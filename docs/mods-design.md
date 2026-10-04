@@ -208,7 +208,8 @@ How it is built (#610): mod-kit holds the band's one hook, and `tools/check-mod-
 fails any other mod that hooks `AbovePrompt`. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
 `$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
-`compact`, `steps` and `message`; a `question` row takes the band alone until it is cleared. Rows in
+`compact`, `handoff`, `held`, `steps` and `message`; a `question` row takes the band alone until it
+is cleared. Rows in
 one slot keep the order they were first published in, and a row published again under its id is
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
 line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
@@ -216,9 +217,20 @@ the amber) and buttons (`button`, `label`, `hotkey`). A button is Claude Code's 
 key `<mod>:<button>`, and its press reaches the publisher through
 `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`, since a closure cannot
 cross from one mod to another. The rows live in mod-kit's `$.state`, so a reload keeps them, and
-they yield to a survey. Later mods that need more than lines of runs (the steps card's amber rule
-down its left edge, the boxed held while away card) add that shape to mod-kit rather than drawing
-the band themselves.
+they yield to a survey. Later mods that need more than lines of runs add that shape to mod-kit
+rather than drawing the band themselves.
+
+The settled extension (2026-10-04), for the cards that followed the status bar: two more slots,
+`handoff` and `held`, so the order top to bottom is needs-a-look, compact, handoff, held, steps,
+message, and a question still alone. Status stays on top and what waits on Dan sits nearest the
+prompt, as Dan chose; the handoff card appears only at session start. A row may carry a `frame`:
+`{ kind: 'box' }` draws it inside a rounded border (the held while away card), `{ kind: 'left-rule' }`
+a vertical rule down its left edge only (the steps card's amber rule), each in `color`, a theme key
+or raw colour, the terminal's grey when left out. A line may be `{ divider: true }` in place of its
+parts: a thin grey line the width of the band, cut at the edge of the frame it sits in, between the
+lines of a card. A part may carry `indent`, the columns it starts in, so a description sits under
+its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
+whole number of columns is refused when the row is published, never drawn as something else.
 
 ## Not design decisions
 

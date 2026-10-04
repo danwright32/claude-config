@@ -66,11 +66,14 @@ test('rows are drawn in the settled order of their slots, whatever order they we
   engineBand(on)
   await show($, row('message', 'Message for Kris'))
   await show($, row('steps', 'Steps for you'))
+  await show($, row('held', 'Held while away'))
+  await show($, row('handoff', 'Where you left off'))
   await show($, row('compact', 'ctx 74%'))
   await show($, row('needs-a-look', 'PR #636 checks failing'))
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount(band(surface))
-    expect(await shown(ui)).toEqual(['PR #636 checks failing', 'ctx 74%', 'Steps for you', 'Message for Kris'])
+    // Status first, then what waits on Dan nearest the prompt (docs/mods-design.md).
+    expect(await shown(ui)).toEqual(['PR #636 checks failing', 'ctx 74%', 'Where you left off', 'Held while away', 'Steps for you', 'Message for Kris'])
     expect(await ui.find({ text: 'engine band' })).toBeUndefined()
     await ui.unmount()
   }
@@ -151,5 +154,76 @@ test('text styles reach the drawing: amber, bold, dim', withPublisher, async ($,
   const ui = await $.ui.mount(band())
   expect((await ui.find({ type: 'Text', text: 'NO BUILD' }))?.props).toMatchObject({ color: 'warning', bold: true })
   expect((await ui.find({ type: 'Text', text: ' | ' }))?.props).toMatchObject({ dimColor: true })
+  await ui.unmount()
+})
+
+test('a box frame draws the row inside a rounded border, grey unless the row names a colour', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, { mod: 'publisher', id: 'held', slot: 'held', frame: { kind: 'box' }, lines: [[{ text: 'Held while away' }]] })
+  await show($, { mod: 'publisher', id: 'hand', slot: 'handoff', frame: { kind: 'box', color: 'warning' }, lines: [[{ text: 'Where you left off' }]] })
+  const ui = await $.ui.mount(band())
+  expect((await ui.find({ type: 'Box', key: 'publisher/held' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'gray' })
+  expect((await ui.find({ type: 'Box', key: 'publisher/hand' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'warning' })
+  expect(await shown(ui)).toEqual(['Where you left off', 'Held while away'])
+  await ui.unmount()
+})
+
+test('a left rule frame draws one rule mark beside every line, in its colour, and no border', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, {
+    mod: 'publisher',
+    id: 'steps',
+    slot: 'steps',
+    frame: { kind: 'left-rule', color: 'warning' },
+    lines: [[{ text: 'Steps for you', color: 'warning' }], { divider: true }, [{ text: '1. Open the dashboard', bold: true }]],
+  })
+  await show($, { mod: 'publisher', id: 'plain', slot: 'message', frame: { kind: 'left-rule' }, lines: [[{ text: 'one line' }]] })
+  const ui = await $.ui.mount(band())
+  const steps = await ui.find({ type: 'Box', key: 'publisher/steps' })
+  expect(steps?.props.borderStyle).toBeUndefined()
+  const rule = await ui.find({ type: 'Box', key: 'publisher/steps:rule' })
+  const marks = (rule?.children ?? []) as { props: { color?: string }; children: unknown[] }[]
+  expect(marks).toHaveLength(3)
+  expect(marks.every(m => m.props.color === 'warning' && m.children.join('') === '\u2502')).toBe(true)
+  const plain = await ui.find({ type: 'Box', key: 'publisher/plain:rule' })
+  expect(((plain?.children ?? []) as { props: { color?: string } }[]).map(m => m.props.color)).toEqual(['gray'])
+  await ui.unmount()
+})
+
+test('a divider line is a thin grey line across the band, between the lines it separates', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, { mod: 'publisher', id: 'card', slot: 'steps', lines: [[{ text: 'above' }], { divider: true }, [{ text: 'below' }]] })
+  const ui = await $.ui.mount(band())
+  const texts = await shown(ui)
+  expect(texts).toHaveLength(3)
+  expect(texts[0]).toBe('above')
+  expect(texts[2]).toBe('below')
+  // Full width: as many columns as the band has, cut at the edge by the frame it sits in.
+  expect(texts[1]).toBe('\u2500'.repeat(100))
+  const line = await ui.find({ type: 'Text', text: '\u2500' })
+  expect(line?.props).toMatchObject({ color: 'gray', wrap: 'truncate-end' })
+  await ui.unmount()
+})
+
+test('a part with an indent starts that many columns in', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, { mod: 'publisher', id: 'q', slot: 'steps', lines: [[{ text: '1. Proceed', bold: true }], [{ text: 'runs it as asked', dim: true, indent: 3 }]] })
+  const ui = await $.ui.mount(band())
+  const boxes = (await ui.findAll({ type: 'Box' })).filter(b => b.props.paddingLeft === 3)
+  expect(boxes).toHaveLength(1)
+  expect(boxes[0]?.text).toContain('runs it as asked')
+  expect((await ui.findAll({ type: 'Box' })).filter(b => b.text.includes('1. Proceed') && b.props.paddingLeft !== undefined)).toHaveLength(0)
+  await ui.unmount()
+})
+
+test('an unknown frame kind, a malformed divider, or a bad indent is refused at publish, never drawn wrong', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', frame: { kind: 'double' }, lines: [] })).toMatch(/refused: .*frame kind "double"/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', frame: { kind: 'box', color: 7 }, lines: [] })).toMatch(/refused: .*frame colour/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [{ divider: false }] })).toMatch(/refused: .*lines must be/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', indent: -1 }]] })).toMatch(/refused: .*indent/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', indent: 1.5 }]] })).toMatch(/refused: .*indent/)
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: 'engine band' })).toBeDefined()
   await ui.unmount()
 })
