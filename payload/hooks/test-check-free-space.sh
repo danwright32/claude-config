@@ -46,6 +46,11 @@ case "${TMPROOT%/}" in
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
+# The symbol cache the warning names is a real folder on this Mac, so every run points the check at
+# a folder of the suite's own instead, and none reads the machine (L2, L284). The default is one
+# that does not exist; the cases about the folder make one and name it.
+export FREE_SPACE_SYMBOL_CACHE="$TMPROOT/no-symbol-cache-here"
+
 GB=$((1024 * 1024 * 1024))
 T0=1757500000            # a fixed instant, so every span below is arithmetic rather than a race
 
@@ -293,6 +298,74 @@ check "and the same reading is reported against a floor nothing can clear" \
 check "and that reading really is a number of GB, which is what proves df was parsed" \
   "$(grep -qE '^claude-sync: only [0-9]+ GB free on /,' <<< "$df_low" && echo ok || echo "said: $df_low")"
 
+# ---- the macOS symbol cache, named as a known cause on a low or falling verdict ----
+# Measured 2026-10-04: the disk fell from 25 GB to 8 GB free, more than once, while Overture agents
+# built and crash tested, and this warning said only that nothing here knew what was using it.
+# The cause was /System/Library/Caches/com.apple.coresymbolicationd at 194 GB, filled by macOS
+# whenever a crash report is written or a process is sampled. Only root can read inside it, so the
+# check cannot size it, and the message has to say so rather than imply a size (L11). What it CAN
+# read is when a file was last added to or removed from it.
+SYMDIR="$TMPROOT/symbol-cache"; mkdir -p "$SYMDIR"
+sym_mtime="$(stat -c %Y "$SYMDIR" 2>/dev/null || stat -f %m "$SYMDIR" 2>/dev/null)"
+sym_probe(){   # sym_probe <free bytes> <epoch> <state dir> [cache dir]
+  local out="$TMPROOT/sym-out"
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$3" FREE_SPACE_PATH=/fixture \
+    FREE_SPACE_SYMBOL_CACHE="${4:-$SYMDIR}" bash "$CHECK" > "$out" 2>&1
+  PROBE_RC=$?
+  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
+}
+check "the suite could read the fixture folder's own change time" \
+  "$([ -n "$sym_mtime" ] && echo ok || echo "stat gave nothing for $SYMDIR")"
+
+S_SYM="$TMPROOT/state-sym-low"; mkdir -p "$S_SYM"
+sym_probe "$((7 * GB))" "$((sym_mtime + 1800))" "$S_SYM"; sym_low="$PROBE_MSG"; sym_low_rc=$PROBE_RC
+check "a low verdict still exits 3 with the symbol cache named" \
+  "$([ "$sym_low_rc" -eq 3 ] && echo ok || echo "exit $sym_low_rc, said: $sym_low")"
+check "a low verdict names the macOS symbol cache folder as a known cause" \
+  "$(grep -q '/System/Library/Caches/com.apple.coresymbolicationd' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+check "and says it is a cache macOS rebuilds" \
+  "$(grep -qi 'rebuilds' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+check "and says reading its size needs an administrator, rather than claiming one" \
+  "$(grep -qi 'administrator' <<< "$sym_low" && grep -qi 'cannot say how big' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+check "and gives the command that sizes it" \
+  "$(grep -qxF 'sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+check "and the command that clears it, emptying the folder rather than removing it" \
+  "$(grep -qxF 'sudo find /System/Library/Caches/com.apple.coresymbolicationd -mindepth 1 -delete' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+# A suspect, never a finding: the check measured no cause and must not read as if it had (L11).
+check "and calls it a suspect nothing measured, not the cause" \
+  "$(grep -q 'Nothing measured it' <<< "$sym_low" && grep -q 'or whether it is the cause' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+# Sizing comes before clearing, and clearing is conditional on what the size shows (L9).
+check "and puts sizing before clearing, with clearing left as Dan's decision" \
+  "$(awk '/sudo du -sh/ { d = NR } /sudo find/ { f = NR } END { exit !(d && f && d < f) }' <<< "$sym_low" && grep -q 'you decide to clear it' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+# One copy paste command per block, so Dan never has to pick a line out of a block (global rule).
+sym_blocks="$(awk '/^```/ { if (inb) { print n; inb=0 } else { inb=1; n=0 }; next } inb { n++ }' <<< "$sym_low")"
+check "each command sits alone in its own code block" \
+  "$([ "$sym_blocks" = "$(printf '1\n1')" ] && echo ok || echo "block line counts: $(tr '\n' ' ' <<< "$sym_blocks"), said: $sym_low")"
+check "and the change time it read is stated, as an age" \
+  "$(grep -q '30 minute(s) ago' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+check "and the folder is named only after the free space sentence, so the nudge still reads its figure" \
+  "$(grep -q '^claude-sync: only 7 GB free on /fixture' <<< "${sym_low%%$'\n'*}" && echo ok || echo "first line: ${sym_low%%$'\n'*}")"
+
+# Falling fast, above the floor, is the other verdict that names it.
+S_SYMF="$TMPROOT/state-sym-fast"; mkdir -p "$S_SYMF"
+sym_probe "$((300 * GB))" "$((sym_mtime - 10800))" "$S_SYMF"
+sym_probe "$((60 * GB))" "$sym_mtime" "$S_SYMF"; sym_fast="$PROBE_MSG"
+check "a falling fast verdict names the symbol cache too" \
+  "$([ "$PROBE_RC" -eq 4 ] && grep -q 'com.apple.coresymbolicationd' <<< "$sym_fast" && echo ok || echo "exit $PROBE_RC, said: $sym_fast")"
+
+# A healthy disk says nothing at all, the folder included, however recently it changed.
+S_SYMH="$TMPROOT/state-sym-healthy"; mkdir -p "$S_SYMH"
+sym_probe "$((200 * GB))" "$((sym_mtime + 60))" "$S_SYMH"; sym_ok="$PROBE_MSG"
+check "a healthy verdict does not mention the symbol cache" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$sym_ok" ] && echo ok || echo "exit $PROBE_RC, said: $sym_ok")"
+
+# Where the folder does not exist (a Linux runner, a later macOS) it cannot be the cause, so it is
+# not named.
+S_SYMN="$TMPROOT/state-sym-none"; mkdir -p "$S_SYMN"
+sym_probe "$((7 * GB))" "$T0" "$S_SYMN" "$TMPROOT/absent-symbol-cache"; sym_none="$PROBE_MSG"
+check "a low verdict on a machine without the folder does not name it" \
+  "$([ "$PROBE_RC" -eq 3 ] && ! grep -q 'coresymbolicationd' <<< "$sym_none" && echo ok || echo "exit $PROBE_RC, said: $sym_none")"
+
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
 # project-list-nudge.sh, so there is one implementation of the question (L107).
@@ -315,6 +388,11 @@ check "a low disk is said unprompted" \
   "$(grep -q 'GB free on' <<< "$n_first" && echo ok || echo "said: $n_first")"
 check "and the notice names the skill that knows what to do next" \
   "$(grep -q 'disk-full' <<< "$n_first" && echo ok || echo "said: $n_first")"
+NS_SYM="$TMPROOT/ns-sym"; mkdir -p "$NS_SYM"
+n_sym="$(payload sess-sym | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SYM" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_SYMBOL_CACHE="$SYMDIR" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+check "the notice carries the symbol cache commands through to the session" \
+  "$(grep -qxF 'sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd' <<< "$n_sym" && echo ok || echo "said: $n_sym")"
 n_again="$(nudge "$((7 * GB))" "$((T0 + 60))" "$NS2" sess-low)"
 check "the same answer is not repeated on the next prompt" \
   "$([ -z "$n_again" ] && echo ok || echo "said: $n_again")"
@@ -363,6 +441,13 @@ check "the disk-full skill the notice names is actually there" \
   "$([ -f "$SKILL" ] && echo ok || echo "no skill at $SKILL")"
 check "and it holds the triage sequence rather than a heading and a promise" \
   "$(grep -q 'df -h' "$SKILL" 2>/dev/null && grep -q 'du -x' "$SKILL" 2>/dev/null && echo ok || echo "no measured sequence in $SKILL")"
+check "and it names the macOS symbol cache with the command that sizes it" \
+  "$(grep -qF 'sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd' "$SKILL" 2>/dev/null && echo ok || echo "no symbol cache step in $SKILL")"
+# The one deleting command must be the same in both places, so the skill cannot drift from what
+# the warning hands Dan (L41). Read from the warning's own output rather than typed again here.
+sym_clear="$(grep -F 'sudo find ' <<< "$sym_low")"
+check "and its clearing command is the very one the warning prints" \
+  "$([ -n "$sym_clear" ] && grep -qxF "$sym_clear" "$SKILL" 2>/dev/null && echo ok || echo "warning prints '$sym_clear', not found as a line in $SKILL")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
