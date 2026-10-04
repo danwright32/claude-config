@@ -307,6 +307,40 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   included). The same thing held twice is one row. A /clear ends the session and every mode with it.
 - The phone line ends every reply to a phone message while home, not only the first.
 
+### Manual steps behaviour (#614), decided in the build, 2026-10-04
+
+No round: each follows from the spec and the settled surfaces above. The ones marked open were
+not settled by either and are waiting on Dan; until he decides, the build does the plainest thing.
+
+- **The handover.** Claude pins steps through the `steps` tool: a heading and a list of steps,
+  each with a title, a direct `https://` link or, where there is no page, an exact location, the
+  click path and any value to paste. A step with no link or location is refused, naming it. Each
+  step must also say what Claude found when it checked it against the current state
+  (`already-done`, `not-done`, `cannot-check`), so the hand-off rule's check is a required field
+  rather than a line in a prompt; a step without it is refused. Pinning replaces the card.
+- **Already done.** A step found done arrives finished, struck through with "already done". A card
+  whose every step is already done is not pinned, and Claude is told so.
+- **Where.** A new card tries the side pane unasked. When Claude Code does not place it (under 144
+  columns) the waiting pane is closed and the card is the `steps` row of the band, so it can never
+  show in both. `/steps` opens the pane, which an asked pane gets at any width, and the band row
+  gives way to it. Closing the pane by hand while steps remain moves the card to the band (open:
+  whether closing should instead hide the card).
+- **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
+  the button until Claude answers (open: the words for that waiting state). Claude records its
+  verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
+  `not-done`, which opens the step again with its Done. A Done that cannot reach Claude opens the
+  step again with a toast saying why.
+- **Copy.** Copies the open step's value on the surface pressed, with a toast saying it was copied
+  or why not (open: whether a successful copy needs a toast at all).
+- **The last step.** Once every step is finished the card goes away and nothing is kept (open:
+  whether the finished card should stay a while).
+- **Carry over.** Unfinished steps are kept per project (the repository root, else the folder) in
+  the mod's store on this Mac. At the next session start there they are held, not shown, and the
+  conversation's first message tells Claude to re-check them and pin the ones left; until then
+  Done cannot be recorded on them, and `/steps` shows them as they were kept.
+- **Not yet.** Holding steps while away (spec item 6) waits on the away and home mod (#621).
+  The pane title is "Manual steps" (open: its words).
+
 ### The band, shared by every mod
 
 Claude Code gives the band above the prompt one drawing, so the mods that use it compose one tree.
