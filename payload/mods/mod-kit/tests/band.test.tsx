@@ -89,12 +89,14 @@ test('rows are drawn in the settled order of their slots, whatever order they we
   await show($, row('steps', 'Steps for you'))
   await show($, row('held', 'Held while away'))
   await show($, row('handoff', 'Where you left off'))
+  await show($, row('room', 'This account is low. Work has room'))
   await show($, row('compact', 'ctx 74%'))
   await show($, row('needs-a-look', 'PR #636 checks failing'))
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount(band(surface))
-    // Status first, then what waits on Dan nearest the prompt (docs/mods-design.md).
-    expect(await shown(ui)).toEqual(['PR #636 checks failing', 'ctx 74%', 'Where you left off', 'Held while away', 'Steps for you', 'Message for Kris'])
+    // Status first, the account room card with them, then what waits on Dan nearest the prompt
+    // (docs/mods-design.md).
+    expect(await shown(ui)).toEqual(['PR #636 checks failing', 'ctx 74%', 'This account is low. Work has room', 'Where you left off', 'Held while away', 'Steps for you', 'Message for Kris'])
     expect(await ui.find({ text: 'engine band' })).toBeUndefined()
     await ui.unmount()
   }

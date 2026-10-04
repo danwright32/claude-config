@@ -203,12 +203,13 @@ export type ModKitQuestion = {
 
 /**
  * Where a band row sits, drawn top to bottom in this order (docs/mods-design.md, "The band, shared
- * by every mod"): the status rows first (the amber needs-a-look line, then the Compact row), then
+ * by every mod"): the status rows first (the amber needs-a-look line, then the Compact row), the
+ * account room card about this account's limits (#659), then
  * what waits on Dan nearest the prompt (the handoff card at session start, the held while away card,
  * the steps card, then a message to send). An open question, published with `$.modkit.question`,
  * takes the band alone, one question at a time, and everything else comes back once it is cleared.
  */
-export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | 'steps' | 'message' | 'question'
+export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'room' | 'handoff' | 'held' | 'steps' | 'message' | 'question'
 
 /**
  * A run of text in a band line, in the terminal's own colours: `color` is a theme key ('warning' is

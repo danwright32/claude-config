@@ -1,7 +1,8 @@
 import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane, ModKitQuestion } from '../types/index.d.ts'
 
 // The band above the prompt, composed once for every mod (docs/mods-design.md, "The band, shared
-// by every mod", settled with Dan 2026-10-04). Status rows on top, what waits on Dan nearest the
+// by every mod", settled with Dan 2026-10-04). Status rows on top, then the account room card (#659)
+// about this account's limits, what waits on Dan nearest the
 // prompt (the handoff card, which appears only at session start, the held while away card, the
 // steps card, a message to send), and an open question alone so a number key can only mean its
 // answer: one question at a time, since two mods can each have one open (#703).
@@ -11,11 +12,12 @@ import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, Mo
 const RANK: Record<ModKitBandSlot, number> = {
   'needs-a-look': 0,
   compact: 1,
-  handoff: 2,
-  held: 3,
-  steps: 4,
-  message: 5,
-  question: 6,
+  room: 2,
+  handoff: 3,
+  held: 4,
+  steps: 5,
+  message: 6,
+  question: 7,
 }
 
 // Also a Record over the type, so a frame kind added to the contract without being drawn fails to type check.
