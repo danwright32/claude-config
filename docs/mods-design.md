@@ -144,8 +144,9 @@ Not yet put to Dan in a round; each is the conservative reading of the spec, and
   at the next break, and the toast "Noted, applying after this step." once the note has entered.
   A note Claude Code refuses gets no toast. A `+` note while idle with no interrupt before it is
   passed through as typed: the spec defines `+` for a running turn only.
-- **Not a `+` note**: a lone `+`, `++`, `+1`, or a pasted diff (later lines starting with `+`, `-`
-  or `@`).
+- **Not a `+` note**: a lone `+`, `++`, `+1`, or a pasted diff (a later line starting with `+`, a
+  hunk header `@@`, or a `-` straight onto the text). A `- ` markdown bullet, a dash then a space,
+  is a list in the note and keeps it an add-on (lessons review).
 - **An interrupt** is a main loop turn that ended because Dan stopped it. A subagent stopped, or a
   turn that died on an API error, is not one. It is used up by Dan's next message whatever that
   says; another session's message does not use it up; /clear forgets it.
