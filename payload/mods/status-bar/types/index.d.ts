@@ -8,6 +8,12 @@ export type StatusBar = {
    * band shows, even with nothing else in it. Rejects any other value, by name.
    */
   setMode: (input: { mode: StatusBarMode | null }) => Promise<void>
+  /**
+   * Sets every scope mode that is on at once, in the order the line shows them (no build or winding
+   * down, and away, can both be on), or clears them all with an empty list. Rejects a value that is
+   * not a mode, or one named twice, by name.
+   */
+  setModes: (input: { modes: StatusBarMode[] }) => Promise<void>
 }
 
 /** What this session's status line reads from the mod: one file per session, this Mac only. */
@@ -23,7 +29,7 @@ declare module 'claude-code' {
     statusbar: StatusBar
   }
   interface PluginState {
-    /** In $.state so a reload of the mod keeps them: the mode, and when the prompt cache goes cold. */
-    'status-bar': { mode: StatusBarMode | null; cacheExpiresAt: number | null }
+    /** In $.state so a reload of the mod keeps them: the modes on, and when the prompt cache goes cold. */
+    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null }
   }
 }
