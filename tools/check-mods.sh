@@ -29,6 +29,17 @@ if [ "$n" -eq 0 ]; then
   exit 0
 fi
 
+# Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638). Without one, Claude Code
+# generates it in the installed copy, and the sync sends that up to main as a local edit. This needs
+# only the filesystem, so it is checked before the claude lookup and holds on a machine with none.
+failed=0
+for d in "${mods[@]}"; do
+  if [ ! -f "$d/tsconfig.json" ]; then
+    echo "check-mods: $(basename "$d") has no tsconfig.json; every mod ships its own, or the copy Claude Code generates is sent up as a local edit"
+    failed=1
+  fi
+done
+
 bin="${CLAUDE_BIN:-}"
 if [ -z "$bin" ]; then
   bin="$(command -v claude 2>/dev/null || true)"
@@ -36,22 +47,17 @@ if [ -z "$bin" ]; then
 fi
 if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   echo "check-mods: UNMEASURED: $n mod(s) in $dir, and no claude command to check them with (looked for ${bin:-claude on PATH}). That is not a pass." >&2
+  # A missing tsconfig.json is a definite failure, which outranks the unmeasured rest.
+  [ "$failed" -eq 1 ] && exit 1
   exit 3
 fi
 
 # The engine's verdict lines: the item marks and the failure summary, a few at most.
 reason(){ printf '%s\n' "$1" | grep -E '[Ff]ail|[Ee]rror|refused|bad' | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -; }
 
-failed=0
 for d in "${mods[@]}"; do
   name="$(basename "$d")"
-  # Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638). Without one, Claude Code
-  # generates it in the installed copy, and the sync sends that up to main as a local edit.
-  if [ ! -f "$d/tsconfig.json" ]; then
-    echo "check-mods: $name has no tsconfig.json; every mod ships its own, or the copy Claude Code generates is sent up as a local edit"
-    failed=1
-    continue
-  fi
+  [ -f "$d/tsconfig.json" ] || continue
   if ! out="$("$bin" plugin validate "$d" 2>&1)"; then
     echo "check-mods: $name refused by claude plugin validate: $(reason "$out")"
     failed=1

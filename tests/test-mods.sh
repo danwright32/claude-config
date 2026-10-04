@@ -83,6 +83,12 @@ printf '%s\n' "$out" | grep 'bare-mod' | grep -q 'tsconfig.json' \
 grep -q "plugin validate $M3B/dressed" "$LOG" && check "and the other mod was still checked" ok \
   || check "and the other mod was still checked" "$(cat "$LOG")"
 
+# 3c. The tsconfig.json rule needs only the filesystem, so it holds where no claude command exists
+#     (CI's Linux runner) instead of hiding behind UNMEASURED (lessons review of #645).
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin bash "$CHECK" "$M3B" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "with no claude command, a mod missing tsconfig.json still fails" ok \
+  || check "with no claude command, a mod missing tsconfig.json still fails" "exit=$code out=$out"
+
 # 4. Generated types are never mistaken for the mod's own tests.
 M4="$TMPROOT/m4"; mkmod "$M4" typed; mkdir -p "$M4/typed/.claude-plugin/types"; printf 'x\n' > "$M4/typed/.claude-plugin/types/x.test.ts"
 runit "$M4"
