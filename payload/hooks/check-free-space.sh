@@ -30,9 +30,22 @@
 # only from readings inside a window this can honestly describe. Refusing is the common case, and
 # it is what keeps the warning worth reading (L36, L253).
 #
-# IT NAMES NO CAUSE. It reports how much is left and, when it can, how fast that is falling. What
+# IT MEASURES NO CAUSE. It reports how much is left and, when it can, how fast that is falling. What
 # is eating the disk is the skill's job, from measurements taken at the time (L11: a message may
 # claim only what its check measured).
+#
+# ONE KNOWN CAUSE IS NAMED, AS A SUSPECT AND NEVER A FINDING. Measured 2026-10-04 on
+# Daniels-MacBook-Pro-2: the disk fell from 25 GB to 8 GB free more than once while Overture agents
+# built and crash tested, and neither this warning nor the disk-full skill could see why. Dan's
+# cleaner app found /System/Library/Caches/com.apple.coresymbolicationd at 194 GB. That is macOS's
+# symbol cache (coresymbolicationd(8)), added to whenever a crash report is written or a process is
+# sampled (sample, spindump, Instruments), so every fresh build of an app that crashes or is sampled
+# adds more. It is root only (drwx------ root wheel), so its size cannot be read here and the
+# message says so rather than implying one. What CAN be read is the folder's own change time, which
+# moves when a file is added or removed (not when one grows), so that is stated as exactly that.
+# Clearing it is Dan's call and needs his password, so the message hands him the commands and runs
+# nothing. The folder carries no SIP restricted flag (ls -lO shows none), so sudo can empty it, and
+# emptying the contents rather than removing the folder keeps its root only permissions in place.
 #
 # Environment, all of it a seam so the suite measures this code rather than the machine (L2, L504):
 #   FREE_SPACE_PATH           the volume to measure (default the data volume, else /)
@@ -44,6 +57,7 @@
 #   FREE_SPACE_WINDOW_HOURS   readings older than this are pruned and never used (default 6)
 #   FREE_SPACE_RECOVERY_GB    a rise larger than this means the disk recovered, so no rate
 #   FREE_SPACE_STATE_DIR      where the readings are kept
+#   FREE_SPACE_SYMBOL_CACHE   the macOS symbol cache folder to look for (default the real one)
 set -uo pipefail
 
 GIB=$((1024 * 1024 * 1024))
@@ -202,13 +216,47 @@ if [ -n "$oldest_t" ]; then
   fi
 fi
 
+# ---------- the one known cause, named only when the verdict is low or falling ----------
+# The commands below always name the REAL folder, whatever the seam points at, because they are
+# for Dan to paste; the seam only decides whether the folder exists and what its change time is.
+SYMBOL_CACHE="${FREE_SPACE_SYMBOL_CACHE:-/System/Library/Caches/com.apple.coresymbolicationd}"
+REAL_SYMBOL_CACHE=/System/Library/Caches/com.apple.coresymbolicationd
+symbol_cache_note(){
+  [ -d "$SYMBOL_CACHE" ] || return 0
+  local changed="" age age_words=""
+  # GNU first, then BSD: on macOS `stat -c` refuses and the BSD form answers. Anything that is not a
+  # number, or lies in the future, is treated as unread, and then no time is stated at all (L11).
+  changed="$(stat -c %Y "$SYMBOL_CACHE" 2>/dev/null || stat -f %m "$SYMBOL_CACHE" 2>/dev/null || true)"
+  if is_number "$changed" && [ "$changed" -le "$now" ]; then
+    age=$((now - changed))
+    if [ "$age" -ge 172800 ]; then age_words="$((age / 86400)) day(s) ago"
+    elif [ "$age" -ge 3600 ]; then age_words="$((age / 3600)) hour(s) ago"
+    else age_words="$((age / 60)) minute(s) ago"; fi
+  fi
+  echo ""
+  echo "A known cause on this Mac, not measured here: $REAL_SYMBOL_CACHE, macOS's symbol cache, which reached 194 GB on 2026-10-04. macOS adds to it whenever a crash report is written or a process is sampled, and each new build of an app that crashes or is sampled adds another copy. It is a cache macOS rebuilds when it needs it, so clearing it loses nothing. Only an administrator can read its size, so this check cannot say how big it is now."
+  if [ -n "$age_words" ]; then
+    echo "A file was last added to it or removed from it $age_words. That says it has been in use, not how much it holds."
+  fi
+  echo "To see its size (asks for your Mac password):"
+  echo '```'
+  echo "sudo du -sh $REAL_SYMBOL_CACHE"
+  echo '```'
+  echo "To clear it (empties the folder and keeps the folder itself):"
+  echo '```'
+  echo "sudo sh -c 'rm -rf $REAL_SYMBOL_CACHE/*'"
+  echo '```'
+}
+
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
   echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause Nothing here says what is using it."
+  symbol_cache_note
   exit 3
 fi
 
 if [ "$falling_fast" -eq 1 ]; then
   echo "claude-sync: $free_gb GB free on $VOLUME, which is above the $FLOOR_GB GB floor but not for long.$rate_clause Nothing here says what is using it."
+  symbol_cache_note
   exit 4
 fi
 

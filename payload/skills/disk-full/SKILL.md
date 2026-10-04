@@ -11,6 +11,12 @@ failing with `cannot create temp file for here document`, followed by every Bash
 ENOSPC before it could run. Reaching the actual cause took about forty minutes, most of it
 rediscovering the sequence below. It is written down so it does not have to be found again.
 
+On 2026-10-04 the disk fell from 25 GB to 8 GB free more than once while several Overture agent
+sessions built and crash tested. Neither the low space warning, nor this sequence, nor Overture's
+DerivedData reclaim could see why, because the cause is a root only folder that no command here
+could read: `/System/Library/Caches/com.apple.coresymbolicationd`, macOS's symbol cache, at 194 GB.
+Dan's cleaner app found it. That is step 5.
+
 ## Before anything else
 
 **If Bash itself cannot write its output file**, no command here will run. Ask Dan to type the
@@ -95,7 +101,43 @@ downloaded:
 brctl quota 2>/dev/null; du -x -d 1 -g ~/Library/Mobile\ Documents 2>/dev/null | sort -rn | head
 ```
 
-### 5. The usual large caches, once the above are ruled out
+### 5. The macOS symbol cache, which only an administrator can measure
+
+`/System/Library/Caches/com.apple.coresymbolicationd` is filled by `coresymbolicationd` whenever a
+crash report is written or a process is sampled (`sample`, spindump, Instruments). It keeps symbols
+per build, so every fresh build of an app that crashes or is sampled adds another copy, and a day of
+agents building and crash testing can put well over a hundred gigabytes there. It lives on the data
+volume, not the read only system snapshot, so it counts against the free space step 1 reports.
+
+It is owned by root with no access for anyone else, so `du` without `sudo` reads nothing, and step 3
+never sees it. Say that plainly rather than reporting it as small or absent. What can be read
+without a password is when a file was last added to it or removed from it, which says it is in use
+and nothing about its size:
+
+```bash
+ls -ld /System/Library/Caches/com.apple.coresymbolicationd
+```
+
+Its size needs Dan's password, so hand him the command rather than running it:
+
+```bash
+sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd
+```
+
+It is a cache macOS rebuilds on demand, so clearing it loses nothing but the time to symbolicate
+the next crash report. The folder carries no SIP restricted flag, so `sudo` can empty it. Empty the
+contents rather than removing the folder, which keeps its root only permissions, and run the glob
+inside the root shell, because Dan's own shell cannot list the folder and zsh would refuse the glob
+before `sudo` ever ran:
+
+```bash
+sudo sh -c 'rm -rf /System/Library/Caches/com.apple.coresymbolicationd/*'
+```
+
+Clearing it is Dan's call, as every deletion is. The low space warning names this folder and both
+commands itself whenever it fires, so if it has already fired, those are the same ones.
+
+### 6. The usual large caches, once the above are ruled out
 
 ```bash
 du -x -d 1 -g ~/Library/Caches ~/Library/Containers ~/Library/Developer 2>/dev/null | sort -rn | head -20
@@ -104,7 +146,7 @@ du -x -d 1 -g ~/Library/Caches ~/Library/Containers ~/Library/Developer 2>/dev/n
 Xcode's `~/Library/Developer/Xcode/DerivedData` and `~/Library/Developer/CoreSimulator` are the two
 that reach tens of gigabytes without anybody noticing.
 
-### 6. Snapshots, which `du` cannot see at all
+### 7. Snapshots, which `du` cannot see at all
 
 Space held by local Time Machine snapshots does not appear in any directory listing, so a disk can
 be full with nothing to find.
