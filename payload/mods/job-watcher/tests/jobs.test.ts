@@ -66,6 +66,13 @@ describe('an error line', () => {
   test('a patient waiting line does not', () => {
     for (const line of ['waiting for deploy', 'checks still pending', 'Waiting for server to start...', '.', 'retrying in 3s']) expect(isErrorLine(line)).toBe(false)
   })
+  // Lessons review of #634: a count of zero or a negation reports no failure.
+  test('a count of zero or a negation of failure does not', () => {
+    for (const line of ['0 failed, 3 pending', 'no errors yet', 'built without errors', 'errors: 0', 'Tests: 0 failures, 12 passed', 'no failures so far']) expect(isErrorLine(line)).toBe(false)
+  })
+  test('a real failure beside a zero count still does', () => {
+    for (const line of ['0 passed, 2 failed', 'Error: connect ECONNREFUSED 127.0.0.1:5432 (no errors before this)']) expect(isErrorLine(line)).toBe(true)
+  })
 })
 
 // Leftover jobs from closed sessions (Dan, 2026-10-04): a model's verdict on each, and the one dim

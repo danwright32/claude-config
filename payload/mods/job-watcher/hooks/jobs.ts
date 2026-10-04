@@ -15,7 +15,11 @@ export const startedJob = (resultText: string): { id: string; outputPath: string
 // repeating is one of these (decided with Dan, 2026-10-04): a loop repeating "waiting" may just be
 // patient, and is only reported.
 const ERROR_LINE = /\b(error|errors|fail(s|ed|ure)?|fatal|exception|traceback|refused|denied|not found|no matches|no such|cannot|can't|couldn't|unable|unreachable|invalid|timed out)\b|^[a-z]+: \(\d+\)/i
-export const isErrorLine = (line: string): boolean => ERROR_LINE.test(line)
+// A count of zero or a negation reports no failure ("0 failed, 3 pending", "no errors yet", "built
+// without errors", "errors: 0"), so those phrases are taken out before the line is read; a real
+// failure beside one still reads as an error (lessons review of #634).
+const NO_FAILURE = /\b0\s+(errors?|fail(s|ed|ures?)?)\b|\b(no|without|zero)\s+(errors?|failures?)\b|\b(errors?|failures?|failed)\s*[:=]\s*0\b/gi
+export const isErrorLine = (line: string): boolean => ERROR_LINE.test(line.replace(NO_FAILURE, ' '))
 
 // A loop that waits for something by trying again after a sleep: the 2026-09-22 loop was one.
 export const isPollLoop = (command: string): boolean => /\b(until|while)\b[\s\S]*\bdo\b[\s\S]*\bsleep\b/.test(command)

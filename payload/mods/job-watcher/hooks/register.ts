@@ -245,7 +245,8 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
     w.told = false
   }
   const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: job.kept?.quiet === true }, now)
-  if (a.state === 'repeating' && isPollLoop(job.command) && isErrorLine(a.line)) {
+  // A job Claude kept on purpose is only ever reported, never stopped by the watcher (lessons review).
+  if (a.state === 'repeating' && !job.kept && isPollLoop(job.command) && isErrorLine(a.line)) {
     // A poll loop that only ever repeated an error never succeeded, and is stopped by itself.
     const why = await stop($, job.id)
     if (why === undefined) {
@@ -328,6 +329,9 @@ const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise
   // A job its session never traced to a group is reported, never stopped: whatever holds its file
   // now could be anything, a reader's tail -f included (lessons review of #634, L1011).
   if (job.pgid === null) return { kind: 'unjudged', name: short, session: job.session }
+  // A job its session kept on purpose is never stopped as a leftover, on silence or anything else,
+  // as the live watcher never stops one; it is named as kept (lessons review of #634).
+  if (job.kept) return (await hasEnded($, job.pgid)) ? undefined : { kind: 'left', name: typeof job.kept.name === 'string' && job.kept.name.trim() ? job.kept.name.trim().slice(0, 60) : short, session: job.session }
   const group = job.pgid
   if (groups === 'unknown') return (await hasEnded($, group)) ? undefined : { kind: 'unjudged', name: short, session: job.session }
   // Its own group no longer holds the file: the job has ended, whatever else reads the file.

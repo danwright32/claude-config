@@ -938,3 +938,42 @@ test('the judge is shown an answer that is itself valid JSON', withDeps, async (
   expect(() => JSON.parse(example)).not.toThrow()
   expect(Object.keys(JSON.parse(example) as object).sort()).toEqual(['name', 'reason', 'stop'])
 })
+
+// Lessons review of 47da3a4: a job kept on purpose is only ever reported, never stopped by the watcher.
+test('a kept poll loop repeating an error is reported, never stopped', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await $.tool.call(keep({ task_id: 'job1', name: 'health poll', reason: 'waiting for the server Dan is starting' }))
+  await clock.advance(MIN + 1)
+  expect(w.reached.filter(r => r.tool === 'TaskStop')).toEqual([])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(next)).toContain('keeps repeating')
+})
+
+const keptRec = (name: string, quiet: boolean) => ({ kept: { name, reason: 'Dan is using it', quiet, at: 0 } })
+
+test('a leftover kept quiet by design and silent is never stopped, and is named as kept', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18, mtime: 0 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, 'npm run dev', keptRec('dev server', true))])] },
+    verdict: () => STOP('dev server'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (dev server).'])
+})
+
+test('a kept leftover repeating an error is never stopped either', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL, keptRec('health poll', false))])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (health poll).'])
+})
