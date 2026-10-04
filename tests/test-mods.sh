@@ -101,6 +101,16 @@ runit "$M4"
 grep -q "plugin test $M4/typed" "$LOG" && check "while the mod's own test file in the same folder is run" ok \
   || check "while the mod's own test file in the same folder is run" "$(cat "$LOG")"
 
+# 4b. A mod whose only tests are .test.tsx (UI tests that mount a component) is run too, not just
+#     validated (#655); and a generated .test.tsx under types/ is still not the mod's own.
+M4B="$TMPROOT/m4b"; mkmod "$M4B" uionly; printf 'x\n' > "$M4B/uionly/hooks/band.test.tsx"
+mkmod "$M4B" typedtsx; mkdir -p "$M4B/typedtsx/.claude-plugin/types"; printf 'x\n' > "$M4B/typedtsx/.claude-plugin/types/x.test.tsx"
+runit "$M4B"
+grep -q "plugin test $M4B/uionly" "$LOG" && check "a mod with only .test.tsx files is run through the test runner" ok \
+  || check "a mod with only .test.tsx files is run through the test runner" "$(cat "$LOG")"
+! grep -q "plugin test $M4B/typedtsx" "$LOG" && check "a .test.tsx under generated types is ignored" ok \
+  || check "a .test.tsx under generated types is ignored" "$(cat "$LOG")"
+
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
 runit "$M5"
