@@ -29,6 +29,7 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string
   const reached: string[] = []
   const toasts: string[] = []
   const logs: string[] = []
+  const debug: string[] = []
   const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
   mock.env(on, { HOME: '/Users/x' })
   mock.store(on, opts.store ?? {})
@@ -53,6 +54,7 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string
   })
   on('ui.log', ($, e) => {
     if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
+    else if (e.to === 'debug') debug.push(e.text)
     else logs.push(e.text)
     return { value: undefined }
   })
@@ -62,7 +64,7 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: undefined }) as never)
-  return { runs, reached, toasts, logs, cards }
+  return { runs, reached, toasts, logs, debug, cards }
 }
 
 const refused = (r: unknown): string => {
@@ -165,6 +167,26 @@ test('when the scanner cannot run, the write goes through and says it was not ch
   await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: BAD } as never)
   expect(w.reached).toContain('Write')
   expect(w.logs).toContain("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
+  // The cause goes to the debug log, so it is not lost (lessons review); the visible line is Dan's.
+  expect(w.debug.join('\n')).toContain("can't open file")
+})
+
+test('a chat reply the scanner could not check is not read as clean (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'missing', store: { chatHits: 0 } })
+  on('session.append', ($, e, next) => next(e))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  try {
+    await $.session.append({
+      door: 'response',
+      origin: { kind: 'model', model: 'm' },
+      uuid: 'r1',
+      message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'a reply' }] },
+    } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 0 this session, 0 in total. 1 reply this session could not be checked.')
 })
 
 test('chat replies with a dash are counted silently and read with /style-count', withKit, async ($, on) => {

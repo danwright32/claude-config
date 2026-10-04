@@ -63,7 +63,13 @@ def relative_to_repo(path):
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         top = ""
-    return os.path.relpath(path, top) if top else os.path.basename(path)
+    # Outside any repository there is no top to be relative to: judged as written, so a bare
+    # CLAUDE.md pattern cannot excuse a CLAUDE.md anywhere on disk (lessons review of #609).
+    if not top:
+        return path
+    # Both sides resolved: git reports the real path (/private/var on macOS) while the path given
+    # may go through a symbolic link (/var), and the two would never line up.
+    return os.path.relpath(os.path.realpath(path), os.path.realpath(top))
 
 
 def scan_diff(stream):

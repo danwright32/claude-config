@@ -82,19 +82,24 @@ const lineWords = (scannerOut: string): string => {
   if (ns.length === 1) return ` on line ${ns[0]}`
   return ` on lines ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`
 }
-// Replies counted this session; the total across sessions is in the mod's store.
+// Replies counted this session; the total across sessions is in the mod's store. Replies the
+// scanner could not check are counted apart, so a broken scanner never reads as clean writing.
 let sessionHits = 0
+let sessionUnchecked = 0
+const UNCHECKED_NOTE = "Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will."
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     sessionHits = 0
+    sessionUnchecked = 0
     await $.command.register({ name: 'style-count', description: 'How many of my replies used a dash or emoji.' })
     return next(e)
   })
 
   on('command.run', { command: 'style-count' }, async $ => {
     const total = ((await $.store.get('chatHits')) as number | undefined) ?? 0
-    return { text: `Replies with a dash or emoji: ${sessionHits} this session, ${total} in total.` }
+    const gap = sessionUnchecked === 0 ? '' : ` ${sessionUnchecked} ${sessionUnchecked === 1 ? 'reply' : 'replies'} this session could not be checked.`
+    return { text: `Replies with a dash or emoji: ${sessionHits} this session, ${total} in total.${gap}` }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -102,15 +107,17 @@ export const register: Register = on => {
     if (!out || !out.text) return next(e)
     const v = await scan($, out.text, out.path || undefined)
     if (v.kind === 'hit') {
-      const reason = `This text has a dash or emoji${lineWords(v.lines)}.`
-      $.modkit.blocked({ toolUseId: String((e as { tool_use_id?: string }).tool_use_id ?? ''), guard: GUARD, reason, safeWay: FIX })
+      const where = lineWords(v.lines)
+      $.modkit.blocked({ toolUseId: String((e as { tool_use_id?: string }).tool_use_id ?? ''), guard: GUARD, reason: `This text has a dash or emoji${where}.`, safeWay: FIX })
       await $.ui.toast('Blocked a dash or emoji.')
-      return { deny: `Blocked: t${reason.slice(1)} ${FIX}` }
+      return { deny: `Blocked: this text has a dash or emoji${where}. ${FIX}` }
     }
     if (v.kind === 'unchecked') {
       // The push gate is still the backstop, so this lets the write through, but says so rather than
       // passing as checked (L11).
-      $.ui.log("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
+      $.ui.log(UNCHECKED_NOTE)
+      // Dan's line stays as he approved it; the cause goes to the debug log, never dropped.
+      $.ui.log(`style-check: ${v.why}`, { to: 'debug' })
     }
     return next(e)
   })
@@ -126,6 +133,11 @@ export const register: Register = on => {
         // Counted silently, read with /style-count (Dan, 2026-10-03).
         sessionHits += 1
         await $.store.set('chatHits', (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1)
+      } else if (v.kind === 'unchecked') {
+        // Said once a session, and kept apart from the count (lessons review).
+        if (sessionUnchecked === 0) $.ui.log(UNCHECKED_NOTE)
+        sessionUnchecked += 1
+        $.ui.log(`style-check: ${v.why}`, { to: 'debug' })
       }
     }
     return next(e)

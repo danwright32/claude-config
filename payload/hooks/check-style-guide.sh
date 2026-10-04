@@ -115,9 +115,10 @@ fi
 # What a push never scans is part of the rule, so it is read from the scanner rather than kept as a
 # second list here (claude-config#609): the mod honours the same paths.
 EXCLUDES=()
+excl="$(python3 "$SCANNER" --excludes)" || scanner_refusal "the style scanner $SCANNER could not list the paths a push never scans (its excluded paths)"
 while IFS= read -r pat; do
   [ -n "$pat" ] && EXCLUDES+=(":(exclude)$pat")
-done < <(python3 "$SCANNER" --excludes 2>/dev/null)
+done <<< "$excl"
 
 skip_ext() {  # $1 = a path ; true when it is one of the excluded kinds
   python3 "$SCANNER" --excluded "$1" 2>/dev/null

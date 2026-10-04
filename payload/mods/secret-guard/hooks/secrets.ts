@@ -124,7 +124,13 @@ export const findKnownSecret = (text: string, values: readonly string[]): boolea
 // ---- commands that print a secret ----
 
 const CAPTURED_GH_TOKEN = /\b[A-Za-z_][A-Za-z0-9_]*=\$\(\s*gh\s+auth\s+token\b[^)]*\)/g
-const READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'strings', 'xxd', 'od', 'tac'])
+// Everything that prints a file's lines, the text tools included (lessons review: grep . .env).
+const READERS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'strings', 'xxd', 'od', 'tac',
+  'grep', 'egrep', 'fgrep', 'rg', 'awk', 'sed', 'cut', 'sort', 'uniq', 'tr', 'jq', 'column', 'paste',
+])
+const SHELLS = new Set(['sh', 'bash', 'zsh'])
+const unquoteArg = (s: string): string => s.replace(/^["']|["']$/g, '')
 
 // Simple commands, split on the shell's separators. Good enough to find a command word and its
 // arguments; it does not need to be a parser, because each rule below errs toward refusing.
@@ -156,6 +162,15 @@ export const blockedCommand = (cmd: string): string | undefined => {
   for (const words of segments(cmd)) {
     const [head, ...args] = words
     if (head === undefined) continue
+    // A command run through a shell's -c is read as the command it runs.
+    if (SHELLS.has(head.split('/').pop() ?? head)) {
+      const c = args.indexOf('-c')
+      if (c >= 0) {
+        const inner = blockedCommand(unquoteArg(args.slice(c + 1).join(' ')))
+        if (inner) return inner
+      }
+      continue
+    }
     if (READERS.has(head)) {
       const file = args.find(a => !a.startsWith('-') && isEnvFile(a.replace(/^["']|["']$/g, '')))
       if (file) return `the secrets in ${file}`

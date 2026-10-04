@@ -104,12 +104,21 @@ want_plain 1 "--plain reads every line, even one that looks like a removed diff 
 plain "nothing here, self-aware and well-known"
 want_plain 0 "--plain is clean on hyphens"
 [ -z "$PLAIN_OUT" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: a clean --plain run prints nothing"; }
-plain "$(uesc 'a \u2014 b')" --path "/repo/CLAUDE.md"
-want_plain 0 "--plain honours the same excluded paths as the push (CLAUDE.md)"
+git init -q "$WORKDIR/a-repo"
+plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/a-repo/CLAUDE.md"
+want_plain 0 "--plain honours the same excluded paths as the push (the top level CLAUDE.md)"
+mkdir -p "$WORKDIR/a-repo/sub"
+plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/a-repo/sub/CLAUDE.md"
+want_plain 1 "--plain judges a CLAUDE.md below the top, as the push does"
 plain "$(uesc 'a \u2014 b')" --path "/repo/package-lock.json"
 want_plain 0 "--plain honours the same excluded paths as the push (a lock file)"
 plain "$(uesc 'a \u2014 b')" --path "/repo/src/a.ts"
 want_plain 1 "--plain still judges an ordinary path"
+# Outside any git repository the path cannot be made relative to a repository top, and a bare
+# basename would excuse a CLAUDE.md anywhere on disk (lessons review): so it is judged as written.
+mkdir -p "$WORKDIR/no-repo"
+plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/no-repo/CLAUDE.md"
+want_plain 1 "--plain judges a CLAUDE.md outside any repository rather than excusing it"
 plain "x" --bogus
 want_plain 2 "an unknown flag is refused with its own exit code, never read as clean (L11)"
 
@@ -450,6 +459,12 @@ run_style_hook_at "$NOSCAN" "$W" "git push"
 want_style_code 2 "a scanner that crashes refuses the push rather than reading as clean"
 run_style_hook_at "$NOSCAN" "$W" "SKIP_STYLE_CHECK=1 git push"
 want_style_code 0 "the visible override still clears a broken scanner refusal"
+# A scanner that reads diffs but cannot list its excluded paths would leave the exclusions empty
+# with nothing said (lessons review): refused by name as well.
+printf 'import sys\nsys.exit(3 if "--excludes" in sys.argv else 0)\n' > "$NOSCAN/lib/style-scan.py"
+run_style_hook_at "$NOSCAN" "$W" "git push"
+want_style_code 2 "a scanner that cannot list its excluded paths refuses the push"
+case "$STYLE_MSG" in *excluded*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: that refusal names the excluded paths: $STYLE_MSG" ;; esac
 
 
 echo

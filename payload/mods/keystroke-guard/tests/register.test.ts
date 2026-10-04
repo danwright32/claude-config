@@ -166,6 +166,15 @@ test('an ordinary command is not asked about', withKit, async ($, on) => {
   expect(w.reached).toContain('Bash')
 })
 
+test('a yes for an app it cannot name covers nothing else (lessons review)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { front: 10, running: {}, answer: 'Go ahead' })
+  // An activate with no app named: the guard cannot say which app comes forward.
+  await $.tool.call(bash(`osascript -e 'activate'`, 'u1'))
+  await $.tool.call(bash(`osascript -e 'activate'`, 'u2'))
+  expect(w.asked.length).toBe(2)
+})
+
 test('Chrome extension tools are left alone', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on, { front: 10, running: {}, answer: 'Go ahead' })

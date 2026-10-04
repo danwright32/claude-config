@@ -27,6 +27,9 @@ describe('blocked commands', () => {
     ['gh auth token printed', 'gh auth token'],
     ['gh auth token echoed through a substitution', 'echo $(gh auth token)'],
     ['a secret command after a harmless one', 'ls && cat .env'],
+    ['grep over a .env file (lessons review)', 'grep . .env'],
+    ['awk over a .env file', "awk '{print}' .env.local"],
+    ['cat of .env inside bash -c', 'bash -c "cat .env"'],
   ]
   for (const [name, cmd] of blocked) {
     test(`refuses ${name}`, () => {

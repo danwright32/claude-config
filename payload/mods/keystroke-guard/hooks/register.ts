@@ -46,9 +46,9 @@ const facts = async ($: EngineInterface, target: string) => {
 
 // The heads up, in the standard question dialog with the chip "Taking over" (design round 2).
 // A decline, a dismissal or a question nobody can answer refuses (L42).
-const headsUp = async ($: EngineInterface, app: string, typing: boolean): Promise<Refusal | undefined> => {
+const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: boolean): Promise<Refusal | undefined> => {
   const now = await $.clock.now()
-  const last = lastActive.get(app)
+  const last = named ? lastActive.get(app) : undefined
   if (last !== undefined && now - last <= QUIET_MS) {
     lastActive.set(app, now)
     return undefined
@@ -61,7 +61,9 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean): Promis
     return { reason: `The question about ${app} was dismissed.` }
   }
   if (answer !== 'Go ahead') return { reason: `You said not now to ${typing ? `typing into ${app}` : `bringing ${app} to the front`}.` }
-  lastActive.set(app, await $.clock.now())
+  // A yes is remembered only for an app the guard could name: one for "an app" would cover every
+  // app it cannot name (lessons review).
+  if (named) lastActive.set(app, await $.clock.now())
   return undefined
 }
 
@@ -85,7 +87,7 @@ export const register: Register = on => {
       if (verdict) return refuse(verdict)
     }
 
-    const declined = await headsUp($, app, typing)
+    const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
     return next(e)
   })
