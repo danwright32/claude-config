@@ -1,0 +1,8 @@
+{
+  "name": "is-it-live",
+  "version": "0.1.0",
+  "description": "A card for each merged change saying whether it is live, how to see it, and a message for whoever asked, pinned in the band until it is marked sent.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
+}

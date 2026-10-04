@@ -262,6 +262,28 @@ lines of a card. A part may carry `indent`, the blank columns drawn before it (o
 first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
 
+## Is it live (#617), built 2026-10-04
+
+How the settled card behaves, decided at build where the spec and the rounds were silent. The
+ones marked open are the builder's choice, waiting on Dan.
+
+- **Claude makes the card through the mod's own tool** (`mcp__is-it-live__card`) after a merge,
+  once while the deploy runs and again once it has checked. The mod confirms the merge with
+  GitHub itself and makes no card for a change GitHub does not report merged, or when GitHub
+  cannot be asked. Live needs Claude to say how it was checked; could not confirm needs why.
+- **Who asked:** an issue another person reported (the mod reads the issue's author, and drops
+  the message when the issue was filed from Dan's own account, which is how both Dan's and
+  Claude's issues are filed), a pasted Slack thread, or a person Dan named. A message with a dash
+  is refused.
+- **Cards are kept per repository** in the mod's store, the newest 50, so `/live` lists them in
+  any later session, newest first, then every message not yet marked sent; `/live` also pins
+  each unsent message in the band again, so Copy and Mark sent are at hand.
+- **The card is the tool's plain text result** until mod-kit draws a boxed card for any result
+  (#663): only mod-kit draws a result row.
+- Open: the title for a project with no recorded deploy step ("Merged, no deploy step
+  recorded:"), its colour, the violet drawn as the terminal's magenta, the toast's words (the
+  card's title), and the Copy and Mark sent buttons having no shortcut keys.
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact
