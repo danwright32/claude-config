@@ -1,4 +1,4 @@
-import { FAIL_STREAK, stateOf, type Progress, type State } from './progress.ts'
+import { FAIL_STREAK, isStepStatus, stateOf, type Progress, type State } from './progress.ts'
 
 // The /goals pane's rows, apart from the drawing (claude-config#612, docs/mods-design.md "Goals
 // pane"): every open session on this Mac, two lines each. Project and goal on top; beneath, the
@@ -60,14 +60,22 @@ export const permissionFor = (tool: string, input: unknown): string => {
 // Every field the pane reads is checked, the text ones too: one malformed record never breaks the
 // drawing of every other session (lessons review of 4cb9221).
 const textOrAbsent = (x: unknown) => x === undefined || typeof x === 'string'
+// The kind of wait decides the pane's detail, and a step's status its count, so both are checked
+// against the values the tracker writes (lessons review of #634, #694).
+const isStep = (x: unknown): boolean => {
+  const s = x as Record<string, unknown> | null
+  return !!s && typeof s === 'object' && typeof s.id === 'string' && typeof s.subject === 'string' && textOrAbsent(s.activeForm) && isStepStatus(s.status)
+}
 const isProgress = (x: unknown): x is Progress => {
   const p = x as Partial<Progress> | null
   if (!p || typeof p !== 'object') return false
   const numbers = typeof p.done === 'number' && typeof p.total === 'number' && typeof p.startedAt === 'number' && typeof p.lastStepAt === 'number' && typeof p.lastActivityAt === 'number'
   const texts = textOrAbsent(p.goal) && textOrAbsent(p.request) && textOrAbsent(p.failed) && (p.current === undefined || p.current === null || typeof p.current === 'string')
-  const w = p.waiting as { question?: unknown; since?: unknown } | undefined
-  const waiting = w === undefined || (!!w && typeof w === 'object' && typeof w.question === 'string' && typeof w.since === 'number')
-  return numbers && texts && waiting
+  const w = p.waiting as { question?: unknown; since?: unknown; kind?: unknown } | undefined
+  const kind = w?.kind === undefined || w.kind === 'question' || w.kind === 'permission'
+  const waiting = w === undefined || (!!w && typeof w === 'object' && typeof w.question === 'string' && typeof w.since === 'number' && kind)
+  const steps = Array.isArray(p.steps) && p.steps.every(isStep)
+  return numbers && texts && waiting && steps
 }
 
 const detailOf = (p: Progress, state: State, now: number): string | undefined => {

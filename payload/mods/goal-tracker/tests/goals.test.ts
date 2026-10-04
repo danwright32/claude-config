@@ -80,6 +80,31 @@ describe('a session in the goals pane', () => {
     expect(rows.map(r => r.project)).toEqual(['Fine'])
   })
 
+  // Lessons review of #634 (#694 item 5): what kind of wait it is decides the pane's detail, and the
+  // steps are the record's own list, so neither is trusted either.
+  test('a record whose waiting kind or steps are malformed is left out, and the others still draw', () => {
+    const waitingOf = (kind: unknown) => ({ waiting: { question: 'Ship it?', since: 0, kind } })
+    const bad = [
+      waitingOf('banana'),
+      waitingOf(3),
+      waitingOf(null),
+      { steps: 'all of them' },
+      { steps: [null] },
+      { steps: [{ id: 'a', subject: 'Read', status: 'finished' }] },
+      { steps: [{ id: 7, subject: 'Read', status: 'pending' }] },
+      { steps: [{ id: 'a', subject: ['Read'], status: 'pending' }] },
+      { steps: [{ id: 'a', subject: 'Read', status: 'pending', activeForm: 9 }] },
+    ]
+    const good = [
+      rec('question', '/r/Question', at(waitingOf('question') as Partial<Progress>)),
+      rec('permission', '/r/Permission', at(waitingOf('permission') as Partial<Progress>)),
+      rec('unkinded', '/r/Unkinded', at({ waiting: { question: 'Ship it?', since: 0 } })),
+      rec('steps', '/r/Steps', at({ steps: [{ id: 'a', subject: 'Read', status: 'completed' }, { id: 'b', subject: 'Build', activeForm: 'Building', status: 'in_progress' }], total: 2, done: 1 })),
+    ]
+    const rows = rowsOf([...bad.map((b, i) => rec(`bad${i}`, `/r/Bad${i}`, at(b as Partial<Progress>))), ...good], 0)
+    expect(rows.map(r => r.project).sort()).toEqual(['Permission', 'Question', 'Steps', 'Unkinded'])
+  })
+
   test('within a state the session that started first comes first', () => {
     const rows = rowsOf([rec('late', '/r/Late', at({ startedAt: 5 * MIN, lastActivityAt: 6 * MIN })), rec('early', '/r/Early', at({ startedAt: 0, lastActivityAt: 6 * MIN }))], 6 * MIN)
     expect(rows.map(r => r.project)).toEqual(['Early', 'Late'])
