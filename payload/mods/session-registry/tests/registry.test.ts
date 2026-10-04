@@ -41,6 +41,10 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     return { value: files[e.path] as string }
   })
   on('fs.exists', ($, e) => ({ value: e.path in files }) as never)
+  on('fs.stat', ($, e) => {
+    if (!(e.path in files)) throw new Error(`no file ${e.path}`)
+    return { value: { kind: 'file', size: 1, mtimeMs: opts.mtimes?.[e.path] ?? 100 * MIN, isLink: false } } as never
+  })
   on('fs.list', ($, e) => ({
     value: Object.keys(files)
       .filter(p => p.startsWith(e.path + '/') && !p.slice(e.path.length + 1).includes('/'))
@@ -87,7 +91,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     return { value: undefined }
   })
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
-  return { files, writes, finds, clock, own, hold, release: () => gate.release() }
+  return { files, writes, finds, logs, removed, clock, own, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
