@@ -103,7 +103,8 @@ const prune = async ($: EngineInterface, h: string, now: number) => {
     let isDamaged = false
     try {
       const r = JSON.parse(await $.fs.read(path)) as SessionsRecord
-      if (r.v !== 1 || typeof r.sessionId !== 'string' || typeof r.lastSeen !== 'number') throw new Error('shape')
+      // Every time compared below must be a number, or its age is NaN and slips past the check (L50).
+      if (r.v !== 1 || typeof r.sessionId !== 'string' || typeof r.lastSeen !== 'number' || (r.closedAt !== null && typeof r.closedAt !== 'number')) throw new Error('shape')
       endedAt = r.closedAt ?? (now - r.lastSeen > DEAD_MS ? r.lastSeen : null)
     } catch {
       isDamaged = true

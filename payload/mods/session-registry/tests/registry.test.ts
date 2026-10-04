@@ -311,3 +311,12 @@ test('an open session is never deleted however long ago it started', withConsume
   await start($)
   expect(w.removed).toEqual([])
 })
+
+test('a record whose closed time is not a number counts as damaged, so a recent one is kept', withConsumer, async ($, on) => {
+  const w = world(on, {
+    files: { [`${DIR}/odd.json`]: recOf('odd', { closedAt: 'yesterday' }) },
+    mtimes: { [`${DIR}/odd.json`]: NOW - DAY },
+  })
+  await start($)
+  expect(w.removed).toEqual([])
+})
