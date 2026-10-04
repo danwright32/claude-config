@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit, type Rec, type Verdict } from './collide.ts'
+import { editedUnder, insideRoot, latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -114,16 +114,29 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
 // The files a Bash call writes, as far as its words name them (collide.ts, shellWrites). A cp or mv
 // onto one existing folder lands inside it; a path the disk cannot answer for is taken as the file
 // itself, the reading that still judges a clash on that name.
-const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<string[]> => {
+const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<ShellWrite[]> => {
   const cwd = await $.session.cwd()
   const home = await $.env.get('HOME').catch(() => undefined)
-  const out: string[] = []
+  const out: ShellWrite[] = []
   for (const w of shellWrites(cmds, cwd, home)) {
     let isDir = false
     if (w.sources) isDir = (await $.fs.stat(w.path).catch(() => undefined))?.kind === 'dir'
-    for (const p of isDir && w.sources ? w.sources.map(s => `${w.path}/${base(s)}`) : [w.path]) if (!out.includes(p)) out.push(p)
+    const { sources, ...write } = w
+    const found = isDir && sources ? sources.map(s => ({ path: `${w.path}/${base(s)}` })) : [write]
+    for (const f of found) if (!out.some(o => o.path === f.path)) out.push(f)
   }
   return out
+}
+
+// The folder a session's edits are recorded within (#674): its repository, or its own folder when
+// it works outside one. Scratch (/tmp, the scratchpad) lies outside it, and recording it would push
+// real edits out of the twenty the judge reads and raise checks between sessions sharing scratch.
+// This session's record says; before the registry has written one, git is asked, then the folder.
+const recordRoot = async ($: EngineInterface, list: { open: Rec[]; selfId: string | null }): Promise<string> => {
+  const me = list.open.find(r => r.sessionId === list.selfId)
+  if (me) return me.repoRoot ?? me.cwd
+  const cwd = await $.session.cwd()
+  return (await run($, ['git', '-C', cwd, 'rev-parse', '--show-toplevel']))?.trim() || cwd
 }
 
 const unreadableRefusal =($: EngineInterface, toolUseId: string, names: string[]) =>
@@ -146,7 +159,7 @@ export const register: Register = on => {
         if (blocked) return blocked
       }
       const result = await next(e)
-      if (!result.deny && !result.isError) await $.sessions.noteEdit({ path })
+      if (!result.deny && !result.isError && insideRoot(path, await recordRoot($, list))) await $.sessions.noteEdit({ path })
       return result
     }
 
@@ -168,17 +181,20 @@ export const register: Register = on => {
       }
 
       // The files the command writes (#654), judged against the other sessions' edits the same way
-      // an Edit is, and noted as this session's own once it has run.
+      // an Edit is, and noted as this session's own once it has run. An rm is judged the same way
+      // (#674), and an rm -r on every file another session edited inside the folder it takes away.
       const written = await writtenFiles($, cmds)
-      if (written.length) {
-        const list = await $.sessions.list()
-        if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
-        for (const path of written) {
+      if (!written.length) return next(e)
+      const list = await $.sessions.list()
+      if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
+      for (const w of written) {
+        for (const path of w.tree ? editedUnder(list.open, list.selfId, w.path) : [w.path]) {
           const others = othersEditing(list.open, list.selfId, path)
           if (!others.length) continue
           const root = others[0]?.repoRoot ?? null
+          const what = !w.removes ? `write ${path}` : path === w.path ? `remove ${path}` : `remove ${path} (inside ${w.path})`
           const blocked = await decide($, toolUseId, {
-            action: `write ${path} with the shell command: ${command}`,
+            action: `${what} with the shell command: ${command}`,
             shortName: base(path),
             messageWhat: relTo(path, root),
             where: 'file',
@@ -190,8 +206,11 @@ export const register: Register = on => {
       }
       const result = await next(e)
       // A command that failed may still have written before it failed (printf >> f; false), so only
-      // a refusal leaves the record alone.
-      if (!result.deny) for (const path of written) await $.sessions.noteEdit({ path })
+      // a refusal leaves the record alone. Scratch outside the session's root is never recorded.
+      if (!result.deny) {
+        const root = await recordRoot($, list)
+        for (const w of written) if (insideRoot(w.path, root)) await $.sessions.noteEdit({ path: w.path })
+      }
       return result
     }
     return next(e)

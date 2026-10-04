@@ -42,6 +42,20 @@ export const watchedGit = (g: { sub: string | undefined; args: string[] }): stri
 export const othersEditing = <R extends Rec>(open: R[], selfId: string | null, path: string): R[] =>
   open.filter(r => r.sessionId !== selfId && r.edits.includes(path))
 
+// Whether a path is the folder itself or anything under it.
+export const insideRoot = (path: string, root: string): boolean => root === '/' || path === root || path.startsWith(root + '/')
+
+// The files other open sessions edited inside a folder an rm -r takes away (#674), each once, in
+// the order first found, so each can be judged by othersEditing like a single write.
+export const editedUnder = <R extends Rec>(open: R[], selfId: string | null, folder: string): string[] => {
+  const out: string[] = []
+  for (const r of open) {
+    if (r.sessionId === selfId) continue
+    for (const p of r.edits) if (insideRoot(p, folder) && !out.includes(p)) out.push(p)
+  }
+  return out
+}
+
 // A session whose repository could not be read when it started is matched by its folder, so a
 // failed lookup there cannot hide it from a branch switch here (the empty answer is not "elsewhere").
 export const othersInRepo = <R extends Rec>(open: R[], selfId: string | null, root: string | null): R[] =>
@@ -100,7 +114,10 @@ export const latestRequest = (tail: string): string | undefined => {
 // Decided for #654 (docs/mods-design.md): what the words do not name is not guessed at. A script, a
 // python -c, a make, or a path built from a variable, a glob or a command substitution writes
 // files this cannot see, and those are neither judged nor noted.
-export type ShellWrite = { path: string; sources?: string[] }
+//
+// An rm or unlink is a write too (#674): it `removes` the file, and with -r it removes a `tree`,
+// the folder and everything under it, so the hook judges every file another session edited there.
+export type ShellWrite = { path: string; sources?: string[]; removes?: true; tree?: true }
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?|>&)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
@@ -214,10 +231,10 @@ const perlInPlace = (args: string[]): string[] => {
 export const shellWrites = (cmds: string[][], cwd: string, home: string | undefined): ShellWrite[] => {
   const out: ShellWrite[] = []
   const seen = new Set<string>()
-  const add = (path: string | undefined, sources?: string[]) => {
+  const add = (path: string | undefined, sources?: string[], extra?: Pick<ShellWrite, 'removes' | 'tree'>) => {
     if (!path || seen.has(path)) return
     seen.add(path)
-    out.push(sources ? { path, sources } : { path })
+    out.push({ path, ...(sources ? { sources } : {}), ...extra })
   }
   let dir: string | undefined = cwd
   for (const words of cmds) {
@@ -254,6 +271,15 @@ export const shellWrites = (cmds: string[][], cwd: string, home: string | undefi
       case 'perl':
         for (const f of perlInPlace(rest)) add(abs(f))
         break
+      case 'rm':
+      case 'unlink': {
+        // rm takes no option values, so every option is a flag: -r, -R or --recursive in any
+        // cluster (-rf, -fR) makes each operand a whole folder.
+        const { ops, opts } = operands(rest, new Set())
+        const tree = name === 'rm' && [...opts.keys()].some(k => k === '--recursive' || /^-[A-Za-z]*[rR]/.test(k))
+        for (const f of ops) add(abs(f), undefined, tree ? { removes: true, tree: true } : { removes: true })
+        break
+      }
       case 'cp':
       case 'mv': {
         const { ops, opts } = operands(rest, new Set(['-t', '--target-directory', '-S', '--suffix']))

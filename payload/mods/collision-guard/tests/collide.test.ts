@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit } from '../hooks/collide.ts'
+import { editedUnder, insideRoot, latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -153,5 +153,49 @@ describe('the files a shell command writes', () => {
     expect(paths([['python3', '-c', "open('notes.txt','a').write('x')"], ['bash', './update.sh']])).toEqual([])
     // A redirect with nothing after it names no file.
     expect(paths([['echo', 'x', '>']])).toEqual([])
+  })
+  // #674: rm takes a file away, the most destructive write, so it is named too.
+  test('rm and unlink name each file they remove', () => {
+    expect(writes([['rm', 'notes.txt', '/abs/b.txt']])).toEqual([
+      { path: '/repo/notes.txt', removes: true },
+      { path: '/abs/b.txt', removes: true },
+    ])
+    expect(writes([['rm', '-f', '--', '-odd.txt']])).toEqual([{ path: '/repo/-odd.txt', removes: true }])
+    expect(writes([['unlink', 'x.txt']])).toEqual([{ path: '/repo/x.txt', removes: true }])
+  })
+  test('rm -r names a folder and everything under it, in any spelling', () => {
+    for (const flag of ['-r', '-R', '-rf', '-fR', '--recursive']) {
+      expect(writes([['rm', flag, 'src/']])).toEqual([{ path: '/repo/src', removes: true, tree: true }])
+    }
+    expect(writes([['cd', 'sub'], ['rm', '-rf', '..']])).toEqual([{ path: '/repo', removes: true, tree: true }])
+  })
+  test('an rm of a glob or a variable is not guessed at (#654)', () => {
+    expect(paths([['rm', '*.txt'], ['rm', '-rf', '$DIR']])).toEqual([])
+  })
+})
+
+describe('what a removed folder holds of the other sessions', () => {
+  test('every file another session edited under the folder, once, and never this session', () => {
+    const open = [rec('me', { edits: ['/repo/src/mine.ts'] }), rec('a', { edits: ['/repo/src/a.ts', '/repo/srcx/no.ts'] }), rec('b', { edits: ['/repo/src/a.ts', '/repo/src/deep/b.ts'] })]
+    expect(editedUnder(open, 'me', '/repo/src')).toEqual(['/repo/src/a.ts', '/repo/src/deep/b.ts'])
+    expect(editedUnder(open, 'me', '/repo/other')).toEqual([])
+  })
+  test('the folder itself, when another session recorded it, counts', () => {
+    expect(editedUnder([rec('a', { edits: ['/repo/src'] })], 'me', '/repo/src')).toEqual(['/repo/src'])
+  })
+  test('the root folder holds everything', () => {
+    expect(editedUnder([rec('a', { edits: ['/repo/x.ts'] })], 'me', '/')).toEqual(['/repo/x.ts'])
+  })
+})
+
+// #674: scratch (/tmp, the scratchpad) is not a session's edit, so it cannot push real edits out of
+// the twenty the judge reads.
+describe('which paths are recorded as a session edit', () => {
+  test('inside the repository root only', () => {
+    expect(insideRoot('/repo/src/a.ts', '/repo')).toBe(true)
+    expect(insideRoot('/repo', '/repo')).toBe(true)
+    expect(insideRoot('/repository/a.ts', '/repo')).toBe(false)
+    expect(insideRoot('/tmp/x.txt', '/repo')).toBe(false)
+    expect(insideRoot('/private/tmp/claude-501/scratchpad/n.md', '/repo')).toBe(false)
   })
 })
