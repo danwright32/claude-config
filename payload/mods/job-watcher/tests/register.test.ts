@@ -27,13 +27,16 @@ const STARTED = `Command running in background with ID: job1. Output is being wr
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
 // The Mac beneath the watcher: one background job writing to OUT, whose output the test sets.
-const world = (on: On, job: { tail: string; size: number }) => {
+const world = (on: On, job: { tail: string; size: number; unreadable?: boolean }) => {
   const w = { reached: [] as { tool: string; input: Record<string, unknown> }[], extra: [] as unknown[], contexts: [] as string[] }
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
     if (cmd === 'lsof') return ok('501\n')
     if (cmd === 'ps' && args.includes('pgid=')) return ok('501\n')
     if (cmd === 'ps' && args.includes('-g')) return ok('501\n')
+    if ((cmd === 'stat' || cmd === 'tail') && job.unreadable) {
+      return { value: { exitCode: 1, stdout: '', stderr: `${cmd}: ${OUT}: Permission denied`, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (cmd === 'stat') return ok(`${job.size}\n`)
     if (cmd === 'tail') return ok(job.tail)
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -103,4 +106,20 @@ test('a healthy job says nothing', withDeps, async ($, on) => {
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).toBe('')
   void w
+})
+
+test('an output file that cannot be read is reported as unreadable, never as a silent job, and only once', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0, unreadable: true })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(11 * MIN)
+  expect(w.reached.filter(r => r.tool === 'TaskStop')).toEqual([])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('job1')
+  expect(contextOf(next)).toMatch(/could not read its output file/)
+  expect(contextOf(next)).not.toMatch(/no new output/)
+  await clock.advance(5 * MIN)
+  const later = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(later)).toBe('')
 })

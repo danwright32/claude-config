@@ -10,7 +10,7 @@ import { assess, isPollLoop, startedJob } from './jobs.ts'
 // a session) waits on the design rounds with him.
 
 type Job = { id: string; command: string; outputPath: string; pgid: number | null; startedAt: number }
-type Watch = { lastSize: number; lastGrowth: number; told: boolean }
+type Watch = { lastSize: number; lastGrowth: number; told: boolean; toldUnreadable: boolean }
 
 const TICK_MS = 60_000
 const jobs = new Map<string, Job>()
@@ -40,16 +40,27 @@ const traceGroup = async ($: EngineInterface, outputPath: string): Promise<numbe
 const look = async ($: EngineInterface) => {
   const now = await $.clock.now()
   for (const job of [...jobs.values()]) {
-    const size = Number((await run($, ['stat', '-f', '%z', job.outputPath]))?.trim())
+    const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
+    const size = statOut === undefined ? NaN : Number(statOut.trim())
+    const tail = await run($, ['tail', '-c', '4096', job.outputPath])
     // The first look dates what is already there from the job's start: it grew before anyone looked.
-    const w = watch.get(job.id) ?? { lastSize: Number.isFinite(size) ? size : 0, lastGrowth: job.startedAt, told: false }
-    if (Number.isFinite(size) && size > w.lastSize) {
+    const w = watch.get(job.id) ?? { lastSize: Number.isFinite(size) ? size : 0, lastGrowth: job.startedAt, told: false, toldUnreadable: false }
+    watch.set(job.id, w)
+    // An output file that cannot be read says nothing about the job, so it is never judged silent:
+    // Claude is told it could not be read, once, until it can be again.
+    if (!Number.isFinite(size) || tail === undefined) {
+      if (!w.toldUnreadable) {
+        w.toldUnreadable = true
+        notices.push(`Background job ${job.id} (${job.command}): could not read its output file ${job.outputPath}, so whether it is stuck is unknown.`)
+      }
+      continue
+    }
+    w.toldUnreadable = false
+    if (size > w.lastSize) {
       w.lastSize = size
       w.lastGrowth = now
       w.told = false
     }
-    watch.set(job.id, w)
-    const tail = (await run($, ['tail', '-c', '4096', job.outputPath])) ?? ''
     const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth }, now)
     if (a.state === 'repeating' && isPollLoop(job.command)) {
       // A poll loop that has never once succeeded is stopped by itself (the spec), through Claude
