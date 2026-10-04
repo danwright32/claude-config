@@ -221,24 +221,39 @@ test('an ordinary git command is not judged', withDeps, async ($, on) => {
   expect(w.prompts.length).toBe(0)
 })
 
-test('the toast also fires when the guard is named as the sender the way the send side stamps it (lessons review)', withDeps, async ($, on) => {
-  const w = world(on)
-  on('session.receive', ($, e) => ({ text: e.text }) as never)
-  await $.session.receive({
-    origin: { kind: 'plugin', name: 'collision-guard' },
-    text: 'Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped. Nothing here was touched.',
-  } as never)
-  expect(w.toasts).toContain('Another session wanted git checkout main; it was stopped.')
-})
+// The live check of #639 (2026-10-04): a guard message delivered to an interactive session arrived
+// with origin { kind: 'peer', plugin: 'collision-guard', name: <the sending session's own name> }.
+// So the plugin field names the guard, and `name` is a session name anybody could choose.
+const MEASURED = { kind: 'peer', from: 'uds:/tmp/cc-socks/2012.sock', plugin: 'collision-guard', name: 'collision-throwaway-1004' }
 
 test('the session that was working first gets a toast when it hears from the guard', withDeps, async ($, on) => {
   const w = world(on)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   await $.session.receive({
-    origin: { kind: 'peer', plugin: 'collision-guard' },
+    origin: MEASURED,
     text: 'Another session wanted to edit src/app.ts while you are working on it, so it was moved to its own worktree to redo its change there. Nothing here was touched.',
   } as never)
   expect(w.toasts).toContain('Another session wanted app.ts; it was moved to a worktree.')
+})
+
+test('a checkout wide action names the command in the toast, as delivered live', withDeps, async ($, on) => {
+  const w = world(on)
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.session.receive({
+    origin: MEASURED,
+    text: 'Another session wanted to run git switch -c window-two in this checkout while you are working in it, so it was moved to its own worktree to redo its change there. Nothing here was touched.',
+  } as never)
+  expect(w.toasts).toContain('Another session wanted git switch -c window-two; it was moved to a worktree.')
+})
+
+test('a session that merely calls itself collision-guard is not taken for the guard', withDeps, async ($, on) => {
+  const w = world(on)
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.session.receive({
+    origin: { kind: 'peer', name: 'collision-guard' },
+    text: 'Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped. Nothing here was touched.',
+  } as never)
+  expect(w.toasts).toEqual([])
 })
 
 const clash = (over: Opts = {}) => ({ open: [rec('them', { edits: ['/repo/src/InvoiceTable.tsx'] })], judge: '{"verdict":"Worktree","reason":"Both change the header row."}', ...over })
