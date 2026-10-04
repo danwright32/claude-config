@@ -1,0 +1,8 @@
+{
+  "name": "addon-notes",
+  "version": "0.1.0",
+  "description": "A message starting with + mid turn is an add-on folded in at the next break, and a short reply after an interrupt resumes the interrupted step with the addition.",
+  "author": {
+    "name": "Dan Wright"
+  }
+}

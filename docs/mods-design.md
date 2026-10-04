@@ -134,6 +134,33 @@ classic status line command passes colour through, and the band above the prompt
 | State colour | On the state word only: waiting on you and stalled amber, failed red, working blue, done green. A deliberate exception to standing rule 1, so every state reads at a glance; red stays for something genuinely wrong (design round) |
 | Notification | One per waiting moment, naming the project: "<project> is waiting on you" with the question, or "<project> needs a permission" with what for. It replaces the PermissionRequest "Permission needed" hook and the idle "What's next?" hook while a question is open, in the same change (pickers) |
 
+## Add-on notes (#620), behaviour decided while building, 2026-10-04
+
+Not yet put to Dan in a round; each is the conservative reading of the spec, and the reason is given.
+
+- **Only Dan's messages count**: typed at the terminal or sent from the phone through Remote
+  Control. A peer session, a background task or a plugin is never an add-on, even with a `+`.
+- **A `+` note mid turn** gets context telling the model to finish the step and fold the note in
+  at the next break, and the toast "Noted, applying after this step." once the note has entered.
+  A note Claude Code refuses gets no toast. A `+` note while idle with no interrupt before it is
+  passed through as typed: the spec defines `+` for a running turn only.
+- **Not a `+` note**: a lone `+`, `++`, `+1`, or a pasted diff (later lines starting with `+`, `-`
+  or `@`).
+- **An interrupt** is a main loop turn that ended because Dan stopped it. A subagent stopped, or a
+  turn that died on an API error, is not one. It is used up by Dan's next message whatever that
+  says; another session's message does not use it up; /clear forgets it.
+- **An amendment after an interrupt** opens with a word Dan uses to add scope (also, and, include,
+  including, plus, keep going, carry on, continue, go on, or a `+`, optionally after oh or ok), is
+  at most 40 words, and carries no word that turns it around (instead, stop, never mind, scrap,
+  cancel, forget it, rather than, not that, wrong, undo, revert, start over, hold off, wait).
+  "Sorry" counts only when followed by carrying on or adding: "sorry, I meant the staging database"
+  is a correction. Read this narrowly on purpose: a miss is an ordinary message, read as without the
+  mod, while a redirect taken for an add-on would carry on with work Dan just stopped.
+- **No toast after an interrupt**: the acknowledgement is Claude's own resume line, the agreed one
+  dim grey line. When the reply adds nothing ("keep going"), the line is "+ add-on: Carrying on."
+  The mod draws the line dim only where it opens a reply.
+- **The words typed are never changed**; the mod only adds context the model reads beside them.
+
 ## Session registry retention (#633), settled 2026-10-04
 
 A closed session's record is kept 7 days after it closed, a crashed one 7 days after it was last
