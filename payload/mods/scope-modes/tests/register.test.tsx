@@ -134,6 +134,7 @@ const world = (on: On, o: Opts = {}) => {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
       return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
+    if (cmd === 'git' && a.includes('--show-current') && o.branch === '__fails') return fail(128, 'fatal: not a git repository')
     if (cmd === 'git' && a.includes('--show-current')) return ok(`${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('symbolic-ref')) return ok('origin/main\n')
     if (cmd === 'git' && a.includes('--list')) return ok(o.branchHere === false ? '' : `  ${o.branch ?? 'scope-modes-616'}\n`)
@@ -145,6 +146,7 @@ const world = (on: On, o: Opts = {}) => {
       if (gh.fails) return fail(1, gh.fails)
       if (a[0] === 'pr' && a[1] === 'list') return ok(JSON.stringify(gh.pr ? [gh.pr] : []))
       if (a[0] === 'pr' && a[1] === 'view') return gh.pr ? ok(JSON.stringify(gh.pr)) : fail(1, 'no pull requests found')
+      if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN' }))
     }
     return fail(1, `unexpected: ${argv.join(' ')}`)
@@ -334,6 +336,27 @@ test('a finish check that cannot read GitHub never counts as finished', withDeps
   await clock.advance(5 * MIN)
   expect(w.toasts).toEqual([])
   expect(lastModes(w)).toEqual(['WINDING DOWN'])
+})
+
+test('a branch that cannot be read when winding down turns on is said, never read as nothing to finish (L11)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: '__fails' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/what this session is working on could not be read \(fatal: not a git repository\)/)
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  // Once it can be read, the check goes on from there.
+  w.o.branch = 'scope-modes-616'
+  w.o.gh = merged('OPEN')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+})
+
+test('an answer from GitHub that is not what was asked for refuses the turn end rather than letting it through', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: { ...merged(), issues: {}, garbled: true } as never })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the finish check failed/)
+  expect(w.toasts).toEqual([])
 })
 
 test("winding down allows the fix that blocks this issue's merge, and denies new work", withDeps, async ($, on) => {

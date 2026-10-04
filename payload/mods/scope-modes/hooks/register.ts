@@ -86,13 +86,27 @@ const run = async ($: EngineInterface, argv: string[]) => {
   }
 }
 
-// What winding down finishes: the branch this session is on, read once when it turns on.
-const readTarget = async ($: EngineInterface): Promise<ScopeModesTarget | null> => {
-  const repo = await $.session.repo().catch(() => null)
+// What winding down finishes: the branch this session is on, read when it turns on. Not in a
+// repository is an answer (nothing to finish); a read that fails is not, and is said (L11).
+type TargetRead = ScopeModesTarget | null | { unreadable: string }
+const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
+  let repo
+  try {
+    repo = await $.session.repo()
+  } catch (err) {
+    return { unreadable: msg(err) }
+  }
   if (!repo) return null
-  const cwd = await $.session.cwd().catch(() => repo.root)
+  let cwd: string
+  try {
+    cwd = await $.session.cwd()
+  } catch (err) {
+    return { unreadable: msg(err) }
+  }
   const b = await run($, ['git', '-C', cwd, 'branch', '--show-current'])
-  const branch = b.exitCode === 0 ? b.stdout.trim() : ''
+  if (b.exitCode !== 0) return { unreadable: b.stderr.trim() || `git exited ${b.exitCode}` }
+  const branch = b.stdout.trim()
+  // origin/HEAD is often never set locally, so its absence falls back to the usual names.
   const head = await run($, ['git', '-C', repo.root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
   const defaultBranch = head.exitCode === 0 ? head.stdout.trim().replace(/^origin\//, '') : undefined
   // A detached head has no branch to finish.
@@ -157,10 +171,22 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
   if (checking) return checking
   checking = (async () => {
     if ((await scopeOf($)) !== 'WINDING DOWN') return null
-    const t = (await $.state.get(targetRef)).value ?? null
+    let t = (await $.state.get(targetRef)).value ?? null
+    if (t && 'unreadable' in t) {
+      const again = await readTarget($)
+      await $.state.set(targetRef, again)
+      if (again && 'unreadable' in again) return [`what this session is working on could not be read (${again.unreadable})`]
+      t = again
+    }
     // Outside a repository there is no PR, branch or deploy to finish.
     if (!t) return []
-    return outstanding(await readWind($, t))
+    // A check that throws must refuse the turn end: a Stop hook that fails is skipped, which would
+    // let the turn end unfinished (L42).
+    try {
+      return outstanding(await readWind($, t))
+    } catch (err) {
+      return [`the finish check failed (${msg(err)})`]
+    }
   })().finally(() => {
     checking = undefined
   })
@@ -428,7 +454,7 @@ export const register: Register = on => {
     }
     if (scope === 'WINDING DOWN') {
       const t = (await $.state.get(targetRef)).value ?? null
-      const r = newWork({ tool, input, commands, issues: t?.issues ?? [] })
+      const r = newWork({ tool, input, commands, issues: t && 'issues' in t ? t.issues : [] })
       if (r) {
         await $.modkit.blocked({ toolUseId, guard: 'Winding down', reason: `Winding down, so this would not ${r.what}.`, safeWay: 'Claude finishes this issue and files anything else.' })
         return { deny: `Blocked: winding down, so this did not ${r.what}. Finish this issue; file anything new as an issue instead of working on it.` }
@@ -484,7 +510,7 @@ export const register: Register = on => {
     await $.state.set(heldRef, [] as ScopeModesHeld[])
     lastOrigin = undefined
     await showModes($)
-    await showHeld($).catch(() => undefined)
+    await showHeld($)
     return next(e)
   })
 }
