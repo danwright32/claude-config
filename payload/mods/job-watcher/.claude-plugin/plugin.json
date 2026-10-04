@@ -3,6 +3,6 @@
   "version": "0.1.0",
   "description": "Keeps track of background jobs, notices when one is stuck, and reminds Claude of any it has neither stopped nor kept.",
   "author": { "name": "Dan Wright" },
-  "dependencies": ["mod-kit", "session-registry"],
+  "dependencies": ["session-registry"],
   "types": "./types/index.d.ts"
 }

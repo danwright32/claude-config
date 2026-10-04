@@ -227,6 +227,48 @@ PY
 grep -q 'terminal-notifier' "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
   && check "and the goal tracker is what sends them" ok || check "and the goal tracker is what sends them" "no terminal-notifier call in goal-tracker"
 
+# 11. Every dependency a mod's plugin.json lists is one its hooks use (#694: the job watcher listed
+#     mod-kit and never used it): a noun the dependency's contract declares reached, or its name.
+DEPS="$ROOT/tools/check-mod-dependencies.sh"
+M11="$TMPROOT/m11"
+mkdepmod(){   # $1 = mods dir  $2 = name  $3 = dependencies as a JSON list  $4 = the hooks module's source
+  mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks"
+  printf '{ "name": "%s", "version": "0.1.0", "description": "t", "dependencies": %s }\n' "$2" "$3" > "$1/$2/.claude-plugin/plugin.json"
+  printf '%s\n' "$4" > "$1/$2/hooks/register.ts"
+}
+mkdepmod "$M11" kit '[]' "export const register = () => {}"
+mkdir -p "$M11/kit/types"
+printf '{ "name": "kit", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' > "$M11/kit/.claude-plugin/plugin.json"
+printf 'export type Kit = { go: () => Promise<void> }\ndeclare module "claude-code" {\n  interface EngineInterface {\n    kit: Kit\n  }\n}\n' > "$M11/kit/types/index.d.ts"
+mkdepmod "$M11" by-noun '["kit"]' "export const register = on => { on('tool.call', async (\$, e, next) => { await \$.kit.go(); return next(e) }) }"
+mkdepmod "$M11" by-name '["kit"]' "export const register = on => { on('ui.press', { plugin: 'kit' }, async (\$, e, next) => next(e)) }"
+out="$(bash "$DEPS" "$M11" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a dependency reached by its noun or named passes" ok || check "a dependency reached by its noun or named passes" "exit=$code out=$out"
+case "$out" in *"3 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+# A mod that lists it and never uses it; its own test file reaching the noun does not count.
+mkdepmod "$M11" lazy '["kit"]' "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
+printf "import { test } from 'claude-code/testing'\n// \$.kit.go() in a stand in\n" > "$M11/lazy/hooks/a.test.ts"
+out="$(bash "$DEPS" "$M11" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a dependency the mod never uses fails the run" ok || check "a dependency the mod never uses fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'lazy lists kit' | grep -q 'lazy/.claude-plugin/plugin.json' \
+  && check "naming the mod, the dependency and the file to change" ok || check "naming the mod, the dependency and the file to change" "$out"
+! printf '%s\n' "$out" | grep -qE '(by-noun|by-name) lists' \
+  && check "and the mods that use it are not named" ok || check "and the mods that use it are not named" "$out"
+rm -rf "$M11/lazy"
+mkdepmod "$M11" orphan '["not-a-mod"]' "export const register = () => {}"
+out="$(bash "$DEPS" "$M11" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'orphan lists not-a-mod under dependencies, which is no mod' \
+  && check "a dependency that is no mod in the folder is reported, never passed" ok \
+  || check "a dependency that is no mod in the folder is reported, never passed" "exit=$code out=$out"
+out="$(bash "$DEPS" "$TMPROOT/not-there" 2>&1)"; code=$?
+[ "$code" -eq 2 ] && check "a missing mods folder is refused by the dependency check" ok \
+  || check "a missing mods folder is refused by the dependency check" "exit=$code out=$out"
+if [ -d "$ROOT/payload/mods" ]; then
+  out="$(bash "$DEPS" "$ROOT/payload/mods" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "every mod in payload/mods uses each dependency it lists" ok \
+    || check "every mod in payload/mods uses each dependency it lists" "exit=$code out=$out"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
