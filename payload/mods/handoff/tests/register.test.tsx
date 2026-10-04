@@ -92,6 +92,7 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
       const [a, b] = rest.filter(x => !x.startsWith('-')) as [string, string]
       if (!(a in files)) return r(1, '', `mv: ${a}: No such file or directory`)
       if (b === init.mvFailsTo) return r(1, '', `mv: rename ${a} to ${b}: Permission denied`)
+      if (rest.includes('-n') && b in files) return r(0)
       files[b] = files[a] as string
       delete files[a]
       return r(0)
@@ -362,4 +363,38 @@ test('a handoff that cannot be offered at all says why in one dim line', withKit
   const w = world(on, { files: { [CURRENT]: saved() }, noHome: true })
   await start($, w.clock)
   expect(w.logs).toEqual(['The saved handoff could not be offered: HOME is not set.'])
+})
+
+test('a Use that cannot send never puts its handoff back over a newer one saved meanwhile', withKit, async ($, on) => {
+  const newer = saved({ savedAt: T0 - MIN, title: 'Newer work', prompt: 'Pick up the next one.', baseline: [] })
+  const box: { w?: ReturnType<typeof world> } = {}
+  box.w = world(on, {
+    files: { [CURRENT]: saved() },
+    gh: { ...M18, 'repos/{owner}/{repo}/issues/615': issue('open', 'a') },
+    submit: () => {
+      ;(box.w as ReturnType<typeof world>).files[CURRENT] = newer
+      throw new Error('the session is closing')
+    },
+  })
+  const w = box.w
+  await start($, w.clock)
+  const ui = await mount($)
+  await ui.press({ key: 'handoff:use' })
+  await w.clock.settle()
+  expect(JSON.parse(w.files[CURRENT] as string).title).toBe('Newer work')
+  expect(JSON.parse(w.files[`${DIR}/archive/${T0}-used.json`] as string).title).toBe('Continue milestone 18 design rounds')
+  // The engine words the refusal its own way; what matters is the newer one being named as kept.
+  expect(w.toasts).toHaveLength(1)
+  expect(w.toasts[0]).toMatch(/^Use did not send the handoff: \S.*\. A newer one was saved meanwhile, so this one stays in the archive\.$/)
+  await ui.unmount()
+})
+
+test('a save whose old handoff cannot be archived is refused, and the old one is kept', withKit, async ($, on) => {
+  const w = world(on, { files: { [CURRENT]: saved() }, gh: { ...M18, 'repos/{owner}/{repo}/issues/615': issue('open', 'a') }, mvFailsTo: `${DIR}/archive/${T0}-replaced.json` })
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  const r = (await $.tool.call({ tool: 'mcp__handoff__save', title: 'New work', prompt: 'Pick up #615.' } as never)) as { deny?: string; text?: string; result?: string }
+  expect(r.result).toBeUndefined()
+  expect(r.deny ?? r.text).toBe(`The handoff could not be saved: the one it replaces could not be archived (mv: rename ${CURRENT} to ${DIR}/archive/${T0}-replaced.json: Permission denied)`)
+  expect(JSON.parse(w.files[CURRENT] as string).title).toBe('Continue milestone 18 design rounds')
 })

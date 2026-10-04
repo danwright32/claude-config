@@ -461,6 +461,7 @@ ones marked open are the builder's choice, waiting on Dan.
   answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
   saved"), a grey rule on both sides of the rule's text, and wrapping it at 76 columns because the
   band cuts a line at its edge.
+
 ## Picker manners (#615), built 2026-10-04
 
 The look is the rounds' (a question in the band, above). The build time check the spec asks for
@@ -487,6 +488,7 @@ and open to Dan changing:
   passes. Turning them off says so once in a dim line: "Next issue pickers are off for this
   session; /pickers on brings them back."
 - An interrupted turn withdraws the question from the band.
+
 ## Handoff (#613), built 2026-10-04
 
 The look is the rounds' (the band at session start, and its changed since lines, above). What the

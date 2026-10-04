@@ -85,12 +85,20 @@ const readAll = async ($: EngineInterface, root: string, names: readonly Name[])
   )
 
 // Moves the current handoff into the archive: the one step that claims it, so of two sessions
-// pressing at once exactly one move succeeds (assume it runs twice).
-const archive = async ($: EngineInterface, dir: string, reason: 'used' | 'dismissed' | 'replaced'): Promise<string | undefined> => {
+// pressing at once exactly one move succeeds (assume it runs twice). Says where it went, or why not.
+const archive = async ($: EngineInterface, dir: string, reason: 'used' | 'dismissed' | 'replaced'): Promise<{ to: string } | { error: string }> => {
   await run($, ['mkdir', '-p', `${dir}/archive`])
   const to = `${dir}/archive/${await $.clock.now()}-${reason}.json`
   const mv = await run($, ['mv', `${dir}/current.json`, to])
-  return mv.exitCode === 0 ? to : undefined
+  return mv.exitCode === 0 ? { to } : { error: firstLine(mv.stderr) || `mv exited ${mv.exitCode}` }
+}
+
+// Puts a claimed handoff back as the saved one, but never over a handoff saved since: that one is
+// newer, and the claimed one stays in the archive. True when it went back.
+const restore = async ($: EngineInterface, from: string, current: string): Promise<boolean> => {
+  if (await $.fs.exists(current)) return false
+  const mv = await run($, ['mv', '-n', from, current])
+  return mv.exitCode === 0 && !(await $.fs.exists(from))
 }
 
 const clearBand = async ($: EngineInterface) => {
@@ -121,17 +129,18 @@ const message = (err: unknown) => String((err as Error)?.message ?? err)
 // Use and Dismiss each claim the handoff on the band by moving it into the archive. A claim that
 // finds nothing (another session took it) or a different handoff (one saved since replaced it)
 // acts on nothing and says so; the replacement is put back and shown instead.
-const claim = async ($: EngineInterface, reason: 'used' | 'dismissed'): Promise<{ rec: Saved; back: () => Promise<unknown> } | undefined> => {
+const claim = async ($: EngineInterface, reason: 'used' | 'dismissed'): Promise<{ rec: Saved; back: () => Promise<boolean> } | undefined> => {
   const shown = (await $.state.get(shownRef)).value
   if (!shown) return undefined
   const p = await place($)
-  const taken = await archive($, p.dir, reason)
-  if (!taken) {
+  const moved = await archive($, p.dir, reason)
+  if ('error' in moved) {
     $.ui.toast('This handoff was already used or dismissed in another session.')
     await clearBand($)
     return undefined
   }
-  const back = async () => run($, ['mv', taken, p.current])
+  const taken = moved.to
+  const back = async () => restore($, taken, p.current)
   const rec = await $.fs.read(taken).then(
     t => parse(t, p.root),
     err => `unreadable (${message(err)})`,
@@ -189,7 +198,11 @@ export const register: Register = on => {
     // Written whole beside it, then moved into place; the one it replaces is archived first.
     const tmp = `${p.dir}/.current.json.tmp`
     await $.fs.write(tmp, JSON.stringify(record))
-    if (await $.fs.exists(p.current)) await archive($, p.dir, 'replaced')
+    if (await $.fs.exists(p.current)) {
+      const old = await archive($, p.dir, 'replaced')
+      // Never written over: a handoff that cannot be archived keeps its place, and this save fails.
+      if ('error' in old) return { deny: `The handoff could not be saved: the one it replaces could not be archived (${old.error})` }
+    }
     const mv = await run($, ['mv', tmp, p.current])
     if (mv.exitCode !== 0) return { deny: `The handoff could not be saved: ${firstLine(mv.stderr) || `mv exited ${mv.exitCode}`}` }
     // A band showing the handoff this one replaced would offer a handoff that is no longer saved.
@@ -203,9 +216,13 @@ export const register: Register = on => {
     try {
       await $.prompt.submit({ text: got.rec.prompt, asUser: true })
     } catch (err) {
-      // Not sent, so not used: it goes back to being the saved handoff, still on the band.
-      await got.back()
-      $.ui.toast(`Use did not send the handoff: ${message(err)}`)
+      // Not sent, so not used: it goes back to being the saved handoff, still on the band, unless a
+      // newer one was saved meanwhile, which it must not overwrite.
+      if (await got.back()) $.ui.toast(`Use did not send the handoff: ${message(err)}`)
+      else {
+        $.ui.toast(`Use did not send the handoff: ${message(err)}. A newer one was saved meanwhile, so this one stays in the archive.`)
+        await clearBand($)
+      }
       return { element: e.element }
     }
     await clearBand($)
