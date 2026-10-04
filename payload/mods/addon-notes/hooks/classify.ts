@@ -45,6 +45,8 @@ const TURNS_AROUND =
 export const isAmendment = (text: string): boolean => {
   const t = text.trim()
   if (!t || t === '+') return false
+  // A + reply follows the + note rules, so a reaction (+1) or pasted code is not an amendment.
+  if (t.startsWith('+') && !isAddOnNote(t)) return false
   if (t.split(/\s+/).length > MAX_WORDS) return false
   if (!LEADS.test(t)) return false
   // A question asks something new ("and what does this do?"), so it is never told to resume.

@@ -106,3 +106,11 @@ test('a + note may open with a number after a space, but +1 is still a reaction'
   expect(isAddOnNote('+1')).toBe(false)
   expect(isAddOnNote('+12')).toBe(false)
 })
+
+// Lessons review of #653: a reply led by + after an interrupt follows the same + rules as a mid turn
+// note, so a reaction or a pasted diff is not read as an amendment.
+test('a + reply after an interrupt follows the + note rules', () => {
+  expect(isAmendment('+1')).toBe(false)
+  expect(isAmendment('+const a = 1')).toBe(false)
+  expect(isAmendment('+ also the footer')).toBe(true)
+})
