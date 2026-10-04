@@ -8,7 +8,8 @@ import { empty, fromTodos, taskCreated, taskUpdated, type Progress, type StepSta
 
 const ACTIVITY_WRITE_MS = 30_000
 let progress: Progress | undefined
-let lastWritten = 0
+// Never written yet: the first activity of a session is written at once.
+let lastWritten = Number.NEGATIVE_INFINITY
 
 // A registry write that fails never breaks the tool call it rides on; Claude is told once, on
 // the next result it reads, until a write lands again.
@@ -51,9 +52,14 @@ const counted = (p: Progress, why: string | undefined): Progress => {
 }
 
 export const register: Register = on => {
+  // Everything the module keeps belongs to one session: a later start in the same process begins
+  // again rather than reading the last one's (lessons review of #634).
   on('session.start', async ($, e, next) => {
     progress = empty(await $.clock.now())
+    lastWritten = Number.NEGATIVE_INFINITY
     streak = 0
+    notice = undefined
+    toldUnwritten = false
     return next(e)
   })
 
@@ -69,21 +75,29 @@ export const register: Register = on => {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
       progress = { ...progress, waiting: { question: qs[0]?.question ?? 'a question', since: now }, lastActivityAt: now }
       await publish($, now)
-      // A question that throws or is refused counts toward failed, as any call does.
-      let why: string | undefined = 'the question did not complete'
-      try {
-        const result = await next(e)
-        why = failureOf(result)
-        return withNotice(result)
-      } catch (err) {
-        why = err instanceof Error ? err.message : String(err)
-        throw err
-      } finally {
-        const after = await $.clock.now()
-        const { waiting: _cleared, ...rest } = progress
+      // A question that throws or is refused counts toward failed, as any call does. What follows
+      // the question can never throw over its result or error, and a notice its write raises rides
+      // on this result (lessons review of #634).
+      const settle = async (why: string | undefined) => {
+        let after = now
+        try {
+          after = await $.clock.now()
+        } catch {
+          // The time the question was asked stands in for a clock that cannot be read.
+        }
+        const { waiting: _cleared, ...rest } = progress ?? empty(now)
         progress = { ...counted(rest, why), lastActivityAt: after }
         await publish($, after)
       }
+      let result
+      try {
+        result = await next(e)
+      } catch (err) {
+        await settle(err instanceof Error ? err.message : String(err))
+        throw err
+      }
+      await settle(failureOf(result))
+      return withNotice(result)
     }
 
     const result = await next(e)
@@ -98,7 +112,10 @@ export const register: Register = on => {
         progress = fromTodos(progress, (input.todos as { content: string; status: StepStatus; activeForm: string }[]) ?? [], now)
       } else if (e.tool === 'TaskCreate') {
         const task = (result.result as { task?: { id?: string; subject?: string } } | undefined)?.task
-        if (task?.id) progress = taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, now)
+        // A result with no task id cannot be followed, but the call is still activity.
+        progress = task?.id
+          ? taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, now)
+          : { ...progress, lastActivityAt: now }
       } else if (e.tool === 'TaskUpdate') {
         progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
       } else {

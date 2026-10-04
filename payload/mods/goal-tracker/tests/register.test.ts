@@ -29,13 +29,22 @@ const MIN = 60_000
 
 type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string }; failed?: string }
 
-const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; askThrows?: boolean; askRefused?: boolean } = {}) => {
+// failExtraFrom: registry writes fail from this one on (1 is the first). taskWithoutId: a
+// TaskCreate answers with no task id.
+type WorldOpts = { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; failExtraFrom?: number; askThrows?: boolean; askRefused?: boolean; taskWithoutId?: boolean }
+const world = (on: On, opts: WorldOpts = {}) => {
   const w = { progress: [] as Rec[] }
-  on('process.run', ($, e) => ({
-    value: opts.registryFails && e.argv[0] === '__extra'
-      ? { exitCode: 1, stdout: '', stderr: 'registry write failed', isStdoutTruncated: false, isStderrTruncated: false }
-      : { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-  }))
+  let writes = 0
+  on('process.run', ($, e) => {
+    const isWrite = e.argv[0] === '__extra'
+    if (isWrite) writes += 1
+    const fails = isWrite && (opts.registryFails || (opts.failExtraFrom !== undefined && writes >= opts.failExtraFrom))
+    return {
+      value: fails
+        ? { exitCode: 1, stdout: '', stderr: 'registry write failed', isStdoutTruncated: false, isStderrTruncated: false }
+        : { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
   on('ui.log', ($, e) => {
     if (e.text.startsWith('EXTRA progress ')) w.progress.push(JSON.parse(e.text.slice('EXTRA progress '.length)))
     return { value: undefined }
@@ -46,6 +55,7 @@ const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void; reg
     if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
     if (e.tool === 'AskUserQuestion' && opts.askRefused) return { deny: 'the question was refused' } as never
     if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('fail')) return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
+    if (e.tool === 'TaskCreate' && opts.taskWithoutId) return { result: { task: {} }, text: 'created' } as never
     if (e.tool === 'TaskCreate') {
       const subject = (e as unknown as { subject: string }).subject
       return { result: { task: { id: String(w.progress.length + 1), subject } }, text: 'created' } as never
@@ -178,4 +188,79 @@ test('a refused question counts toward failed, and still clears waiting', withDe
   await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never)
   expect(last(w)?.waiting).toBeUndefined()
   expect(last(w)?.failed).toBe('the question was refused')
+})
+
+// Lessons review of #634, the second round of code-only findings.
+// The engine itself keeps a call's result or error when a hook fails after next (its "kept"), so
+// what a throwing clock could lose is the tracker's own work: waiting must still be cleared.
+test('a clock that throws after a question still clears waiting', withDeps, async ($, on) => {
+  let afterAsk = false
+  on('clock.now', () => {
+    if (afterAsk) throw new Error('clock broke')
+    return { value: 0 } as never
+  })
+  const w = world(on, { duringAsk: () => (afterAsk = true) })
+  await start($)
+  const r = (await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never)) as { text?: string }
+  expect(r.text).toBe('ran')
+  expect(w.progress.length).toBe(2)
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test('a clock that throws after a question that threw still clears waiting and keeps the error', withDeps, async ($, on) => {
+  let afterAsk = false
+  on('clock.now', () => {
+    if (afterAsk) throw new Error('clock broke')
+    return { value: 0 } as never
+  })
+  const w = world(on, { askThrows: true, duringAsk: () => (afterAsk = true) })
+  await start($)
+  const err = await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never).then(
+    () => 'no error',
+    (e: unknown) => (e instanceof Error ? e.message : String(e)),
+  )
+  expect(err).not.toBe('no error')
+  expect(err).not.toContain('clock broke')
+  expect(w.progress.length).toBe(2)
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test('a registry write that fails after a question is said on that question result', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { failExtraFrom: 2 })
+  await start($)
+  const r = (await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never)) as { context?: string[] }
+  expect((r.context ?? []).join('\n')).toContain("The goal tracker could not record this session's progress")
+  void w
+})
+
+test('a TaskCreate whose result carries no task id still counts as activity', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { taskWithoutId: true })
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  await clock.advance(MIN)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Read', description: 'x', activeForm: 'Reading' } as never)
+  expect(last(w)?.lastActivityAt).toBe(MIN)
+})
+
+test('a new session start in the same process writes its first activity at once', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  await clock.advance(10_000)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(last(w)).toMatchObject({ total: 0, lastActivityAt: 10_000 })
+})
+
+test('a registry that still cannot be written is said again after a new session start', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { registryFails: true })
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  await start($)
+  const r = (await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'completed', activeForm: 'Building' }] } as never)) as { context?: string[] }
+  expect((r.context ?? []).join('\n')).toContain("The goal tracker could not record this session's progress")
 })
