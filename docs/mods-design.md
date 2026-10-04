@@ -284,6 +284,29 @@ ones marked open are the builder's choice, waiting on Dan.
   recorded:"), its colour, the violet drawn as the terminal's magenta, the toast's words (the
   card's title), and the Copy and Mark sent buttons having no shortcut keys.
 
+## Ask before saving (#618), built 2026-10-04
+
+How the settled question behaves, decided at build where the spec and the rounds were silent. The
+ones marked open are the builder's choice, waiting on Dan.
+
+- **The write is refused at once and replayed on For good, never held open.** A tool call hook that
+  waits on a band press is cut at its 10 second budget and the engine then runs the write as if the
+  hook were absent (measured with `claude plugin test` on 2026-10-04), so holding the call would
+  fail open. Claude's call is refused with a note that Dan is being asked; For good replays the
+  exact call through every other mod's checks; each answer reaches Claude as a note. A hook that
+  cannot finish refuses the write. This is also the answer to picker manners' (#615) build time
+  check: a tool call cannot wait for a band answer.
+- **What the question shows as the rule:** a new file's whole text, the lines a rewrite adds, an
+  Edit's new text, and a Bash write's command as written (mod-kit's reader drops heredoc bodies and
+  hands back no body, so the command, which carries the text, is shown whole).
+- **Just this session** rides the system prompt's memory section, assembled afresh for every
+  request, so a compaction keeps it; it is dropped at session end and on /clear.
+- **A second save** waits behind the first and is asked once the first is answered.
+- Open: the chip "Standing rule", the question "Save this as a standing rule?", the line under each
+  answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
+  saved"), a grey rule on both sides of the rule's text, and wrapping it at 76 columns because the
+  band cuts a line at its edge.
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact
