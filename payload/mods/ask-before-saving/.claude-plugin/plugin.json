@@ -1,0 +1,8 @@
+{
+  "name": "ask-before-saving",
+  "version": "0.1.0",
+  "description": "Before a standing rule is saved to lasting memory (the memory folder, MEMORY.md, CLAUDE.md, AGENTS.md, LESSONS.md), asks Dan in the band whether it is for good, just this session, or not at all.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
+}
