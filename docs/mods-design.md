@@ -347,7 +347,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   columns) the waiting pane is closed and the card is the `steps` row of the band, so it can never
   show in both. `/steps` opens the pane, which an asked pane gets at any width, and the band row
   gives way to it. Closing the pane by hand while steps remain moves the card to the band (open:
-  whether closing should instead hide the card).
+  whether closing should instead hide the card). Both are drawn by mod-kit with one drawing of a
+  card (#690): the pane is published before it opens, so it never opens empty, and a pane mod-kit
+  refuses is not opened at all; the card goes to the band.
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
@@ -407,6 +409,31 @@ parts: a thin grey line the width of the band, cut at the edge of the frame it s
 lines of a card. A part may carry `indent`, the blank columns drawn before it (on a line's
 first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
+
+A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
+`$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
+band row's lines and frame with no slot, since a pane holds one card. mod-kit draws it with the very
+function that draws a band row, so the steps card cannot read differently in the pane and the band
+as cards gain shapes, and a button in it reaches the publisher by the same `ui.press` key.
+`$.modkit.clearPane({ mod, id })` stops it, after which Claude Code draws a still open pane itself.
+Claude Code keys a pane by its id alone, so a pane id another mod already draws is refused rather
+than taken over. `tools/check-mod-shared-parts.sh` fails any other mod that draws a card's parts
+or its left rule itself. A pane drawn its own way rather than as a card, such as the goals pane's
+live list read at each draw (#612), stays the mod's.
+
+### A message to another session, shared by every mod
+
+A mod telling another open session something (the collision guard's note to the session working
+first, scope modes' away and home) sends it with `$.session.send` once and reports `reason` when it
+was not delivered. mod-kit's `session.send` hook tries a refused send once more (decided with Dan
+after the live check of #605 on 2026-10-04, where auto mode's classifier refused one), never after a
+throw, since that can come after the message landed (lessons review of #636), and answers the second
+refusal's reason trimmed of its full stop, or "no reason given". It is a hook rather than a method
+on `$.modkit` (#688) because a method would send as mod-kit, while each receiver tells its own mod's
+messages apart by the sending plugin, and a send cannot be handed to a method, since only plain data
+crosses between mods. Claude's own SendMessage is left as it is. `tools/check-mod-shared-parts.sh`
+fails any other mod that keeps its own retry: a loop that stops once a send is delivered, or the
+"no reason given" fallback.
 
 ## Is it live (#617), built 2026-10-04
 

@@ -82,25 +82,6 @@ const refuse = async ($: EngineInterface, toolUseId: string, reason: string, saf
   return { deny: `Blocked: ${reason} ${safeWay}${note ? ` ${note}` : ''}` }
 }
 
-// One send, tried again once when it is refused (decided with Dan after the live check of #605 on
-// 2026-10-04, where auto mode's classifier refused it). A throw is not retried: it can come after
-// the message landed, and a second copy would tell the other session twice (lessons review of
-// #636). Answers why it did not land, or undefined when it did.
-const tell = async ($: EngineInterface, sessionId: string, text: string): Promise<string | undefined> => {
-  let why = ''
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const sent = await $.session.send({ to: { sessionId }, text })
-      if (sent.isDelivered) return undefined
-      why = sent.reason
-    } catch (err) {
-      why = err instanceof Error ? err.message : String(err)
-      break
-    }
-  }
-  return why.trim().replace(/\.$/, '') || 'no reason given'
-}
-
 // Checked, judged and acted on. undefined means go ahead.
 const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
   const v = await judge($, c)
@@ -115,10 +96,11 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
       ? `Another session wanted to edit ${c.messageWhat} while you are working on it, so ${outcome}. Nothing here was touched.`
       : `Another session wanted to run ${c.messageWhat} in this checkout while you are working in it, so ${outcome}. Nothing here was touched.`
   // The block stands whether or not the other session hears of it; one that cannot is said so.
+  // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
   const unheard: string[] = []
   for (const o of c.others) {
-    const why = await tell($, o.sessionId, message)
-    if (why) unheard.push(why)
+    const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: message })
+    if (!sent.isDelivered) unheard.push(sent.reason)
   }
   const note = !unheard.length
     ? undefined

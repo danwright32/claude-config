@@ -1,4 +1,4 @@
-import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot } from '../types/index.d.ts'
+import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane } from '../types/index.d.ts'
 
 // The band above the prompt, composed once for every mod (docs/mods-design.md, "The band, shared
 // by every mod", settled with Dan 2026-10-04). Status rows on top, what waits on Dan nearest the
@@ -35,32 +35,52 @@ const partRefusal = (p: ModKitBandPart): string | undefined => {
 
 export const isSlot = (s: unknown): s is ModKitBandSlot => typeof s === 'string' && Object.prototype.hasOwnProperty.call(RANK, s)
 
-/** Why a row cannot be shown, or undefined when it can. */
-export const refusal = (row: ModKitBandRow): string | undefined => {
-  if (!row || typeof row.mod !== 'string' || !row.mod || typeof row.id !== 'string' || !row.id) return 'a band row needs a mod and an id'
-  if (!isSlot(row.slot)) return `a band row's slot "${String(row.slot)}" is not one of ${Object.keys(RANK).join(', ')}`
-  if (!Array.isArray(row.lines) || !row.lines.every(l => Array.isArray(l) || isDivider(l)))
-    return `band row ${row.mod}/${row.id}: lines must be a list of lines, each a list of parts or { divider: true }`
-  for (const l of row.lines) {
+// What a band row and a pane both carry, checked once for both (#690): who publishes it, then its
+// lines and its frame. `what` names which it is in the refusal.
+const ownerRefusal = (card: ModKitPane, what: string): string | undefined =>
+  !card || typeof card.mod !== 'string' || !card.mod || typeof card.id !== 'string' || !card.id ? `a ${what} needs a mod and an id` : undefined
+
+const bodyRefusal = (card: ModKitPane, what: string): string | undefined => {
+  const name = `${what} ${card.mod}/${card.id}`
+  if (!Array.isArray(card.lines) || !card.lines.every(l => Array.isArray(l) || isDivider(l))) return `${name}: lines must be a list of lines, each a list of parts or { divider: true }`
+  for (const l of card.lines) {
     if (!Array.isArray(l)) continue
     for (const p of l) {
       const why = partRefusal(p)
-      if (why) return `band row ${row.mod}/${row.id}: ${why}`
+      if (why) return `${name}: ${why}`
     }
   }
   // Refused here rather than drawn as no frame: a card that lost its frame reads as another mod's row.
-  if (row.frame !== undefined) {
-    const f = row.frame as { kind?: unknown; color?: unknown } | null
-    if (!f || typeof f !== 'object') return `band row ${row.mod}/${row.id}: a frame must be { kind, color? }`
-    if (typeof f.kind !== 'string' || !Object.prototype.hasOwnProperty.call(FRAMES, f.kind))
-      return `band row ${row.mod}/${row.id}: frame kind "${String(f.kind)}" is not one of ${Object.keys(FRAMES).join(', ')}`
-    if (f.color !== undefined && (typeof f.color !== 'string' || !f.color)) return `band row ${row.mod}/${row.id}: a frame colour must be a theme key or a colour name`
+  if (card.frame !== undefined) {
+    const f = card.frame as { kind?: unknown; color?: unknown } | null
+    if (!f || typeof f !== 'object') return `${name}: a frame must be { kind, color? }`
+    if (typeof f.kind !== 'string' || !Object.prototype.hasOwnProperty.call(FRAMES, f.kind)) return `${name}: frame kind "${String(f.kind)}" is not one of ${Object.keys(FRAMES).join(', ')}`
+    if (f.color !== undefined && (typeof f.color !== 'string' || !f.color)) return `${name}: a frame colour must be a theme key or a colour name`
   }
   return undefined
 }
 
+/** Why a row cannot be shown, or undefined when it can. */
+export const refusal = (row: ModKitBandRow): string | undefined => {
+  const who = ownerRefusal(row, 'band row')
+  if (who) return who
+  if (!isSlot(row.slot)) return `a band row's slot "${String(row.slot)}" is not one of ${Object.keys(RANK).join(', ')}`
+  return bodyRefusal(row, 'band row')
+}
+
+/**
+ * Why a pane cannot be drawn, or undefined when it can. Claude Code keys a pane by its id alone,
+ * so a pane another mod already draws under that id is refused rather than taken over.
+ */
+export const paneRefusal = (pane: ModKitPane, panes: readonly ModKitPane[]): string | undefined => {
+  const why = ownerRefusal(pane, 'pane') ?? bodyRefusal(pane, 'pane')
+  if (why) return why
+  const holder = panes.find(p => p.id === pane.id && p.mod !== pane.mod)
+  return holder ? `pane "${pane.id}" is already drawn for ${holder.mod}` : undefined
+}
+
 /** The rows with this one put in: in place when the mod already shows a row under its id, else last. */
-export const put = (rows: readonly ModKitBandRow[], row: ModKitBandRow): ModKitBandRow[] => {
+export const put = <R extends ModKitPane>(rows: readonly R[], row: R): R[] => {
   const i = rows.findIndex(r => r.mod === row.mod && r.id === row.id)
   if (i < 0) return [...rows, row]
   const next = [...rows]
@@ -68,7 +88,7 @@ export const put = (rows: readonly ModKitBandRow[], row: ModKitBandRow): ModKitB
   return next
 }
 
-export const drop = (rows: readonly ModKitBandRow[], mod: string, id: string): ModKitBandRow[] => rows.filter(r => !(r.mod === mod && r.id === id))
+export const drop = <R extends ModKitPane>(rows: readonly R[], mod: string, id: string): R[] => rows.filter(r => !(r.mod === mod && r.id === id))
 
 /** What the band draws, top to bottom: by slot, publishing order within one; a question alone. */
 export const compose = (rows: readonly ModKitBandRow[]): ModKitBandRow[] => {

@@ -228,23 +228,6 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
   await showModes($)
 }
 
-// One send, tried once more when refused (as the collision guard does). A throw is not retried: it
-// can come after the message landed.
-const tell = async ($: EngineInterface, sessionId: string, text: string): Promise<string | undefined> => {
-  let why = ''
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const sent = await $.session.send({ to: { sessionId }, text })
-      if (sent.isDelivered) return undefined
-      why = sent.reason
-    } catch (err) {
-      why = msg(err)
-      break
-    }
-  }
-  return why.trim().replace(/\.$/, '') || 'no reason given'
-}
-
 type Told = { told: number; failed: string[]; unknown?: string }
 const tellOthers = async ($: EngineInterface, place: ScopeModesPlace): Promise<Told> => {
   let list
@@ -258,8 +241,9 @@ const tellOthers = async ($: EngineInterface, place: ScopeModesPlace): Promise<T
   if (list.unreadable.length) out.unknown = `the session registry could not read ${list.unreadable.join(', ')}`
   for (const o of list.open) {
     if (o.sessionId === list.selfId) continue
-    const why = await tell($, o.sessionId, place === 'away' ? AWAY_TEXT : HOME_TEXT)
-    if (why) out.failed.push(why)
+    // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
+    const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: place === 'away' ? AWAY_TEXT : HOME_TEXT })
+    if (!sent.isDelivered) out.failed.push(sent.reason)
     else out.told++
   }
   return out

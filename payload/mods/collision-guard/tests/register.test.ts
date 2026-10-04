@@ -12,6 +12,22 @@ const deps: { name: string; register: Register } = {
         .split(/&&|;|\n/)
         .map(part => [...part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)].map(m => m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2')))
         .filter(w => w.length > 0)
+    // mod-kit's retry of a mod's refused send (its hooks/send.ts), standing in: once more when
+    // refused, never after a throw, the reason tidied. mod-kit's own tests prove the real one.
+    on('session.send', async ($, e, next) => {
+      let why = ''
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const sent = await next(e)
+          if (sent.isDelivered) return sent
+          why = sent.reason
+        } catch (err) {
+          why = String((err as Error)?.message ?? err)
+          break
+        }
+      }
+      return { isDelivered: false, reason: why.trim().replace(/\.$/, '') || 'no reason given' }
+    })
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       return {
