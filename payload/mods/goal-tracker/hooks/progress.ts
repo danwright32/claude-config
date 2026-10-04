@@ -33,6 +33,9 @@ export type Progress = {
 export type State = 'working' | 'stalled' | 'failed' | 'done' | 'waiting'
 
 const STALL_MS = 10 * 60_000
+// Failed, decided with Dan (2026-10-04): this many tool calls in a row failed or refused. The one
+// number the rule and the pane's sentence both read.
+export const FAIL_STREAK = 3
 
 export const empty = (now: number): Progress => ({ steps: [], done: 0, total: 0, current: null, startedAt: now, lastStepAt: now, lastActivityAt: now })
 

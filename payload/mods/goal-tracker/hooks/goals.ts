@@ -1,4 +1,4 @@
-import { stateOf, type Progress, type State } from './progress.ts'
+import { FAIL_STREAK, stateOf, type Progress, type State } from './progress.ts'
 
 // The /goals pane's rows, apart from the drawing (claude-config#612, docs/mods-design.md "Goals
 // pane"): every open session on this Mac, two lines each. Project and goal on top; beneath, the
@@ -20,8 +20,6 @@ export type StateWord = 'waiting on you' | 'failed' | 'stalled' | 'working' | 'd
 const WORDS: Record<State, StateWord> = { waiting: 'waiting on you', failed: 'failed', stalled: 'stalled', working: 'working', done: 'done' }
 // The settled order (design round): what needs Dan first, what is finished last.
 const ORDER: StateWord[] = ['waiting on you', 'failed', 'stalled', 'working', 'done']
-// Failed is three tool calls in a row failing (Dan, 2026-10-04), said as the design round drew it.
-const FAIL_STREAK = 3
 const GOAL_MAX = 80
 
 const cut = (text: string, max: number): string => {
@@ -35,7 +33,7 @@ export const duration = (ms: number): string => {
   return mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`
 }
 
-const baseName = (path: string): string => path.replace(/\/+$/, '').split('/').pop() || path
+export const baseName = (path: string): string => path.replace(/\/+$/, '').split('/').pop() || path
 
 export const projectOf = (r: { repoRoot: string | null; cwd: string }): string => baseName(r.repoRoot ?? r.cwd)
 

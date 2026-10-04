@@ -155,6 +155,22 @@ test('a session registry that cannot be read is said, never drawn as no sessions
   expect((await ui.find({ type: 'Text', text: /could not be read/ }))?.text).toBe('Session records could not be read: the sessions folder could not be read.')
 })
 
+// Lessons review of 8c094ae: a clock that cannot be read is said, never a pane that fails to draw.
+test('a clock that cannot be read while drawing is said in the pane', withDeps, async ($, on) => {
+  let broken = false
+  on('clock.now', () => {
+    if (broken) throw new Error('clock gone')
+    return { value: 0 } as never
+  })
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  world(on, { now: FIVE(0) })
+  await start($)
+  await goals($)
+  broken = true
+  const ui = await mount($)
+  expect((await ui.find({ type: 'Text', text: /could not/ }))?.text).toMatch(/^The goals pane could not read the clock: /)
+})
+
 test('records that cannot be read are counted beneath the sessions that can', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   const l = FIVE(0) as Exclude<Listing, 'throws'>

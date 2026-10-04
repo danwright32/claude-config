@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
-import { empty, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
+import { baseName, firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
+import { empty, FAIL_STREAK, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
 
 // Goal tracker (claude-config#612). Each session's task list, its goal text, its last activity and
 // whether it waits on Dan go into the shared session registry, where the /goals pane (below)
@@ -47,9 +47,11 @@ const withNotice = <R extends { context?: readonly string[] }>(result: R): R => 
 // nothing being asked. One that cannot be sent is said once a session, in one dim line (the guards'
 // note style), its reason also in the debug log; it never holds up or breaks what it rides on.
 let startCwd = ''
+// The call the open permission prompt belongs to, named as the prompt names it, so another call
+// returning meanwhile (a parallel call, a subagent's) leaves the session waiting (lessons review).
+let permissionCall: { tool: string; what: string } | undefined
 let project: string | undefined
 let toldNoNotify = false
-const baseName = (path: string) => path.replace(/\/+$/, '').split('/').pop() || path
 // This session's project, from its own registry record (the one place its repository is worked out).
 const projectName = async ($: EngineInterface): Promise<string> => {
   if (project) return project
@@ -139,7 +141,6 @@ const paneOnPrompt = async ($: EngineInterface, e: { text: string; origin: { kin
 
 // Failed, decided with Dan (2026-10-04, after the review of #634): three tool calls in a row failed
 // or refused, nothing succeeding between; the next success clears it.
-const FAIL_STREAK = 3
 let streak = 0
 // The failure is recorded as its first line, cut to a short length: the registry is shared with
 // every session on this Mac, so a tool's whole output never goes into it (L657, lessons review).
@@ -173,6 +174,7 @@ export const register: Register = on => {
     toldNoNotify = false
     startCwd = e.cwd
     project = undefined
+    permissionCall = undefined
     await paneStart($)
     return next(e)
   })
@@ -202,7 +204,18 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const rows = rowsOf(list.open, await $.clock.now())
+    let now: number
+    try {
+      now = await $.clock.now()
+    } catch (err) {
+      // A clock that cannot be read is said too, never a pane that fails to draw.
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>{`The goals pane could not read the clock: ${err instanceof Error ? err.message : String(err)}.`}</Text>
+        </Box>
+      )
+    }
+    const rows = rowsOf(list.open, now)
     const unreadable = list.unreadable.length
     return (
       <Box flexDirection="column">
@@ -263,6 +276,7 @@ export const register: Register = on => {
   // pane until the call it belongs to returns, and notified.
   on('classic.PermissionRequest', async ($, e, next) => {
     const what = permissionFor(e.tool_name, e.tool_input)
+    permissionCall = { tool: e.tool_name, what }
     if (progress) {
       const now = await nowOr($)
       progress = { ...progress, waiting: { question: what, since: now, kind: 'permission' } }
@@ -332,7 +346,9 @@ export const register: Register = on => {
     const result = await next(e)
     const waitingBefore = progress.waiting
     // A permission asked inside this call has been answered, either way, once it returns.
-    if (progress.waiting?.kind === 'permission') {
+    const thisCall = (({ tool: _t, tool_use_id: _id, agentId: _a, ...rest }) => rest)(input as Record<string, unknown> & { tool?: unknown; tool_use_id?: unknown; agentId?: unknown })
+    if (progress.waiting?.kind === 'permission' && permissionCall?.tool === e.tool && permissionCall.what === permissionFor(e.tool, thisCall)) {
+      permissionCall = undefined
       const { waiting: _answered, ...rest } = progress
       progress = rest
     }

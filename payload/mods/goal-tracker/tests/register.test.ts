@@ -395,7 +395,7 @@ test('a question to Dan sends one notification naming the project, with the ques
 // A Bash call that Claude Code stops to ask Dan about: the prompt is raised while the call waits.
 type Raiser = { tool: { call: (e: never) => Promise<unknown> }; classic: { PermissionRequest: (e: never) => Promise<unknown> } }
 const withPermission = async ($: Raiser, w: { answer: (() => void) | undefined }) => {
-  const call = $.tool.call(bash('npm test'))
+  const call = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the test suite' } as never)
   for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
   await $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run the test suite' } } as never)
   w.answer?.()
@@ -409,6 +409,22 @@ test('a permission prompt marks the session waiting on Dan, notifies with what i
   await withPermission($, w)
   expect(w.duringPermission?.waiting).toMatchObject({ question: 'Run the test suite', kind: 'permission' })
   expect(w.notified).toEqual([['-title', 'Ovation needs a permission', '-message', 'Run the test suite', '-sound', 'Glass']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// Lessons review of 8c094ae: another call returning while a permission is still open (a parallel
+// call, a subagent's) leaves the session waiting on Dan.
+test('another call returning while a permission is open leaves the session waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const call = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the test suite' } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run the test suite' } } as never)
+  await $.tool.call(bash('ls'))
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  await call
   expect(last(w)?.waiting).toBeUndefined()
 })
 
