@@ -315,7 +315,9 @@ const promptFor = (job: Job, runMs: number, tail: string, state: string) =>
     `It has run for ${runFor(runMs)}.`,
     `Its output: ${state}.`,
     `The end of its output:\n${fenced('job-output', tail.slice(-2000) || '(empty)')}`,
-    'Answer with JSON only: {"stop": true | false, "name": "<a few words naming the job, like \"dev server\" or \"curl loop repeating connection refused\">", "reason": "<one short sentence>"}.',
+    // The example is itself valid JSON: a model copies the shape it is shown (L270).
+    'Answer with JSON only, shaped like this example: {"stop": false, "name": "dev server", "reason": "It may still be serving a page someone is using."}',
+    'stop is true or false; name is a few words naming the job, like dev server or curl loop repeating connection refused; reason is one short sentence.',
   ].join('\n')
 
 // One leftover, judged and acted on; undefined when it has ended or is not the job it was.
@@ -432,7 +434,10 @@ export const register: Register = on => {
     if (!name) return { deny: `Give the job a name: a few words Dan reads on the status bar, like "dev server".` }
     if (!reason) return { deny: `Give a reason why ${id} must keep running.` }
     const kept: Kept = { name, reason, quiet: input.quiet === true, at: await $.clock.now() }
-    jobs.set(id, { ...job, kept })
+    // Written onto the record as it is after the wait, so a group traced meanwhile is kept (L443).
+    const current = jobs.get(id)
+    if (!current) return { deny: `Background job ${id} ended while it was being kept, so there is nothing to keep.` }
+    jobs.set(id, { ...current, kept })
     await publishSafely($)
     const said = notices.splice(0)
     const reminder = unkeptReminder()

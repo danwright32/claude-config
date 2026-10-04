@@ -67,6 +67,8 @@ type World = {
   verdict?: (model: string, prompt: string) => string | 'none' | 'throws'
   /** The test's mocked clock, for commands that answer late. */
   clock?: { sleep: (ms: number) => Promise<void> }
+  /** Told of each registry write of the jobs, with the value written. */
+  onExtra?: (value: string) => void
 }
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   const list = Array.isArray(jobOrJobs) ? jobOrJobs : [jobOrJobs]
@@ -95,6 +97,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return ok(JSON.stringify({ open: o.sessions?.open ?? [], closed: o.sessions?.closed ?? [], unreadable: o.sessions?.unreadable ?? [], selfId: 'me' }))
     }
     if (cmd === '__extra') {
+      if (args[0] === 'jobs') o.onExtra?.(args[1] ?? '')
       const failing = o.failExtra || list.some(j => j.failExtraOf !== undefined && args[1] === j.failExtraOf)
       return failing ? res(1, '', 'registry write failed') : ok('')
     }
@@ -882,4 +885,56 @@ test('a clock that cannot be read is said to Claude once, not every minute', wit
   broken = false
   const r = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(noticesOf(r).split('could not check its jobs').length - 1).toBe(1)
+})
+
+test('a keep whose clock read waits while the job is traced keeps the traced group (L443)', withDeps, async ($, on) => {
+  // The test is the clock: it gives the watcher its minutes, and holds one clock read back.
+  const minutes: (() => void)[] = []
+  let asked: (() => void) | undefined
+  let holdNext = false
+  let release: (() => void) | undefined
+  on('clock.now', async () => {
+    if (holdNext) {
+      holdNext = false
+      await new Promise<void>(r => (release = r))
+    }
+    return { value: 0 } as never
+  })
+  on('clock.every', async () => {
+    await new Promise<void>(r => {
+      minutes.push(r)
+      asked?.()
+    })
+    return { value: undefined } as never
+  })
+  on('clock.after', () => ({ value: undefined }) as never)
+  let traced: (() => void) | undefined
+  const tracedWritten = new Promise<void>(r => (traced = r))
+  const job: Job = { tail: 'building\n', size: 9, holder: 'error' }
+  const w = world(on, job, { onExtra: v => (v.includes('"pgid":501') ? traced?.() : undefined) })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.holder = 'held'
+  holdNext = true
+  const kept = $.tool.call(keep({ task_id: 'job1', name: 'build', reason: 'the next step needs it' }))
+  if (!minutes.length) await new Promise<void>(r => (asked = r))
+  minutes.shift()?.()
+  await tracedWritten
+  release?.()
+  await kept
+  expect(lastRecs(w)[0]).toMatchObject({ pgid: 501, kept: { name: 'build' } })
+})
+
+test('the judge is shown an answer that is itself valid JSON', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => KEEP_IT('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  const prompt = w.asked[0]?.prompt ?? ''
+  const example = prompt.slice(prompt.lastIndexOf('{'), prompt.lastIndexOf('}') + 1)
+  expect(() => JSON.parse(example)).not.toThrow()
+  expect(Object.keys(JSON.parse(example) as object).sort()).toEqual(['name', 'reason', 'stop'])
 })
