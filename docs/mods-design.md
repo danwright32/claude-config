@@ -66,7 +66,7 @@ request in it.
 | Facts shown only when they need a look | Unpushed commits, PR and checks (failing or running), a running background job, context above 70% (status round 2) |
 | Hidden | Branch, uncommitted files, commits behind main (status round 2) |
 | Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). |
-| Colour | Everything grey; the needs-a-look items in amber (colour round, switcher) |
+| Colour | Everything grey; the needs-a-look items in amber (colour round, switcher). A deliberate exception to standing rule 1: a running PR and a running job are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look (picker, after the probe below). |
 | The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
 | Order of the amber line | Most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
@@ -81,6 +81,8 @@ classic status line command passes colour through, and the band above the prompt
 
 - A waiting loop is stopped by the watcher only when the line it keeps repeating reads as an error.
   A loop repeating "waiting" is reported to Claude and never stopped (picker).
+- A job kept on purpose, with a reason, still shows in amber in the band like any running job,
+  named with its run time ("dev server kept 2h 14m"): kept does not mean out of sight (design round).
 - A session shows as failed after three tool calls in a row fail or are refused, a refused question
   included, naming the last failure; the next success clears it. A subagent's calls and to-do list
   are not the session's (picker).
