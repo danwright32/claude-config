@@ -18496,7 +18496,11 @@ check "#638 the other Mac starts on release one" "grep -q release-one '$S38HB/mo
 # A pull request merges on the shared repo, from a checkout that is not a sync clone.
 S38D="$WORK/s638-dev"; git clone -q "$S38B" "$S38D" 2>/dev/null
 sed -i.bak 's/release-one/release-two/' "$S38D/payload/mods/guard/hooks/register.ts"; rm -f "$S38D/payload/mods/guard/hooks/register.ts.bak"
-git -C "$S38D" commit -q -am 'merge a pull request' && git -C "$S38D" push -q origin main 2>/dev/null
+_638merge="$(git -C "$S38D" commit -q -am 'merge a pull request' 2>&1 && git -C "$S38D" push -q origin main 2>&1)" || _638merge="FAILED: $_638merge"
+# Every check below depends on this merge having landed, so a merge that did not land is said here,
+# with git's own words, rather than read later as the tool failing to apply it (L177).
+_638tip="$(git -C "$S38B" show main:payload/mods/guard/hooks/register.ts 2>/dev/null || true)"
+check "#638 fixture: the merge reached the shared repo ($_638merge)" "case \"\$_638tip\" in *release-two*) true ;; *) false ;; esac"
 # The control the issue asked for, and the one that ruled the hold out: a held watcher across that
 # merge does not stop a pull applying it.
 printf '%s %s %s %s\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" host 'a hold across a merge' > "$WORK/s638-hold"
