@@ -68,7 +68,9 @@ const projectName = async ($: EngineInterface): Promise<string> => {
 const notify = async ($: EngineInterface, title: string, message: string, sound?: string) => {
   let why: string | undefined
   try {
-    const r = await $.process.run(['terminal-notifier', '-title', title, '-message', message, ...(sound ? ['-sound', sound] : [])], { timeoutMs: 10_000 })
+    // A value starting with a dash would be read as an option, so it is led by a space (lessons review).
+    const text = (v: string) => (v.startsWith('-') ? ` ${v}` : v)
+    const r = await $.process.run(['terminal-notifier', '-title', text(title), '-message', text(message), ...(sound ? ['-sound', sound] : [])], { timeoutMs: 10_000 })
     if (r.exitCode !== 0) why = r.stderr.trim() || `terminal-notifier exited ${r.exitCode}`
   } catch (err) {
     why = err instanceof Error ? err.message : String(err)

@@ -469,6 +469,18 @@ test("an idle prompt while a question is open sends nothing more: the question's
   expect(w.notified.map(n => n[1])).toEqual(['Ovation is waiting on you'])
 })
 
+// Lessons review of 4cb9221: a question starting with a dash is the question, never an option.
+test('a question that starts with a dash reaches the notification as text, not as an option', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call(ask('-remove the old build?'))
+  const args = w.notified[0] ?? []
+  const message = args[args.indexOf('-message') + 1] ?? ''
+  expect(message.startsWith('-')).toBe(false)
+  expect(message).toContain('-remove the old build?')
+})
+
 test('a notification that cannot be sent is said once in a dim line, and never breaks the question', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on, { notifyFails: true })

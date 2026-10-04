@@ -57,9 +57,17 @@ export const permissionFor = (tool: string, input: unknown): string => {
 }
 
 // A record another session wrote is read, never trusted: one not shaped as progress is left out.
+// Every field the pane reads is checked, the text ones too: one malformed record never breaks the
+// drawing of every other session (lessons review of 4cb9221).
+const textOrAbsent = (x: unknown) => x === undefined || typeof x === 'string'
 const isProgress = (x: unknown): x is Progress => {
   const p = x as Partial<Progress> | null
-  return !!p && typeof p === 'object' && typeof p.done === 'number' && typeof p.total === 'number' && typeof p.startedAt === 'number' && typeof p.lastStepAt === 'number' && typeof p.lastActivityAt === 'number'
+  if (!p || typeof p !== 'object') return false
+  const numbers = typeof p.done === 'number' && typeof p.total === 'number' && typeof p.startedAt === 'number' && typeof p.lastStepAt === 'number' && typeof p.lastActivityAt === 'number'
+  const texts = textOrAbsent(p.goal) && textOrAbsent(p.request) && textOrAbsent(p.failed) && (p.current === undefined || p.current === null || typeof p.current === 'string')
+  const w = p.waiting as { question?: unknown; since?: unknown } | undefined
+  const waiting = w === undefined || (!!w && typeof w === 'object' && typeof w.question === 'string' && typeof w.since === 'number')
+  return numbers && texts && waiting
 }
 
 const detailOf = (p: Progress, state: State, now: number): string | undefined => {

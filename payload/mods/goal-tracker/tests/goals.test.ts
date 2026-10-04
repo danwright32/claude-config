@@ -73,6 +73,13 @@ describe('a session in the goals pane', () => {
     expect(rowsOf([{ sessionId: 'a', cwd: '/x', repoRoot: null, extra: { progress: { done: 'lots' } } }], 0)).toEqual([])
   })
 
+  // Lessons review of 4cb9221: one malformed record from another session never breaks the pane.
+  test('a record whose text fields are not text is left out, and the others still draw', () => {
+    const bad = [{ goal: 42 }, { request: ['x'] }, { failed: {} }, { current: 7 }, { waiting: { question: null, since: 0 } }, { waiting: 'yes' }]
+    const rows = rowsOf([...bad.map((b, i) => rec(`bad${i}`, `/r/Bad${i}`, at(b as Partial<Progress>))), rec('ok', '/r/Fine', at({ request: 'fine' }))], 0)
+    expect(rows.map(r => r.project)).toEqual(['Fine'])
+  })
+
   test('within a state the session that started first comes first', () => {
     const rows = rowsOf([rec('late', '/r/Late', at({ startedAt: 5 * MIN, lastActivityAt: 6 * MIN })), rec('early', '/r/Early', at({ startedAt: 0, lastActivityAt: 6 * MIN }))], 6 * MIN)
     expect(rows.map(r => r.project)).toEqual(['Early', 'Late'])
