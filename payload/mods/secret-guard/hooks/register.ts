@@ -1,6 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import {
-  blockedCommandReason,
+  SAFE_WAY,
+  blockedCommand,
+  commandRefusal,
   findKnownSecret,
   isEnvFile,
   scrub,
@@ -14,6 +16,12 @@ import {
 let known: string[] = []
 
 const WRITERS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+
+// The text a writer tool is about to put into its file, whichever tool it is.
+const newTextOf = (input: Record<string, unknown>): string => {
+  if (Array.isArray(input.edits)) return (input.edits as { new_string?: unknown }[]).map(x => String(x.new_string ?? '')).join('\n')
+  return String(input.content ?? input.new_string ?? input.new_source ?? '')
+}
 
 const strings = (v: unknown, out: string[] = []): string[] => {
   if (typeof v === 'string') out.push(v)
@@ -43,6 +51,7 @@ const loadSecrets = async ($: EngineInterface, cwd: string): Promise<string[]> =
 
   const gh = await run($, ['gh', 'auth', 'token'])
   if (gh !== undefined && gh.trim()) found.push(gh.trim())
+  else missing.push('the gh token')
 
   const root = (await run($, ['git', 'rev-parse', '--show-toplevel'], cwd))?.trim()
   for (const dir of [...new Set([cwd, root].filter((d): d is string => !!d))]) {
@@ -62,13 +71,13 @@ const loadSecrets = async ($: EngineInterface, cwd: string): Promise<string[]> =
       }
     }
   }
-  if (missing.length) {
-    await $.ui.log(`secret-guard: could not read ${missing.join(', ')}, so secrets held there are guarded by their shape only.`)
-  }
+  // One dim line per source it could not read, once per session (docs/mods-design.md).
+  for (const m of missing) $.ui.log(`Secret guard couldn't read ${m}, so it's guarded by its shape only.`)
   return [...new Set(found)]
 }
 
-const toast = ($: EngineInterface, text: string) => $.ui.toast(`secret-guard: ${text}`)
+const GUARD = 'Secret guard'
+const OUTBOUND = 'Refer to it by its name, not its value.'
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -79,26 +88,26 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
 
+    const toolUseId = String(input.tool_use_id ?? '')
     if (e.tool === 'Bash') {
-      const why = blockedCommandReason(String(input.command ?? ''))
-      if (why) {
-        await toast($, 'refused a command that would print a secret')
-        return { deny: why }
+      const what = blockedCommand(String(input.command ?? ''))
+      if (what) {
+        $.modkit.blocked({ toolUseId, guard: GUARD, reason: `This would print ${what}.`, safeWay: SAFE_WAY })
+        await $.ui.toast('Blocked a command that would print a secret.')
+        return { deny: commandRefusal(what) }
       }
     }
 
     const path = String(input.file_path ?? input.notebook_path ?? '')
     const intoEnvFile = WRITERS.has(String(e.tool)) && isEnvFile(path)
     if (!intoEnvFile && strings(input).some(s => findKnownSecret(s, known))) {
-      await toast($, `refused ${String(e.tool)}, its input carries a secret`)
-      return {
-        deny:
-          'secret-guard: refused, because this input carries a secret value (a known one, or one shaped like a token). Refer to it by name, for example an environment variable or a .env entry, never by its value.',
-      }
+      $.modkit.blocked({ toolUseId, guard: GUARD, reason: 'This message contains a secret.', safeWay: OUTBOUND })
+      await $.ui.toast('Blocked a message containing a secret.')
+      return { deny: `Blocked: this message contains a secret. ${OUTBOUND}` }
     }
 
     // A secret written into a .env file is one to guard from now on.
-    if (intoEnvFile) known = [...new Set([...known, ...secretsFromEnvText(String(input.content ?? input.new_string ?? ''))])]
+    if (intoEnvFile) known = [...new Set([...known, ...secretsFromEnvText(newTextOf(input))])]
 
     return next(e)
   })
@@ -130,7 +139,7 @@ export const register: Register = on => {
       return block
     }) as typeof e.message.content
     if (count === 0) return next(e)
-    await toast($, `scrubbed ${count} secret${count === 1 ? '' : 's'} from a tool result`)
+    await $.ui.toast(`Hid ${count} secret${count === 1 ? '' : 's'} from a command's output.`)
     return next({ ...e, message: { ...e.message, content } })
   })
 }

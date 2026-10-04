@@ -4,5 +4,8 @@
   "description": "Blocks commands that print secrets, scrubs secrets from tool output, and refuses tool input that carries one.",
   "author": {
     "name": "Dan Wright"
-  }
+  },
+  "dependencies": [
+    "mod-kit"
+  ]
 }

@@ -1,5 +1,19 @@
 import { expect, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, Register } from 'claude-code'
+
+// A stand-in for mod-kit, which draws the grey card. An inline plugin runs in an environment of
+// its own and cannot reach this file's variables, so it reports each card as a transcript line
+// the world below collects (measured 2026-10-03).
+const kit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { blocked: (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } }
+    })
+  },
+}
+const withKit = { plugins: [kit] }
 
 const KNOWN = 'kN0wn-S3cr3t-v4lue-zz'
 const ENV_SECRET = 'fr0m-the-env-f1le-yy'
@@ -11,6 +25,7 @@ const GH_TOKEN = 'gho_' + 'Q'.repeat(36)
 const world = (on: On) => {
   const reached: string[] = []
   const toasts: string[] = []
+  const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
   on('process.run', ($, e) => {
     const cmd = e.argv.join(' ')
     if (cmd === 'env') return { value: { exitCode: 0, stdout: `HOME=/Users/x\nAPI_TOKEN=${KNOWN}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -27,13 +42,16 @@ const world = (on: On) => {
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', ($, e) => {
+    if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
+    return { value: undefined }
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.call', ($, e) => {
     reached.push(e.tool)
     return { result: 'ran', text: 'ran' } as never
   })
-  return { reached, toasts }
+  return { reached, toasts, cards }
 }
 
 const appendRow = async ($: { session: { append: (e: never) => Promise<unknown> } }, row: unknown) => {
@@ -48,58 +66,96 @@ const appendRow = async ($: { session: { append: (e: never) => Promise<unknown> 
 const start = async ($: { session: { start: (e: { cwd: string; surface: 'terminal'; isInteractive: boolean }) => Promise<unknown> } }) =>
   $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
-test('a command that prints a secret is refused and a toast says so', async ($, on) => {
+test('a command that prints a secret is refused and a toast says so', withKit, async ($, on) => {
   const w = world(on)
   await start($)
-  const r = await $.tool.call({ tool: 'Bash', command: 'cat .env' } as never)
-  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toMatch(/refused/)
+  const r = await $.tool.call({ tool: 'Bash', command: 'cat .env', tool_use_id: 'c1' } as never)
+  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe(
+    'Blocked: this would print the secrets in .env. Check it without printing: test -n, its length, or gh auth status.',
+  )
   expect(w.reached).not.toContain('Bash')
-  expect(w.toasts.join('\n')).toMatch(/secret-guard/)
+  expect(w.toasts).toContain('Blocked a command that would print a secret.')
+  expect(w.cards[w.cards.length - 1]).toEqual({
+    toolUseId: 'c1',
+    guard: 'Secret guard',
+    reason: 'This would print the secrets in .env.',
+    safeWay: 'Check it without printing: test -n, its length, or gh auth status.',
+  })
 })
 
-test('an ordinary command runs', async ($, on) => {
+test('an ordinary command runs', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await $.tool.call({ tool: 'Bash', command: 'ls -la' } as never)
   expect(w.reached).toContain('Bash')
 })
 
-test('a secret from the environment in a commit message is refused', async ($, on) => {
+test('a secret from the environment in a commit message is refused', withKit, async ($, on) => {
   const w = world(on)
   await start($)
-  await $.tool.call({ tool: 'Bash', command: `git commit -m "token ${KNOWN}"` } as never)
+  const r = await $.tool.call({ tool: 'Bash', command: `git commit -m "token ${KNOWN}"`, tool_use_id: 'c2' } as never)
   expect(w.reached).not.toContain('Bash')
+  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.toasts).toContain('Blocked a message containing a secret.')
+  expect(w.cards[w.cards.length - 1]).toEqual({ toolUseId: 'c2', guard: 'Secret guard', reason: 'This message contains a secret.', safeWay: 'Refer to it by its name, not its value.' })
 })
 
-test('a secret from the project .env file in a gh body is refused', async ($, on) => {
+test('a secret from the project .env file in a gh body is refused', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await $.tool.call({ tool: 'Bash', command: `gh issue create --title t --body "uses ${ENV_SECRET}"` } as never)
   expect(w.reached).not.toContain('Bash')
 })
 
-test('the gh token written into a source file is refused', async ($, on) => {
+test('the gh token written into a source file is refused', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await $.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', content: `const t = '${GH_TOKEN}'` } as never)
   expect(w.reached).not.toContain('Write')
 })
 
-test('a secret written into a .env file is allowed', async ($, on) => {
+test('a secret written into a .env file is allowed', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await $.tool.call({ tool: 'Write', file_path: '/repo/.env.local', content: `API_TOKEN=${KNOWN}\n` } as never)
   expect(w.reached).toContain('Write')
 })
 
-test('a secret in a Slack message is refused', async ($, on) => {
+test('a secret MultiEdited into a .env file is guarded from then on', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const fresh = 'n3wly-wr1tten-v4lue-qq'
+  await $.tool.call({ tool: 'MultiEdit', file_path: '/repo/.env', edits: [{ old_string: 'A=1', new_string: `API_TOKEN=${fresh}` }] } as never)
+  expect(w.reached).toContain('MultiEdit')
+  await $.tool.call({ tool: 'Bash', command: `git commit -m "${fresh}"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a gh token that cannot be read is named in the log', withKit, async ($, on) => {
+  const logs: string[] = []
+  on('process.run', ($, e) => {
+    const cmd = e.argv.join(' ')
+    if (cmd === 'env') return { value: { exitCode: 0, stdout: 'HOME=/x\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 1, stdout: '', stderr: 'not logged in', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.list', () => ({ value: [] }) as never)
+  on('ui.log', ($, e) => {
+    logs.push(e.text)
+    return { value: undefined }
+  })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await start($)
+  expect(logs).toContain("Secret guard couldn't read the gh token, so it's guarded by its shape only.")
+})
+
+test('a secret in a Slack message is refused', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await $.tool.call({ tool: 'mcp__claude_ai_Slack__slack_send_message', channel_id: 'C1', message: `here ${KNOWN}` } as never)
   expect(w.reached).not.toContain('mcp__claude_ai_Slack__slack_send_message')
 })
 
-test('a secret in a tool result is scrubbed before it is kept, with a toast', async ($, on) => {
+test('a secret in a tool result is scrubbed before it is kept, with a toast', withKit, async ($, on) => {
   const w = world(on)
   let stored = ''
   // In 2.1.288 a test cannot be the store: a bottom that answers is skipped, and one that calls
@@ -123,10 +179,10 @@ test('a secret in a tool result is scrubbed before it is kept, with a toast', as
   expect(stored).not.toContain(KNOWN)
   expect(stored).not.toContain(ENV_SECRET)
   expect(stored).toContain('[REDACTED]')
-  expect(w.toasts.join('\n')).toMatch(/scrubbed/)
+  expect(w.toasts).toContain("Hid 2 secrets from a command's output.")
 })
 
-test('a tool result with no secret is kept as it was', async ($, on) => {
+test('a tool result with no secret is kept as it was', withKit, async ($, on) => {
   const w = world(on)
   let stored = ''
   // In 2.1.288 a test cannot be the store: a bottom that answers is skipped, and one that calls

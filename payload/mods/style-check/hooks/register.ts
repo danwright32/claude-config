@@ -9,7 +9,9 @@ const SLACK = new Set([
   'mcp__claude_ai_Slack__slack_send_message_draft',
   'mcp__claude_ai_Slack__slack_schedule_message',
 ])
-const COMMIT = /\bgit\b[^\n;&|]*\bcommit\b/
+// commit as git's subcommand, after any global options (-C <dir>, -c <k=v>, --flags), never a git
+// command that merely mentions the word (git log --grep=commit).
+const COMMIT = /\bgit(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+commit\b/
 const GH_BODY = /\bgh\s+(?:issue|pr)\s+(?:create|edit|comment)\b/
 const BODY_FILE = /(?:--body-file|--file|-F)[ =](?:"([^"]+)"|'([^']+)'|(\S+))/g
 
@@ -71,22 +73,44 @@ const outgoing = async ($: EngineInterface, tool: string, e: Record<string, unkn
   }
 }
 
-const FIX =
-  'Rewrite it: a period, comma, colon or parentheses in place of the dash, and no emoji. Code that must name one of these characters writes it as an escape (\\u2014).'
+// Wording settled with Dan, 2026-10-03 (docs/mods-design.md).
+const GUARD = 'Style check'
+const FIX = 'Use a comma, colon or parentheses.'
+const lineWords = (scannerOut: string): string => {
+  const ns = [...scannerOut.matchAll(/^line (\d+):/gm)].map(m => m[1] as string)
+  if (ns.length === 0) return ''
+  if (ns.length === 1) return ` on line ${ns[0]}`
+  return ` on lines ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`
+}
+// Replies counted this session; the total across sessions is in the mod's store.
+let sessionHits = 0
 
 export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    sessionHits = 0
+    await $.command.register({ name: 'style-count', description: 'How many of my replies used a dash or emoji.' })
+    return next(e)
+  })
+
+  on('command.run', { command: 'style-count' }, async $ => {
+    const total = ((await $.store.get('chatHits')) as number | undefined) ?? 0
+    return { text: `Replies with a dash or emoji: ${sessionHits} this session, ${total} in total.` }
+  })
+
   on('tool.call', async ($, e, next) => {
     const out = await outgoing($, String(e.tool), e as unknown as Record<string, unknown>)
     if (!out || !out.text) return next(e)
     const v = await scan($, out.text, out.path || undefined)
     if (v.kind === 'hit') {
-      await $.ui.toast('style-check: refused text with a dash or emoji')
-      return { deny: `style-check: refused, because this carries an em dash, en dash or emoji, which the Writing Style rule forbids:\n${v.lines}\n${FIX}` }
+      const reason = `This text has a dash or emoji${lineWords(v.lines)}.`
+      $.modkit.blocked({ toolUseId: String((e as { tool_use_id?: string }).tool_use_id ?? ''), guard: GUARD, reason, safeWay: FIX })
+      await $.ui.toast('Blocked a dash or emoji.')
+      return { deny: `Blocked: t${reason.slice(1)} ${FIX}` }
     }
     if (v.kind === 'unchecked') {
       // The push gate is still the backstop, so this lets the write through, but says so rather than
       // passing as checked (L11).
-      $.ui.log(`style-check: could not check ${String(e.tool)} (${v.why}); the push hook still will.`)
+      $.ui.log("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
     }
     return next(e)
   })
@@ -99,9 +123,9 @@ export const register: Register = on => {
     if (text) {
       const v = await scan($, text)
       if (v.kind === 'hit') {
-        const n = (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1
-        await $.store.set('chatHits', n)
-        await $.ui.toast(`style-check: a chat reply used a dash or emoji (${n} so far)`)
+        // Counted silently, read with /style-count (Dan, 2026-10-03).
+        sessionHits += 1
+        await $.store.set('chatHits', (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1)
       }
     }
     return next(e)

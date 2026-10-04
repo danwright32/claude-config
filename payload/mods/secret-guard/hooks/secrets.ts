@@ -1,8 +1,8 @@
 // The secret guard's rules, kept apart from the hooks so each is tested on its own (claude-config#607).
 
-// A name that says its value is a secret. Matched on the whole name, so GITHUB_TOKEN and
-// OPENAI_API_KEY count and HOME does not.
-const SECRET_NAME = /(TOKEN|KEY|SECRET|PASSWORD|PASSWD)/i
+// A name that says its value is a secret: one of these words as a whole underscore separated part
+// of it, so GITHUB_TOKEN and OPENAI_API_KEY count while KEYBOARD_LAYOUT and TOKENIZER_DIR do not.
+const SECRET_NAME = /(?:^|_)(?:TOKEN|TOKENS|KEY|KEYS|APIKEY|SECRET|SECRETS|PASSWORD|PASSWD)(?:_|$)/i
 
 // Shapes of secrets this Mac may never have seen: GitHub, Anthropic, Slack, Supabase, JWT.
 // Each needs its full length, so a masked value like gho_**** (L691) is not one.
@@ -18,8 +18,9 @@ const SHAPES: readonly RegExp[] = [
 const REDACTED = '[REDACTED]'
 const MIN_VALUE = 8
 
-const SAFE_FORMS =
-  'To check a secret without printing it, use its presence (test -n "$NAME"), its length (echo ${#NAME}), or which account it belongs to (gh auth status).'
+// Wording settled with Dan, 2026-10-03 (docs/mods-design.md).
+export const SAFE_WAY = 'Check it without printing: test -n, its length, or gh auth status.'
+export const commandRefusal = (what: string): string => `Blocked: this would print ${what}. ${SAFE_WAY}`
 
 export const isEnvFile = (path: string): boolean => {
   const base = path.split('/').pop() ?? ''
@@ -102,10 +103,12 @@ export const scrub = (text: string, values: readonly string[]): { text: string; 
       return REDACTED
     })
   }
-  // A token percent encoded inside a URL or a query: decode each encoded run and redact the run
-  // whole when what it decodes to carries a token's shape.
-  out = out.replace(/[A-Za-z0-9._~+\-]*%[0-9A-Fa-f]{2}[A-Za-z0-9._~+%\-]*/g, run => {
-    if (!hasShape(safeDecode(run))) return run
+  // A token percent encoded inside a URL or a query: decode each run of URL characters that holds
+  // an escape, and redact the run whole when what it decodes to carries a token's shape. One pass
+  // over maximal runs, so the cost is linear in the text: a pattern that could start anywhere and
+  // look ahead for a % rescanned every long run once per position (lessons review, L353).
+  out = out.replace(/[A-Za-z0-9._~+%\-]+/g, run => {
+    if (!/%[0-9A-Fa-f]{2}/.test(run) || !hasShape(safeDecode(run))) return run
     count++
     return REDACTED
   })
@@ -146,32 +149,28 @@ const secretVarIn = (word: string): string | undefined => {
   return undefined
 }
 
-export const blockedCommandReason = (cmd: string): string | undefined => {
-  const refuse = (what: string) => `secret-guard: refused, because this would print ${what}. ${SAFE_FORMS}`
-
-  if (/\bgh\s+auth\s+token\b/.test(cmd.replace(CAPTURED_GH_TOKEN, ''))) {
-    return refuse('the GitHub token (gh auth token, not captured into a variable)')
-  }
+// What a command would print, when that is a secret: a name, "the secrets in <file>", or every
+// variable. Undefined when the command is fine.
+export const blockedCommand = (cmd: string): string | undefined => {
+  if (/\bgh\s+auth\s+token\b/.test(cmd.replace(CAPTURED_GH_TOKEN, ''))) return 'the GitHub token'
   for (const words of segments(cmd)) {
     const [head, ...args] = words
     if (head === undefined) continue
     if (READERS.has(head)) {
       const file = args.find(a => !a.startsWith('-') && isEnvFile(a.replace(/^["']|["']$/g, '')))
-      if (file) return refuse(`the secrets in ${file}`)
+      if (file) return `the secrets in ${file}`
     }
     if (head === 'echo' || head === 'printf') {
       const v = args.map(secretVarIn).find(Boolean)
-      if (v) return refuse(`the value of ${v}`)
+      if (v) return v
     }
     if (head === 'printenv') {
       const names = args.filter(a => !a.startsWith('-'))
-      if (names.length === 0) return refuse('every environment variable, secrets included')
+      if (names.length === 0) return 'every environment variable'
       const v = names.find(n => SECRET_NAME.test(n))
-      if (v) return refuse(`the value of ${v}`)
+      if (v) return v
     }
-    if (head === 'env' && args.every(a => a.startsWith('-'))) {
-      return refuse('every environment variable, secrets included')
-    }
+    if (head === 'env' && args.every(a => a.startsWith('-'))) return 'every environment variable'
   }
   return undefined
 }

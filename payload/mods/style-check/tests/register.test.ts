@@ -1,5 +1,18 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, Register } from 'claude-code'
+
+// A stand-in for mod-kit: an inline plugin cannot reach this file's variables, so it reports each
+// card as a transcript line the world collects.
+const kit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { blocked: (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } }
+    })
+  },
+}
+const withKit = { plugins: [kit] }
 
 // The mod never judges a character itself: it hands the text to the push hook's own scanner,
 // hooks/lib/style-scan.py, and relays its verdict, so the two cannot disagree (claude-config#609).
@@ -11,13 +24,14 @@ const BAD = `const label = "Loading ${DASH} please wait"`
 
 type Run = { argv: readonly string[]; stdin: string }
 
-const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string, string> } = {}) => {
+const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string, string>; store?: Record<string, unknown> } = {}) => {
   const runs: Run[] = []
   const reached: string[] = []
   const toasts: string[] = []
   const logs: string[] = []
+  const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
   mock.env(on, { HOME: '/Users/x' })
-  mock.store(on)
+  mock.store(on, opts.store ?? {})
   on('process.run', ($, e) => {
     const stdin = e.init?.stdin ?? ''
     runs.push({ argv: e.argv, stdin })
@@ -38,14 +52,17 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string
     return { value: undefined }
   })
   on('ui.log', ($, e) => {
-    logs.push(e.text)
+    if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
+    else logs.push(e.text)
     return { value: undefined }
   })
   on('tool.call', ($, e) => {
     reached.push(e.tool)
     return { result: 'ran', text: 'ran' } as never
   })
-  return { runs, reached, toasts, logs }
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }) as never)
+  return { runs, reached, toasts, logs, cards }
 }
 
 const refused = (r: unknown): string => {
@@ -53,22 +70,25 @@ const refused = (r: unknown): string => {
   return x.deny ?? (x.isError ? (x.text ?? '') : '')
 }
 
-test('a Write carrying a dash is refused, naming the line', async ($, on) => {
+test('a Write carrying a dash is refused, naming the line', withKit, async ($, on) => {
   const w = world(on)
-  const r = await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: `ok\n${BAD}\n` } as never)
+  const r = await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: `ok\n${BAD}\n`, tool_use_id: 'w1' } as never)
   expect(w.reached).not.toContain('Write')
-  expect(refused(r)).toContain('line 2')
+  // Wording settled with Dan, 2026-10-03 (docs/mods-design.md).
+  expect(refused(r)).toBe('Blocked: this text has a dash or emoji on line 2. Use a comma, colon or parentheses.')
+  expect(w.cards).toEqual([{ toolUseId: 'w1', guard: 'Style check', reason: 'This text has a dash or emoji on line 2.', safeWay: 'Use a comma, colon or parentheses.' }])
+  expect(w.toasts).toContain('Blocked a dash or emoji.')
   expect(w.runs[0]?.argv).toEqual(['python3', SCRIPT, '--plain', '--path', '/repo/a.ts'])
   expect(w.runs[0]?.stdin).toContain(BAD)
 })
 
-test('a clean Write goes through', async ($, on) => {
+test('a clean Write goes through', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'all fine\n' } as never)
   expect(w.reached).toContain('Write')
 })
 
-test('an Edit is judged on its new text, not the old', async ($, on) => {
+test('an Edit is judged on its new text, not the old', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: BAD, new_string: 'fixed' } as never)
   expect(w.reached).toContain('Edit')
@@ -76,43 +96,56 @@ test('an Edit is judged on its new text, not the old', async ($, on) => {
   expect(w.reached.filter(t => t === 'Edit').length).toBe(1)
 })
 
-test('a MultiEdit is judged on every new text', async ($, on) => {
+test('a MultiEdit is judged on every new text', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'MultiEdit', file_path: '/repo/a.ts', edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: BAD }] } as never)
   expect(w.reached).not.toContain('MultiEdit')
 })
 
-test('a NotebookEdit is judged on its new source', async ($, on) => {
+test('a NotebookEdit is judged on its new source', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'NotebookEdit', notebook_path: '/repo/n.ipynb', new_source: BAD } as never)
   expect(w.reached).not.toContain('NotebookEdit')
 })
 
-test('a commit message carrying a dash is refused', async ($, on) => {
+test('a commit message carrying a dash is refused', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Bash', command: `git commit -m "Fix ${DASH} again"` } as never)
   expect(w.reached).not.toContain('Bash')
 })
 
-test('a commit message read from a file is judged too', async ($, on) => {
+test('a commit message read from a file is judged too', withKit, async ($, on) => {
   const w = world(on, { files: { '/tmp/msg.txt': `Subject ${DASH} body\n` } })
   await $.tool.call({ tool: 'Bash', command: 'git commit -F /tmp/msg.txt' } as never)
   expect(w.reached).not.toContain('Bash')
 })
 
-test('a gh pr body carrying a dash is refused', async ($, on) => {
+test('a git command that only mentions commit is not scanned (lessons review)', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `git log --grep=commit --format="%s ${DASH}"` } as never)
+  expect(w.reached).toContain('Bash')
+  expect(w.runs.length).toBe(0)
+})
+
+test('a commit made with git -C is still judged', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `git -C /repo commit -m "x ${DASH} y"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a gh pr body carrying a dash is refused', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Bash', command: `gh pr create --title t --body "x ${DASH} y"` } as never)
   expect(w.reached).not.toContain('Bash')
 })
 
-test('a gh issue comment read from a body file is judged', async ($, on) => {
+test('a gh issue comment read from a body file is judged', withKit, async ($, on) => {
   const w = world(on, { files: { '/tmp/b.md': `note ${DASH}\n` } })
   await $.tool.call({ tool: 'Bash', command: 'gh issue comment 12 --body-file /tmp/b.md' } as never)
   expect(w.reached).not.toContain('Bash')
 })
 
-test('an ordinary command is not scanned at all', async ($, on) => {
+test('an ordinary command is not scanned at all', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Bash', command: `grep -n "${DASH}" file.txt` } as never)
   expect(w.reached).toContain('Bash')
@@ -120,22 +153,22 @@ test('an ordinary command is not scanned at all', async ($, on) => {
 })
 
 for (const tool of ['mcp__claude_ai_Slack__slack_send_message', 'mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__claude_ai_Slack__slack_schedule_message']) {
-  test(`a Slack message through ${tool.split('__').pop()} is judged`, async ($, on) => {
+  test(`a Slack message through ${tool.split('__').pop()} is judged`, withKit, async ($, on) => {
     const w = world(on)
     await $.tool.call({ tool, channel_id: 'C1', message: `hi ${DASH} there` } as never)
     expect(w.reached).not.toContain(tool)
   })
 }
 
-test('when the scanner cannot run, the write goes through and says it was not checked', async ($, on) => {
+test('when the scanner cannot run, the write goes through and says it was not checked', withKit, async ($, on) => {
   const w = world(on, { scanner: 'missing' })
   await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: BAD } as never)
   expect(w.reached).toContain('Write')
-  expect([...w.logs, ...w.toasts].join('\n')).toMatch(/could not check/)
+  expect(w.logs).toContain("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
 })
 
-test('a chat reply carrying a dash gets a toast and is counted', async ($, on) => {
-  const w = world(on)
+test('chat replies with a dash are counted silently and read with /style-count', withKit, async ($, on) => {
+  const w = world(on, { store: { chatHits: 5 } })
   const row = (text: string) => ({
     door: 'response',
     origin: { kind: 'model', model: 'm' },
@@ -150,10 +183,11 @@ test('a chat reply carrying a dash gets a toast and is counted', async ($, on) =
       if (!/no implementation for session.append/.test(String(err))) throw err
     }
   }
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await append(`a reply ${DASH} with a dash`)
   await append('a clean reply')
   await append(`another ${DASH} one`)
-  expect(w.toasts.filter(t => /chat reply/.test(t)).length).toBe(2)
-  // The count is kept in the mod's store across sessions; the second toast reads it back.
-  expect(w.toasts.filter(t => /chat reply/.test(t))[1]).toContain('2 so far')
+  expect(w.toasts.length).toBe(0)
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 2 this session, 7 in total.')
 })

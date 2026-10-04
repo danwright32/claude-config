@@ -4,5 +4,8 @@
   "description": "Refuses synthetic keystrokes and clicks unless the declared app is frontmost and alone, after a heads up.",
   "author": {
     "name": "Dan Wright"
-  }
+  },
+  "dependencies": [
+    "mod-kit"
+  ]
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Tests for the em-dash/en-dash/emoji detector inside check-style-guide.sh.
-# Extracts the real python3 detection block out of the hook and feeds it
-# synthetic diff text, so we exercise the actual code, not a re-implementation.
+# Tests for the em-dash/en-dash/emoji rule check-style-guide.sh enforces at push. The rule lives in
+# lib/style-scan.py, shared with the style-check mod (claude-config#609), and is driven directly,
+# so the suite exercises the real code, not a re-implementation.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -15,11 +15,9 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/check-style-guide.sh"
 
-# The extracted detector goes in a directory of this RUN's own, never beside this file
-# (claude-config#180). A fixed name in payload/hooks is one path shared by every run on the
-# machine: two at once truncate and then delete each other's copy, and the second reads a half
-# written file and reports that the detector found nothing. It also put a stray file inside the
-# tree the sync mirrors whenever a run was killed between writing it and removing it.
+# Anything this run makes goes in a directory of its own, never beside this file
+# (claude-config#180): a fixed path in payload/hooks is shared by every run on the machine, and a
+# run killed part way leaves a stray file in the tree the sync mirrors.
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.styleguide.XXXXXXXX")" || WORKDIR=""
 case "${WORKDIR%/}" in
   ''|/|"${HOME%/}") echo "$(basename "${BASH_SOURCE[0]}"): refusing to run: throwaway directory came back as '$WORKDIR'." >&2; exit 2 ;;
@@ -430,6 +428,29 @@ run_style_hook "$W" "git push"
 want_style_code 0 "the control still allows a clean push with python3 present"
 
 rm -rf "$NOPY_ROOT"
+
+# --- a scanner that is missing or crashes refuses the push by name (lessons review of #609) ---
+# The rule used to be inline and could not go missing. Now that it is a file, its absence must not
+# read as a clean diff: with every finding empty the push would pass with nothing said (L490).
+NOSCAN="$WORKDIR/noscan-hooks"; mkdir -p "$NOSCAN/lib"
+cp "$HOOK" "$NOSCAN/check-style-guide.sh"
+for f in "$DIR"/lib/*; do [ "$(basename "$f")" = style-scan.py ] || cp "$f" "$NOSCAN/lib/"; done
+run_style_hook_at() {  # $1 hooks dir, $2 cwd, $3 command
+  local p
+  p="$(HK_CMD="$3" HK_CWD="$2" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  STYLE_MSG="$(printf '%s' "$p" | bash "$1/check-style-guide.sh" 2>&1 >/dev/null)"; STYLE_CODE=$?
+}
+W="$(mk_style_repo "$CLEAN")"
+run_style_hook_at "$NOSCAN" "$W" "git push"
+want_style_code 2 "with lib/style-scan.py missing, even a clean push is refused"
+case "$STYLE_MSG" in *style-scan.py*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: the refusal names the missing scanner: $STYLE_MSG" ;; esac
+printf 'import sys\nsys.exit(3)\n' > "$NOSCAN/lib/style-scan.py"
+run_style_hook_at "$NOSCAN" "$W" "git push"
+want_style_code 2 "a scanner that crashes refuses the push rather than reading as clean"
+run_style_hook_at "$NOSCAN" "$W" "SKIP_STYLE_CHECK=1 git push"
+want_style_code 0 "the visible override still clears a broken scanner refusal"
+
 
 echo
 echo "passed: $pass, failed: $fail"

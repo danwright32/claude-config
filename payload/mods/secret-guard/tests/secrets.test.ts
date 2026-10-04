@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
-  blockedCommandReason,
+  blockedCommand,
+  commandRefusal,
   findKnownSecret,
   isEnvFile,
   scrub,
@@ -29,10 +30,7 @@ describe('blocked commands', () => {
   ]
   for (const [name, cmd] of blocked) {
     test(`refuses ${name}`, () => {
-      const why = blockedCommandReason(cmd)
-      expect(why).toBeDefined()
-      // The refusal names the safe form, not just the refusal (L111).
-      expect(why ?? '').toMatch(/test -n|length|\$\{#/)
+      expect(blockedCommand(cmd)).toBeDefined()
     })
   }
 
@@ -45,13 +43,27 @@ describe('blocked commands', () => {
     ['gh auth status', 'gh auth status'],
     ['cat of an example env file', 'cat .env.example'],
     ['echo of an ordinary variable', 'echo $HOME'],
+    ['echo of a name that only contains KEY', 'echo $KEYBOARD_LAYOUT'],
+    ['printenv of a name that only contains TOKEN', 'printenv TOKENIZER_DIR'],
     ['cat of an unrelated file', 'cat README.md'],
   ]
   for (const [name, cmd] of allowed) {
     test(`allows ${name}`, () => {
-      expect(blockedCommandReason(cmd)).toBeUndefined()
+      expect(blockedCommand(cmd)).toBeUndefined()
     })
   }
+})
+
+describe('wording agreed with Dan (docs/mods-design.md)', () => {
+  test('the refusal names what it would print and the safe way', () => {
+    expect(blockedCommand('echo $GITHUB_TOKEN')).toBe('GITHUB_TOKEN')
+    expect(commandRefusal('GITHUB_TOKEN')).toBe(
+      'Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its length, or gh auth status.',
+    )
+  })
+  test('a .env file is named as its secrets', () => {
+    expect(blockedCommand('cat .env')).toBe('the secrets in .env')
+  })
 })
 
 describe('scrubbing', () => {
@@ -89,6 +101,13 @@ describe('scrubbing', () => {
     const out = scrub(`Token: ${masked}`, [])
     expect(out.text).toContain(masked)
     expect(out.count).toBe(0)
+  })
+
+  test('a huge single line with no secret is scrubbed in linear time (lessons review)', () => {
+    const big = 'A'.repeat(400_000) + ' tail'
+    const out = scrub(big, [KNOWN])
+    expect(out.count).toBe(0)
+    expect(out.text.endsWith('tail')).toBe(true)
   })
 
   test('text with no secret is returned unchanged', () => {

@@ -72,6 +72,17 @@ if ps_has_override "$cmd" SKIP_STYLE_CHECK; then
   exit 0
 fi
 
+# The rule is a file now (lib/style-scan.py, claude-config#609), so it can go missing, and a scanner
+# that is absent or crashes finds nothing, which is exactly what a clean push looks like (L490). So
+# its presence is asked here, by name, before anything is read. The override above still clears it.
+SCANNER="$HOOK_DIR/lib/style-scan.py"
+scanner_refusal() {  # $1 = what is wrong
+  echo "PUSH BLOCKED: $1, so check-style-guide.sh cannot judge this push for an em dash, en dash or emoji, and a push it cannot judge is not let through as clean." >&2
+  echo "Restore it from the shared config (claude-sync pull), or, for this one command: SKIP_STYLE_CHECK=1 <your original git push command>" >&2
+  exit 2
+}
+[ -r "$SCANNER" ] || scanner_refusal "the style scanner $SCANNER is missing"
+
 # The repo is resolved from the COMMAND first and the payload cwd second. The cwd
 # is the SESSION's directory, so a session rooted outside the project reaches it
 # as `cd <repo> && git push`, and reading the cwd alone let every one of those
@@ -103,7 +114,6 @@ fi
 
 # What a push never scans is part of the rule, so it is read from the scanner rather than kept as a
 # second list here (claude-config#609): the mod honours the same paths.
-SCANNER="$HOOK_DIR/lib/style-scan.py"
 EXCLUDES=()
 while IFS= read -r pat; do
   [ -n "$pat" ] && EXCLUDES+=(":(exclude)$pat")
@@ -171,12 +181,12 @@ fi
 # the style-check mod runs too, so a write refused there and a push refused here are refused by the
 # same code (claude-config#609, L370). test-check-style-guide.sh drives that script directly, and
 # also asserts this file keeps no copy of the rule.
-scan() {  # $1 = diff text ; prints one line per finding
-  printf '%s' "$1" | python3 "$SCANNER" 2>/dev/null
+scan() {  # $1 = diff text ; prints one line per finding, and fails when the scanner did
+  printf '%s' "$1" | python3 "$SCANNER"
 }
 
-committed_findings="$(scan "$committed_diff")"
-pending_findings="$(scan "$pending_diff")"
+committed_findings="$(scan "$committed_diff")" || scanner_refusal "the style scanner $SCANNER failed while reading the commits"
+pending_findings="$(scan "$pending_diff")" || scanner_refusal "the style scanner $SCANNER failed while reading the pending commit"
 
 [ -n "$committed_findings$pending_findings" ] || exit 0
 
