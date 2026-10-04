@@ -83,6 +83,13 @@ classic status line command passes colour through, and the band above the prompt
   A loop repeating "waiting" is reported to Claude and never stopped (picker).
 - A job kept on purpose, with a reason, still shows in amber in the band like any running job,
   named with its run time ("dev server kept 2h 14m"): kept does not mean out of sight (design round).
+- Turn end with a running job that was not kept: the turn is refused until Claude stops or keeps
+  it, and Dan sees nothing of the refusal itself, only what Claude does next (picker).
+- No toast when a kept job passes an hour: the band already shows its run time (picker).
+- Leftover jobs at session start: no question to Dan, who cannot judge a job from a closed session.
+  Haiku decides each one from its command, run time and output; Sonnet tries if Haiku cannot; if
+  neither can, the job is left running and judged again next session. Dan sees one dim grey line
+  naming what was stopped and what was left (pickers).
 - A session shows as failed after three tool calls in a row fail or are refused, a refused question
   included, naming the last failure; the next success clears it. A subagent's calls and to-do list
   are not the session's (picker).
