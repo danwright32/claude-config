@@ -171,6 +171,26 @@ test('when the scanner cannot run, the write goes through and says it was not ch
   expect(w.debug.join('\n')).toContain("can't open file")
 })
 
+test('the could not run note is said once a session, not on every write (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'missing' })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: BAD } as never)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/b.ts', content: BAD } as never)
+  expect(w.logs.filter(l => l.startsWith("Style check couldn't run")).length).toBe(1)
+})
+
+test('a -F inside a quoted commit message is not read as a message file (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/b.md': `note ${DASH}\n` } })
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "explain the -F /tmp/b.md option"' } as never)
+  expect(w.reached).toContain('Bash')
+})
+
+test('a message file given as a quoted path is still read', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/my msg.txt': `Subject ${DASH} body\n` } })
+  await $.tool.call({ tool: 'Bash', command: 'git commit -F "/tmp/my msg.txt"' } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
 test('a chat reply the scanner could not check is not read as clean (lessons review)', withKit, async ($, on) => {
   const w = world(on, { scanner: 'missing', store: { chatHits: 0 } })
   on('session.append', ($, e, next) => next(e))

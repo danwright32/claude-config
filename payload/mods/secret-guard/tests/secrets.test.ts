@@ -30,6 +30,11 @@ describe('blocked commands', () => {
     ['grep over a .env file (lessons review)', 'grep . .env'],
     ['awk over a .env file', "awk '{print}' .env.local"],
     ['cat of .env inside bash -c', 'bash -c "cat .env"'],
+    ['sudo cat of .env (lessons review)', 'sudo cat .env'],
+    ['env cat of .env', 'env cat .env'],
+    ['command cat of .env', 'command cat .env'],
+    ['exec printenv', 'exec printenv'],
+    ['an assignment before echo of a secret', 'X=1 echo $GITHUB_TOKEN'],
   ]
   for (const [name, cmd] of blocked) {
     test(`refuses ${name}`, () => {

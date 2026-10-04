@@ -119,6 +119,15 @@ want_plain 1 "--plain still judges an ordinary path"
 mkdir -p "$WORKDIR/no-repo"
 plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/no-repo/CLAUDE.md"
 want_plain 1 "--plain judges a CLAUDE.md outside any repository rather than excusing it"
+# Text that is not valid UTF-8 must not crash the scanner into the exit code that means "found a
+# dash" (lessons review): read with replacement, it is judged on what it says.
+PLAIN_OUT="$(printf 'ok \xff\xfe bytes\n' | python3 "$SCANNER" --plain)"; PLAIN_CODE=$?
+want_plain 0 "--plain reads invalid UTF-8 without crashing, and finds nothing in it"
+PLAIN_OUT="$(printf 'bad \xff then %s\n' "$(uesc 'a \u2014 b')" | python3 "$SCANNER" --plain)"; PLAIN_CODE=$?
+want_plain 1 "--plain still finds a dash beside invalid bytes"
+# A new file block is cut with head -c, which can split a character: the diff reading must survive it.
+d="$(printf '+++ b/f.ts\n+%s\xe2\x80\n' "$(uesc 'x \u2014 y')" | python3 "$SCANNER")"; dcode=$?
+if [ "$dcode" = 0 ] && [ -n "$d" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the diff reading survives a split character and still reports the dash (exit $dcode, got: $d)"; fi
 plain "x" --bogus
 want_plain 2 "an unknown flag is refused with its own exit code, never read as clean (L11)"
 

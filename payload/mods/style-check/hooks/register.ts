@@ -15,6 +15,20 @@ const COMMIT = /\bgit(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+commit\b/
 const GH_BODY = /\bgh\s+(?:issue|pr)\s+(?:create|edit|comment)\b/
 const BODY_FILE = /(?:--body-file|--file|-F)[ =](?:"([^"]+)"|'([^']+)'|(\S+))/g
 
+// Whether position i of a shell command falls inside a quoted string.
+const insideQuotes = (cmd: string, i: number): boolean => {
+  let q: string | undefined
+  for (let k = 0; k < i; k++) {
+    const c = cmd[k]
+    if (q) {
+      if (c === q) q = undefined
+      else if (c === '\\' && q === '"') k++
+    } else if (c === '"' || c === "'") q = c
+    else if (c === '\\') k++
+  }
+  return q !== undefined
+}
+
 type Verdict = { kind: 'clean' } | { kind: 'hit'; lines: string } | { kind: 'unchecked'; why: string }
 
 const scan = async ($: EngineInterface, text: string, path?: string): Promise<Verdict> => {
@@ -57,7 +71,10 @@ const outgoing = async ($: EngineInterface, tool: string, e: Record<string, unkn
       if (!COMMIT.test(cmd) && !GH_BODY.test(cmd)) return undefined
       // The message as written in the command, plus any file it is read from.
       const parts = [cmd]
+      // Only a flag outside quoted text names a file: a -F inside a quoted message is words
+      // (lessons review). The file's own path may be quoted, so only the flag's position is judged.
       for (const m of cmd.matchAll(BODY_FILE)) {
+        if (insideQuotes(cmd, m.index ?? 0)) continue
         const f = m[1] ?? m[2] ?? m[3]
         if (!f || f === '-') continue
         try {
@@ -86,12 +103,20 @@ const lineWords = (scannerOut: string): string => {
 // scanner could not check are counted apart, so a broken scanner never reads as clean writing.
 let sessionHits = 0
 let sessionUnchecked = 0
+let noteSaid = false
 const UNCHECKED_NOTE = "Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will."
+// Dan's note, once a session however many checks fail; each cause goes to the debug log.
+const unchecked = ($: EngineInterface, why: string) => {
+  if (!noteSaid) $.ui.log(UNCHECKED_NOTE)
+  noteSaid = true
+  $.ui.log(`style-check: ${why}`, { to: 'debug' })
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     sessionHits = 0
     sessionUnchecked = 0
+    noteSaid = false
     await $.command.register({ name: 'style-count', description: 'How many of my replies used a dash or emoji.' })
     return next(e)
   })
@@ -115,9 +140,7 @@ export const register: Register = on => {
     if (v.kind === 'unchecked') {
       // The push gate is still the backstop, so this lets the write through, but says so rather than
       // passing as checked (L11).
-      $.ui.log(UNCHECKED_NOTE)
-      // Dan's line stays as he approved it; the cause goes to the debug log, never dropped.
-      $.ui.log(`style-check: ${v.why}`, { to: 'debug' })
+      unchecked($, v.why)
     }
     return next(e)
   })
@@ -134,10 +157,9 @@ export const register: Register = on => {
         sessionHits += 1
         await $.store.set('chatHits', (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1)
       } else if (v.kind === 'unchecked') {
-        // Said once a session, and kept apart from the count (lessons review).
-        if (sessionUnchecked === 0) $.ui.log(UNCHECKED_NOTE)
+        // Kept apart from the count (lessons review).
         sessionUnchecked += 1
-        $.ui.log(`style-check: ${v.why}`, { to: 'debug' })
+        unchecked($, v.why)
       }
     }
     return next(e)

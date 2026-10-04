@@ -21,6 +21,7 @@ Modes:
 Any other argument exits 2, which is never read as clean (L11).
 """
 import fnmatch
+import io
 import os
 import re
 import subprocess
@@ -110,9 +111,16 @@ def scan_plain(stream, path):
     return 1 if hits else 0
 
 
+def text_stdin():
+    """Standard input as text, never raising: a byte that is not UTF-8 (a file cut part way through
+    a character by head -c, or binary) becomes a replacement character. A crash here would exit 1,
+    which --plain uses for found a dash (lessons review of #609)."""
+    return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+
+
 def main(argv):
     if not argv:
-        return scan_diff(sys.stdin)
+        return scan_diff(text_stdin())
     if argv == ["--excludes"]:
         print("\n".join(EXCLUDES))
         return 0
@@ -121,12 +129,19 @@ def main(argv):
     if argv[0] == "--plain":
         rest = argv[1:]
         if not rest:
-            return scan_plain(sys.stdin, None)
+            return scan_plain(text_stdin(), None)
         if len(rest) == 2 and rest[0] == "--path":
-            return scan_plain(sys.stdin, rest[1])
+            return scan_plain(text_stdin(), rest[1])
     print(f"style-scan: unknown arguments {argv!r}", file=sys.stderr)
     return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # Any other failure exits 2, never 1, so it can only ever read as could not check.
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except SystemExit:
+        raise
+    except Exception as err:  # noqa: BLE001
+        print(f"style-scan: {err!r}", file=sys.stderr)
+        sys.exit(2)

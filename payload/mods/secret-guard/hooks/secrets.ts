@@ -130,6 +130,7 @@ const READERS = new Set([
   'grep', 'egrep', 'fgrep', 'rg', 'awk', 'sed', 'cut', 'sort', 'uniq', 'tr', 'jq', 'column', 'paste',
 ])
 const SHELLS = new Set(['sh', 'bash', 'zsh'])
+const RUNNERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice'])
 const unquoteArg = (s: string): string => s.replace(/^["']|["']$/g, '')
 
 // Simple commands, split on the shell's separators. Good enough to find a command word and its
@@ -139,8 +140,17 @@ const segments = (cmd: string): string[][] =>
     .split(/&&|\|\||[;|\n]/)
     .map(s => s.trim().split(/\s+/).filter(Boolean))
     .map(words => {
+      // Past assignments and the words that only run the next command (sudo cat .env is cat
+      // .env, lessons review). A bare env or printenv is kept: it is the command itself.
       let i = 0
-      while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? '')) i++
+      for (;;) {
+        const w = words[i] ?? ''
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) i++
+        else if (RUNNERS.has(w) && words.slice(i + 1).some(x => !x.startsWith('-') && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(x))) {
+          i++
+          while ((words[i] ?? '').startsWith('-')) i++
+        } else break
+      }
       return words.slice(i)
     })
     .filter(w => w.length > 0)
