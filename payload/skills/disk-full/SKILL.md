@@ -1,6 +1,6 @@
 ---
 name: disk-full
-description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only, in the order that finds the cause fastest.
+description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from one clearing command for Dan to run, in the order that finds the cause fastest.
 ---
 
 # disk-full
@@ -124,18 +124,20 @@ Its size needs Dan's password, so hand him the command rather than running it:
 sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd
 ```
 
-It is a cache macOS rebuilds on demand, so clearing it loses nothing but the time to symbolicate
-the next crash report. The folder carries no SIP restricted flag, so `sudo` can empty it. Empty the
-contents rather than removing the folder, which keeps its root only permissions, and run the glob
-inside the root shell, because Dan's own shell cannot list the folder and zsh would refuse the glob
-before `sudo` ever ran:
+It is a cache macOS rebuilds on demand, so clearing it costs only the time to symbolicate the next
+crash reports. Clearing it is Dan's call, as every deletion is, and only once the size above shows
+it is large. This is the one command in the sequence that deletes anything, and it is for Dan to
+run, never for Claude. The folder carries no SIP restricted flag, so `sudo` can empty it. `find
+-mindepth 1 -delete` empties it, hidden files included, and keeps the folder and its root only
+permissions; it needs no glob, which Dan's zsh would refuse before `sudo` ran because his user
+cannot list the folder:
 
 ```bash
-sudo sh -c 'rm -rf /System/Library/Caches/com.apple.coresymbolicationd/*'
+sudo find /System/Library/Caches/com.apple.coresymbolicationd -mindepth 1 -delete
 ```
 
-Clearing it is Dan's call, as every deletion is. The low space warning names this folder and both
-commands itself whenever it fires, so if it has already fired, those are the same ones.
+The low space warning names this folder and both commands itself when its verdict is low or falling
+and the folder exists, so if it has already fired that way, those are the same ones.
 
 ### 6. The usual large caches, once the above are ruled out
 
@@ -167,7 +169,8 @@ disk; a folder growing between two readings is.
 
 ## Deleting anything
 
-Everything above is read only on purpose. Before removing anything:
+Everything above is read only on purpose, except the one clearing command in step 5, which is
+Dan's to run once he has seen the size. Before removing anything:
 
 - Say what you propose to delete, how much it frees, and what regenerates it.
 - Stop the thing that is writing first. Deleting under an active writer frees space that is

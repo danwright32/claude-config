@@ -330,7 +330,13 @@ check "and says reading its size needs an administrator, rather than claiming on
 check "and gives the command that sizes it" \
   "$(grep -qxF 'sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
 check "and the command that clears it, emptying the folder rather than removing it" \
-  "$(grep -qxF "sudo sh -c 'rm -rf /System/Library/Caches/com.apple.coresymbolicationd/*'" <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+  "$(grep -qxF 'sudo find /System/Library/Caches/com.apple.coresymbolicationd -mindepth 1 -delete' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+# A suspect, never a finding: the check measured no cause and must not read as if it had (L11).
+check "and calls it a suspect nothing measured, not the cause" \
+  "$(grep -q 'Nothing measured it' <<< "$sym_low" && grep -q 'or whether it is the cause' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
+# Sizing comes before clearing, and clearing is conditional on what the size shows (L9).
+check "and puts sizing before clearing, with clearing left as Dan's decision" \
+  "$(awk '/sudo du -sh/ { d = NR } /sudo find/ { f = NR } END { exit !(d && f && d < f) }' <<< "$sym_low" && grep -q 'you decide to clear it' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
 # One copy paste command per block, so Dan never has to pick a line out of a block (global rule).
 sym_blocks="$(awk '/^```/ { if (inb) { print n; inb=0 } else { inb=1; n=0 }; next } inb { n++ }' <<< "$sym_low")"
 check "each command sits alone in its own code block" \
