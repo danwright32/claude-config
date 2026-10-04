@@ -90,9 +90,10 @@ export const register: Register = on => {
 
     const toolUseId = String(input.tool_use_id ?? '')
     if (e.tool === 'Bash') {
-      const what = blockedCommand(String(input.command ?? ''))
+      const raw = String(input.command ?? '')
+      const what = blockedCommand(await $.modkit.commands({ command: raw }), raw)
       if (what) {
-        $.modkit.blocked({ toolUseId, guard: GUARD, reason: `This would print ${what}.`, safeWay: SAFE_WAY })
+        await $.modkit.blocked({ toolUseId, guard: GUARD, reason: `This would print ${what}.`, safeWay: SAFE_WAY })
         await $.ui.toast('Blocked a command that would print a secret.')
         return { deny: commandRefusal(what) }
       }
@@ -101,7 +102,7 @@ export const register: Register = on => {
     const path = String(input.file_path ?? input.notebook_path ?? '')
     const intoEnvFile = WRITERS.has(String(e.tool)) && isEnvFile(path)
     if (!intoEnvFile && strings(input).some(s => findKnownSecret(s, known))) {
-      $.modkit.blocked({ toolUseId, guard: GUARD, reason: 'This message contains a secret.', safeWay: OUTBOUND })
+      await $.modkit.blocked({ toolUseId, guard: GUARD, reason: 'This message contains a secret.', safeWay: OUTBOUND })
       await $.ui.toast('Blocked a message containing a secret.')
       return { deny: `Blocked: this message contains a secret. ${OUTBOUND}` }
     }

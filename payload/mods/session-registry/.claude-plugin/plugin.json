@@ -1,0 +1,7 @@
+{
+  "name": "session-registry",
+  "version": "0.1.0",
+  "description": "One record per open Claude Code session on this Mac, shared by the collision guard, the background job watcher and the goal tracker.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts"
+}

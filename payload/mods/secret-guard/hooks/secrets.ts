@@ -122,6 +122,11 @@ export const findKnownSecret = (text: string, values: readonly string[]): boolea
 }
 
 // ---- commands that print a secret ----
+//
+// The command is read by mod-kit's one shared reader ($.modkit.commands): each simple command as
+// its words, quotes removed, sudo and env looked past, a shell's -c read as what it runs (L613).
+// This judges what it hands back. The gh token check alone reads the command as written, because
+// whether the token was captured into a variable is a property of how the command is spelled.
 
 const CAPTURED_GH_TOKEN = /\b[A-Za-z_][A-Za-z0-9_]*=\$\(\s*gh\s+auth\s+token\b[^)]*\)/g
 // Everything that prints a file's lines, the text tools included (lessons review: grep . .env).
@@ -129,31 +134,16 @@ const READERS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'strings', 'xxd', 'od', 'tac',
   'grep', 'egrep', 'fgrep', 'rg', 'awk', 'sed', 'cut', 'sort', 'uniq', 'tr', 'jq', 'column', 'paste',
 ])
-const SHELLS = new Set(['sh', 'bash', 'zsh'])
-const RUNNERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice'])
-const unquoteArg = (s: string): string => s.replace(/^["']|["']$/g, '')
 
-// Simple commands, split on the shell's separators. Good enough to find a command word and its
-// arguments; it does not need to be a parser, because each rule below errs toward refusing.
-const segments = (cmd: string): string[][] =>
-  cmd
-    .split(/&&|\|\||[;|\n]/)
-    .map(s => s.trim().split(/\s+/).filter(Boolean))
-    .map(words => {
-      // Past assignments and the words that only run the next command (sudo cat .env is cat
-      // .env, lessons review). A bare env or printenv is kept: it is the command itself.
-      let i = 0
-      for (;;) {
-        const w = words[i] ?? ''
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) i++
-        else if (RUNNERS.has(w) && words.slice(i + 1).some(x => !x.startsWith('-') && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(x))) {
-          i++
-          while ((words[i] ?? '').startsWith('-')) i++
-        } else break
-      }
-      return words.slice(i)
-    })
-    .filter(w => w.length > 0)
+// A filter tool's first plain argument is its program or pattern, not a file, unless the program
+// came with a flag (grep -e, awk -f, jq --arg is not one): a jq filter starting .env. was refused
+// live on 2026-10-03.
+const PROGRAM_FIRST = new Set(['grep', 'egrep', 'fgrep', 'rg', 'awk', 'sed', 'jq'])
+const PROGRAM_FLAGS = new Set(['-e', '--regexp', '-f', '--file', '--expression'])
+const fileArgs = (head: string, args: string[]): string[] => {
+  const plain = args.filter(a => !a.startsWith('-'))
+  return PROGRAM_FIRST.has(head) && !args.some(a => PROGRAM_FLAGS.has(a)) ? plain.slice(1) : plain
+}
 
 const secretVarIn = (word: string): string | undefined => {
   for (const m of word.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)) {
@@ -167,22 +157,14 @@ const secretVarIn = (word: string): string | undefined => {
 
 // What a command would print, when that is a secret: a name, "the secrets in <file>", or every
 // variable. Undefined when the command is fine.
-export const blockedCommand = (cmd: string): string | undefined => {
-  if (/\bgh\s+auth\s+token\b/.test(cmd.replace(CAPTURED_GH_TOKEN, ''))) return 'the GitHub token'
-  for (const words of segments(cmd)) {
-    const [head, ...args] = words
-    if (head === undefined) continue
-    // A command run through a shell's -c is read as the command it runs.
-    if (SHELLS.has(head.split('/').pop() ?? head)) {
-      const c = args.indexOf('-c')
-      if (c >= 0) {
-        const inner = blockedCommand(unquoteArg(args.slice(c + 1).join(' ')))
-        if (inner) return inner
-      }
-      continue
-    }
+export const blockedCommand = (cmds: string[][], raw: string): string | undefined => {
+  if (/\bgh\s+auth\s+token\b/.test(raw.replace(CAPTURED_GH_TOKEN, ''))) return 'the GitHub token'
+  for (const words of cmds) {
+    const [first, ...args] = words
+    if (first === undefined) continue
+    const head = first.split('/').pop() ?? first
     if (READERS.has(head)) {
-      const file = args.find(a => !a.startsWith('-') && isEnvFile(a.replace(/^["']|["']$/g, '')))
+      const file = fileArgs(head, args).find(isEnvFile)
       if (file) return `the secrets in ${file}`
     }
     if (head === 'echo' || head === 'printf') {

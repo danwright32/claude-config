@@ -39,6 +39,19 @@ and settles its own surfaces in rounds of its own before it is built.
   part of the name) or they are shaped like a token.
 - A source the secret guard cannot read is one dim note per session.
 
+## Collision guard (#605), settled 2026-10-03
+
+| Surface | Decision |
+| --- | --- |
+| A Proceed | A toast only: "Checked with the other session: safe to edit app.ts." |
+| A Worktree or a Stop | The grey blocked card (mod-kit), titled Collision guard |
+| The note to the session that was working first | Claude Code's standard incoming message from that session (collision round 1, over a grey card), plus a toast: "Another session wanted app.ts; it was moved to a worktree." |
+| A record that cannot be read | Stop, naming the file and how to clear it (picker) |
+| A judgment that cannot be had | Stop, as specced (picker) |
+
+A session silent for five minutes counts as closed; its latest request is read from its transcript,
+never copied into the registry.
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact

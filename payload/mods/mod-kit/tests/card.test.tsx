@@ -5,8 +5,8 @@ import type { Register } from 'claude-code'
 const guard: { name: string; register: Register } = {
   name: 'fake-guard',
   register: on => {
-    on('tool.call', { tool: 'Bash' }, ($, e) => {
-      $.modkit.blocked({
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      await $.modkit.blocked({
         toolUseId: String(e.tool_use_id),
         guard: 'Secret guard',
         reason: 'This would print GITHUB_TOKEN.',
@@ -50,4 +50,18 @@ test('a call no guard blocked is left to Claude Code', { plugins: [guard] }, asy
   expect(await ui.find({ text: /Blocked by/ })).toBeUndefined()
   expect(await ui.find({ text: 'engine row' })).toBeDefined()
   await ui.unmount()
+})
+
+// The shared command reader, reached as a noun so every guard uses the one copy (L613).
+const reader: { name: string; register: Register } = {
+  name: 'reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => ({ deny: JSON.stringify(await $.modkit.commands({ command: String((e as { command?: string }).command) })) }))
+  },
+}
+
+test('the command reader is shared as $.modkit.commands', { plugins: [reader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = (await $.tool.call({ tool: 'Bash', command: 'sudo cat .env && git status' } as never)) as { deny?: string; text?: string }
+  expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([['cat', '.env'], ['git', 'status']])
 })

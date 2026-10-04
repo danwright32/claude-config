@@ -3781,9 +3781,13 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
   # manifest and nothing else in it, the folder is that leftover and nothing else, so it goes.
   # Only on an apply, which is the one thing that can leave it: a send fires on every edit, and
   # sweeping there would race a mod folder somebody has just made and not yet filled (L5).
+  # And only a folder this Mac last held AS a mod (.mods-seen, written at the end of the last send or
+  # apply): an empty folder made here a moment ago looks just the same, and was swept away by a pull
+  # before this (claude-config#629).
   local left
   [ -n "$sweep" ] && for left in "$CLAUDE_HOME/mods"/*/; do
     [ -d "$left" ] && [ ! -f "$left.claude-plugin/plugin.json" ] || continue
+    grep -qxF "$(basename "$left")" "$MODS_SEEN_FILE" 2>/dev/null || continue
     [ -z "$(find "$left" -type f -not -path "$left.claude-plugin/types/*" 2>/dev/null)" ] && rm -rf "${left%/}"
   done
   ours="$(mod_dirs_here)"
@@ -4040,6 +4044,20 @@ MERGED
       refuse_unloadable_skills "$PAYLOAD/skills" "applied to this Mac" prune
       protect_unloadable_local_skills
       kex+=(${REFUSED_SKILL_EXCLUDES[@]+"${REFUSED_SKILL_EXCLUDES[@]}"})
+    fi
+    # A mod folder made here that the shared copy does not have and this Mac has never held as a mod
+    # (.mods-seen) is new work, not a deletion arriving: an empty one has no file for the unsent work
+    # protection above to see, and the mirror took it (claude-config#629). A folder this Mac DID hold
+    # is still removed when the other Mac deletes it.
+    if [ "$d" = mods ]; then
+      local mod_here mod_name
+      for mod_here in "$CLAUDE_HOME/mods"/*/; do
+        [ -d "$mod_here" ] || continue
+        mod_name="$(basename "$mod_here")"
+        [ -e "$(apply_source_dir mods)/$mod_name" ] && continue
+        grep -qxF "$mod_name" "$MODS_SEEN_FILE" 2>/dev/null && continue
+        kex+=(--exclude="/$mod_name/")
+      done
     fi
     while IFS= read -r p2; do
       case "$p2" in "$d"/?*) kex+=(--exclude="/${p2#"$d"/}") ;; esac

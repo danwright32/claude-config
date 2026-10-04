@@ -3,12 +3,39 @@ import type { On, Register } from 'claude-code'
 
 // A stand-in for mod-kit: an inline plugin cannot reach this file's variables, so it reports each
 // card as a transcript line the world collects.
+// Its command reader is a small stand-in for the real one (a mod cannot import another mod's
+// files), enough for the commands below; the real reader is tested in mod-kit.
 const kit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
+    const read = (cmd: string): string[][] =>
+      cmd
+        .split(/&&|;|\n/)
+        .map(part => {
+          const words: string[] = []
+          // A word may mix bare and quoted parts (X="a b" is one word), as the shell's are.
+          for (const m of part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)) words.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
+          while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) words.shift()
+          return words
+        })
+        .filter(w => w.length > 0)
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      return { ...built, modkit: { blocked: (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } }
+      return {
+        ...built,
+        modkit: {
+          blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
+          commands: async ({ command }: { command: string }) => read(command),
+          // A stand-in for mod-kit's git reader, enough for the commands below.
+          git: async ({ words }: { words: string[] }) => {
+            if ((words[0] ?? '').split('/').pop() !== 'git') return undefined
+            const rest = words.slice(1)
+            while (rest[0] === '-C' || rest[0] === '-c') rest.splice(0, 2)
+            while ((rest[0] ?? '').startsWith('-')) rest.shift()
+            return { sub: rest[0], args: rest.slice(1), dir: undefined }
+          },
+        },
+      }
     })
   },
 }
@@ -190,9 +217,40 @@ test('a -F inside a quoted commit message is not read as a message file (lessons
 
 test('python failing with exit 1 and nothing found is not read as a dash (lessons review)', withKit, async ($, on) => {
   const w = world(on, { scanner: 'crash' })
-  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'clean text' } as never)
+  // Non-ASCII but allowed, so the scanner has to be asked, and fails.
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'caf\u00e9 text' } as never)
   expect(w.reached).toContain('Write')
   expect(w.logs).toContain("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
+})
+
+test('plain ASCII text never starts the scanner, since every forbidden character is outside it (lessons review)', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'all plain text, with - hyphens\n' } as never)
+  expect(w.reached).toContain('Write')
+  expect(w.runs.length).toBe(0)
+})
+
+test('two replies counted at once both land (lessons review, L690)', withKit, async ($, on) => {
+  const w = world(on, { store: { chatHits: 0 } })
+  on('session.append', ($, e, next) => next(e))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const row = (uuid: string) => ({
+    door: 'response',
+    origin: { kind: 'model', model: 'm' },
+    uuid,
+    message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: `one ${DASH} two` }] },
+  })
+  const append = async (uuid: string) => {
+    try {
+      await $.session.append(row(uuid) as never)
+    } catch (err) {
+      if (!/no implementation for session.append/.test(String(err))) throw err
+    }
+  }
+  await Promise.all([append('a'), append('b')])
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 2 this session, 2 in total.')
+  void w
 })
 
 test('a message file given as a quoted path is still read', withKit, async ($, on) => {
@@ -210,7 +268,7 @@ test('a chat reply the scanner could not check is not read as clean (lessons rev
       door: 'response',
       origin: { kind: 'model', model: 'm' },
       uuid: 'r1',
-      message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'a reply' }] },
+      message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'a caf\u00e9 reply' }] },
     } as never)
   } catch (err) {
     if (!/no implementation for session.append/.test(String(err))) throw err
