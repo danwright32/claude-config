@@ -96,7 +96,9 @@ export const register: Register = on => {
         await show($, pending)
       } catch (err) {
         // Nobody can answer a question the band cannot show, so the save is refused, never let through.
-        await update($, pendingRef, p => (p ?? []).filter(x => x !== q && x.id !== q.id)).catch(() => undefined)
+        // Taken back out so it can never be answered later; if even that fails, the hook throws and
+        // its catch refuses the write all the same.
+        await update($, pendingRef, p => (p ?? []).filter(x => x.id !== q.id))
         const why = String((err as Error)?.message ?? err)
         $.ui.toast(`The question about saving to ${where} could not be shown: ${why}`)
         return { deny: `Not saved: the question asking Dan whether this is a standing rule could not be shown (${why}). Ask him in your reply instead.` }
@@ -131,6 +133,8 @@ export const register: Register = on => {
     await $.state.set(pendingRef, [])
     await $.state.set(promptRef, null)
     $.ui.invalidate('prompt.section')
+    // At session end there is nobody left to tell, and a row left behind has no question under it:
+    // a press then finds nothing pending and does nothing.
     await $.modkit.clearBandRow({ mod: MOD, id: 'question' }).catch(() => undefined)
     return next(e)
   })
