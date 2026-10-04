@@ -37,6 +37,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: files[e.path] as string }
   })
+  on('fs.exists', ($, e) => ({ value: e.path in files }) as never)
   on('fs.list', ($, e) => ({
     value: Object.keys(files)
       .filter(p => p.startsWith(e.path + '/') && !p.slice(e.path.length + 1).includes('/'))
@@ -60,6 +61,10 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
       return ok()
     }
     if (cmd === 'git') return ok('/repo\n')
+    if (cmd === 'find' && a) {
+      const name = rest[rest.indexOf('-name') + 1] as string
+      return ok(Object.keys(files).filter(p => p.startsWith(a + '/') && p.endsWith('/' + name)).map(p => p + '\n').join(''))
+    }
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', () => ({ value: (opts.id ?? (() => 's1'))() }) as never)
@@ -194,10 +199,32 @@ test('after a /clear, an edit queued before the switch lands on the old record, 
   expect(w.own('s2').edits).toEqual([])
 })
 
-test('the transcript path is taken from the session start hook input', withConsumer, async ($, on) => {
-  const w = world(on)
-  on('classic.SessionStart', () => ({}) as never)
+// The transcript path never reaches a module from the start hook (live check of #605, 2026-10-04:
+// every record on this Mac had none), so the registry works it out where it is read, from Claude
+// Code's own layout, and hands it on only when that file is really there.
+const other = (id: string, cwd: string) =>
+  JSON.stringify({ v: 1, sessionId: id, cwd, repoRoot: '/repo', startedAt: 0, lastSeen: 100 * MIN, closedAt: null, transcriptPath: null, edits: [], extra: {} })
+const openOf = async ($: Parameters<typeof call>[0], id: string) =>
+  (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null }[] }).open.find(r => r.sessionId === id)
+
+test("an open session's transcript is found in Claude Code's folder for its working directory", withConsumer, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-Users-x-my-app-v2/s2.jsonl'
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/my_app.v2'), [T]: '' } })
   await start($)
-  await $.classic.SessionStart({ source: 'startup', transcript_path: '/Users/x/.claude/projects/p/s1.jsonl' } as never)
-  expect(w.own().transcriptPath).toBe('/Users/x/.claude/projects/p/s1.jsonl')
+  expect((await openOf($, 's2'))?.transcriptPath).toBe(T)
+})
+
+test('a transcript filed under another folder is found by the session id (a session that changed folder)', withConsumer, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-Users-x-elsewhere/s2.jsonl'
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' } })
+  await start($)
+  expect((await openOf($, 's2'))?.transcriptPath).toBe(T)
+})
+
+test('a transcript that is nowhere is handed on as none, never as a guessed path', withConsumer, async ($, on) => {
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') } })
+  await start($)
+  const r = await openOf($, 's2')
+  expect(r).toBeDefined()
+  expect(r?.transcriptPath).toBeNull()
 })
