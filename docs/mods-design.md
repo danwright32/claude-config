@@ -174,7 +174,7 @@ classic status line command passes colour through, and the band above the prompt
 Not settled with Dan, built in #634 as the plainest reading and open for a round: the pane's
 cadence (it reads the registry every five seconds while open); "nothing being asked" read as no
 open question and no open permission; the permission's "what for" (the call's own description,
-else the tool and its command or file); six words for "a few words"; a goal cut to 80
+else "a Bash command", never the command itself, which can carry a secret, or the tool and its file); six words for "a few words"; a goal cut to 80
 characters; a session with no task list showing no step count; within one state, oldest session
 first; a session that records no progress left out; the blue as the theme's `suggestion` colour;
 the permission notification keeping the Glass sound the settings hook had; and the words for a

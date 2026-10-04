@@ -48,7 +48,9 @@ export const firstWords = (text: string): string => {
 export const permissionFor = (tool: string, input: unknown): string => {
   const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
   if (typeof i.description === 'string' && i.description.trim()) return cut(i.description, 120)
-  if (typeof i.command === 'string' && i.command.trim()) return cut(`${tool}: ${i.command}`, 120)
+  // The command itself is never copied: it can carry a secret, and this text goes into the registry every
+  // session reads and into a notification (lessons review of 3ff16ba).
+  if (typeof i.command === 'string' && i.command.trim()) return `a ${tool} command`
   const file = [i.file_path, i.notebook_path, i.path].find((x): x is string => typeof x === 'string' && x.trim() !== '')
   if (file) return cut(`${tool} ${baseName(file)}`, 120)
   return cut(tool, 120)

@@ -98,9 +98,9 @@ describe('the first request, cut to a few words', () => {
 })
 
 describe('what a permission is for', () => {
-  test('a Bash call is named by its description, else its command', () => {
+  test("a Bash call is named by its description, else only as a Bash command", () => {
     expect(permissionFor('Bash', { command: 'npm test', description: 'Run the test suite' })).toBe('Run the test suite')
-    expect(permissionFor('Bash', { command: 'npm test' })).toBe('Bash: npm test')
+    expect(permissionFor('Bash', { command: 'npm test' })).toBe('a Bash command')
   })
   test('a file tool is named by the file', () => {
     expect(permissionFor('Edit', { file_path: '/Users/dan/Apps/x/src/app.ts' })).toBe('Edit app.ts')
@@ -109,7 +109,7 @@ describe('what a permission is for', () => {
     expect(permissionFor('WebFetch', { url: 'https://example.com' })).toBe('WebFetch')
     expect(permissionFor('mcp__x__y', null)).toBe('mcp__x__y')
   })
-  test('a long command is cut short', () => {
-    expect(permissionFor('Bash', { command: `echo ${'z'.repeat(300)}` }).length).toBeLessThanOrEqual(120)
+  test('a command is never copied, since it can carry a secret into the shared registry and the notification', () => {
+    expect(permissionFor('Bash', { command: 'curl -H "Authorization: Bearer sk-live-123" https://x' })).toBe('a Bash command')
   })
 })
