@@ -14,7 +14,10 @@ and settles its own surfaces in rounds of its own before it is built.
    Dan asked that the steps card not be grey "since it needs my action"). One amber line per
    surface: heading and next step both amber was too much (steps amber round), and the handoff's
    changed since lines are grey under its amber lead (handoff colour round, 2026-10-04). The one
-   exception is the steps card's amber left edge beside its amber heading, which Dan asked for.
+   exception to one amber line per surface is the steps card's amber left edge beside its amber
+   heading, which Dan asked for. The exceptions to colour only for action are separate, each
+   recorded where it applies: the running PR, running job and kept job, the scope mode label, and
+   the goals pane's state colours.
 2. **Plain wording.** A refusal says what was blocked and the safe way, in one or two short
    sentences: "Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its
    length, or gh auth status." Settled 2026-10-03, then applied to every refusal and toast of the
@@ -71,7 +74,7 @@ request in it.
 | Facts shown only when they need a look | Unpushed commits, PR and checks (failing or running), a running background job, context above 70% (status round 2) |
 | Hidden | Branch, uncommitted files, commits behind main (status round 2) |
 | Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). |
-| Colour | The status line is all grey; the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job and a job kept on purpose are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round). |
+| Colour | The status line is all grey; the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job, a job kept on purpose and a scope mode label are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round) and a mode changes what Claude will do; the scope mode label shows even when nothing else is in the band (scope mode round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look or a scope mode is on (picker, after the probe below; scope mode round). |
 | The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
 | Order of the amber line | A scope mode (NO BUILD, WINDING DOWN, AWAY) leads it in bold, since it changes what Claude will do (scope mode round). Then most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
