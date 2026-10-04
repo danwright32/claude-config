@@ -16,7 +16,9 @@ let lastTried = Number.NEGATIVE_INFINITY
 // A registry write that fails never breaks the tool call it rides on; Claude is told once, on
 // the next result it reads, until a write lands again.
 let toldUnwritten = false
-let notice: string | undefined
+// What Claude is told rides on the next result it reads; each note is kept until then, so a second
+// never overwrites one still waiting (lessons review of 327a767).
+const notices: string[] = []
 let toldNoClock = false
 const publish = async ($: EngineInterface, now: number) => {
   if (!progress) return
@@ -28,17 +30,16 @@ const publish = async ($: EngineInterface, now: number) => {
   } catch (err) {
     if (!toldUnwritten) {
       toldUnwritten = true
-      notice = `The goal tracker could not record this session's progress: ${err instanceof Error ? err.message : String(err)}. Other sessions and the goals pane will not see it.`
+      notices.push(`The goal tracker could not record this session's progress: ${err instanceof Error ? err.message : String(err)}. Other sessions and the goals pane will not see it.`)
     }
   }
 }
 const unknownStatus = (status: unknown) =>
   `The goal tracker did not record that step change: status ${JSON.stringify(status)} is not one of pending, in_progress, completed or deleted, so the session's progress is as it was.`
 const withNotice = <R extends { context?: readonly string[] }>(result: R): R => {
-  if (!notice) return result
-  const said = notice
-  notice = undefined
-  return { ...result, context: [...(result.context ?? []), said] }
+  if (!notices.length) return result
+  const said = notices.splice(0)
+  return { ...result, context: [...(result.context ?? []), ...said] }
 }
 
 // Notifications (Dan, 2026-10-04): one per waiting moment, naming the project. A question: "<project>
@@ -175,7 +176,7 @@ export const register: Register = on => {
     progress = await $.clock.now().then(empty, () => undefined)
     lastTried = Number.NEGATIVE_INFINITY
     streak = 0
-    notice = undefined
+    notices.length = 0
     toldUnwritten = false
     toldNoClock = false
     toldNoNotify = false
@@ -317,7 +318,7 @@ export const register: Register = on => {
     } catch (err) {
       if (!toldNoClock) {
         toldNoClock = true
-        notice = `The goal tracker could not read the clock (${err instanceof Error ? err.message : String(err)}), so this session's progress is not being recorded.`
+        notices.push(`The goal tracker could not read the clock (${err instanceof Error ? err.message : String(err)}), so this session's progress is not being recorded.`)
       }
       return withNotice(await next(e))
     }
@@ -379,7 +380,7 @@ export const register: Register = on => {
         const odd = todos.find(t => !isStepStatus(t?.status))
         // A list carrying a status the tracker cannot count is not stored at all, and Claude is told.
         if (odd) {
-          notice = unknownStatus(odd.status)
+          notices.push(unknownStatus(odd.status))
           progress = { ...progress, lastActivityAt: now }
         } else progress = fromTodos(progress, todos as { content: string; status: StepStatus; activeForm: string }[], now)
       } else if (e.tool === 'ProposeGoal' && typeof input.condition === 'string' && input.condition.trim()) {
@@ -395,7 +396,7 @@ export const register: Register = on => {
         const status = input.status
         // An update carrying a status the tracker cannot count is not stored at all, and Claude is told.
         if (status !== undefined && status !== 'deleted' && !isStepStatus(status)) {
-          notice = unknownStatus(status)
+          notices.push(unknownStatus(status))
           progress = { ...progress, lastActivityAt: now }
         } else progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
       } else {

@@ -362,6 +362,20 @@ test('a task update with a status the tracker does not know is not stored, and C
   expect(contextText(again)).not.toContain('"finished"')
 })
 
+// Lessons review of 327a767: a second note never overwrites one still waiting to be said.
+test('a refused status and a failed registry write on one call are both said', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { failExtraFrom: 3 })
+  await start($)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Read', description: 'x', activeForm: 'Reading' } as never)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as never)
+  // Past the activity throttle, so this call's own write is tried, and fails.
+  await clock.advance(MIN)
+  const r = await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'finished' } as never)
+  expect(contextText(r)).toContain('"finished"')
+  expect(contextText(r)).toContain('could not record')
+})
+
 test('a to-do list carrying a status the tracker does not know is not stored, and Claude is told', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on)
