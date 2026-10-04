@@ -38,7 +38,9 @@ const scan = async ($: EngineInterface, text: string, path?: string): Promise<Ve
   try {
     const r = await $.process.run(argv, { stdin: text, timeoutMs: 10_000 })
     if (r.exitCode === 0) return { kind: 'clean' }
-    if (r.exitCode === 1) return { kind: 'hit', lines: r.stdout.trim() }
+    // A hit is exit 1 WITH lines: python itself failing also exits 1, with nothing on stdout and the
+    // traceback on stderr, and that is a scanner that could not run (lessons review).
+    if (r.exitCode === 1 && r.stdout.trim()) return { kind: 'hit', lines: r.stdout.trim() }
     return { kind: 'unchecked', why: `the scanner exited ${r.exitCode}: ${r.stderr.trim().slice(0, 160)}` }
   } catch (err) {
     return { kind: 'unchecked', why: `the scanner could not run: ${String(err).slice(0, 160)}` }

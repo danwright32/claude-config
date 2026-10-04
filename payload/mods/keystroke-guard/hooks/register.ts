@@ -32,8 +32,19 @@ const facts = async ($: EngineInterface, target: string) => {
   const targetPids: number[] = []
   for (const p of pids((await run($, ['pgrep', '-f', target])) ?? '')) if ((await pathOf(p)) === target) targetPids.push(p)
   // Every process with the same executable name, at any path: the copies that must not be running.
+  // Read from the full process list by the executable's whole name, never pgrep -x, which matches a
+  // name macOS cuts to 16 characters and so never finds a second Adobe Lightroom Classic (lessons
+  // review). A list that cannot be read is an unreadable front app's twin: refused below.
   const otherPids: number[] = []
-  for (const p of pids((await run($, ['pgrep', '-x', exec])) ?? '')) if (!targetPids.includes(p) && (await pathOf(p)) !== target) otherPids.push(p)
+  const all = await run($, ['ps', '-axo', 'pid=,comm='])
+  if (all === undefined) return { targetPids, otherPids, frontmost: undefined, frontName: undefined }
+  for (const line of all.split('\n')) {
+    const m = /^\s*(\d+)\s+(.+)$/.exec(line)
+    if (!m) continue
+    const pid = Number(m[1])
+    const path = (m[2] as string).trim()
+    if (!targetPids.includes(pid) && path !== target && path.split('/').pop() === exec) otherPids.push(pid)
+  }
   const front = await run($, [
     'osascript',
     '-e',

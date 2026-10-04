@@ -24,7 +24,7 @@ const BAD = `const label = "Loading ${DASH} please wait"`
 
 type Run = { argv: readonly string[]; stdin: string }
 
-const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string, string>; store?: Record<string, unknown> } = {}) => {
+const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown> } = {}) => {
   const runs: Run[] = []
   const reached: string[] = []
   const toasts: string[] = []
@@ -36,6 +36,9 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing'; files?: Record<string
   on('process.run', ($, e) => {
     const stdin = e.init?.stdin ?? ''
     runs.push({ argv: e.argv, stdin })
+    if (opts.scanner === 'crash') {
+      return { value: { exitCode: 1, stdout: '', stderr: 'SyntaxError: invalid syntax', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (opts.scanner === 'missing') {
       return { value: { exitCode: 2, stdout: '', stderr: "can't open file", isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -183,6 +186,13 @@ test('a -F inside a quoted commit message is not read as a message file (lessons
   const w = world(on, { files: { '/tmp/b.md': `note ${DASH}\n` } })
   await $.tool.call({ tool: 'Bash', command: 'git commit -m "explain the -F /tmp/b.md option"' } as never)
   expect(w.reached).toContain('Bash')
+})
+
+test('python failing with exit 1 and nothing found is not read as a dash (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'crash' })
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'clean text' } as never)
+  expect(w.reached).toContain('Write')
+  expect(w.logs).toContain("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
 })
 
 test('a message file given as a quoted path is still read', withKit, async ($, on) => {

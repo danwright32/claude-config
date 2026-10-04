@@ -16,16 +16,22 @@ const dropHeredocs = (cmd: string): string => {
   const lines = cmd.split('\n')
   const out: string[] = []
   let end: string | undefined
+  let body: string[] = []
   for (const line of lines) {
     if (end !== undefined) {
-      if (line.trim() === end) end = undefined
+      if (line.trim() === end) {
+        end = undefined
+        body = []
+      } else body.push(line)
       continue
     }
     out.push(line)
-    const m = /<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/.exec(line)
+    // Exactly two <, so a here-string (<<<) is not taken for a heredoc (lessons review).
+    const m = /(?<!<)<<(?!<)-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/.exec(line)
     if (m) end = m[1] ?? m[2] ?? m[3]
   }
-  return out.join('\n')
+  // A heredoc that never ends is not text the guard may skip: its lines are judged after all.
+  return [...out, ...body].join('\n')
 }
 
 // Simple commands, split on separators outside quotes, each as its words with quotes removed. A

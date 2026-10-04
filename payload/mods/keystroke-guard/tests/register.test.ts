@@ -39,8 +39,12 @@ const world = (on: On, w: World) => {
       return pids.length ? ok(pids.join('\n') + '\n') : none
     }
     if (cmd === 'pgrep' && args[0] === '-x') {
-      const pids = Object.entries(w.running).filter(([, p]) => p.endsWith('/' + (args[1] ?? ''))).map(([pid]) => pid)
+      // As macOS does: the process name it matches is cut to 16 characters (lessons review).
+      const pids = Object.entries(w.running).filter(([, p]) => (p.split('/').pop() ?? '').slice(0, 16) === (args[1] ?? '')).map(([pid]) => pid)
       return pids.length ? ok(pids.join('\n') + '\n') : none
+    }
+    if (cmd === 'ps' && args.includes('-axo')) {
+      return ok(Object.entries(w.running).map(([pid, p]) => `${pid} ${p}`).join('\n') + '\n')
     }
     if (cmd === 'ps') return ok((w.running[Number(args[args.length - 1])] ?? '') + '\n')
     if (cmd === 'osascript') return ok(`${w.front}\n`)
@@ -102,6 +106,14 @@ test('a wrong frontmost app is refused, with the card and a toast', withKit, asy
     { toolUseId: 'w1', guard: 'Keystroke guard', reason: "Overture isn't the front app (Adobe Lightroom Classic is).", safeWay: 'Bring it forward first, then type.' },
   ])
   expect(w.toasts).toContain('Blocked typing into Overture.')
+})
+
+test('two copies of an app with a long name are refused too (lessons review)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const OTHER_LR = '/Users/x/Beta/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic'
+  const w = world(on, { front: 10, running: { 10: LIGHTROOM, 11: OTHER_LR }, answer: 'Go ahead' })
+  await $.tool.call(bash(`TARGET_APP="${LIGHTROOM}" cliclick c:1,1`))
+  expect(w.reached).not.toContain('Bash')
 })
 
 test('two running copies of the app are refused', withKit, async ($, on) => {
