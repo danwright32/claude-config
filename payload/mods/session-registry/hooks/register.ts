@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Sessions, SessionsList, SessionsRecord } from '../types/index.d.ts'
+import { remember } from './bounded.ts'
 
 // ONE record of the open sessions on this Mac, read by the collision guard (#605), the background
 // job watcher (#611) and the goal tracker (#612), which the milestone said must not each build
@@ -10,6 +11,8 @@ import type { Sessions, SessionsList, SessionsRecord } from '../types/index.d.ts
 // session's requests are read from its own transcript when needed, never copied here.
 
 const DEAD_MS = 5 * 60_000
+// Decided with Dan (2026-10-04, #633): a record is kept 7 days after its session ended.
+const KEEP_MS = 7 * 24 * 60 * 60_000
 const BEAT_MS = 60_000
 const MAX_EDITS = 500
 
@@ -78,8 +81,53 @@ const found = new Map<string, string>()
 // not on every read, since every guarded edit reads the list (lessons review of #636).
 const missed = new Map<string, number>()
 const SEARCH_AGAIN_MS = 60_000
+// Far more sessions than are ever open at once; the cap only stops growth over a long process.
+const CACHE_MAX = 200
 // What a session id looks like; anything else read from disk never goes into a path or a search.
 const SESSION_ID = /^[A-Za-z0-9-]+$/
+
+// What a readable record is, one rule for every reader (the list and the cleanup), so a record is
+// damaged or readable the same way everywhere (lessons review of #644). Every time it holds must be
+// a number, or an age computed from it is NaN and slips past every check (L50).
+const isRecord = (r: SessionsRecord): boolean =>
+  r.v === 1 && typeof r.sessionId === 'string' && typeof r.lastSeen === 'number' && (r.closedAt === null || typeof r.closedAt === 'number')
+
+// Clears out what has expired, once per session start so no edit pays for it (#633). A closed
+// record goes 7 days after it closed; a crashed one, never closed, 7 days after it was last seen;
+// a damaged one 7 days after its file last changed, named in one grey line. A damaged record any
+// newer stays, since it may belong to a live session, and still stops guarded actions.
+const prune = async ($: EngineInterface, h: string, now: number) => {
+  const dir = dirOf(h)
+  let entries: { name: string; kind: string }[]
+  try {
+    entries = await $.fs.list(dir)
+  } catch {
+    return
+  }
+  const damaged: string[] = []
+  for (const ent of entries) {
+    if (ent.kind !== 'file' || !ent.name.endsWith('.json') || ent.name.startsWith('.')) continue
+    const path = `${dir}/${ent.name}`
+    let endedAt: number | null
+    let isDamaged = false
+    try {
+      const r = JSON.parse(await $.fs.read(path)) as SessionsRecord
+      if (!isRecord(r)) throw new Error('shape')
+      endedAt = r.closedAt ?? (now - r.lastSeen > DEAD_MS ? r.lastSeen : null)
+    } catch {
+      isDamaged = true
+      try {
+        endedAt = (await $.fs.stat(path)).mtimeMs
+      } catch {
+        continue
+      }
+    }
+    if (endedAt === null || now - endedAt <= KEEP_MS) continue
+    const rm = await $.process.run(['rm', '-f', path]).catch(() => undefined)
+    if (rm?.exitCode === 0 && isDamaged) damaged.push(ent.name)
+  }
+  if (damaged.length) $.ui.log(`Session registry deleted ${damaged.length === 1 ? 'a damaged record' : `${damaged.length} damaged records`} older than ${KEEP_MS / (24 * 60 * 60_000)} days: ${damaged.join(', ')}.`)
+}
 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
@@ -99,7 +147,7 @@ export const register: Register = on => {
       if (!SESSION_ID.test(r.sessionId)) return null
       for (const p of [found.get(r.sessionId), r.transcriptPath, `${projectsOf(h)}/${folderOf(r.cwd)}/${r.sessionId}.jsonl`]) {
         if (p && (await built.fs.exists(p).catch(() => false))) {
-          found.set(r.sessionId, p)
+          remember(found, r.sessionId, p, CACHE_MAX)
           return p
         }
       }
@@ -109,14 +157,14 @@ export const register: Register = on => {
         const f = await built.process.run(['find', projectsOf(h), '-maxdepth', '2', '-name', `${r.sessionId}.jsonl`], { timeoutMs: 5_000 })
         const p = f.exitCode === 0 ? f.stdout.split('\n').map(l => l.trim()).find(Boolean) : undefined
         if (p) {
-          found.set(r.sessionId, p)
+          remember(found, r.sessionId, p, CACHE_MAX)
           missed.delete(r.sessionId)
           return p
         }
       } catch {
         // Not found is the answer: the reader says so by name.
       }
-      missed.set(r.sessionId, now)
+      remember(missed, r.sessionId, now, CACHE_MAX)
       return null
     }
     const sessions: Sessions = {
@@ -140,7 +188,7 @@ export const register: Register = on => {
           let r: SessionsRecord
           try {
             r = JSON.parse(await built.fs.read(`${dirOf(h)}/${ent.name}`)) as SessionsRecord
-            if (r.v !== 1 || typeof r.sessionId !== 'string' || typeof r.lastSeen !== 'number') throw new Error('shape')
+            if (!isRecord(r)) throw new Error('shape')
           } catch {
             out.unreadable.push(ent.name)
             continue
@@ -167,6 +215,7 @@ export const register: Register = on => {
     home = await $.env.get('HOME')
     if (home) {
       await $.process.run(['mkdir', '-p', dirOf(home)])
+      await prune($, home, await $.clock.now())
       rec = await fresh($, await $.session.id(), e.cwd)
       await save(() => undefined)
       if (!beating) {

@@ -94,6 +94,24 @@ classic status line command passes colour through, and the band above the prompt
   included, naming the last failure; the next success clears it. A subagent's calls and to-do list
   are not the session's (picker).
 
+## Goals pane (#612), settled 2026-10-04
+
+| Surface | Decision |
+| --- | --- |
+| Scope | Every open session on this Mac, in any project (picker) |
+| Pane | /goals opens a live pane that updates as sessions move and closes itself when Dan next sends a message (picker) |
+| Row | Two lines per session: project and goal on top; state, steps, elapsed time and one detail (the question, the failure, how long quiet, or the step under way) as a dim sentence beneath (design round) |
+| Order | Waiting on you, failed, stalled, working, done (design round) |
+| State colour | On the state word only: waiting on you and stalled amber, failed red, working blue, done green. A deliberate exception to standing rule 1, so every state reads at a glance; red stays for something genuinely wrong (design round) |
+| Notification | One per waiting moment, naming the project: "<project> is waiting on you" with the question, or "<project> needs a permission" with what for. It replaces the PermissionRequest "Permission needed" hook and the idle "What's next?" hook while a question is open, in the same change (pickers) |
+
+## Session registry retention (#633), settled 2026-10-04
+
+A closed session's record is kept 7 days after it closed, a crashed one 7 days after it was last
+seen, then deleted at session start, never on a read. A damaged record older than 7 days by its
+file's age is deleted too, named in one dim grey line; a newer damaged record still stops guarded
+actions, since it may belong to a live session (pickers).
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact
