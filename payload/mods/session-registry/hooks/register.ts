@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Sessions, SessionsList, SessionsRecord } from '../types/index.d.ts'
+import { remember } from './bounded.ts'
 
 // ONE record of the open sessions on this Mac, read by the collision guard (#605), the background
 // job watcher (#611) and the goal tracker (#612), which the milestone said must not each build
@@ -80,6 +81,8 @@ const found = new Map<string, string>()
 // not on every read, since every guarded edit reads the list (lessons review of #636).
 const missed = new Map<string, number>()
 const SEARCH_AGAIN_MS = 60_000
+// Far more sessions than are ever open at once; the cap only stops growth over a long process.
+const CACHE_MAX = 200
 // What a session id looks like; anything else read from disk never goes into a path or a search.
 const SESSION_ID = /^[A-Za-z0-9-]+$/
 
@@ -139,7 +142,7 @@ export const register: Register = on => {
       if (!SESSION_ID.test(r.sessionId)) return null
       for (const p of [found.get(r.sessionId), r.transcriptPath, `${projectsOf(h)}/${folderOf(r.cwd)}/${r.sessionId}.jsonl`]) {
         if (p && (await built.fs.exists(p).catch(() => false))) {
-          found.set(r.sessionId, p)
+          remember(found, r.sessionId, p, CACHE_MAX)
           return p
         }
       }
@@ -149,14 +152,14 @@ export const register: Register = on => {
         const f = await built.process.run(['find', projectsOf(h), '-maxdepth', '2', '-name', `${r.sessionId}.jsonl`], { timeoutMs: 5_000 })
         const p = f.exitCode === 0 ? f.stdout.split('\n').map(l => l.trim()).find(Boolean) : undefined
         if (p) {
-          found.set(r.sessionId, p)
+          remember(found, r.sessionId, p, CACHE_MAX)
           missed.delete(r.sessionId)
           return p
         }
       } catch {
         // Not found is the answer: the reader says so by name.
       }
-      missed.set(r.sessionId, now)
+      remember(missed, r.sessionId, now, CACHE_MAX)
       return null
     }
     const sessions: Sessions = {
