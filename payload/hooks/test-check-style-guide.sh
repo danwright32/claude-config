@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Tests for the em-dash/en-dash/emoji detector inside check-style-guide.sh.
-# Extracts the real python3 detection block out of the hook and feeds it
-# synthetic diff text, so we exercise the actual code, not a re-implementation.
+# Tests for the em-dash/en-dash/emoji rule check-style-guide.sh enforces at push. The rule lives in
+# lib/style-scan.py, shared with the style-check mod (claude-config#609), and is driven directly,
+# so the suite exercises the real code, not a re-implementation.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -15,29 +15,23 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/check-style-guide.sh"
 
-# The extracted detector goes in a directory of this RUN's own, never beside this file
-# (claude-config#180). A fixed name in payload/hooks is one path shared by every run on the
-# machine: two at once truncate and then delete each other's copy, and the second reads a half
-# written file and reports that the detector found nothing. It also put a stray file inside the
-# tree the sync mirrors whenever a run was killed between writing it and removing it.
+# Anything this run makes goes in a directory of its own, never beside this file
+# (claude-config#180): a fixed path in payload/hooks is shared by every run on the machine, and a
+# run killed part way leaves a stray file in the tree the sync mirrors.
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.styleguide.XXXXXXXX")" || WORKDIR=""
 case "${WORKDIR%/}" in
   ''|/|"${HOME%/}") echo "$(basename "${BASH_SOURCE[0]}"): refusing to run: throwaway directory came back as '$WORKDIR'." >&2; exit 2 ;;
 esac
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# Pull the python3 -c '...' detector body out of the hook into its own file
-# (the lines strictly between the opening `findings=...python3 -c '` line and
-# the closing `' 2>/dev/null)"` line).
-awk '
-  /^findings="\$\(printf/ { flag=1; next }
-  flag && /2>\/dev\/null\)"$/ { flag=0; next }
-  flag { print }
-' "$HOOK" > "$WORKDIR/.style-detector.tmp.py"
-[ -s "$WORKDIR/.style-detector.tmp.py" ] || { echo "FAIL: could not extract detector block"; exit 1; }
+# The detector is ONE shared script, lib/style-scan.py, which this hook and the style-check mod
+# both run (claude-config#609). It is driven directly here, so the suite tests the rule itself and
+# not a re-implementation of it (L52). It used to be lifted out of the hook with awk.
+SCANNER="$DIR/lib/style-scan.py"
+[ -f "$SCANNER" ] || { echo "FAIL: lib/style-scan.py is missing, so there is no detector to test"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 
 detect() {
-  printf '%s' "$1" | python3 "$WORKDIR/.style-detector.tmp.py"
+  printf '%s' "$1" | python3 "$SCANNER"
 }
 
 pass=0
@@ -82,6 +76,78 @@ want_flag "em dash in a brand-new untracked file" "--- NEW FILE: app/new.ts ---
 want_clean "plain new file with no violations" "--- NEW FILE: app/new.ts ---
 +export const x = 1;"
 
+
+# --- one rule, shared with the style-check mod (claude-config#609) ---
+# The hook must carry no copy of the rule: a second copy is the thing that drifts (L370, L613).
+if grep -q 'dash_re\|emoji_re\|U0001F300' "$HOOK"; then
+  fail=$((fail+1)); echo "FAIL: check-style-guide.sh still holds its own copy of the character rule"
+else pass=$((pass+1)); fi
+if grep -q 'lib/style-scan.py' "$HOOK"; then pass=$((pass+1));
+else fail=$((fail+1)); echo "FAIL: check-style-guide.sh does not run lib/style-scan.py"; fi
+
+# --plain reads text as written (no diff markers), names each offending line by number, and exits
+# 1 on a finding, 0 when clean: the mod refuses on the exit code and quotes the lines.
+uesc() { python3 -c 'import sys,codecs; sys.stdout.write(codecs.decode(sys.argv[1], "unicode_escape"))' "$1"; }
+plain() {  # $1 text, then any extra flags -> PLAIN_OUT, PLAIN_CODE
+  local t="$1"; shift
+  PLAIN_OUT="$(printf '%s' "$t" | python3 "$SCANNER" --plain "$@")"; PLAIN_CODE=$?
+}
+want_plain() {  # $1 expected code, $2 description
+  if [ "$PLAIN_CODE" = "$1" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $2: expected exit $1, got $PLAIN_CODE ($PLAIN_OUT)"; fi
+}
+plain "$(printf 'fine\nalso %s fine\n' "$(uesc 'x\u2014y')")"
+want_plain 1 "--plain flags a dash on line 2"
+case "$PLAIN_OUT" in *"line 2:"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: --plain names the line: got $PLAIN_OUT" ;; esac
+plain "$(printf '+++ b/x\n-%s\n' "$(uesc '\u2014')")"
+want_plain 1 "--plain reads every line, even one that looks like a removed diff line"
+plain "nothing here, self-aware and well-known"
+want_plain 0 "--plain is clean on hyphens"
+[ -z "$PLAIN_OUT" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: a clean --plain run prints nothing"; }
+git init -q "$WORKDIR/a-repo"
+plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/a-repo/CLAUDE.md"
+want_plain 0 "--plain honours the same excluded paths as the push (the top level CLAUDE.md)"
+mkdir -p "$WORKDIR/a-repo/sub"
+plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/a-repo/sub/CLAUDE.md"
+want_plain 1 "--plain judges a CLAUDE.md below the top, as the push does"
+plain "$(uesc 'a \u2014 b')" --path "/repo/package-lock.json"
+want_plain 0 "--plain honours the same excluded paths as the push (a lock file)"
+plain "$(uesc 'a \u2014 b')" --path "/repo/src/a.ts"
+want_plain 1 "--plain still judges an ordinary path"
+# Outside any git repository the path cannot be made relative to a repository top, and a bare
+# basename would excuse a CLAUDE.md anywhere on disk (lessons review): so it is judged as written.
+mkdir -p "$WORKDIR/no-repo"
+plain "$(uesc 'a \u2014 b')" --path "$WORKDIR/no-repo/CLAUDE.md"
+want_plain 1 "--plain judges a CLAUDE.md outside any repository rather than excusing it"
+# Text that is not valid UTF-8 must not crash the scanner into the exit code that means "found a
+# dash" (lessons review): read with replacement, it is judged on what it says.
+PLAIN_OUT="$(printf 'ok \xff\xfe bytes\n' | python3 "$SCANNER" --plain)"; PLAIN_CODE=$?
+want_plain 0 "--plain reads invalid UTF-8 without crashing, and finds nothing in it"
+PLAIN_OUT="$(printf 'bad \xff then %s\n' "$(uesc 'a \u2014 b')" | python3 "$SCANNER" --plain)"; PLAIN_CODE=$?
+want_plain 1 "--plain still finds a dash beside invalid bytes"
+# A new file block is cut with head -c, which can split a character: the diff reading must survive it.
+d="$(printf '+++ b/f.ts\n+%s\xe2\x80\n' "$(uesc 'x \u2014 y')" | python3 "$SCANNER")"; dcode=$?
+if [ "$dcode" = 0 ] && [ -n "$d" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the diff reading survives a split character and still reports the dash (exit $dcode, got: $d)"; fi
+plain "x" --bogus
+want_plain 2 "an unknown flag is refused with its own exit code, never read as clean (L11)"
+
+# One fixture set, two readings: the push's diff reading and the mod's --plain reading must give the
+# same verdict on every case (the issue's done-when). Escapes keep this file free of the characters.
+FIXTURES="$DIR/lib/style-fixtures.txt"
+nfix=0
+while IFS=$'\t' read -r want text; do
+  case "$want" in flag|clean) ;; *) continue ;; esac
+  nfix=$((nfix+1))
+  body="$(uesc "$text")"
+  d="$(detect "$(printf '+++ b/f.ts\n+%s\n' "$body")")"
+  plain "$body"
+  if [ -n "$d" ]; then dv=flag; else dv=clean; fi
+  if [ "$PLAIN_CODE" = 1 ]; then pv=flag; elif [ "$PLAIN_CODE" = 0 ]; then pv=clean; else pv="exit$PLAIN_CODE"; fi
+  if [ "$dv" = "$want" ] && [ "$pv" = "$want" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: fixture '$text': want $want, push reading $dv, mod reading $pv"; fi
+done < "$FIXTURES"
+# The count is asserted, so an unreadable or emptied fixture file cannot pass as agreement (L98).
+if [ "$nfix" -ge 10 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: only $nfix fixtures were read from $FIXTURES"; fi
 
 # --- end to end: the hook must find the repo even when the session is elsewhere -
 # The payload's cwd is the SESSION's directory, not the project's. A session
@@ -380,6 +446,35 @@ run_style_hook "$W" "git push"
 want_style_code 0 "the control still allows a clean push with python3 present"
 
 rm -rf "$NOPY_ROOT"
+
+# --- a scanner that is missing or crashes refuses the push by name (lessons review of #609) ---
+# The rule used to be inline and could not go missing. Now that it is a file, its absence must not
+# read as a clean diff: with every finding empty the push would pass with nothing said (L490).
+NOSCAN="$WORKDIR/noscan-hooks"; mkdir -p "$NOSCAN/lib"
+cp "$HOOK" "$NOSCAN/check-style-guide.sh"
+for f in "$DIR"/lib/*; do [ "$(basename "$f")" = style-scan.py ] || cp "$f" "$NOSCAN/lib/"; done
+run_style_hook_at() {  # $1 hooks dir, $2 cwd, $3 command
+  local p
+  p="$(HK_CMD="$3" HK_CWD="$2" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  STYLE_MSG="$(printf '%s' "$p" | bash "$1/check-style-guide.sh" 2>&1 >/dev/null)"; STYLE_CODE=$?
+}
+W="$(mk_style_repo "$CLEAN")"
+run_style_hook_at "$NOSCAN" "$W" "git push"
+want_style_code 2 "with lib/style-scan.py missing, even a clean push is refused"
+case "$STYLE_MSG" in *style-scan.py*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: the refusal names the missing scanner: $STYLE_MSG" ;; esac
+printf 'import sys\nsys.exit(3)\n' > "$NOSCAN/lib/style-scan.py"
+run_style_hook_at "$NOSCAN" "$W" "git push"
+want_style_code 2 "a scanner that crashes refuses the push rather than reading as clean"
+run_style_hook_at "$NOSCAN" "$W" "SKIP_STYLE_CHECK=1 git push"
+want_style_code 0 "the visible override still clears a broken scanner refusal"
+# A scanner that reads diffs but cannot list its excluded paths would leave the exclusions empty
+# with nothing said (lessons review): refused by name as well.
+printf 'import sys\nsys.exit(3 if "--excludes" in sys.argv else 0)\n' > "$NOSCAN/lib/style-scan.py"
+run_style_hook_at "$NOSCAN" "$W" "git push"
+want_style_code 2 "a scanner that cannot list its excluded paths refuses the push"
+case "$STYLE_MSG" in *excluded*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: that refusal names the excluded paths: $STYLE_MSG" ;; esac
+
 
 echo
 echo "passed: $pass, failed: $fail"

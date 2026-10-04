@@ -1,0 +1,245 @@
+import { expect, mock, test } from 'claude-code/testing'
+import type { On, Register } from 'claude-code'
+
+// A stand-in for mod-kit: an inline plugin cannot reach this file's variables, so it reports each
+// card as a transcript line the world collects.
+const kit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { blocked: (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } }
+    })
+  },
+}
+const withKit = { plugins: [kit] }
+
+// The mod never judges a character itself: it hands the text to the push hook's own scanner,
+// hooks/lib/style-scan.py, and relays its verdict, so the two cannot disagree (claude-config#609).
+// The scanner is stood in for here (a test has no processes); its own rule, and the proof that the
+// push hook and this --plain mode agree on one fixture set, live in test-check-style-guide.sh.
+const SCRIPT = '/Users/x/.claude/hooks/lib/style-scan.py'
+const DASH = '\u2014'
+const BAD = `const label = "Loading ${DASH} please wait"`
+
+type Run = { argv: readonly string[]; stdin: string }
+
+const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown> } = {}) => {
+  const runs: Run[] = []
+  const reached: string[] = []
+  const toasts: string[] = []
+  const logs: string[] = []
+  const debug: string[] = []
+  const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
+  mock.env(on, { HOME: '/Users/x' })
+  mock.store(on, opts.store ?? {})
+  on('process.run', ($, e) => {
+    const stdin = e.init?.stdin ?? ''
+    runs.push({ argv: e.argv, stdin })
+    if (opts.scanner === 'crash') {
+      return { value: { exitCode: 1, stdout: '', stderr: 'SyntaxError: invalid syntax', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (opts.scanner === 'missing') {
+      return { value: { exitCode: 2, stdout: '', stderr: "can't open file", isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    const lines = stdin.split('\n')
+    const hits = lines.map((l, i) => (l.includes(DASH) ? `line ${i + 1}: ${l}` : '')).filter(Boolean)
+    return { value: { exitCode: hits.length ? 1 : 0, stdout: hits.join('\n'), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.read', ($, e) => {
+    const f = opts.files?.[e.path]
+    if (f === undefined) throw new Error(`no file ${e.path}`)
+    return { value: f }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.log', ($, e) => {
+    if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
+    else if (e.to === 'debug') debug.push(e.text)
+    else logs.push(e.text)
+    return { value: undefined }
+  })
+  on('tool.call', ($, e) => {
+    reached.push(e.tool)
+    return { result: 'ran', text: 'ran' } as never
+  })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }) as never)
+  return { runs, reached, toasts, logs, debug, cards }
+}
+
+const refused = (r: unknown): string => {
+  const x = r as { deny?: string; text?: string; isError?: boolean }
+  return x.deny ?? (x.isError ? (x.text ?? '') : '')
+}
+
+test('a Write carrying a dash is refused, naming the line', withKit, async ($, on) => {
+  const w = world(on)
+  const r = await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: `ok\n${BAD}\n`, tool_use_id: 'w1' } as never)
+  expect(w.reached).not.toContain('Write')
+  // Wording settled with Dan, 2026-10-03 (docs/mods-design.md).
+  expect(refused(r)).toBe('Blocked: this text has a dash or emoji on line 2. Use a comma, colon or parentheses.')
+  expect(w.cards).toEqual([{ toolUseId: 'w1', guard: 'Style check', reason: 'This text has a dash or emoji on line 2.', safeWay: 'Use a comma, colon or parentheses.' }])
+  expect(w.toasts).toContain('Blocked a dash or emoji.')
+  expect(w.runs[0]?.argv).toEqual(['python3', SCRIPT, '--plain', '--path', '/repo/a.ts'])
+  expect(w.runs[0]?.stdin).toContain(BAD)
+})
+
+test('a clean Write goes through', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'all fine\n' } as never)
+  expect(w.reached).toContain('Write')
+})
+
+test('an Edit is judged on its new text, not the old', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: BAD, new_string: 'fixed' } as never)
+  expect(w.reached).toContain('Edit')
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'x', new_string: BAD } as never)
+  expect(w.reached.filter(t => t === 'Edit').length).toBe(1)
+})
+
+test('a MultiEdit is judged on every new text', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'MultiEdit', file_path: '/repo/a.ts', edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: BAD }] } as never)
+  expect(w.reached).not.toContain('MultiEdit')
+})
+
+test('a NotebookEdit is judged on its new source', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'NotebookEdit', notebook_path: '/repo/n.ipynb', new_source: BAD } as never)
+  expect(w.reached).not.toContain('NotebookEdit')
+})
+
+test('a commit message carrying a dash is refused', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `git commit -m "Fix ${DASH} again"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a commit message read from a file is judged too', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/msg.txt': `Subject ${DASH} body\n` } })
+  await $.tool.call({ tool: 'Bash', command: 'git commit -F /tmp/msg.txt' } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a git command that only mentions commit is not scanned (lessons review)', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `git log --grep=commit --format="%s ${DASH}"` } as never)
+  expect(w.reached).toContain('Bash')
+  expect(w.runs.length).toBe(0)
+})
+
+test('a commit made with git -C is still judged', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `git -C /repo commit -m "x ${DASH} y"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a gh pr body carrying a dash is refused', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `gh pr create --title t --body "x ${DASH} y"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a gh issue comment read from a body file is judged', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/b.md': `note ${DASH}\n` } })
+  await $.tool.call({ tool: 'Bash', command: 'gh issue comment 12 --body-file /tmp/b.md' } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('an ordinary command is not scanned at all', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: `grep -n "${DASH}" file.txt` } as never)
+  expect(w.reached).toContain('Bash')
+  expect(w.runs.length).toBe(0)
+})
+
+for (const tool of ['mcp__claude_ai_Slack__slack_send_message', 'mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__claude_ai_Slack__slack_schedule_message']) {
+  test(`a Slack message through ${tool.split('__').pop()} is judged`, withKit, async ($, on) => {
+    const w = world(on)
+    await $.tool.call({ tool, channel_id: 'C1', message: `hi ${DASH} there` } as never)
+    expect(w.reached).not.toContain(tool)
+  })
+}
+
+test('when the scanner cannot run, the write goes through and says it was not checked', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'missing' })
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: BAD } as never)
+  expect(w.reached).toContain('Write')
+  expect(w.logs).toContain("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
+  // The cause goes to the debug log, so it is not lost (lessons review); the visible line is Dan's.
+  expect(w.debug.join('\n')).toContain("can't open file")
+})
+
+test('the could not run note is said once a session, not on every write (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'missing' })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: BAD } as never)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/b.ts', content: BAD } as never)
+  expect(w.logs.filter(l => l.startsWith("Style check couldn't run")).length).toBe(1)
+})
+
+test('a -F inside a quoted commit message is not read as a message file (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/b.md': `note ${DASH}\n` } })
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "explain the -F /tmp/b.md option"' } as never)
+  expect(w.reached).toContain('Bash')
+})
+
+test('python failing with exit 1 and nothing found is not read as a dash (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'crash' })
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.ts', content: 'clean text' } as never)
+  expect(w.reached).toContain('Write')
+  expect(w.logs).toContain("Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will.")
+})
+
+test('a message file given as a quoted path is still read', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/my msg.txt': `Subject ${DASH} body\n` } })
+  await $.tool.call({ tool: 'Bash', command: 'git commit -F "/tmp/my msg.txt"' } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a chat reply the scanner could not check is not read as clean (lessons review)', withKit, async ($, on) => {
+  const w = world(on, { scanner: 'missing', store: { chatHits: 0 } })
+  on('session.append', ($, e, next) => next(e))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  try {
+    await $.session.append({
+      door: 'response',
+      origin: { kind: 'model', model: 'm' },
+      uuid: 'r1',
+      message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'a reply' }] },
+    } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 0 this session, 0 in total. 1 reply this session could not be checked.')
+})
+
+test('chat replies with a dash are counted silently and read with /style-count', withKit, async ($, on) => {
+  const w = world(on, { store: { chatHits: 5 } })
+  const row = (text: string) => ({
+    door: 'response',
+    origin: { kind: 'model', model: 'm' },
+    uuid: 'r' + text.length,
+    message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] },
+  })
+  on('session.append', ($, e, next) => next(e))
+  const append = async (text: string) => {
+    try {
+      await $.session.append(row(text) as never)
+    } catch (err) {
+      if (!/no implementation for session.append/.test(String(err))) throw err
+    }
+  }
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await append(`a reply ${DASH} with a dash`)
+  await append('a clean reply')
+  await append(`another ${DASH} one`)
+  expect(w.toasts.length).toBe(0)
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 2 this session, 7 in total.')
+})

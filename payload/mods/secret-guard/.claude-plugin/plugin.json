@@ -1,0 +1,11 @@
+{
+  "name": "secret-guard",
+  "version": "0.1.0",
+  "description": "Blocks commands that print secrets, scrubs secrets from tool output, and refuses tool input that carries one.",
+  "author": {
+    "name": "Dan Wright"
+  },
+  "dependencies": [
+    "mod-kit"
+  ]
+}

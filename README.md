@@ -993,6 +993,15 @@ Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` 
 Mac with no mods folder cannot be told apart from one that never had mods yet, and reading that as a
 deletion would wipe the other Mac's mods the first time a fresh Mac sends. Delete the mods inside it.
 
+The mods in use, each with its agreed spec in its issue (milestone "Claude Code mods"):
+
+| Mod | What it does | Issue |
+| --- | --- | --- |
+| `mod-kit` | What every mod draws the same way, so no mod keeps its own copy. Today the grey card a blocked action is drawn as ("Blocked by <guard>", the reason, the safe way dimmed). Every guard depends on it. The settled look of all mods is `docs/mods-design.md`. | #607 to #609 |
+| `secret-guard` | Refuses commands that print a secret (`cat .env`, `echo $TOKEN`, bare `printenv` or `env`, an uncaptured `gh auth token`), refuses any tool input carrying a known secret or a token shaped value outside a `.env` file, and scrubs secrets from tool results before the transcript keeps them. Values come from the environment, the project's `.env*` files and the gh token, held in memory only. No override. | #607 |
+| `keystroke-guard` | Synthetic input (osascript keystrokes and clicks, cliclick, Peekaboo) must name its target as `TARGET_APP=<executable path>`; it is refused unless that executable runs exactly once, no other copy of the app runs, and the frontmost pid (read separately) is that one. A heads up is asked once per app and holds until 10 quiet minutes pass. Focus stealers (`open -a`, `activate`, `set frontmost`) get the heads up only. | #608 |
+| `style-check` | Refuses writes, commit messages, `gh issue`/`gh pr` bodies and Slack messages carrying an em dash, en dash or emoji, by running `hooks/lib/style-scan.py --plain`, the same scanner `check-style-guide.sh` runs at push. A chat reply cannot be refused, so it gets a toast and a count. | #609 |
+
 Two things are deliberately not carried:
 
 - `.claude-plugin/types/`, which Claude Code writes into every plugin folder on every load,

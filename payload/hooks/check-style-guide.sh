@@ -72,6 +72,17 @@ if ps_has_override "$cmd" SKIP_STYLE_CHECK; then
   exit 0
 fi
 
+# The rule is a file now (lib/style-scan.py, claude-config#609), so it can go missing, and a scanner
+# that is absent or crashes finds nothing, which is exactly what a clean push looks like (L490). So
+# its presence is asked here, by name, before anything is read. The override above still clears it.
+SCANNER="$HOOK_DIR/lib/style-scan.py"
+scanner_refusal() {  # $1 = what is wrong
+  echo "PUSH BLOCKED: $1, so check-style-guide.sh cannot judge this push for an em dash, en dash or emoji, and a push it cannot judge is not let through as clean." >&2
+  echo "Restore it from the shared config (claude-sync pull), or, for this one command: SKIP_STYLE_CHECK=1 <your original git push command>" >&2
+  exit 2
+}
+[ -r "$SCANNER" ] || scanner_refusal "the style scanner $SCANNER is missing"
+
 # The repo is resolved from the COMMAND first and the payload cwd second. The cwd
 # is the SESSION's directory, so a session rooted outside the project reaches it
 # as `cd <repo> && git push`, and reading the cwd alone let every one of those
@@ -101,16 +112,16 @@ else
   mb="$(ps_merge_base "$base")"
 fi
 
-EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
-  ':(exclude)*.min.js' ':(exclude)*.min.css' ':(exclude)*.svg'
-  ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.gif'
-  ':(exclude)*.pdf' ':(exclude)CLAUDE.md' ':(exclude).claude/hooks/check-style-guide.sh')
+# What a push never scans is part of the rule, so it is read from the scanner rather than kept as a
+# second list here (claude-config#609): the mod honours the same paths.
+EXCLUDES=()
+excl="$(python3 "$SCANNER" --excludes)" || scanner_refusal "the style scanner $SCANNER could not list the paths a push never scans (its excluded paths)"
+while IFS= read -r pat; do
+  [ -n "$pat" ] && EXCLUDES+=(":(exclude)$pat")
+done <<< "$excl"
 
 skip_ext() {  # $1 = a path ; true when it is one of the excluded kinds
-  case "$1" in
-    *.lock|*-lock.json|*.snap|*.min.js|*.min.css|*.svg|*.png|*.jpg|*.jpeg|*.gif|*.pdf|CLAUDE.md) return 0 ;;
-    *) return 1 ;;
-  esac
+  python3 "$SCANNER" --excluded "$1" 2>/dev/null
 }
 
 # A whole file, in the shape the detector reads, for a file git has never seen.
@@ -167,49 +178,16 @@ fi
 
 [ -n "$committed_diff$pending_diff" ] || exit 0
 
-# The detector, as a function over one body of diff text, so the two readings below
-# cannot drift into two copies of it. Kept unindented and in this exact shape because
-# test-check-style-guide.sh lifts the python out of this file and drives it directly,
-# which is what stops the suite testing a re-implementation of the rule (L52).
-scan() {  # $1 = diff text ; prints one line per finding
-findings="$(printf '%s' "$1" | python3 -c '
-import sys, re
-
-emoji_re = re.compile(
-    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
-    "⤴⤵⬅-⬇⬛⬜⭐⭕️]"
-)
-dash_re = re.compile("[—–]")
-
-current_file = "(unknown file)"
-out = []
-for line in sys.stdin:
-    line = line.rstrip("\n")
-    if line.startswith("+++ "):
-        f = line[4:]
-        if f.startswith("b/"):
-            f = f[2:]
-        current_file = f
-        continue
-    if line.startswith("--- NEW FILE: ") and line.endswith(" ---"):
-        current_file = line[len("--- NEW FILE: "):-4]
-        continue
-    if not line.startswith("+") or line.startswith("+++"):
-        continue
-    content = line[1:]
-    if dash_re.search(content) or emoji_re.search(content):
-        out.append(f"{current_file}: {content.strip()[:160]}")
-
-for o in out[:25]:
-    print(o)
-if len(out) > 25:
-    print(f"... and {len(out) - 25} more")
-' 2>/dev/null)"
-printf '%s' "$findings"
+# The detector is lib/style-scan.py, the ONE definition of the Writing Style character rule, which
+# the style-check mod runs too, so a write refused there and a push refused here are refused by the
+# same code (claude-config#609, L370). test-check-style-guide.sh drives that script directly, and
+# also asserts this file keeps no copy of the rule.
+scan() {  # $1 = diff text ; prints one line per finding, and fails when the scanner did
+  printf '%s' "$1" | python3 "$SCANNER"
 }
 
-committed_findings="$(scan "$committed_diff")"
-pending_findings="$(scan "$pending_diff")"
+committed_findings="$(scan "$committed_diff")" || scanner_refusal "the style scanner $SCANNER failed while reading the commits"
+pending_findings="$(scan "$pending_diff")" || scanner_refusal "the style scanner $SCANNER failed while reading the pending commit"
 
 [ -n "$committed_findings$pending_findings" ] || exit 0
 
