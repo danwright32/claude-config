@@ -320,3 +320,10 @@ test('a record whose closed time is not a number counts as damaged, so a recent 
   await start($)
   expect(w.removed).toEqual([])
 })
+
+test('the list and the cleanup agree on what is damaged: a non-number closed time is unreadable to both', withConsumer, async ($, on) => {
+  world(on, { files: { [`${DIR}/odd.json`]: recOf('odd', { closedAt: 'yesterday' }) }, mtimes: { [`${DIR}/odd.json`]: NOW - DAY } })
+  await start($)
+  const list = JSON.parse(await call($, 'list')) as { unreadable: string[] }
+  expect(list.unreadable).toEqual(['odd.json'])
+})

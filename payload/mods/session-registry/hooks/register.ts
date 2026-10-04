@@ -90,6 +90,12 @@ const SESSION_ID = /^[A-Za-z0-9-]+$/
 // record goes 7 days after it closed; a crashed one, never closed, 7 days after it was last seen;
 // a damaged one 7 days after its file last changed, named in one grey line. A damaged record any
 // newer stays, since it may belong to a live session, and still stops guarded actions.
+// What a readable record is, one rule for every reader (the list and the cleanup), so a record is
+// damaged or readable the same way everywhere (lessons review of #644). Every time it holds must be
+// a number, or an age computed from it is NaN and slips past every check (L50).
+const isRecord = (r: SessionsRecord): boolean =>
+  r.v === 1 && typeof r.sessionId === 'string' && typeof r.lastSeen === 'number' && (r.closedAt === null || typeof r.closedAt === 'number')
+
 const prune = async ($: EngineInterface, h: string, now: number) => {
   const dir = dirOf(h)
   let entries: { name: string; kind: string }[]
@@ -106,8 +112,7 @@ const prune = async ($: EngineInterface, h: string, now: number) => {
     let isDamaged = false
     try {
       const r = JSON.parse(await $.fs.read(path)) as SessionsRecord
-      // Every time compared below must be a number, or its age is NaN and slips past the check (L50).
-      if (r.v !== 1 || typeof r.sessionId !== 'string' || typeof r.lastSeen !== 'number' || (r.closedAt !== null && typeof r.closedAt !== 'number')) throw new Error('shape')
+      if (!isRecord(r)) throw new Error('shape')
       endedAt = r.closedAt ?? (now - r.lastSeen > DEAD_MS ? r.lastSeen : null)
     } catch {
       isDamaged = true
@@ -183,7 +188,7 @@ export const register: Register = on => {
           let r: SessionsRecord
           try {
             r = JSON.parse(await built.fs.read(`${dirOf(h)}/${ent.name}`)) as SessionsRecord
-            if (r.v !== 1 || typeof r.sessionId !== 'string' || typeof r.lastSeen !== 'number') throw new Error('shape')
+            if (!isRecord(r)) throw new Error('shape')
           } catch {
             out.unreadable.push(ent.name)
             continue
