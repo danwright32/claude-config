@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Pickers, PickersOpen, PickersOutcome } from '../types/index.d.ts'
-import { asksQuiet, bandLines, echoOf, proseAnswers, refusal } from './pickers.ts'
+import { asksQuiet, bandLines, echoOf, onAbort, proseAnswers, refusal, refusalFor } from './pickers.ts'
 import type { Question } from './pickers.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 and drawn in the design rounds of
@@ -80,7 +80,7 @@ export const register: Register = on => {
     if (why || !q) return { deny: why ?? 'Ask one question per call: Dan answers pickers one at a time.' }
     const id = (e as unknown as { tool_use_id?: string }).tool_use_id ?? `call-${++calls}`
     // An interrupted turn withdraws the question rather than leaving it in the band.
-    next.signal?.addEventListener?.('abort', () => settle(id, { kind: 'withdrawn' }))
+    onAbort(next.signal, () => settle(id, { kind: 'withdrawn' }))
     let outcome: PickersOutcome
     try {
       await show($, { id, question: q, chosen: [] })
@@ -94,11 +94,8 @@ export const register: Register = on => {
       for (const line of echoOf([q], outcome.answers)) $.ui.log(line)
       return answered(outcome.answers.join(', '))
     }
-    if (outcome.kind === 'withdrawn') return { deny: 'The question was withdrawn: the turn was interrupted.' }
-    await $.state.set(talkedRef, { ...talked, [q.question]: (talked[q.question] ?? 0) + 1 })
-    return {
-      deny: 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first. If this question is still unanswered after that, ask it again once; never more than once.',
-    }
+    if (outcome.kind === 'message') await $.state.set(talkedRef, { ...talked, [q.question]: (talked[q.question] ?? 0) + 1 })
+    return { deny: refusalFor(outcome) ?? 'The question ended without an answer.' }
   })
 
   on('ui.press', { plugin: 'mod-kit' }, async ($, e, next) => {

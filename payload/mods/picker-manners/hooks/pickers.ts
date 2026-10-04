@@ -63,3 +63,24 @@ export const echoOf = (questions: readonly Question[], answers: readonly string[
 
 /** Dan asking for next issue offers to stop for the session (the spec's two phrases). */
 export const asksQuiet = (text: string): boolean => /\bno next issue\b|\bjust give me the list\b/i.test(text)
+
+/** How an open question ended, as the hook hears it (the contract's PickersOutcome). */
+export type Outcome = { kind: 'answer'; answer: string } | { kind: 'prose'; answers: string[] } | { kind: 'message' } | { kind: 'withdrawn' }
+
+/** What Claude reads when the question ended without an answer, or undefined when it was answered. */
+export const refusalFor = (o: Outcome): string | undefined => {
+  if (o.kind === 'withdrawn') return 'The question was withdrawn: the turn was interrupted.'
+  if (o.kind === 'message')
+    return 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first. If this question is still unanswered after that, ask it again once; never more than once.'
+  return undefined
+}
+
+/** Runs `withdraw` once when the call's signal aborts (an interrupted turn), or at once if it already has. */
+export const onAbort = (signal: AbortSignal | undefined, withdraw: () => void): void => {
+  if (!signal) return
+  if (signal.aborted) {
+    withdraw()
+    return
+  }
+  signal.addEventListener('abort', withdraw, { once: true })
+}

@@ -21,6 +21,8 @@ const modKit: { name: string; register: Register } = {
           built.ui.log(`BAND ${row.slot}`, { to: 'debug' })
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
+          // A row whose text asks for it stands for a band that cannot be cleared.
+          if ((await rows()).some(r => r.mod === mod && r.id === id && JSON.stringify(r.lines).includes('cannot be cleared'))) throw new Error('the band is gone')
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
           built.ui.log('BAND cleared', { to: 'debug' })
         },
@@ -73,6 +75,7 @@ const QUESTION = {
 const world = (on: On) => {
   const logs: string[] = []
   const shown: string[] = []
+  const debug: string[] = []
   const toasts: string[] = []
   const reachedEngine: string[] = []
   on('ui.render', ($, e) => {
@@ -89,6 +92,7 @@ const world = (on: On) => {
   on('ui.log', ($, e) => {
     const text = String((e as { text?: string }).text)
     if (text.startsWith('BAND ')) shown.push(text.slice(5))
+    else if ((e as { to?: string }).to === 'debug') debug.push(text)
     else logs.push(text)
     return { value: undefined } as never
   })
@@ -96,7 +100,7 @@ const world = (on: On) => {
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  return { logs, shown, toasts, reachedEngine }
+  return { logs, shown, debug, toasts, reachedEngine }
 }
 
 const band = { plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} } } as never
@@ -249,5 +253,17 @@ test('a press after more than a hook budget of real time still answers from the 
   await ui.press({ key: 'picker-manners:opt3' })
   expect((await call).result?.answers).toEqual({ [QUESTION.question]: '30 days' })
   expect(w.reachedEngine).toEqual([])
+  await ui.unmount()
+})
+
+test('a band that cannot be cleared is logged, and the answer still reaches Claude', withKit, async ($, on) => {
+  const w = world(on)
+  const q = { ...QUESTION, question: 'Which one, though this band cannot be cleared?' }
+  const call = ask($ as never, q)
+  await tick(w)
+  const ui = (await $.ui.mount(band)) as unknown as Ui
+  await ui.press({ key: 'picker-manners:opt1' })
+  expect((await call).result?.answers).toEqual({ [q.question]: '1 day' })
+  expect(w.debug).toEqual(['Picker manners could not clear the question: the band is gone'])
   await ui.unmount()
 })

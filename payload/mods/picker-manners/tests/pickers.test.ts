@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { asksQuiet, bandLines, echoOf, proseAnswers, refusal } from '../hooks/pickers.ts'
+import { asksQuiet, bandLines, echoOf, onAbort, proseAnswers, refusal, refusalFor } from '../hooks/pickers.ts'
 import type { Question } from '../hooks/pickers.ts'
 
 const RETENTION: Question = {
@@ -85,5 +85,33 @@ describe('asksQuiet', () => {
   test('ordinary messages do not', () => {
     expect(asksQuiet('give me the next issue')).toBe(false)
     expect(asksQuiet('list the files')).toBe(false)
+  })
+})
+
+describe('onAbort', () => {
+  test('an interrupted call runs its withdrawal once, when the signal aborts', () => {
+    const c = new AbortController()
+    let n = 0
+    onAbort(c.signal, () => n++)
+    expect(n).toBe(0)
+    c.abort()
+    c.abort()
+    expect(n).toBe(1)
+  })
+  test('a signal already aborted withdraws at once, and no signal at all is no withdrawal', () => {
+    let n = 0
+    onAbort(AbortSignal.abort(), () => n++)
+    expect(n).toBe(1)
+    onAbort(undefined, () => n++)
+    expect(n).toBe(1)
+  })
+})
+
+describe('refusalFor', () => {
+  test('a withdrawn question and a typed message each tell Claude what happened, and an answer is no refusal', () => {
+    expect(refusalFor({ kind: 'withdrawn' })).toBe('The question was withdrawn: the turn was interrupted.')
+    expect(refusalFor({ kind: 'message' })).toMatch(/^Dan did not pick an answer: he is sending a message instead/)
+    expect(refusalFor({ kind: 'answer', answer: 'x' })).toBeUndefined()
+    expect(refusalFor({ kind: 'prose', answers: ['x'] })).toBeUndefined()
   })
 })
