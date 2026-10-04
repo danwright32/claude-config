@@ -759,7 +759,8 @@ rather than drawing the band themselves.
 
 The settled extension (2026-10-04), for the cards that followed the status bar: two more slots,
 `handoff` and `held`, so the order top to bottom is needs-a-look, compact, handoff, held, steps,
-message, and a question still alone. Status stays on top and what waits on Dan sits nearest the
+message, and a question still alone. The account room (#659) then added `room` after compact, so
+the order is needs-a-look, compact, room, handoff, held, steps, message. Status stays on top and what waits on Dan sits nearest the
 prompt, as Dan chose; the handoff card appears only at session start. A row may carry a `frame`:
 `{ kind: 'box' }` draws it inside a rounded border (the held while away card), `{ kind: 'left-rule' }`
 a vertical rule down its left edge only (the steps card's amber rule), each in `color`, a theme key

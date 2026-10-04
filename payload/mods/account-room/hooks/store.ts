@@ -108,8 +108,6 @@ export const combine = (a: Reading | undefined, b: Reading | undefined): Reading
   return { takenAt, ...(f ? { five: f } : {}), ...(wk ? { week: wk } : {}) }
 }
 
-/** A newer reading laid over an older one: `combine`, named for the order the caller knows. */
-export const mergeReading = (older: Reading | undefined, newer: Reading): Reading => combine(older, newer) as Reading
 
 /**
  * This Mac's file with one sighting of an account added: who it is and when it was seen, and the

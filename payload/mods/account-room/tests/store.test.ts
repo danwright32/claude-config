@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { accountKey, combine, macsIn, merge, mergeReading, parseMacFile, parseNicknames, serialize, withSighting } from '../hooks/store.ts'
+import { accountKey, combine, macsIn, merge, parseMacFile, parseNicknames, serialize, withSighting } from '../hooks/store.ts'
 import type { MacFile } from '../hooks/store.ts'
 
 // The two files the account room keeps (#659): one readings file per Mac in iCloud Drive, each Mac
@@ -53,8 +53,8 @@ test('a reading carrying one window keeps the other window from before, dated by
   const f = file('m', { a: { email: 'a@x.com', org: 'Acme', seenAt: T, reading: { takenAt: T, five: { used: 10, resetsAt: null }, week: { used: 40, resetsAt: null } } } })
   const next = withSighting(f, 'm', { id: 'a', email: 'a@x.com', org: 'Acme' }, { takenAt: T + H, five: { used: 20, resetsAt: null } }, T + H)
   expect(next.accounts.a?.reading).toEqual({ takenAt: T, five: { used: 20, resetsAt: null, takenAt: T + H }, week: { used: 40, resetsAt: null } })
-  expect(mergeReading({ takenAt: T, week: { used: 40, resetsAt: null } }, { takenAt: T + H, five: { used: 20, resetsAt: null }, week: { used: 50, resetsAt: null } })).toEqual({ takenAt: T + H, five: { used: 20, resetsAt: null }, week: { used: 50, resetsAt: null } })
-  expect(mergeReading(undefined, { takenAt: T, five: { used: 1, resetsAt: null } })).toEqual({ takenAt: T, five: { used: 1, resetsAt: null } })
+  expect(combine({ takenAt: T, week: { used: 40, resetsAt: null } }, { takenAt: T + H, five: { used: 20, resetsAt: null }, week: { used: 50, resetsAt: null } })).toEqual({ takenAt: T + H, five: { used: 20, resetsAt: null }, week: { used: 50, resetsAt: null } })
+  expect(combine(undefined, { takenAt: T, five: { used: 1, resetsAt: null } })).toEqual({ takenAt: T, five: { used: 1, resetsAt: null } })
 })
 
 test('an entry this build cannot read is carried through a rewrite unchanged, never erased (L105)', () => {
