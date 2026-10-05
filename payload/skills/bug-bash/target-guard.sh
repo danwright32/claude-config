@@ -32,26 +32,32 @@ case "$url" in
   *) echo "target-guard: give a full http:// or https:// URL, got: $url" >&2; exit 2 ;;
 esac
 
-# The host, without scheme, credentials, port or path. A bracketed IPv6 literal keeps its brackets.
-rest="${url#*://}"
-rest="${rest%%/*}"
-rest="${rest%%\?*}"
-rest="${rest%%#*}"
-rest="${rest##*@}"
-case "$rest" in
-  \[*\]*) host="${rest%%]*}]" ;;
-  *) host="${rest%%:*}" ;;
-esac
-host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
-
+# A URL's host, without scheme, credentials, port or path, lower cased. A bracketed IPv6 literal
+# keeps its brackets.
+host_of() {
+  local rest="${1#*://}"
+  rest="${rest%%/*}"
+  rest="${rest%%\?*}"
+  rest="${rest%%#*}"
+  rest="${rest##*@}"
+  case "$rest" in
+    \[*\]*) rest="${rest%%]*}]" ;;
+    *) rest="${rest%%:*}" ;;
+  esac
+  printf '%s' "$rest" | tr '[:upper:]' '[:lower:]'
+}
 # Local means the whole host names this machine. Matched on the whole name, so localhost.example.com
 # and 127.0.0.1.nip.io, which resolve wherever their owners like, are remote.
+is_local_host() {
+  case "$1" in
+    localhost|*.localhost|\[::1\]) return 0 ;;
+    127.*) grep -Eq '^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' <<< "$1" ;;
+    *) return 1 ;;
+  esac
+}
+host="$(host_of "$url")"
 is_local=0
-case "$host" in
-  localhost|*.localhost|\[::1\]) is_local=1 ;;
-  127.*)
-    if grep -Eq '^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' <<< "$host"; then is_local=1; fi ;;
-esac
+is_local_host "$host" && is_local=1
 
 if [ "$is_local" -eq 0 ]; then
   if [ "$read_only" -eq 1 ]; then
@@ -62,12 +68,30 @@ if [ "$is_local" -eq 0 ]; then
   exit 3
 fi
 
-page="$(curl -s -L --max-time 10 "$url" 2>/dev/null)"
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null)"
-if [ -z "$code" ] || [ "$code" = "000" ]; then
-  echo "target-guard: nothing answered at $url. Start the production build first (for example a build then a start), then run this again." >&2
-  exit 5
-fi
+# Redirects are followed by hand, one hop at a time, each target judged before it is requested,
+# so a local page that redirects off this machine is refused without a request to where it points
+# (curl -L would follow it and judge the remote page instead).
+at="$url"
+page=""
+for _hop in 1 2 3 4 5 6; do
+  body_file="$(mktemp)"
+  meta="$(curl -s --max-time 10 -o "$body_file" -w '%{http_code} %{redirect_url}' "$at" 2>/dev/null)"
+  page="$(cat "$body_file")"
+  rm -f "$body_file"
+  code="${meta%% *}"
+  next="${meta#* }"
+  [ "$next" = "$meta" ] && next=""
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
+    echo "target-guard: nothing answered at $at. Start the production build first (for example a build then a start), then run this again." >&2
+    exit 5
+  fi
+  [ -n "$next" ] || break
+  if ! is_local_host "$(host_of "$next")"; then
+    echo "target-guard: refusing $url: it redirects to $(host_of "$next"), which is not this machine." >&2
+    exit 3
+  fi
+  at="$next"
+done
 
 dev_reason=""
 # Next.js in development: the React refresh runtime, the development build id, the HMR socket.
@@ -100,4 +124,5 @@ if [ -n "$dev_reason" ]; then
   exit 4
 fi
 
-printf 'LOCAL %s\n' "$url"
+# Read only asked for is read only, wherever the build runs.
+if [ "$read_only" -eq 1 ]; then printf 'READ-ONLY %s\n' "$url"; else printf 'LOCAL %s\n' "$url"; fi

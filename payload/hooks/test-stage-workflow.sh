@@ -150,6 +150,12 @@ rm -f "$PCH/.claude/hooks/lib/stage-workflow.sh"
 out="$(pc_section)"
 grep -q 'FAIL.*exact copy' <<< "$out" && ok \
   || bad "plan-council healthcheck fails when the staging helper is missing" "$out"
+# A workflow that does not parse is named with the parser's reason, not only "syntax error"
+# (lessons review of #798).
+printf 'export const meta = {}\nconst x = (\n' > "$PCH/.claude/skills/plan-council/panel.workflow.js"
+out="$(HOME="$PCH" bash "$PCH/.claude/skills/plan-council/healthcheck.sh" 2>&1 | sed -n '/workflow engine/,/^==/p')"
+grep -q 'FAIL.*panel.workflow.js.*does not parse as a workflow script' <<< "$out" && ok \
+  || bad "plan-council healthcheck says why a workflow does not parse" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

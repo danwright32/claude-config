@@ -53,6 +53,15 @@ root, port_file = sys.argv[1], sys.argv[2]
 class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a, **k):
         pass
+    # Two redirects: one staying on this machine, one leaving it.
+    def do_GET(self):
+        hops = {'/redir-local/': '/prod/', '/redir-remote/': 'http://app.example.com/'}
+        if self.path in hops:
+            self.send_response(302)
+            self.send_header('Location', hops[self.path])
+            self.end_headers()
+            return
+        super().do_GET()
 handler = functools.partial(Quiet, directory=root)
 with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
     with open(port_file + ".tmp", "w") as f:
@@ -83,6 +92,18 @@ else
 
   # A refusal names the remedy: build and serve a production build.
   grep -qi "production build" <<< "$out" && ok || bad "the dev server refusal says to use a production build" "$out"
+
+  # Redirects are followed one hop at a time, each judged before it is requested (lessons review
+  # of #798: curl -L followed a local page to a remote host and judged that host's page).
+  out="$(bash "$GUARD" "$BASE/redir-local/" 2>&1)"; rc=$?
+  expect "a redirect that stays on this machine is followed" 0 "^LOCAL " "$rc" "$out"
+  out="$(bash "$GUARD" "$BASE/redir-remote/" 2>&1)"; rc=$?
+  expect "a redirect off this machine is refused" 3 "redirects to app.example.com" "$rc" "$out"
+
+  # Read only asked for against a local URL stays read only (lessons review of #798).
+  out="$(bash "$GUARD" --read-only "$BASE/prod/" 2>&1)"; rc=$?
+  expect "read only against a local build is still read only" 0 "^READ-ONLY " "$rc" "$out"
+
 
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
   out="$(bash "$GUARD" "$BASE/prod/" 2>&1)"; rc=$?
