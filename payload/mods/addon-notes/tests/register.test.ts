@@ -182,98 +182,20 @@ test('the amendment tells Claude to resume, keep scope, and open with the agreed
   expect(ADD_ON_CONTEXT).toContain('not a redirect')
 })
 
-// Picker manners (#615), standing in, since a mod's tests cannot import another mod's files. As the
-// real mod does, it holds the question it asks open in its state (picker-manners.open) while it
-// waits; when Dan types instead of answering, it reads that state, withdraws the question (Claude is
-// told to answer his message first) and lets the message through, and the question's state is
-// cleared once the call returns. Everything is inside register: the kit loads it on its own.
-const pickerMannersHolds: Register = on => {
-  let withdraw: (() => void) | undefined
-  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e) => {
-    const open = { plugin: 'picker-manners', key: 'open' } as never
-    await $.state.set(open, { id: 'q1', question: { question: 'Ship it?', header: 'Ship', multiSelect: false, options: [] }, chosen: [] } as never)
-    // Says when the question is in front of Dan, so the test types only then.
-    $.ui.log('QUESTION OPEN', { to: 'debug' })
-    try {
-      await new Promise<void>(r => {
-        withdraw = r
-      })
-      return { deny: 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first.' } as never
-    } finally {
-      await $.state.set(open, null as never)
-    }
-  })
-  on('prompt.submit', async ($, e, next) => {
-    const open = (await $.state.get({ plugin: 'picker-manners', key: 'open' } as never)) as { value?: unknown }
-    if (e.origin.kind === 'composer' && open.value && withdraw) {
-      withdraw()
-      withdraw = undefined
-    }
-    return next(e)
-  })
-}
-const PickerManners = (tier: 'prepend' | 'append') => ({ name: 'picker-manners', tier, register: pickerMannersHolds })
-const askShip = { tool: 'AskUserQuestion', questions: [{ question: 'Ship it?', header: 'Ship', options: [], multiSelect: false }] } as never
-
-// #701: a question in front of Dan is the step Claude is on, and picker manners withdraws it and
-// tells Claude to answer his message first. Telling Claude also to finish that step and fold the note
-// in later, with a toast saying so, would be two opposite instructions, so the note is left to
-// picker manners, whichever of the two mods sits outermost.
-for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as const) {
-  test(`a + note typed while a picker question is open gets no add-on context and no toast (picker manners ${where})`, { plugins: [PickerManners(tier)] }, async ($, on) => {
-    let shown = () => {}
-    const isOpen = new Promise<void>(r => {
-      shown = r
-    })
-    on('ui.log', ($, e) => {
-      if (e.text === 'QUESTION OPEN') shown()
-      return { value: undefined } as never
-    })
-    const w = world(on)
-    const asked = $.tool.call(askShip)
-    await isOpen
-    await $.prompt.submit(typed('+ also link the commission', 't1'))
-    await asked
-    expect(w.seen).toEqual([{ text: '+ also link the commission', context: [] }])
-    expect(w.toasts).toEqual([])
-  })
-}
-
-test('with picker manners loaded and no question open, a + note mid turn is still an add-on', { plugins: [PickerManners('prepend')] }, async ($, on) => {
-  const w = world(on)
-  await $.prompt.submit(typed('+ also link the commission', 't1'))
-  expect(w.seen).toEqual([{ text: '+ also link the commission', context: [ADD_ON_CONTEXT] }])
-  expect(w.toasts).toEqual([TOAST])
-})
-
-// Picker manners' value is another mod's, read and never trusted: a shape that is no open question
-// (a write from an older or newer contract), or a read that fails, leaves the note an add-on, as it
-// is with picker manners not loaded, and a failed read is said in the debug log.
-const pickerMannersGarbled: Register = on => {
-  on('tool.call', { tool: 'Bash' }, async ($, e) => {
-    await $.state.set({ plugin: 'picker-manners', key: 'open' } as never, 'Ship it?' as never)
+// #744: picker manners holds no question open any more (Claude Code's own dialog asks, and holds the
+// keyboard while it does, so no + note can be typed under a question). An open question an earlier
+// build left in the session's state is never read: a + note mid turn is an add-on (L377).
+const pickerMannersLeftOver: Register = on => {
+  on('tool.call', { tool: 'Bash' }, async $ => {
+    await $.state.set({ plugin: 'picker-manners', key: 'open' } as never, { id: 'q1', question: { question: 'Ship it?', header: 'Ship', multiSelect: false, options: [] }, chosen: [] } as never)
     return { deny: 'written' } as never
   })
 }
 
-test('a picker manners value that is no open question leaves a + note an add-on', { plugins: [{ name: 'picker-manners', register: pickerMannersGarbled }] }, async ($, on) => {
+test('an open question an earlier picker manners left in the session state does not stop a + note being an add-on', { plugins: [{ name: 'picker-manners', register: pickerMannersLeftOver }] }, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Bash', command: 'x' } as never)
   await $.prompt.submit(typed('+ also link the commission', 't1'))
   expect(w.seen).toEqual([{ text: '+ also link the commission', context: [ADD_ON_CONTEXT] }])
   expect(w.toasts).toEqual([TOAST])
-})
-
-test('a question state that cannot be read leaves a + note an add-on, and says so in the debug log', async ($, on) => {
-  const debug: string[] = []
-  on('state.get', () => ({ deny: 'state store unavailable' }) as never)
-  on('ui.log', ($, e) => {
-    if (e.to === 'debug') debug.push(e.text)
-    return { value: undefined } as never
-  })
-  const w = world(on)
-  await $.prompt.submit(typed('+ also link the commission', 't1'))
-  expect(w.seen).toEqual([{ text: '+ also link the commission', context: [ADD_ON_CONTEXT] }])
-  expect(w.toasts).toEqual([TOAST])
-  expect(debug.filter(l => /could not read whether a question is open.*state store unavailable/.test(l))).toHaveLength(1)
 })

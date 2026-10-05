@@ -137,27 +137,10 @@ const callEnded = (id: string): boolean => {
   return true
 }
 
-// Picker manners (#615) answers every AskUserQuestion in its own tool.call hook and never calls next.
-// Hooks on one event nest by tier, then by load order, outermost first, so wherever picker manners
-// sits above this mod, this mod's tool.call hook never sees the question (#694). The question is
-// also seen where picker manners cannot pre-empt it: its own writes of the question it holds open
-// (`picker-manners.open` in its contract), which reach every plugin's state.set hook wherever each
-// sits, the question as it opens and null as it ends. Where both see one question (this mod above),
-// the call's id, which picker manners keys the open question by, makes it one mark and one
-// notification.
-const PICKER_OPEN = { plugin: 'picker-manners', key: 'open' } as const
-let toldUnreadableQuestion = false
-// Another plugin's value is read, never trusted: the question's id and its text, or nothing.
-const openQuestionOf = (value: unknown): { id: string; text: string } | undefined => {
-  const o = value as { id?: unknown; question?: { question?: unknown } } | null
-  return o && typeof o === 'object' && typeof o.id === 'string' && typeof o.question?.question === 'string' ? { id: o.id, text: o.question.question } : undefined
-}
-// A question is notified once Dan can see it (#706), whichever order the two mods run in. Picker
-// manners' write of the question it holds open is it shown, and notified at once: picker manners
-// writes it only after its own refusals and mod-kit's screen (the secret guard) have let it through.
-// A question Claude Code shows itself is marked only once every refusing guard and settings hook has
-// let it through (#732): from this mod's classic.PreToolUse hook, which the engine raises beneath
-// every tool.call hook, never from its tool.call hook, which runs before the guards beneath it
+// Every question is asked by Claude Code's own dialog (picker manners only refuses some, #744), so a
+// question is notified once Dan can see it (#706): marked only once every refusing guard and settings
+// hook has let it through (#732), from this mod's classic.PreToolUse hook, which the engine raises
+// beneath every tool.call hook, never from its tool.call hook, which runs before the guards beneath it
 // decide. A secret scan can take seconds, and a question it refuses must not put its text into a
 // notification or the shared registry. It is then notified QUESTION_SHOWN_MS later if still open,
 // since a refusal by Claude Code itself comes after the hooks.
@@ -182,20 +165,15 @@ const dropUnsent = (id: string) => {
   unsent.timer.cancel()
   unsent = undefined
 }
-// A question in front of Dan: marked for the pane and notified, once per question. `shown` when
-// picker manners has put it in front of him.
-const questionOpened = async ($: EngineInterface, id: string, text: string, now: number, shown: boolean) => {
-  if (question?.id === id) {
-    if (shown) sendUnsent(id)
-    return
-  }
+// A question in front of Dan: marked for the pane and notified, once per question.
+const questionOpened = async ($: EngineInterface, id: string, text: string, now: number) => {
+  if (question?.id === id) return
   question = { id, mark: { question: text, since: now, kind: 'question' } }
   if (progress) {
     progress = { ...withWaiting(progress), lastActivityAt: now }
     await publish($, now)
   }
   const send = () => waitingOnYou($, text)
-  if (shown) return send()
   if (unsent) dropUnsent(unsent.id)
   // Sent only if that question is still the open one: one ended meanwhile never reached Dan.
   unsent = { id, send, timer: $.clock.after(QUESTION_SHOWN_MS, () => (question?.id === id ? sendUnsent(id) : dropUnsent(id))) }
@@ -361,7 +339,6 @@ const beginAgain = async ($: EngineInterface) => {
   permission = undefined
   if (unsent) dropUnsent(unsent.id)
   countedCalls.clear()
-  toldUnreadableQuestion = false
   toldUnreadableSave = false
 }
 
@@ -501,34 +478,6 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The question picker manners holds open, seen whatever order the two mods run in (above). A write
-  // that was refused or did not land, or a value that cannot be read, changes nothing.
-  on('state.set', PICKER_OPEN, async ($, e, next) => {
-    const r = await next(e)
-    if ((r as { value?: { isSet?: boolean } }).value?.isSet !== true) return r
-    const shown = openQuestionOf(e.value)
-    if (shown) await questionOpened($, shown.id, shown.text, await nowOr($), true)
-    else if (e.value === null) {
-      if (question) {
-        dropUnsent(question.id)
-        question = undefined
-        if (progress) {
-          progress = withWaiting(progress)
-          await publish($, await nowOr($))
-        }
-      }
-    } else {
-      // Each time in the debug log, and once a session in one dim line, the guards' note style: from
-      // here on the questions picker manners shows go unmarked (lessons review of #696).
-      $.ui.log("goal-tracker: picker manners' open question could not be read, so it is not marked or notified.", { to: 'debug' })
-      if (!toldUnreadableQuestion) {
-        toldUnreadableQuestion = true
-        $.ui.log('The goal tracker could not read the question picker manners holds open, so a question it shows is not marked as waiting on you or notified.')
-      }
-    }
-    return r
-  })
-
   // A save waiting in the band for Dan's answer (above), read from ask before saving's writes.
   on('state.set', SAVE_PENDING, async ($, e, next) => {
     const r = await next(e)
@@ -595,7 +544,7 @@ export const register: Register = on => {
     const text = asking.get(key)
     if (decided.deny !== undefined || text === undefined) return decided
     asking.delete(key)
-    await questionOpened($, key, text, await nowOr($), false)
+    await questionOpened($, key, text, await nowOr($))
     return decided
   })
 

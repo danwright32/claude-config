@@ -119,8 +119,6 @@ export type ModKit = {
    * twice, or body lines of the wrong shape.
    */
   question: (question: ModKitQuestion) => Promise<void>
-  /** The question the band draws now, the first asked of those open, or null when none is open. */
-  shownQuestion: () => Promise<{ mod: string; id: string } | null>
   /** Takes this mod's row with that id out of the band, a question included. Clearing a row that is not there is fine. */
   clearBandRow: (input: { mod: string; id: string }) => Promise<void>
   /**

@@ -202,9 +202,9 @@ test('a secret in a tool result is scrubbed before it is kept, with a toast', wi
 })
 
 // #707: a mod that answers a tool call itself never calls next, so a hook beneath it never sees the
-// call: manual steps, is it live, picker manners, handoff and the job watcher all sort above this
-// mod. The answering mod here stands in for them (a mod's tests cannot load another mod's files),
-// loaded above this one: it asks $.secretGuard.screen before it acts, and says it acted by a toast.
+// call: manual steps, is it live, handoff and the job watcher all sort above this mod. The answering
+// mod here stands in for them (a mod's tests cannot load another mod's files), loaded above this
+// one: it asks $.secretGuard.screen before it acts, and says it acted by a toast.
 const answerer: { name: string; tier: 'prepend'; register: Register } = {
   name: 'manual-steps',
   tier: 'prepend',

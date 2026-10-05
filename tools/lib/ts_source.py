@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """TypeScript and TSX source read the way the mod scans need it: which characters are code, which
 are a string, a regex literal, JSX text or a comment. One reader for every scan that has to tell a
-comment from code (tools/check-mod-shared-parts.sh, tools/check-mod-dependencies.sh and the contract
-checks in tests/test-mods.sh), rather than a stripper per script that each misreads something of
-its own (L613). The one it replaces took a regex literal holding // or /* for a comment, and JSX
+comment from code (tools/check-mod-shared-parts.sh, tools/check-mod-dependencies.sh,
+tools/check-mod-noun-waits.sh and the contract check in tests/test-mods.sh), rather than a stripper
+per script that each misreads something of its own (L613). The one it replaces took a regex literal holding // or /* for a comment, and JSX
 text's // or apostrophe for a comment or a quote (#735); the shared parts scan dropped any line
 that merely started like a comment (#732).
 
@@ -280,16 +280,6 @@ def block_after(text, pattern):
         return None
     end = closing(code, m.end() - 1)
     return None if end is None else clean[m.end() : end - 1]
-
-
-def object_members(type_text):
-    """The top level members of an inline object type ("{ a: string; b: { c: number } }"), or None
-    when the type is not one."""
-    code = code_only(type_text)
-    if not code.startswith("{"):
-        return None
-    end = closing(code, 0)
-    return None if end is None else top_members(type_text[1 : end - 1])
 
 
 def top_members(body):
