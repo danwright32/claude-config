@@ -24,6 +24,18 @@ and settles its own surfaces in rounds of its own before it is built.
    three guards at Dan's choice.
 3. **Ask before focus moves.** Anything that brings an app forward is announced and waits for Dan
    (CLAUDE.md, and the keystroke guard enforces it).
+4. **A mod's own `$` noun answers within 10 seconds.** Claude Code cuts a call to a plugin's noun
+   off at 10 s: measured live on 2.1.289 (#744), a probe plugin's `$.probe.wait` was rejected at
+   10,003 ms with "did not answer within 10000ms". `claude plugin test` does not apply that limit,
+   so a noun that waits longer passes every test of its own and fails only in a session. So a noun
+   never waits on a person (Dan's answer has no bound) or on anything else with no bound under
+   10 s: it answers at once, or settles from a timer under 10 s. A hook that must wait on Dan asks
+   through an engine `$` call, which does not spend its budget, or refuses and lets the answer
+   arrive later, as ask before saving does. `tools/check-mod-noun-waits.sh`, run by
+   `tests/test-mods.sh`, fails a mod whose noun's code waits on `$.ui.ask` or on a promise only a
+   later event settles (its resolve kept, handed on or called back) with no timer under 10 s
+   settling it in the same executor; it was seen to fail on picker manners' `$.pickers.wait`. It
+   does not follow a promise made outside a noun's code and handed to it.
 
 ## Guard surfaces (#607, #608, #609)
 
@@ -334,32 +346,24 @@ Built in #694 from the last lessons reviews of #634, not put to Dan, each the pl
   message still clears it at the latest.
 - A question and a permission prompt open at once are kept apart: the pane shows the one asked
   latest, and each ending takes off only its own mark.
-- Picker manners, with its band question on, answers every AskUserQuestion in its own `tool.call`
-  hook without calling `next`. (While that is off, pending #744, it passes every question it does
-  not refuse down to Claude Code's own dialog, which the tracker sees as a question Claude Code
-  shows itself, below.) Hooks on one event nest by tier (an organisation's prepended plugins, everything a person
-  installs, the appended ones, the built in ones) and within a tier in load order, outermost first,
-  and the plugin API gives a person's mod no way to say where it sits. So the goal tracker also
-  watches picker manners' writes of the question it holds open (`picker-manners.open`), which every
-  plugin's `state.set` hook sees wherever it sits, and marks and notifies from those; where it sees
-  the call too (sitting above picker manners), the call's id keeps that to one mark and one
-  notification. The tests load picker manners both above and beneath the goal tracker, and
-  `tests/test-mods.sh` checks picker manners' contract declares the open question in the shape the
-  goal tracker reads; one it cannot read is said once a session in one dim line. Which order a live
-  session loads them in was not measured. The two differences between the orders left by #694 are
-  closed by #706, below.
+- Every question is asked by Claude Code's own dialog: picker manners only refuses some, and hands
+  the rest down (#744). Hooks on one event nest by tier (an organisation's prepended plugins,
+  everything a person installs, the appended ones, the built in ones) and within a tier in load
+  order, outermost first, and the plugin API gives a person's mod no way to say where it sits; since
+  picker manners calls `next` for every question it lets through, the tracker sees each one wherever
+  the two sit. The tests load picker manners both above and beneath the goal tracker. (Until #744,
+  picker manners answered questions from its band itself, and the tracker also watched its writes of
+  the question it held open, `picker-manners.open`; that reader went with the band question.)
 
 Built in #706 from the milestone audit and the notes left on it after #694, not put to Dan, each the
 plainest reading of the decisions above:
 
-- **Notified once Dan can see it, whichever order.** A question picker manners shows is notified as
-  it shows it (its write of the open question). One the tracker sees only as a call (sitting above
-  picker manners, or a question Claude Code shows itself) is notified one second after it was asked
-  if it is still open then, or at once when picker manners' write of it comes first. So a question
-  picker manners refuses at once (more than one in a call, a next issue picker while quiet, one
-  talked past) sends no notification in either order. Since #732 a question Claude Code shows
-  itself is marked only from the tracker's `classic.PreToolUse` hook, once every guard and settings
-  hook has let it through, so one refused after a slow scan is never marked or notified either.
+- **Notified once Dan can see it, whichever order.** A question is notified one second after it was
+  asked if it is still open then. So a question picker manners refuses at once (more than one in a
+  call, a next issue picker while quiet) sends no notification in either order. Since #732 a
+  question is marked only from the tracker's `classic.PreToolUse` hook, once every guard and
+  settings hook has let it through, so one refused after a slow scan is never marked or notified
+  either.
 - **Every refusal counts toward failed, whichever mod made it.** A call refused by a mod sitting
   outside the tracker (the collision guard, ask before saving, picker manners above it) never
   reaches the tracker's own hook, but its result's row does, so the rows count too; a call the hook
@@ -408,12 +412,10 @@ Not yet put to Dan in a round; each is the conservative reading of the spec, and
   dim grey line. When the reply adds nothing ("keep going"), the line is "+ add-on: Carrying on."
   The mod draws the line dim only where it opens a reply.
 - **The words typed are never changed**; the mod only adds context the model reads beside them.
-- **A `+` note while a question is open** (picker manners, #615) is left as typed, with no context
-  and no toast (#701). The step Claude is on is that question, which picker manners withdraws,
-  telling Claude to answer the message first; telling it as well to finish the step and fold the
-  note in later, with "Noted, applying after this step.", was the opposite instruction. The mod
-  reads picker manners' open question (`picker-manners.open`); one it cannot read leaves the note
-  an add-on, as with picker manners not loaded. The plainest reading, not put to Dan.
+- **A `+` note while a question is open** was left as typed, with no context and no toast (#701),
+  while picker manners held questions in the band and withdrew one when Dan typed. Since #744
+  Claude Code's own dialog asks every question and holds the keyboard while it does, so no note can
+  be typed under one, and the mod no longer reads picker manners' state.
 - **The resume line for other mods** is read through `$.addonNotes.resumeLine({ text })`: the line
   and the rest of the block, or null, by the rule the mod draws it with. Simpler reads it so its
   button sits under the line (Simpler behaviour, below).
@@ -431,7 +433,7 @@ Each in a rendered design round unless marked picker.
 
 | Mod | Surface | Decision |
 | --- | --- | --- |
-| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line) |
+| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744; the look stays as mod-kit's question, which ask before saving draws |
 | Ask before saving (#618) | The question | The rule's exact text and the file it would go to sit between the question and the three answers, set off by a grey rule (over above the question, and in the chat) |
 | Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
 | Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
@@ -789,10 +791,12 @@ first part, where the line starts), so a description sits under its option. A fr
 whole number of columns is refused when the row is published, never drawn as something else.
 
 One question at a time, and one look for every question (#703, #705, after the milestone audit).
-Two mods can each have a question open at once: ask before saving leaves its question in the band
-while Claude carries on, and a picker can then land beside it. Drawn together, both numbered from 1,
-a key meant for the picker could press For good. So the band draws the first question asked, alone,
-and the next once it is cleared; `$.modkit.shownQuestion()` names the one in view. A question is
+Two mods could each have a question open at once: ask before saving leaves its question in the band
+while Claude carries on, and picker manners' band question (until #744 removed it) could land beside
+it. Drawn together, both numbered from 1, a key meant for the picker could press For good. So the
+band draws the first question asked, alone, and the next once it is cleared. (The noun that named
+the one in view, `$.modkit.shownQuestion()`, had picker manners as its only caller and went with
+its band question in #744.) A question is
 asked with `$.modkit.question({ mod, id, chip, question, body, options, submit })`, which builds it
 the settled way: `[chip]` grey and the question amber on one line, the asker's `body` lines (ask
 before saving's rule and file), each option as Claude Code's plain button `1: label`, its number its
@@ -863,9 +867,8 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
 - **Two asking guards on one call.** A Bash call that both types into an app and writes a file
   another session edits is held by both the keystroke guard and the collision guard; whichever
   loads beneath asks first, and the other may then refuse. Rare enough to leave.
-- **A mod that answers a call itself** (manual steps, is it live, picker manners, handoff, the job
-  watcher's keep, scope modes' switch to build) never calls `next`, so no guard beneath it sees the
-  call. Each asks `$.modkit.screen(e)` first and answers with its refusal. mod-kit asks the secret
+- **A mod that answers a call itself** (manual steps, is it live, handoff, the job watcher's keep,
+  scope modes' switch to build) never calls `next`, so no guard beneath it sees the call. Each asks `$.modkit.screen(e)` first and answers with its refusal. mod-kit asks the secret
   guard's `$.secretGuard.screen`, which makes the same check its `tool.call` hook makes, card and
   toast included, from a hook on its own noun's event, where every mod's noun is reachable whatever
   the load order; a noun's own method sees only the mods loaded beneath it. With the secret guard
@@ -890,9 +893,9 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   secret guard; and the secret guard's screen with a stand-in answering mod above it.
 - **The goal tracker waits for them too (#732).** It is not a guard, but its mark and notification
   carry the question's text, so it marks a question only once the refusing guards have let it
-  through: a question picker manners shows from picker manners' write of it, made after its screen,
-  and one Claude Code shows itself from the tracker's own `classic.PreToolUse` hook, after `next`.
-  A question the secret guard refuses, however long its scan takes, is never marked or notified.
+  through, from the tracker's own `classic.PreToolUse` hook, after `next` (every question is shown
+  by Claude Code itself since #744). A question the secret guard refuses, however long its scan
+  takes, is never marked or notified.
 
 ## Is it live (#617), built 2026-10-04
 
@@ -1018,76 +1021,45 @@ ones marked open are the builder's choice, waiting on Dan.
   In 2.1.289 the post turn extractor runs as a forked query (`querySource: "extract_memories"`)
   whose saves are Write and Edit tool uses, and the engine's declaration names its memory fork among
   the loops whose calls raise `tool.call`. So its saves are asked about like any other.
-- The look is mod-kit's question (`$.modkit.question`, above), shared with picker manners; the
-  rule's text wraps at the band's edge rather than at a fixed width.
+- The look is mod-kit's question (`$.modkit.question`, above), shared with picker manners until
+  #744; the rule's text wraps at the band's edge rather than at a fixed width.
 - Open: the chip "Standing rule", the question "Save this as a standing rule?", the line under each
   answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
   saved"), and a grey rule on both sides of the rule's text.
 
 ## Picker manners (#615), built 2026-10-04
 
-**The band question is off, pending #744** (decided with Dan on 2026-10-05). In the live checks every
-question was asked twice: in the band, then, after about 10 seconds, by Claude Code's own dialog.
-The build time check the spec asked for had passed only in the test kit, which counts the hook's
-wait through the mod's own `$` noun (`$.pickers.wait`) as a `$` call in flight and so stops the
-hook's 10 second budget while it waits. A live session does not: past the budget the hook counts
-as absent, `next(e)` runs on its behalf, and Claude Code's own dialog asks. So, until #744 finds a
-way to wait on Dan that does not run on the hook budget (to be brought to Dan before anything
-changes), picker manners draws nothing in the band and passes every question that clears its
-refusals to Claude Code's own dialog, which asks once. The band path stays in the code behind the
-`bandQuestions` setting (the manifest's `userConfig`, off by default), so its tests keep running.
+**Claude Code's own question dialog asks every question, for good** (decided with Dan on
+2026-10-05, in a picker, after the findings on #744). The band question picker manners was built
+with is removed rather than kept switched off (L29), and with it what only the band made possible:
+typing a message in the prompt to withdraw a question, numbered prose answers, and counting a pass
+over a question, with the refusal of a question talked past twice that was built on that count.
 
-What stays while it is off: one question per call is enforced, next issue pickers are refused while
-Dan has them off and his system prompt says so, and a question of Claude's talked past twice is
-refused. What does not: a question is answered in Claude Code's dialog, so the prompt is not free
-while it is open, text typed there is an answer rather than a message, and numbered prose answers
-nothing. A pass is counted only from the band, so while it is off no new pass is counted and the
-limit on asking again holds only for passes counted while it was on.
+Why it went, as measured on #744. In the live checks every question was asked twice: in the band,
+then, after about 10 seconds, by Claude Code's own dialog. The `tool.call` hook waited for Dan's
+press through the mod's own `$` noun, `$.pickers.wait`, and Claude Code cuts a call to a plugin's
+noun off at 10 s: a probe plugin's noun, in a headless 2.1.289 session, was rejected at 10,003 ms
+with "did not answer within 10000ms". The hook's `try`/`finally` had no `catch`, so the rejected
+wait cleared the band and threw; a hook that throws is skipped, the rest of the chain ran, and
+Claude Code's own dialog asked. `claude plugin test` does not apply that limit to a plugin's noun,
+which is why the build time check (a press after 11 seconds) passed in the test kit. Standing rule 4
+above, and `tools/check-mod-noun-waits.sh`, hold every mod to it now. Ways to bring the band back
+without the noun were set out on #744 (the most promising raced `next(e)` against the band, and
+needed an interactive check first); Dan chose to stay with the dialog.
 
-The rest of this section is the band question as built, with the setting on. The look is the
-rounds' (a question in the band, above). What the build had to settle beyond the rounds, taken from
-the spec or the rounds' renderings rather than chosen afresh, and open to Dan changing:
+What picker manners does:
 
-- Each option is Claude Code's own button in its plain style, "1: 7 days", the digit its hotkey in the
-  accent colour (mod-kit's `plain`, #667): the nearest the terminal draws to the rounds' "1. 7 days".
-- One question per call (CLAUDE.md) is enforced: a call with more is refused, by name, to Claude.
-- Typed text withdraws the question, and Claude reads: "Dan did not pick an answer: he is sending a
-  message instead, which follows. Answer his message first." After the first pass it adds "If this
-  question is still unanswered after that, ask it again once; never more than once."; after the
-  second, "He has now talked past or dismissed this question twice, so do not ask it again: carry
-  on from what he says." (#703: the second pass still said ask again, and that asking was refused.)
-  A third asking is refused.
-- What counts toward that limit (#703, after the milestone audit). A dismissal counts as well as a
-  talk past (spec point 3). Only Claude's own questions count: another mod's question asked through
-  `$.ui.ask` (the keystroke guard's heads up, Switch to build) reads the same every time, and was
-  refused for good after two talk pasts. The same question is the same text however it is spaced or
-  punctuated, in any script, or the same chip over the same answers, each described the same way,
-  however it is put, since Claude rewords a question when it asks again. Answers with no
-  description (a bare Yes and No) mean whatever the question asks, so two questions under one chip
-  with only those are two questions, and a question with no letters at all is never the same as
-  another by its text (#726: a question in another script compared as nothing, and two Yes or No
-  questions under "Confirm" shared one count). A question waiting behind another mod's in the band, which Dan never
-  saw, is withdrawn by his message but not counted.
-- Dan's messages from his phone through Remote Control count as his own, as in every other mod: the
-  band is not drawn on the phone, so a message there is the only way he can answer or dismiss.
-- Where no band is drawn at all, Claude Code's own question dialog asks instead, since it is drawn on
-  every surface: a `claude -p` or SDK run (where it refuses, so another mod's `$.ui.ask` fails closed
-  as written), Dan's phone or VS Code attached, or surfaces that cannot be read. Open: whether a
-  phone merely attached while Dan is at the Mac should keep the band.
-- The wait for Dan's answer has no deadline: it is a person's answer, not machine work (L737), and
-  the prompt stays free throughout, so nothing hangs behind it; the turn interrupted withdraws it.
-- Numbered prose maps onto the open question only when the whole message is numbered from 1, with
-  no more answers than open questions, and only onto the question in view (with another mod's
-  question drawn, "1. yes" is meant for that one); anything else is a message. Its echo is one dim
-  transcript line per question.
-- A multi select question marks a chosen option with a dim "chosen" after it, and Submit with
-  nothing chosen says "Nothing is chosen yet." in a toast.
-- Next issue offers are known by `metadata.source: "next-issue"`, which the `/next-issue` skill now
-  passes. Turning them off says so once in a dim line: "Next issue pickers are off for this
-  session; /pickers on brings them back." While they are off, Claude's system prompt says so too, so
-  an offer made from CLAUDE.md's issue loop rule, which carries no tag, is a plain list as well
-  (spec point 4: this overrides the loop rule for that session only, #703).
-- An interrupted turn withdraws the question from the band.
+- One question per call (CLAUDE.md) is enforced: a call with more, or with none, is refused, by
+  name, to Claude.
+- Next issue offers are known by `metadata.source: "next-issue"`, which the `/next-issue` skill
+  passes. "no next issue" or "just give me the list", typed at the Mac or sent from Dan's phone
+  through Remote Control, turns them off for the session, and says so once in a dim line: "Next
+  issue pickers are off for this session; /pickers on brings them back." While they are off,
+  Claude's system prompt says so too, so an offer made from CLAUDE.md's issue loop rule, which
+  carries no tag, is a plain list as well (spec point 4: this overrides the loop rule for that
+  session only, #703). `/pickers on` brings them back.
+- Everything else is Claude Code's own dialog: the prompt is not free while a question is open,
+  text typed there is an answer rather than a message, and numbered prose answers nothing.
 
 ## Handoff (#613), built 2026-10-04
 
