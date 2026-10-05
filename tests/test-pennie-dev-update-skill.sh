@@ -36,7 +36,12 @@ section="$(awk '/^### First appearance$/ { f = 1; next } f && /^(#|---)/ { exit 
 paras="$(printf '%s\n' "$section" | awk 'BEGIN { RS = ""; ORS = "\n" } { gsub(/[[:space:]]+/, " "); print }')"
 claim(){   # $1 = what it holds  $2 = the exact sentence, inside one paragraph of the section
   if [ -z "$section" ]; then check "$1" "the skill has no '### First appearance' section"; return; fi
-  if printf '%s\n' "$paras" | grep -q -F -- "$2"; then check "$1" ok; else check "$1" "the section does not say: $2"; fi
+  # Matched with `case`, one paragraph at a time, never a producer piped into a quiet grep (L183).
+  local p
+  while IFS= read -r p; do
+    case "$p" in *"$2"*) check "$1" ok; return ;; esac
+  done <<< "$paras"
+  check "$1" "the section does not say: $2"
 }
 gone(){   # $1 = what it holds  $2 = a phrase that must appear nowhere in the skill, in any case
   if grep -q -i -F -- "$2" "$SKILL"; then check "$1" "the skill still says: $2"; else check "$1" ok; fi
