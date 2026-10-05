@@ -15,7 +15,7 @@
 #
 # Prints one line on success, `LOCAL <url>` or `READ-ONLY <url>`, and exits 0. Every refusal goes
 # to stderr with its reason and a distinct exit code: 2 usage, 3 remote without read only, 4 dev
-# server, 5 nothing answering.
+# server, 5 nothing answering, 6 a redirect chain longer than six hops.
 # Text is matched through here strings, never `printf | grep -q`: under pipefail grep -q exiting on
 # its first match kills printf, and the pipeline then reads as no match (L183).
 set -uo pipefail
@@ -92,6 +92,11 @@ for _hop in 1 2 3 4 5 6; do
   fi
   at="$next"
 done
+# The last hop still pointing on means the guard never reached a page to judge.
+if [ -n "$next" ]; then
+  echo "target-guard: refusing $url: it redirects more than 6 times, so no page was reached to judge." >&2
+  exit 6
+fi
 
 dev_reason=""
 # Next.js in development: the React refresh runtime, the development build id, the HMR socket.

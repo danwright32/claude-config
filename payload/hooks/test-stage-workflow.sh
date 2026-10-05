@@ -129,6 +129,10 @@ out="$(node "$SYN" "$TMP/bad.workflow.js" 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && grep -q 'bad.workflow.js does not parse' <<< "$out" && ok || bad "a script with a syntax error is refused by name (rc $rc)" "$out"
 out="$(node "$SYN" "$TMP/missing.workflow.js" 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && ok || bad "a missing script is a usage error, not a pass (rc $rc)" "$out"
+# One unreadable file does not stop the rest being checked, and every failure is named.
+out="$(node "$SYN" "$TMP/bad.workflow.js" "$TMP/missing.workflow.js" "$TMP/bad.workflow.js" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && grep -q 'cannot read .*missing.workflow.js' <<< "$out" && [ "$(grep -c 'bad.workflow.js does not parse' <<< "$out")" = "2" ] && ok \
+  || bad "an unreadable file is reported beside every parse failure, before and after it (rc $rc)" "$out"
 out="$(node "$SYN" "$SKILLS/production-ready/production-audit.workflow.js" "$SKILLS/plan-council/panel.workflow.js" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && ok || bad "both shipped workflow scripts parse as the engine runs them" "$out"
 

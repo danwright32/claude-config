@@ -55,7 +55,7 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
         pass
     # Two redirects: one staying on this machine, one leaving it.
     def do_GET(self):
-        hops = {'/redir-local/': '/prod/', '/redir-remote/': 'http://app.example.com/'}
+        hops = {'/redir-local/': '/prod/', '/redir-remote/': 'http://app.example.com/', '/loop/': '/loop/'}
         if self.path in hops:
             self.send_response(302)
             self.send_header('Location', hops[self.path])
@@ -99,6 +99,9 @@ else
   expect "a redirect that stays on this machine is followed" 0 "^LOCAL " "$rc" "$out"
   out="$(bash "$GUARD" "$BASE/redir-remote/" 2>&1)"; rc=$?
   expect "a redirect off this machine is refused" 3 "redirects to app.example.com" "$rc" "$out"
+  # A chain that never ends is refused, never judged by a page it did not reach.
+  out="$(bash "$GUARD" "$BASE/loop/" 2>&1)"; rc=$?
+  expect "a redirect chain past the hop limit is refused" 6 "redirects more than" "$rc" "$out"
 
   # Read only asked for against a local URL stays read only (lessons review of #798).
   out="$(bash "$GUARD" --read-only "$BASE/prod/" 2>&1)"; rc=$?

@@ -10,7 +10,7 @@
 // body with the meta's `export` taken off, and never runs it.
 //
 // Exit 0 when every file parses; 1 naming each one that does not, with the parser's message; 2 on
-// usage or a file it cannot read.
+// usage or any file it cannot read, after every file has been checked.
 const fs = require('fs')
 
 const files = process.argv.slice(2)
@@ -20,13 +20,16 @@ if (!files.length) {
 }
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 let failed = 0
+let unreadable = 0
+// Every file is checked, an unreadable one included, so one bad path never hides the rest.
 for (const f of files) {
   let src
   try {
     src = fs.readFileSync(f, 'utf8')
   } catch (e) {
+    unreadable++
     console.error(`workflow-syntax: cannot read ${f}: ${e.message}`)
-    process.exit(2)
+    continue
   }
   try {
     new AsyncFunction(src.replace(/^(\s*)export\s+(?=const\s+meta\b)/m, '$1'))
@@ -35,4 +38,4 @@ for (const f of files) {
     console.error(`workflow-syntax: ${f} does not parse as a workflow script: ${e.message}`)
   }
 }
-process.exit(failed ? 1 : 0)
+process.exit(unreadable ? 2 : failed ? 1 : 0)
