@@ -69,6 +69,34 @@ test('a note is drawn on the card under the safe way', { plugins: [noting] }, as
   await ui.unmount()
 })
 
+// #698: the settled look of the blocked card (docs/mods-design.md, Guard surfaces): a grey rounded
+// border, the title in bold, the reason in the terminal's own colour, then the safe way and any note
+// in dim text. Only the words were checked, so plain text or a coloured border would have passed.
+test('the blocked card keeps its settled look on every surface: a grey round border, the safe way and the note dim', { plugins: [noting] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  await $.tool.call({ tool: 'Bash', command: 'x', tool_use_id: 'look1' } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...row('look1'), surface } as never)
+    const box = await ui.find({ type: 'Box' })
+    expect(box?.props.borderStyle).toBe('round')
+    expect(box?.props.borderColor).toBe('gray')
+    const texts = await ui.findAll({ type: 'Text' })
+    const leaf = (text: string) => texts.find(t => t.text === text && t.children.every(c => typeof c === 'string'))
+    const lineOf = (text: string) => texts.find(t => t.text === text && t.children.some(c => typeof c !== 'string'))
+    expect(lineOf('Blocked by Collision guard')?.props.bold).toBe(true)
+    expect(leaf('Blocked by Collision guard')?.props.color).toBeUndefined()
+    expect(leaf('Another session is working on app.ts.')?.props.dimColor).toBeFalsy()
+    expect(leaf('Another session is working on app.ts.')?.props.color).toBeUndefined()
+    expect(leaf('Move this work to its own worktree and redo it there.')?.props.dimColor).toBe(true)
+    expect(leaf('The other session could not be told: Classifier unavailable.')?.props.dimColor).toBe(true)
+    await ui.unmount()
+  }
+})
+
 test('a call no guard blocked is left to Claude Code', { plugins: [guard] }, async ($, on) => {
   // Claude Code's own row, beneath the kit: what is drawn when no guard blocked the call.
   on('ui.render', ($, e) => {
