@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { StatusBar, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
 import { CACHE_WARN_MS, checksOf, compactDue, lookParts, unpushedOf } from './facts.ts'
-import type { Job, PrReading, RollupEntry } from './facts.ts'
+import type { Job, PrReading, RollupEntry, UnpushedReading } from './facts.ts'
 
 // The status bar (#610), settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)").
 //
@@ -36,7 +36,8 @@ let interactive = false
 // One reading at a time: a slow gh must not let the next tick start a second one beside it.
 let reading = false
 let pr: PrReading | null = null
-let unpushed = 0
+let unpushed: UnpushedReading | null = null
+let unpushedNoted = false
 let jobs: Job[] = []
 let jobsNoted = false
 let context: number | undefined
@@ -44,8 +45,13 @@ let toastedFor: number | null = null
 let shownLook = ''
 let shownCompact = ''
 let writtenId: string | undefined
+let toldSave = false
+// Whether a main turn is running: from its first request to its end. Every request it makes keeps
+// the cache warm, so the cache warning and a cache Compact row wait for it to end (#697).
+let turnRunning = false
 let chain: Promise<unknown> = Promise.resolve()
 
+const msg = (err: unknown) => String((err as Error)?.message ?? err)
 const dirOf = (h: string) => `${h}/.claude/state/status-bar`
 const serial = <T>(work: () => Promise<T>): Promise<T> => {
   const next = chain.then(work)
@@ -58,35 +64,77 @@ const isJob = (j: unknown): j is Job => {
   return !!o && typeof o.label === 'string' && typeof o.runMs === 'number' && typeof o.kept === 'boolean'
 }
 
-// This session's facts for the status line script, written whole and moved into place so the
-// script never reads half a file. After a /clear the session id changes, and the old file goes.
-const writeFacts = async ($: EngineInterface) => {
-  if (!home) return
-  const id = await $.session.id()
-  if (!SESSION_ID.test(id)) return
-  const cache = (await $.state.get(cacheRef)).value ?? null
-  const facts: StatusBarFacts = { v: 1, sessionId: id, cacheExpiresAt: cache }
-  const tmp = `${dirOf(home)}/.${id}.json.tmp`
-  await $.fs.write(tmp, JSON.stringify(facts))
-  const mv = await $.process.run(['mv', '-f', tmp, `${dirOf(home)}/${id}.json`])
-  if (mv.exitCode !== 0) {
-    $.ui.log(`status-bar: could not save the status line's facts: ${mv.stderr.trim()}`, { to: 'debug' })
-    return
-  }
-  if (writtenId && writtenId !== id) await $.process.run(['rm', '-f', `${dirOf(home)}/${writtenId}.json`]).catch(() => undefined)
-  writtenId = id
+// The facts file is the status line's only source for the cache time, so one that cannot be saved
+// is said, once a session, in the guards' note style: the status line then shows an old or unknown
+// cache time (#697).
+const cannotSave = ($: EngineInterface, why: string) => {
+  if (toldSave) return
+  toldSave = true
+  $.ui.log(`Status bar couldn't save the cache time for the status line, so it may show it out of date: ${why}`)
 }
 
-const readUnpushed = async ($: EngineInterface, root: string): Promise<number> => {
+// This session's facts for the status line script, written whole and moved into place so the
+// script never reads half a file. After a /clear the session id changes, and the old file goes. A
+// write that fails (an unwritable or full disk) is said, never thrown: nothing after it stops, not
+// the refresh being armed at session start, the band, or a turn ending (#697).
+const writeFacts = async ($: EngineInterface) => {
+  if (!home) return
   try {
-    // No remote is nothing to push to: every commit would otherwise count as unpushed.
-    const rem = await $.process.run(['git', '-C', root, 'remote'], { timeoutMs: 10_000 })
-    if (rem.exitCode !== 0 || !rem.stdout.trim()) return 0
-    const c = await $.process.run(['git', '-C', root, 'rev-list', '--count', 'HEAD', '--not', '--remotes'], { timeoutMs: 10_000 })
-    return (c.exitCode === 0 ? unpushedOf(c.stdout) : undefined) ?? 0
-  } catch {
-    return 0
+    const id = await $.session.id()
+    if (!SESSION_ID.test(id)) return
+    const cache = (await $.state.get(cacheRef)).value ?? null
+    const facts: StatusBarFacts = { v: 1, sessionId: id, cacheExpiresAt: cache }
+    const tmp = `${dirOf(home)}/.${id}.json.tmp`
+    await $.fs.write(tmp, JSON.stringify(facts))
+    const mv = await $.process.run(['mv', '-f', tmp, `${dirOf(home)}/${id}.json`])
+    if (mv.exitCode !== 0) throw new Error(mv.stderr.trim() || `mv exited ${mv.exitCode}`)
+    if (writtenId && writtenId !== id) await $.process.run(['rm', '-f', `${dirOf(home)}/${writtenId}.json`]).catch(() => undefined)
+    writtenId = id
+  } catch (err) {
+    cannotSave($, msg(err))
   }
+}
+
+// The commits not pushed anywhere. No repository, no remote, or no commit yet is nothing to push:
+// a reading of zero. Anything else git cannot answer (an error, a timeout) is no reading: never a
+// zero, which would drop the commits off the line (L215, #697).
+const countUnpushed = async ($: EngineInterface, root: string): Promise<{ count: number } | { unreadable: string }> => {
+  try {
+    const rem = await $.process.run(['git', '-C', root, 'remote'], { timeoutMs: 10_000 })
+    if (rem.exitCode !== 0) {
+      if (/not a git repository/i.test(rem.stderr)) return { count: 0 }
+      return { unreadable: rem.stderr.trim() || `git remote exited ${rem.exitCode}` }
+    }
+    // No remote is nothing to push to: every commit would otherwise count as unpushed.
+    if (!rem.stdout.trim()) return { count: 0 }
+    const c = await $.process.run(['git', '-C', root, 'rev-list', '--count', 'HEAD', '--not', '--remotes'], { timeoutMs: 10_000 })
+    if (c.exitCode === 0) {
+      const n = unpushedOf(c.stdout)
+      return n === undefined ? { unreadable: `git gave no count (${c.stdout.trim() || 'nothing'})` } : { count: n }
+    }
+    // A repository with no commit yet has no HEAD, and nothing to push.
+    if (/unknown revision|ambiguous argument 'HEAD'/i.test(c.stderr)) return { count: 0 }
+    return { unreadable: c.stderr.trim() || `git rev-list exited ${c.exitCode}` }
+  } catch (err) {
+    return { unreadable: msg(err) }
+  }
+}
+
+// A refresh that fails keeps what was last read, marked stale with its age, as the PR does (L682),
+// and says so once in the debug log until a reading comes again.
+const readUnpushed = async ($: EngineInterface, root: string) => {
+  const now = await $.clock.now()
+  const got = await countUnpushed($, root)
+  if ('count' in got) {
+    unpushed = { count: got.count, readAt: now, isStale: false }
+    unpushedNoted = false
+    return
+  }
+  if (unpushed) unpushed = { ...unpushed, isStale: true }
+  if (unpushedNoted) return
+  unpushedNoted = true
+  const kept = unpushed ? 'so the last count stays, with its age' : 'so none is shown'
+  $.ui.log(`status-bar: could not read the unpushed commits, ${kept}: ${got.unreadable}`, { to: 'debug' })
 }
 
 // The branch's PR. A refresh that fails keeps what was last read, marked stale with its age, never
@@ -149,7 +197,7 @@ const publish = () =>
     const now = await io.now()
     const cache = await io.cache()
     const look = lookParts({ modes: await io.modes(), pr, jobs, unpushed, now })
-    const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now })
+    const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now, isWorking: turnRunning })
     const compact = due
       ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact' }]
       : []
@@ -171,8 +219,10 @@ const publish = () =>
     }
   })
 
-// One toast per hour of cache, 5 minutes before it goes cold (the spec).
+// One toast per hour of cache, 5 minutes before it goes cold (the spec). Not while a main turn runs:
+// its next request warms the cache again, and Dan has nothing to do about it then (#697).
 const warnCache = async ($: EngineInterface) => {
+  if (turnRunning) return
   const cache = (await $.state.get(cacheRef)).value ?? null
   if (cache === null || toastedFor === cache) return
   const left = cache - (await $.clock.now())
@@ -194,7 +244,7 @@ const tick = async ($: EngineInterface) => {
 
 const read = async ($: EngineInterface) => {
   const root = await $.session.root().catch(() => startCwd)
-  unpushed = await readUnpushed($, root)
+  await readUnpushed($, root)
   await readPr($, root)
   await readJobs($)
   try {
@@ -206,6 +256,22 @@ const read = async ($: EngineInterface) => {
   await warnCache($)
   await publish()
   if ((await $.session.id()) !== writtenId) await writeFacts($)
+}
+
+// The cache clock moved (a request started a new hour, or a compaction replaced the conversation):
+// the status line's file and the band follow, off the path of whatever moved it.
+const cacheMoved = async ($: EngineInterface) => {
+  await writeFacts($)
+  await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
+}
+
+// A compaction replaces the conversation, so the hour being counted belonged to one that is gone:
+// the clock starts again from nothing, as after a /clear, and a Compact row shown for the cache
+// goes with it (#697).
+const cacheReplaced = async ($: EngineInterface) => {
+  await $.state.set(cacheRef, null)
+  toastedFor = null
+  await cacheMoved($)
 }
 
 export const register: Register = on => {
@@ -241,8 +307,9 @@ export const register: Register = on => {
     startCwd = e.cwd
     home = await $.env.get('HOME')
     if (home) {
-      await $.process.run(['mkdir', '-p', dirOf(home)])
-      await writeFacts($)
+      const made = await $.process.run(['mkdir', '-p', dirOf(home)]).catch(err => ({ exitCode: -1, stderr: msg(err) }))
+      if (made.exitCode === 0) await writeFacts($)
+      else cannotSave($, made.stderr.trim() || `mkdir exited ${made.exitCode}`)
     } else {
       $.ui.log("Status bar couldn't find the home folder, so the status line can't show the cache time.")
     }
@@ -255,15 +322,45 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The hour of cache starts again at every main request (the spec's "measured from the last
+  // request", #697), so a long turn keeps it warm on the status line as each of its requests really
+  // does. A subagent's request carries its own conversation, not this one. The file and the band
+  // follow off the request's path, so a slow disk never holds a request up.
+  on('turn.step', async function* ($, e, next) {
+    if (interactive && e.agentId === undefined) {
+      turnRunning = true
+      try {
+        await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
+        $.clock.after(0, () => void cacheMoved($))
+      } catch (err) {
+        $.ui.log(`status-bar: could not restart the cache clock: ${msg(err)}`, { to: 'debug' })
+      }
+    }
+    return yield* next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (interactive && e.agentId === undefined) {
-      await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
-      await writeFacts($)
-      await publish()
+      turnRunning = false
+      // The turn's end makes no request, so the cache clock stays where its last request put it;
+      // only the band changes, since a cache warning waits for the turn to end.
+      await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
       // A turn may have committed or pushed: read git again now rather than at the next tick.
       $.clock.after(0, () => void tick($))
     }
     return next(e)
+  })
+
+  // Any compaction of this conversation (the Compact row, /compact, the threshold) resets the cache
+  // clock. A subagent compacting its own transcript, a precompute that installs nothing, and a
+  // compaction that was skipped leave this conversation as it is.
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    const skipped = typeof (r as { skip?: unknown } | undefined)?.skip === 'string'
+    if (interactive && e.agentId === undefined && e.trigger !== 'precompute' && !skipped) {
+      await cacheReplaced($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
+    }
+    return r
   })
 
   on('session.measure', async ($, e, next) => {
@@ -273,12 +370,20 @@ export const register: Register = on => {
   })
 
   on('ui.press', { plugin: 'mod-kit', element: 'status-bar:compact' }, async ($, e) => {
+    let r: { skip?: string } | undefined
     try {
-      const r = (await $.session.compact()) as { skip?: string }
-      if (r && typeof r.skip === 'string') $.ui.toast(`Compact did not run: ${r.skip}`)
+      r = (await $.session.compact()) as { skip?: string }
     } catch (err) {
-      $.ui.toast(`Compact did not run: ${String((err as Error)?.message ?? err)}`)
+      $.ui.toast(`Compact did not run: ${msg(err)}`)
+      return { element: e.element }
     }
+    if (r && typeof r.skip === 'string') {
+      $.ui.toast(`Compact did not run: ${r.skip}`)
+      return { element: e.element }
+    }
+    // Reset here as well: this mod's own call does not pass through its own session.compact hook
+    // (the engine skips the calling plugin, measured in the tests), and resetting twice changes nothing.
+    await cacheReplaced($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
     return { element: e.element }
   })
 
@@ -287,10 +392,11 @@ export const register: Register = on => {
       await $.process.run(['rm', '-f', `${dirOf(home)}/${e.sessionId}.json`]).catch(() => undefined)
       if (writtenId === e.sessionId) writtenId = undefined
     }
-    // A /clear starts a new conversation, whose cache starts cold.
+    // A /clear starts a new conversation, whose cache starts cold, and ends any turn.
     if (e.reason === 'clear') {
       await $.state.set(cacheRef, null)
       toastedFor = null
+      turnRunning = false
     }
     return next(e)
   })

@@ -20,7 +20,10 @@ export type StatusBar = {
 export type StatusBarFacts = {
   v: 1
   sessionId: string
-  /** When the prompt cache goes cold, in ms since the epoch: an hour after the last main turn ended. Null before any. */
+  /**
+   * When the prompt cache goes cold, in ms since the epoch: an hour after the last main request.
+   * Null before any request, and again after a compaction or /clear replaces the conversation.
+   */
   cacheExpiresAt: number | null
 }
 
