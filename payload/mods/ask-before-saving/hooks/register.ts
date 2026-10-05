@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { AskBeforeSavingQuestion } from '../types/index.d.ts'
-import { ANSWERS, type Answer, type InCheckout, MOD, addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, rowId } from './rules.ts'
+import { ANSWERS, type Answer, type InCheckout, MOD, addedText, cannotCheck, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, rowId } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
 // Edit or Bash, Dan is asked in the band: For good, Just this session, or Not at all. Settled with
@@ -101,9 +101,6 @@ const REFUSED =
   'Not saved yet. Dan is being asked in the band above the prompt whether this is a standing rule: For good, Just this session, or Not at all. ' +
   'His answer reaches you as a note, and For good saves it exactly as you wrote it here. Do not write it again.'
 
-const cannotCheck = (why: string | undefined) =>
-  `Not saved: Ask before saving could not check whether this writes lasting memory (${why ?? 'it failed'}). Tell Dan what you meant to save instead.`
-
 export const register: Register = on => {
   // Dan's latest message of his own, typed or from his phone, read for the words that already make
   // a rule permanent. A peer session's or a plugin's message never counts.
@@ -133,7 +130,7 @@ export const register: Register = on => {
       }
       if (r.deny !== undefined || r.isError) return r
       return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
-    }).catch(($, e, next) => ({ deny: cannotCheck(next.error.message) }))
+    }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
   }
 
   // Asked here, beneath every mod's tool.call hook and after the settings hooks beneath this one, so
@@ -179,7 +176,7 @@ export const register: Register = on => {
       return { deny: `Not saved: the question asking Dan whether this is a standing rule could not be shown (${message(err)}). Ask him in your reply instead.` }
     }
     return { deny: REFUSED }
-  }).catch(($, e, next) => ({ deny: cannotCheck(next.error.message) }))
+  }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
   // A press carries the answer and the save it was drawn for: "<answer>:<save id>".
   on('ui.press', { plugin: 'mod-kit' }, async ($, e, next) => {

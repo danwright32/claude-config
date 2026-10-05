@@ -134,6 +134,14 @@ export const addedText = (content: string, old: string | undefined): string => {
   return added.length ? added.join('\n') : trim(content)
 }
 
+/**
+ * What Claude reads when the hook could not finish, from the failure the engine hands its catch
+ * handler. Built from whatever arrives, so the refusal can never itself throw: a hook that throws
+ * is skipped, and the save would go through unasked (lessons review of #731).
+ */
+export const cannotCheck = (failure: { message?: string } | undefined): string =>
+  `Not saved: Ask before saving could not check whether this writes lasting memory (${failure?.message || 'it failed'}). Tell Dan what you meant to save instead.`
+
 /** The three answers, with the button id their press arrives under (before the save's own id). */
 export const ANSWERS = [
   { button: 'for-good', label: 'For good' },

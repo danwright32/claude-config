@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath } from '../hooks/rules.ts'
+import { addedText, cannotCheck, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -161,6 +161,17 @@ test('lasting memory a script or a patch mentions, read from its text', async ()
   expect(await mentioned("python3 -c \"open('/tmp/repo/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/repo/CLAUDE.md'])
   expect(await mentioned("python3 -c \"open('/tmp/$D/AGENTS.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/$D/AGENTS.md'])
   expect(await mentioned("python3 -c \"open('/tmp/../Users/dan/.claude/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
+})
+
+// Lessons review of #731: the hook's refusal read the failure's message with no guard, so a failure
+// that arrived without its error would make the refusal itself throw, and a hook that throws is
+// skipped: the save would go through unasked. The refusal is built from whatever arrives.
+test('a hook that could not finish is refused with its reason, and with no reason at all it is still refused', () => {
+  expect(cannotCheck({ message: 'EACCES: /tmp/locked' })).toBe(
+    'Not saved: Ask before saving could not check whether this writes lasting memory (EACCES: /tmp/locked). Tell Dan what you meant to save instead.',
+  )
+  expect(cannotCheck({})).toContain('could not check whether this writes lasting memory (it failed)')
+  expect(cannotCheck(undefined)).toContain('could not check whether this writes lasting memory (it failed)')
 })
 
 test('the text shown is what would be saved: the new lines of a rewrite, the whole of a new file', () => {
