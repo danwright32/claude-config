@@ -123,6 +123,20 @@ test('the command reader is shared as $.modkit.commands', { plugins: [reader] },
   expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([['cat', '.env'], ['git', 'status']])
 })
 
+// #698: a reader that judges what a heredoc feeds asks for its body through the kit, as plain data.
+const heredocReader: { name: string; register: Register } = {
+  name: 'heredoc-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => ({ deny: JSON.stringify(await $.modkit.pipeline({ command: String((e as { command?: string }).command) })) }))
+  },
+}
+
+test("a heredoc's body is shared on $.modkit.pipeline's commands", { plugins: [heredocReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = (await $.tool.call({ tool: 'Bash', command: "python3 - <<'EOF'\nprint(1)\nEOF" } as never)) as { deny?: string; text?: string }
+  expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+})
+
 // Any mod's own tool result drawn as the boxed card (#663), from plain data: a title whose runs can
 // carry colour (a state word leading it), then body lines. The blocked card is one use of it.
 // A plugin in a test runs in its own environment, so the card is spelled inside the hook.
