@@ -9889,6 +9889,16 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   SHORT: A measurement sampled from inside the same context as the thing measured can itself be the load, so judge by the events the platform emits.
 
 
+- **L749. In a JavaScript test, attach the handler or expectation for a promise that may reject
+  BEFORE the next `await`, and await it afterwards: a rejection that lands during that await is
+  reported as unhandled and fails the run even though every test passed.** It only lands there
+  under load, so it reads as a flake and gets retried rather than fixed (L293). (slate#3342:
+  `dwd-burst.test.ts` gave its leader a 20ms deadline and attached `rejects` only after
+  `await untilFetches(1)`; under the pre-push gate's concurrent `cf:build` that wait outlasted
+  20ms, the leader rejected unhandled, and vitest failed the gate with "Errors 1" while all 5,885
+  tests passed. It passed 5 of 5 alone.)
+  SHORT: In a JS test, attach a may-reject promise's handler before the next await: a rejection landing during it fails the run though every test passed.
+
 ## Pipeline speed
 
 - **L395. A speed improvement claimed from ONE reading per arm cannot be told from noise**, because

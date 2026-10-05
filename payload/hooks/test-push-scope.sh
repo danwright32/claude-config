@@ -386,6 +386,19 @@ for c in "git -C \"$SP\" push" \
   [ "$rc" -eq 0 ] && [ "$got" = "$SP" ] && check "#589 a quoted -C path with a space resolves: $c" ok \
     || check "#589 a quoted -C path with a space resolves: $c" "rc=$rc got [$got] said [$(cat "$RD/quoted.err")]"
 done
+# ...and before any of that, the push has to be SEEN as a push. The segment reader split on
+# whitespace, so the skip after -C landed on the second half of the quoted path, read it as the
+# subcommand, and every gate stood down at its first question (found by the lessons review of #778).
+want_push "git -C \"$SP\" push" "#589 a push with a quoted -C path holding a space is seen"
+want_push "git -C '$SP' push origin HEAD" "#589 a push with a single quoted -C path holding a space is seen"
+want_push "git -c core.quotepath=false -C \"$SP\" push" "#589 a push with an option before a quoted -C path is seen"
+want_push "rtk git -C \"$SP\" push" "#589 an rtk push with a quoted -C path is seen"
+# The same word reader answers the pull request question, so a quoted assignment holding a space
+# in front of `gh pr create` is still a creation (found by the lessons review of #778).
+if ps_is_gh_pr_create 'GH_TOKEN="a b" gh pr create --fill'; then check "#589 a pr create after a quoted assignment with a space is seen" ok
+else check "#589 a pr create after a quoted assignment with a space is seen" "not seen"; fi
+if ps_is_gh_pr_create 'echo "gh pr create --fill"'; then check "#589 a pr create inside a quoted argument is still not a creation" "seen"
+else check "#589 a pr create inside a quoted argument is still not a creation" ok; fi
 got="$(ps_repo_dir "git -C \"$RD/target\" push" "$S" 2>/dev/null)"
 [ "$got" = "$RD/target" ] && check "#589 a quoted -C path without a space resolves" ok \
   || check "#589 a quoted -C path without a space resolves" "got [$got]"

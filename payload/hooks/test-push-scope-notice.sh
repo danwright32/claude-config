@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Tests for push-scope-notice.sh, which tells the SESSION when every push gate stood down because
-# the push named a directory that could not be resolved (claude-config#552).
+# Tests for push-scope-notice.sh, which REFUSES a push every push gate would stand down on because
+# it names a directory that could not be resolved (claude-config#552, refusing since #589).
 #
 # Since #532 the shared resolver refuses rather than judging the session repository in its place,
-# and the thirteen gates that use it exit 0 on that refusal. Right, but the refusal's sentence went
-# to stderr, which a PreToolUse hook exiting 0 shows to nobody, so a push nothing judged read
-# exactly like a push judged clean (L98). This one hook says it once, as context the model receives,
-# instead of thirteen copies from thirteen gates.
+# and the thirteen gates that use it exit 0 on that refusal, which left the push unjudged. #552 had
+# this hook only say so, as context the model received, and let the push through; since #589 it
+# blocks with exit 2 and states the reason and the remedy on stderr, once, instead of thirteen
+# copies from thirteen gates (L42, L320).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -69,10 +69,18 @@ silent "and says nothing" "$out"
 
 echo "push scope notice: silent where there is nothing to announce"
 
-silent "a push the gates can resolve says nothing" "$(run "cd $W/target && git push")"
-silent "a plain push from the session repository says nothing" "$(run "git push")"
-silent "a command that is not a push says nothing" "$(run "cd $W/no-such-dir && git status")"
-silent "a push quoted inside an argument says nothing" "$(run "gh issue create --body \"cd $W/no-such-dir && git push\"")"
+# Since #589 the hook refuses with exit 2 and speaks on STDERR, so "silent" means all three: exit 0,
+# nothing on stdout, nothing on stderr. Checking stdout alone could not see a wrong refusal.
+allowed() { # allowed <description> <command>
+  local out rc
+  out="$(run "$2")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -s "$W/err" ]; then check "$1" ok
+  else check "$1" "exit $rc, stdout [${out:0:200}], stderr [$(head -c 200 "$W/err")]"; fi
+}
+allowed "a push the gates can resolve is let through, saying nothing" "cd $W/target && git push"
+allowed "a plain push from the session repository is let through, saying nothing" "git push"
+allowed "a command that is not a push is let through, saying nothing" "cd $W/no-such-dir && git status"
+allowed "a push quoted inside an argument is let through, saying nothing" "gh issue create --body \"cd $W/no-such-dir && git push\""
 
 echo "push scope notice: it is actually run"
 
