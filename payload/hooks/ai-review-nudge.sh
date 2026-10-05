@@ -255,6 +255,6 @@ IFS=$' \t\n'
 
 # Housekeeping and the fast path stamp: this session has now seen everything written so far.
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
-find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey' -o -name '*.txt.acknowledged' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 [ -n "$LIST" ] && { touch "$LIST" 2>/dev/null || true; }
 exit 0

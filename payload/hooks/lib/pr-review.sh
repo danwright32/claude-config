@@ -151,7 +151,7 @@ do_start() {
   fi
   # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
   # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
-  rm -f "$delivered" "$acknowledged" "$final.readkey" 2>/dev/null
+  rm -f "$delivered" "$acknowledged" "$final.readkey"* 2>/dev/null
   if [ -z "$full_sha" ]; then
     record could-not-run "The commit $sha is not in this checkout and could not be fetched from origin, so there is nothing to review."
     echo "The lessons review could not run: $sha is not in this checkout."; return 0
@@ -301,6 +301,6 @@ do_check() {
 case "$verb" in
   start) do_start ;;
   check) do_check; exit $? ;;
-  restart) rm -f "$final" "$pending" "$delivered" "$acknowledged" "$final.readkey"; do_start ;;
+  restart) rm -f "$final" "$pending" "$delivered" "$acknowledged" "$final.readkey"*; do_start ;;
 esac
 exit 0

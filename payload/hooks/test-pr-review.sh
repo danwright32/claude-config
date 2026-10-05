@@ -451,10 +451,14 @@ f7="$(final_of "$HEAD_SHA")"
 sed 's/^finished=.*/finished=1/' "$f7" > "$f7.tmp" && mv "$f7.tmp" "$f7"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "an acknowledgement does not carry over to a replaced review of the same head" "2" "$rc"
+[ -n "$(key_in "$out")" ] && [ "$(key_in "$out")" != "$gk" ] && ok \
+  || bad "a replaced review of the same head is given a NEW read key (old $gk, now $(key_in "$out"))"
+out2="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
+check_eq "and the earlier review's key does not read the replaced one" "2" "$rc"
 out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
 check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
 # Two first askers at once agree on ONE key, and neither ever reads an empty one.
-fk="$WORKDIR/concurrent-review.txt"; : > "$fk"; rm -f "$fk.readkey"
+fk="$WORKDIR/concurrent-review.txt"; printf 'status=ok\nfinished=42\n\n' > "$fk"; rm -f "$fk".readkey*
 for i in 1 2 3 4 5 6 7 8; do
   bash -c '. "$1" && ar_review_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
 done

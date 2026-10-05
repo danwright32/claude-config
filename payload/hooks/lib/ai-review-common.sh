@@ -99,8 +99,14 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
 # empty or partial key (a noclobber write creates the name first and fills it after). A key that
 # cannot be made prints nothing and fails, and the caller then refuses, since no merge can present a
 # key nobody was shown (L42).
+#
+# Kept in <file>.readkey-<finished stamp>, so a review written again for the same head (a new
+# finished= stamp) gets a NEW key, and the earlier review's key cannot read the new findings.
 ar_review_key() {   # $1 = finished review file
-  local kf="$1.readkey" k tmp
+  local fin kf k tmp
+  fin="$(awk 'index($0, "finished=") == 1 { print substr($0, 10); exit } /^$/ { exit }' "$1" 2>/dev/null)"
+  case "$fin" in ''|*[!0-9]*) return 1 ;; esac
+  kf="$1.readkey-$fin"
   if [ ! -s "$kf" ]; then
     k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
     [ -n "$k" ] || return 1
