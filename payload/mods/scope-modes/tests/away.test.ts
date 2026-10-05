@@ -48,6 +48,17 @@ describe('needsTheMac: what is held while Dan is away', () => {
     expect(needs(`echo 'tell application "Finder" to activate' | osascript`, ['echo', 'tell application "Finder" to activate'], '|', ['osascript'])).toBe('Bring an app to the front')
     expect(needs(`osascript <<'EOF'`, ['osascript', '<<EOF'])).toBe('Run an AppleScript on the Mac')
   })
+  // #724: a script file was never judged, so one that shows a dialog or activates an app ran.
+  test('an AppleScript in a file, or one that runs a script it cannot read, is held', () => {
+    expect(needs('osascript notify.scpt', ['osascript', 'notify.scpt'])).toBe('Run an AppleScript on the Mac')
+    expect(needs('osascript -s o ~/bin/front.applescript Overture', ['osascript', '-s', 'o', '~/bin/front.applescript', 'Overture'])).toBe('Run an AppleScript on the Mac')
+    expect(needs('osascript -l JavaScript front.js', ['osascript', '-l', 'JavaScript', 'front.js'])).toBe('Run an AppleScript on the Mac')
+    expect(needs('osascript < front.applescript', ['osascript', '<', 'front.applescript'])).toBe('Run an AppleScript on the Mac')
+    expect(needs(`osascript -e 'run script file "x.scpt"'`, ['osascript', '-e', 'run script file "x.scpt"'])).toBe('Run an AppleScript on the Mac')
+    // A script file run by anything but osascript is no AppleScript.
+    expect(needs('python3 tools/report.py', ['python3', 'tools/report.py'])).toBeUndefined()
+    expect(needs('osascript -l JavaScript', ['osascript', '-l', 'JavaScript'])).toBeUndefined()
+  })
 })
 
 describe('heldTool: the tools that open something on the Mac by another route than Bash (#702)', () => {

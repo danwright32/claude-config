@@ -88,11 +88,15 @@ const piped = (feeder: readonly string[] | undefined): Program | undefined => {
   return { unreadable: `fed by what ${name} pipes into it` }
 }
 
-const programOf = (words: readonly string[], feeder: readonly string[] | undefined): Program | undefined => {
+// What a command runs as its program, or, where that is a file, which file: a script file named
+// as its operand, or one its standard input is redirected from (#724: away never saw
+// `osascript notify.scpt`, a script it cannot read).
+type Reading = { program?: Program; file?: string }
+const readProgram = (words: readonly string[], feeder: readonly string[] | undefined): Reading => {
   const kind = kindOf(words[0])
-  if (!kind) return undefined
+  if (!kind) return {}
   // deno runs inline code as `deno eval <code>`, and a script with `deno run`.
-  if (kind === 'deno') return words[1] === 'eval' ? { text: words[2] ?? '' } : undefined
+  if (kind === 'deno') return words[1] === 'eval' ? { program: { text: words[2] ?? '' } } : {}
   const g = GRAMMAR[kind]
   const long = LONG[kind] ?? {}
   // python and a shell run their first inline program, the words after it its arguments; every
@@ -104,7 +108,7 @@ const programOf = (words: readonly string[], feeder: readonly string[] | undefin
   let fromStdin = false
   let shellC = false
   let fed: Program | undefined
-  let fromFile = false
+  let fromFile: string | undefined
   let programFile = false
   const inline: string[] = []
   const operands: string[] = []
@@ -120,8 +124,7 @@ const programOf = (words: readonly string[], feeder: readonly string[] | undefin
       continue
     }
     if (/^\d*</.test(a)) {
-      fromFile = true
-      if (/^\d*<$/.test(a)) i++
+      fromFile = a.replace(/^\d*</, '') || (words[++i] ?? '')
       continue
     }
     const r = REDIRECT.exec(a)
@@ -150,7 +153,7 @@ const programOf = (words: readonly string[], feeder: readonly string[] | undefin
       const attached = eq < 0 ? undefined : a.slice(eq + 1)
       if (long.inline?.includes(name)) {
         const code = attached ?? words[++i] ?? ''
-        if (firstOnly) return { text: code }
+        if (firstOnly) return { program: { text: code } }
         inline.push(code)
       } else if (long.file?.includes(name)) {
         programFile = true
@@ -175,7 +178,7 @@ const programOf = (words: readonly string[], feeder: readonly string[] | undefin
           // node's -e and -p take the next word, never what is attached, so -pe is -p then -e.
           const attachedCode = kind === 'node' && /^[ep]*$/.test(rest) ? '' : rest
           const code = attachedCode || (words[++i] ?? '')
-          if (firstOnly) return { text: code }
+          if (firstOnly) return { program: { text: code } }
           inline.push(code)
           break
         }
@@ -186,7 +189,7 @@ const programOf = (words: readonly string[], feeder: readonly string[] | undefin
         }
         if (g.value.includes(letter)) {
           // python -m runs a module, which is no program here, as a script file is not.
-          if (kind === 'python' && letter === 'm') return undefined
+          if (kind === 'python' && letter === 'm') return {}
           if (!rest) {
             // macOS sed -i takes its suffix as its own word, an empty one arriving as ''.
             i++
@@ -206,16 +209,21 @@ const programOf = (words: readonly string[], feeder: readonly string[] | undefin
     }
     operand = a
   }
-  if (programFile) return { unreadable: 'its program is in a file' }
+  if (programFile) return { program: { unreadable: 'its program is in a file' } }
   // Inline code is the program; the words after it are its data files.
-  if (inline.length) return { text: inline.join('\n') }
-  if (kind === 'shell' && shellC) return operand !== undefined ? { text: operand } : undefined
-  if (programWord) return operand !== undefined ? { text: operand } : undefined
-  if (operand !== undefined && operand !== '-' && !fromStdin) return undefined
-  if (fed) return fed
-  if (fromFile) return undefined
-  return piped(feeder)
+  if (inline.length) return { program: { text: inline.join('\n') } }
+  if (kind === 'shell' && shellC) return operand !== undefined ? { program: { text: operand } } : {}
+  if (programWord) return operand !== undefined ? { program: { text: operand } } : {}
+  if (operand !== undefined && operand !== '-' && !fromStdin) return { file: operand }
+  if (fed) return { program: fed }
+  if (fromFile !== undefined) return { file: fromFile }
+  const p = piped(feeder)
+  return p ? { program: p } : {}
 }
+const programOf = (words: readonly string[], feeder: readonly string[] | undefined): Program | undefined => readProgram(words, feeder).program
+
+/** The script file an interpreter runs, named as its operand or redirected into it, or undefined. */
+export const scriptFileOf = (words: readonly string[]): string | undefined => readProgram(words, undefined).file
 
 /**
  * Each command's program. Only a | feeds a command what another prints: the command before it in

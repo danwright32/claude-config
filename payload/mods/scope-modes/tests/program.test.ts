@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { execsOf, programsOf } from '../hooks/program.ts'
+import { execsOf, programsOf, scriptFileOf } from '../hooks/program.ts'
 import { listed } from './listed.ts'
 
 // Commands as mod-kit's reader hands them over, a '|' between two of them a pipe (listed.ts).
@@ -84,6 +84,23 @@ describe('programsOf: the program a shell or interpreter runs that the reader di
   })
   test("a subshell's output piped in cannot be read either, and is named as a subshell", () => {
     expect(programsOf([{ words: ['bash'], pipedFrom: [')'] }])).toEqual([{ unreadable: 'fed by what a subshell pipes into it' }])
+  })
+})
+
+describe('scriptFileOf: the script file an interpreter runs, by the same option grammar (#724)', () => {
+  test('named as its operand, past the options that take a value, or redirected into it', () => {
+    expect(scriptFileOf(['osascript', 'notify.scpt'])).toBe('notify.scpt')
+    expect(scriptFileOf(['osascript', '-l', 'JavaScript', 'front.js', 'arg'])).toBe('front.js')
+    expect(scriptFileOf(['osascript', '<', 'front.applescript'])).toBe('front.applescript')
+    expect(scriptFileOf(['python3', '-W', 'ignore', 'tools/report.py'])).toBe('tools/report.py')
+  })
+  test('none for inline code, a module, a heredoc, standard input or no program', () => {
+    expect(scriptFileOf(['osascript', '-e', 'display dialog "x"'])).toBeUndefined()
+    expect(scriptFileOf(['python3', '-m', 'json.tool'])).toBeUndefined()
+    expect(scriptFileOf(['osascript', '<<EOF'])).toBeUndefined()
+    expect(scriptFileOf(['osascript', '-'])).toBeUndefined()
+    expect(scriptFileOf(['osascript'])).toBeUndefined()
+    expect(scriptFileOf(['ls', 'a.scpt'])).toBeUndefined()
   })
 })
 
