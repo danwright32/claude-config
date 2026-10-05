@@ -64,8 +64,22 @@ for h in require-tests-before-push check-style-guide lessons-advisory require-is
 done
 
 echo "== skill -> workflow path resolves =="
-ref=$(grep -o '/Users/[^"]*panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null | awk 'NR <= 1')
-if [ -n "$ref" ] && [ -f "$ref" ]; then ok "scriptPath -> $ref"; else bad "SKILL.md scriptPath missing or broken: '${ref:-none}'"; fi
+# The Workflow tool refuses a script under the config home, so the skill stages a copy into the
+# session scratchpad and passes that (claude-config#587). Checked as the skill does it: the
+# instruction is there, and the helper really produces an exact copy.
+if grep -q 'stage-workflow\.sh.*skills/plan-council/panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null; then
+  ok "SKILL.md stages panel.workflow.js through stage-workflow.sh"
+else
+  bad "SKILL.md does not stage panel.workflow.js through hooks/lib/stage-workflow.sh"
+fi
+_pc_tmp="$(mktemp -d)"
+_pc_staged="$(bash "$D/hooks/lib/stage-workflow.sh" "$D/skills/plan-council/panel.workflow.js" "$_pc_tmp" 2>&1)"
+if [ -f "$_pc_staged" ] && cmp -s "$D/skills/plan-council/panel.workflow.js" "$_pc_staged"; then
+  ok "stage-workflow.sh -> $_pc_staged"
+else
+  bad "stage-workflow.sh did not produce an exact copy: '${_pc_staged:-none}'"
+fi
+rm -rf "$_pc_tmp"
 
 echo "== grilling gate (both planners open with a grill) =="
 # The `grilling` skill must exist AND both planners must invoke it, and both must be

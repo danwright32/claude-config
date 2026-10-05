@@ -34,22 +34,21 @@ done
 # 4. No unsubstituted install placeholders survived.
 if grep -q '@@' "$SKILL"; then fail "SKILL.md still contains an unsubstituted placeholder"; fi
 
-# 5. The scriptPath the skill hands to the Workflow tool must actually resolve.
-#    A stale absolute path here is silent: the skill reads fine and only fails
-#    at run time, which is exactly how the original shipped broken.
-WFPATH="$(grep -o 'scriptPath: "[^"]*"' "$SKILL" | awk 'NR <= 1' | sed 's/scriptPath: "//; s/"$//')"
-# The installed SKILL.md carries a real absolute path, because the config sync rewrites the home
-# directory in every synced file on the way in. A copy that has not been through an apply (the
-# repo's own, or one edited by hand) still holds the token, so expand it here rather than
-# reporting a file that does not exist.
-# The token is ASSEMBLED, never written whole. The sync expands it in every mirrored
-# file on the way in, and it cannot tell a line that means the token from a line that
-# means a path: written out, this very line came back as
-# ${WFPATH//Users/<name>/.claude/...} and the healthcheck reported a path made of two
-# homes glued together (claude-config#99).
-_CS_TOKEN="__CLAUDE""_HOME__"
-WFPATH="${WFPATH/$_CS_TOKEN/${CLAUDE_HOME:-$HOME/.claude}}"
-[ -n "$WFPATH" ] || fail "SKILL.md declares no scriptPath for the Workflow tool"
-[ -f "$WFPATH" ] || fail "SKILL.md scriptPath does not exist on this machine: $WFPATH"
+# 5. The launch the skill describes must actually work (claude-config#587).
+#    The Workflow tool refuses a scriptPath under the config home, so the skill copies its script
+#    into the session scratchpad with hooks/lib/stage-workflow.sh and passes the copy. A SKILL.md
+#    that hands the tool its installed path reads fine and fails every run, which is how this
+#    skill first shipped, so both halves are checked: the instruction, and the helper doing it.
+grep -q "stage-workflow\.sh.*skills/production-ready/production-audit\.workflow\.js" "$SKILL" \
+  || fail "SKILL.md does not stage production-audit.workflow.js through hooks/lib/stage-workflow.sh"
+if grep -Eq 'scriptPath: *"(__CLAUDE|~|\$HOME|/Users/)' "$SKILL"; then
+  fail "SKILL.md hands the Workflow tool a scriptPath inside the config home, which the tool refuses"
+fi
+STAGE="$DIR/../../hooks/lib/stage-workflow.sh"
+[ -f "$STAGE" ] || fail "hooks/lib/stage-workflow.sh is missing, so the skill cannot stage its workflow"
+_hc_tmp="$(mktemp -d)"
+_staged="$(bash "$STAGE" "$WF" "$_hc_tmp" 2>&1)" || { rm -rf "$_hc_tmp"; fail "stage-workflow.sh refused a fresh scratchpad: $_staged"; }
+cmp -s "$WF" "$_staged" || { rm -rf "$_hc_tmp"; fail "stage-workflow.sh printed a path that is not an exact copy: $_staged"; }
+rm -rf "$_hc_tmp"
 
 echo "HEALTHCHECK OK"
