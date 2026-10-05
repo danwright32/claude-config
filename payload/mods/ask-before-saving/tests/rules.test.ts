@@ -1,11 +1,22 @@
 import { expect, test } from 'claude-code/testing'
-import { addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath } from '../hooks/rules.ts'
+import { addedText, cannotCheck, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
 const HOME = '/Users/dan'
 
-test('every lasting memory file counts, and nothing beside it does', () => {
+// The disk beneath the judgement ($.modkit.workingTree in the mod): a checkout at each root given,
+// and none anywhere else. `looked` is every path it was asked about.
+const checkouts = (roots: string[] = ['/tmp/repo', '/private/var/folders/kd/T/clone']) => {
+  const looked: string[] = []
+  const inCheckout = async (abs: string) => {
+    looked.push(abs)
+    return roots.some(r => abs === r || abs.startsWith(`${r}/`))
+  }
+  return { inCheckout, looked }
+}
+
+test('every lasting memory file counts, and nothing beside it does', async () => {
   const yes = [
     '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory/no-merge-quizzes.md',
     '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md',
@@ -30,8 +41,29 @@ test('every lasting memory file counts, and nothing beside it does', () => {
     '/private/tmp/claude-501/p/s/scratchpad/CLAUDE.md',
     '/var/folders/kd/T/x/AGENTS.md',
   ]
-  for (const p of yes) expect(`${p} ${lastingMemory(p, HOME)}`).toBe(`${p} true`)
-  for (const p of no) expect(`${p} ${lastingMemory(p, HOME)}`).toBe(`${p} false`)
+  const { inCheckout } = checkouts()
+  for (const p of yes) expect(`${p} ${await lastingMemory(p, HOME, inCheckout)}`).toBe(`${p} true`)
+  for (const p of no) expect(`${p} ${await lastingMemory(p, HOME, inCheckout)}`).toBe(`${p} false`)
+})
+
+// #726: everything under a temporary folder was exempt, but a session started in a repository or
+// worktree checked out there loads its CLAUDE.md or AGENTS.md, so a save to it went through unasked.
+test('a file in a temporary folder counts inside a checkout there, and the disk is asked only about one that would otherwise count', async () => {
+  const d = checkouts()
+  expect(await lastingMemory('/tmp/repo/CLAUDE.md', HOME, d.inCheckout)).toBe(true)
+  expect(await lastingMemory('/tmp/repo/docs/AGENTS.md', HOME, d.inCheckout)).toBe(true)
+  expect(await lastingMemory('/private/var/folders/kd/T/clone/CLAUDE.md', HOME, d.inCheckout)).toBe(true)
+  expect(await lastingMemory('/tmp/backup/CLAUDE.md', HOME, d.inCheckout)).toBe(false)
+  expect(await lastingMemory('/tmp/repo/README.md', HOME, d.inCheckout)).toBe(false)
+  expect(await lastingMemory('/Users/dan/Apps/slate/CLAUDE.md', HOME, d.inCheckout)).toBe(true)
+  expect(d.looked).toEqual(['/tmp/repo/CLAUDE.md', '/tmp/repo/docs/AGENTS.md', '/private/var/folders/kd/T/clone/CLAUDE.md', '/tmp/backup/CLAUDE.md'])
+})
+
+test('a disk that cannot say whether a temporary file is in a checkout fails the judgement, never answers no', async () => {
+  const failing = async () => {
+    throw new Error('EACCES: /tmp/locked')
+  }
+  await expect(lastingMemory('/tmp/locked/CLAUDE.md', HOME, failing)).rejects.toThrow('EACCES: /tmp/locked')
 })
 
 test('a path is read the way the tools read it: home, relative and dot segments', () => {
@@ -54,6 +86,12 @@ test("Dan's words make a rule permanent only when they give one: the spec's phra
     'please remember to ask before deploying',
     'you should never push to main',
     'Thanks. And remember: the staging deploy is manual.',
+    // #726: an instruction aimed at Claude still counts, wherever it starts.
+    'Also, always use pnpm here',
+    'I think you should always ask first',
+    'Could you please never deploy on Fridays',
+    'So never do that again.',
+    'Rule: always run the linter first',
   ])
     expect(`${s}: ${madePermanent(s)}`).toBe(`${s}: true`)
   for (const s of [
@@ -72,6 +110,15 @@ test("Dan's words make a rule permanent only when they give one: the spec's phra
     'Remember when we shipped the band last week?',
     'remember the deploy failed yesterday?',
     'do you remember that file?',
+    // #726: "and", "but", "so", "should" and "must" in the middle of a sentence lead narrative, not
+    // an instruction aimed at Claude, and the save went through unasked.
+    'It ran and never finished',
+    'that should never take this long',
+    'the build should always pass first',
+    'it also never worked on my phone',
+    'we must never let that happen again',
+    'I tried it twice; never got it working',
+    'It failed, never mind why',
     // Words limiting it to today or this session win over the permanent ones: asking is the harmless side.
     'From now on skip the screenshots, at least for today',
     'always use the staging key this session',
@@ -79,8 +126,8 @@ test("Dan's words make a rule permanent only when they give one: the spec's phra
     expect(`${s}: ${madePermanent(s)}`).toBe(`${s}: false`)
 })
 
-test("the lasting memory a command's words name: by path where it can be read, by name where it cannot", () => {
-  const files = lastingFiles(
+test("the lasting memory a command's words name: by path where it can be read, by name where it cannot", async () => {
+  const files = await lastingFiles(
     {
       files: [
         { word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' },
@@ -88,21 +135,43 @@ test("the lasting memory a command's words name: by path where it can be read, b
         { word: '$DIR/AGENTS.md' },
         { word: '$DIR/notes.md' },
         { word: 'note.md', path: '/Users/dan/.claude/projects/p/memory/note.md' },
+        { word: '/tmp/repo/CLAUDE.md', path: '/tmp/repo/CLAUDE.md' },
+        { word: '/tmp/backup/CLAUDE.md', path: '/tmp/backup/CLAUDE.md' },
+        // #726: a temporary path built from a variable cannot be looked for on the disk, so it counts.
+        { word: '/tmp/$D/AGENTS.md' },
       ],
       unnamed: [],
     },
     HOME,
+    checkouts().inCheckout,
   )
-  expect(files).toEqual(['~/Apps/slate/CLAUDE.md', '$DIR/AGENTS.md', '~/.claude/projects/p/memory/note.md'])
+  expect(files).toEqual(['~/Apps/slate/CLAUDE.md', '$DIR/AGENTS.md', '~/.claude/projects/p/memory/note.md', '/tmp/repo/CLAUDE.md', '/tmp/$D/AGENTS.md'])
 })
 
-test('lasting memory a script or a patch mentions, read from its text', () => {
-  expect(mentioned(`python3 -c "open('/Users/dan/.claude/CLAUDE.md','a').write('x')"`, HOME)).toEqual(['~/.claude/CLAUDE.md'])
-  expect(mentioned('--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule', HOME)).toEqual(['AGENTS.md'])
-  expect(mentioned("node -e \"fs.writeFileSync(require('os').homedir() + '/.claude/projects/p/memory/x.md', 'y')\"", HOME)).toEqual(['/.claude/projects/p/memory/x.md'])
-  expect(mentioned('cat > ~/.claude/projects/p/memory/a.md', HOME)).toEqual(['~/.claude/projects/p/memory/a.md'])
-  expect(mentioned("python3 -c \"open('README.md','w').write('x')\"", HOME)).toEqual([])
-  expect(mentioned('cp CLAUDE.md /tmp/backup/CLAUDE.md', HOME)).toEqual(['CLAUDE.md'])
+test('lasting memory a script or a patch mentions, read from its text', async () => {
+  const { inCheckout } = checkouts()
+  expect(await mentioned(`python3 -c "open('/Users/dan/.claude/CLAUDE.md','a').write('x')"`, HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await mentioned('--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule', HOME, inCheckout)).toEqual(['AGENTS.md'])
+  expect(await mentioned("node -e \"fs.writeFileSync(require('os').homedir() + '/.claude/projects/p/memory/x.md', 'y')\"", HOME, inCheckout)).toEqual(['/.claude/projects/p/memory/x.md'])
+  expect(await mentioned('cat > ~/.claude/projects/p/memory/a.md', HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/a.md'])
+  expect(await mentioned("python3 -c \"open('README.md','w').write('x')\"", HOME, inCheckout)).toEqual([])
+  expect(await mentioned('cp CLAUDE.md /tmp/backup/CLAUDE.md', HOME, inCheckout)).toEqual(['CLAUDE.md'])
+  // #726: a checkout under /tmp counts, as does a temporary path built from a variable, and one
+  // that climbs out of the temporary folder is judged where it lands.
+  expect(await mentioned("python3 -c \"open('/tmp/repo/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/repo/CLAUDE.md'])
+  expect(await mentioned("python3 -c \"open('/tmp/$D/AGENTS.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/$D/AGENTS.md'])
+  expect(await mentioned("python3 -c \"open('/tmp/../Users/dan/.claude/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
+})
+
+// Lessons review of #731: the hook's refusal read the failure's message with no guard, so a failure
+// that arrived without its error would make the refusal itself throw, and a hook that throws is
+// skipped: the save would go through unasked. The refusal is built from whatever arrives.
+test('a hook that could not finish is refused with its reason, and with no reason at all it is still refused', () => {
+  expect(cannotCheck({ message: 'EACCES: /tmp/locked' })).toBe(
+    'Not saved: Ask before saving could not check whether this writes lasting memory (EACCES: /tmp/locked). Tell Dan what you meant to save instead.',
+  )
+  expect(cannotCheck({})).toContain('could not check whether this writes lasting memory (it failed)')
+  expect(cannotCheck(undefined)).toContain('could not check whether this writes lasting memory (it failed)')
 })
 
 test('the text shown is what would be saved: the new lines of a rewrite, the whole of a new file', () => {

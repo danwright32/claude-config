@@ -83,6 +83,38 @@ describe('passedOver and recordPass', () => {
     const passed = recordPass(RETENTION, [])
     expect(passedOver({ ...RETENTION, question: 'Which folder should it use?', options: [{ label: 'Home' }, { label: 'Scratch' }] }, passed)).toBe(0)
   })
+  // #726: the text was compared with everything outside a to z and 0 to 9 taken out, so a question in
+  // another script compared as nothing, and any two such questions were the same one.
+  test('a question in another script keeps its letters: two different ones are two questions, and its punctuation still does not count', () => {
+    const merge: Question = { question: 'このブランチをマージしますか？', header: 'マージ', multiSelect: false, options: [{ label: 'はい' }, { label: 'いいえ' }] }
+    const remove: Question = { question: 'このブランチを削除しますか？', header: '削除', multiSelect: false, options: [{ label: 'する' }, { label: 'しない' }] }
+    const passed = recordPass(merge, recordPass(merge, []))
+    expect(passedOver(remove, passed)).toBe(0)
+    expect(passedOver({ ...merge, question: 'このブランチをマージしますか' }, passed)).toBe(2)
+    const cafe: Question = { question: 'Ajouter le café ?', header: 'Menu', multiSelect: false, options: [{ label: 'Oui' }, { label: 'Non' }] }
+    expect(passedOver({ ...cafe, question: 'Ajouter le cafe ?', header: 'Carte' }, recordPass(cafe, []))).toBe(0)
+  })
+  test('a question with no letters or digits at all is never the same as another by its text', () => {
+    const a: Question = { question: '???', header: 'One', multiSelect: false, options: [{ label: 'a' }] }
+    expect(passedOver({ question: '!!!', header: 'Two', multiSelect: false, options: [{ label: 'b' }] }, recordPass(a, []))).toBe(0)
+  })
+  // #726: the same chip over the same labels counted as one question, so two different Yes or No
+  // questions under "Confirm" shared one count, and the second could be refused unasked.
+  test('two different questions under one chip with the same bare answers are two questions', () => {
+    const merge: Question = { question: 'Merge PR #12 now?', header: 'Confirm', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }
+    const remove: Question = { question: 'Delete the old branch?', header: 'Confirm', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }
+    expect(passedOver(remove, recordPass(merge, recordPass(merge, [])))).toBe(0)
+  })
+  test('nor are they one question when their answers are described differently', () => {
+    const merge: Question = { question: 'Merge PR #12 now?', header: 'Confirm', multiSelect: false, options: [{ label: 'Yes', description: 'Merges it now.' }, { label: 'No', description: 'Leaves it open.' }] }
+    const remove: Question = { question: 'Delete the old branch?', header: 'Confirm', multiSelect: false, options: [{ label: 'Yes', description: 'Deletes it.' }, { label: 'No', description: 'Keeps it.' }] }
+    expect(passedOver(remove, recordPass(merge, []))).toBe(0)
+  })
+  test('a pass recorded before answers were compared with their descriptions still counts by its text', () => {
+    const older: Passed[] = [{ question: 'merge pr 12 now', header: 'confirm', labels: ['no', 'yes'], count: 1 } as unknown as Passed]
+    expect(passedOver({ question: 'Merge PR 12 now?', header: 'Confirm', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }, older)).toBe(1)
+    expect(passedOver({ question: 'Delete it?', header: 'Confirm', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }, older)).toBe(0)
+  })
 })
 
 describe('passesOver', () => {

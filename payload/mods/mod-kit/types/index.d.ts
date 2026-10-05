@@ -52,20 +52,24 @@ export type ModKit = {
    * The simple commands a Bash call would run, each as its words with quotes removed: heredoc
    * bodies dropped, assignments, the reserved words leading a command (then, do, else, `{`, `!`) and
    * sudo, env, timeout, nice, xargs and the like looked past, each runner by its own options, a
-   * shell's -c read as
-   * the commands it runs, a subshell's parentheses each a command of their own (`['(']`, `[')']`),
-   * while one inside a word (`$(`, `<(`) stays part of it. The one reader every mod uses (L613).
+   * shell's -c read as the commands it runs (alone or in a cluster, `bash -lc`, `zsh -ec`, `sh -ce`,
+   * for sh, bash, zsh, dash and ksh), a subshell's parentheses each a command of their own
+   * (`['(']`, `[')']`), while one inside a word (`$(`, `<(`) stays part of it. The one reader every
+   * mod uses (L613).
    */
   commands: (input: { command: string }) => Promise<string[][]>
   /**
    * The files a Bash call would put content into, read from the same simple commands, with `cwd`
    * the folder it runs in and `home` the home folder: redirects, tee, cp, mv, ln, install, rsync
    * and ditto's destinations (a copy into a folder lands under each source's name), sed, perl, ruby
-   * and gawk editing in place (every file), dd's of=, and curl and wget's output file, each relative
-   * path resolved after any cd before
-   * it. And the writes its words do not name: a patch (git apply, git am, patch), an inline script
-   * that writes (python3 -c, node -e), a script fed on standard input. The one reader of what a
-   * command writes (L613); a file only touched, removed or changed in mode is not reported.
+   * and gawk editing in place (every file), dd's of=, and curl and wget's files (an output file, a
+   * file saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or
+   * `-P`, and curl's cookie jar, dumped headers and trace, wget's log), each relative path resolved
+   * after any cd before it. And the writes its words do not name: a patch (git apply, git am,
+   * patch), an inline script that writes (python3 -c, node -e), a script fed on standard input, a
+   * download the server names (`curl -J`, `wget --content-disposition`), a recursive wget, or one of
+   * the addresses in a file (`wget -i`, the file in `inputs`). The one reader of what a command
+   * writes (L613); a file only touched, removed or changed in mode is not reported.
    */
   writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
@@ -77,8 +81,22 @@ export type ModKit = {
    * or a shell's -c reads what feeds it; a piped group's output arrives as its closing word (`)`,
    * `}`, `done`, `fi`). Only the reader can see which
    * separator stood outside the quotes, so no mod works it out from the list (#724).
+   *
+   * Each command also carries `heredocs`, the body of every heredoc that feeds it, absent when none
+   * does (#698), for a reader that judges what a heredoc feeds (`python3 - <<'EOF'`, `bash <<'EOF'`),
+   * which `commands` drops: `word` is the place of its `<<` word in `words`, and `<<-` takes the
+   * leading tabs off the body. A heredoc inside a word (`"$(cat <<'EOF' ... )"`) feeds no command
+   * here, and one that never ends has no body (its lines are read as commands).
    */
   pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
+  /**
+   * The git working tree an absolute path sits in: the nearest folder at or above it holding a
+   * `.git` entry (a folder, or the file a linked worktree has), found on the disk, never by running
+   * git, at most 64 folders up; null when there is none. Rejects a path that is not absolute, a
+   * look the disk cannot answer, and a path deeper than the 64 looks reach, rather than answering
+   * null. The one reading every mod uses (L613).
+   */
+  workingTree: (input: { path: string }) => Promise<string | null>
   /**
    * Shows a row in the band above the prompt, or replaces the row this mod already shows under the
    * same id (it keeps its place). Claude Code gives the band ONE drawing, so no mod but mod-kit
@@ -137,8 +155,11 @@ export type ModKitCall = { tool: string; tool_use_id?: string } & Record<string,
  */
 export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; frame?: ModKitBandFrame }
 
-/** One simple command, as `pipeline` reads it: its words, and those of the command a `|` feeds it from. */
-export type ModKitCommand = { words: string[]; pipedFrom?: string[] }
+/**
+ * One simple command, as `pipeline` reads it: its words, those of the command a `|` feeds it from,
+ * and each heredoc feeding it, by its `<<` word's place.
+ */
+export type ModKitCommand = { words: string[]; pipedFrom?: string[]; heredocs?: { word: number; body: string }[] }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
 

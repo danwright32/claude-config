@@ -69,6 +69,34 @@ test('a note is drawn on the card under the safe way', { plugins: [noting] }, as
   await ui.unmount()
 })
 
+// #698: the settled look of the blocked card (docs/mods-design.md, Guard surfaces): a grey rounded
+// border, the title in bold, the reason in the terminal's own colour, then the safe way and any note
+// in dim text. Only the words were checked, so plain text or a coloured border would have passed.
+test('the blocked card keeps its settled look on every surface: a grey round border, the safe way and the note dim', { plugins: [noting] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  await $.tool.call({ tool: 'Bash', command: 'x', tool_use_id: 'look1' } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...row('look1'), surface } as never)
+    const box = await ui.find({ type: 'Box' })
+    expect(box?.props.borderStyle).toBe('round')
+    expect(box?.props.borderColor).toBe('gray')
+    const texts = await ui.findAll({ type: 'Text' })
+    const leaf = (text: string) => texts.find(t => t.text === text && t.children.every(c => typeof c === 'string'))
+    const lineOf = (text: string) => texts.find(t => t.text === text && t.children.some(c => typeof c !== 'string'))
+    expect(lineOf('Blocked by Collision guard')?.props.bold).toBe(true)
+    expect(leaf('Blocked by Collision guard')?.props.color).toBeUndefined()
+    expect(leaf('Another session is working on app.ts.')?.props.dimColor).toBeFalsy()
+    expect(leaf('Another session is working on app.ts.')?.props.color).toBeUndefined()
+    expect(leaf('Move this work to its own worktree and redo it there.')?.props.dimColor).toBe(true)
+    expect(leaf('The other session could not be told: Classifier unavailable.')?.props.dimColor).toBe(true)
+    await ui.unmount()
+  }
+})
+
 test('a call no guard blocked is left to Claude Code', { plugins: [guard] }, async ($, on) => {
   // Claude Code's own row, beneath the kit: what is drawn when no guard blocked the call.
   on('ui.render', ($, e) => {
@@ -93,6 +121,53 @@ test('the command reader is shared as $.modkit.commands', { plugins: [reader] },
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   const r = (await $.tool.call({ tool: 'Bash', command: 'sudo cat .env && git status' } as never)) as { deny?: string; text?: string }
   expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([['cat', '.env'], ['git', 'status']])
+})
+
+// #698: a reader that judges what a heredoc feeds asks for its body through the kit, as plain data.
+const heredocReader: { name: string; register: Register } = {
+  name: 'heredoc-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => ({ deny: JSON.stringify(await $.modkit.pipeline({ command: String((e as { command?: string }).command) })) }))
+  },
+}
+
+test("a heredoc's body is shared on $.modkit.pipeline's commands", { plugins: [heredocReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = (await $.tool.call({ tool: 'Bash', command: "python3 - <<'EOF'\nprint(1)\nEOF" } as never)) as { deny?: string; text?: string }
+  expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+})
+
+// #726: the working tree a path sits in, asked of the disk through the kit. The reader stands in
+// for ask before saving, and the disk is the test's: a .git folder at /tmp/repo and nowhere else.
+const treeReader: { name: string; register: Register } = {
+  name: 'tree-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      try {
+        return { deny: JSON.stringify(await $.modkit.workingTree({ path: String((e as { command?: string }).command) })) }
+      } catch (err) {
+        return { deny: `refused: ${String((err as Error).message ?? err)}` }
+      }
+    })
+  },
+}
+
+test('the working tree a path sits in is shared as $.modkit.workingTree, a look the disk cannot answer refused', { plugins: [treeReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('fs.exists', ($, e) => {
+    if (e.path === '/locked/.git') throw new Error('the disk is gone')
+    return { value: e.path === '/tmp/repo/.git' } as never
+  })
+  const ask = async (path: string) => {
+    const r = (await $.tool.call({ tool: 'Bash', command: path } as never)) as { deny?: string; text?: string }
+    return r.deny ?? r.text
+  }
+  expect(await ask('/tmp/repo/docs/CLAUDE.md')).toBe('"/tmp/repo"')
+  expect(await ask('/tmp/backup/CLAUDE.md')).toBe('null')
+  // The engine skips a hook that throws, so the failed look reaches the kit as no answer at all;
+  // either way it is refused, never taken for "no checkout".
+  expect(await ask('/locked/CLAUDE.md')).toMatch(/^refused: /)
+  expect(await ask('relative/CLAUDE.md')).toBe('refused: a working tree is found from an absolute path, not relative/CLAUDE.md')
 })
 
 // Any mod's own tool result drawn as the boxed card (#663), from plain data: a title whose runs can

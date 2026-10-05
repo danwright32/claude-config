@@ -100,6 +100,17 @@ standard input) reported as such rather than guessed at. Ask before saving reads
 guard and no build move onto it in #712, and until then `tools/check-mod-shared-parts.sh` names
 them as known exceptions on every run.
 
+Since #698 and #726 the shared reader reads a shell's `-c` in a cluster too (`bash -lc`, `zsh -ec`,
+`sh -ce`, for sh, bash, zsh, dash and ksh: the script is the first word after the options, `-o` and
+`-O` taking the next word), so every guard sees what those run, and it gives a heredoc's body to a
+reader that asks: each command `$.modkit.pipeline` gives carries `heredocs`, the body of every
+heredoc feeding it, while `$.modkit.commands` still drops it. The write reader names a file `curl -O` or a plain `wget`
+saves under the address's own name (curl takes the query and fragment off, as curl 8.7 does; wget
+keeps the query, as GNU wget documents), into `--output-dir` or `-P`, and reports a name the server
+gives, a recursive wget and `wget -i` as writes the words do not name. The walk up for a checkout's
+`.git` entry described below is mod-kit's too now (`$.modkit.workingTree`), which ask before saving
+reads; the collision guard keeps its own copy, a known exception until #712.
+
 ### rm, and scratch kept out of the record (#674), decided 2026-10-04
 
 An `rm` or `unlink` of a file another open session edited is judged the same way, with the same
@@ -530,9 +541,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   it: inline (`python3 -c`, `node -e` or `-p`, `perl -ne`, a shell's `-lc`, whose commands are read
   by mod-kit's reader like `bash -c`), a here-string, or text `echo` or `printf` pipes in. A program
   fed by a heredoc, or piped in from anything else, is refused as one it cannot read, as psql fed a
-  heredoc already was: mod-kit's reader drops a heredoc's body, and this mod keeps no reader of its
-  own (L613). The refusal tells Claude that inline code is read and judged, so code that only reads
-  still runs. Also refused: `curl -o` and `-O`, `wget` writing a file, `find -delete` and `-exec`
+  heredoc already was: mod-kit's command list drops a heredoc's body, and this mod keeps no reader
+  of its own (L613). mod-kit gives the body on request since #698 (`heredocs` on each command
+  `$.modkit.pipeline` gives); no build moves onto it in #712. The refusal tells Claude that inline
+  code is read and judged, so code that only reads still runs. Also refused: `curl -o` and `-O`, `wget` writing a file, `find -delete` and `-exec`
   on what it finds, `awk -i inplace` and `ruby -pi`. Allowed, which it refused before: a GraphQL
   query through `gh api graphql` and a mutation that is issue, label or milestone work; SQL whose
   strings, comments or functions (`replace()`) read like a write; and Claude's own notes outside
@@ -723,7 +735,10 @@ answered, so a number key can only mean the answer (design round, over the quest
 bottom of everything).
 
 How it is built (#610): mod-kit holds the band's one hook, and `tools/check-mod-shared-parts.sh`
-fails any other mod that hooks `AbovePrompt`. A mod publishes a row with
+fails any other mod that hooks `AbovePrompt`: any line of its hooks naming it as a string, in any
+quotes, since the engine takes a filter however it is spelled and an unfiltered `ui.render` hook
+that tests `e.component` (#698; a line that is only a comment is not read). The same goes for a
+result row, `ToolResult`. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
 `$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
 `compact`, `handoff`, `held`, `steps` and `message`; a `question` row takes the band alone until it
@@ -911,8 +926,8 @@ ones marked open are the builder's choice, waiting on Dan.
   cannot finish refuses the write. This is also the answer to picker manners' (#615) build time
   check: a tool call cannot wait for a band answer.
 - **What the question shows as the rule:** a new file's whole text, the lines a rewrite adds, an
-  Edit's new text, and a Bash write's command as written (mod-kit's reader drops heredoc bodies and
-  hands back no body, so the command, which carries the text, is shown whole).
+  Edit's new text, and a Bash write's command as written (the command carries the text, any heredoc
+  body included, so it is shown whole).
 - **Just this session** rides the system prompt's memory section, assembled afresh for every
   request, so a compaction keeps it; it is dropped at session end and on /clear.
 - **A second save** waits behind the first and is asked once the first is answered. Each save asks
@@ -930,11 +945,17 @@ ones marked open are the builder's choice, waiting on Dan.
   A write its words do not name (a patch, an inline script, a script on standard input) is judged by
   the lasting memory its text, and any patch file it reads, mentions. A copy into the memory folder
   itself counts; a file in a temporary folder (`/tmp`, `/var/folders`, the session scratchpad) loads
-  into no session, so it never does.
-- **The permanent words** (#705) count only as an instruction from Dan's own message, typed or from
-  his phone: "from now on" anywhere, "always" or "never" leading a sentence or clause or after please
-  or should, "remember" as a request. Read anywhere, "never mind the screenshots" and "it always
-  fails" skipped the question (#705). Words limiting it to the moment ("for now", "today", "this
+  into no session, so it does not, unless it is in a git checkout there (#726: a session started in
+  a repository or worktree cloned under `/tmp` loads its `CLAUDE.md`), found by mod-kit's walk for
+  a `.git` entry. A temporary path built from a variable cannot be looked for, so it counts, and a
+  disk that cannot answer refuses the save.
+- **The permanent words** (#705) count only as an instruction to Claude in Dan's own message, typed
+  or from his phone: "from now on" anywhere, "always" or "never" leading the message, a sentence, a
+  line or what a colon introduces (after an opening word such as "ok", "also" or "and"), or after
+  "please", "you should" or "you must"; "remember" as a request in the same places. Read anywhere,
+  "never mind the screenshots" and "it always fails" skipped the question (#705); "and", "but",
+  "so", "should" and "must" inside a sentence lead narrative ("It ran and never finished", "that
+  should never take this long"), so they count only as a sentence's opening word (#726). Words limiting it to the moment ("for now", "today", "this
   time", "this session") win, since saving without asking is the harm and asking is not.
 - **Claude Code's auto-memory writer goes through tool calls** (the spec's check at build, #705).
   In 2.1.289 the post turn extractor runs as a forked query (`querySource: "extract_memories"`)
@@ -969,8 +990,12 @@ and open to Dan changing:
   talk past (spec point 3). Only Claude's own questions count: another mod's question asked through
   `$.ui.ask` (the keystroke guard's heads up, Switch to build) reads the same every time, and was
   refused for good after two talk pasts. The same question is the same text however it is spaced or
-  punctuated, or the same chip over the same answers however it is put, since Claude rewords a
-  question when it asks again. A question waiting behind another mod's in the band, which Dan never
+  punctuated, in any script, or the same chip over the same answers, each described the same way,
+  however it is put, since Claude rewords a question when it asks again. Answers with no
+  description (a bare Yes and No) mean whatever the question asks, so two questions under one chip
+  with only those are two questions, and a question with no letters at all is never the same as
+  another by its text (#726: a question in another script compared as nothing, and two Yes or No
+  questions under "Confirm" shared one count). A question waiting behind another mod's in the band, which Dan never
   saw, is withdrawn by his message but not counted.
 - Dan's messages from his phone through Remote Control count as his own, as in every other mod: the
   band is not drawn on the phone, so a message there is the only way he can answer or dismiss.

@@ -37,6 +37,29 @@ describe('commands', () => {
   test('reads a command run through a shell -c as the commands it runs', () => {
     expect(commands(`bash -c "cat .env && git checkout main"`)).toEqual([['cat', '.env'], ['git', 'checkout', 'main']])
   })
+  // #698: -c was read only as a word of its own, so bash -lc, zsh -ec and sh -ce reached every guard
+  // as one command whose script was a single word.
+  test("reads a shell's -c in a cluster, wherever the c stands, as the commands it runs", () => {
+    expect(commands(`bash -lc 'cat .env && git checkout main'`)).toEqual([['cat', '.env'], ['git', 'checkout', 'main']])
+    expect(commands(`zsh -ec "git push"`)).toEqual([['git', 'push']])
+    expect(commands(`sh -ce 'rm notes.txt'`)).toEqual([['rm', 'notes.txt']])
+    expect(commands(`/bin/bash -lc 'make'`)).toEqual([['make']])
+    expect(commands(`env FOO=1 bash -lc 'make'`)).toEqual([['make']])
+    expect(commands(`dash -c 'ls'; ksh -ec 'pwd'`)).toEqual([['ls'], ['pwd']])
+  })
+  test("a shell's script is the first word after its options, -o and -O taking the next word", () => {
+    expect(commands(`bash -c -e 'ls | wc -l'`)).toEqual([['ls'], ['wc', '-l']])
+    expect(commands(`bash -o pipefail -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`bash -eo pipefail -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`bash --rcfile x -lc 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`bash -c -- 'make test'`)).toEqual([['make', 'test']])
+  })
+  test('a shell running a script file is the command itself, a -c after the script being its own argument', () => {
+    expect(commands('bash -l ./run.sh')).toEqual([['bash', '-l', './run.sh']])
+    expect(commands(`bash ./run.sh -c 'not a script'`)).toEqual([['bash', './run.sh', '-c', 'not a script']])
+    expect(commands('bash -lc')).toEqual([['bash', '-lc']])
+    expect(commands('grep -c x notes.txt')).toEqual([['grep', '-c', 'x', 'notes.txt']])
+  })
   // #654: the collision guard reads which files a command writes, so an output redirect is its own
   // word however it is spaced, and the & of a 2>&1 or a &> joins no two commands.
   test('an output redirect is its own word, spaced or not', () => {
@@ -181,6 +204,50 @@ describe('pipeline', () => {
       ['fi', undefined],
       ['python3', undefined],
     ])
+  })
+})
+
+// #698: a heredoc's body was dropped with no way to ask for it, so no guard could judge what
+// python3 - <<EOF or bash <<EOF runs. `commands` still drops it (it is text, not commands); a reader
+// that needs it reads `heredocs` on each command `pipeline` gives, the body of every heredoc feeding it.
+describe('pipeline: heredocs', () => {
+  test("gives each command the body of the heredoc that feeds it, by its << word's place, and none where none does", () => {
+    expect(pipeline(`python3 - <<'EOF'\nimport os\nopen('x', 'w')\nEOF\ngit status`)).toEqual([
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: "import os\nopen('x', 'w')" }] },
+      { words: ['git', 'status'] },
+    ])
+  })
+  test('a spaced <<, a file descriptor before it, a quoted or escaped delimiter, and the words looked past', () => {
+    expect(pipeline('bash << EOF\nls\nEOF')).toEqual([{ words: ['bash', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls' }] }])
+    expect(pipeline('cat 0<<"END"\nx\nEND')).toEqual([{ words: ['cat', '0<<END'], heredocs: [{ word: 1, body: 'x' }] }])
+    expect(pipeline('sudo -E python3 - <<\\EOF\nprint(1)\nEOF')).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+  })
+  test('<<- takes the leading tabs off its body', () => {
+    expect(pipeline('cat <<-EOF\n\tone\n\t\ttwo\n\tEOF')).toEqual([{ words: ['cat', '<<-EOF'], heredocs: [{ word: 1, body: 'one\ntwo' }] }])
+  })
+  test('each of several heredocs feeds its own command, read one after another', () => {
+    expect(pipeline('cat <<A; python3 - <<B\na\nA\nb\nB\nls')).toEqual([
+      { words: ['cat', '<<A'], heredocs: [{ word: 1, body: 'a' }] },
+      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b' }] },
+      { words: ['ls'] },
+    ])
+  })
+  test('a heredoc piped on keeps its body on the command it feeds, and the command after the pipe is fed by that one', () => {
+    expect(pipeline("cat <<'EOF' | sh\nrm -rf build\nEOF")).toEqual([
+      { words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'rm -rf build' }] },
+      { words: ['sh'], pipedFrom: ['cat', '<<EOF'] },
+    ])
+  })
+  test("a heredoc inside a shell's -c script feeds the command there", () => {
+    expect(pipeline(`bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`)).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+  })
+  test('a heredoc inside a word feeds no command here, and one that never ends has no body', () => {
+    expect(pipeline(`git commit -m "$(cat <<'EOF'\nit's done\nEOF\n)"`)).toEqual([{ words: ['git', 'commit', '-m', "$(cat <<'EOF'\n)"] }])
+    expect(pipeline('cat <<EOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'] }, { words: ['git', 'status'] }])
+  })
+  test('the commands are the ones commands gives, word for word', () => {
+    const cmd = `X=1 cat > f.js <<'EOF'\nosascript -e 'x'\nEOF\n(cd sub && printf x >> notes.txt) 2>&1 | tee log`
+    expect(pipeline(cmd).map(c => c.words)).toEqual(commands(cmd))
   })
 })
 

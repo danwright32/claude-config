@@ -110,6 +110,58 @@ describe('writes: downloads', () => {
     expect(paths('wget -q -O ~/.claude/CLAUDE.md https://example.com/x')).toEqual([`${HOME}/.claude/CLAUDE.md`])
     expect(paths('curl -s https://example.com/x')).toEqual([])
   })
+  // #726: a file saved under the address's own name, into the current folder, was not reported, so
+  // a download into lasting memory by its remote name was never seen. curl 8.7 takes the query and
+  // the fragment off that name (measured 2026-10-04); wget keeps the query, as GNU wget documents.
+  test("curl's -O and --remote-name save under the address's last part, query and fragment off", () => {
+    expect(paths('curl -O https://example.com/docs/CLAUDE.md')).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths('curl -sSLO https://example.com/docs/CLAUDE.md')).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths('curl --remote-name "https://example.com/a/AGENTS.md?raw=1#top"')).toEqual([`${CWD}/AGENTS.md`])
+    expect(paths("curl -H 'Accept: text/plain' -O https://example.com/a/CLAUDE.md")).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths('cd ~/.claude && curl -O https://example.com/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
+  })
+  test('each -o or -O is for the next address in turn, and --remote-name-all names every one', () => {
+    expect(paths('curl -O https://x.com/a.md -O https://x.com/b.md')).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+    expect(paths('curl -o out.txt https://x.com/a -O https://x.com/CLAUDE.md')).toEqual([`${CWD}/out.txt`, `${CWD}/CLAUDE.md`])
+    expect(paths('curl https://x.com/a.md https://x.com/b.md -O -O')).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+    expect(paths('curl -O https://x.com/a.md https://x.com/b.md')).toEqual([`${CWD}/a.md`])
+    expect(paths('curl --remote-name-all https://x.com/a.md --url https://x.com/b.md')).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+  })
+  test('--output-dir is where a remote name lands', () => {
+    expect(paths('curl --output-dir ~/.claude -O https://x.com/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
+  })
+  test('an address with no file name in it saves nothing', () => {
+    expect(paths('curl -O https://example.com/')).toEqual([])
+    expect(paths('curl -O example.com')).toEqual([])
+  })
+  test('-J lets the server name the file, which the words cannot give, so it is a write they do not name', () => {
+    expect(read('curl -J -O https://x.com/get?f=CLAUDE.md')).toEqual({
+      files: [{ word: 'get', path: `${CWD}/get` }],
+      unnamed: [{ what: 'a curl download the server names', words: ['curl', '-J', '-O', 'https://x.com/get?f=CLAUDE.md'], inputs: [] }],
+    })
+    expect(read('curl -OJ https://x.com/get').unnamed.map(u => u.what)).toEqual(['a curl download the server names'])
+  })
+  test("curl's other files: a cookie jar, dumped headers, a trace", () => {
+    expect(paths('curl -c jar.txt -D headers.txt --trace-ascii trace.log https://x.com/a')).toEqual([`${CWD}/jar.txt`, `${CWD}/headers.txt`, `${CWD}/trace.log`])
+    expect(paths('curl -D - https://x.com/a')).toEqual([])
+  })
+  test('a plain wget saves under the address\'s last part, index.html for a folder, into the current folder or -P', () => {
+    expect(paths('wget https://example.com/docs/CLAUDE.md')).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths('wget -q https://example.com/docs/')).toEqual([`${CWD}/index.html`])
+    expect(paths('wget -P ~/.claude https://example.com/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
+    expect(paths('wget --directory-prefix=/tmp/x https://example.com/AGENTS.md')).toEqual(['/tmp/x/AGENTS.md'])
+    expect(paths('wget https://example.com/CLAUDE.md?raw=1')).toEqual(['(as written) CLAUDE.md?raw=1'])
+    expect(paths('wget --header "Accept: x" https://example.com/a/AGENTS.md')).toEqual([`${CWD}/AGENTS.md`])
+  })
+  test("wget's -O to standard output saves nothing, and its log is a file it writes", () => {
+    expect(paths('wget -qO- https://example.com/CLAUDE.md')).toEqual([])
+    expect(paths('wget -o fetch.log -O - https://example.com/x')).toEqual([`${CWD}/fetch.log`])
+  })
+  test('a wget whose files the words cannot name is a write they do not name', () => {
+    expect(read('wget --content-disposition https://x.com/get').unnamed.map(u => u.what)).toEqual(['a wget download the server names'])
+    expect(read('wget -r https://x.com/docs/').unnamed.map(u => u.what)).toEqual(['a wget download of many files'])
+    expect(read('wget -i urls.txt')).toEqual({ files: [], unnamed: [{ what: 'a wget download of the addresses in a file', words: ['wget', '-i', 'urls.txt'], inputs: [`${CWD}/urls.txt`] }] })
+  })
 })
 
 describe('writes: what the words do not name', () => {
@@ -137,6 +189,16 @@ describe('writes: what the words do not name', () => {
     expect(read("python3 - <<'EOF'\nopen('CLAUDE.md','a').write('x')\nEOF").unnamed.map(u => u.what)).toEqual(['a python3 script on standard input'])
     expect(read("bash <<'EOF'\ncat >> CLAUDE.md < rules.md\nEOF").unnamed.map(u => u.what)).toEqual(['a bash script on standard input'])
     expect(read('sh < setup.sh').unnamed).toEqual([{ what: 'a sh script on standard input', words: ['sh', '<', 'setup.sh'], inputs: [`${CWD}/setup.sh`] }])
+  })
+  // #698: the delimiter of a spaced heredoc was taken for a script file, and the shells beyond sh,
+  // bash and zsh were not shells here.
+  test('a spaced heredoc feeds a shell too, and dash and ksh are shells', () => {
+    expect(read("bash << 'EOF'\ncat >> CLAUDE.md < rules.md\nEOF").unnamed.map(u => u.what)).toEqual(['a bash script on standard input'])
+    expect(read("dash <<'EOF'\nls\nEOF").unnamed.map(u => u.what)).toEqual(['a dash script on standard input'])
+  })
+  test("a shell's -c in a cluster is read as the commands it runs, so their files are named", () => {
+    expect(paths(`bash -lc 'printf x >> CLAUDE.md'`)).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths(`zsh -ec "cd ~/.claude && sed -i '' 's/a/b/' CLAUDE.md"`)).toEqual([`${HOME}/.claude/CLAUDE.md`])
   })
   test('a shell running a script file, or with no input at all, names nothing', () => {
     expect(read('bash ./build.sh').unnamed).toEqual([])

@@ -23,11 +23,14 @@ export type Writes = { files: { word: string; path?: string }[]; unnamed: { what
 const NAMES = new Set(['MEMORY.md', 'CLAUDE.md', 'AGENTS.md', 'LESSONS.md'])
 
 // A file in a temporary folder (a backup copy, a test fixture in the session's scratchpad) is loaded
-// into no session, so it is no lasting memory whatever it is called.
+// into no session, so it is no lasting memory whatever it is called, unless it is in a checkout
+// there: a session started in a repository or worktree cloned under /tmp loads its CLAUDE.md or
+// AGENTS.md (#726). Whether it is, `inCheckout` asks the disk ($.modkit.workingTree), only for a
+// temporary file that would otherwise count; a disk that cannot answer fails the judgement.
 const TEMP = /^(?:\/private)?\/(?:tmp|var\/folders)(?:\/|$)/
+export type InCheckout = (abs: string) => Promise<boolean>
 
-export const lastingMemory = (abs: string, home: string): boolean => {
-  if (TEMP.test(abs)) return false
+const lastingByName = (abs: string, home: string): boolean => {
   const name = abs.split('/').pop() ?? ''
   if (NAMES.has(name)) return true
   const projects = `${home.replace(/\/$/, '')}/.claude/projects/`
@@ -36,6 +39,9 @@ export const lastingMemory = (abs: string, home: string): boolean => {
   const rest = abs.slice(projects.length).split('/')
   return rest.length >= 2 && rest[1] === 'memory'
 }
+
+export const lastingMemory = async (abs: string, home: string, inCheckout: InCheckout): Promise<boolean> =>
+  lastingByName(abs, home) && (!TEMP.test(abs) || (await inCheckout(abs)))
 
 /** A path as a tool would reach it: home spelled out, relative to cwd, dot segments gone. */
 export const resolvePath = (p: string, cwd: string, home: string): string => {
@@ -60,12 +66,14 @@ export const display = (abs: string, home: string): string => {
 
 /**
  * The lasting memory among the files a command's words name (mod-kit's $.modkit.writes): judged by
- * path where the words name one, by file name where they do not (a path built from a variable).
+ * path where the words name one, by file name where they do not (a path built from a variable),
+ * which cannot be looked for on the disk, so one in a temporary folder counts too (asking is the
+ * harmless side).
  */
-export const lastingFiles = (w: Writes, home: string): string[] => {
+export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout): Promise<string[]> => {
   const out: string[] = []
   for (const f of w.files) {
-    const hit = f.path ? lastingMemory(f.path, home) && display(f.path, home) : !TEMP.test(f.word) && NAMES.has(f.word.split('/').pop() ?? '') && f.word
+    const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : NAMES.has(f.word.split('/').pop() ?? '') && f.word
     if (hit && !out.includes(hit)) out.push(hit)
   }
   return out
@@ -77,27 +85,35 @@ const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'"]+\/memory(?:\/[^\s'"]*)
 
 /**
  * The lasting memory a write's text mentions, for the writes whose words name no file (a patch, an
- * inline script): each as written, home shown as ~, a diff's a/ or b/ taken off.
+ * inline script): each as written, home shown as ~, a diff's a/ or b/ taken off, an absolute path
+ * judged where it lands. One in a temporary folder counts inside a checkout there, or when it is
+ * built from a variable and so cannot be looked for.
  */
-export const mentioned = (text: string, home: string): string[] => {
+export const mentioned = async (text: string, home: string, inCheckout: InCheckout): Promise<string[]> => {
   const out: string[] = []
   for (const m of text.match(MENTION) ?? []) {
     let p = m.replace(/^[ab]\//, '')
-    if (p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
-    if (TEMP.test(p)) continue
+    if (p.startsWith('/') || p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
+    if (TEMP.test(p) && !p.includes('$') && !(await inCheckout(p))) continue
     const shown = p.startsWith('/') ? display(p, home) : p
     if (!out.includes(shown)) out.push(shown)
   }
   return out
 }
 
-// The spec's words that make a rule permanent in Dan's own message, as an instruction: "from now
-// on" anywhere, "always" or "never" leading a sentence or clause or after please or should, and
-// "remember" as a request, leading one and followed by that, to, this, a colon or a comma
-// ("please remember to", "Remember: ..."). Read anywhere, "never mind the screenshots" and "it
-// always fails" skipped the question (#705), and "Remember when we shipped it?" did too.
+// The spec's words that make a rule permanent in Dan's own message, as an instruction aimed at
+// Claude: "from now on" anywhere, "always" or "never" leading the message, a sentence, a line or
+// what a colon introduces (after an opening word such as "ok", "also" or "and", and "please", "you
+// should" or "you must"), or after "please", "you should" or "you must" anywhere; and "remember" as
+// a request in the same places, followed by that, to, this, a colon or a comma ("please remember
+// to", "Remember: ..."). Read anywhere, "never mind the screenshots" and "it always fails" skipped
+// the question (#705), and "Remember when we shipped it?" did too; "and", "but", "so", "should" and
+// "must" inside a sentence lead narrative ("It ran and never finished", "that should never take
+// this long", #726), so they count only as the sentence's opening word.
 const FROM_NOW_ON = /\bfrom now on\b/i
-const LEAD = String.raw`(?:^|[.!?;:,\n]\s*|\b(?:please|and|but|so|also|you should|you must|should|must)\s+)`
+const OPENER = String.raw`(?:(?:ok(?:ay)?|yes|yeah|yep|no|thanks|thank you|right|sure|great|good|cool|also|and|but|so|then|oh|hey)\b[,\s]\s*)*`
+const ASKED = String.raw`(?:please|you should|you must)\s+`
+const LEAD = String.raw`(?:(?:^|[.!?:\n]\s*)${OPENER}(?:${ASKED})?|\b${ASKED})`
 const ALWAYS_NEVER = new RegExp(`${LEAD}(?:always|never)\\b(?!\\s+mind\\b)`, 'i')
 const REMEMBER = new RegExp(`${LEAD}remember(?:\\s+(?:that|to|this)\\b|\\s*[:,])`, 'i')
 // Words that limit it to the moment, which win: saving without asking is the harm, asking is not.
@@ -117,6 +133,14 @@ export const addedText = (content: string, old: string | undefined): string => {
   const added = content.split('\n').filter(l => l.trim() !== '' && !had.has(l))
   return added.length ? added.join('\n') : trim(content)
 }
+
+/**
+ * What Claude reads when the hook could not finish, from the failure the engine hands its catch
+ * handler. Built from whatever arrives, so the refusal can never itself throw: a hook that throws
+ * is skipped, and the save would go through unasked (lessons review of #731).
+ */
+export const cannotCheck = (failure: { message?: string } | undefined): string =>
+  `Not saved: Ask before saving could not check whether this writes lasting memory (${failure?.message || 'it failed'}). Tell Dan what you meant to save instead.`
 
 /** The three answers, with the button id their press arrives under (before the save's own id). */
 export const ANSWERS = [
