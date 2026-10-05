@@ -137,6 +137,8 @@ type World = {
   phaseAfterReload?: unknown
   /** The session as an earlier build stored it, answered to every read of it from then on. */
   sessionStored?: unknown
+  /** How long a read of the live reading takes to answer, on the test clock. */
+  liveReadDelayMs?: number
 }
 const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 
@@ -185,8 +187,16 @@ const world = (on: On, init: Partial<World> = {}) => {
     lockTouched = clock.now()
   }
   on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: lockTouched } }) as never)
-  on('state.get', ($, e, next) => {
+  on('state.get', async ($, e, next) => {
     const at = e as unknown as { plugin?: string; key?: string }
+    // The session's state answering a moment late, as it can in a busy session: the value is read,
+    // then arrives later, so two pieces of work reading the live reading at once both see it as it
+    // was before either wrote.
+    if (w.liveReadDelayMs && at.plugin === 'account-room' && at.key === 'live') {
+      const read = await next(e)
+      await clock.sleep(w.liveReadDelayMs)
+      return read
+    }
     // The session's state answers nothing usable for the live reading.
     if (w.liveReadFails && at.plugin === 'account-room' && at.key === 'live') return { value: undefined } as never
     if (w.sessionStored && at.plugin === 'account-room' && at.key === 'session') return { value: { value: w.sessionStored, version: 1 } } as never
@@ -616,6 +626,43 @@ test("Switch's elapsed seconds keep counting while a reading waits on a slow Git
   // The sign in step ran, and the slow write landed after it, with the newer figure.
   expect(runs.find(r => r[0] === 'claude')).toEqual(['claude', 'auth', 'login', '--email=work@example.com'])
   expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-home', 'org-1')].reading.five.used).toBe(98)
+  await ui.unmount()
+})
+
+test("Switch's elapsed seconds keep counting while the other Macs are read from a slow GitHub (second review of #757)", { ...withKit, ...ROUTE }, async ($, on) => {
+  let release: () => void = () => undefined
+  const logoutGate = new Promise<void>(r => (release = r))
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, logoutGate })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
+  // Past the minute a good read is kept, the same figures arrive: nothing to write, but the other
+  // Macs are read again, and GitHub takes 30 seconds to answer.
+  await clock.advance(61_000)
+  w.ghDelayMs = 30_000
+  await measure($, clock, limits(97, 50))
+  await clock.advance(3_000)
+  expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 64s/)
+  release()
+  w.ghDelayMs = 0
+  await clock.advance(30_000)
+  await ui.unmount()
+})
+
+test('two measurements arriving together each keep their own window in the live reading (second review of #757, L443)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  w.liveReadDelayMs = 10
+  // One response reports only the 5 hour window, at 96%; the next only the weekly one, at 50%.
+  const five = limits(96, 50).filter(l => l.kind === 'five_hour')
+  const week = limits(96, 50).filter(l => l.kind === 'seven_day')
+  void $.session.measure({ context: { window: 200_000 }, rateLimits: five, changed: ['rateLimits'] } as never)
+  void $.session.measure({ context: { window: 200_000 }, rateLimits: week, changed: ['rateLimits'] } as never)
+  await clock.advance(1_000)
+  // Both windows are kept, so the 5 hour figure still triggers the card.
+  expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
   await ui.unmount()
 })
 

@@ -1174,8 +1174,10 @@ the spec rather than chosen afresh, and open to Dan changing:
   state. gh must be logged in, on each Mac, to an account that can see the repository.
 - A rate limit measurement hands its reading work (saving it, reading the Macs' figures, drawing the
   card) to a timer and goes on at once, so a slow GitHub or a held lock never holds up the mods
-  beneath (#736). Readings writes take turns on their own queue, so a slow write never stops
-  Switch's elapsed seconds.
+  beneath (#736). Readings writes take turns on their own queue, and the other Macs are read before
+  a redraw joins the queue the progress ticks use, so a slow GitHub never stops Switch's elapsed
+  seconds. Two measurements arriving together take turns updating the live reading, so neither
+  drops the other's window.
 
 Not settled by any round, built so the spec holds, and each an open question for Dan:
 

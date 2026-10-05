@@ -52,6 +52,9 @@ const queue = () => {
 // seconds counting, which is how a stalled step is told from a live one (#750).
 const serial = queue()
 const serialWrites = queue()
+// The live reading is read, combined and written back in one turn, so two measurements arriving
+// together cannot each combine over the same old value and drop the other's window (L443).
+const serialLive = queue()
 // Things said once per session, so a fault that repeats on every reading is not a note per reading.
 const noted = new Set<string>()
 // Whether this module instance is running a Switch: after a reload a "working" phase has no runner.
@@ -398,9 +401,18 @@ const clearRow = async ($: EngineInterface) => {
   await $.modkit.clearBandRow({ mod: MOD, id: 'room' }).catch(err => once($, 'band-clear', `account-room: the band could not be updated: ${message(err)}`, true))
 }
 
-/** What the card shows now, from this session's live reading and every Mac's readings. */
-const recompute = ($: EngineInterface) =>
-  serial(async () => {
+/**
+ * What the card shows now, from this session's live reading and every Mac's readings. The other
+ * Macs' readings, which can wait on GitHub, are read before the pass joins the queue the progress
+ * ticks take turns on, so a slow read never stops Switch's elapsed seconds (second review of #757).
+ * A pass whose account turned low while it was reading has nothing read to draw from, and leaves
+ * the card to the pass that follows the reading that made it low.
+ */
+const recompute = async ($: EngineInterface) => {
+  const first = (await $.state.get(sessionRef)).value
+  const low = !!first && first.isInteractive && !(await $.state.get(dismissedRef)).value && triggered((await $.state.get(liveRef)).value ?? undefined, await $.clock.now()).length > 0
+  const readings = low ? await loadReadings($) : undefined
+  return serial(async () => {
     const s = (await $.state.get(sessionRef)).value
     if (!s || !s.isInteractive) return
     const live = (await $.state.get(liveRef)).value ?? undefined
@@ -413,6 +425,7 @@ const recompute = ($: EngineInterface) =>
       await clearRow($)
       return
     }
+    if (!readings) return
     let phase: AccountRoomPhase = (await $.state.get(phaseRef)).value ?? { kind: 'idle' }
     // A reload while Switch ran left nobody running it.
     if (phase.kind === 'working' && !switching) {
@@ -427,7 +440,7 @@ const recompute = ($: EngineInterface) =>
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
     const names = typeof nick === 'string' ? {} : nick.names
     const nameFor = (id: string) => (Object.prototype.hasOwnProperty.call(names, id) ? (names[id]?.name ?? null) : null)
-    const { accounts, unavailable } = await loadReadings($)
+    const { accounts, unavailable } = readings
     const here: Account = { id: s.id, email: s.email, org: s.org, nickname: nameFor(s.id), ...(live ? { reading: live } : {}) }
     const others = [...accounts.values()].filter(a => a.id !== s.id).map(a => ({ ...a, nickname: nameFor(a.id) }))
     const v = verdict(here, others, now)
@@ -435,6 +448,7 @@ const recompute = ($: EngineInterface) =>
     shown = { verdict: v, offset: await offsetsFor($, v, now), unavailable }
     await draw($, phase, now)
   })
+}
 
 /** The offset in force at every instant the card shows, plus now, read once per pass. */
 const offsetsFor = async ($: EngineInterface, v: Verdict, now: number): Promise<Offset> => {
@@ -635,8 +649,13 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
   }
   // Merged, never overwritten: a session.measure may already have stored a newer reading, which
   // wins limit by limit over this older start reading (L510).
-  const already = (await $.state.get(liveRef)).value ?? undefined
-  if (reading) await $.state.set(liveRef, combine(reading, already) as Reading)
+  if (reading) {
+    const start = reading
+    await serialLive(async () => {
+      const already = (await $.state.get(liveRef)).value ?? undefined
+      await $.state.set(liveRef, combine(start, already) as Reading)
+    })
+  }
   await record($, s, reading)
   await settleNicknames($, s.home)
   if (s.isInteractive) {
@@ -654,7 +673,9 @@ const takeIn = async ($: EngineInterface, windows: Parameters<typeof fromRateLim
   const reading = fromRateLimits(windows, await $.clock.now())
   if (!reading) return
   // Limit by limit, so a response reporting one window keeps the other (L510).
-  await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
+  await serialLive(async () => {
+    await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
+  })
   await record($, s, reading)
   await recompute($)
 }
