@@ -862,6 +862,28 @@ four minute CI wait is noise against a week, so an old plist is not worth chasin
 asks about the head of the branch, not about each commit between: a red commit followed by a green
 one is applied with the green one, which is what a person pulling by hand would get.
 
+## Two settings beyond the hooks block, written but never published (#772, #695)
+
+Everything else in `settings.json` stays per Mac. Two things are written into it on every apply.
+
+`statusLine` runs the status bar mod's script, whose path is under each Mac's own home folder, so
+it cannot travel as text. On 2026-10-05 the mod reached Dans-MacBook-Pro and its line never showed,
+because nothing wrote the setting there and nothing said so (#772). It is derived from the script
+that arrived: written when there is no `statusLine` at all, left alone when it already names this
+Mac's copy, and never overwritten when it names anything else, because that is somebody's choice
+and the sync cannot tell a deliberate one from a stale one (L5, L509). Status names that case.
+
+`payload/settings.shared.json` carries the settings Dan chose to share, starting with `ultracode`
+alone (#695, chosen 2026-10-04 without reopening the per Mac rule for anything else). The repo is
+its only source: it is never staged from a Mac's `settings.json`, so no three way merge is needed.
+A fixed allowlist in `claude-sync` decides which keys may be written, and a file carrying any other
+key is refused whole and by name, so it cannot carry model or effort by the back door. Off is
+`false` rather than a deleted key, so the apply never infers a removal. Whether it is applied is
+judged by value in `payload_path_applied`, since the file never lands under its own name.
+
+Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
+a WatchPath and a rewrite for formatting alone would trigger the next sync.
+
 ## The hooks block is merged in BOTH directions, against the same base
 
 `settings.json` is not mirrored like the rest of the config. Its `hooks` block is extracted into

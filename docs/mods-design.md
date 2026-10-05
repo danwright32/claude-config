@@ -38,7 +38,13 @@ and settles its own surfaces in rounds of its own before it is built.
    settling it in the same executor. Before #744 removed it, picker manners' `$.pickers.wait` failed
    it (`payload/mods/picker-manners/hooks/register.ts:89` at 53c803b, which `git show` still
    reproduces); in the tree, the `waits-in-map` fixture in `tests/test-mods.sh` is that shape and
-   fails it on every run. It does not follow a promise made outside a noun's code and handed to it.
+   fails it on every run. Since #756 it also follows a promise made outside a noun's code (in
+   another hook) and kept in a variable, map or list a noun reads, and counts a wait bounded when
+   the noun races it against a timer under 10 s made in another executor, a helper's included.
+   A noun's 10 s does not stop while its own `$` calls are in flight, unlike a hook's budget:
+   measured live on 2026-10-05 (2.1.289, #756), a noun whose only wait was
+   `$.process.run(['/bin/sleep', '13'])` was rejected at 10,003 ms, like the 13 s timer control at
+   10,002 ms. So `$.ui.ask` in a noun is always cut, and so is any other slow `$` call there.
 
 ## Guard surfaces (#607, #608, #609)
 
@@ -408,11 +414,11 @@ plainest reading of the decisions above:
   outside the tracker (the collision guard, ask before saving, picker manners above it) never
   reaches the tracker's own hook, but its result's row does, so the rows count too; a call the hook
   already counted is not counted again from its row. A subagent's rows are its own.
-- **A save waiting in the band is waiting on Dan.** While ask before saving holds a question in the
-  band, read from its writes of the questions it holds (`ask-before-saving.pending`), the session
-  shows as waiting on you, "Save this as a standing rule?" (the band's own words), notified once per
-  question as "<project> is waiting on you", and the idle "What's next?" is held back until it is
-  answered. `tests/test-mods.sh` checks ask before saving's contract still declares it that way.
+- **A save question is a question like any other.** Since #777 ask before saving has Claude ask in
+  Claude Code's own dialog, so the tracker marks and notifies it as it does every question. Until
+  then it read ask before saving's band questions from `ask-before-saving.pending`; that reading,
+  and the check in `tests/test-mods.sh` that held the two mods to one shape, went with the band
+  question (L29).
 - **A long call is not a stall.** While any call runs, the session's activity is written each
   minute, and what follows a call is stamped when it returned, never when it began: a test suite
   running twelve minutes no longer shows the session stalled during it or after it.
@@ -473,8 +479,8 @@ Each in a rendered design round unless marked picker.
 
 | Mod | Surface | Decision |
 | --- | --- | --- |
-| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744; the look stays as mod-kit's question, which ask before saving draws |
-| Ask before saving (#618) | The question | The rule's exact text and the file it would go to sit between the question and the three answers, set off by a grey rule (over above the question, and in the chat) |
+| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744, and ask before saving in #777; the look stays as mod-kit's question, which no mod draws now |
+| Ask before saving (#618) | The question | Superseded by #777: Claude asks in Claude Code's own dialog, naming the file and stating the rule in plain words. Was: the rule's exact text and the file it would go to between the question and the three answers, set off by a grey rule |
 | Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
 | Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
 | Handoff (#613) | Something it names that changed | Its own line under the handoff, one per change: "changed since: #615 closed" (over a list on the same line, and a count), in grey under the amber lead line (handoff colour round, over amber, which made three amber lines) |
@@ -857,7 +863,9 @@ first part, where the line starts), so a description sits under its option. A fr
 whole number of columns is refused when the row is published, never drawn as something else.
 
 One question at a time, and one look for every question (#703, #705, after the milestone audit).
-Two mods could each have a question open at once: ask before saving leaves its question in the band
+(Since #777 no mod asks in the band: ask before saving has Claude ask in Claude Code's own dialog,
+as picker manners has since #744. What follows is the noun as built; it has no caller now.)
+Two mods could each have a question open at once: ask before saving left its question in the band
 while Claude carries on, and picker manners' band question (until #744 removed it) could land beside
 it. Drawn together, both numbered from 1, a key meant for the picker could press For good. So the
 band draws the first question asked, alone, and the next once it is cleared. (The noun that named
@@ -1014,15 +1022,51 @@ ones marked open are the builder's choice, waiting on Dan.
 
 ## Ask before saving (#618), built 2026-10-04
 
-How the settled question behaves, decided at build where the spec and the rounds were silent. The
-ones marked open are the builder's choice, waiting on Dan.
+How the settled question behaves, decided at build where the spec and the rounds were silent.
 
-- **The write is refused at once, never held open.** A tool call hook that waits on a band press is
-  cut at its 10 second budget and the engine then runs the write as if the hook were absent
-  (measured with `claude plugin test` on 2026-10-04), so holding the call would fail open. Claude's
-  call is refused with a note that Dan is being asked; each answer reaches Claude as a note. A hook
-  that cannot finish refuses the write. This is also the answer to picker manners' (#615) build time
-  check: a tool call cannot wait for a band answer.
+**Asked in Claude Code's own dialog, in plain words, and never for a subagent** (#777, Dan,
+2026-10-05: "I thought standing rule questions were going to be claude pickers, not the mod
+version? also that's wildly hard to read. I don't really know what it's asking."). Picker manners'
+decision (#744, below) that Claude Code's own dialog asks every question now covers this one too,
+and the band question is removed rather than kept beside it (L29). Three defects went with it:
+
+- **The surface.** The refusal tells Claude to ask Dan with AskUserQuestion: one question, with
+  `metadata.source` `ask-before-saving:<the refused call's id>`, naming the file and stating the rule
+  in one plain sentence, never the command or the raw text. The mod checks that question (it must
+  name every file, carry no answers of its own, and be about a save still waiting) and sets its
+  header (`Memory rule`, the dialog takes at most 12 characters) and its three answers itself (For good, "Saved to <file>"; Just this
+  session, "Followed until this session ends; nothing is written"; Not at all, "Nothing is saved"),
+  so the label read back is always one of them. Dan's answer is read from that dialog's own result,
+  and what Claude must do next is said in the same result: For good approves the identical call
+  once (#738, below), Just this session keeps Claude's plain words in the system prompt, Not at all
+  saves nothing. A dialog that closed itself while Dan was away (`afkTimeoutMs`) and an answer typed
+  in his own words approve nothing. No prompt or note goes to the session for any of it.
+- **Subagents.** A subagent's write to lasting memory is refused and never asked about, and its
+  refusal tells it to put the rule and the file in its final report. Its call ran in its own tree
+  and conversation; before #777 its question came up in Dan's main session, and For good then
+  asked the main session (twice) to send the subagent's call again, which would have run its edit in
+  the main checkout. Which loop a call runs in is known only at `tool.call` (`e.agentId`), so the
+  judgement for a subagent is made there; the main session's refusal stays at `classic.PreToolUse`,
+  beneath every other guard. Claude Code's own background loops (the memory writer) carry an id no
+  agent list names: refused the same way, and the main session is told what they would have saved,
+  so it can save it itself and ask Dan first. A subagent's write elsewhere is untouched.
+- **The false trigger.** The subagent's call was a python heredoc editing a test file whose text
+  built fixture homes, `$E27HA/CLAUDE.md`, from `E27HA="$WORK/..."`. A mention of lasting memory
+  built from a variable now counts only when that variable could hold a path when the command runs:
+  each Bash call is a fresh shell, so a variable reaches it only from Claude Code's environment
+  (asked through `printenv`, since `$.env.get` takes literal names alone), a shell profile, or the
+  command itself. One the command gives a value is followed through the variables that value is
+  built from; a literal, a path under home, or a command's output can be anything, so it counts; a
+  fresh `$(mktemp ...)` folder does not; any other use of the bare name (a loop, a `read`) counts.
+  A variable every shell sets for itself (`PWD`, `OLDPWD`, `TMPDIR`, `USER` and the like) always
+  counts, whatever the environment holds.
+  A variable named nowhere and set nowhere expands to nothing, so a path through it reaches no
+  lasting memory. The same holds for a target the command names through such a variable.
+
+- **The write is refused at once, never held open.** A tool call hook that waits on Dan is cut at
+  its 10 second budget and the engine then runs the write as if the hook were absent (measured with
+  `claude plugin test` on 2026-10-04), so holding the call would fail open. A hook that cannot
+  finish refuses the write, and so does one that cannot read Dan's answer.
 - **For good asks Claude to send the call again** (#738, built 2026-10-05). Until then For good
   replayed the call itself, and in auto mode, Dan's `defaultMode`, it never saved: the classifier
   judges a call by the model request that produced it and refused the replay ("gave no verdict ...
@@ -1035,13 +1079,10 @@ ones marked open are the builder's choice, waiting on Dan.
     path by any spelling of the same file). The key is taken where Dan is asked, so it approves the
     file he was shown: the same relative path sent again after the session has moved is another
     file, and is asked about again.
-  - Claude is asked to send the same call again, given whole, since the call may not be in front of
-    it (the memory writer's, a subagent's, one a compaction took out): as a note while it works,
-    which it reads at its next step, and as a prompt of its own, a turn, while it is idle, where a
-    note would wait for Dan's next message. A note added while the turn's last answer was being
-    written is read by nobody, so when the main loop's turn ends with the save not sent, it is asked
-    for again as a prompt, once. A session start marks no turn running, whatever a process that
-    stopped mid-turn left behind, so a note is never sent to a session nobody is working in.
+  - Claude is asked to send the same call again, given whole, since a compaction may have taken the
+    call out of its context. Since #777 that is said in the result of the dialog Claude itself
+    opened, so it reaches the loop that asked; until then it went as a note or a prompt of the mod's
+    own to the main session, whichever loop had made the call.
   - The call that writes the same thing takes the approval at `classic.PreToolUse` and goes on to
     the settings hooks and the permission check beneath, the classifier among them, never asked
     about again; every mod's own checks have seen it already. It is used once: the same call after
@@ -1067,14 +1108,15 @@ ones marked open are the builder's choice, waiting on Dan.
   - What only a live session shows: whether the classifier allows the call Claude sends again, which
     it judges against the conversation as for any call (a For good cannot overrule it), and that a
     plugin's prompt starts Claude's turn while the session is idle.
-- **What the question shows as the rule:** a new file's whole text, the lines a rewrite adds, an
-  Edit's new text, and a Bash write's command as written (the command carries the text, any heredoc
-  body included, so it is shown whole).
+- **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
+  new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
+  which for a heredoc or a script was unreadable.
 - **Just this session** rides the system prompt's memory section, assembled afresh for every
-  request, so a compaction keeps it; it is dropped at session end and on /clear.
-- **A second save** waits behind the first and is asked once the first is answered. Each save asks
-  under its own id and its buttons carry that id, so a press answers only the save it was drawn
-  for: a second tap after the first was answered cannot land on the save asked next (#705).
+  request, so a compaction keeps it; it is dropped at session end and on /clear. The rule kept is
+  Claude's plain words after the file in its question.
+- **Each save waits under its own id** (the refused call's), which the dialog's `metadata.source`
+  names, so an answer applies only to the save it was asked about (#705). The same save refused
+  again waits under the newer id alone.
 - **Asked beneath every guard** (#705). The question is asked from `classic.PreToolUse`, which the
   engine raises beneath every mod's `tool.call` hook, so a save the style check, the secret guard or
   no build refuses is refused before Dan is asked, whatever order the mods load in, and he is never
@@ -1130,17 +1172,16 @@ ones marked open are the builder's choice, waiting on Dan.
 - **Claude Code's auto-memory writer goes through tool calls** (the spec's check at build, #705).
   In 2.1.289 the post turn extractor runs as a forked query (`querySource: "extract_memories"`)
   whose saves are Write and Edit tool uses, and the engine's declaration names its memory fork among
-  the loops whose calls raise `tool.call`. So its saves are asked about like any other.
-- The look is mod-kit's question (`$.modkit.question`, above), shared with picker manners until
-  #744; the rule's text wraps at the band's edge rather than at a fixed width.
-- Open: the chip "Standing rule", the question "Save this as a standing rule?", the line under each
-  answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
-  saved"), and a grey rule on both sides of the rule's text.
+  the loops whose calls raise `tool.call`, carrying an id no agent list names. Since #777 its saves
+  are refused, never asked, and the main session is told what it would have saved (above).
+- The band look (mod-kit's `$.modkit.question`) is no longer drawn by any mod since #777; the noun
+  itself, with no caller left, is removed by #796.
 
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
-2026-10-05, in a picker, after the findings on #744). The band question picker manners was built
+2026-10-05, in a picker, after the findings on #744; ask before saving's standing rule question
+followed in #777). The band question picker manners was built
 with is removed rather than kept switched off (L29), and with it what only the band made possible:
 typing a message in the prompt to withdraw a question, numbered prose answers, and counting a pass
 over a question, with the refusal of a question talked past twice that was built on that count.
