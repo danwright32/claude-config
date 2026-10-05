@@ -9697,6 +9697,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   on a slot that is free; the reroute live proof met it at 02:45 UTC by repeating one identity.)
   SHORT: Scope an idempotency key to one attempt, never to inputs a person can repeat, or a cancelled earlier attempt's derived id refuses the next real one.
 
+- **L748. Coordination held in a serverless instance's memory (a lock, a queue, a debounce, a
+  dedup set) coordinates only the requests that land on that one instance, so under real load,
+  which spreads across many instances, it barely works while every test run in one process shows
+  it working.** Coordinate through a shared store or a single coordinator (a Durable Object, a
+  database row, a lock service), or prove the requests that must meet are pinned to one instance,
+  and measure the coordination under spread load before counting on it: count how many times the
+  guarded work actually ran against how many requests asked for it. (slate#3324, slate#3325,
+  2026-10-05: the per slot confirm line and the per pool refresh coalescer both lived in module
+  memory; in load run 37333201026 a burst of 100 confirms for one slot formed many lines, each with
+  its own leader, saturated the database and booked nobody, and the coalescer still ran 0.87
+  computes per booking, the same as with no coalescing at all.)
+  SHORT: Coordination in a serverless instance's memory spans one instance only; coordinate through a shared store and measure it under spread load.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
