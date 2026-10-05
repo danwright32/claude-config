@@ -583,7 +583,9 @@ ones marked open are the builder's choice, waiting on Dan.
   when that repository's cards are next written. Copy and Mark sent find their card in whichever
   repository it is kept, so they work in any session (#704). `/live` asks GitHub for the name the
   session folder's repository has now (`gh repo view`, which follows renames), so a checkout whose
-  origin still carries an old name lists the cards kept under the new one; when GitHub cannot be
+  origin still carries an old name lists the cards kept under the new one; a PR with a card under
+  both names is listed once, as its newest card, still carrying any message an older card under
+  the other name owes, pinned from that card so Mark sent finds it (#720). When GitHub cannot be
   asked it lists what is kept under the remote's name and says the rest may be missing.
 - **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
   row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),

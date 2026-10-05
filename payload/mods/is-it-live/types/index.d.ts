@@ -1,6 +1,7 @@
 /**
  * A merged change's card as kept in the store, one list per repository (`cards:<owner/name>`, the
- * repository as GitHub's own link for the PR names it, in lowercase).
+ * repository as GitHub's own link for the PR names it). The store key is in lowercase; the card's
+ * `repo` keeps GitHub's own spelling.
  */
 export type IsItLiveCard = {
   repo: string

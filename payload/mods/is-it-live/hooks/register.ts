@@ -280,12 +280,25 @@ export const register: Register = on => {
     const now = await run($, ['gh', 'repo', 'view', repo, '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
     const current = (now.out ?? '').trim()
     const names = [repo, ...(current && fold(current) !== fold(repo) ? [current] : [])]
-    const byPr = new Map<string, IsItLiveCard>()
-    for (const name of names) for (const c of await cardsOf($, name)) byPr.set(`${fold(c.repo)}#${c.pr}`, c)
+    const all: IsItLiveCard[] = []
+    for (const name of names) all.push(...(await cardsOf($, name)))
+    // Both names are one repository, so a PR is one card: the newest, whichever name it is under.
+    const byPr = new Map<number, IsItLiveCard>()
+    for (const c of all) {
+      const seen = byPr.get(c.pr)
+      if (!seen || c.at > seen.at) byPr.set(c.pr, c)
+    }
+    // A message waits until Dan presses Mark sent (#704), so one an older card under the other name
+    // still owes is not dropped with that card: it is listed with the newest, and pinned from the
+    // card that holds it, which is the one Mark sent then finds.
+    const owes = (c: IsItLiveCard) => Boolean(c.requester && c.message && c.sentAt === undefined)
+    const shown = [...byPr.values()]
+      .map(c => ({ c, owing: owes(c) ? c : all.filter(o => o.pr === c.pr && owes(o)).sort((a, b) => b.at - a.at)[0] }))
+      .sort((a, b) => b.c.at - a.c.at)
     // Newest first across both names, as cardsOf gives one name's: the band pins in this order.
-    const cards = [...byPr.values()].sort((a, b) => b.at - a.at)
     // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.
-    for (const c of cards) await pin($, c)
+    for (const { owing } of shown) if (owing) await pin($, owing)
+    const cards = shown.map(({ c, owing }) => (owing && owing !== c ? { ...c, requester: owing.requester, message: owing.message, sentAt: undefined } : c))
     const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''
     return { text: liveList(cards) + unasked }
   })
