@@ -371,12 +371,13 @@ test('a shell write whose command failed is still noted, since it may have writt
   expect(w.edits).toEqual(['/repo/notes.txt'])
 })
 
-test('a shell write a later guard refuses is not noted, and the refusal is passed on', withDeps, async ($, on) => {
-  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], ran: { deny: 'Blocked: no build is on.' } })
+// A refusal from Claude Code's own permission step comes after the guard has judged, the one
+// refusal it cannot wait for (#707: every guard's refusal comes first, tested below).
+test('a shell write refused after it was judged, by the permission step, is not noted, and the refusal is passed on', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], ran: { deny: 'Permission to use Bash was denied.' } })
   const r = await $.tool.call(bash('echo x >> notes.txt'))
-  // Judged and let through here, then refused beneath.
   expect(w.toasts).toContain('Checked with the other session: safe to edit notes.txt.')
-  expect(refusal(r)).toBe('Blocked: no build is on.')
+  expect(refusal(r)).toBe('Permission to use Bash was denied.')
   expect(w.edits).toEqual([])
 })
 
@@ -657,4 +658,86 @@ test('another session working in that checkout is judged against the file this o
   await $.tool.call(edit('/other/src/a.ts'))
   expect(w.prompts.length).toBe(1)
   expect(w.edits).toEqual(['/other/src/a.ts'])
+})
+
+// #707: a guard that refuses decides before this one judges, whichever order the mods load in. The
+// guard here stands in for no build, winding down, the secret guard and the style check (a mod's
+// tests cannot load another mod's files): it refuses at tool.call anything naming NO-BUILD, as each
+// of them refuses there. It is loaded above this guard (the prepend tier) and beneath it (append),
+// the two places a mod can stand: the engine nests tiers as it nests mods by load order.
+const Refuser = (tier: 'prepend' | 'append'): { name: string; tier: 'prepend' | 'append'; register: Register } => ({
+  name: 'refuser',
+  tier,
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      const x = e as unknown as { command?: string; file_path?: string }
+      if (`${x.command ?? ''} ${x.file_path ?? ''}`.includes('NO-BUILD')) return { deny: 'Blocked: no build is on.' }
+      return next(e)
+    })
+  },
+})
+const STOP = '{"verdict":"Stop","reason":"They are mid rebase."}'
+const clashes = { open: [rec('them', { edits: ['/repo/src/InvoiceTable.tsx', '/repo/src/NO-BUILD.tsx', '/repo/NO-BUILD.txt'] })], judge: STOP }
+
+for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as const) {
+  test(`a call a guard ${where} it refuses is never judged, told or toasted, while one it lets through still is (#707)`, { plugins: [deps, Refuser(tier)] }, async ($, on) => {
+    const w = world(on, clashes)
+    // The same fixture judges an allowed clash, so the silence below is the refusal deciding first.
+    const judged = await $.tool.call(edit('/repo/src/InvoiceTable.tsx', 'ok1'))
+    expect(refusal(judged)).toContain('Another session is working on InvoiceTable.tsx.')
+    expect(w.prompts.length).toBe(1)
+    expect(w.sent.length).toBe(1)
+    for (const call of [edit('/repo/src/NO-BUILD.tsx', 'n1'), bash('echo x >> NO-BUILD.txt', 'n2'), bash('git checkout main && echo NO-BUILD', 'n3')]) {
+      const r = await $.tool.call(call)
+      expect(refusal(r)).toBe('Blocked: no build is on.')
+    }
+    expect(w.prompts.length).toBe(1)
+    expect(w.sent.length).toBe(1)
+    expect(w.toasts).toEqual([])
+    expect(w.cards.map(c => c.toolUseId)).toEqual(['ok1'])
+    expect(w.reached).toEqual([])
+    expect(w.edits).toEqual([])
+  })
+}
+
+// A settings hook (the payload write gate, the push gates) decides beneath every mod at
+// classic.PreToolUse, which the test's own hook stands in for: its refusal comes first too.
+test('a call a settings hook refuses is never judged, told or toasted (#707)', withDeps, async ($, on) => {
+  const w = world(on, clashes)
+  on('classic.PreToolUse', ($, e) => ((e as unknown as { file_path?: string }).file_path?.includes('NO-BUILD') ? { deny: 'Blocked: the payload write gate refused it.' } : {}))
+  const r = await $.tool.call(edit('/repo/src/NO-BUILD.tsx', 'g1'))
+  expect(refusal(r)).toBe('Blocked: the payload write gate refused it.')
+  expect(w.prompts).toEqual([])
+  expect(w.sent).toEqual([])
+  expect(w.toasts).toEqual([])
+  expect(w.cards).toEqual([])
+  expect(w.edits).toEqual([])
+  // The same hook letting a clash through leaves it to be judged as before.
+  await $.tool.call(edit('/repo/src/InvoiceTable.tsx', 'g2'))
+  expect(w.prompts.length).toBe(1)
+})
+
+// What a settings hook decides about a call the guard lets through is passed on as it was: an allow
+// skips Claude Code's permission prompt, and a rewrite (rtk's) is what runs.
+const Watcher: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'watcher',
+  tier: 'prepend',
+  register: on => {
+    on('classic.PreToolUse', async ($, e, next) => {
+      const r = await next(e)
+      // Told to the world as a process it records, the one channel an inline plugin has to it.
+      await $.process.run(['__decided', JSON.stringify(r)])
+      return r
+    })
+  },
+}
+test('a settings hook decision on a call the guard lets through is passed on unchanged (#707)', { plugins: [deps, Watcher] }, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  on('classic.PreToolUse', () => ({ allow: true, additionalContext: ['from a settings hook'] }) as never)
+  const r = await $.tool.call(bash('echo x >> notes.txt', 'p1'))
+  expect(w.toasts).toEqual(['Checked with the other session: safe to edit notes.txt.'])
+  const decided = w.runs.filter(x => x.startsWith('__decided ')).map(x => JSON.parse(x.slice('__decided '.length)))
+  expect(decided).toEqual([{ allow: true, additionalContext: ['from a settings hook'] }])
+  expect(refusal(r)).toBe('ran')
+  expect(w.edits).toEqual(['/repo/notes.txt'])
 })
