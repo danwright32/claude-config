@@ -6,7 +6,7 @@ const DEBUG = '/Users/x/Build/Debug/Overture.app/Contents/MacOS/Overture'
 const LIGHTROOM = '/Applications/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic'
 const KEYWORD = 'key' + 'stroke'
 
-type World = { front: number; running: Record<number, string>; answer: string | 'dismiss' }
+type World = { front: number; running: Record<number, string>; answer: string | 'dismiss'; away?: boolean }
 type Card = { toolUseId: string; guard: string; reason: string; safeWay?: string }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -67,6 +67,8 @@ const world = (on: On, w: World) => {
     }
     if (cmd === 'ps') return ok((w.running[Number(args[args.length - 1])] ?? '') + '\n')
     if (cmd === 'osascript') return ok(`${w.front}\n`)
+    // Where Dan is, for the scope modes stand-in below.
+    if (cmd === '__away') return w.away ? ok('') : none
     return none
   })
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e) => {
@@ -85,11 +87,13 @@ const world = (on: On, w: World) => {
     toasts.push(e.text)
     return { value: undefined }
   })
+  const holds: { label: string; prompt: string }[] = []
   on('ui.log', ($, e) => {
     if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
+    if (e.text.startsWith('HOLD ')) holds.push(JSON.parse(e.text.slice(5)))
     return { value: undefined }
   })
-  return { reached, asked, toasts, cards }
+  return { reached, asked, toasts, cards, holds }
 }
 
 const KEY = `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
@@ -212,4 +216,119 @@ test('Chrome extension tools are left alone', withKit, async ($, on) => {
   await $.tool.call({ tool: 'mcp__claude-in-chrome__computer', action: 'left_click' } as never)
   expect(w.asked.length).toBe(0)
   expect(w.reached).toContain('mcp__claude-in-chrome__computer')
+})
+
+// #707: a guard that refuses decides before the heads up is asked, whichever order the mods load
+// in. The guard here stands in for no build, winding down, the secret guard and the style check (a
+// mod's tests cannot load another mod's files): it refuses at tool.call any command naming
+// NO-BUILD. It is loaded above this guard (prepend) and beneath it (append).
+const Refuser = (tier: 'prepend' | 'append'): { name: string; tier: 'prepend' | 'append'; register: Register } => ({
+  name: 'refuser',
+  tier,
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String((e as unknown as { command?: string }).command ?? '').includes('NO-BUILD')) return { deny: 'Blocked: no build is on.' }
+      return next(e)
+    })
+  },
+})
+
+for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as const) {
+  test(`an action a guard ${where} it refuses is never asked about, while one it lets through still is (#707)`, { plugins: [kit, Refuser(tier)] }, async ($, on) => {
+    mock.clock(on, { now: 0 })
+    const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+    await $.tool.call(bash(KEY, 'a1'))
+    expect(w.asked.length).toBe(1)
+    // An app not yet asked about, which this guard would ask about.
+    const r = await $.tool.call(bash('open -a "Google Chrome" report.html && echo NO-BUILD', 'a2'))
+    expect(refusal(r)).toBe('Blocked: no build is on.')
+    // An app that is not running, which this guard would refuse itself: the refusal beneath still
+    // decides first.
+    const r2 = await $.tool.call(bash(`TARGET_APP="${LIGHTROOM}" osascript -e 'tell application "System Events" to ${KEYWORD} "x"' && echo NO-BUILD`, 'a3'))
+    expect(refusal(r2)).toBe('Blocked: no build is on.')
+    expect(w.asked.length).toBe(1)
+    expect(w.cards).toEqual([])
+    expect(w.toasts).toEqual([])
+  })
+}
+
+// A settings hook decides at classic.PreToolUse beneath every mod, as the test's own hook does here.
+test('an action a settings hook refuses is never asked about (#707)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  on('classic.PreToolUse', ($, e) => (String((e as unknown as { command?: string }).command).includes('NO-BUILD') ? { deny: 'Blocked by a settings hook.' } : {}))
+  const r = await $.tool.call(bash(`${KEY} && echo NO-BUILD`))
+  expect(refusal(r)).toBe('Blocked by a settings hook.')
+  expect(w.asked.length).toBe(0)
+  await $.tool.call(bash(KEY, 't2'))
+  expect(w.asked.length).toBe(1)
+})
+
+// The scope modes mod (#621), standing in: while Dan is away it holds what it is handed for the held
+// card and answers with the refusal worded as its own held actions are; at home nothing is held.
+// Where Dan is comes from the world (an inline plugin cannot reach this file's variables): a
+// process.run of __away answers 0 while he is away.
+const scopeModes: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const isAway = async () => (await built.process.run(['__away'])).exitCode === 0
+      const hold = async (h: { label: string; prompt: string }) => {
+        built.ui.log('HOLD ' + JSON.stringify(h))
+        if (!(await isAway())) return { isHeld: false }
+        return {
+          isHeld: true,
+          card: { guard: 'Away', reason: `Held for when you are back: ${h.label}.`, safeWay: 'Claude publishes a private page for your phone instead.' },
+          deny: `Held: Dan is away from the Mac, so "${h.label}" waits for him to come back.`,
+        }
+      }
+      return { ...built, scopeModes: { isAway, hold } } as never
+    })
+  },
+}
+
+test('while Dan is away an action is held for when he is back, never asked about in the band (#707)', { plugins: [kit, scopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  // The wrong app in front: held all the same, since Dan cannot bring it forward from his phone.
+  const w = world(on, { front: 77, running: { 10: OVERTURE, 77: LIGHTROOM }, answer: 'Go ahead', away: true })
+  const r = await $.tool.call(bash(KEY, 'h1'))
+  expect(w.asked).toEqual([])
+  expect(w.reached).not.toContain('Bash')
+  expect(w.holds).toEqual([{ label: 'Type into Overture', prompt: `Do it now. What was held: ${KEY}` }])
+  expect(refusal(r)).toBe('Held: Dan is away from the Mac, so "Type into Overture" waits for him to come back.')
+  expect(w.cards).toEqual([{ toolUseId: 'h1', guard: 'Away', reason: 'Held for when you are back: Type into Overture.', safeWay: 'Claude publishes a private page for your phone instead.' }])
+  const r2 = await $.tool.call(bash('open -a "Google Chrome" report.html', 'h2'))
+  expect(w.holds[1]?.label).toBe('Bring Google Chrome to the front')
+  expect(refusal(r2)).toContain('waits for him to come back')
+  expect(w.asked).toEqual([])
+})
+
+test('at home nothing is held and the heads up is asked as before (#707)', { plugins: [kit, scopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  expect(w.holds.length).toBe(1)
+  expect(w.asked.length).toBe(1)
+  expect(w.reached).toContain('Bash')
+})
+
+// Whether Dan is away cannot be read: asking in the band could wait on nobody, so it is refused.
+const brokenScopeModes: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, scopeModes: { isAway: async () => false, hold: async () => { throw new Error('the state could not be read') } } } as never
+    })
+  },
+}
+test('an away check that fails refuses the action rather than ask a question nobody may see (#707)', { plugins: [kit, brokenScopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const r = await $.tool.call(bash(KEY, 'b1'))
+  expect(w.asked).toEqual([])
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toContain("Couldn't tell whether you are away")
+  expect(w.cards[0]?.guard).toBe('Keystroke guard')
 })

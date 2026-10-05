@@ -100,6 +100,16 @@ export const heldTool = (tool: string, input: Record<string, unknown>): string |
 }
 
 /**
+ * How a call held while Dan is away is refused: the grey card (its guard "Away") and the reason
+ * Claude reads. One wording for every held call, this mod's own and one another guard holds through
+ * `$.scopeModes.hold` (the keystroke guard, #707), so the two read the same (L605).
+ */
+export const heldRefusal = (label: string): { card: { guard: string; reason: string; safeWay: string }; deny: string } => ({
+  card: { guard: 'Away', reason: `Held for when you are back: ${label}.`, safeWay: 'Claude publishes a private page for your phone instead.' },
+  deny: `Held: Dan is away from the Mac, so "${label}" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).`,
+})
+
+/**
  * The held while away card (design round, 2026-10-04): boxed, an amber heading, one row per held
  * thing with its own button and a thin line between rows. Undefined when nothing was held, so a
  * session that held nothing shows no card.

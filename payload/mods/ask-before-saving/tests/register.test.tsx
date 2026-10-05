@@ -289,6 +289,22 @@ test('a save another guard refuses is refused before Dan is asked, so he never a
   await ui.unmount()
 })
 
+// #707: a settings hook (the payload write gate) decides beneath every mod at classic.PreToolUse,
+// as the test's own hook does here, and its refusal comes before the question too.
+test('a save a settings hook refuses is refused before Dan is asked (#707)', withKit, async ($, on) => {
+  const w = world(on)
+  on('classic.PreToolUse', ($, e) => (JSON.stringify(e).includes('GATE-REFUSES') ? { deny: 'Blocked: the payload write gate refused it.' } : {}))
+  const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- GATE-REFUSES this rule\n' })
+  expect(refusalOf(r)).toBe('Blocked: the payload write gate refused it.')
+  expect(w.ran).toEqual([])
+  const ui = await mount($)
+  expect(await shown(ui)).toEqual(['engine band'])
+  await ui.unmount()
+  // The same hook letting a save through leaves it to be asked about as before.
+  const asked = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })
+  expect(refusalOf(asked)).toContain('Dan is being asked')
+})
+
 test("Dan's own permanent words skip the question, and Claude is told to say what it saved", withKit, async ($, on) => {
   const w = world(on)
   await dan($, 'From now on, ask before you merge anything.')

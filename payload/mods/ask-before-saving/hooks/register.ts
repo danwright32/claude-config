@@ -133,7 +133,8 @@ export const register: Register = on => {
     }).catch(($, e) => ({ deny: cannotCheck(e.error?.message) }))
   }
 
-  // Asked here, beneath every mod's tool.call hook, so only a write every guard lets through is asked about.
+  // Asked here, beneath every mod's tool.call hook and after the settings hooks beneath this one, so
+  // only a write every guard lets through is asked about.
   on('classic.PreToolUse', async ($, e, next) => {
     const tool = String(e.tool)
     if (!TOOLS.has(tool)) return next(e)
@@ -142,6 +143,10 @@ export const register: Register = on => {
     if (approved.delete(fingerprint(tool, input))) return next(e)
     const files = await lastingTargets($, tool, input)
     if (!files.length) return next(e)
+    // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
+    // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
+    const decided = await next(e)
+    if (decided.deny !== undefined) return decided
 
     let text = String(input.command ?? '')
     if (tool === 'Edit') text = String(input.new_string ?? '')

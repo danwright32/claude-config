@@ -818,7 +818,13 @@ test('another mod holds its own item while away, and is told nothing was held at
   const holdIt = () => call($ as never, { tool: 'HoldIt', tool_use_id: 'h' } as never)
   expect(await holdIt()).toBe('{"isHeld":false}')
   await command($ as never, 'away')
-  expect(await holdIt()).toBe('{"isHeld":true}')
+  // Held, with the refusal worded as this mod's own held actions are, for a guard that holds a call
+  // (the keystroke guard, #707) to answer it with and draw the same card.
+  expect(JSON.parse(await holdIt())).toEqual({
+    isHeld: true,
+    card: { guard: 'Away', reason: 'Held for when you are back: Paste the key into Stripe.', safeWay: 'Claude publishes a private page for your phone instead.' },
+    deny: 'Held: Dan is away from the Mac, so "Paste the key into Stripe" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).',
+  })
   await command($ as never, 'home')
   expect((w.bands[w.bands.length - 1] as Row).lines[1]).toEqual([{ text: 'Paste the key into Stripe ' }, { button: 'held-1', label: 'Do it' }])
 })
