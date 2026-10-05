@@ -36,7 +36,8 @@ expect() { # expect <description> <want rc> <want words> <got rc> <got output>
 
 # ---------------------------------------------------------------- target-guard.sh
 # Three fixture sites under one server: a production build, a Next dev server, a Vite dev server.
-mkdir -p "$TMP/www/prod" "$TMP/www/nextdev" "$TMP/www/vitedev/@vite"
+mkdir -p "$TMP/www/prod" "$TMP/www/nextdev" "$TMP/www/vitedev/@vite" "$TMP/www/wpdev"
+printf '<!doctype html><title>App</title><script src="/static/js/bundle.js"></script><script src="/webpack-dev-server.js"></script>\n' > "$TMP/www/wpdev/index.html"
 printf '<!doctype html><title>App</title><script src="/_next/static/chunks/main-abc123.js"></script>\n' > "$TMP/www/prod/index.html"
 printf '<!doctype html><title>App</title><script src="/_next/static/chunks/react-refresh.js"></script><script id="__NEXT_DATA__">{"buildId":"development"}</script>\n' > "$TMP/www/nextdev/index.html"
 printf '<!doctype html><title>App</title><div id="root"></div>\n' > "$TMP/www/vitedev/index.html"
@@ -86,6 +87,9 @@ else
 
   out="$(bash "$GUARD" "$BASE/nextdev/" 2>&1)"; rc=$?
   expect "a Next dev server is refused" 4 "dev server" "$rc" "$out"
+
+  out="$(bash "$GUARD" "$BASE/wpdev/" 2>&1)"; rc=$?
+  expect "a webpack dev server (Create React App and kin) is refused" 4 "dev server" "$rc" "$out"
 
   out="$(bash "$GUARD" "$BASE/vitedev/" 2>&1)"; rc=$?
   expect "a Vite dev server is refused" 4 "dev server" "$rc" "$out"
@@ -230,6 +234,34 @@ expect "a run with no findings says so" 0 "no findings" "$rc" "$out"
 write ro '{"target":"https://app.example.com/","mode":"read-only","cost":{"model_calls":9},"findings":[]}'
 out="$(run_report ro)"; rc=$?
 expect "a read only run is labelled read only" 0 "read only" "$rc" "$out"
+
+# ---------------------------------------------------------------- explorer-browser.js
+# Read only is enforced in the browser, not asked for in a prompt (lessons review of #798): the
+# launcher every explorer uses aborts any request that is not a read. Driven with a stand in
+# Playwright, so no browser starts here; what is asserted is what the launcher wires.
+LAUNCHER="$DIR/explorer-browser.js"
+out="$(node -e '
+const { launch, isRead } = require(process.argv[1])
+const routes = []
+const fake = { launch: async () => ({ newContext: async () => ({ route: async (pat, fn) => routes.push({ pat, fn }) }) }) }
+const req = m => ({ request: () => ({ method: () => m }), continue: () => "continued", abort: () => "aborted" })
+;(async () => {
+  const ro = await launch({ chromium: fake, readOnly: true })
+  const r = routes.length === 1 ? routes[0] : null
+  const verdicts = r ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].map(m => m + "=" + r.fn(req(m))) : []
+  routes.length = 0
+  await launch({ chromium: fake, readOnly: false })
+  console.log(JSON.stringify({ hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead) }))
+})().catch(e => { console.log("ERR " + e.message); process.exit(1) })
+' "$LAUNCHER" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "the explorer launcher loads and launches with a stand in browser" "$out"
+grep -q '"verdicts":\["GET=continued","HEAD=continued","OPTIONS=continued","POST=aborted","PUT=aborted","PATCH=aborted","DELETE=aborted"\]' <<< "$out" && ok \
+  || bad "read only lets reads through and aborts every request that could change something" "$out"
+grep -q '"localRoutes":0' <<< "$out" && ok || bad "a local run is not restricted" "$out"
+grep -q '"hasContext":true' <<< "$out" && ok || bad "the launcher hands back the context explorers drive" "$out"
+out="$(node -e 'require(process.argv[1]).launch({ readOnly: true }).then(() => console.log("launched"), e => { console.log(e.message); process.exit(3) })' "$LAUNCHER" 2>&1)"; rc=$?
+[ "$rc" -eq 3 ] && grep -qi 'playwright' <<< "$out" && ok || bad "with no Playwright handed in, the launcher refuses by name (rc $rc)" "$out"
+grep -q 'explorer-browser.js' "$DIR/SKILL.md" && ok || bad "SKILL.md has every explorer launch through explorer-browser.js"
 
 # ---------------------------------------------------------------- SKILL.md wires both helpers
 SKILL="$DIR/SKILL.md"

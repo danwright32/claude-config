@@ -11,7 +11,10 @@
 #      READ-ONLY and the explorers may only look.
 #   2. A production build, never a dev server. A dev server compiles each route on its first visit
 #      and injects reload scripts, so explorers report its pauses as dead links. A local URL whose
-#      page carries a dev server's marks is refused.
+#      page carries a dev server's marks is refused. The marks recognised are Next.js's, Vite's
+#      (and so Astro, Nuxt, SvelteKit and Remix, which serve through it) and webpack's dev
+#      server's; a dev server with none of them is not caught, so the skill's own step still says
+#      to serve a production build.
 #
 # Prints one line on success, `LOCAL <url>` or `READ-ONLY <url>`, and exits 0. Every refusal goes
 # to stderr with its reason and a distinct exit code: 2 usage, 3 remote without read only, 4 dev
@@ -102,6 +105,10 @@ dev_reason=""
 # Next.js in development: the React refresh runtime, the development build id, the HMR socket.
 if grep -Eq 'react-refresh|"buildId":"development"|/_next/webpack-hmr|__webpack_hmr' <<< "$page"; then
   dev_reason="the page loads Next.js development scripts"
+fi
+# webpack's dev server (Create React App and its kin): its client script and its socket.
+if [ -z "$dev_reason" ] && grep -Eq 'webpack-dev-server|sockjs-node|__webpack_dev_server__' <<< "$page"; then
+  dev_reason="the page loads the webpack dev server client"
 fi
 # Vite in development: the client it injects, linked from the page or served at its fixed path.
 if [ -z "$dev_reason" ]; then

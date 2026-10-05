@@ -102,8 +102,9 @@ export type ModKit = {
    * fed on standard input (`cat x.scpt | osascript`); `language`, the language of either; and
    * `verdict`, what the program can do, judged per language (writes files, runs a process, or builds
    * code at run time and cannot be read), absent when it only reads. `xargs` marks a command xargs
-   * runs, whose operands come from its input (#730); `found` one a find -exec runs, whose `{}` is
-   * written as the folder find starts from and stands for everything under it (#760).
+   * runs, whose operands come from its input (#730); `found`, on a command a find -exec runs, the
+   * folders find starts from, which its `{}` is written as and which stand for everything under
+   * them (#760).
    *
    * Each command also carries `heredocs`, the body of every heredoc that feeds it, absent when none
    * does (#698), for a reader that judges what a heredoc feeds (`python3 - <<'EOF'`, `bash <<'EOF'`),
@@ -173,7 +174,7 @@ export type ModKitCommand = {
   pipedFrom?: string[]
   heredocs?: { word: number; body: string }[]
   xargs?: true
-  found?: true
+  found?: string[]
   language?: ModKitLanguage
   program?: ModKitProgram
   script?: { files: string[]; stdin?: true }

@@ -288,6 +288,11 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(changes(`find src -name '*.bak' -exec rm {} \\;`)).toEqual([`remove ${CWD}/src tree`])
     expect(changes(`find src -exec chmod 644 {} +`)).toEqual([`mode ${CWD}/src tree`])
     expect(changes('rm src/a.bak')).toEqual([`remove ${CWD}/src/a.bak`])
+    // Only the operand {} stood for reaches the tree; one the command names itself is that path
+    // alone (lessons review of #798).
+    expect(changes('find src -exec rm other.txt \\;')).toEqual([`remove ${CWD}/other.txt`])
+    expect(changes('find . -name x -exec mkdir out \\;')).toEqual([`folder ${CWD}/out`])
+    expect(changes('find a b -exec rm {} \\;')).toEqual([`remove ${CWD}/a tree`, `remove ${CWD}/b tree`])
   })
   test('a file edited in place is marked as edited, beside files written whole', () => {
     expect(read(`sed -i 's/a/b/' a.md; echo x > b.md`).files).toEqual([

@@ -39,7 +39,8 @@ esac
 # config home.
 real_dest="$(cd "$dest" && pwd -P)" || { echo "stage-workflow: cannot enter the scratchpad: $dest" >&2; exit 3; }
 config_home="${CLAUDE_HOME:-$HOME/.claude}"
-real_config=""
+# A config home that does not exist yet is compared as it is spelled, rather than standing down.
+real_config="${config_home%/}"
 [ -d "$config_home" ] && real_config="$(cd "$config_home" && pwd -P)"
 if [ -n "$real_config" ]; then
   case "$real_dest/" in

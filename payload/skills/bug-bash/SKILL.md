@@ -35,18 +35,22 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
 
        bash ~/.claude/skills/bug-bash/target-guard.sh "<url>"
 
-   It prints `LOCAL <url>`, or refuses a host that is not this machine (real users) or a dev server
-   (its first compile reads as a dead link). Against a deployment Dan names, only ever run it with
-   `--read-only`: explorers then only look, and every finding is at most a risk.
+   It prints `LOCAL <url>`, or refuses a host that is not this machine (real users), a redirect off
+   it, or a dev server it recognises (Next.js, Vite and what serves through it, webpack's): a first
+   compile reads as a dead link. Against a deployment Dan names, only ever run it with
+   `--read-only`: it prints `READ-ONLY <url>`, every explorer launches with `readOnly: true`, and
+   every finding is at most a risk.
 
 ## 3. Explore (at most 4 agents at a time)
 
 Each explorer gets one area, one persona, a charter of five to ten one sentence goals, and its own
 output directory `<scratchpad>/bug-bash/<run>/explorer-<n>/`. Tell each explorer:
 
-- Drive a **headless Playwright browser of your own**, launched by a script you write in your output
-  directory with the project's own Playwright install (`require` it from the project's
-  `node_modules`). Never the Playwright MCP browser (one browser for the whole session; the
+- Drive a **headless Playwright browser of your own**, from a script you write in your output
+  directory, started only through
+  `require(process.env.HOME + '/.claude/skills/bug-bash/explorer-browser.js').launch({ chromium, readOnly })`
+  with `chromium` from the project's own `node_modules/playwright`. In a read only run it aborts
+  every request that is not a read, so nothing is submitted to a site with real users. Never the Playwright MCP browser (one browser for the whole session; the
   `playwright-subagent-gate` hook refuses it) and never Claude in Chrome (Dan's real browser and
   sign ins). Measured on 2026-10-05: four such browsers launched at once ran in 1.2 to 1.5 s, and a
   cookie set in one was absent from the other three.

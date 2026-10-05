@@ -84,6 +84,23 @@ refuses "a destination inside the config home is refused, since the tool refuses
 ln -s "$FAKEHOME" "$TMP/linkhome"
 refuses "the config home reached through a symlink is still refused" "config" "$SRC" "$TMP/linkhome/skills"
 
+# A config home that does not exist yet is still the config home: the refusal compares against its
+# spelling rather than standing down (lessons review of #798).
+NOHOME="$TMP/nohome/.claude"
+mkdir -p "$TMP/nohome-dest"
+o="$(CLAUDE_HOME="$NOHOME" bash "$HELPER" "$SRC" "$NOHOME" 2>&1)"; r=$?
+[ "$r" -ne 0 ] && ! grep -q '^/' <<< "$o" && ok \
+  || bad "a destination inside a config home that does not exist is still refused (rc $r)" "$o"
+# The refusal compares against the spelling too: a real folder at a config home's path, reached
+# while CLAUDE_HOME names it but before cd can resolve it, is refused by name.
+mkdir -p "$NOHOME"
+o="$(CLAUDE_HOME="$NOHOME/" bash "$HELPER" "$SRC" "$NOHOME" 2>&1)"; r=$?
+[ "$r" -eq 4 ] && grep -qi 'config' <<< "$o" && ok \
+  || bad "a config home named with a trailing slash is still the config home (rc $r)" "$o"
+rmdir "$NOHOME" 2>/dev/null
+o="$(CLAUDE_HOME="$NOHOME" bash "$HELPER" "$SRC" "$TMP/nohome-dest" 2>&1)"; r=$?
+[ "$r" -eq 0 ] && ok || bad "with no config home, a real scratchpad still stages (rc $r)" "$o"
+
 # --- 3. the skills hand the Workflow tool the staged copy, never their installed path ---
 for pair in "production-ready:production-audit.workflow.js" "plan-council:panel.workflow.js"; do
   skill="${pair%%:*}"; wf="${pair#*:}"

@@ -6,7 +6,7 @@
 // or interpreter runs as its program (program.ts) and judges inline code (code.ts), so a shell fed
 // its script on standard input is read as the commands it runs, as a shell's -c always was.
 import { codeVerdict, type CodeVerdict } from './code.ts'
-import { SHELLS, execsOf, kindOf, languageOf, readProgram, type Lang, type Program, type Script, type Stdin } from './program.ts'
+import { SHELLS, execsOf, findRoots, kindOf, languageOf, readProgram, type Lang, type Program, type Script, type Stdin } from './program.ts'
 
 export { SHELLS }
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
@@ -504,15 +504,16 @@ const printfText = (args: readonly string[]): string | undefined => {
  * a shell or an interpreter, what it runs (#712): the language of its inline code, its program (its
  * text, `stdin` when that came on standard input, or why it cannot be read), the script file it
  * runs instead, and what the program can do. `xargs` marks a command xargs runs, giving it
- * operands from its own input that no word names; `found` one find -exec runs, whose {} this reader
- * writes as the folder find starts from and which stands for everything under it.
+ * operands from its own input that no word names; `found` the folders find starts from, on a
+ * command its -exec runs, whose {} this reader writes as one of them and stands for everything
+ * under it.
  */
 export type Command = {
   words: string[]
   pipedFrom?: string[]
   heredocs?: Fed
   xargs?: true
-  found?: true
+  found?: string[]
   language?: Lang
   program?: Program
   script?: Script
@@ -521,7 +522,7 @@ export type Command = {
 
 // What feeds the commands of one read: the command a | feeds them from, what is on their standard
 // input, and whether xargs runs them, each given to every command no | of its own feeds.
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: boolean }
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[] }
 
 // A command's output redirects that name a file, each with its target: `> f`, `>> f`, `>| f`,
 // `&> f`, `2> f`, and a `>&` whose target is no descriptor. A descriptor copy (2>&1) names none.
@@ -551,13 +552,13 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Command[], opts: ReadO
   const { program, script } = kind ? readProgram(words, stdin) : {}
   if (kind === 'shell' && program && 'text' in program) {
     const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
-    out.push(...pipeline(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: true } : {}) }))
+    out.push(...pipeline(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: feed.found } : {}) }))
     // The shell's own output redirects send everything its script prints to a file, which the
     // script's commands never name (#760: `bash -c 'make' > build.log` wrote a build.log no reader
     // saw). They are given as a command of their own, the shell and those redirects, so every
     // reader of redirects sees the file.
     const own = ownRedirects(words)
-    if (own.length) out.push({ words: [words[0] as string, ...own], ...(feed.xargs ? { xargs: true as const } : {}), ...(feed.found ? { found: true as const } : {}) })
+    if (own.length) out.push({ words: [words[0] as string, ...own], ...(feed.xargs ? { xargs: true as const } : {}), ...(feed.found ? { found: feed.found } : {}) })
     return
   }
   // The language is said only where there is a program or script in it to read.
@@ -568,18 +569,20 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Command[], opts: ReadO
     ...(feed.pipedFrom ? { pipedFrom: feed.pipedFrom } : {}),
     ...(fed.length ? { heredocs: fed } : {}),
     ...(feed.xargs ? { xargs: true as const } : {}),
-    ...(feed.found ? { found: true as const } : {}),
+    ...(feed.found ? { found: feed.found } : {}),
     ...(language ? { language } : {}),
     ...(program ? { program } : {}),
     ...(script ? { script } : {}),
     ...(verdict ? { verdict } : {}),
   })
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
-  // from, so the command is marked `found`: what it changes is that folder and everything under it
-  // (#760: `find src -exec rm {} \;` was read as removing src alone).
+  // from, so the command carries those folders as `found`: what it changes at one of them is that
+  // folder and everything under it (#760: `find src -exec rm {} \;` was read as removing src alone),
+  // and a path it names itself is that path alone.
+  const roots = findRoots(words)
   for (const inner of execsOf(words)) {
     const b = begins(inner, inner.map(() => -1))
-    if (b.words.length) emit(b.words, [], { ...(b.xargs ? { xargs: true } : {}), found: true }, out, opts)
+    if (b.words.length) emit(b.words, [], { ...(b.xargs ? { xargs: true } : {}), found: roots }, out, opts)
   }
 }
 
@@ -623,7 +626,7 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       feed = { pipedFrom: feeder, stdin: piped(feeder, fedOf(f)) }
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
-    if (outer.found) feed = { ...feed, found: true }
+    if (outer.found) feed = { ...feed, found: outer.found }
     emit(b.words, fedOf(b), feed, out, opts)
   })
   return out

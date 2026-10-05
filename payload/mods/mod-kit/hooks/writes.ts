@@ -424,11 +424,11 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
     })
   }
   const named = (w: string, edits?: true) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined)
-  // Set for each command a find -exec runs: what it changes is the folder find starts from and
-  // everything under it, so every change it makes reaches the tree (#760).
-  let foundTree = false
+  // For a command a find -exec runs, the folders find starts from: a change at one of them is one
+  // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
+  let foundRoots: readonly string[] = []
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
-    tree = tree || foundTree
+    tree = tree || foundRoots.includes(word)
     const path = absolutePath(word, dir, home)
     if (!word || isDevice(path ?? word)) return
     const written = asWritten.get(word) ?? word
@@ -475,7 +475,7 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
       continue
     }
     asWritten.clear()
-    foundTree = !!c.found
+    foundRoots = c.found ?? []
     const raw = written.map(expand)
     raw.forEach((w, n) => {
       if (w !== written[n]) asWritten.set(w, written[n] as string)

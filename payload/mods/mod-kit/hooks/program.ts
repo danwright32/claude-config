@@ -200,12 +200,18 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
  * reads each as a command of its own, so its runners are looked past and its program read (lessons
  * review of #714; #730: a wrapper in front of it hid the command).
  */
-export const execsOf = (words: readonly string[]): string[][] => {
+/** The folders a find starts from, which its -exec's {} is written as: `.` when it names none. */
+export const findRoots = (words: readonly string[]): string[] => {
   if (base(words[0] ?? '') !== 'find') return []
   const args = words.slice(1)
   const firstExpr = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!')
   const roots = firstExpr < 0 ? args : args.slice(0, firstExpr)
-  const starts = roots.length ? roots : ['.']
+  return roots.length ? roots : ['.']
+}
+export const execsOf = (words: readonly string[]): string[][] => {
+  if (base(words[0] ?? '') !== 'find') return []
+  const args = words.slice(1)
+  const starts = findRoots(words)
   const out: string[][] = []
   for (let i = 0; i < args.length; i++) {
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i] as string)) continue
