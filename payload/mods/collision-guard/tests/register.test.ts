@@ -189,7 +189,7 @@ test('a Worktree verdict blocks with the card and tells the other session', with
   expect(w.sent).toEqual([
     {
       to: 'them',
-      text: 'Another session wanted to edit src/InvoiceTable.tsx while you are working on it, so it was moved to its own worktree to redo its change there. Nothing here was touched.',
+      text: 'Another session wanted to edit "src/InvoiceTable.tsx" while you are working on it, so it was moved to its own worktree to redo its change there. Nothing here was touched.',
       origin: { kind: 'plugin', name: 'collision-guard' },
     },
   ])
@@ -199,7 +199,7 @@ test('a Stop verdict blocks with the card and tells the other session', withDeps
   const w = world(on, { open: [rec('them', { edits: ['/repo/src/InvoiceTable.tsx'] })], judge: '{"verdict":"Stop","reason":"They are mid rebase."}' })
   const r = await $.tool.call(edit('/repo/src/InvoiceTable.tsx'))
   expect(refusal(r)).toBe('Blocked: Another session is working on InvoiceTable.tsx. They are mid rebase. Leave it to the other session, or ask Dan.')
-  expect(w.sent[0]?.text).toBe('Another session wanted to edit src/InvoiceTable.tsx while you are working on it, so it was stopped. Nothing here was touched.')
+  expect(w.sent[0]?.text).toBe('Another session wanted to edit "src/InvoiceTable.tsx" while you are working on it, so it was stopped. Nothing here was touched.')
 })
 
 test('a judge that cannot answer stops the edit (the spec, L42)', withDeps, async ($, on) => {
@@ -258,7 +258,7 @@ test('an ordinary git command is not judged', withDeps, async ($, on) => {
 // So the plugin field names the guard, and `name` is a session name anybody could choose.
 const MEASURED = { kind: 'peer', from: 'uds:/tmp/cc-socks/2012.sock', plugin: 'collision-guard', name: 'collision-throwaway-1004' }
 
-test('the session that was working first gets a toast when it hears from the guard', withDeps, async ($, on) => {
+test('the session that was working first gets a toast when it hears from the guard, in the shape the live check delivered before #700', withDeps, async ($, on) => {
   const w = world(on)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   await $.session.receive({
@@ -355,7 +355,7 @@ test('a shell write to a file another open session edited is judged like an edit
   expect(w.prompts[0]?.prompt).toContain('echo done >> notes.txt')
   expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
   expect(w.cards[0]?.toolUseId).toBe('sh1')
-  expect(w.sent[0]?.text).toBe('Another session wanted to edit notes.txt while you are working on it, so it was stopped. Nothing here was touched.')
+  expect(w.sent[0]?.text).toBe('Another session wanted to edit "notes.txt" while you are working on it, so it was stopped. Nothing here was touched.')
   // Blocked, so it wrote nothing and is not noted.
   expect(w.edits).toEqual([])
 })
@@ -444,7 +444,7 @@ test('an rm of a file another open session edited is judged, and a Stop blocks i
   expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are still writing it. Leave it to the other session, or ask Dan.')
   expect(w.cards[0]?.toolUseId).toBe('rm1')
   // Dan, 2026-10-04 (#700): a removal says remove, where #674 had kept the edit words.
-  expect(w.sent[0]?.text).toBe('Another session wanted to remove notes.txt while you are working on it, so it was stopped. Nothing here was touched.')
+  expect(w.sent[0]?.text).toBe('Another session wanted to remove "notes.txt" while you are working on it, so it was stopped. Nothing here was touched.')
   expect(w.edits).toEqual([])
 })
 
@@ -479,7 +479,7 @@ test('an mv of a folder holding a file another session edited is judged on that 
   expect(w.reached).not.toContain('Bash')
   expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/a.ts, with the shell command: mv src /tmp/old-src')
   expect(refusal(r)).toContain('Another session is working on a.ts.')
-  expect(w.sent[0]?.text).toBe('Another session wanted to remove src/a.ts while you are working on it, so it was stopped. Nothing here was touched.')
+  expect(w.sent[0]?.text).toBe('Another session wanted to remove "src/a.ts" while you are working on it, so it was stopped. Nothing here was touched.')
 })
 
 test('a folder copied in and then removed in one command keeps the removal (lessons review of #691)', withDeps, async ($, on) => {
@@ -523,8 +523,8 @@ test('an rm -r of a folder holding several edited files is judged once, with one
   expect(w.cards.length).toBe(1)
   expect(refusal(r)).toBe('Blocked: Another session is working on 3 files in src. Both are mid change. Leave it to the other session, or ask Dan.')
   expect(w.sent.map(s => [s.to, s.text])).toEqual([
-    ['one', 'Another session wanted to remove src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.'],
-    ['two', 'Another session wanted to remove src/c.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+    ['one', 'Another session wanted to remove "src/a.ts", "src/b.ts" while you are working on it, so it was stopped. Nothing here was touched.'],
+    ['two', 'Another session wanted to remove "src/c.ts" while you are working on it, so it was stopped. Nothing here was touched.'],
   ])
 })
 
@@ -541,7 +541,7 @@ test('a removal naming several files is told in one toast with each file name, s
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   await $.session.receive({
     origin: MEASURED,
-    text: 'Another session wanted to remove src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.',
+    text: 'Another session wanted to remove "src/a.ts", "src/b.ts" while you are working on it, so it was stopped. Nothing here was touched.',
   } as never)
   expect(w.toasts).toEqual(['Another session wanted to remove a.ts, b.ts; it was stopped.'])
 })
@@ -555,7 +555,7 @@ test('a whole path with spaces and a curly apostrophe is named in the toast, sen
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   await $.tool.call(edit(`${SPACED}/app.ts`))
   const text = w.sent[0]?.text as string
-  expect(text).toBe(`Another session wanted to edit ${SPACED}/app.ts while you are working on it, so it was stopped. Nothing here was touched.`)
+  expect(text).toBe(`Another session wanted to edit "${SPACED}/app.ts" while you are working on it, so it was stopped. Nothing here was touched.`)
   await $.session.receive({ origin: MEASURED, text } as never)
   expect(w.toasts).toEqual(['Another session wanted app.ts; it was stopped.'])
 })
@@ -566,6 +566,21 @@ test('a removal of a whole path with spaces is named in the toast too', withDeps
   await $.tool.call(bash(`rm '${SPACED}/app.ts'`))
   await $.session.receive({ origin: MEASURED, text: w.sent[0]?.text as string } as never)
   expect(w.toasts).toEqual(['Another session wanted to remove app.ts; it was moved to a worktree.'])
+})
+
+// #700, the finding Dan folded in: the list was split on comma space, so "Notes, draft.md" read as
+// two files. Each name is now quoted in the message and read back whole.
+test('a removal naming a file with a comma in it and one under spaces is sent and heard with each name whole', withDeps, async ($, on) => {
+  const w = world(on, {
+    open: [rec('them', { repoRoot: null, cwd: SPACED, edits: [`${SPACED}/Notes, draft.md`, `${SPACED}/app.ts`] })],
+    judge: '{"verdict":"Stop","reason":"They are mid change."}',
+  })
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.tool.call(bash(`rm -r '${SPACED}'`))
+  const text = w.sent[0]?.text as string
+  expect(text).toBe(`Another session wanted to remove "${SPACED}/Notes, draft.md", "${SPACED}/app.ts" while you are working on it, so it was stopped. Nothing here was touched.`)
+  await $.session.receive({ origin: MEASURED, text } as never)
+  expect(w.toasts).toEqual(['Another session wanted to remove "Notes, draft.md", app.ts; it was stopped.'])
 })
 
 test('an rm -r of a folder the judge cannot answer for is stopped (L42)', withDeps, async ($, on) => {

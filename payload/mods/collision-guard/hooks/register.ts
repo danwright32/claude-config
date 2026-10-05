@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit, workingTree, type Rec, type ShellWrite, type Verdict } from './collide.ts'
+import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, shellWrites, wantedFiles, watchedGit, workingTree, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -193,7 +193,7 @@ export const register: Register = on => {
       const others = othersEditing(list.open, list.selfId, path)
       if (others.length) {
         const root = others[0]?.repoRoot ?? null
-        const blocked = await decide($, toolUseId, { action: `edit ${path}`, shortName: base(path), messageWhat: relTo(path, root), doing: 'edit', root, others })
+        const blocked = await decide($, toolUseId, { action: `edit ${path}`, shortName: base(path), messageWhat: quoteNames([relTo(path, root)]), doing: 'edit', root, others })
         if (blocked) return blocked
       }
       const result = await next(e)
@@ -239,7 +239,7 @@ export const register: Register = on => {
         const blocked = await decide($, toolUseId, {
           action: `${what} with the shell command: ${command}`,
           shortName: one ? base(one) : `${files.length} files in ${base(w.path)}`,
-          messageWhat: one ? relTo(one, root) : o => files.filter(p => o.edits.includes(p)).map(p => relTo(p, root)).join(', '),
+          messageWhat: one ? quoteNames([relTo(one, root)]) : o => quoteNames(files.filter(p => o.edits.includes(p)).map(p => relTo(p, root))),
           doing: w.removes ? 'remove' : 'edit',
           root,
           others,
@@ -267,11 +267,13 @@ export const register: Register = on => {
     if (origin.plugin === 'collision-guard' && e.text.startsWith('Another session wanted')) {
       const outcome = /moved to its own worktree/.test(e.text) ? 'it was moved to a worktree' : 'it was stopped'
       // The message is plain text, the only thing a send carries, so the files are read back out of
-      // it: everything up to the fixed words after them, so a path with spaces stays whole (#700). A
-      // folder removal names several, comma separated (#674), and a removal says so (#700).
-      const file = /wanted to (edit|remove) (.+?) while you are working on it/.exec(e.text)
+      // it as the sender quoted them (collide.ts, wantedFiles), each name whole (#700). A folder
+      // removal names several (#674), and a removal says so (#700). In the toast a name holding a
+      // comma is quoted, so the list still reads as the files it is.
+      const wanted = wantedFiles(e.text)
       const action = /wanted to run (.+?) in this checkout/.exec(e.text)?.[1]
-      const what = file ? `${file[1] === 'remove' ? 'to remove ' : ''}${(file[2] as string).split(', ').map(base).join(', ')}` : (action ?? 'your files')
+      const names = wanted?.names.map(base).map(n => (n.includes(',') ? `"${n}"` : n)).join(', ')
+      const what = wanted ? `${wanted.verb === 'remove' ? 'to remove ' : ''}${names}` : (action ?? 'your files')
       await $.ui.toast(`Another session wanted ${what}; ${outcome}.`)
     }
     return next(e)

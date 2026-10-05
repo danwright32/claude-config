@@ -108,14 +108,21 @@ in `cp a x; rm -r x` where `x` is a folder the copy lands in, the folder's remov
 
 A removal says so (changed at Dan's request on 2026-10-04, #700; #674 had kept the edit words): the
 toast is "Checked with the other session: safe to remove app.ts." (or "safe to remove 3 files in
-src"), the message to the other session reads "Another session wanted to remove src/app.ts while
-you are working on it, ...", naming that session's own files, and its toast reads "Another session
+src"), the message to the other session reads `Another session wanted to remove "src/app.ts" while
+you are working on it, ...`, naming that session's own files, and its toast reads "Another session
 wanted to remove app.ts; it was stopped." An ordinary write keeps "edit", and its toast in the
 other session keeps the settled "Another session wanted app.ts; ...". The card names the file the
-same way for both ("Another session is working on app.ts."). A message between sessions carries
-text only, so the receiving side reads the files back out of it: everything between the verb and
-the fixed words "while you are working on it", which keeps a path with spaces or a curly apostrophe
-whole (the whole path is sent when the other session's repository is not known).
+same way for both ("Another session is working on app.ts.").
+
+A message between sessions carries text only (`$.session.send` takes a recipient and a text), so
+the receiving side reads the files back out of the sentence. Each name is written as a quoted
+string, with JSON's own quoting, and the names are separated by a comma and a space (#700, the
+list shape chosen when Dan folded in the finding that a name such as `Notes, draft.md` read as two
+files). No comma, space, quote or curly apostrophe inside a name can break that, and the whole path
+is sent when the other session's repository is not known. The toast quotes a name holding a comma,
+`Another session wanted to remove "Notes, draft.md", app.ts; it was stopped.` A message in the
+shape before #700 (names unquoted, from a session still running the code it loaded earlier) is still
+read, everything between the verb and "while you are working on it", split on comma and space.
 
 What a session records as its edits, by the edit tools and by shell commands alike: any path inside
 its own root (its repository, or its own folder when it works outside one: the record's `repoRoot`,

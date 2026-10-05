@@ -85,6 +85,28 @@ export const othersInRepo = <R extends Rec>(open: R[], selfId: string | null, ro
     ? []
     : open.filter(r => r.sessionId !== selfId && (r.repoRoot === root || (r.repoRoot === null && (r.cwd === root || r.cwd.startsWith(root + '/')))))
 
+// The files a message to another session names (#700). A message carries text only, so each name is
+// written as a quoted string (JSON's own quoting), which no comma, space, quote or curly apostrophe
+// inside a name can break, and read back the same way. A message from a guard before #700 named them
+// unquoted and comma separated, and is still read that way, since a session keeps the code it loaded.
+export const quoteNames = (names: string[]): string => names.map(n => JSON.stringify(n)).join(', ')
+
+export type Wanted = { verb: 'edit' | 'remove'; names: string[] }
+const STRING = '"(?:[^"\\\\]|\\\\.)*"'
+const QUOTED_LIST = new RegExp(`wanted to (edit|remove) (${STRING}(?:, ${STRING})*) while you are working on it`)
+export const wantedFiles = (text: string): Wanted | undefined => {
+  const q = QUOTED_LIST.exec(text)
+  if (q) {
+    try {
+      return { verb: q[1] as Wanted['verb'], names: ((q[2] as string).match(new RegExp(STRING, 'g')) ?? []).map(s => JSON.parse(s) as string) }
+    } catch {
+      // Not quoting this guard wrote: read as the older shape below.
+    }
+  }
+  const old = /wanted to (edit|remove) (.+?) while you are working on it/.exec(text)
+  return old ? { verb: old[1] as Wanted['verb'], names: (old[2] as string).split(', ') } : undefined
+}
+
 // The judge answers JSON; anything that is not exactly one of the three verdicts with a reason is
 // no verdict, and the guard stops (L42, the spec).
 export const parseVerdict = (text: string): Verdict | undefined => {

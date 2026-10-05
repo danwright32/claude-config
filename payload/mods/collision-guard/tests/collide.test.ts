@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit, workingTree } from '../hooks/collide.ts'
+import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, shellWrites, wantedFiles, watchedGit, workingTree } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -232,6 +232,28 @@ describe('scratch, which is never recorded outside the session root', () => {
     expect(isScratch('/Users/dan/Apps/other/a.ts', '/var/folders/ab/T/')).toBe(false)
     expect(isScratch('/tmpfiles/a.ts', undefined)).toBe(false)
     expect(isScratch('/repo/tmp/a.ts', 'relative/tmp')).toBe(false)
+  })
+})
+
+// #700: a message between sessions carries text only, so the files it names are written so they
+// read back whole: each a quoted string, which a comma, a space, a quote or Dan's curly apostrophe
+// inside a name cannot break.
+describe('the files a message to another session names', () => {
+  const names = ['src/Notes, draft.md', '/Users/dan/Documents/Documents - Dan\u2019s MacBook Pro/app.ts', 'say "hi".md', 'odd while you are working on it.md']
+  const message = (verb: string, list: string) => `Another session wanted to ${verb} ${list} while you are working on it, so it was stopped. Nothing here was touched.`
+  test('are written quoted, comma separated', () => {
+    expect(quoteNames(['src/a.ts', 'src/b.ts'])).toBe('"src/a.ts", "src/b.ts"')
+  })
+  test('and read back exactly, with the verb, whatever the names hold', () => {
+    expect(wantedFiles(message('remove', quoteNames(names)))).toEqual({ verb: 'remove', names })
+    expect(wantedFiles(message('edit', quoteNames(['src/app.ts'])))).toEqual({ verb: 'edit', names: ['src/app.ts'] })
+  })
+  test('a message from a guard before #700, its names unquoted, is still read', () => {
+    expect(wantedFiles(message('edit', 'src/app.ts'))).toEqual({ verb: 'edit', names: ['src/app.ts'] })
+    expect(wantedFiles(message('edit', 'src/a.ts, src/b.ts'))).toEqual({ verb: 'edit', names: ['src/a.ts', 'src/b.ts'] })
+  })
+  test('a message naming no file is none', () => {
+    expect(wantedFiles('Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped.')).toBeUndefined()
   })
 })
 
