@@ -6696,7 +6696,10 @@ _cir_re='(gh|"\$gh")[[:space:]]+(run[[:space:]]+list|pr[[:space:]]+checks|api)'
 # remote no slug can be derived from (L11: a message may claim only what its check measured). A
 # literal repos/<owner>/<name> path counts too, since `gh api` has no --repo and that path is how
 # it names one; a {owner}/{repo} placeholder or a variable does not match the character class.
-_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+# An ACCOUNT endpoint is about no repository at all, so naming one is not possible and its answer
+# cannot be about the wrong one: `gh api rate_limit`, which the CI gate asks when a read was refused
+# for a used up limit (claude-config#593), and `gh api user`. Exempted by that reason, as a shape.
+_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|api[[:space:]]+(rate_limit|user)([[:space:]]|$)'
 _cir_lines(){   # $1 = a copy of the tool to read
   # Comments stripped and continuation lines joined, exactly as every other source scan here does
   # it, so a query split over two lines is judged as the one line it really is.
@@ -12172,6 +12175,22 @@ printf '%s\n' "\$*" >> "$WORK/ci-calls.log"
 # the third would report a working lookup as a broken one (L10, L11).
 [ "\${CI_STATE:-}" = "none" ] && exit 0
 [ -n "\${CI_STATE:-}" ] || exit 1
+# A gh whose account has used up its REST limit (claude-config#593), in the words the real one
+# prints, and the rate_limit endpoint (which costs nothing against the limit) saying when it resets.
+if [ "\${CI_STATE:-}" = "ratelimited" ]; then
+  case "\$*" in
+    *rate_limit*) printf '%s %s\n' "\${CI_REMAINING:-0}" "\${CI_RESET:-0}"; exit 0 ;;
+  esac
+  # One error body per kind, in gh's own words, so the classifier is judged on what GitHub sends
+  # rather than one line of my own (L52).
+  case "\${CI_RL_KIND:-primary}" in
+    primary)   echo "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    secondary) echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    429)       echo "gh: Too many requests (HTTP 429)" >&2 ;;
+    other403)  echo "gh: Resource not accessible by integration (HTTP 403)" >&2 ;;
+  esac
+  exit 1
+fi
 printf '%s\n' "\$CI_STATE"
 STUB
 chmod +x "$CIBIN/gh"
@@ -12280,6 +12299,43 @@ check "#221 and it says it could not read the answer, not that it failed" \
   "case \"\$out_unread\" in *'could not read whether'*) true ;; *) false ;; esac"
 check "#221 and unreadable carries its own marker" \
   "case \"\$out_unread\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+check "#593 an unreadable verdict that is not a rate limit does not claim to be one" \
+  "case \"\$out_unread\" in *'rate limit'*) false ;; *) true ;; esac"
+
+# RATE LIMITED is unreadable for a reason the reader can do nothing about but wait, and it has a
+# known end (claude-config#593). On 2026-10-02 a CI review in another session used up the account's
+# REST limit for over 40 minutes and config sync paused on both Macs with nothing saying why. So the
+# cause and the reset time are said, in Eastern time, as Dan reads every time.
+_rl_reset=$(( $(date +%s) + 1500 ))
+# Formatted by perl rather than the tool's own date helper, so the expectation cannot share a
+# mistake with the code it judges (L70).
+_rl_when="$(TZ=America/New_York perl -MPOSIX -e 'print strftime("%-I:%M %p ET", localtime($ARGV[0]))' "$_rl_reset")"
+out_rl="$(CI_RESET="$_rl_reset" ci_case ratelimited ratelimited)"
+dbg "#593 rate limited: $out_rl"
+check "#593 a rate limited verdict is still not applied" "! ci_applied ratelimited"
+check "#593 and it names the rate limit as the cause" \
+  "case \"\$out_rl\" in *'rate limit'*) true ;; *) false ;; esac"
+check "#593 and when it resets, in Eastern time ($_rl_when)" \
+  "case \"\$out_rl\" in *\"\$_rl_when\"*) true ;; *) false ;; esac"
+check "#593 and it is still the unreadable outcome, so the watcher log and the clock treat it as one" \
+  "case \"\$out_rl\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+# A secondary limit leaves the primary one with calls to spare and has no reset time to quote, so
+# it is named as that rather than given a time the reader would wait for in vain (L11).
+out_rl_old="$(SYNC_CI_UNREADABLE_AFTER=0 CI_RESET="$_rl_reset" ci_case ratelimited-old ratelimited)"
+check "#593 past the window a rate limited verdict is applied like any unreadable one, and still names the cause" \
+  "case \"\$out_rl_old\" in *'WITHOUT a verdict'*\"\$_rl_when\"*) true ;; *) false ;; esac"
+# The KIND is read from gh's error text, never inferred from the rate_limit endpoint: here the
+# primary limit reads as used up too, and the secondary body must still win.
+out_rl2="$(CI_RL_KIND=secondary CI_RESET="$_rl_reset" ci_case ratelimited2 ratelimited)"
+check "#593 a secondary rate limit is named from gh's own text, without quoting the primary reset time" \
+  "case \"\$out_rl2\" in *'secondary rate limit'*) case \"\$out_rl2\" in *\"\$_rl_when\"*) false ;; *) true ;; esac ;; *) false ;; esac"
+out_rl3="$(CI_RL_KIND=429 CI_RESET="$_rl_reset" ci_case ratelimited3 ratelimited)"
+check "#593 an HTTP 429 is read as a rate limit, and as the short secondary kind" \
+  "case \"\$out_rl3\" in *'secondary rate limit'*) true ;; *) false ;; esac"
+# A 403 that is NOT a rate limit stays plainly unreadable, so its advice still points at gh's login.
+out_rl4="$(CI_RL_KIND=other403 CI_RESET="$_rl_reset" ci_case ratelimited4 ratelimited)"
+check "#593 a 403 that is not a rate limit is not called one" \
+  "case \"\$out_rl4\" in *'rate limit'*) false ;; *'could not read whether'*) true ;; *) false ;; esac"
 
 # AN UNREADABLE VERDICT MUST NOT BLOCK FOR EVER (claude-config#327). Failing closed is right while
 # the answer might still arrive, and wrong once it is clear no answer is coming: gh not logged in,
