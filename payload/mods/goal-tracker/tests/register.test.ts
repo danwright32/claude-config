@@ -34,32 +34,15 @@ const withDeps = { plugins: [deps] }
 const MIN = 60_000
 
 // Picker manners (#615), standing in, since a mod's tests cannot import another mod's files. As the
-// real mod does, it adds $.pickers, answers every AskUserQuestion in its own tool.call hook without
-// ever calling next (more than one question is refused), and holds the open question in its state
-// while it waits, writing null once the question ends. Dan's answer comes from the world, which
-// sees the session as it stood while the question was open.
+// real mod does since #744, it refuses a call with more than one question without calling next, and
+// hands every other question down to Claude Code's own dialog.
 const PickerManners = (tier: 'prepend' | 'append'): { name: string; tier: 'prepend' | 'append'; register: Register } => ({
   name: 'picker-manners',
   tier,
   register: on => {
-    on('engine.create', async ($, e, next) => {
-      const built = await next(e)
-      const wait = async ({ id }: { id: string }) => ({ kind: 'answer', answer: (await built.process.run(['__answer', id])).stdout })
-      return { ...built, pickers: { wait } } as never
-    })
-    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e) => {
-      const questions = (e.questions ?? []) as unknown as { question: string }[]
-      const q = questions[0]
-      if (!q || questions.length > 1) return { deny: 'Ask one question per call: Dan answers pickers one at a time.' }
-      const id = (e as unknown as { tool_use_id?: string }).tool_use_id ?? 'call-1'
-      const open = { plugin: 'picker-manners', key: 'open' } as never
-      await $.state.set(open, { id, question: q, chosen: [] } as never)
-      try {
-        const outcome = await ($ as unknown as { pickers: { wait: (i: { id: string }) => Promise<{ answer: string }> } }).pickers.wait({ id })
-        return { result: { questions: e.questions, answers: { [q.question]: outcome.answer } } } as never
-      } finally {
-        await $.state.set(open, null as never)
-      }
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      if ((e.questions ?? []).length !== 1) return { deny: 'Ask one question per call: Dan answers pickers one at a time.' }
+      return next(e)
     })
   },
 })
@@ -89,14 +72,9 @@ type WorldOpts = {
   pending?: unknown
 }
 const world = (on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined, duringPicker: undefined as Rec | undefined }
+  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
   let writes = 0
   on('process.run', ($, e) => {
-    // Dan answering the question picker manners shows: "Yes".
-    if (e.argv[0] === '__answer') {
-      w.duringPicker = w.progress[w.progress.length - 1]
-      return { value: { exitCode: 0, stdout: 'Yes', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    }
     if (e.argv[0] === '__pending') return { value: { exitCode: 0, stdout: JSON.stringify(opts.pending ?? []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (e.argv[0] === 'terminal-notifier') {
       w.notified.push(e.argv.slice(1))
@@ -484,10 +462,10 @@ test('a question refused at once sends no notification', withDeps, async ($, on)
 })
 
 // #732: a question is marked and notified only once every refusing guard has let it through. The
-// secret guard and picker manners' screen decide in a tool.call hook beneath the tracker, and a
-// secret scan runs a process that can take seconds; a question it refuses was never in front of Dan,
-// and its text (perhaps the very secret) must not reach a notification or the shared registry. This
-// stand-in refuses after five seconds, well past the second the tracker waits before notifying.
+// secret guard decides in a tool.call hook beneath the tracker, and a secret scan runs a process
+// that can take seconds; a question it refuses was never in front of Dan, and its text (perhaps the
+// very secret) must not reach a notification or the shared registry. This stand-in refuses after
+// five seconds, well past the second the tracker waits before notifying.
 const SlowScreen: { name: string; tier: 'append'; register: Register } = {
   name: 'secret-guard',
   tier: 'append',
@@ -766,11 +744,11 @@ test('a notification that cannot be sent is said once in a dim line, and never b
   expect(said[0]).toContain('no permission to notify')
 })
 
-// #694 item 6: hooks on one event nest by tier and then by load order, outermost first, and a hook
-// that answers without calling next keeps every hook beneath it from seeing the call. Picker manners
-// answers every AskUserQuestion that way, so wherever it sits above the tracker the tracker's own
-// tool.call hook never sees the question. Both orders are loaded here: picker manners in the tier
-// above the tracker's (prepend), and in the tier beneath it (append).
+// #694 item 6: hooks on one event nest by tier and then by load order, outermost first, and the plugin
+// API gives a person's mod no way to choose its place. Picker manners hands every question it does not
+// refuse down to Claude Code's own dialog (#744), so wherever it sits the tracker sees the call, and
+// marks it from its classic.PreToolUse hook once everything beneath has let it through. Both orders
+// are loaded here: picker manners in the tier above the tracker's (prepend), and beneath it (append).
 const ORDERS = [
   ['above', 'prepend'],
   ['beneath', 'append'],
@@ -778,64 +756,17 @@ const ORDERS = [
 const shipIt = { tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'Ship it?', header: 'Ship', options: [], multiSelect: false }] } as never
 
 for (const [where, tier] of ORDERS) {
-  test(`a question picker manners answers is marked and notified once, with picker manners ${where} the tracker`, { plugins: [deps, PickerManners(tier)] }, async ($, on) => {
-    mock.clock(on, { now: 0 })
-    const w = world(on)
+  test(`a question picker manners lets through is marked and notified once, with picker manners ${where} the tracker`, { plugins: [deps, PickerManners(tier)] }, async ($, on) => {
+    const clock = mock.clock(on, { now: 0 })
+    let during: Rec | undefined
+    const w = world(on, { clock, questionOpenMs: OPEN_MS, duringAsk: x => (during = last(x)) })
     await start($)
-    const r = (await $.tool.call(shipIt)) as { result?: { answers?: Record<string, string> } }
-    // Picker manners answered it, never the engine's own picker beneath.
-    expect(r.result?.answers).toEqual({ 'Ship it?': 'Yes' })
-    expect(w.duringPicker?.waiting).toMatchObject({ question: 'Ship it?', kind: 'question' })
+    await asked($, clock, shipIt)
+    expect(during?.waiting).toMatchObject({ question: 'Ship it?', kind: 'question' })
     expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
     expect(last(w)?.waiting).toBeUndefined()
   })
 }
-
-// Above the tracker, the question's end is seen only as picker manners' null: it takes off the
-// question's mark alone, and a permission prompt still open stands (#694 item 2 on this path too).
-test('a question picker manners holds open above the tracker leaves an open permission mark when it ends', { plugins: [deps, PickerManners('prepend')] }, async ($, on) => {
-  const clock = mock.clock(on, { now: 0 })
-  const w = world(on)
-  await start($)
-  const { call } = await prompted($ as never, w, { command: 'npm test', description: 'Run the test suite' })
-  await clock.advance(1_000)
-  await $.tool.call(shipIt)
-  expect(w.duringPicker?.waiting).toMatchObject({ kind: 'question', question: 'Ship it?' })
-  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'Run the test suite' })
-  w.answer?.()
-  await call
-  expect(last(w)?.waiting).toBeUndefined()
-})
-
-// Another mod's value is read, never trusted: an open question that cannot be read marks nothing.
-const Garbled: { name: string; tier: 'prepend'; register: Register } = {
-  name: 'picker-manners',
-  tier: 'prepend',
-  register: on => {
-    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e) => {
-      const open = { plugin: 'picker-manners', key: 'open' } as never
-      await $.state.set(open, { id: 7, question: 'Ship it?' } as never)
-      await $.state.set(open, null as never)
-      return { result: { questions: e.questions, answers: {} } } as never
-    })
-  },
-}
-test('an open question picker manners writes in a shape that cannot be read marks and notifies nothing, and is said', { plugins: [deps, Garbled] }, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  const w = world(on)
-  await start($)
-  await $.tool.call(shipIt)
-  await $.tool.call(shipIt)
-  expect(w.notified).toEqual([])
-  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
-  // Never passed off as no question at all (L11): each time in the debug log, and once a session in
-  // one dim line, since from then on the questions it shows go unmarked (lessons review of #696).
-  expect(w.debug.filter(l => l.includes("picker manners' open question could not be read"))).toHaveLength(2)
-  expect(w.logs.filter(l => l.includes('could not read the question picker manners holds open'))).toHaveLength(1)
-  await start($)
-  await $.tool.call(shipIt)
-  expect(w.logs.filter(l => l.includes('could not read the question picker manners holds open'))).toHaveLength(2)
-})
 
 // The goal text (Dan, 2026-10-04, picker): the /goal condition when one is set, otherwise the
 // session's first request cut to a few words. No model call.
@@ -884,9 +815,9 @@ test("a permission mark left over is cleared by Dan's next message", withDeps, a
 })
 
 // #706: picker manners in either order. Above it, the tracker sees the call; a question picker
-// manners refuses at once (more than one in a call, a next issue picker while quiet, one talked past)
-// never reached Dan, so it sends no notification. Beneath it, the tracker never sees the call, so the
-// refusal is counted toward failed from the result's row, which every mod's refusal reaches.
+// manners refuses at once (more than one in a call, a next issue picker while quiet) never reached
+// Dan, so it sends no notification. Beneath it, the tracker never sees the call, so the refusal is
+// counted toward failed from the result's row, which every mod's refusal reaches.
 const twoQuestions = {
   tool: 'AskUserQuestion',
   tool_use_id: 'q2',

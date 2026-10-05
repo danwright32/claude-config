@@ -5,6 +5,5 @@
   "author": {
     "name": "Dan Wright"
   },
-  "types": "./types/index.d.ts",
-  "dependencies": ["picker-manners"]
+  "types": "./types/index.d.ts"
 }

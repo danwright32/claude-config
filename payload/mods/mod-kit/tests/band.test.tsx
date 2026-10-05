@@ -14,7 +14,6 @@ const publisher: { name: string; register: Register } = {
       try {
         if (verb === 'show') await $.modkit.bandRow(JSON.parse(rest.join(' ')) as ModKitBandRow)
         if (verb === 'ask') await $.modkit.question(JSON.parse(rest.join(' ')) as ModKitQuestion)
-        if (verb === 'shown') return { deny: `shown ${JSON.stringify(await $.modkit.shownQuestion())}` }
         if (verb === 'clear') await $.modkit.clearBandRow({ mod: rest[0] as string, id: rest[1] as string })
       } catch (err) {
         return { deny: `refused: ${String((err as Error).message ?? err)}` }
@@ -43,10 +42,6 @@ const clear = async ($: Caller, mod: string, id: string) => {
 const ask = async ($: Caller, q: unknown) => {
   const out = (await $.tool.call({ tool: 'Bash', command: `ask ${JSON.stringify(q)}` } as never)) as { deny?: string; text?: string }
   return out.deny ?? out.text ?? ''
-}
-const shownQuestion = async ($: Caller) => {
-  const out = (await $.tool.call({ tool: 'Bash', command: 'shown' } as never)) as { deny?: string }
-  return JSON.parse(String(out.deny).replace(/^shown /, '')) as unknown
 }
 const question = (mod: string, text: string, extra: Partial<ModKitQuestion> = {}): ModKitQuestion => ({
   mod,
@@ -117,33 +112,35 @@ test('an open question takes the band alone, and the rest comes back once it is 
 })
 
 // #703: two mods can each have a question open at once (ask before saving's question waits while
-// Claude carries on, and then Claude asks a picker). Drawn together, both numbered from 1, a key
-// meant for one answered the other. One question at a time: the first asked is drawn, alone, and
-// the next waits its turn, so a number key can only mean the answer to the question in view.
+// Claude carries on; picker manners' band question beside it, until #744 removed it). Drawn together,
+// both numbered from 1, a key meant for one answered the other. One question at a time: the first
+// asked is drawn, alone, and the next waits its turn, so a number key can only mean the answer to the
+// question in view.
 test('two open questions: only the first asked is drawn, only its buttons hold the number keys, and the next follows once it is cleared', withPublisher, async ($, on) => {
   engineBand(on)
   await ask($, question('ask-before-saving', 'Save this as a standing rule?', { id: 'question:t1', chip: 'Standing rule' }))
-  await ask($, question('picker-manners', 'Which issue next?', { chip: 'Next' }))
-  for (const surface of ['terminal', 'desktop'] as const) {
+  await ask($, question('second-asker', 'Which window?', { chip: 'Window' }))
+  const firstInView = async (surface: 'terminal' | 'desktop' = 'terminal') => {
     const ui = await $.ui.mount(band(surface))
     expect(await shown(ui)).toContain('Save this as a standing rule?')
-    expect(await shown(ui)).not.toContain('Which issue next?')
+    expect(await shown(ui)).not.toContain('Which window?')
     expect((await ui.find({ type: 'Button', key: 'ask-before-saving:yes' }))?.props.hotkey).toBe('1')
-    expect(await ui.find({ type: 'Button', key: 'picker-manners:yes' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'second-asker:yes' })).toBeUndefined()
     await ui.unmount()
   }
-  expect(await shownQuestion($)).toEqual({ mod: 'ask-before-saving', id: 'question:t1' })
+  for (const surface of ['terminal', 'desktop'] as const) await firstInView(surface)
   // The one drawn published again (a multi select toggle) keeps its turn.
   await ask($, question('ask-before-saving', 'Save this as a standing rule?', { id: 'question:t1', chip: 'Standing rule', options: [{ button: 'yes', label: 'Yes', chosen: true }, { button: 'no', label: 'No' }] }))
-  expect(await shownQuestion($)).toEqual({ mod: 'ask-before-saving', id: 'question:t1' })
+  await firstInView()
   await clear($, 'ask-before-saving', 'question:t1')
-  const ui = await $.ui.mount(band())
-  expect(await shown(ui)).toContain('Which issue next?')
-  expect((await ui.find({ type: 'Button', key: 'picker-manners:yes' }))?.props.hotkey).toBe('1')
+  let ui = await $.ui.mount(band())
+  expect(await shown(ui)).toContain('Which window?')
+  expect((await ui.find({ type: 'Button', key: 'second-asker:yes' }))?.props.hotkey).toBe('1')
   await ui.unmount()
-  expect(await shownQuestion($)).toEqual({ mod: 'picker-manners', id: 'question' })
-  await clear($, 'picker-manners', 'question')
-  expect(await shownQuestion($)).toBeNull()
+  await clear($, 'second-asker', 'question')
+  ui = await $.ui.mount(band())
+  expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  await ui.unmount()
 })
 
 // #703 and #705: the question rows picker manners and ask before saving drew by hand had drifted

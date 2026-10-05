@@ -558,91 +558,228 @@ if [ -d "$ROOT/payload/mods" ]; then
     || check "every mod in payload/mods uses each dependency it lists" "exit=$code out=$out"
 fi
 
-# 12. The goal tracker reads picker manners' open question, `picker-manners.open`, as { id: string,
-#     question: { question: string } } (#694), and its own tests can only stand in for picker manners,
-#     so its reading is checked here against the contract picker manners declares (lessons review of
-#     #696, L52). Shown failing on a contract whose shape moved, then held on the real one.
-# Both contract checks read a block's members at its own top level with comments taken out (#735),
-# through the one reader of source every mod scan shares.
-TS_LIB="$ROOT/tools/lib"
-picker_contract(){   # $1 = picker manners' types file -> prints what does not match, exits 1 when anything does not
-  python3 - "$1" "$TS_LIB" <<'PY'
-import re, sys
-sys.path.insert(0, sys.argv[2])
-from ts_source import block_after, object_members, top_members
-try:
-    text = open(sys.argv[1]).read()
-except OSError as e:
-    print(f"cannot read {sys.argv[1]}: {e}")
-    sys.exit(1)
-wrong = []
-state = block_after(text, r"'picker-manners'\s*:\s*\{")
-if state is None or not re.match(r"PickersOpen\s*\|\s*null\b", top_members(state).get("open", "")):
-    wrong.append("PluginState 'picker-manners' does not declare open: PickersOpen | null")
-body = block_after(text, r"export type PickersOpen\s*=\s*\{")
-if body is None:
-    wrong.append("there is no PickersOpen type")
-else:
-    members = top_members(body)
-    if members.get("id") != "string":
-        wrong.append("PickersOpen has no id: string")
-    if (object_members(members.get("question", "")) or {}).get("question") != "string":
-        wrong.append("PickersOpen has no question: { question: string }")
-print("; ".join(wrong))
-sys.exit(1 if wrong else 0)
-PY
+# 12. No mod's own $ noun waits on a person, or on anything else with no bound under 10 seconds
+#     (#744). Claude Code cuts a noun call off at 10 s ("did not answer within 10000ms", measured
+#     live on 2026-10-05, 2.1.289), and `claude plugin test` does not, so a noun that waits on a
+#     press passes every test of its own and fails in a session: picker manners' $.pickers.wait
+#     asked every question twice that way. Each fixture is one form of that reason, never one named
+#     case (L362).
+WAITS="$ROOT/tools/check-mod-noun-waits.sh"
+M12W="$TMPROOT/m12w"
+mknounmod(){   # $1 = mods dir  $2 = name  $3 = the noun its contract declares; the hooks module's source on stdin
+  mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks" "$1/$2/types"
+  printf '{ "name": "%s", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' "$2" > "$1/$2/.claude-plugin/plugin.json"
+  printf 'declare module "claude-code" {\n  interface EngineInterface {\n    %s: Record<string, (input?: unknown) => Promise<unknown>>\n  }\n}\n' "$3" > "$1/$2/types/index.d.ts"
+  cat > "$1/$2/hooks/register.ts"
 }
-PM_TYPES="$ROOT/payload/mods/picker-manners/types/index.d.ts"
-if [ ! -f "$PM_TYPES" ]; then
-  echo "note: picker manners is not in payload/mods, so the goal tracker reads no open question of its and there is no contract to check."
-  check "picker manners is absent, which is not a pass over its contract" ok
-else
-  M12="$TMPROOT/m12"; mkdir -p "$M12"
-  sed 's/^  id: string$/  callId: string/' "$PM_TYPES" > "$M12/moved.d.ts"
-  out="$(picker_contract "$M12/moved.d.ts" 2>&1)"; code=$?
-  [ "$code" -eq 1 ] && case "$out" in *"PickersOpen has no id: string"*) true ;; *) false ;; esac \
-    && check "a picker manners contract whose open question moved fails the goal tracker's reading" ok \
-    || check "a picker manners contract whose open question moved fails the goal tracker's reading" "exit=$code out=$out"
-  # A member with an inline object type ahead of open does not hide it (lessons review of #709).
-  sed "s/'picker-manners': { open:/'picker-manners': { meta: { at: number }; open:/" "$PM_TYPES" > "$M12/nested.d.ts"
-  grep -q 'meta: { at: number }; open:' "$M12/nested.d.ts" || check "the nested fixture was made" "sed did not change the contract"
-  out="$(picker_contract "$M12/nested.d.ts" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "an inline object type ahead of open still finds open" ok \
-    || check "an inline object type ahead of open still finds open" "exit=$code out=$out"
-  # #735: a member counts only at the block's own top level, never nested in another member's type
-  # or standing in a comment.
-  perl -pe 's/^  id: string$/  callId: string\n  meta: {\n    id: string\n  }/' "$PM_TYPES" > "$M12/nested-id.d.ts"
-  perl -pe 's/^  id: string$/  \/*\n  id: string\n  *\/\n  callId: string/' "$PM_TYPES" > "$M12/commented-id.d.ts"
-  perl -pe 's/^  question: \{ question: string;/  question: { meta: { question: string }; text: string;/' "$PM_TYPES" > "$M12/nested-question.d.ts"
-  perl -pe "s/'picker-manners': \{ open:/'picker-manners': { \/* open: PickersOpen | null *\/ shown:/" "$PM_TYPES" > "$M12/commented-open.d.ts"
-  for f in nested-id commented-id nested-question commented-open; do
-    cmp -s "$PM_TYPES" "$M12/$f.d.ts" && check "the $f fixture was made" "perl did not change the contract"
-  done
-  for f in nested-id:'PickersOpen has no id: string' commented-id:'PickersOpen has no id: string' nested-question:'PickersOpen has no question: { question: string }' commented-open:'does not declare open: PickersOpen | null'; do
-    out="$(picker_contract "$M12/${f%%:*}.d.ts" 2>&1)"; code=$?
-    [ "$code" -eq 1 ] && case "$out" in *"${f#*:}"*) true ;; *) false ;; esac \
-      && check "a contract with only ${f%%:*} fails the goal tracker's reading" ok \
-      || check "a contract with only ${f%%:*} fails the goal tracker's reading" "exit=$code out=$out"
-  done
-  # Members separated by commas, as TypeScript allows, with a generic's comma among them, are read
-  # the same as ones on lines of their own (lessons review of #737).
-  printf '%s\n' "export type PickersOpen = { id: string, meta: Record<string, unknown>, question: { question: string, header: string }, chosen: string[] }" \
-    "declare module 'claude-code' { interface PluginState { 'picker-manners': { open: PickersOpen | null, quiet: boolean } } }" > "$M12/commas.d.ts"
-  out="$(picker_contract "$M12/commas.d.ts" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "a contract whose members are separated by commas is read the same" ok \
-    || check "a contract whose members are separated by commas is read the same" "exit=$code out=$out"
-  out="$(picker_contract "$PM_TYPES" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
-    || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"
-  grep -q "PICKER_OPEN = { plugin: 'picker-manners', key: 'open' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
-    && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no PICKER_OPEN for picker-manners open in goal-tracker"
+# The shape picker manners had: the noun's promise is settled by a press, through a map of waiters.
+mknounmod "$M12W" waits-in-map pickers <<'TS'
+const waiters = new Map<string, (o: string) => void>()
+const early = new Map<string, string>()
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const pickers = {
+      wait: ({ id }) =>
+        new Promise<string>(resolve => {
+          const got = early.get(id)
+          if (got) resolve(got)
+          else waiters.set(id, resolve)
+        }),
+    }
+    return { ...built, pickers }
+  })
+  on('ui.press', async ($, e, next) => {
+    waiters.get(e.element)?.('pressed')
+    return next(e)
+  })
+}
+TS
+# Handed to something that calls it later, kept in a variable, or reached through a helper.
+mknounmod "$M12W" passed-to-listener presses <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, presses: { next: () => new Promise(resolve => built.events.once('press', resolve)) } }
+  })
+}
+TS
+mknounmod "$M12W" called-back-later gate <<'TS'
+let release: (() => void) | undefined
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, gate: { open: () => new Promise<void>(r => { release = () => r() }) } }
+  })
+}
+TS
+mknounmod "$M12W" through-helper helped <<'TS'
+const waiters = new Map<string, (v: string) => void>()
+const waitFor = (id: string): Promise<string> =>
+  new Promise(resolve => {
+    waiters.set(id, resolve)
+  })
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, helped: { wait: ({ id }) => waitFor(id) } }
+  })
+}
+TS
+# A timer bounds the wait only when it settles the promise, and only under the 10 s limit measured
+# on 2026-10-05.
+mknounmod "$M12W" long-timer pause <<'TS'
+const WAIT_MS = 15 * 1_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, pause: { long: () => new Promise(r => built.clock.after(WAIT_MS, () => r('done'))) } }
+  })
+}
+TS
+mknounmod "$M12W" unrelated-timer beat <<'TS'
+const waiters = new Map()
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, beat: { wait: ({ id }) => new Promise(resolve => { waiters.set(id, resolve); built.clock.after(1_000, () => built.ui.log('still waiting')) }) } }
+  })
+}
+TS
+# A person, asked through Claude Code's own dialog, has no bound either.
+mknounmod "$M12W" asks-a-person confirm <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, confirm: { ready: async () => (await built.ui.ask('Ready?', ['Yes', 'No'])) === 'Yes' } }
+  })
+}
+TS
+# A noun answered by a hook on its own event (as mod-kit's screen is) is that noun's code too.
+mknounmod "$M12W" on-noun-event relay <<'TS'
+const pending: ((v: string) => void)[] = []
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, relay: { get: async () => 'fallback' } }
+  })
+  on('relay.get', async ($, e) => ({ value: await new Promise<string>(r => pending.push(r)) }))
+}
+TS
+# An executor named rather than written in place is read where it is defined; one that cannot be
+# found is reported as unreadable, never passed.
+mknounmod "$M12W" named-executor parked <<'TS'
+const parked: ((v: string) => void)[] = []
+function park(resolve: (v: string) => void) {
+  parked.push(resolve)
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, parked: { wait: () => new Promise(park) } }
+  })
+}
+TS
+mknounmod "$M12W" lost-executor lost <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, lost: { wait: () => new Promise(fromSomewhereElse) } }
+  })
+}
+TS
+# What must pass: a wait a timer under 10 s settles, one settled at once, a comment or a string
+# naming the forbidden shape, and a wait outside every noun's code, which is not this check's to
+# judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun). The
+# 10 s is the limit measured on 2026-10-05.
+mknounmod "$M12W" bounded short <<'TS'
+const waiters = new Map()
+const ANSWER_MS = 5_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      short: {
+        wait: ({ id }) =>
+          new Promise(resolve => {
+            waiters.set(id, resolve)
+            built.clock.after(ANSWER_MS, () => resolve('timed out'))
+          }),
+        nap: () => new Promise(r => setTimeout(r, 50)),
+        now: () => new Promise(r => r(Date.now())),
+      },
+    }
+  })
+}
+TS
+mknounmod "$M12W" commented quiet <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    // new Promise(r => waiters.set(id, r)) would wait on a press; built.ui.ask('Ready?') on a person.
+    return { ...built, quiet: { say: async () => 'new Promise(r => waiters.set(id, r)) and built.ui.ask(question)' } }
+  })
+}
+TS
+mknounmod "$M12W" outside-any-noun quick <<'TS'
+const waiters = new Map()
+const later = (id: string) => new Promise(resolve => waiters.set(id, resolve))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, quick: { now: async () => Date.now() } }
+  })
+  on('session.start', async ($, e, next) => {
+    void later('start')
+    return next(e)
+  })
+}
+TS
+out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
+case "$out" in *"13 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
+    && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
+    || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
+done
+printf '%s\n' "$out" | grep -F 'asks-a-person/hooks/register.ts:4' | grep -q 'waits on a person' \
+  && check "a noun asking a person through \$.ui.ask is named" ok || check "a noun asking a person through \$.ui.ask is named" "$out"
+printf '%s\n' "$out" | grep -F 'lost-executor/hooks/register.ts:4' | grep -q 'cannot be read' \
+  && check "an executor that cannot be found is reported as unreadable, never passed" ok \
+  || check "an executor that cannot be found is reported as unreadable, never passed" "$out"
+for m in bounded commented outside-any-noun; do
+  ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
+done
+# Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
+for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor; do rm -rf "${M12W:?}/$m"; done
+out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
+  || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
+out="$(bash "$WAITS" "$TMPROOT/not-there" 2>&1)"; code=$?
+[ "$code" -eq 2 ] && check "a missing mods folder is refused by the noun wait check" ok \
+  || check "a missing mods folder is refused by the noun wait check" "exit=$code out=$out"
+if [ -d "$ROOT/payload/mods" ]; then
+  out="$(bash "$WAITS" "$ROOT/payload/mods" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \
+    || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
 fi
+# Every check this suite runs can be run directly, as its header says, so each is committed
+# executable (the lessons review of #744: the noun wait check was committed 644 beside its 755
+# siblings, which this suite's own `bash <check>` could never notice).
+for t in "$CHECK" "$SHARED" "$DEPS" "$WAITS"; do
+  [ -x "$t" ] && check "${t#"$ROOT"/} is executable" ok || check "${t#"$ROOT"/} is executable" "not executable"
+done
 
 # 13. The goal tracker reads ask before saving's waiting saves, `ask-before-saving.pending`, as a list
 #     whose first entry has id: string (#706), and its own tests can only stand in for ask before
-#     saving, so its reading is checked here against the contract ask before saving declares (L52),
-#     as picker manners' contract is above. Shown failing on a contract whose shape moved, then held
-#     on the real one.
+#     saving, so its reading is checked here against the contract ask before saving declares (L52).
+#     Shown failing on a contract whose shape moved, then held on the real one. The contract is read
+#     with a block's members at its own top level and comments taken out (#735), through the one
+#     reader of source every mod scan shares. (Picker manners' open question was checked the same way
+#     until #744 removed it, and the goal tracker's reading of it with it.)
+TS_LIB="$ROOT/tools/lib"
 save_contract(){   # $1 = ask before saving's types file -> prints what does not match, exits 1 when anything does not
   python3 - "$1" "$TS_LIB" <<'PY'
 import re, sys
@@ -678,7 +815,21 @@ else
   [ "$code" -eq 1 ] && case "$out" in *"AskBeforeSavingQuestion has no id: string"*) true ;; *) false ;; esac \
     && check "an ask before saving contract whose question id moved fails the goal tracker's reading" ok \
     || check "an ask before saving contract whose question id moved fails the goal tracker's reading" "exit=$code out=$out"
-  # #735: as for picker manners, a member counts only at the block's own top level and outside comments.
+  # A member with an inline object type ahead of pending does not hide it (lessons review of #709).
+  sed "s/'ask-before-saving': { pending:/'ask-before-saving': { meta: { at: number }; pending:/" "$ABS_TYPES" > "$M13/nested.d.ts"
+  grep -q 'meta: { at: number }; pending:' "$M13/nested.d.ts" || check "the nested fixture was made" "sed did not change the contract"
+  out="$(save_contract "$M13/nested.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "an inline object type ahead of pending still finds pending" ok \
+    || check "an inline object type ahead of pending still finds pending" "exit=$code out=$out"
+  # Members separated by commas, as TypeScript allows, with a generic's comma among them, are read
+  # the same as ones on lines of their own (lessons review of #737).
+  printf '%s\n' "export type AskBeforeSavingQuestion = { id: string, input: Record<string, unknown>, files: string[] }" \
+    "declare module 'claude-code' { interface PluginState { 'ask-before-saving': { pending: AskBeforeSavingQuestion[], rules: string[] } } }" > "$M13/commas.d.ts"
+  out="$(save_contract "$M13/commas.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "a contract whose members are separated by commas is read the same" ok \
+    || check "a contract whose members are separated by commas is read the same" "exit=$code out=$out"
+  # #735: a member counts only at the block's own top level, never nested in another member's type
+  # or standing in a comment.
   perl -pe 's/^  id: string$/  callId: string\n  meta: {\n    id: string\n  }/' "$ABS_TYPES" > "$M13/nested-id.d.ts"
   perl -pe 's/^  id: string$/  \/*\n  id: string\n  *\/\n  callId: string/' "$ABS_TYPES" > "$M13/commented-id.d.ts"
   perl -pe "s/'ask-before-saving': \{ pending:/'ask-before-saving': { \/* pending: AskBeforeSavingQuestion[] *\/ waiting:/" "$ABS_TYPES" > "$M13/commented-pending.d.ts"

@@ -172,7 +172,7 @@ export const put = <R extends ModKitPane>(rows: readonly R[], row: R): R[] => {
 export const drop = <R extends ModKitPane>(rows: readonly R[], mod: string, id: string): R[] => rows.filter(r => !(r.mod === mod && r.id === id))
 
 /** The question the band draws: the first asked of those open (rows keep the order first published in). */
-export const shownQuestion = (rows: readonly ModKitBandRow[]): ModKitBandRow | undefined => rows.find(r => r.slot === 'question')
+const shownQuestion = (rows: readonly ModKitBandRow[]): ModKitBandRow | undefined => rows.find(r => r.slot === 'question')
 
 /** What the band draws, top to bottom: by slot, publishing order within one; one question, alone. */
 export const compose = (rows: readonly ModKitBandRow[]): ModKitBandRow[] => {

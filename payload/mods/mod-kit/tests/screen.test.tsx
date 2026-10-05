@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 import type { Register } from 'claude-code'
 
-// #707: a mod that answers a tool call itself (manual steps, is it live, picker manners, handoff,
-// the job watcher, scope modes' switch to build) never calls next, so no guard beneath it sees the
-// call. It asks $.modkit.screen first. The answering mod here stands in for them: it answers Pin,
-// and says by a toast that it acted.
+// #707: a mod that answers a tool call itself (manual steps, is it live, handoff, the job watcher,
+// scope modes' switch to build) never calls next, so no guard beneath it sees the call. It asks
+// $.modkit.screen first. The answering mod here stands in for them: it answers Pin, and says by a
+// toast that it acted.
 const answerer: { name: string; register: Register } = {
   name: 'manual-steps',
   register: on => {
