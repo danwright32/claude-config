@@ -436,8 +436,11 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   the session onto one. With no PR for the session's own branch, it finishes every PR this session
   opened: each `gh pr create` the session or any of its agents runs is noted from the link gh
   prints, so a PR an agent opened in a worktree the session is not in is finished before "safe to
-  close"; each is read in the repository its link names, its branch the PR's own head. A note that
-  cannot be made is toasted, since winding down would not know that PR. An agent named after this
+  close"; each is read in the repository its link names, its branch the PR's own head. A PR in
+  another repository than the session's has its branch on GitHub checked there, while its local
+  branch and worktree, in a checkout this session cannot see, are said to be unreadable rather than
+  read as cleaned, so winding down does not call it finished. A note that cannot be made is
+  toasted, since winding down would not know that PR. An agent named after this
   branch's PR, an issue that PR closes, or a PR the session opened goes ahead (the PR is looked up
   first when it has not been yet); any other issue number is still new work.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app

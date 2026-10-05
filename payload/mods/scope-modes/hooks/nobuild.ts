@@ -225,8 +225,18 @@ const ALL_ARGS = new Set(['mv', 'rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'trun
 const FIRST_IS_MODE = new Set(['chmod', 'chown', 'chgrp'])
 const IN_PLACE = new Set(['sed', 'gsed', 'perl', 'ruby'])
 
+// The in place flag, alone (`-i`, `-i.bak`) or after switches that take no value in one cluster
+// (`-pi`, `-Ei`). Only those switches may come before it: an i inside a value is no flag, so
+// `ruby -rminitest/autorun` and `perl -MList::Util` read nothing in place (lessons review of #714).
+const IN_PLACE_FLAG: Record<string, RegExp> = {
+  sed: /^-[nrEsuz]*i/,
+  gsed: /^-[nrEsuz]*i/,
+  perl: /^-[anpswlcvtTuUWX0]*i/,
+  ruby: /^-[anpswlcvtTuUWX0]*i/,
+}
 const inPlaceFiles = (args: string[], cmdName: string): string[] | undefined => {
-  const inPlace = args.some(a => a.startsWith('--in-place') || (/^-[A-Za-z]+/.test(a) && !a.startsWith('--') && /^-[A-Za-z]*i/.test(a)))
+  const flag = IN_PLACE_FLAG[cmdName] ?? /^-i/
+  const inPlace = args.some(a => a.startsWith('--in-place') || (!a.startsWith('--') && flag.test(a)))
   if (!inPlace) return undefined
   // The script is the first non-flag word unless -e (or perl's -e) gave it; -e and -f take a value.
   const out: string[] = []

@@ -13,14 +13,20 @@ export type Trigger = { kind: 'scope'; scope: 'NO BUILD' | 'WINDING DOWN' } | { 
 // comma, semicolon or colon, led by nothing but the words Dan opens one with.
 const APOS = "['’]"
 // The words that lead a request to Claude ("ok", "can you", "let's", "you can"), and nothing else.
-const LEAD = `(?:^\\s*|[.!?;:,]\\s+|\\n\\s*)(?:(?:ok(?:ay)?|so|and|then|now|please|pls|just|right|heads up|thanks|can you|could you|would you|you can|let${APOS}?s)[,!.]?\\s+)*`
+const LEADS = `(?:(?:ok(?:ay)?|so|and|then|now|please|pls|just|right|heads up|thanks|can you|could you|would you|you can|let${APOS}?s)[,!.]?\\s+)*`
+const LEAD = `(?:^\\s*|[.!?;:,]\\s+|\\n\\s*)${LEADS}`
+// A sentence of its own, never a clause after a comma: for a phrase that reads as prose there too
+// ("once the sprint ends, time to wind down").
+const SENTENCE = `(?:^\\s*|[.!?]\\s+|\\n\\s*)${LEADS}`
 const ME = `(?:i${APOS}?m\\s+|i am\\s+)?`
-const own = (phrase: string) => new RegExp(`${LEAD}${phrase}`, 'i')
+const own = (phrase: string, start = LEAD) => new RegExp(`${start}${phrase}`, 'i')
+// Ends the sentence or names when, so "let's wind down the Redis instance" stays prose.
+const WIND_END = `wind(?:ing)? (?:it )?down(?=\\s*(?:[.!,;]|$|now\\b|for (?:today|tonight|the (?:day|night))\\b|after\\b))`
 const PHRASES: { re: RegExp; trigger: Trigger }[] = [
   { re: own('pause after (?:this|the|that) (?:issue|one|pr)\\b'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: own('wind (?:it )?down (?:now|after (?:this|the|that))\\b'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
-  // Ends the sentence or names when, so "let's wind down the Redis instance" stays prose.
-  { re: new RegExp(`\\b(?:let${APOS}?s|time to|please|start) wind(?:ing)? (?:it )?down(?=\\s*(?:[.!,;]|$|now\\b|for (?:today|tonight|the (?:day|night))\\b|after\\b))`, 'i'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
+  { re: own(`(?:let${APOS}?s|please|start) ${WIND_END}`), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
+  { re: own(`time to ${WIND_END}`, SENTENCE), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /^\s*(?:ok,? )?wind (?:it )?down[.!]?\s*$/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: own('no coding yet\\b'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   // A read only instruction is a sentence of its own ("Stay read only.", "Stay read only until I

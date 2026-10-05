@@ -165,8 +165,11 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName'
 
 // What the finish check reads for one PR: the branch's own (found by its head) or one named by
 // number, in `repo` when given (a PR this session opened, read in the repository its link names).
-// The branch cleaned is the PR's own head where the target names no branch.
-const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string): Promise<{ reading: Reading; found?: Found }> => {
+// The branch cleaned is the PR's own head where the target names no branch. A PR in another
+// repository than the session's (`elsewhere`) has its branch on GitHub checked there, while its
+// local branch and worktree live in a checkout this session cannot see, so they are said to be
+// unreadable rather than read as gone from this one (lessons review of #714).
+const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, elsewhere = false): Promise<{ reading: Reading; found?: Found }> => {
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: false }
   const where = repo ? ['--repo', repo] : []
   let prUrl: string | undefined
@@ -211,11 +214,15 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string):
       const none = { unreadable: `GitHub named no branch for PR #${r.pr.number}` }
       return { reading: { ...r, branchHere: none, branchOnGitHub: none, worktreeOnBranch: none }, found }
     }
+    // ls-remote --exit-code answers 2 when no such branch, and anything else nonzero is a failed read.
+    const remote = await run($, ['git', '-C', t.root, 'ls-remote', '--exit-code', '--heads', elsewhere && repo ? `https://github.com/${repo}.git` : 'origin', r.branch])
+    r.branchOnGitHub = remote.exitCode === 0 ? true : remote.exitCode === 2 ? false : { unreadable: remote.stderr.trim() || 'could not reach origin' }
+    if (elsewhere) {
+      const unseen = { unreadable: `PR #${r.pr.number} is in ${repo ?? 'another repository'}, whose checkout this session cannot see` }
+      return { reading: { ...r, branchHere: unseen, worktreeOnBranch: unseen }, found }
+    }
     const here = await run($, ['git', '-C', t.root, 'branch', '--list', r.branch])
     r.branchHere = here.exitCode === 0 ? here.stdout.trim() !== '' : { unreadable: here.stderr.trim() }
-    // ls-remote --exit-code answers 2 when no such branch, and anything else nonzero is a failed read.
-    const remote = await run($, ['git', '-C', t.root, 'ls-remote', '--exit-code', '--heads', 'origin', r.branch])
-    r.branchOnGitHub = remote.exitCode === 0 ? true : remote.exitCode === 2 ? false : { unreadable: remote.stderr.trim() || 'could not reach origin' }
     const wt = await run($, ['git', '-C', t.root, 'worktree', 'list', '--porcelain'])
     r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${r.branch}`) : { unreadable: wt.stderr.trim() }
   }
@@ -227,6 +234,14 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string):
 }
 
 const openedOf = async ($: EngineInterface) => (await $.state.get(openedRef)).value ?? []
+// owner/name of the session folder's origin, ssh or https, or undefined when it cannot be read.
+const sessionSlug = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    return /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec((await $.session.repo())?.remote ?? '')?.[1]
+  } catch {
+    return undefined
+  }
+}
 const sameList = (a: readonly number[] | undefined, b: readonly number[]) => (a ?? []).join(',') === b.join(',')
 
 // The target with the PR a reading found for its branch, kept so later checks and the agent rule
@@ -271,8 +286,12 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
       // opened, an agent's in a worktree the session is not in included (#702).
       if (t.isDefault && reading.pr === null) {
         const opened = await openedOf($)
+        // The session's own repository, to tell a PR opened here from one opened in another; a
+        // remote that cannot be read counts every PR as elsewhere, so nothing is read as cleaned.
+        const own = opened.length ? await sessionSlug($) : undefined
         for (const o of opened) {
-          const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo)
+          const elsewhere = !own || own.toLowerCase() !== o.repo.toLowerCase()
+          const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo, elsewhere)
           if (one.found && !sameList(o.closes, one.found.closes)) {
             const closes = one.found.closes
             await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))

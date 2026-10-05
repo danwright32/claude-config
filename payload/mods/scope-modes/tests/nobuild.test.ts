@@ -159,6 +159,16 @@ describe('refused in no build', () => {
 })
 
 describe('allowed in no build, which the audit found refused (#702)', () => {
+  test('ruby and perl loading a library whose name has an i in it, which is no in place edit (lessons review of #714)', () => {
+    expect(bash(['ruby', '-rminitest/autorun', '-e', 'puts 1', 'data.json'])).toBeUndefined()
+    expect(bash(['perl', '-MList::Util=sum', '-ne', 'print', 'data.txt'])).toBeUndefined()
+    expect(bash(['perl', '-Ilib', '-e', 'print 1', 'data.txt'])).toBeUndefined()
+    expect(bash(['sed', '-n', '/fix/p', 'notes.txt'])).toBeUndefined()
+    // In place edits still are: alone, with a suffix, and in a cluster of switches.
+    expect(bash(['perl', '-i', '-pe', 's/a/b/', 'app.ts'])?.what).toBe('edit app.ts')
+    expect(bash(['ruby', '-ni.bak', '-e', 'print', 'app.rb'])?.what).toBe('edit app.rb')
+    expect(bash(['sed', '-Ei', 's/a/b/', 'app.ts'])?.what).toBe('edit app.ts')
+  })
   test('curl and wget reading to the screen or the scratchpad, find listing, awk reading', () => {
     expect(bash(['curl', '-sS', 'https://x.dev/api'])).toBeUndefined()
     expect(bash(['curl', '-sSo', '/dev/null', '-w', '%{http_code}', 'https://x.dev'])).toBeUndefined()

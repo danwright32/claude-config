@@ -554,6 +554,21 @@ test('turned on from the default branch, winding down finishes the PRs this sess
   expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName')).toBe(true)
 })
 
+test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
+  const pr = { number: 31, state: 'MERGED', url: 'https://github.com/o/other/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/other/pull/31\n', gh: { pr, issues: {} }, verdict: { state: 'live', at: T0 }, branchOnGitHub: false })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --repo o/other --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/whether fix-31 is gone here could not be read \(PR #31 is in o\/other, whose checkout this session cannot see\)/)
+  expect(block).toMatch(/whether a worktree is still on fix-31 could not be read \(PR #31 is in o\/other, whose checkout this session cannot see\)/)
+  // GitHub's copy of the branch is checked in that repository.
+  expect(block).not.toMatch(/gone from GitHub/)
+  expect(w.runs.some(r => r.join(' ') === 'git -C /repo ls-remote --exit-code --heads https://github.com/o/other.git fix-31')).toBe(true)
+  expect(w.toasts).toEqual([])
+})
+
 test('a gh pr create that printed no link notes no PR; one that cannot be read to note is said', withDeps, async ($, on) => {
   const { w, clock } = world(on, { branch: 'main', created: 'Warning: 2 uncommitted changes\n' })
   await start($ as never, clock)

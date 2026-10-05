@@ -57,6 +57,10 @@ describe('triggersIn', () => {
       'Stepping away from the form, what happens to the draft?',
       'Are you back at your desk?',
       'Should I go ahead and build?',
+      // The let's wind down family too (lessons review of #714).
+      'the workers start winding down.',
+      'once the sprint ends, time to wind down.',
+      'users said it is time to wind down for the night',
     ])
       expect(triggersIn(t)).toEqual([])
   })
@@ -73,6 +77,9 @@ describe('triggersIn', () => {
     expect(triggersIn("Let's go ahead and build.")).toEqual([{ kind: 'build' }])
     expect(triggersIn('you can go ahead and build now')).toEqual([{ kind: 'build' }])
     expect(triggersIn('so the worker can go ahead and build')).toEqual([])
+    expect(triggersIn('Great work today, let’s wind down.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('ok, time to wind down for the night')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('Thanks. Start winding down.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
     expect(triggersIn('Nice.\nPause after this PR and clean up.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
   })
   test('one mode named twice in a message comes back once', () => {
