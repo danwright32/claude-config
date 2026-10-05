@@ -82,7 +82,7 @@ type WorldOpts = {
   permissionThrows?: boolean
 }
 const world = (on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined, duringPicker: undefined as Rec | undefined }
+  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined, duringPicker: undefined as Rec | undefined }
   let writes = 0
   on('process.run', ($, e) => {
     // Dan answering the question picker manners shows: "Yes".
@@ -107,6 +107,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
   on('ui.log', ($, e) => {
     if (e.text.startsWith('EXTRA progress ')) w.progress.push(JSON.parse(e.text.slice('EXTRA progress '.length)))
     else if (e.to !== 'debug') w.logs.push(e.text)
+    else w.debug.push(e.text)
     return { value: undefined }
   })
   on('classic.PermissionRequest', () => ({}) as never)
@@ -708,6 +709,8 @@ test('an open question picker manners writes in a shape that cannot be read mark
   await $.tool.call(shipIt)
   expect(w.notified).toEqual([])
   expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
+  // Said in the debug log, never passed off as no question at all (L11).
+  expect(w.debug.filter(l => l.includes("picker manners' open question could not be read"))).toHaveLength(1)
 })
 
 // The goal text (Dan, 2026-10-04, picker): the /goal condition when one is set, otherwise the

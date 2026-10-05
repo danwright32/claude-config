@@ -42,7 +42,8 @@ for entry in sorted(os.listdir(root)):
     mods[man.get("name") or entry] = (folder, man)
 
 def nouns(folder, man):
-    """The nouns a mod's contract declares on $, from its interface EngineInterface block."""
+    """The nouns a mod's contract declares on $, from its interface EngineInterface block: none when
+    it names no contract, None when the contract it names cannot be read."""
     types = man.get("types")
     if not isinstance(types, str):
         return []
@@ -50,7 +51,7 @@ def nouns(folder, man):
         with open(os.path.join(folder, types)) as f:
             src = f.read()
     except OSError:
-        return []
+        return None
     block = re.search(r"interface\s+EngineInterface\s*\{([^}]*)\}", src)
     return re.findall(r"^\s*([A-Za-z_$][\w$]*)\??\s*:", block.group(1), re.M) if block else []
 
@@ -75,6 +76,11 @@ for name, (folder, man) in mods.items():
             failed = 1
             continue
         declared = nouns(*mods[dep])
+        if declared is None:
+            # Never scored as declaring nothing: that would accuse a mod reaching its nouns (L11).
+            print(f"check-mod-dependencies: {name} lists {dep} under dependencies, whose contract {mods[dep][1].get('types')} cannot be read, so whether {name} uses it cannot be read.")
+            failed = 1
+            continue
         reached = any(re.search(r"\." + re.escape(n) + r"\??\.", src) for n in declared)
         named = re.search(r"['\"`]" + re.escape(dep) + r"['\"`]", src)
         if not (reached or named):

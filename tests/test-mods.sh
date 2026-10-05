@@ -260,6 +260,18 @@ out="$(bash "$DEPS" "$M11" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'orphan lists not-a-mod under dependencies, which is no mod' \
   && check "a dependency that is no mod in the folder is reported, never passed" ok \
   || check "a dependency that is no mod in the folder is reported, never passed" "exit=$code out=$out"
+rm -rf "$M11/orphan"
+# A dependency whose contract cannot be read is said as such, never scored as declaring no noun,
+# which would accuse a mod that reaches one.
+M11B="$TMPROOT/m11b"
+mkdepmod "$M11B" kit '[]' "export const register = () => {}"
+printf '{ "name": "kit", "version": "0.1.0", "description": "t", "types": "./types/missing.d.ts" }\n' > "$M11B/kit/.claude-plugin/plugin.json"
+mkdepmod "$M11B" by-noun '["kit"]' "export const register = on => { on('tool.call', async (\$, e, next) => { await \$.kit.go(); return next(e) }) }"
+out="$(bash "$DEPS" "$M11B" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'by-noun lists kit under dependencies, whose contract ./types/missing.d.ts cannot be read' \
+  && ! printf '%s\n' "$out" | grep -q 'never uses it' \
+  && check "a dependency whose contract cannot be read is reported as unreadable, never as unused" ok \
+  || check "a dependency whose contract cannot be read is reported as unreadable, never as unused" "exit=$code out=$out"
 out="$(bash "$DEPS" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the dependency check" ok \
   || check "a missing mods folder is refused by the dependency check" "exit=$code out=$out"

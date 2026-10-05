@@ -380,13 +380,15 @@ export const register: Register = on => {
     if ((r as { value?: { isSet?: boolean } }).value?.isSet !== true) return r
     const shown = openQuestionOf(e.value)
     if (shown) await questionOpened($, shown.id, shown.text, await nowOr($))
-    else if (e.value === null && question) {
-      question = undefined
-      if (progress) {
-        progress = withWaiting(progress)
-        await publish($, await nowOr($))
+    else if (e.value === null) {
+      if (question) {
+        question = undefined
+        if (progress) {
+          progress = withWaiting(progress)
+          await publish($, await nowOr($))
+        }
       }
-    }
+    } else $.ui.log("goal-tracker: picker manners' open question could not be read, so it is not marked or notified.", { to: 'debug' })
     return r
   })
 
