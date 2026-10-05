@@ -846,7 +846,7 @@ result row, `ToolResult`. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
 `$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
 `compact`, `room` (the account room card, #659), `handoff`, `held`, `steps` and `message` (a
-`question` slot that took the band alone went in #777). Rows in
+`question` slot that took the band alone went in #796). Rows in
 one slot keep the order they were first published in, and a row published again under its id is
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
 line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
@@ -874,10 +874,10 @@ lines of a card. A part may carry `indent`, the blank columns drawn before it (o
 first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
 
-No question in the band (#777). Picker manners (#744) and then ask before saving (#777) moved to
+No question in the band (#796). Picker manners (#744) and then ask before saving (#777) moved to
 Claude Code's own question dialog, so the band's question slot and mod-kit's question builder
 (`$.modkit.question`, which drew one question at a time, alone, in one settled look, #703, #705)
-had no caller and were removed (L29). A row naming a `question` slot is refused as no slot. A text
+had no caller and were removed in #796 (L29). A row naming a `question` slot is refused as no slot. A text
 run may carry `wrap: true`, drawn on as many lines as it needs rather than cut at the band's edge
 (so the brackets at the end of a long line are never cut off). Inside a left rule (#734), a row with no run
 that wraps keeps one rule mark per line; a row with one draws its rule as a single column laid over
