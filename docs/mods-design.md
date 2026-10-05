@@ -1105,6 +1105,10 @@ the spec rather than chosen afresh, and open to Dan changing:
   because Claude Code's own question dialog cannot carry the dim line or a field with Save. Enter
   in the field saves; an empty name saves nothing. Skip and Esc record that the ask was answered,
   so neither Mac asks again.
+- Claude Code holds a pane opened unasked back below 144 terminal columns, and the dialog opens
+  unasked at session start, so in a narrower window it waits unseen (found in the live check on
+  2026-10-05). The transcript then says once that the question is waiting, with Claude Code's own
+  reason, and that `/accounts rename` answers it now, since a pane Dan asks for opens at any width.
 - When the triggering limit is both (95% 5 hour and 90% weekly at once), an account must have more
   room on both. "Most weekly room" ties are broken by the most 5 hour room, then the newest reading.
 - Nicknames are shared through the claude-sync payload, in `mods/account-room-nicknames.json`: the

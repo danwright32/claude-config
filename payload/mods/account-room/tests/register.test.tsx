@@ -105,6 +105,8 @@ type World = {
   tokenWriteFails: boolean
   /** Opening a pane fails. */
   openFails: boolean
+  /** A pane opened unasked waits undrawn, as Claude Code does below 144 terminal columns. */
+  openWaits: boolean
   /** Asking whether a path exists fails, as a disk going away would. */
   existsFails: boolean
   /** Asking whether the readings folder exists fails, and nothing else does. */
@@ -117,7 +119,7 @@ const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, existsFails: false, folderExistsFails: false, authLoginThrows: false, ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, existsFails: false, folderExistsFails: false, authLoginThrows: false, ...init }
   const toasts: string[] = []
   const logs: string[] = []
   // The lines that reach the transcript, as against the debug log.
@@ -213,6 +215,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('ui.open', ($, e) => {
     if (w.openFails) throw new Error('no surface to open it on')
     opened.push(e.id)
+    if (w.openWaits) return { value: { isPlaced: false, reason: 'the terminal is 120 columns wide; a pane opened unasked needs 144' } } as never
     return { value: { isPlaced: true } } as never
   })
   on('ui.close', ($, e) => {
@@ -576,6 +579,20 @@ test('the first session on an account the mod has not seen asks once for a nickn
   expect(w.files[NICKNAMES]).not.toContain('work@example.com')
   expect(closed).toEqual([PANE])
   await ui.unmount()
+})
+
+test('in a window too narrow to show the nickname question, the transcript says how to answer it now (live check, 2026-10-05)', withKit, async ($, on) => {
+  const { clock, transcript, opened } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') }, openWaits: true })
+  await start($, clock)
+  // The question still waits, so widening the window shows it; nothing is said only to the debug log.
+  expect(opened).toEqual([PANE])
+  const said = transcript.filter(t => /^Account room: /.test(t))
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('work@example.com')
+  expect(said[0]).toContain('/accounts rename')
+  // Claude Code's own reason, as it gave it, and that the account has no nickname, which is known.
+  expect(said[0]).toContain('the terminal is 120 columns wide; a pane opened unasked needs 144')
+  expect(said[0]).toContain('has no nickname yet')
 })
 
 test('Enter in the field saves too; an empty name saves nothing and the dialog stays', withKit, async ($, on) => {
