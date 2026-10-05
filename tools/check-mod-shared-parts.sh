@@ -39,9 +39,9 @@
 #             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
 #
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
-# on every run, with that issue, rather than failing the run or passing in silence (L129, L523). The
-# collision guard's write reader and walk for a checkout moved onto mod-kit in #712; no build's write
-# reader, program reader and code judge (scope-modes) move in its second part.
+# on every run, with that issue, rather than failing the run or passing in silence (L129, L523). None
+# stands today: #712 moved the last (the collision guard's and no build's write readers, and the
+# collision guard's walk for a checkout).
 #
 # A mod's tests may read with mod-kit's own readers rather than a stand-in (#730: a stand-in split
 # inside quotes): a test cannot import another mod's files, so each such file is a copy under the
@@ -103,11 +103,10 @@ PARTS=(
 )
 
 # $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
+# None today: #712 moved the last, so this answers nothing until a new one is named here.
 exception(){
   case "$1:$2" in
-    # No build's file readers predate mod-kit's writes (#705), and its program reader and code judge
-    # are the copy mod-kit's were moved from (#712); the second part of #712 moves scope-modes onto them.
-    scope-modes:write-reader|scope-modes:program-reader) echo '#712' ;;
+    *) ;;
   esac
 }
 

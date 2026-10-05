@@ -1,7 +1,5 @@
-import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import type { ModKitBandRow, ModKitCommand } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesHeld } from '../types/index.d.ts'
-import { codeVerdict } from './code.ts'
-import { scriptFileOf, type Program } from './program.ts'
 
 // Away and home (#621). While Dan is away nothing opens on the Mac and nothing takes focus: what
 // needs him at the Mac is held, and on coming home each session shows what it held in one boxed
@@ -26,16 +24,18 @@ const targetApp = (raw: string): string | undefined => {
 // does a notification banner; a dialog does, and waits for a press nobody is there to give (#702).
 const SCRIPT_ACTS = /\b(?:keystroke|key code|click|activate|frontmost to true|set frontmost|open location|reopen|launch|open)\b/i
 const SCRIPT_TYPES = /\b(?:keystroke|key code|click)\b/i
-const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from list|color|application|remote application|URL|file name))\b/i
+// JavaScript for Automation spells each one as a method, `app.displayDialog()` (#730).
+const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from list|color|application|remote application|URL|file name)|display(?:Dialog|Alert)|choose(?:File(?:Name)?|Folder|FromList|Color|Application|RemoteApplication|URL))\b/i
 
 /**
  * What a Bash call would do on the Mac that needs Dan there (open something, take focus, type or
  * click), as the line his held card names it by, or undefined when it needs nothing of the Mac.
- * Each command comes with the program it runs (program.ts), so an AppleScript fed on standard
- * input is judged too.
+ * Each command comes with what mod-kit's reader found it runs (#712): its program and what that can
+ * do, or the script file it runs, so an AppleScript fed on standard input, or piped in from a file
+ * (`cat notify.scpt | osascript`, #730), is judged too.
  */
-export const needsTheMac = (call: { raw: string; commands: { words: string[]; program?: Program }[] }): string | undefined => {
-  for (const { words, program } of call.commands) {
+export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): string | undefined => {
+  for (const { words, program, script: file, verdict } of call.commands) {
     const cmd = base(words[0] ?? '')
     const args = words.slice(1)
     if (cmd === 'open') {
@@ -54,12 +54,13 @@ export const needsTheMac = (call: { raw: string; commands: { words: string[]; pr
       return files.length ? `Open ${files.join(', ')} in BBEdit` : 'Open BBEdit'
     }
     if (cmd === 'osascript') {
-      // A script whose text the reader never saw may do anything on the Mac: a heredoc's body, a
-      // script file (#724: `osascript notify.scpt` ran while away), or a script it runs by name.
+      // A script whose text the reader never saw may do anything on the Mac: one piped in from what
+      // cannot be read, a script file (#724: `osascript notify.scpt` ran while away; #730: one cat
+      // pipes in), or a script it runs by name.
       if (program && 'unreadable' in program) return 'Run an AppleScript on the Mac'
-      if (scriptFileOf(words) !== undefined) return 'Run an AppleScript on the Mac'
-      if (program && codeVerdict('osascript', program.text)?.does === 'unreadable') return 'Run an AppleScript on the Mac'
-      const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program ? [program.text] : [])].join(' ')
+      if (file) return 'Run an AppleScript on the Mac'
+      if (verdict?.does === 'unreadable') return 'Run an AppleScript on the Mac'
+      const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
       if (SCRIPT_DIALOG.test(script)) return 'Show a dialog on the Mac'
       if (!SCRIPT_ACTS.test(script)) continue
       const app = targetApp(call.raw)

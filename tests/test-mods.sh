@@ -177,28 +177,22 @@ out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
   || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
 case "$out" in *"5 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 case "$out" in *clean-comment*) check "a comment naming the band or a result row is not taken for a copy" "$out" ;; *) check "a comment naming the band or a result row is not taken for a copy" ok ;; esac
-# #712 moved the collision guard's write reader and walk for a checkout onto mod-kit, so the
-# collision guard keeping a copy now fails the run like any other mod, never named as an exception
-# again (L373: the exception's premise is spent). No build's readers (scope-modes) stay a known
-# exception until #712's second part moves them, named on every run with the issue that ends it.
+# #712 moved the last known exceptions (the collision guard's and no build's write readers, the
+# collision guard's walk for a checkout) onto mod-kit, so either mod keeping a copy now fails the
+# run like any other, never named as an exception again (L373: the exception's premise is spent).
 M9X="$TMPROOT/m9x"
 mkmodsrc "$M9X" collision-guard "switch (name) { case 'tee': add(f) }
 const hasGit = dir => \$.fs.stat(\`\${dir === '/' ? '' : dir}/.git\`)"
 mkmodsrc "$M9X" scope-modes "const ALL_ARGS = new Set(['mv', 'rm', 'tee'])
 const PROCESS = /\\bsubprocess\\b/"
-mkmodsrc "$M9X" own-judge "const PROCESS = /\\bchild_process\\b/"
 out="$(bash "$SHARED" "$M9X" 2>&1)"; code=$?
-[ "$code" -eq 1 ] && check "after #712 the collision guard keeping its own reader fails the run" ok \
-  || check "after #712 the collision guard keeping its own reader fails the run" "exit=$code out=$out"
-for want in 'collision-guard keeps its own write-reader at' 'collision-guard keeps its own working-tree at' 'own-judge keeps its own program-reader at'; do
+[ "$code" -eq 1 ] && check "after #712 the collision guard or no build keeping its own reader fails the run" ok \
+  || check "after #712 the collision guard or no build keeping its own reader fails the run" "exit=$code out=$out"
+case "$out" in *'known exception'*) check "and is never named as a known exception" "$out" ;; *) check "and is never named as a known exception" ok ;; esac
+for want in 'collision-guard keeps its own write-reader' 'collision-guard keeps its own working-tree' 'scope-modes keeps its own write-reader' 'scope-modes keeps its own program-reader'; do
   case "$out" in *"$want"*) check "and names: $want" ok ;; *) check "and names: $want" "$out" ;; esac
 done
-case "$out" in *'collision-guard keeps its own write-reader, a known exception'*) check "and the collision guard is no known exception" "$out" ;; *) check "and the collision guard is no known exception" ok ;; esac
-for part in write-reader program-reader; do
-  printf '%s\n' "$out" | grep "scope-modes keeps its own $part, a known exception until #712" | grep -q 'moves it onto' \
-    && check "no build's $part is a known exception until #712's second part" ok || check "no build's $part is a known exception until #712's second part" "$out"
-done
-printf '%s\n' "$out" | grep 'own-judge keeps its own program-reader' | grep -q 'modkit.pipeline(' \
+printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'modkit.pipeline(' \
   && check "and points a mod judging code its own way at what modkit.pipeline gives" ok || check "and points a mod judging code its own way at what modkit.pipeline gives" "$out"
 # #712, #730: a mod's tests may read with mod-kit's own readers, through a copy under tests/mod-kit
 # (a test cannot import another mod's files), held byte for byte to mod-kit's (L422). A copy that
