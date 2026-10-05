@@ -12,7 +12,8 @@ export type Trigger = { kind: 'scope'; scope: 'NO BUILD' | 'WINDING DOWN' } | { 
 // phrase now starts an instruction of its own: the message, a sentence, a line or a clause after a
 // comma, semicolon or colon, led by nothing but the words Dan opens one with.
 const APOS = "['’]"
-const LEAD = `(?:^\\s*|[.!?;:,]\\s+|\\n\\s*)(?:(?:ok(?:ay)?|so|and|then|now|please|right|heads up|thanks)[,!.]?\\s+)*`
+// The words that lead a request to Claude ("ok", "can you", "let's", "you can"), and nothing else.
+const LEAD = `(?:^\\s*|[.!?;:,]\\s+|\\n\\s*)(?:(?:ok(?:ay)?|so|and|then|now|please|pls|just|right|heads up|thanks|can you|could you|would you|you can|let${APOS}?s)[,!.]?\\s+)*`
 const ME = `(?:i${APOS}?m\\s+|i am\\s+)?`
 const own = (phrase: string) => new RegExp(`${LEAD}${phrase}`, 'i')
 const PHRASES: { re: RegExp; trigger: Trigger }[] = [

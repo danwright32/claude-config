@@ -396,9 +396,9 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   2026-10-04, PR #686). The milestone audit (#702) found the away, home, no coding and build
   phrases still matched anywhere ("the user is stepping away from the form" switched every session
   to away), so every phrase now has to start an instruction of its own: the message, a sentence,
-  a line, or a clause after a comma, semicolon or colon, led by nothing but a word like "ok",
-  "so" or "please" (and "I'm" for away and home). A phrase in a sentence ending in a question
-  mark never counts.
+  a line, or a clause after a comma, semicolon or colon, led by nothing but the words a request
+  to Claude opens with ("ok", "so", "please", "can you", "let's", "you can", and "I'm" for away
+  and home). A phrase in a sentence ending in a question mark never counts.
 - One scope mode at a time: turning on no build while winding down replaces it, and the other way.
   Away is separate and can be on with either; both show, the scope mode first.
 - The words: `/nobuild` answers "No build is on.", `/winddown` "Winding down is on.", `/build` "No

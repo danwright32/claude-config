@@ -67,6 +67,12 @@ describe('triggersIn', () => {
     expect(triggersIn('Research the sync first, no coding yet.')).toEqual([{ kind: 'scope', scope: 'NO BUILD' }])
     expect(triggersIn('ok, go ahead and build')).toEqual([{ kind: 'build' }])
     expect(triggersIn("Just file, don't build it yet.")).toEqual([{ kind: 'scope', scope: 'NO BUILD' }])
+    // Led by the words a request to Claude opens with, which the anywhere match used to allow.
+    expect(triggersIn('can you pause after this issue')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('pls go ahead and build')).toEqual([{ kind: 'build' }])
+    expect(triggersIn("Let's go ahead and build.")).toEqual([{ kind: 'build' }])
+    expect(triggersIn('you can go ahead and build now')).toEqual([{ kind: 'build' }])
+    expect(triggersIn('so the worker can go ahead and build')).toEqual([])
     expect(triggersIn('Nice.\nPause after this PR and clean up.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
   })
   test('one mode named twice in a message comes back once', () => {
