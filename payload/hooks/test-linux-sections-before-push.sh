@@ -258,6 +258,26 @@ run "$R14" 'git push --all origin'; o14c="$OUT"
 run "$R14" 'git add x && git commit -qm y && git push -u origin feature'; o14d="$OUT"
 [ "$RC" -eq 0 ] && check "a feature branch push is let through" ok \
                 || check "a feature branch push is let through" "rc=$RC out=$o14d"
+# A tag only push from the default branch updates no branch at all, so it is not a push to main.
+git -C "$R14" checkout -q main 2>/dev/null
+run "$R14" 'git push --tags origin'; o14g="$OUT"
+[ "$RC" -eq 0 ] && check "a tag only push from the default branch is not a push to it" ok \
+                || check "a tag only push from the default branch is not a push to it" "rc=$RC out=$o14g"
+run "$R14" 'git push origin v1.2'; o14h="$OUT"
+[ "$RC" -eq 0 ] && check "pushing one named tag from the default branch is not a push to it" ok \
+                || check "pushing one named tag from the default branch is not a push to it" "rc=$RC out=$o14h"
+git -C "$R14" tag v1.2 2>/dev/null
+run "$R14" 'git push origin v1.2'; o14h="$OUT"
+[ "$RC" -eq 0 ] && check "a refspec naming an existing tag is not the default branch" ok \
+                || check "a refspec naming an existing tag is not the default branch" "rc=$RC out=$o14h"
+git -C "$R14" checkout -q feature 2>/dev/null
+# A glob refspec is matched, never expanded against the working directory: a file named main sits
+# in the checkout, so an unquoted expansion of 'refs/heads/*' patterns would read it as a word.
+: > "$R14/main"
+run "$R14" 'git push origin "refs/heads/*:refs/heads/*"'; o14i="$OUT"
+[ "$RC" -eq 2 ] && check "a glob refspec over every branch counts as pushing the default one" ok \
+                || check "a glob refspec over every branch counts as pushing the default one" "rc=$RC out=$o14i"
+rm -f "$R14/main"
 run "$R14" 'git push other main'; o14e="$OUT"
 [ "$RC" -eq 0 ] && check "a push to some other remote is not the shared default branch" ok \
                 || check "a push to some other remote is not the shared default branch" "rc=$RC out=$o14e"

@@ -87,7 +87,11 @@ _ls_push_dests(){   # $1 = command
     ps__segment_is_push "$seg" || continue
     local -a tok
     read -r -a tok <<< "$seg"
-    local i=0 n=${#tok[@]} seen=0 remote="" specs="" skip=0 t d
+    # The refspecs are kept in an ARRAY and walked quoted: a glob refspec like refs/heads/*:refs/
+    # heads/* expanded unquoted is matched against files in the working directory (claude-config#776
+    # review). A tag only push (--tags with no refspec) updates no branch, so it names none.
+    local -a specs=()
+    local i=0 n=${#tok[@]} seen=0 remote="" skip=0 tags=0 t d
     while [ "$i" -lt "$n" ]; do
       t="${tok[$i]}"; i=$((i + 1))
       if [ "$seen" -eq 0 ]; then
@@ -99,20 +103,26 @@ _ls_push_dests(){   # $1 = command
       if [ "$skip" -eq 1 ]; then skip=0; continue; fi
       case "$t" in
         --all|--mirror|--branches) printf 'ALL\n' ;;
+        --tags) tags=1 ;;
         -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
         -*) ;;
-        *) if [ -z "$remote" ]; then remote="$t"; else specs="$specs $t"; fi ;;
+        *) if [ -z "$remote" ]; then remote="$t"; else specs+=("$t"); fi ;;
       esac
     done
     # A push to another remote does not reach the shared repository's default branch.
     case "$remote" in ''|origin) ;; *) continue ;; esac
-    if [ -n "$specs" ]; then
-      for t in $specs; do
+    if [ "${#specs[@]}" -gt 0 ]; then
+      for t in "${specs[@]}"; do
         t="${t#+}"
         case "$t" in *:*) d="${t#*:}" ;; *) d="$t" ;; esac
         if [ -z "$d" ] || [ "$d" = "HEAD" ]; then d="$(_ls_cur_branch)"; fi
-        printf '%s\n' "${d#refs/heads/}"
+        d="${d#refs/heads/}"
+        # A pattern refspec reaches every branch it matches, the default one included.
+        case "$d" in *'*'*) d="ALL" ;; esac
+        printf '%s\n' "$d"
       done
+    elif [ "$tags" -eq 1 ]; then
+      :
     else
       d="$(git rev-parse --abbrev-ref --symbolic-full-name '@{push}' 2>/dev/null)"
       if [ -n "$d" ]; then d="${d#*/}"; else d="$(_ls_cur_branch)"; fi
@@ -166,7 +176,7 @@ out="$(AUDIT_ON_LINUX=1 bash tests/audit-changed-sections.sh "$base" 2>&1)"; rc=
 
 # 0 is a pass or an honest nothing-to-do, and 2 is the audit refusing to answer, which is its own
 # problem and not evidence about this push. Only 1 means a section ran on Linux and failed, and 4
-# that the prelude before it failed while its own checks passed.
+# that the prelude before it failed while no check of its own failed.
 #
 # An exit 0 that says UNMEASURED is neither: the runner could not run, so nothing about this push
 # was judged on Linux. That must be SAID. Measured on 2026-09-21 while timing what a push waits on
@@ -205,7 +215,7 @@ _ls_record(){        # $1 = judged | stood-down  -> prints "<judged> of the <tot
 }
 
 if [ "$rc" -eq 4 ]; then
-  # The PRELUDE failed and the changed sections' own checks passed (claude-config#625). Still a
+  # The PRELUDE failed and no changed section failed a check of its own (claude-config#625). Still a
   # block, because something this push would run fails on Linux, but worded for what was measured:
   # on 2026-10-03 this said a changed section failed while the suite's own counts read
   # prelude_fail=4 target_fail=0, and a refusal naming the wrong culprit pushes toward an override
@@ -214,7 +224,8 @@ if [ "$rc" -eq 4 ]; then
   {
     echo "PUSH BLOCKED: the prelude every test section runs first FAILS on Linux."
     echo ""
-    echo "The sections this change touches passed their own checks there. What failed is the"
+    echo "None of the sections this change touches failed a check of its own there (the audit"
+    echo "below says, per section, whether it ran any or was cut short). What failed is the"
     echo "shared setup before them, which is either broken on the base this was cut from, or"
     echo "broken by a change to code it exercises (the tool, a hook, or what the container holds)."
     echo ""

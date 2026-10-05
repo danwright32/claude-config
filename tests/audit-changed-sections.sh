@@ -17,7 +17,7 @@
 #
 # Exit 0 = every changed section ran alone and passed, or there was nothing to do (which is said in
 # those words rather than reported as a clean audit). Exit 1 = a changed section cannot run alone.
-# Exit 4 = a changed section's own checks passed but the prelude every section runs first failed,
+# Exit 4 = no changed section failed a check of its own but the prelude every section runs first failed,
 # which is worded as that rather than blamed on the section (claude-config#625).
 # Exit 2 = the suite changed but no section could be derived from the diff, which is a failure
 # rather than a pass: an empty answer here is indistinguishable from having checked everything
@@ -152,8 +152,17 @@ while IFS= read -r _t; do
     _pf="$(_sec_count "$_secline" prelude_fail)"; _tf="$(_sec_count "$_secline" target_fail)"
     case "$_pf" in ''|*[!0-9]*) _pf=0 ;; esac
     case "$_tf" in ''|*[!0-9]*) _tf=0 ;; esac
+    _tp="$(_sec_count "$_secline" target_pass)"
+    case "$_tp" in ''|*[!0-9]*) _tp=0 ;; esac
     if [ "$_tf" -eq 0 ] && [ "$_pf" -gt 0 ]; then
-      prelude_bad="$prelude_bad$_t (the prelude failed $_pf check(s), the section's own checks passed)
+      # Only a section that RAN checks of its own can be said to have passed them. One the prelude
+      # cut short ran none, and saying it passed would claim a measurement nobody took (L440).
+      if [ "$_tp" -gt 0 ]; then
+        _what="the section's own $_tp check(s) passed"
+      else
+        _what="the section ran none of its own checks, so nothing here says whether it passes"
+      fi
+      prelude_bad="$prelude_bad$_t (the prelude failed $_pf check(s); $_what)
 "
     else
       bad="$bad$_t
@@ -178,7 +187,7 @@ case "$bad" in *[![:space:]]*)
   exit 1 ;;
 esac
 
-# THE PRELUDE FAILED and the changed sections' own checks passed (claude-config#625). That is not
+# THE PRELUDE FAILED and no changed section failed a check of its own (claude-config#625). That is not
 # evidence against the sections, and it is not said as if it were. What it IS evidence of is
 # narrower than "the base is broken": the prelude also exercises code outside the suite file, so
 # a change to that code can break it too, and only running the base tells the two apart. Its own

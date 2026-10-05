@@ -223,11 +223,11 @@ esac
 #     suite reports the two apart. On 2026-10-03 a push was blocked as the changed section failing
 #     on Linux while the suite's own line read prelude_fail=4 target_fail=0. So the audit reads the
 #     counts: a failing prelude under a passing section is its own outcome, worded as that.
-mkcountrunner(){          # $1 = repo  $2 = prelude_fail  $3 = target_fail  -> stub exits 1
+mkcountrunner(){          # $1 = repo  $2 = prelude_fail  $3 = target_fail  $4 = target_pass (12)  -> stub exits 1
   cat > "$1/tests/run-on-linux.sh" <<STUB
 #!/usr/bin/env bash
 echo "stub linux runner ran: SECTION_ONLY=\${SECTION_ONLY:-}"
-echo "SUITE-SECTIONS prelude_pass=29 prelude_fail=$2 target_pass=12 target_fail=$3 repeat_pass=0 repeat_fail=0 total_pass=41 total_fail=$(( $2 + $3 ))"
+echo "SUITE-SECTIONS prelude_pass=29 prelude_fail=$2 target_pass=${4:-12} target_fail=$3 repeat_pass=0 repeat_fail=0 total_pass=41 total_fail=$(( $2 + $3 ))"
 echo "SUITE-RESULT passed=41 failed=$(( $2 + $3 ))"
 exit 1
 STUB
@@ -252,6 +252,22 @@ esac
 grep -q 'unchanged base' <<< "$o10" \
   && check "and names how to tell a broken base from a change elsewhere" ok \
   || check "and names how to tell a broken base from a change elsewhere" "out=$o10"
+
+# A section that ran NONE of its own checks, because the prelude stopped the run first, has not
+# passed anything, and must not be said to have (claude-config#776 review, L440).
+R13="$(mkrepo linuxpreludecut)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R13/tests/test-claude-sync.sh"
+mkcountrunner "$R13" 4 0 0
+o13="$(runlinux "$R13")"; c13=$?
+[ "$c13" -eq 4 ] && check "a prelude failure that cut the section short is still the prelude's" ok \
+                 || check "a prelude failure that cut the section short is still the prelude's" "exit=$c13 out=$o13"
+case "$o13" in
+  *"own checks passed"*) check "and does not claim the section's checks passed when none ran" "out=$o13" ;;
+  *) check "and does not claim the section's checks passed when none ran" ok ;;
+esac
+grep -q 'ran none of its own checks' <<< "$o13" \
+  && check "and says the section ran none of its own checks" ok \
+  || check "and says the section ran none of its own checks" "out=$o13"
 
 # The section's OWN checks failing is still the section's failure, with the prelude failing too
 # or not: the counts only ever narrow the blame, never move it off a section that failed.
