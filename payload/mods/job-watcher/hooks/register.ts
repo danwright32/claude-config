@@ -880,7 +880,7 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
-    return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar as kept, with its run time.${quietly}`, ...(said.length ? { context: said } : {}) }
+    return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar by its name, state and run time, like "${name} running ${runFor(kept.at - current.startedAt)}".${quietly}`, ...(said.length ? { context: said } : {}) }
   })
 
   on('tool.call', async ($, e, next) => {

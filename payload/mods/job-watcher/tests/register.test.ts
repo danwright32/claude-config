@@ -576,6 +576,8 @@ test('a job kept with a reason is published as kept, with the name the band show
   const r = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is clicking through the site' }))) as { result?: unknown; deny?: string }
   expect(r.deny).toBeUndefined()
   expect(String(r.result)).toContain('Kept job1')
+  // The bar no longer says kept (#784): Claude is told what it will show.
+  expect(String(r.result)).toContain('It shows on the status bar by its name, state and run time, like "dev server running 5m".')
   expect(lastRecs(w)[0]?.kept).toEqual({ name: 'dev server', reason: 'Dan is clicking through the site', quiet: false, at: 5 * MIN })
 })
 
