@@ -104,8 +104,12 @@ const ROOTED = /^\$([A-Za-z_]\w*)/
  * of the bare name (a loop, a read, a declare) counts. A variable named nowhere and set nowhere
  * expands to nothing in a fresh shell, so a path through it reaches no lasting memory.
  */
+// Variables a shell sets for itself, present in every fresh shell whatever the environment held
+// (lessons review of #783: `$PWD/CLAUDE.md` was judged unset and saved unasked).
+const SHELL_SET = new Set(['HOME', 'PWD', 'OLDPWD', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'HOSTNAME', 'HOST', 'PPID', 'SHLVL', 'ZDOTDIR', 'BASH', 'ZSH_NAME', 'MACHTYPE', 'OSTYPE'])
+
 export const settable = async (name: string, text: string, isSet: IsSet, seen: Set<string> = new Set()): Promise<boolean> => {
-  if (name === 'HOME' || seen.has(name)) return true
+  if (SHELL_SET.has(name) || seen.has(name)) return true
   seen.add(name)
   if (await isSet(name)) return true
   const bare = new RegExp(`(^|[^$\\w{])${name}(?!\\w)`, 'gm')
@@ -248,7 +252,7 @@ export const THIS_SESSION = 'Just this session'
 export const NOT_AT_ALL = 'Not at all'
 
 /** The header chip the dialog shows over the question (at most 12 characters). */
-export const HEADER = 'Standing rule'
+export const HEADER = 'Memory rule'
 
 /**
  * The answers the dialog offers, each with what it does. The mod sets them on Claude's call itself,

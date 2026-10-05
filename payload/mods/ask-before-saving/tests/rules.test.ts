@@ -290,6 +290,11 @@ test('a mention through a variable nothing sets is no lasting memory; one someth
   expect(await mentioned('W=$(mktemp -d); echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
   // A name that only contains the variable's is not it.
   expect(await mentioned('SYNC_WORK=~/.claude; echo y > "$WORK/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
+  // A variable every shell sets for itself is always set, whatever printenv says (lessons review
+  // of #783: `$PWD/CLAUDE.md` was judged unset and its save went through unasked).
+  for (const v of ['PWD', 'OLDPWD', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL'])
+    expect(await mentioned(`echo y >> "$${v}/CLAUDE.md"`, HOME, inCheckout, unset)).toEqual([`$${v}/CLAUDE.md`])
+  expect(await mentioned('D="$PWD"; echo y >> "$D/AGENTS.md"', HOME, inCheckout, unset)).toEqual(['$D/AGENTS.md'])
   // A path spelled out beside it is judged as before.
   expect(await mentioned('echo y > "$NOPE/x"; cat ~/.claude/CLAUDE.md', HOME, inCheckout, unset)).toEqual(['~/.claude/CLAUDE.md'])
 })

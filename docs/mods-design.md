@@ -1034,7 +1034,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   `metadata.source` `ask-before-saving:<the refused call's id>`, naming the file and stating the rule
   in one plain sentence, never the command or the raw text. The mod checks that question (it must
   name every file, carry no answers of its own, and be about a save still waiting) and sets its
-  header (`Standing rule`) and its three answers itself (For good, "Saved to <file>"; Just this
+  header (`Memory rule`, the dialog takes at most 12 characters) and its three answers itself (For good, "Saved to <file>"; Just this
   session, "Followed until this session ends; nothing is written"; Not at all, "Nothing is saved"),
   so the label read back is always one of them. Dan's answer is read from that dialog's own result,
   and what Claude must do next is said in the same result: For good approves the identical call
@@ -1058,6 +1058,8 @@ and the band question is removed rather than kept beside it (L29). Three defects
   command itself. One the command gives a value is followed through the variables that value is
   built from; a literal, a path under home, or a command's output can be anything, so it counts; a
   fresh `$(mktemp ...)` folder does not; any other use of the bare name (a loop, a `read`) counts.
+  A variable every shell sets for itself (`PWD`, `OLDPWD`, `TMPDIR`, `USER` and the like) always
+  counts, whatever the environment holds.
   A variable named nowhere and set nowhere expands to nothing, so a path through it reaches no
   lasting memory. The same holds for a target the command names through such a variable.
 
@@ -1173,7 +1175,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the loops whose calls raise `tool.call`, carrying an id no agent list names. Since #777 its saves
   are refused, never asked, and the main session is told what it would have saved (above).
 - The band look (mod-kit's `$.modkit.question`) is no longer drawn by any mod since #777; the noun
-  itself is left for a follow up to remove.
+  itself, with no caller left, is removed by #796.
 
 ## Picker manners (#615), built 2026-10-04
 

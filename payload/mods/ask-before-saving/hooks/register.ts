@@ -315,7 +315,7 @@ export const register: Register = on => {
     if (decided.deny !== undefined) return decided
 
     const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
-    const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, text: await savedText($, tool, input, at), key }
+    const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
     const ask = askInstruction(id, files)

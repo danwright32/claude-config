@@ -212,7 +212,9 @@ test('the dialog Claude opens shows the mod\'s own answers, and For good saves t
   expect(w.asked.length).toBe(1)
   const q = w.asked[0].questions[0]
   expect(q.question).toBe('Save to ~/.claude/projects/p/memory/MEMORY.md for good: skip the screenshots?')
-  expect(q.header).toBe('Standing rule')
+  // Claude Code's dialog takes a header of at most 12 characters (lessons review of #783).
+  expect(q.header).toBe('Memory rule')
+  expect(q.header.length).toBeLessThanOrEqual(12)
   expect(q.multiSelect).toBe(false)
   expect(q.options.map(o => [o.label, o.description])).toEqual([
     ['For good', 'Saved to ~/.claude/projects/p/memory/MEMORY.md'],
