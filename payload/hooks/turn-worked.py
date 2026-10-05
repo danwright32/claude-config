@@ -10,7 +10,7 @@ Fails safe: any error prints "no".
 
 Usage: turn-worked.py <transcript_path>
 """
-import re, sys, json
+import os, re, sys, json
 
 MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Workflow"}
 MCP_READONLY = re.compile(
@@ -39,28 +39,70 @@ def is_genuine_user(obj):
     return False
 
 
+BLOCK = 65536
+
+
+def lines_from_end(f, counter):
+    """The file's lines, last first, read backwards one block at a time.
+
+    Read from the END and only as far as the last genuine user message, because two Stop hooks
+    run this on every prompt and a transcript only grows: read whole, the cost per prompt grew
+    with every turn before it (claude-config#603). counter[0] is the bytes read, for the guard.
+    """
+    f.seek(0, 2)
+    pos = f.tell()
+    tail = b""
+    while pos > 0:
+        step = min(BLOCK, pos)
+        pos -= step
+        f.seek(pos)
+        chunk = f.read(step)
+        counter[0] += len(chunk)
+        parts = (chunk + tail).split(b"\n")
+        tail = parts[0]
+        for part in reversed(parts[1:]):
+            if part.strip():
+                yield part
+    if tail.strip():
+        yield tail
+
+
 def main():
+    counter = [0]
+    worked = False
     try:
-        with open(sys.argv[1], "r", encoding="utf-8") as f:
-            lines = [ln for ln in f if ln.strip()]
+        f = open(sys.argv[1], "rb")
     except Exception:
         print("no")
         return
-
-    worked = False
-    for ln in reversed(lines):
-        try:
-            obj = json.loads(ln)
-        except Exception:
-            continue
-        if obj.get("type") == "assistant":
-            for it in ((obj.get("message") or {}).get("content") or []):
-                if isinstance(it, dict) and it.get("type") == "tool_use" \
-                        and is_mutating(it.get("name") or ""):
-                    worked = True
-            continue
-        if is_genuine_user(obj):
-            break
+    try:
+        for ln in lines_from_end(f, counter):
+            try:
+                obj = json.loads(ln.decode("utf-8"))
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("type") == "assistant":
+                for it in ((obj.get("message") or {}).get("content") or []):
+                    if isinstance(it, dict) and it.get("type") == "tool_use" \
+                            and is_mutating(it.get("name") or ""):
+                        worked = True
+                continue
+            if is_genuine_user(obj):
+                break
+    except Exception:
+        print("no")
+        return
+    finally:
+        f.close()
+        stats = os.environ.get("TURN_WORKED_STATS")
+        if stats:
+            try:
+                with open(stats, "w") as out:
+                    out.write("%d\n" % counter[0])
+            except Exception:
+                pass
     print("yes" if worked else "no")
 
 

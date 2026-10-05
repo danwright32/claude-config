@@ -4,6 +4,10 @@
 # Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse a write under a
 # development checkout's payload/ while the watch daemon could revert it, rather than warning about
 # it on the next prompt (claude-config#367).
+# Claude Code PostToolUse(Bash) hook: before a Bash call the half above notes what an at risk
+# payload/ holds, and after it this names anything written, added or removed there, so a write the
+# command's words could not show (a script file, a path built at run time) is still caught, by its
+# destination (claude-config#647).
 #
 # payload-revert-warning.sh already says the right thing: edits to payload/ in a development
 # checkout are mirrored over by the watch daemon running from another clone. But it is a
@@ -53,6 +57,9 @@ payload="$(cat 2>/dev/null || true)"
 # nothing could revert the write is not refused.
 if ps_reader_missing python3; then
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
+  # After a call there is nothing left to refuse, and the check made then needs the note this
+  # branch never took.
+  case "$payload" in *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) exit 0 ;; esac
   case "$payload" in *payload/*) ;; *) exit 0 ;; esac
   unreadable_root="$(sc_clone_root_of "$PWD" 2>/dev/null || true)"
   unreadable_watcher="$(sc_watcher_cmd || true)"
@@ -78,17 +85,80 @@ MSG
   exit 2
 fi
 
-read -r tool cwd <<EOF
+IFS=$'\t' read -r tool cwd event use_id <<EOF
 $(printf '%s' "$payload" | python3 -c '
-import json, sys
+import json, re, sys
 try:
     d = json.loads(sys.stdin.read())
 except Exception:
     d = {}
-print((d.get("tool_name") or "-"), (d.get("cwd") or "-"))
-' 2>/dev/null || printf -- '- -')
+def f(k):
+    v = d.get(k) or "-"
+    return re.sub(r"[\t\n]", " ", str(v))
+print("\t".join([f("tool_name"), f("cwd"), f("hook_event_name"), f("tool_use_id")]))
+' 2>/dev/null || printf -- '-\t-\t-\t-')
 EOF
 [ "$cwd" = "-" ] && cwd="$PWD"
+
+# WHERE this gate keeps the note of what payload/ held before a Bash call, read back after it
+# (claude-config#647). One small set of files per call, removed by the read, so what it keeps
+# cannot grow with the number of calls (claude-config#603).
+STATE_DIR="${PAYLOAD_WRITE_STATE_DIR:-$HOME/.claude-payload-write-gate}"
+state_key="$(printf '%s' "$use_id" | tr -c 'A-Za-z0-9_.-' '_')"
+
+# AFTER a Bash call: what changed under a payload/ that was at risk while it ran (claude-config#647).
+#
+# The command text cannot show every write. A script FILE, a path a program builds at run time, a
+# tool nobody listed: each writes where its words do not say, and on 2026-10-04 an agent's python
+# edits to payload/mods went past this gate while its one shell redirect was refused. So whatever
+# the words could not show is judged by the destination itself, after the fact. It cannot undo the
+# write, so it says so plainly and names the one step that protects it now, rather than staying
+# quiet about a write the daemon may revert (L11, L98).
+if [ "$event" = "PostToolUse" ]; then
+  [ "$tool" = "Bash" ] || exit 0
+  [ "$use_id" != "-" ] || exit 0
+  roots_f="$STATE_DIR/$state_key.roots"
+  list_f="$STATE_DIR/$state_key.list"
+  [ -f "$roots_f" ] || exit 0
+  changed=""
+  while IFS= read -r root; do
+    [ -n "$root" ] && [ -d "$root/payload" ] || continue
+    # Written or replaced since the note: mtime for an edit, ctime for a move, which keeps the moved
+    # file's old modification time and would read as untouched by mtime alone.
+    changed="$changed$(find "$root/payload" -type f \( -newer "$roots_f" -o -cnewer "$roots_f" \) 2>/dev/null)
+"
+  done < "$roots_f"
+  # Added or removed: the listing now against the listing then.
+  now_list="$(while IFS= read -r root; do
+    [ -n "$root" ] && [ -d "$root/payload" ] && find "$root/payload" -type f 2>/dev/null
+  done < "$roots_f" | LC_ALL=C sort)"
+  if [ -f "$list_f" ]; then
+    changed="$changed$(printf '%s\n' "$now_list" | LC_ALL=C comm -3 - "$list_f" | sed 's/^[[:space:]]*//')"
+  fi
+  rm -f "$roots_f" "$list_f"
+  changed="$(printf '%s\n' "$changed" | sed '/^$/d' | LC_ALL=C sort -u)"
+  [ -n "$changed" ] || exit 0
+  # Protected since it ran: a hold taken meanwhile, or the watcher gone, is what makes it safe now.
+  wcmd="$(sc_watcher_cmd || true)"
+  [ -n "$wcmd" ] || exit 0
+  sc_hold_live && exit 0
+  n="$(printf '%s\n' "$changed" | grep -c .)"
+  shown="$(printf '%s\n' "$changed" | awk 'NR <= 20 { print "  " $0 }')"
+  [ "$n" -gt 20 ] && shown="$shown
+  ... and $((n - 20)) more"
+  cat >&2 <<MSG
+claude-sync: that command changed $n file(s) under a development checkout's payload/ while a watch daemon was live from another clone and no hold was in force:
+
+$shown
+
+Nothing in the command's words showed those writes, so they could not be refused before it ran. The daemon mirrors ~/.claude up over payload/ and pushes, so these edits can be reverted silently, as 84 files were on 2026-09-03. Protect them now, before anything else:
+
+     claude-sync hold 120 "why you are editing the checkout"
+
+Then make ~/.claude match the checkout before the hold expires, or the next send reverts them.
+MSG
+  exit 2
+fi
 
 # WHICH FILES this call would write. Two shapes, because two kinds of tool call write a file and
 # only covering the first would leave the gate silent on the way most of this session's own edits
@@ -123,50 +193,119 @@ for v in seen:
     # The documented override, honoured before anything else, so the person who has read the
     # message can get past it for one command.
     case "$cmd" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
-    # Only the payload paths in a WRITE POSITION, never every payload path in a command that
-    # happens to contain a redirect somewhere. `cat payload/x 2>/dev/null` holds both and writes
-    # nothing, and reading is the overwhelming majority of what a session does in a checkout: a
-    # gate that refused those would be turned off within the hour (L36, L104).
-    targets="$(printf '%s' "$cmd" | python3 -c '
-import re, sys
+    # Nothing can revert anything with no watcher, so none of the reading below is paid for then.
+    [ -n "$(sc_watcher_cmd || true)" ] || exit 0
+    # Only the paths in a WRITE POSITION, never every payload path in a command that happens to
+    # contain a redirect somewhere. `cat payload/x 2>/dev/null` holds both and writes nothing, and
+    # reading is the overwhelming majority of what a session does in a checkout: a gate that refused
+    # those would be turned off within the hour (L36, L104).
+    #
+    # Judged by the DESTINATION (claude-config#647): a relative path is resolved against where the
+    # command actually runs, the session's directory or a `cd` earlier in the same command, so a
+    # write made from inside payload/ counts whether or not its words say payload.
+    targets="$(printf '%s' "$cmd" | GATE_CWD="$cwd" python3 -c '
+import os, re, sys
 
 cmd = sys.stdin.read()
+cwd = os.environ.get("GATE_CWD") or os.getcwd()
 targets = []
 
-def add(tok):
+def resolve(tok, base):
     tok = tok.strip().strip("\"\x27")
-    if tok and re.search(r"(^|/)payload/", tok):
-        targets.append(tok)
+    if not tok:
+        return None
+    if tok.startswith("~"):
+        tok = os.path.expanduser(tok)
+    if tok.startswith("$") or "$(" in tok or "`" in tok:
+        # A value only the shell knows. Counted only when its words name payload, as before.
+        return tok if re.search(r"(^|/)payload/", tok) else None
+    if not tok.startswith("/"):
+        tok = os.path.join(base, tok)
+    return os.path.normpath(tok)
 
-# A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
-for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", cmd):
-    add(m.group(1))
+def add(tok, base):
+    p = resolve(tok, base)
+    if p:
+        targets.append(p)
 
-# Commands whose arguments ARE what they write. Scanned per segment, so a read in one segment is
-# not blamed on a write in the next.
-WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate")
-for seg in re.split(r"&&|\|\||;|\||\n", cmd):
+# Heredoc BODIES are data, not shell: a python comparison like `a > b` in one is no redirect. They
+# are taken out of the shell reading and kept for the inline script reading below.
+shell = []
+bodies = []
+lines = cmd.split("\n")
+i = 0
+while i < len(lines):
+    line = lines[i]
+    shell.append(line)
+    delims = re.findall(r"<<-?\s*[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)[\"\x27]?", line)
+    i += 1
+    for delim in delims:
+        while i < len(lines) and lines[i].strip() != delim:
+            bodies.append(lines[i])
+            i += 1
+        i += 1
+shell_text = "\n".join(shell)
+
+# Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
+# segment is not blamed on a write in the next, and a `cd` moves where the rest resolve.
+WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
+           "ln", "ditto", "unlink", "rmdir")
+GIT_WRITERS = ("checkout", "restore", "rm", "mv")
+base = cwd
+for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
+    # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
+    for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):
+        add(m.group(1), base)
     words = seg.split()
     if not words:
         continue
-    # Leading VAR=value assignments are not the command.
     k = 0
     while k < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[k]):
         k += 1
     if k >= len(words):
         continue
-    head = words[k].rsplit("/", 1)[-1]
-    if head == "sed" and any(w == "-i" or w.startswith("-i") for w in words[k:]):
-        for w in words[k + 1:]:
-            add(w)
+    head = words[k].lstrip("(").rsplit("/", 1)[-1]
+    args = words[k + 1:]
+    if head in ("cd", "pushd"):
+        dest = next((w for w in args if not w.startswith("-")), "~")
+        nb = resolve(dest, base)
+        if nb and not nb.startswith("$"):
+            base = nb
+        continue
+    if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
+        for w in args:
+            add(w, base)
+    elif head in ("perl", "ruby") and any(re.match(r"^-[A-Za-z]*i", w) for w in args):
+        for w in args:
+            if not w.startswith("-"):
+                add(w, base)
+    elif head == "dd":
+        for w in args:
+            if w.startswith("of="):
+                add(w[3:], base)
+    elif head == "git":
+        sub = next((w for w in args if not w.startswith("-")), "")
+        if sub in GIT_WRITERS:
+            for w in args[args.index(sub) + 1:]:
+                if not w.startswith("-"):
+                    add(w, base)
     elif head in WRITERS:
-        for w in words[k + 1:]:
-            add(w)
+        for w in args:
+            add(w, base)
 
-# An inline script opening a file for writing. This is how most of this repo own payload edits are
-# actually made, and a gate blind to it would be silent on exactly the session that prompted it.
+# An inline script that can write, and names a payload path. Most of this repo own payload edits
+# are made this way, and the path is routinely held in a variable before it is opened, so the test
+# is the script holding a payload path AND any writing call at all, not the two on one line.
+WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes)\(",
+               r"shutil\.(copy|copy2|copyfile|copytree|move|rmtree)\(",
+               r"os\.(replace|rename|remove|unlink|makedirs|mkdir|rmdir)\(", r"\.unlink\(",
+               r"\.rename\(", r"\.touch\(", r"writeFileSync|appendFileSync|File\.write")
+if any(re.search(p, cmd) for p in WRITE_CALLS):
+    for m in re.finditer(r"[\"\x27]([^\"\x27\s]*payload/[^\"\x27\s]*)[\"\x27]", cmd):
+        add(m.group(1), cwd)
+# The original single line form, kept: a literal opened for writing in place.
 for m in re.finditer(r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]", cmd):
-    add(m.group(1))
+    add(m.group(1), cwd)
 
 seen = []
 for t in targets:
@@ -177,7 +316,6 @@ print("\n".join(seen))
     ;;
   *) exit 0 ;;
 esac
-[ -n "$targets" ] || exit 0
 
 # Which clone each target is in, and whether that clone is at risk. Asked per target, because one
 # command can name paths in two checkouts.
@@ -203,7 +341,50 @@ done <<TARGETS
 $targets
 TARGETS
 
-[ -n "$refuse_root" ] || exit 0
+# BEFORE a Bash call it let through: a note of what each at risk payload/ holds, for the check after
+# it to compare against (claude-config#647). Taken only in the state that loses work, a live watcher
+# from another clone and no hold, and only for the checkouts this command could reach: the one it
+# runs in, and any its words name. Two finds over a few hundred files, never one process per file.
+note_payload_before(){
+  local wcmd roots="" dir root
+  [ "$tool" = "Bash" ] && [ "$use_id" != "-" ] || return 0
+  wcmd="$(sc_watcher_cmd || true)"
+  [ -n "$wcmd" ] || return 0
+  sc_hold_live && return 0
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    root="$(sc_clone_root_of "$dir" 2>/dev/null)" || continue
+    [ -n "$root" ] || continue
+    sc_is_this_clone "$root" "$wcmd" && continue
+    case "
+$roots
+" in *"
+$root
+"*) continue ;; esac
+    roots="${roots:+$roots
+}$root"
+  done <<DIRS
+$cwd
+$(printf '%s\n' "$targets" | sed -n 's#/[^/]*$##p')
+$(printf '%s' "$cmd" | grep -oE "/[^[:space:]\"']*/payload/" | sed 's#/payload/$##' | LC_ALL=C sort -u)
+DIRS
+  [ -n "$roots" ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  # A call another gate refused never reaches the check after it, so its note is left behind. One
+  # find clears every such note older than a day, so the directory cannot grow with refusals.
+  find "$STATE_DIR" -type f -mmin +1440 -delete 2>/dev/null
+  # The roots file is written FIRST: its time is what "changed since" is measured from.
+  printf '%s\n' "$roots" > "$STATE_DIR/$state_key.roots" || return 0
+  printf '%s\n' "$roots" | while IFS= read -r root; do
+    find "$root/payload" -type f 2>/dev/null
+  done | LC_ALL=C sort > "$STATE_DIR/$state_key.list"
+  return 0
+}
+
+if [ -z "$refuse_root" ]; then
+  note_payload_before
+  exit 0
+fi
 
 cat >&2 <<MSG
 claude-sync: REFUSED a write to $refuse_path.

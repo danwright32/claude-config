@@ -108,6 +108,69 @@ fresh_cache
 run "git add -A"
 allowed "a file this session wrote through a Bash command is this session's too"
 
+echo "check add scope: a file this session wrote by script, never naming it (claude-config#585)"
+
+# In an Ovation worktree on 2026-09-26 this gate called a session's own python and sed output
+# another session's, because the script that wrote those files never named them in its command. A
+# file whose change happened WHILE one of this session's own Bash calls was running is this
+# session's, judged by the times Claude Code records around every call, not by the words.
+bash_call(){ # bash_call <id> <command> <start epoch> <end epoch>
+  python3 -c '
+import json, sys, datetime
+def iso(t):
+    return datetime.datetime.fromtimestamp(float(t), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+print(json.dumps({"type": "assistant", "timestamp": iso(sys.argv[3]), "message": {"content": [
+    {"type": "tool_use", "id": sys.argv[1], "name": "Bash", "input": {"command": sys.argv[2]}}]}}))
+print(json.dumps({"type": "user", "timestamp": iso(sys.argv[4]), "message": {"content": [
+    {"type": "tool_result", "tool_use_id": sys.argv[1], "content": "ok"}]}}))
+' "$@" >> "$TR"
+}
+read_call(){ # read_call <id> <start epoch> <end epoch>: a call that is not Bash, over the same kind of window
+  python3 -c '
+import json, sys, datetime
+def iso(t):
+    return datetime.datetime.fromtimestamp(float(t), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+print(json.dumps({"type": "assistant", "timestamp": iso(sys.argv[2]), "message": {"content": [
+    {"type": "tool_use", "id": sys.argv[1], "name": "Read", "input": {"limit": 5}}]}}))
+print(json.dumps({"type": "user", "timestamp": iso(sys.argv[3]), "message": {"content": [
+    {"type": "tool_result", "tool_use_id": sys.argv[1], "content": "ok"}]}}))
+' "$@" >> "$TR"
+}
+set_mtime(){ python3 -c 'import os, sys; t = float(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$1" "$2"; }
+
+now="$(date +%s)"
+bash_call t585a "python3 $FIX/gen.py" "$((now - 600))" "$((now - 590))"
+printf 'generated\n' > "$REPO/generated.txt"
+set_mtime "$REPO/generated.txt" "$((now - 595))"
+fresh_cache
+run "git add -A"
+allowed "a file changed while this session's own script ran is this session's"
+# The control: the same kind of file, changed long after that call ended, is still foreign.
+printf 'later\n' > "$REPO/later.txt"
+set_mtime "$REPO/later.txt" "$((now - 300))"
+fresh_cache
+run "git add -A"
+refused "a file changed outside every one of this session's Bash calls is still foreign"
+says "and it is the one named" "later.txt"
+silentabout "and the scripted file is not accused" "  generated.txt"
+# Only a Bash call writes files by script: a Read running over the same moment does not credit it.
+rm -f "$REPO/later.txt"
+read_call t585b "$((now - 200))" "$((now - 190))"
+printf 'during read\n' > "$REPO/duringread.txt"
+set_mtime "$REPO/duringread.txt" "$((now - 195))"
+fresh_cache
+run "git add -A"
+refused "a file changed while only a Read was running is not credited"
+says "and it is named" "duringread.txt"
+rm -f "$REPO/duringread.txt" "$REPO/generated.txt"
+# Read incrementally like the mentions: a call recorded after the cache was last topped up counts.
+bash_call t585c "python3 $FIX/gen2.py" "$((now - 100))" "$((now - 90))"
+printf 'second\n' > "$REPO/second.txt"
+set_mtime "$REPO/second.txt" "$((now - 95))"
+run "git add -A"
+allowed "a scripted write recorded after the last read of the transcript is credited too"
+rm -f "$REPO/second.txt"
+
 echo "check add scope: a checkout somebody else is working in"
 
 # The incident: another session's file, which this one has never mentioned anywhere.
