@@ -272,6 +272,37 @@ out="$(bash "$DEPS" "$M11B" 2>&1)"; code=$?
   && ! printf '%s\n' "$out" | grep -q 'never uses it' \
   && check "a dependency whose contract cannot be read is reported as unreadable, never as unused" ok \
   || check "a dependency whose contract cannot be read is reported as unreadable, never as unused" "exit=$code out=$out"
+# The lessons review of #696: what counts as use is code, wherever the mod keeps it, read against
+# the whole contract.
+M11C="$TMPROOT/m11c"
+mkdepmod "$M11C" kit '[]' "export const register = () => {}"
+mkdir -p "$M11C/kit/types"
+printf '{ "name": "kit", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' > "$M11C/kit/.claude-plugin/plugin.json"
+printf 'declare module "claude-code" {\n  interface EngineInterface {\n    kitInfo: { version: string; nested: { deep: boolean } }\n    kit: { go: () => Promise<void> }\n  }\n}\n' > "$M11C/kit/types/index.d.ts"
+# A noun declared after a member with an inline object type is still one of the contract's.
+mkdepmod "$M11C" late-noun '["kit"]' "export const register = on => { on('tool.call', async (\$, e, next) => { await \$.kit.go(); return next(e) }) }"
+# Code outside hooks/ that the hooks module imports is the mod's code too.
+mkdepmod "$M11C" elsewhere '["kit"]' "import { go } from '../lib/go.ts'
+export const register = on => { on('tool.call', async (\$, e, next) => { await go(\$); return next(e) }) }"
+mkdir -p "$M11C/elsewhere/lib"
+printf 'export const go = async ($) => { await $.kit.go() }\n' > "$M11C/elsewhere/lib/go.ts"
+out="$(bash "$DEPS" "$M11C" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a noun after an inline object type, and a use outside hooks/, both count" ok \
+  || check "a noun after an inline object type, and a use outside hooks/, both count" "exit=$code out=$out"
+# A comment mentioning the noun or the name is not a use.
+mkdepmod "$M11C" commented '["kit"]' "// \$.kit.go() is how this would be called, and { plugin: 'kit' } how a press would be matched
+/* 'kit' and \$.kit.go() in a block comment */
+export const register = on => { on('tool.call', async (\$, e, next) => next(e)) } // 'kit'"
+# A mod listing a dependency with no source at all is reported, never passed or accused.
+mkdepmod "$M11C" sourceless '["kit"]' ""
+rm -f "$M11C/sourceless/hooks/register.ts"
+out="$(bash "$DEPS" "$M11C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'commented lists kit under dependencies but never uses it' \
+  && check "a dependency only a comment mentions fails the run" ok || check "a dependency only a comment mentions fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'sourceless lists kit under dependencies, but no source file of sourceless was found' \
+  && check "a mod with no source is reported as such" ok || check "a mod with no source is reported as such" "$out"
+! printf '%s\n' "$out" | grep -qE '(late-noun|elsewhere) lists' \
+  && check "and the mods whose code uses it are not named" ok || check "and the mods whose code uses it are not named" "$out"
 out="$(bash "$DEPS" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the dependency check" ok \
   || check "a missing mods folder is refused by the dependency check" "exit=$code out=$out"
@@ -279,6 +310,74 @@ if [ -d "$ROOT/payload/mods" ]; then
   out="$(bash "$DEPS" "$ROOT/payload/mods" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "every mod in payload/mods uses each dependency it lists" ok \
     || check "every mod in payload/mods uses each dependency it lists" "exit=$code out=$out"
+fi
+
+# 12. The goal tracker reads picker manners' open question, `picker-manners.open`, as { id: string,
+#     question: { question: string } } (#694), and its own tests can only stand in for picker manners,
+#     so its reading is checked here against the contract picker manners declares (lessons review of
+#     #696, L52). Shown failing on a contract whose shape moved, then held on the real one.
+picker_contract(){   # $1 = picker manners' types file -> prints what does not match, exits 1 when anything does not
+  python3 - "$1" <<'PY'
+import re, sys
+try:
+    text = open(sys.argv[1]).read()
+except OSError as e:
+    print(f"cannot read {sys.argv[1]}: {e}")
+    sys.exit(1)
+def block_after(pattern, top_only):
+    """The body of the brace block that pattern opens, to its own closing brace; with top_only, what
+    is nested in it blanked. None when there is no such block or it never closes."""
+    m = re.search(pattern, text)
+    if not m:
+        return None
+    depth, out = 1, []
+    for c in text[m.end():]:
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(c if depth == 1 or not top_only or c == "\n" else " ")
+    return None
+wrong = []
+state = block_after(r"'picker-manners'\s*:\s*\{", True)
+if state is None or not re.search(r"\bopen\s*:\s*PickersOpen\s*\|\s*null", state):
+    wrong.append("PluginState 'picker-manners' does not declare open: PickersOpen | null")
+body = block_after(r"export type PickersOpen\s*=\s*\{", False)
+if body is None:
+    wrong.append("there is no PickersOpen type")
+else:
+    if not re.search(r"^\s*id\s*:\s*string\b", body, re.M):
+        wrong.append("PickersOpen has no id: string")
+    if not re.search(r"^\s*question\s*:\s*\{\s*question\s*:\s*string\b", body, re.M):
+        wrong.append("PickersOpen has no question: { question: string }")
+print("; ".join(wrong))
+sys.exit(1 if wrong else 0)
+PY
+}
+PM_TYPES="$ROOT/payload/mods/picker-manners/types/index.d.ts"
+if [ ! -f "$PM_TYPES" ]; then
+  echo "note: picker manners is not in payload/mods, so the goal tracker reads no open question of its and there is no contract to check."
+  check "picker manners is absent, which is not a pass over its contract" ok
+else
+  M12="$TMPROOT/m12"; mkdir -p "$M12"
+  sed 's/^  id: string$/  callId: string/' "$PM_TYPES" > "$M12/moved.d.ts"
+  out="$(picker_contract "$M12/moved.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 1 ] && case "$out" in *"PickersOpen has no id: string"*) true ;; *) false ;; esac \
+    && check "a picker manners contract whose open question moved fails the goal tracker's reading" ok \
+    || check "a picker manners contract whose open question moved fails the goal tracker's reading" "exit=$code out=$out"
+  # A member with an inline object type ahead of open does not hide it (lessons review of #709).
+  sed "s/'picker-manners': { open:/'picker-manners': { meta: { at: number }; open:/" "$PM_TYPES" > "$M12/nested.d.ts"
+  grep -q 'meta: { at: number }; open:' "$M12/nested.d.ts" || check "the nested fixture was made" "sed did not change the contract"
+  out="$(picker_contract "$M12/nested.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "an inline object type ahead of open still finds open" ok \
+    || check "an inline object type ahead of open still finds open" "exit=$code out=$out"
+  out="$(picker_contract "$PM_TYPES" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
+    || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"
+  grep -q "PICKER_OPEN = { plugin: 'picker-manners', key: 'open' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
+    && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no PICKER_OPEN for picker-manners open in goal-tracker"
 fi
 
 echo "passed: $pass, failed: $fail"

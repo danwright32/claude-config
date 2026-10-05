@@ -46,8 +46,12 @@ let toldUnpublished = false
 let toldClockFailed = false
 // A look still running when the next minute comes is not overlapped by a second (lessons review).
 // It describes the look in flight, not the session, so a session start never resets it: an earlier
-// session's look may still be running then, and a second would overlap it (#694).
+// session's look may still be running then, and a second would overlap it (#694). A look is given up
+// after LOOK_MAX_MS, so one that never finishes (a stop Claude Code never answers) cannot silence the
+// watcher for good; Claude is told once, until a look finishes again (lessons review of #696).
 let looking = false
+const LOOK_MAX_MS = 10 * 60_000
+let toldLookGivenUp = false
 // One timer, started again by each session start so it looks with that session's engine interface.
 let tick: { cancel: () => void } | undefined
 const watchOf = (job: Job): Watch => {
@@ -147,9 +151,21 @@ const forget = async ($: EngineInterface, id: string) => {
 const lookSafely = async ($: EngineInterface) => {
   if (looking) return
   looking = true
+  let deadline: { cancel: () => void } | undefined
+  const givenUp = new Promise<'given up'>(resolve => {
+    deadline = $.clock.after(LOOK_MAX_MS, () => resolve('given up'))
+  })
+  const pass = lookAll($).then(() => 'finished' as const)
+  // A look given up may still settle later; whatever it then throws goes nowhere.
+  pass.catch(() => undefined)
   try {
-    await lookAll($)
+    if ((await Promise.race([pass, givenUp])) === 'finished') toldLookGivenUp = false
+    else if (!toldLookGivenUp) {
+      toldLookGivenUp = true
+      notices.push(`The background job watcher's look at its jobs did not finish within ${LOOK_MAX_MS / 60_000} minutes and was given up; the next look starts at the next minute. A job may be stuck without a word from the watcher meanwhile.`)
+    }
   } finally {
+    deadline?.cancel()
     looking = false
   }
 }
@@ -424,6 +440,7 @@ export const register: Register = on => {
     notices.length = 0
     toldUnpublished = false
     toldClockFailed = false
+    toldLookGivenUp = false
     tick?.cancel()
     tick = $.clock.every(TICK_MS, () => lookSafely($))
     await $.tool.register(KEEP_SPEC)

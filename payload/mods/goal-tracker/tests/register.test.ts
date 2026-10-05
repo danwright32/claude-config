@@ -702,15 +702,21 @@ const Garbled: { name: string; tier: 'prepend'; register: Register } = {
     })
   },
 }
-test('an open question picker manners writes in a shape that cannot be read marks and notifies nothing', { plugins: [deps, Garbled] }, async ($, on) => {
+test('an open question picker manners writes in a shape that cannot be read marks and notifies nothing, and is said', { plugins: [deps, Garbled] }, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on)
   await start($)
   await $.tool.call(shipIt)
+  await $.tool.call(shipIt)
   expect(w.notified).toEqual([])
   expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
-  // Said in the debug log, never passed off as no question at all (L11).
-  expect(w.debug.filter(l => l.includes("picker manners' open question could not be read"))).toHaveLength(1)
+  // Never passed off as no question at all (L11): each time in the debug log, and once a session in
+  // one dim line, since from then on the questions it shows go unmarked (lessons review of #696).
+  expect(w.debug.filter(l => l.includes("picker manners' open question could not be read"))).toHaveLength(2)
+  expect(w.logs.filter(l => l.includes('could not read the question picker manners holds open'))).toHaveLength(1)
+  await start($)
+  await $.tool.call(shipIt)
+  expect(w.logs.filter(l => l.includes('could not read the question picker manners holds open'))).toHaveLength(2)
 })
 
 // The goal text (Dan, 2026-10-04, picker): the /goal condition when one is set, otherwise the

@@ -219,8 +219,10 @@ Built in #694 from the last lessons reviews of #634, not put to Dan, each the pl
   watches picker manners' writes of the question it holds open (`picker-manners.open`), which every
   plugin's `state.set` hook sees wherever it sits, and marks and notifies from those; where it sees
   the call too (sitting above picker manners), the call's id keeps that to one mark and one
-  notification. The tests load picker manners both above and beneath the goal tracker; which order a
-  live session loads them in was not measured. Two differences between the orders remain: beneath
+  notification. The tests load picker manners both above and beneath the goal tracker, and
+  `tests/test-mods.sh` checks picker manners' contract declares the open question in the shape the
+  goal tracker reads; one it cannot read is said once a session in one dim line. Which order a live
+  session loads them in was not measured. Two differences between the orders remain: beneath
   picker manners, the goal tracker never sees the call, so a question picker manners refuses is not
   counted toward failed; above it, a question picker manners refuses is marked and notified for the
   moment before the refusal, as before #694.

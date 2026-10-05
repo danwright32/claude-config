@@ -1,13 +1,16 @@
 #!/bin/bash
 # check-mod-dependencies.sh <mods dir>: every plugin a mod's plugin.json lists under "dependencies" is
-# one its hooks actually use (#694: the job watcher listed mod-kit, which it never used). A listed
+# one its code actually uses (#694: the job watcher listed mod-kit, which it never used). A listed
 # dependency is what Claude Code lays the contract of into the mod's types and what a reader takes as
 # a fact about how the mods fit together, so one nothing uses is a false statement in both places.
 #
-# Used means the mod's hooks (its hooks/ folder, test files left out) either reach a noun the
-# dependency's contract declares on $ ($.modkit.bandRow, built.sessions.list), or name the
-# dependency itself, as a ui.press matcher or a state reference does ('mod-kit'). A dependency that
-# is no mod in the folder cannot be read, so it is reported rather than passed.
+# Used means the mod's code either reaches a noun the dependency's contract declares on $
+# ($.modkit.bandRow, built.sessions.list), or names the dependency itself, as a ui.press matcher or a
+# state reference does ('mod-kit'). The mod's code is every source file in its folder, wherever its
+# hooks module imports it from, less its tests, its own contract and what Claude Code generates, and
+# with comments taken out, since a comment naming a noun calls nothing (lessons review of #696).
+# A dependency that is no mod in the folder, a contract that cannot be read or parsed whole, and a
+# mod with no source at all are each reported as such, never passed and never taken as unused.
 #
 # Exit codes, each distinct (L11): 0 every dependency is used (the count of mods is printed, L98),
 # 1 an unused or unreadable dependency, each named with its mod, 2 the mods folder does not exist,
@@ -41,35 +44,96 @@ for entry in sorted(os.listdir(root)):
         continue
     mods[man.get("name") or entry] = (folder, man)
 
+QUOTES = "'\"`"
+
+def strip_comments(text):
+    """The text with line and block comments blanked, outside quotes. A quote is followed only to the
+    end of its line, a template literal's excepted, so a regex literal holding a quote mark cannot
+    hide the rest of the file."""
+    out, i, n, quote = [], 0, len(text), None
+    while i < n:
+        c = text[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote or (c == "\n" and quote != "`"):
+                quote = None
+            i += 1
+        elif c in QUOTES:
+            quote = c
+            out.append(c)
+            i += 1
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            stop = n if end < 0 else end
+            out.append("\n" * text.count("\n", i, stop))
+            i = n if end < 0 else end + 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
 def nouns(folder, man):
     """The nouns a mod's contract declares on $, from its interface EngineInterface block: none when
-    it names no contract, None when the contract it names cannot be read."""
+    it names no contract, None when the contract it names cannot be read or parsed whole."""
     types = man.get("types")
     if not isinstance(types, str):
         return []
     try:
         with open(os.path.join(folder, types)) as f:
-            src = f.read()
+            src = strip_comments(f.read())
     except OSError:
         return None
-    block = re.search(r"interface\s+EngineInterface\s*\{([^}]*)\}", src)
-    return re.findall(r"^\s*([A-Za-z_$][\w$]*)\??\s*:", block.group(1), re.M) if block else []
+    head = re.search(r"interface\s+EngineInterface\s*\{", src)
+    if not head:
+        return []
+    # The block runs to its own closing brace, past any member's inline object type; only what stands
+    # at its top level is a member, so whatever is nested is blanked before the members are read.
+    depth, top = 1, []
+    for c in src[head.end():]:
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        top.append(c if depth == 1 or c == "\n" else " ")
+    else:
+        return None
+    return re.findall(r"^\s*([A-Za-z_$][\w$]*)\??\s*:", "".join(top), re.M)
 
 SOURCE = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
-def hooks_source(folder):
+# Not the mod's code: its tests (which stand in for other mods), its own contract, and what Claude
+# Code generates into its folder.
+SKIP_DIRS = {"tests", "types", ".claude-plugin", "node_modules"}
+
+def mod_source(folder):
     texts = []
-    for base, _dirs, files in os.walk(os.path.join(folder, "hooks")):
+    for base, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         for name in sorted(files):
-            if name.endswith(SOURCE) and ".test." not in name:
+            if name.endswith(SOURCE) and ".test." not in name and not name.endswith(".d.ts"):
                 with open(os.path.join(base, name), errors="replace") as f:
-                    texts.append(f.read())
-    return "\n".join(texts)
+                    texts.append(strip_comments(f.read()))
+    return texts
 
 for name, (folder, man) in mods.items():
     deps = man.get("dependencies") or []
     if not deps:
         continue
-    src = hooks_source(folder)
+    texts = mod_source(folder)
+    if not texts:
+        for dep in deps:
+            print(f"check-mod-dependencies: {name} lists {dep} under dependencies, but no source file of {name} was found, so whether it uses it cannot be read.")
+        failed = 1
+        continue
+    src = "\n".join(texts)
     for dep in deps:
         if dep not in mods:
             print(f"check-mod-dependencies: {name} lists {dep} under dependencies, which is no mod in {root}, so whether {name} uses it cannot be read.")
@@ -78,14 +142,14 @@ for name, (folder, man) in mods.items():
         declared = nouns(*mods[dep])
         if declared is None:
             # Never scored as declaring nothing: that would accuse a mod reaching its nouns (L11).
-            print(f"check-mod-dependencies: {name} lists {dep} under dependencies, whose contract {mods[dep][1].get('types')} cannot be read, so whether {name} uses it cannot be read.")
+            print(f"check-mod-dependencies: {name} lists {dep} under dependencies, whose contract {mods[dep][1].get('types')} cannot be read or parsed whole, so whether {name} uses it cannot be read.")
             failed = 1
             continue
         reached = any(re.search(r"\." + re.escape(n) + r"\??\.", src) for n in declared)
-        named = re.search(r"['\"`]" + re.escape(dep) + r"['\"`]", src)
+        named = re.search("[" + QUOTES + "]" + re.escape(dep) + "[" + QUOTES + "]", src)
         if not (reached or named):
             what = " or ".join(f"$.{n}" for n in declared) or "no noun of its"
-            print(f"check-mod-dependencies: {name} lists {dep} under dependencies but never uses it: its hooks reach {what} nowhere and never name '{dep}'. Remove it from {name}/.claude-plugin/plugin.json.")
+            print(f"check-mod-dependencies: {name} lists {dep} under dependencies but never uses it: its code reaches {what} nowhere and never names '{dep}'. Remove it from {name}/.claude-plugin/plugin.json.")
             failed = 1
 
 print(f"check-mod-dependencies: {len(mods)} mods checked in {root}")
