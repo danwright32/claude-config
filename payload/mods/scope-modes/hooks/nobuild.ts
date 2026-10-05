@@ -62,27 +62,47 @@ const gitRefusal = (g: { sub?: string; args: string[] }): boolean => {
   return false
 }
 
-// A GraphQL document's top level fields: in a mutation, the changes it makes. Strings are skipped,
-// so a brace inside an argument's text is not read as structure.
-const topFields = (doc: string): string[] => {
-  const out: string[] = []
+// Every operation and fragment a GraphQL document defines, each with its top level fields (in a
+// mutation, the changes it makes) and whether it spreads a fragment there, whose fields this guard
+// cannot see. Every one is judged, never only the first (lessons review of #714): a query first
+// and a mutation after it is run by naming the mutation in operationName. Strings and comments are
+// skipped, so a brace inside an argument's text is not read as structure.
+type Operation = { kind: string; fields: string[]; spreads: boolean }
+const operations = (doc: string): Operation[] => {
+  const out: Operation[] = []
   let depth = 0
   let parens = 0
+  let pending: string | undefined
+  let op: Operation | undefined
+  const ident = (i: number) => (/^[A-Za-z_][A-Za-z0-9_]*/.exec(doc.slice(i)) as RegExpExecArray)[0]
   for (let i = 0; i < doc.length; i++) {
     const c = doc[i] as string
     if (c === '"') {
       for (i++; i < doc.length && doc[i] !== '"'; i++) if (doc[i] === '\\') i++
     } else if (c === '#') {
       while (i < doc.length && doc[i] !== '\n') i++
-    } else if (c === '{') depth++
-    else if (c === '}') depth--
+    } else if (c === '{') {
+      // A document's shorthand `{ ... }` is a query.
+      if (depth === 0) out.push((op = { kind: pending ?? 'query', fields: [], spreads: false }))
+      pending = undefined
+      depth++
+    } else if (c === '}') depth--
     else if (c === '(') parens++
     else if (c === ')') parens--
-    else if (depth === 1 && parens === 0 && /[A-Za-z_]/.test(c)) {
-      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(doc.slice(i)) as RegExpExecArray
-      i += m[0].length - 1
+    else if (c === '.' && doc.startsWith('...', i)) {
+      if (depth === 1 && op) op.spreads = true
+      i += 2
+      // The fragment's name, or `on Type`, belongs to the spread, never a field.
+      const after = /^\s*(?:on\s+)?[A-Za-z_][A-Za-z0-9_]*/.exec(doc.slice(i + 1))
+      if (after) i += after[0].length
+    } else if (c === '@' && /[A-Za-z_]/.test(doc[i + 1] ?? '')) {
+      i += ident(i + 1).length
+    } else if (/[A-Za-z_]/.test(c)) {
+      const word = ident(i)
+      i += word.length - 1
+      if (depth === 0 && parens === 0 && ['query', 'mutation', 'subscription', 'fragment'].includes(word)) pending = word
       // An alias (`a: createIssue`) names the field after it.
-      if (!/^\s*:/.test(doc.slice(i + 1))) out.push(m[0])
+      else if (depth === 1 && parens === 0 && op && !/^\s*:/.test(doc.slice(i + 1))) op.fields.push(word)
     }
   }
   return out
@@ -103,12 +123,13 @@ const graphqlRefusal = (words: string[]): string | undefined => {
   }
   // A query read from a file (`-F query=@q.graphql`), or none at all, cannot be judged.
   if (query === undefined || fromFile) return 'call the GitHub API with a query that could not be read'
-  const doc = query.replace(/^(?:\s|#[^\n]*\n)*/, '')
-  if (!/^mutation\b/.test(doc)) return undefined
-  const changes = topFields(doc.slice(doc.indexOf('{')))
-  if (!changes.length) return 'call the GitHub API with a query that could not be read'
-  const other = changes.find(f => !ISSUE_WORK(f))
-  return other ? `call the GitHub API to run ${other}` : undefined
+  for (const op of operations(query)) {
+    if (op.kind !== 'mutation') continue
+    if (op.spreads || !op.fields.length) return 'call the GitHub API with a query that could not be read'
+    const other = op.fields.find(f => !ISSUE_WORK(f))
+    if (other) return `call the GitHub API to run ${other}`
+  }
+  return undefined
 }
 
 // gh: everything under issue and label is allowed but `issue develop`, which makes a branch.
@@ -171,19 +192,32 @@ const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
 const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
 
 // SQL with its string literals, quoted identifiers and comments blanked, so a word inside one
-// ("status = 'delete'", "-- then drop it") is never read as a statement (#702).
-const sqlCode = (sql: string): string => {
+// ("status = 'delete'", "-- then drop it") is never read as a statement (#702). Whether a
+// backslash escapes a quote depends on the dialect (MySQL and E'' strings: yes; a standard
+// string: no), so the text is read both ways, and a reading whose quotes never close is said to be
+// unbalanced (lessons review of #714).
+const sqlCode = (sql: string, backslash: boolean): { code: string; balanced: boolean } => {
   let out = ''
+  let balanced = true
   for (let i = 0; i < sql.length; i++) {
     const c = sql[i] as string
     const dollar = c === '$' ? /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i)) : null
     if (c === "'" || c === '"' || c === '`') {
-      // A doubled quote inside is the quote itself.
-      for (i++; i < sql.length; i++) if (sql[i] === c && sql[i + 1] !== c) break
-      else if (sql[i] === c) i++
+      let closed = false
+      for (i++; i < sql.length; i++) {
+        if (backslash && sql[i] === '\\') i++
+        // A doubled quote inside is the quote itself.
+        else if (sql[i] === c && sql[i + 1] === c) i++
+        else if (sql[i] === c) {
+          closed = true
+          break
+        }
+      }
+      if (!closed) balanced = false
       out += ' x '
     } else if (dollar) {
       const end = sql.indexOf(dollar[0], i + dollar[0].length)
+      if (end < 0) balanced = false
       i = end < 0 ? sql.length : end + dollar[0].length - 1
       out += ' x '
     } else if (c === '-' && sql[i + 1] === '-') {
@@ -195,17 +229,30 @@ const sqlCode = (sql: string): string => {
       out += ' '
     } else out += c
   }
-  return out
+  return { code: out, balanced }
 }
 // SQL that changes data or schema: these anywhere in a statement (a data changing CTE included),
 // and the rest only as the statement itself, so replace() or a column named cluster is a read.
 const SQL_WRITE = /\b(?:insert|update|delete|drop|alter|truncate|create|grant|revoke|comment\s+on|refresh\s+materialized|merge\s+into|replace\s+into|select\b[^;]*\binto)\b/i
 const SQL_WRITE_STATEMENT = /(?:^|;)\s*(?:replace|merge|upsert|copy|vacuum|reindex|cluster|call|do)\b/i
+// The clients' own commands, which no statement keyword shows (lessons review of #714): psql's
+// \copy <table> from (a query in brackets can only be copied to) and sqlite's .import load data;
+// \i, \gexec, sqlite's .read and MySQL's source run SQL this guard cannot read; \!, .shell and
+// .system run a shell.
+const CLIENT_LOADS = /\\copy\s+(?!\()\S+(?:\s*\([^)]*\))?\s+from\b|(?:^|\n)\s*\.(?:import|restore)\b/i
+const CLIENT_RUNS = /\\(?:i|ir|include|include_relative|gexec)\b|(?:^|\n)\s*\.read\b|(?:^|[;\n])\s*(?:source|\\\.)\s/i
+const CLIENT_SHELL = /\\!|(?:^|\n)\s*\.(?:shell|system)\b/i
 // A query that cannot be read is refused too: it may be either.
 const sqlRefusal = (sql: string | undefined): string | undefined => {
   if (sql === undefined) return 'run SQL that could not be read'
-  const code = sqlCode(sql)
-  return SQL_WRITE.test(code) || SQL_WRITE_STATEMENT.test(code) ? 'change data with SQL' : undefined
+  const readings = [sqlCode(sql, false), sqlCode(sql, true)]
+  const codes = readings.map(r => r.code)
+  if (codes.some(c => CLIENT_SHELL.test(c))) return 'run a shell command through psql'
+  if (codes.some(c => CLIENT_LOADS.test(c) || SQL_WRITE.test(c) || SQL_WRITE_STATEMENT.test(c))) return 'change data with SQL'
+  if (codes.some(c => CLIENT_RUNS.test(c))) return 'run SQL that could not be read'
+  // Quotes that close under neither reading leave nothing that can be judged.
+  if (!readings.some(r => r.balanced)) return 'run SQL that could not be read'
+  return undefined
 }
 const valueAfter = (words: string[], flags: string[]): string | undefined => {
   for (let i = 0; i < words.length; i++) {
@@ -347,8 +394,10 @@ const wgetRefusal = (args: string[], outside: (p: string[]) => string | undefine
   return 'write a file with wget'
 }
 
-// find: -delete removes what it finds under its starting folders, -exec runs a command on each
-// (judged with each starting folder standing for `{}`), and -fprint and its kin write a file.
+// find: -delete removes what it finds under its starting folders, and -fprint and its kin write a
+// file. What -exec runs is no business of this function: the tool call hook reads each such
+// command (program.ts's execsOf) as a command of its own, git reading and program included, and
+// hands it in beside the find (lessons review of #714).
 const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
 const findRefusal = (args: string[], outside: (p: string[]) => string | undefined): string | undefined => {
   const firstExpr = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!')
@@ -361,13 +410,9 @@ const findRefusal = (args: string[], outside: (p: string[]) => string | undefine
       const hit = outside([args[i + 1] ?? ''])
       if (hit !== undefined) return `write to ${base(hit)}`
     }
+    // Skip what -exec runs, so its words are not read as find's own.
     if (['-exec', '-execdir', '-ok', '-okdir'].includes(a)) {
       const end = args.findIndex((w, j) => j > i && (w === ';' || w === '+'))
-      const inner = args.slice(i + 1, end < 0 ? args.length : end)
-      for (const root of starts) {
-        const why = commandRefusal({ words: inner.map(w => (w === '{}' ? root : w)) })
-        if (why) return why.what
-      }
       i = end < 0 ? args.length : end
     }
   }

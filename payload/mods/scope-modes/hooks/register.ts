@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
-import { isShell, programsOf } from './program.ts'
+import { execsOf, isShell, programsOf } from './program.ts'
 import { isDans, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
@@ -84,8 +84,10 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
 // as text (`bash -lc '...'`, a here-string, echo piped in) is read the same way, as mod-kit reads
 // `bash -c` (#702). Nesting past a few shells deep is not read, and says so.
 const NEST = 3
-const readCommands = async ($: EngineInterface, raw: string, depth = 0): Promise<Cmd[]> => {
-  const list = await $.modkit.commands({ command: raw })
+// One read's list of commands, each built the same way: its git reading, its program, a shell's
+// program read as more commands, and what a find -exec runs read as commands of its own (lessons
+// review of #714: `find . -exec git checkout {} ;` and `-exec sh -c` went unread).
+const readList = async ($: EngineInterface, list: readonly string[][], depth: number): Promise<Cmd[]> => {
   const programs = programsOf(list)
   const out: Cmd[] = []
   for (let i = 0; i < list.length; i++) {
@@ -93,12 +95,15 @@ const readCommands = async ($: EngineInterface, raw: string, depth = 0): Promise
     const g = await $.modkit.git({ words })
     const p = programs[i]
     const inner = p && 'text' in p && isShell(words) ? p.text : undefined
-    const program = inner !== undefined && depth >= NEST ? { unreadable: 'nested too deep in shells to read' } : p
+    const deep = depth >= NEST
+    const program = inner !== undefined && deep ? { unreadable: 'nested too deep in shells to read' } : p
     out.push({ words, ...(g ? { git: { sub: g.sub, args: g.args } } : {}), ...(program ? { program } : {}) })
-    if (inner !== undefined && depth < NEST) out.push(...(await readCommands($, inner, depth + 1)))
+    if (inner !== undefined && !deep) out.push(...(await readCommands($, inner, depth + 1)))
+    for (const exec of execsOf(words)) out.push(...(deep ? [{ words: exec, program: { unreadable: 'nested too deep in shells to read' } }] : await readList($, [exec], depth + 1)))
   }
   return out
 }
+const readCommands = async ($: EngineInterface, raw: string, depth = 0): Promise<Cmd[]> => readList($, await $.modkit.commands({ command: raw }), depth)
 
 const run = async ($: EngineInterface, argv: string[]) => {
   try {
@@ -282,9 +287,10 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
       const { reading, found } = await readWind($, t)
       t = await keepFound($, t, found)
       const left = outstanding(reading)
-      // With no PR for the session's own branch, what is left to finish is the PRs this session
-      // opened, an agent's in a worktree the session is not in included (#702).
-      if (t.isDefault && reading.pr === null) {
+      // With no PR for the session's own branch, default or not, what is left to finish is the PRs
+      // this session opened, an agent's in a worktree the session is not in included (#702; the
+      // lessons review of #714 found a feature branch with no PR skipped them).
+      if (reading.pr === null) {
         const opened = await openedOf($)
         // The session's own repository, to tell a PR opened here from one opened in another; a
         // remote that cannot be read counts every PR as elsewhere, so nothing is read as cleaned.
@@ -335,8 +341,9 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
     const links = [...String(result.text ?? '').matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)]
     const link = links[links.length - 1]
     if (!link) return
-    const cmds = await $.modkit.commands({ command: raw })
-    if (!cmds.some(w => (w[0] ?? '').split('/').pop() === 'gh' && w[1] === 'pr' && w[2] === 'create')) return
+    // Read as the judge reads it, so `bash -lc 'gh pr create'` is seen too (lessons review of #714).
+    const cmds = await readCommands($, raw)
+    if (!cmds.some(({ words: w }) => (w[0] ?? '').split('/').pop() === 'gh' && w[1] === 'pr' && w[2] === 'create')) return
     const repo = link[1] as string
     const number = Number(link[2])
     const opened = await openedOf($)

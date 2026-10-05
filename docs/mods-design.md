@@ -421,6 +421,14 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   strings, comments or functions (`replace()`) read like a write; and Claude's own notes outside
   the project, its memory files and plan mode's plans under the home folder's `.claude`. A check
   of a call that throws refuses the call, under any mode, since a skipped hook would let it run.
+- After the lessons review of #714: every inline script is judged where the interpreter runs every
+  one (`perl -e a -e b`, ruby, node, osascript); what a `find -exec` runs is read as a command of
+  its own, its git reading and program included, so `-exec git checkout` and `-exec sh -c` are
+  judged; every operation in a GraphQL document is judged, a mutation that spreads a fragment
+  being one it cannot read; SQL is read with and without backslash escapes, so `'it\'s'` cannot
+  hide a write, and quotes that close under neither reading cannot be judged; and the clients' own
+  commands are judged: `\copy ... from` and sqlite's `.import` change data, `\i`, `\gexec`,
+  `.read` and `source` run SQL it cannot read, and `\!`, `.shell` and `.system` run a shell.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
   issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR

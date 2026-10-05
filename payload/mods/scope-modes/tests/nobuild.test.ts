@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { inScratch, noBuildRefusal, type Cmd } from '../hooks/nobuild.ts'
-import { programsOf } from '../hooks/program.ts'
+import { execsOf, programsOf } from '../hooks/program.ts'
 
 // Commands as mod-kit's reader hands them over: each simple command's words with quotes removed
 // (heredoc bodies dropped, `&` a separator, so `2>&1` arrives as `2>` then a command `1`), and git
@@ -11,10 +11,14 @@ const gitOf = (words: string[]) => {
   while (rest[0] === '-C') rest.splice(0, 2)
   return { sub: rest[0], args: rest.slice(1) }
 }
-// Each command's program read as the mod's tool call hook reads it, from the same list.
+// Each command's program read as the mod's tool call hook reads it, from the same list, and the
+// commands a find -exec runs read after it the same way, as that hook reads them.
 const cmds = (...lines: string[][]): Cmd[] => {
   const programs = programsOf(lines)
-  return lines.map((words, i) => ({ words, git: gitOf(words), ...(programs[i] ? { program: programs[i] } : {}) }))
+  return lines.flatMap((words, i) => [
+    { words, git: gitOf(words), ...(programs[i] ? { program: programs[i] } : {}) },
+    ...execsOf(words).flatMap(inner => cmds(inner)),
+  ])
 }
 const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/0a1b/scratchpad'
 const bash = (...lines: string[][]) => noBuildRefusal({ tool: 'Bash', input: {}, commands: cmds(...lines) })
@@ -220,5 +224,46 @@ describe('still refused, beside what the audit opened up (#702)', () => {
     expect(what(tool('Write', { file_path: '/Users/x/proj/.claude/projects/p/memory/a.ts' }))).toBe('edit a.ts')
     expect(what(tool('Write', { file_path: '/Users/x/.claude/projects/p/memory/../../../proj/a.ts' }))).toBe('edit a.ts')
     expect(what(tool('Write', { file_path: '/Users/x/.claude/settings.json' }))).toBe('edit settings.json')
+  })
+})
+
+// The lessons review of #714 at b154bc9: seven routes the first fix left open.
+describe('the second review of #714', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test("psql's own commands: \\copy from loads data, \\i and \\gexec run SQL it cannot read, \\! runs a shell", () => {
+    expect(what(bash(['psql', '$DB', '-c', "\\copy shows from 'shows.csv' csv"]))).toBe('change data with SQL')
+    expect(what(bash(['psql', '$DB', '-c', '\\i fix.sql']))).toBe('run SQL that could not be read')
+    expect(what(bash(['psql', '$DB', '-c', "SELECT 'drop table x' \\gexec"]))).toBe('run SQL that could not be read')
+    expect(what(bash(['psql', '$DB', '-c', '\\! rm -rf src']))).toBe('run a shell command through psql')
+    // \copy to the screen only reads.
+    expect(bash(['psql', '$DB', '-c', '\\copy (select id from shows) to stdout csv'])).toBeUndefined()
+    expect(bash(['psql', '$DB', '-c', '\\dt'])).toBeUndefined()
+  })
+  test('GraphQL: every operation in the document is judged, not only the first', () => {
+    const q = (doc: string) => what(bash(['gh', 'api', 'graphql', '-f', `query=${doc}`, '-f', 'operationName=M']))
+    expect(q('query Q { viewer { login } } mutation M { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }')).toBe('call the GitHub API to run mergePullRequest')
+    expect(q('fragment F on Repository { name } mutation M { closePullRequest(input: {}) { clientMutationId } }')).toBe('call the GitHub API to run closePullRequest')
+    // A spread inside a mutation names fields this guard cannot see.
+    expect(q('mutation M { ...Changes } fragment Changes on Mutation { mergePullRequest(input: {}) { clientMutationId } }')).toBe('call the GitHub API with a query that could not be read')
+    expect(q('query Q { viewer { login } } query R { rateLimit { remaining } }')).toBeUndefined()
+    expect(q('query Q { viewer { login } } mutation M { addLabelsToLabelable(input: {}) { clientMutationId } }')).toBeUndefined()
+  })
+  test('every inline script is judged, not only the first', () => {
+    expect(what(bash(['perl', '-e', 'print 1', '-e', 'unlink("a.ts")']))).toBe('write files from perl')
+    expect(what(bash(['ruby', '-e', 'puts 1', '-e', 'File.write("a.rb", "x")']))).toBe('write files from ruby')
+  })
+  test('a command find -exec runs is read like any other: its git reading and its program', () => {
+    expect(what(bash(['find', '.', '-name', '*.ts', '-exec', 'git', 'checkout', '{}', ';']))).toBe('run git checkout')
+    expect(what(bash(['find', 'src', '-exec', 'python3', '-c', "open('/repo/a.ts','w')", '{}', ';']))).toBe('write files from python3')
+    expect(bash(['find', 'src', '-exec', 'grep', '-l', 'x', '{}', '+'])).toBeUndefined()
+    // A shell's program there is more commands, read by the tool call hook (the session tests).
+  })
+  test('SQL quotes escaped with a backslash, as MySQL and E strings write them, never hide a write', () => {
+    expect(what(bash(['mysql', '-e', "SELECT 'it\\'s'; DROP TABLE t"]))).toBe('change data with SQL')
+    expect(what(bash(['psql', '$DB', '-c', "SELECT E'a\\'b'; DELETE FROM t"]))).toBe('change data with SQL')
+    // A backslash in a standard string is that string's own character.
+    expect(bash(['psql', '$DB', '-c', "SELECT 'C:\\temp' AS path"])).toBeUndefined()
+    // Quotes that balance under no reading cannot be judged.
+    expect(what(bash(['psql', '$DB', '-c', "SELECT 'abc"]))).toBe('run SQL that could not be read')
   })
 })

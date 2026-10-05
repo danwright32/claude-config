@@ -569,6 +569,36 @@ test('a PR the session opened in another repository has its branch cleanup said 
   expect(w.toasts).toEqual([])
 })
 
+// The lessons review of #714 at b154bc9.
+test('a PR opened through bash -lc is noted like any other', withDeps, async ($, on) => {
+  const pr31 = { number: 31, state: 'OPEN', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31, issues: {} } })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: "bash -lc 'gh pr create --fill'", tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+})
+
+test("a session on a branch with no PR of its own still finishes the PRs it opened, as the docs say", withDeps, async ($, on) => {
+  const pr31 = { number: 31, state: 'MERGED', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { clock } = world(on, { branch: 'feature-x', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31, issues: {} }, verdict: { state: 'live', at: T0 } })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/there is no PR for feature-x yet/)
+  expect(block).toMatch(/the branch fix-31 still exists here/)
+})
+
+test('no build reads what a find -exec runs through a shell', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  expect(await call($ as never, bash("find src -exec sh -c 'echo x > /repo/app.ts' _ {} +"))).toMatch(/did not write to app\.ts/)
+  expect(await call($ as never, bash("find src -name '*.ts' -exec wc -l {} +"))).toBe('ran')
+  expect(w.reached).toEqual(["find src -name '*.ts' -exec wc -l {} +"])
+})
+
 test('a gh pr create that printed no link notes no PR; one that cannot be read to note is said', withDeps, async ($, on) => {
   const { w, clock } = world(on, { branch: 'main', created: 'Warning: 2 uncommitted changes\n' })
   await start($ as never, clock)
