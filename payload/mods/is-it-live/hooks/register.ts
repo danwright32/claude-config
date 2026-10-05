@@ -280,8 +280,14 @@ export const register: Register = on => {
     const now = await run($, ['gh', 'repo', 'view', repo, '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
     const current = (now.out ?? '').trim()
     const names = [repo, ...(current && fold(current) !== fold(repo) ? [current] : [])]
-    const byPr = new Map<string, IsItLiveCard>()
-    for (const name of names) for (const c of await cardsOf($, name)) byPr.set(`${fold(c.repo)}#${c.pr}`, c)
+    // Both names are one repository, so a PR is one card: the newest, whichever name it is under.
+    const byPr = new Map<number, IsItLiveCard>()
+    for (const name of names) {
+      for (const c of await cardsOf($, name)) {
+        const seen = byPr.get(c.pr)
+        if (!seen || c.at > seen.at) byPr.set(c.pr, c)
+      }
+    }
     // Newest first across both names, as cardsOf gives one name's: the band pins in this order.
     const cards = [...byPr.values()].sort((a, b) => b.at - a.at)
     // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.

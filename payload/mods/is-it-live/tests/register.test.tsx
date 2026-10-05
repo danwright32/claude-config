@@ -430,6 +430,18 @@ test('/live after a rename lists and pins the cards of both names newest first, 
   expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.', 'About 301.', 'About 302.'])
 })
 
+test('/live after a rename lists a PR kept under both names once, as its newest card (#720)', withKit, async ($, on) => {
+  const old = (pr: number, at: number, title: string) => ({ repo: 'danwright32/old-slate', pr, title, url: `https://github.com/danwright32/old-slate/pull/${pr}`, state: 'live', at })
+  const now = (pr: number, at: number, title: string) => ({ ...old(pr, at, title), repo: 'danwright32/slate', url: `https://github.com/danwright32/slate/pull/${pr}` })
+  // The newer card is under the old name, which /live reads first, so neither a per name key nor
+  // the last name read can pick it.
+  world(on, {
+    remote: 'git@github.com:danwright32/old-slate.git',
+    stored: { 'cards:danwright32/old-slate': [old(300, T0 - 1000, 'Newer')], 'cards:danwright32/slate': [now(300, T0 - 5000, 'Older')] },
+  })
+  expect(await live($)).toBe('- Live: Newer (#300)')
+})
+
 test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
   const w = world(on, { remote: 'git@github.com:danwright32/old-slate.git' })
   await card($, CARD)
