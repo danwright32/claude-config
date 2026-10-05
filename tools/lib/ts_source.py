@@ -296,11 +296,14 @@ def top_members(body):
     code = code_only(body)
     parts, depth, start = [], 0, 0
     for j, c in enumerate(code):
-        if c in "{[(":
+        # A generic's < > count as brackets, so its comma (Record<string, unknown>) never splits a
+        # member; the > of an arrow (=>) is no bracket.
+        if c in "{[(<":
             depth += 1
-        elif c in "}])":
+        elif c in "}])" or (c == ">" and code[j - 1 : j] != "="):
             depth -= 1
-        elif depth == 0 and c in ";\n":
+        elif depth == 0 and c in ";,\n":
+            # Members may be separated by ; , or a line break, as TypeScript allows (lessons review of #737).
             parts.append(body[start:j])
             start = j + 1
     parts.append(body[start:])
@@ -360,28 +363,45 @@ def _definition(code, name):
         return None
     i, n = m.end(), len(code)
     arrow = False
+    # A function declaration, or (found below) a function expression assigned to the name.
+    declared = code[m.start() :].startswith("function")
+    # Within a return type: the angle brackets open (Promise<{ ... }>), and whether the last thing
+    # read was the : or | & that a type literal follows. A brace there is the signature, never the
+    # body (lessons review of #737).
+    angles, after_type_mark = 0, False
     while i < n:
         c = code[i]
         if code.startswith("=>", i):
             arrow = True
+            angles, after_type_mark = 0, False
             i += 2
             continue
+        if c == "<":
+            angles += 1
+        elif c == ">":
+            angles = max(0, angles - 1)
         if c in "([":
             end = closing(code, i)
             if end is None:
                 return None
             i = end
+            after_type_mark = False
             continue
         if c == "{":
-            # The body: after the arrow, or a function declaration's after its parameters.
-            if arrow or code[m.start() :].startswith("function") or "function" in code[m.end() : i]:
-                end = closing(code, i)
-                return None if end is None else code[m.start() : end]
             end = closing(code, i)
             if end is None:
                 return None
+            is_type = angles > 0 or after_type_mark
+            # The body: after the arrow, or a function declaration's once its signature is read.
+            if not is_type and (arrow or declared):
+                return code[m.start() : end]
             i = end
+            after_type_mark = False
             continue
+        if not c.isspace():
+            after_type_mark = c in ":|&"
+        if not declared and re.match(r"function\b", code[i : i + 9]) and not re.match(r"[\w$]", code[i - 1 : i]):
+            declared = True
         if arrow and not c.isspace():
             # An expression body runs to the end of its statement.
             stop = re.search(r"[;\n]", code[i:])

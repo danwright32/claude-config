@@ -531,6 +531,29 @@ test('a question a settings hook refuses is never marked or notified (#732)', wi
   expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
 })
 
+// The hook that holds a question and the one that marks it key it the same way, by the call's id
+// (lessons review of #737). A question with no id cannot reach either: the engine refuses a mod that
+// hands a call on without its id (measured here, Claude Code 2.1.289), so it is still marked.
+const IdDropper: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'id-dropper',
+  tier: 'prepend',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      const { tool_use_id: _dropped, ...rest } = e as unknown as Record<string, unknown>
+      return next(rest as never)
+    })
+  },
+}
+test('a mod that hands a question on without its id cannot strip it, so it is marked and notified under its id', { plugins: [deps, IdDropper] }, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let during: Rec | undefined
+  const w = world(on, { clock, questionOpenMs: OPEN_MS, duringAsk: x => (during = last(x)) })
+  await start($)
+  await asked($, clock, { ...(ask('Which date format?') as object), tool_use_id: 'k1' } as never)
+  expect(during?.waiting?.question).toBe('Which date format?')
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format?']])
+})
+
 // A subagent's question is its own business, as its to-do list is: never the session waiting on Dan.
 test("a subagent's question is neither marked nor notified", withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })

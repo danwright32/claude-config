@@ -317,6 +317,17 @@ mkmodsrc "$M9P" named-screened "async function answer(\$, e) {
   return { result: 'Saved.' }
 }
 export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+# A return type holding braces is the signature, never the body (lessons review of #737).
+mkmodsrc "$M9P" named-typed-screened "async function answer(\$, e): Promise<{ result: string } | { deny: string }> {
+  const refused = await \$.modkit.screen(e)
+  return refused ?? { result: 'Saved.' }
+}
+export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+mkmodsrc "$M9P" named-literal-type-screened "function answer(\$, e): { result: string } {
+  \$.modkit.screen(e)
+  return { result: 'Saved.' }
+}
+export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
 out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod with an answering hook that never asks the screen fails, beside one that does" ok \
   || check "a mod with an answering hook that never asks the screen fails, beside one that does" "exit=$code out=$out"
@@ -326,7 +337,7 @@ printf '%s\n' "$out" | grep 'one-of-two ' | grep 'modkit.screen(e)' | grep -q '/
 for m in screen-in-a-comment named-unscreened; do
   printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.screen(e)' && check "and names $m" ok || check "and names $m" "$out"
 done
-case "$out" in *both-screened*|*named-screened*) check "a mod whose every answering hook asks, a named one included, is not named" "$out" ;; *) check "a mod whose every answering hook asks, a named one included, is not named" ok ;; esac
+case "$out" in *both-screened*|*named-screened*|*named-typed-screened*|*named-literal-type-screened*) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" "$out" ;; *) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" ok ;; esac
 # #732 (lessons review of #731): a walk for a checkout is caught however its .git entry is spelled,
 # joined, bare or inside a longer path, and a name that merely starts with .git is not one.
 M9G="$TMPROOT/m9g"
@@ -565,6 +576,13 @@ else
       && check "a contract with only ${f%%:*} fails the goal tracker's reading" ok \
       || check "a contract with only ${f%%:*} fails the goal tracker's reading" "exit=$code out=$out"
   done
+  # Members separated by commas, as TypeScript allows, with a generic's comma among them, are read
+  # the same as ones on lines of their own (lessons review of #737).
+  printf '%s\n' "export type PickersOpen = { id: string, meta: Record<string, unknown>, question: { question: string, header: string }, chosen: string[] }" \
+    "declare module 'claude-code' { interface PluginState { 'picker-manners': { open: PickersOpen | null, quiet: boolean } } }" > "$M12/commas.d.ts"
+  out="$(picker_contract "$M12/commas.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "a contract whose members are separated by commas is read the same" ok \
+    || check "a contract whose members are separated by commas is read the same" "exit=$code out=$out"
   out="$(picker_contract "$PM_TYPES" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
     || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"

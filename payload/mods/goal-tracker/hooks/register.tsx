@@ -166,6 +166,9 @@ const QUESTION_SHOWN_MS = 1_000
 // the classic.PreToolUse hook marks them or the call ends. A subagent's are never held: the classic
 // hook's input does not say whose a call is.
 const asking = new Map<string, string>()
+// The one spelling of its key, for the hook that holds a question and the one that marks it (lessons
+// review of #737): the call's id, which the engine gives every call and lets no mod strip.
+const askKey = (e: unknown) => String((e as { tool_use_id?: unknown }).tool_use_id ?? '')
 let unsent: { id: string; send: () => void; timer: { cancel: () => void } } | undefined
 const sendUnsent = (id: string) => {
   if (unsent?.id !== id) return
@@ -588,11 +591,11 @@ export const register: Register = on => {
   // settings hooks, never the question.
   on('classic.PreToolUse', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const decided = await next(e)
-    const id = String(e.tool_use_id)
-    const text = asking.get(id)
+    const key = askKey(e)
+    const text = asking.get(key)
     if (decided.deny !== undefined || text === undefined) return decided
-    asking.delete(id)
-    await questionOpened($, id, text, await nowOr($), false)
+    asking.delete(key)
+    await questionOpened($, key, text, await nowOr($), false)
     return decided
   })
 
@@ -630,7 +633,8 @@ export const register: Register = on => {
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
       // Marked by the classic.PreToolUse hook below once the guards have let it through (#732).
-      asking.set(id, qs[0]?.question ?? 'a question')
+      const key = askKey(e)
+      asking.set(key, qs[0]?.question ?? 'a question')
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
@@ -643,8 +647,8 @@ export const register: Register = on => {
         }
         // Only the question's own mark comes off: a permission prompt still open stands (#694). One
         // that ended before it was notified never reached Dan, and is not notified now (#706).
-        asking.delete(id)
-        dropUnsent(id)
+        asking.delete(key)
+        dropUnsent(key)
         question = undefined
         callEnded(id)
         progress = { ...counted(withWaiting(progress ?? empty(now)), why), lastActivityAt: after }
