@@ -118,6 +118,10 @@ type World = {
   ghRefuse: number
   /** How long GitHub takes to answer, on the test clock. */
   ghDelayMs: number
+  /** Holds every write to GitHub until the test releases it, so the card can be read meanwhile. */
+  ghWriteGate: Promise<void> | undefined
+  /** A write to GitHub, once released, fails to connect ('down') or the gh run itself throws ('throws'). */
+  ghWriteFails: 'down' | 'throws' | undefined
   /** A lock left behind by a session that died, last touched this long before the start. */
   staleLockMs: number
   /** Reading the session's usage fails. */
@@ -150,7 +154,7 @@ const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, checkTimeoutMs: undefined, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, ghWriteGate: undefined, ghWriteFails: undefined, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, checkTimeoutMs: undefined, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
   // Every gh command the mod ran, and each write it asked GitHub for with the sha it gave.
   const gh: string[][] = []
   const puts: { path: string; sha?: string }[] = []
@@ -253,6 +257,9 @@ const world = (on: On, init: Partial<World> = {}) => {
       return refused(404, held.length ? 'Not Found' : 'This repository is empty.')
     }
     if (method === 'PUT') {
+      if (w.ghWriteGate) await w.ghWriteGate
+      if (w.ghWriteFails === 'throws') throw new Error('gh was killed')
+      if (w.ghWriteFails === 'down') return { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n' }
       const body = JSON.parse(stdin ?? '{}') as { content?: string; sha?: string }
       puts.push({ path: p, ...(body.sha ? { sha: body.sha } : {}) })
       if (w.ghRefuse > 0) {
@@ -751,6 +758,27 @@ test("the card's first appearance never waits on this Mac's write to GitHub, and
   expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-home', 'org-1')].reading.five.used).toBe(97)
   await ui.unmount()
 })
+
+for (const fails of ['down', 'throws'] as const) {
+  test(`a write to GitHub that ${fails === 'down' ? 'fails' : 'throws'} lands after the card is drawn, and the card is drawn again to say so (#758)`, withKit, async ($, on) => {
+    const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+    await start($, clock)
+    const ui = await mountBand($ as never)
+    let release = () => {}
+    w.ghWriteGate = new Promise<void>(r => { release = r })
+    await $.session.measure({ context: { window: 200_000 }, rateLimits: limits(97, 50), changed: ['rateLimits'] } as never)
+    await clock.settle()
+    // Drawn while the write is still held: low, with no word yet about the save.
+    expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+    expect(await shown(ui)).not.toContain('could not be saved to GitHub')
+    w.ghWriteFails = fails
+    release()
+    await clock.settle()
+    expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+    expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub")
+    await ui.unmount()
+  })
+}
 
 test('a weekly reset after the clocks change reads in the offset of that day', withKit, async ($, on) => {
   const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
