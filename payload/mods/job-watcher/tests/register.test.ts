@@ -1906,3 +1906,51 @@ test('an agent list that cannot be read is said to this session once, never take
   await clock.advance(MIN + 1)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
 })
+
+// The lessons review of PR 794's head 47cb709.
+test("an agent the list does not name but which is making calls keeps its own jobs' reminders (lessons review of PR 794)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  // A loop the agent list never names (a workflow's agent), still making calls.
+  world(on, { tail: 'listening on 3000\n', size: 18 }, { agents: [] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'npm run dev', run_in_background: true }, 'w1'))
+  // A look comes before the agent's next call: this conversation is still not handed its job.
+  await clock.advance(MIN + 1)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(contextOf(mine)).not.toContain(REMINDER)
+  const theirs = await $.tool.call(asAgent({ tool: 'Bash', command: 'ls' }, 'w1'))
+  expect(contextOf(theirs)).toContain(`${REMINDER} background job job1 (npm run dev)`)
+})
+
+test('an agent back to running after waiting on a person is dated from its return, never accused at once (lessons review of PR 794)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents: Agent[] = [{ ...AGENT }]
+  world(on, { tail: '', size: 0 }, { agents })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  ;(agents[0] as Agent).status = 'waiting'
+  await clock.advance(30 * MIN)
+  ;(agents[0] as Agent).status = 'running'
+  await clock.advance(MIN + 1)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+  // The positive in the same fixture (L159): quiet twenty minutes after its return, it is said.
+  await clock.advance(20 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('Background agent "fix CI" (a1) has been quiet')
+})
+
+test("a second ask for the session list set before a new session starts is never made for it (lessons review of PR 794)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: '', size: 0 }, { sessions: 'throws' })
+  await start($)
+  await judged(clock)
+  expect(w.sessionAsks).toBe(1)
+  // A new session starts (a /clear) before the minute is up: its own start asks once, and the
+  // earlier session's second ask never fires.
+  await start($)
+  await judged(clock)
+  expect(w.sessionAsks).toBe(2)
+  await clock.advance(MIN)
+  expect(w.sessionAsks).toBe(3)
+  await clock.advance(5 * MIN)
+  expect(w.sessionAsks).toBe(3)
+})

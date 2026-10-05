@@ -284,15 +284,28 @@ const lookAtAgents = async ($: EngineInterface, now: number, live: Live) => {
     return
   }
   if (!live()) return
+  // Live: every agent the list names as not ended, and any it does not name (a workflow's agent)
+  // that has made a call within QUIET_MS, so its jobs stay its own between its calls (lessons
+  // review of PR 794). One the list names as ended is gone, whatever it did last.
+  const gone = new Set(agents.filter(a => ENDED.has(a.status)).map(a => a.id))
+  const listed = new Set(agents.map(a => a.id))
   liveAgents.clear()
-  for (const a of agents) if (!ENDED.has(a.status)) liveAgents.add(a.id)
+  for (const a of agents) if (!gone.has(a.id)) liveAgents.add(a.id)
+  for (const [id, s] of agentSeen) if (!listed.has(id) && now - s.at < QUIET_MS) liveAgents.add(id)
   for (const id of [...agentSeen.keys()]) if (!liveAgents.has(id)) agentSeen.delete(id)
   for (const a of agents) {
-    if (a.status !== 'running') continue
+    if (gone.has(a.id)) continue
     let s = agentSeen.get(a.id)
     if (!s) {
       s = { at: now, inFlight: 0, told: false }
       agentSeen.set(a.id, s)
+    }
+    // An agent not running (waiting on a person, idle) is not quiet: it is dated from now, so its
+    // return to running is never judged from before it stopped (lessons review of PR 794).
+    if (a.status !== 'running') {
+      s.at = now
+      s.told = false
+      continue
     }
     const quietMs = now - s.at
     if (quietMs < QUIET_MS || s.told) continue
@@ -742,6 +755,9 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
 // said as such, and asked again once, a minute later, rather than leaving leftovers unchecked.
 const ASK_AGAIN_MS = 60_000
 let retriedLeftovers = false
+// The second ask, cancelled by a session start, so an earlier session's never fires into a new one
+// (lessons review of PR 794).
+let askAgain: { cancel: () => void } | undefined
 const judgeLeftovers = async ($: EngineInterface) => {
   let list
   try {
@@ -755,7 +771,7 @@ const judgeLeftovers = async ($: EngineInterface) => {
     }
     retriedLeftovers = true
     $.ui.log('The session list could not be asked; leftover jobs not checked yet, looking again in a minute.')
-    $.clock.after(ASK_AGAIN_MS, () => {
+    askAgain = $.clock.after(ASK_AGAIN_MS, () => {
       judgeLeftovers($).catch(e => $.ui.log(`Background job watcher could not check leftover jobs from closed sessions: ${message(e)}.`))
     })
     return
@@ -841,6 +857,8 @@ export const register: Register = on => {
     agentSeen.clear()
     toldAgentsUnlisted = false
     retriedLeftovers = false
+    askAgain?.cancel()
+    askAgain = undefined
     tick?.cancel()
     tick = $.clock.every(TICK_MS, () => lookSafely($))
     await $.tool.register(KEEP_SPEC)
