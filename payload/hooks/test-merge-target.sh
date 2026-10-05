@@ -125,6 +125,29 @@ for w in "venv/bin/python tools/wait_for_checks.py 7 --merge" \
   if mt_is_pr_merge "$w"; then fail "PET's pinned tool was read as a direct merge: $w"; else pass; fi
 done
 
+# The interpreter held in a SHELL VARIABLE (claude-config#584). PostRoll resolves its python
+# into $PY and runs `$PY tools/wait_for_checks.py N --merge`; the first token was then `$PY`,
+# no known interpreter, and #1416, #1418 and #1421 merged before their lessons reviews finished.
+# A variable in command position is read as an interpreter, whichever way it is spelled.
+for w in 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY tools/wait_for_checks.py 1421 --merge' \
+         '$PY tools/wait_for_checks.py 7 --merge' \
+         '${PY} tools/wait_for_checks.py 7 --merge' \
+         '"$PY" tools/wait_for_checks.py 7 --merge' \
+         '"${POSTROLL_PYTHON}" tools/wait_for_checks.py 7 --merge' \
+         '$SHELL scripts/merge-when-green.sh 7'; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge run by an interpreter in a variable was not read as a merge: $w"; fi
+done
+eq "$(mt_pr_number 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY tools/wait_for_checks.py 1421 --merge')" \
+  "1421" "the variable spelling names its pull request"
+# The variable spelling still needs the flag: without --merge it only waits.
+if mt_runs_merge '$PY tools/wait_for_checks.py 7'; then
+  fail "the tool merely waiting for checks, run by a variable, was read as a merge"
+else pass; fi
+# And a variable naming something that is not a merge tool is not a merge.
+if mt_runs_merge '$PY tools/merge_report.py 7 --merge'; then
+  fail "an unrelated script run by a variable was read as a merge"
+else pass; fi
+
 # Without --merge the same tool only WAITS for the checks and merges nothing, so firing
 # on it would quiz and gate every look at a pull request. The flag is the whole
 # difference, which is why the segment is read rather than only its leading tokens.

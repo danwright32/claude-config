@@ -114,6 +114,23 @@ MT_MERGE_TOOLS=(
 # (venv/bin/python, .venv/bin/python) is the same route as one run by python3.
 MT_INTERPRETERS="bash sh zsh python python3"
 
+# True when a command position token RUNS what follows it: a known interpreter, or a shell
+# variable expansion ($PY, ${PY}, "$PY"), whose value cannot be known here (claude-config#584).
+# PostRoll resolves its python into a variable and runs `$PY tools/wait_for_checks.py N --merge`;
+# read as a command, `$PY` matched no tool and three merges walked past the lessons review gate.
+# A variable is treated as an interpreter rather than refused: the segment still has to name a
+# declared merge tool, with its flag, as the next token, so `$EDITOR notes.txt` stays nothing.
+mt_is_interpreter() {  # $1 = a command position token
+  local tok="$1"
+  case "$tok" in
+    '"$'*|'$'[A-Za-z_{]*) return 0 ;;
+  esac
+  case " $MT_INTERPRETERS " in
+    *" ${tok##*/} "*) return 0 ;;
+  esac
+  return 1
+}
+
 mt_declared_tool_paths() {
   local row
   for row in "${MT_MERGE_TOOLS[@]}"; do printf '%s\n' "${row%%|*}"; done
@@ -246,9 +263,7 @@ MTEOF
 
   # The tool is either the command itself, or the argument to an interpreter.
   target="$first"
-  case " $MT_INTERPRETERS " in
-    *" ${first##*/} "*) target="$second" ;;
-  esac
+  mt_is_interpreter "$first" && target="$second"
   [ -n "$target" ] || return 1
 
   for row in "${MT_MERGE_TOOLS[@]}"; do
@@ -314,7 +329,7 @@ mt_runs_merge() {  # $1 = command
 # case gh resolves it from the current branch, which is also what the merge
 # itself would do.
 mt_pr_number() {  # $1 = command
-  local direct seg first second third rest prev tok target
+  local direct seg prev tok
   local -a MT_TOKENS
   direct="$(mt__merge_selector "$1")"
   direct="${direct#*$'\t'}"
@@ -333,13 +348,6 @@ mt_pr_number() {  # $1 = command
   # that reads the wrong pull request's record is worse than one that reads none (L75).
   while IFS= read -r seg; do
     mt_segment_runs_wrapper "$seg" || continue
-    read -r first second third rest <<MTEOF
-$seg
-MTEOF
-    target="$first"
-    case " $MT_INTERPRETERS " in
-      *" ${first##*/} "*) target="$second" ;;
-    esac
     prev=""
     # Read into an array rather than looping over an unquoted expansion, which would
     # let a `*` in the command glob against the working directory.
