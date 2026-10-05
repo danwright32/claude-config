@@ -66,7 +66,21 @@ export type ModKit = {
    * through `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`.
    */
   bandRow: (row: ModKitBandRow) => Promise<void>
-  /** Takes this mod's row with that id out of the band. Clearing a row that is not there is fine. */
+  /**
+   * Asks a question in the band, drawn the one settled way (docs/mods-design.md, "The band, shared
+   * by every mod"), or replaces the question this mod already asks under the same id (it keeps its
+   * turn). The only way into the `question` slot: `bandRow` refuses a question row, so every
+   * question reads the same (#703, #705). One question is drawn at a time, the first asked; the rest
+   * wait, each drawn once the one before it is cleared with `clearBandRow`, so a number key can only
+   * mean the answer to the question in view. Option n is pressed by the key n and its press reaches
+   * the publisher as `<mod>:<button>`, as any band button's does. Rejects a question with no mod,
+   * id, chip or question, no options or more than nine, an option with no label, a button id used
+   * twice, or body lines of the wrong shape.
+   */
+  question: (question: ModKitQuestion) => Promise<void>
+  /** The question the band draws now, the first asked of those open, or null when none is open. */
+  shownQuestion: () => Promise<{ mod: string; id: string } | null>
+  /** Takes this mod's row with that id out of the band, a question included. Clearing a row that is not there is fine. */
   clearBandRow: (input: { mod: string; id: string }) => Promise<void>
   /**
    * Draws a side pane the mod opened with `$.ui.open({ id })` as a card, with the band's own row
@@ -92,11 +106,35 @@ export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; fra
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
 
 /**
+ * One answer to a question in the band. `button` is its id within the mod (its press arrives as
+ * `<mod>:<button>`), `label` what it reads, `description` the line drawn under it, and `chosen`
+ * marks an option of a multi select question as picked so far.
+ */
+export type ModKitQuestionOption = { button: string; label: string; description?: string; chosen?: boolean }
+
+/**
+ * A question in the band, as `$.modkit.question` draws it: `[chip]` in grey and the question in
+ * amber on one line; then `body`, any lines the asker shows before the answers (ask before saving's
+ * rule and the file it goes to); then each option on its own line as Claude Code's plain button,
+ * "1: label", its number its hotkey, its description dim and indented under it, wrapping at the
+ * band's edge; then `submit`, when given, as a bracketed button (a multi select question's Submit).
+ */
+export type ModKitQuestion = {
+  mod: string
+  id: string
+  chip: string
+  question: string
+  body?: ModKitBandLine[]
+  options: ModKitQuestionOption[]
+  submit?: { button: string; label: string }
+}
+
+/**
  * Where a band row sits, drawn top to bottom in this order (docs/mods-design.md, "The band, shared
  * by every mod"): the status rows first (the amber needs-a-look line, then the Compact row), then
  * what waits on Dan nearest the prompt (the handoff card at session start, the held while away card,
- * the steps card, then a message to send). An open question takes the band alone, and everything
- * else comes back once it is cleared.
+ * the steps card, then a message to send). An open question, published with `$.modkit.question`,
+ * takes the band alone, one question at a time, and everything else comes back once it is cleared.
  */
 export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | 'steps' | 'message' | 'question'
 
@@ -104,9 +142,11 @@ export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | '
  * A run of text in a band line, in the terminal's own colours: `color` is a theme key ('warning' is
  * amber) or a raw colour. `indent` is how many blank columns are drawn before it (after any
  * part before it on the line, so on a line's first part it is where the line starts), so a description can sit under
- * the option it describes.
+ * the option it describes. `wrap: true` carries a run too long for the band on to the lines under
+ * it; any other run is cut at the band's edge. Refused in a row with a left rule, which draws one
+ * mark per line.
  */
-export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
+export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true }
 /**
  * Claude Code's own Button, `[ label ]`; `button` is its id within the publishing mod. `plain: true`
  * draws it in Claude Code's plain style, a survey's row: the hotkey in the accent colour, a colon,
@@ -125,7 +165,7 @@ export type ModKitBandLine = ModKitBandPart[] | ModKitBandDivider
  */
 export type ModKitBandFrame = { kind: 'box' | 'left-rule'; color?: string }
 
-/** One mod's row: plain data, since only plain data crosses between mods. Each line is drawn as one terminal line. */
+/** One mod's row: plain data, since only plain data crosses between mods. Each line is drawn as one terminal line, or more where a run wraps. */
 export type ModKitBandRow = { mod: string; id: string; slot: ModKitBandSlot; lines: ModKitBandLine[]; frame?: ModKitBandFrame }
 
 declare module 'claude-code' {
