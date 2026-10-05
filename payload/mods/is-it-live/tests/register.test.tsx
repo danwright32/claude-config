@@ -86,7 +86,7 @@ const withKit = { plugins: [modKit] }
 const T0 = 1_800_000_000_000
 const REPO = 'danwright32/slate'
 type Gh = { exitCode: number; stdout: string; stderr?: string }
-type World = { pr: Gh; issue: Gh; me: Gh; copied: boolean }
+type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; copied: boolean; stored?: Record<string, unknown> }
 
 // GitHub, the clipboard, the store, toasts and Claude Code's own band beneath the mod.
 const world = (on: On, init: Partial<World> = {}) => {
@@ -94,6 +94,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     pr: { exitCode: 0, stdout: JSON.stringify({ state: 'MERGED', title: 'Filter bookings by venue', url: `https://github.com/${REPO}/pull/412` }) },
     issue: { exitCode: 0, stdout: JSON.stringify({ author: { login: 'kris-k' } }) },
     me: { exitCode: 0, stdout: 'danwright32\n' },
+    // Every account gh is logged in to on this Mac, as `gh auth status --json hosts --jq` lists them.
+    accounts: { exitCode: 0, stdout: 'danwright32\n' },
     copied: true,
     ...init,
   }
@@ -101,11 +103,19 @@ const world = (on: On, init: Partial<World> = {}) => {
   const copies: string[] = []
   const runs: string[][] = []
   mock.clock(on, { now: T0 })
-  mock.store(on)
+  mock.store(on, w.stored)
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     const a = e.argv.join(' ')
-    const g = a.startsWith('gh pr view') ? w.pr : a.startsWith('gh issue view') ? w.issue : a.startsWith('gh api user') ? w.me : { exitCode: 1, stdout: '', stderr: 'unexpected' }
+    const g = a.startsWith('gh pr view')
+      ? w.pr
+      : a.startsWith('gh issue view')
+        ? w.issue
+        : a.startsWith('gh api user')
+          ? w.me
+          : a.startsWith('gh auth status')
+            ? w.accounts
+            : { exitCode: 1, stdout: '', stderr: 'unexpected' }
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: `git@github.com:${REPO}.git`, isOwn: false } }) as never)
@@ -352,4 +362,106 @@ test('a malformed question is refused loudly, never answered as no card', withRe
   world(on)
   expect(await verdict($, 'not-a-repo 412')).toMatch(/^threw: .*owner\/name/)
   expect(await verdict($, `${REPO} zero`)).toMatch(/^threw: .*pull request number/)
+})
+
+// ---- The milestone audit's gaps (#704, and the verdict key in #702) ----
+
+const mergedIn = (repo: string, pr = 412) => ({ exitCode: 0, stdout: JSON.stringify({ state: 'MERGED', title: 'Filter bookings by venue', url: `https://github.com/${repo}/pull/${pr}` }) })
+
+test("the verdict is found under GitHub's own spelling of the repo, whatever case Claude typed it in", withReader, async ($, on) => {
+  // gh accepts any case, so the card is made; GitHub's link spells it PostRoll.
+  world(on, { pr: mergedIn('danwright32/PostRoll', 5) })
+  expect((await card($, { ...CARD, repo: 'danwright32/postroll', pr: 5 })).deny).toBeUndefined()
+  // Wind down asks with the spelling from GitHub's own link for the PR.
+  expect(JSON.parse(await verdict($, 'danwright32/PostRoll 5')).state).toBe('live')
+  expect(JSON.parse(await verdict($, 'danwright32/POSTROLL 5')).state).toBe('live')
+})
+
+test("a card made under a repo's old name gives its verdict under the name GitHub gives it now", withReader, async ($, on) => {
+  // gh follows the rename, so the card is accepted; GitHub's link names the repo as it is now.
+  world(on, { pr: mergedIn('danwright32/backstage', 9) })
+  await card($, { ...CARD, repo: 'danwright32/shared-swift', pr: 9 })
+  expect(JSON.parse(await verdict($, 'danwright32/backstage 9')).state).toBe('live')
+})
+
+test("Copy and Mark sent work on a message for a PR in another repository than the session folder's", withKit, async ($, on) => {
+  const w = world(on, { pr: mergedIn('danwright32/backstage', 31) })
+  await card($, { ...CARD, repo: 'danwright32/backstage', pr: 31, requester: { name: 'Kris', via: 'named' }, message: 'The sign in fix is live.' })
+  expect(await shown($)).toEqual(['Message for Kris', 'The sign in fix is live.'])
+  await press($, 'is-it-live:copy-danwright32-backstage-31')
+  expect(w.copies).toEqual(['The sign in fix is live.'])
+  expect(w.toasts).not.toContain('That message is no longer kept.')
+  await press($, 'is-it-live:sent-danwright32-backstage-31')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test("a card Claude spelled in another case than the session folder's remote is listed, copied and marked sent", withKit, async ($, on) => {
+  const w = world(on)
+  await card($, { ...CARD, repo: 'DanWright32/Slate', requester: { name: 'Kris', via: 'named' }, message: 'It is live.' })
+  expect(await live($)).toContain('- Live: Filter bookings by venue (#412)')
+  await press($, 'is-it-live:copy-danwright32-slate-412')
+  expect(w.copies).toEqual(['It is live.'])
+  await press($, 'is-it-live:sent-danwright32-slate-412')
+  expect(await live($)).not.toContain('Not sent yet')
+})
+
+test('cards kept under a key in another case are still listed, and a new card loses none of them', withKit, async ($, on) => {
+  const old = { repo: 'danwright32/Slate', pr: 300, title: 'Old change', url: 'https://github.com/danwright32/slate/pull/300', state: 'live', at: T0 - 1000, requester: { name: 'Kris', via: 'named' }, message: 'Old news.' }
+  world(on, { stored: { 'cards:danwright32/Slate': [old] } })
+  expect(await live($)).toBe(['- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
+  await card($, CARD)
+  expect(await live($)).toBe(['- Live: Filter bookings by venue (#412)', '- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
+})
+
+test('a later card for the same PR that names nobody keeps the unsent message, in /live and in the band', withKit, async ($, on) => {
+  world(on)
+  await card($, { ...CARD, deploy: 'deploying', checked: undefined, requester: { name: 'Kris', via: 'slack' }, message: 'Deploying now.' })
+  await card($, CARD)
+  expect(await live($)).toContain('Not sent yet:\n- Message for Kris (#412): Deploying now.')
+  expect(await shown($)).toEqual(['Message for Kris', 'Deploying now.'])
+})
+
+test('a message Dan marked sent stays sent when the card is made again with it, and a new message waits again', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'It is live now.' }
+  await card($, { ...CARD, ...ask })
+  await press($, 'is-it-live:sent-danwright32-slate-412')
+  await card($, { ...CARD, ...ask })
+  expect(await shown($)).toEqual(['engine band'])
+  expect(await live($)).not.toContain('Not sent yet')
+  // Made again naming nobody, the sent message stays sent too.
+  await card($, CARD)
+  expect(await shown($)).toEqual(['engine band'])
+  expect(await live($)).not.toContain('Not sent yet')
+  await card($, { ...CARD, ...ask, message: 'It is live, and faster.' })
+  expect(await live($)).toContain('- Message for Kris (#412): It is live, and faster.')
+})
+
+test("an issue filed from another of Dan's gh accounts gets no message", withKit, async ($, on) => {
+  const w = world(on, { issue: { exitCode: 0, stdout: JSON.stringify({ author: { login: 'dwright-pennie' } }) }, accounts: { exitCode: 0, stdout: 'danwright32\ndwright-pennie\n' } })
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'issue', issue: 88 }, message: 'It is live.' })
+  expect((r.context ?? []).join(' ')).toContain('issue #88 was filed from your own account')
+  expect(await shown($)).toEqual(['engine band'])
+  // The accounts come from gh's own list of every account logged in, read without a token.
+  expect(w.runs).toContainEqual(['gh', 'auth', 'status', '--hostname', 'github.com', '--json', 'hosts', '--jq', '.hosts["github.com"][].login'])
+})
+
+test("when gh cannot list its accounts, the active account counts as Dan's and Claude is told so", withKit, async ($, on) => {
+  world(on, { issue: { exitCode: 0, stdout: JSON.stringify({ author: { login: 'danwright32' } }) }, accounts: { exitCode: 1, stdout: '', stderr: 'unknown flag: --json' } })
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'issue', issue: 88 }, message: 'It is live.' })
+  const said = (r.context ?? []).join(' ')
+  expect(said).toContain('issue #88 was filed from your own account')
+  expect(said).toContain("could not list every gh account on this Mac (unknown flag: --json), so only the active one counted as Dan's")
+})
+
+test('when gh can name no account of Dan\'s at all, no card is made, rather than a guess', withKit, async ($, on) => {
+  world(on, { accounts: { exitCode: 1, stdout: '', stderr: 'unknown flag: --json' }, me: { exitCode: 1, stdout: '', stderr: 'HTTP 401: Bad credentials' } })
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'issue', issue: 88 }, message: 'It is live.' })
+  expect(r.deny).toBe('No card: could not read who filed issue #88 (HTTP 401: Bad credentials).')
+})
+
+test("an issue whose author is none of Dan's accounts keeps its message", withKit, async ($, on) => {
+  world(on, { accounts: { exitCode: 0, stdout: 'danwright32\ndwright-pennie\n' } })
+  await card($, { ...CARD, requester: { name: 'Kris', via: 'issue', issue: 88 }, message: 'It is live.' })
+  expect(await shown($)).toEqual(['Message for Kris', 'It is live.'])
 })
