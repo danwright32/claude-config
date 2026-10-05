@@ -9,9 +9,11 @@
        return T.screen({
          title: "claude-config",
          transcript: [T.user("keep going"), "Merging #653 once its checks pass."],
-         band: [[T.amber("Work has more room"), "  ", T.button("Switch")]],
-         status: ["claude-config", "5h 64%", "week 91%"]
+         band: [[T.amber("Work has more room"), "  ", T.button("Switch")]]
        });
+
+   The status line is the built one unless the round names other segments, which are text only:
+   the real line is all grey, divided by |.
      }
 
    Everything lives under the one name Terminal. Every hand written round declared its own
@@ -29,6 +31,11 @@ var Terminal = (function () {
   var EDGES = ["grey", "amber", "violet", "red"];
   var OPTIONS = ["title", "width", "height", "fontSize", "transcript", "band",
                  "prompt", "footer", "status"];
+  /* The status line as the status bar mod draws it (docs/mods-design.md, "Status bar (#610)"):
+     every always-shown fact in the settled order, so a round that names none shows the line Dan
+     really has (claude-config#699). The switcher's tests compare it with the design record. */
+  var BUILT_STATUS = ["claude-config", "5h 68% (1h 52m)", "week 91% (4d 14h)", "cache 41m",
+                      "Opus 5.5 (high)", "Dan, Personal"];
 
   function refuse(message) { throw new Error("Terminal: " + message); }
 
@@ -163,14 +170,19 @@ var Terminal = (function () {
       body.append(f);
     }
 
-    var status = opts.status === undefined ? ["claude-config", "5h 64%", "week 91%", "opus 5.5 high"] : opts.status;
+    var status = opts.status === undefined ? BUILT_STATUS : opts.status;
     if (status !== false) {
       if (!Array.isArray(status)) refuse("status is a list of segments, or false for none.");
       var s = node("div", "term-status");
-      status.forEach(function (segment, i) {
-        if (i) s.append(run(" · ", "dim"));
-        s.append(piece(segment));
+      status.forEach(function (segment) {
+        if (typeof segment !== "string" && typeof segment !== "number") {
+          refuse("a status segment is text, because the status line is all grey (docs/mods-design.md); " +
+                 "a scope mode or anything amber goes in the band. It was given " +
+                 (segment && segment.nodeType === 1 ? "a styled run" : JSON.stringify(segment)) + ".");
+        }
       });
+      // One run of text in the status line's own grey, divided by |, as statusline.sh prints it.
+      s.append(document.createTextNode(status.map(String).join(" | ")));
       body.append(s);
     }
 

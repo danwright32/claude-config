@@ -134,7 +134,10 @@ the spec rather than chosen afresh, and open to Dan changing:
   folder, which the `statusLine` setting names; that setting lives in each Mac's own settings and
   does not travel, so it is set once per Mac. A fact that cannot be read says so ("cache unknown"
   when the mod has written nothing for the session, "account unknown" when the login file cannot be
-  read), never a blank.
+  read), never a blank. The design rounds' shared terminal (`skills/design-rounds/screens/
+  terminal.js`) draws this same line, all in its grey and divided by `|`, whenever a round names
+  no status line, and refuses a coloured segment, since a scope mode leads the band; its tests
+  read the line from here (#699).
 - The amber line's items read as drawn in the rounds: "PR #636 checks failing", "1 job running",
   "dev server kept 2h 14m", "2 unpushed commits", divided by a dim `|` as the status line is.
 - A PR whose refresh failed keeps what was last read with its age: "PR #649 checks running, as of
