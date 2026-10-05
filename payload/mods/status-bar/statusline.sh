@@ -6,7 +6,9 @@
 #
 # The always-shown facts, settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)"),
 # in this order, all grey: project (with its Supabase project where it has one, #697), 5 hour
-# limit, weekly limit, cache time left, model and effort, account and org. What needs a look is not
+# limit, weekly limit, cache time left, model and effort, account and org. The one exception is a
+# limit's share past its threshold (Dan, 2026-10-05): amber over 70% on the 5 hour limit or over 85%
+# on the weekly, red at 100%, the number alone. Everything else that needs a look is not
 # here: the mod draws it in amber in the band above the prompt, since a mod's own status line is
 # drawn as a warning notice and cannot be grey.
 #
@@ -23,6 +25,8 @@
 #
 # STATUSLINE_NOW (seconds since the epoch) stands in for the clock in tests.
 GREY=$'\033[90m'
+AMBER=$'\033[33m'
+RED=$'\033[31m'
 RESET=$'\033[0m'
 say(){ printf '%s%s%s' "$GREY" "$1" "$RESET"; }
 
@@ -67,15 +71,20 @@ left(){
   if [ "$s" -ge 86400 ]; then printf '%dd %dh' $((s / 86400)) $(((s % 86400) / 3600))
   else printf '%dh %02dm' $((s / 3600)) $(((s % 3600) / 60)); fi
 }
-limit(){   # $1 = label  $2 = percent  $3 = reset (epoch seconds)
+limit(){   # $1 = label  $2 = percent  $3 = reset (epoch seconds)  $4 = amber above this share
   [ -n "$2" ] || return 0
-  local pct reset
+  local pct reset share
   pct="$(printf '%.0f' "$2" 2>/dev/null)" || return 0
+  # Judged on the share as shown, so a 70% that is really 70.4 stays grey, as it reads. The line is
+  # one grey run, so a coloured share hands back to grey rather than to the terminal's default.
+  share="$pct%"
+  if [ "$pct" -ge 100 ]; then share="$RED$pct%$GREY"
+  elif [ "$pct" -gt "$4" ]; then share="$AMBER$pct%$GREY"; fi
   reset="${3%%.*}"
   if [ -n "$reset" ] && [ "$reset" -gt "$now" ] 2>/dev/null; then
-    parts+=("$1 $pct% ($(left $((reset - now))))")
+    parts+=("$1 $share ($(left $((reset - now))))")
   else
-    parts+=("$1 $pct%")
+    parts+=("$1 $share")
   fi
 }
 
@@ -125,8 +134,8 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
 fi
 [ -n "$supabase" ] && parts+=("SB $supabase")
 
-limit 5h "$five_pct" "$five_reset"
-limit week "$week_pct" "$week_reset"
+limit 5h "$five_pct" "$five_reset" 70
+limit week "$week_pct" "$week_reset" 85
 
 # The cache: an id that is not one is never made into a path.
 cache="unknown"
