@@ -1,20 +1,11 @@
 // Ask before saving (claude-config#618): what counts as lasting memory, when Dan's own words already
-// made a rule permanent, and the question the band shows. Pure, so each rule is tested on its own.
+// made a rule permanent, and what Claude is told to ask in Claude Code's own dialog (#777). Pure, so
+// each rule is tested on its own.
 
 export const MOD = 'ask-before-saving'
 
-// The question and what a command writes, as mod-kit's contract spells them (types/index.d.ts
-// there): plain data, since only plain data crosses between mods.
-type Text = { text: string; color?: string; bold?: boolean; dim?: boolean; indent?: number; wrap?: true }
-type Line = Text[] | { divider: true }
-export type Question = {
-  mod: string
-  id: string
-  chip: string
-  question: string
-  body: Line[]
-  options: { button: string; label: string; description: string }[]
-}
+// What a command writes, as mod-kit's contract spells it (types/index.d.ts there): plain data, since
+// only plain data crosses between mods.
 export type Writes = { files: { word: string; path?: string }[]; unnamed: { what: string; words: string[]; inputs: string[] }[] }
 
 // The lasting memory the spec names: the memory folder, MEMORY.md, ~/.claude/CLAUDE.md, LESSONS.md,
@@ -78,18 +69,63 @@ const unread = (f: { word: string; path?: string }) => !f.path || THROUGH.test(f
  * do not name at all: by the lasting memory the command mentions anywhere, an assignment such as
  * `F=<path>` included (#743). One that mentions none goes through (docs/mods-design.md).
  */
-export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout, command: string): Promise<string[]> => {
+export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout, command: string, isSet: IsSet = ALWAYS_SET): Promise<string[]> => {
   const out: string[] = []
   const add = (s: string) => {
     if (!out.includes(s)) out.push(s)
   }
   let mentions: string[] | undefined
   for (const f of w.files) {
-    const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : NAMES.has(f.word.split('/').pop() ?? '') && f.word
+    const byName = !f.path && NAMES.has(f.word.split('/').pop() ?? '') && (await throughSettable(f.word, command, isSet))
+    const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : byName && f.word
     if (hit) add(hit)
-    else if (unread(f)) for (const m of (mentions ??= await mentioned(command, home, inCheckout))) add(m)
+    else if (unread(f)) for (const m of (mentions ??= await mentioned(command, home, inCheckout, isSet))) add(m)
   }
   return out
+}
+
+/**
+ * Whether a variable could hold a value when the command runs (#777). Each Bash call is a fresh
+ * shell, so a variable reaches it only from Claude Code's environment, the shell profile, or the
+ * command itself. Answered by the mod from $.env and the profile files; one that cannot say is
+ * taken as set, the harmless side.
+ */
+export type IsSet = (name: string) => Promise<boolean>
+const ALWAYS_SET: IsSet = async () => true
+
+// A word or mention rooted at a variable other than HOME: `$NAME/...`.
+const ROOTED = /^\$([A-Za-z_]\w*)/
+
+/**
+ * Whether the variable `name` can hold a path when `text` runs: set in the environment, or given a
+ * value in the text that can be one. A value it is given is followed: a literal, a path under home
+ * or a command's output can be anything, so it counts; another variable counts as that one does; a
+ * fresh temporary folder (`$(mktemp ...)`) is loaded into no session, so it does not. Any other use
+ * of the bare name (a loop, a read, a declare) counts. A variable named nowhere and set nowhere
+ * expands to nothing in a fresh shell, so a path through it reaches no lasting memory.
+ */
+export const settable = async (name: string, text: string, isSet: IsSet, seen: Set<string> = new Set()): Promise<boolean> => {
+  if (name === 'HOME' || seen.has(name)) return true
+  seen.add(name)
+  if (await isSet(name)) return true
+  const bare = new RegExp(`(^|[^$\\w{])${name}(?!\\w)`, 'gm')
+  for (const m of text.matchAll(bare)) {
+    const after = text.slice((m.index ?? 0) + m[0].length)
+    const given = /^=(?:"([^"]*)"|'([^']*)'|([^\s;&|]*))/.exec(after)
+    if (!given) return true
+    const value = given[1] ?? given[2] ?? given[3] ?? ''
+    if (value.startsWith('$(mktemp')) continue
+    const root = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/.exec(value)
+    if (!root) return true
+    if (await settable(root[1] ?? root[2], text, isSet, seen)) return true
+  }
+  return false
+}
+
+// A word through a variable is judged by whether that variable could hold a path; any other word is.
+const throughSettable = async (word: string, text: string, isSet: IsSet): Promise<boolean> => {
+  const root = ROOTED.exec(word)
+  return !root || (await settable(root[1], text, isSet))
 }
 
 // A lasting memory file named in a script's or a patch's text: a path ending in one of the names,
@@ -103,9 +139,10 @@ const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'";&|()<>`]+\/memory(?:\/[
  * judged where it lands. One in a temporary folder counts inside a checkout there, or when it is
  * built from a variable and so cannot be looked for.
  */
-export const mentioned = async (text: string, home: string, inCheckout: InCheckout): Promise<string[]> => {
+export const mentioned = async (text: string, home: string, inCheckout: InCheckout, isSet: IsSet = ALWAYS_SET): Promise<string[]> => {
   const out: string[] = []
   for (const m of text.match(MENTION) ?? []) {
+    if (!(await throughSettable(m, text, isSet))) continue
     let p = m.replace(/^[ab]\//, '')
     if (p.startsWith('/') || p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
     if (TEMP.test(p) && !p.includes('$') && !(await inCheckout(p))) continue
@@ -205,36 +242,57 @@ export const stands = (until: unknown, now: number): boolean => typeof until ===
  */
 export const lapseWait = (until: unknown, now: number): number => (stands(until, now) ? (until as number) - now : 0)
 
-/** The three answers, with the button id their press arrives under (before the save's own id). */
-export const ANSWERS = [
-  { button: 'for-good', label: 'For good' },
-  { button: 'this-session', label: 'Just this session' },
-  { button: 'not-at-all', label: 'Not at all' },
-] as const
-export type Answer = (typeof ANSWERS)[number]['button']
+/** The three answers, as Dan reads them in Claude Code's dialog (#777). */
+export const FOR_GOOD = 'For good'
+export const THIS_SESSION = 'Just this session'
+export const NOT_AT_ALL = 'Not at all'
 
-/** The band row a save's question is drawn as, under its own id. */
-export const rowId = (id: string) => `question:${id}`
+/** The header chip the dialog shows over the question (at most 12 characters). */
+export const HEADER = 'Standing rule'
 
 /**
- * The question in the band (docs/mods-design.md, Ask before saving), as mod-kit's question builder
- * takes it: the chip and the question, then the rule's exact text, wrapping at the band's edge, and
- * the file it would go to, set off by grey rules, then each answer with what it does under it. The
- * row and each button carry the save's id, so a press answers only the save it was drawn for (L243).
+ * The answers the dialog offers, each with what it does. The mod sets them on Claude's call itself,
+ * so the label read back is always one of these three, whatever Claude wrote.
  */
-export const questionOf = (q: { id: string; text: string; files: string[] }): Question => {
-  const where = q.files.join(', ')
-  const does: Record<Answer, string> = {
-    'for-good': `Saved to ${where}`,
-    'this-session': 'Kept until this session ends; nothing is written',
-    'not-at-all': 'Nothing is saved',
+export const dialogOptions = (files: string[]) => [
+  { label: FOR_GOOD, description: `Saved to ${files.join(', ')}` },
+  { label: THIS_SESSION, description: 'Followed until this session ends; nothing is written' },
+  { label: NOT_AT_ALL, description: 'Nothing is saved' },
+]
+
+/** The AskUserQuestion `metadata.source` that ties a question to the save it is about. */
+export const sourceOf = (id: string) => `${MOD}:${id}`
+export const saveIdOf = (source: unknown): string | undefined => {
+  if (typeof source !== 'string' || !source.startsWith(`${MOD}:`)) return undefined
+  return source.slice(MOD.length + 1) || undefined
+}
+
+/**
+ * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,
+ * naming the file and stating the rule in plain words (#777, Dan: "I don't really know what it's
+ * asking"), and on For good send the same call again.
+ */
+export const askInstruction = (id: string, files: string[]): string => {
+  const where = files.join(', ')
+  return (
+    `Not saved yet: this writes lasting memory (${where}), so Dan decides first. ` +
+    `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${where} and states the rule in one plain sentence, never the command or the raw text, ` +
+    `such as "Save to ${files[0]} for good: <the rule>?", with the options ${FOR_GOOD}, ${THIS_SESSION} and ${NOT_AT_ALL}. ` +
+    `If he answers ${FOR_GOOD}, send this same call again unchanged and it is saved. Until he answers, do not write it any other way.`
+  )
+}
+
+/**
+ * The rule Dan kept for this session only, from the question Claude asked: the plain words after the
+ * file it names, without the question mark; the whole question when the file does not lead it.
+ */
+export const ruleOf = (question: string, files: string[]): string => {
+  const q = question.trim().replace(/\?+$/, '').trim()
+  for (const f of files) {
+    const at = q.indexOf(f)
+    if (at < 0) continue
+    const rest = q.slice(at + f.length).replace(/^[^:]*:\s*/, '').trim()
+    if (rest && rest !== q.slice(at + f.length).trim()) return rest
   }
-  return {
-    mod: MOD,
-    id: rowId(q.id),
-    chip: 'Standing rule',
-    question: 'Save this as a standing rule?',
-    body: [{ divider: true }, ...q.text.split('\n').map((l): Line => [{ text: l, wrap: true }]), [{ text: where, dim: true }], { divider: true }],
-    options: ANSWERS.map(a => ({ button: `${a.button}:${q.id}`, label: a.label, description: does[a.button] })),
-  }
+  return q
 }
