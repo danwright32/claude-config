@@ -549,6 +549,8 @@ test('an approval past its time is refused where it is used even when nothing an
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await call($, input)
   await answer($, 'for-good')
+  // A timer that cannot be set never stops Claude being asked (lessons review of #738).
+  expect(w.prompts.length).toBe(1)
   now = APPROVAL_MS
   expect(w.toasts.join('\n')).not.toContain('lapsed')
   const late = await call($, input)

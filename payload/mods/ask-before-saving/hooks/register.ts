@@ -162,8 +162,16 @@ const lapse = async ($: EngineInterface) => {
     await tell($, `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes unused: it no longer lets that save through, and sending it again asks him again.`)
   }
 }
-const lapseAfter = ($: EngineInterface, ms: number) =>
-  $.clock.after(Math.max(0, ms), () => void lapse($).catch(err => $.ui.toast(`Ask before saving could not take out an approval past its time: ${message(err)}`)))
+// Times the lapse, never throwing: a timer that cannot be set is said, and whatever comes after it
+// (telling Claude, the next approval at a session start) still runs. The approval is then refused on
+// its age where it is used, and said at session end, so only the announcement on time is lost.
+const lapseAfter = ($: EngineInterface, ms: number, where: string) => {
+  try {
+    $.clock.after(Math.max(0, ms), () => void lapse($).catch(err => $.ui.toast(`Ask before saving could not take out an approval past its time: ${message(err)}`)))
+  } catch (err) {
+    $.ui.toast(`The ${MINUTES} minute limit on For good for saving to ${where} could not be timed (${message(err)}), so nothing will say when it lapses; it still lapses then.`, { timeoutMs: 10_000 })
+  }
+}
 
 // The approval for this save, taken as the call that uses it arrives, refused on its age there too
 // (L567): a timer a reload dropped never said it lapsed. A lapsed one is taken out and said.
@@ -316,7 +324,8 @@ export const register: Register = on => {
       unread = (a ?? []).filter(x => x.told === 'note')
       return (a ?? []).map(x => (x.told === 'note' ? { ...x, told: 'prompt' as const } : x))
     })
-    for (const x of unread) $.clock.after(0, () => void ask($, x.text))
+    // Not awaited, so this hook never waits on the turn the prompt starts; ask says its own failure.
+    for (const x of unread) void ask($, x.text)
     return r
   })
 
@@ -330,7 +339,7 @@ export const register: Register = on => {
     const waiting = (await $.state.get(approvalsRef)).value ?? []
     if (waiting.length) {
       const now = await $.clock.now()
-      for (const x of waiting) lapseAfter($, x.until - now)
+      for (const x of waiting) lapseAfter($, x.until - now, x.files.join(', '))
     }
     return r
   })
@@ -415,8 +424,8 @@ const answer = async ($: EngineInterface, choice: Answer, id: string) => {
     return
   }
   // Recorded: from here a failure is said by what failed (the timer, the note, the prompt), never as
-  // an approval that was not recorded.
-  lapseAfter($, APPROVAL_MS)
+  // an approval that was not recorded, and none of them stops Claude being asked.
+  lapseAfter($, APPROVAL_MS, where)
   if (approval.told === 'note') await tell($, approval.text)
   else await ask($, approval.text)
 }
