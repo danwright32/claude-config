@@ -463,9 +463,15 @@ for i in 1 2 3 4 5 6 7 8; do
   bash -c '. "$1" && ar_review_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
 done
 wait
-keys="$(cat "$WORKDIR"/key.* | sort -u)"
-[ "$(printf '%s\n' "$keys" | grep -c .)" = "1" ] && [ "${#keys}" -ge 16 ] && ok \
-  || bad "eight concurrent askers agree on one full key (got: $(cat "$WORKDIR"/key.* | tr '\n' ' '))"
+# Each asker's answer is read on its own (the key is printed with no newline, so joining the files
+# would make eight different keys one line), and each must be the same full 16 character key.
+first_key="$(cat "$WORKDIR/key.1")"; agree=1
+for i in 1 2 3 4 5 6 7 8; do
+  k="$(cat "$WORKDIR/key.$i")"
+  { [ "$k" = "$first_key" ] && [ "${#k}" -eq 16 ]; } || agree=0
+done
+[ "$agree" -eq 1 ] && ok \
+  || bad "eight concurrent askers agree on one full key (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
 rm -f "$WORKDIR"/key.*
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"
