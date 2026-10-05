@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On, PromptOrigin } from 'claude-code'
+import type { On, PromptOrigin, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { LONG_WORDS, REPORT_EVERY_MS, judge, requestText } from '../hooks/simpler.ts'
 
@@ -15,9 +15,13 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
   const clock = mock.clock(on, { now: opts.now ?? 100 * DAY })
   const store: Record<string, unknown> = { ...(opts.store ?? {}) }
   const fail = { get: false, set: false, keys: false }
+  // Runs after each read is answered, so a test can stage another session writing in between.
+  const between = { afterGet: (_key: string) => {} }
   on('store.get', ($, e) => {
     if (fail.get) throw new Error('store unreadable')
-    return { value: store[e.key] } as never
+    const value = store[e.key]
+    between.afterGet(e.key)
+    return { value } as never
   })
   on('store.set', ($, e) => {
     if (fail.set) throw new Error('disk full')
@@ -40,15 +44,42 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   const toasts: string[] = []
   const logs: string[] = []
+  const debug: string[] = []
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } as never })
-  on('ui.log', ($, e) => { if (e.to !== 'debug') logs.push(e.text); return { value: undefined } as never })
+  on('ui.log', ($, e) => { (e.to === 'debug' ? debug : logs).push(e.text); return { value: undefined } as never })
   // The engine's own drawing of a reply, for every reply the mod leaves alone.
   on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text key="engine">{e.props.text}</Text>
   })
-  return { clock, store, fail, submits, toasts, logs }
+  // The folders on this Mac every session shares, for the weekly count's claim: mkdir makes one or
+  // says it exists, rmdir takes it away, stat reads its age. `mkdirFails` stands for a folder that
+  // cannot be made at all (a full or unwritable disk).
+  mock.env(on, { HOME: '/Users/x' })
+  const dirs = new Map<string, number>()
+  const disk = { mkdirFails: '' }
+  on('process.run', ($, e) => {
+    const [cmd, ...rest] = e.argv
+    const path = rest.filter(a => !a.startsWith('-'))[0] ?? ''
+    const r = (exitCode: number, stderr = '') => ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
+    if (cmd === 'mkdir' && rest.includes('-p')) return r(0)
+    if (cmd === 'mkdir') {
+      if (disk.mkdirFails) return r(1, disk.mkdirFails)
+      if (dirs.has(path)) return r(1, `mkdir: ${path}: File exists`)
+      dirs.set(path, clock.now())
+      return r(0)
+    }
+    if (cmd === 'rmdir') return r(dirs.delete(path) ? 0 : 1, dirs.has(path) ? '' : `rmdir: ${path}: No such file or directory`)
+    return r(1, `unexpected command ${cmd}`)
+  })
+  on('fs.stat', ($, e) => {
+    const at = dirs.get(e.path)
+    if (at === undefined) return { deny: `no such file: ${e.path}` } as never
+    return { value: { kind: 'dir', size: 0, mtimeMs: at, isLink: false } } as never
+  })
+  return { clock, store, fail, between, submits, toasts, logs, debug, dirs, disk }
 }
+const CLAIM = '/Users/x/.claude/state/simpler/weekly.lock'
 
 const answer = ($: Parameters<Parameters<typeof test>[1]>[0], text: string, extra: Record<string, unknown> = {}) =>
   $.turn.complete({ answer: text, durationMs: 1, isAborted: false, turnId: 't', reason: 'answer', ...extra } as never)
@@ -61,6 +92,10 @@ const type = ($: Parameters<Parameters<typeof test>[1]>[0], inputText: string) =
 const submitAs = ($: Parameters<Parameters<typeof test>[1]>[0], origin: PromptOrigin) =>
   ($.prompt as unknown as { submit: (e: unknown) => Promise<unknown> }).submit({ text: 'hi', wait: false, origin })
 
+// The drawing's leaves in document order: each Text's words and each Button's label.
+const leaves = async (ui: { findAll: (q: object) => Promise<{ type: string; text: string }[]> }) =>
+  (await ui.findAll({})).filter(n => n.type === 'Text' || n.type === 'Button').map(n => n.text)
+
 test('the threshold: a long answer gets the button at the top of its reply, on every surface', async ($, on) => {
   world(on)
   await start($)
@@ -68,10 +103,92 @@ test('the threshold: a long answer gets the button at the top of its reply, on e
   for (const surface of SURFACES) {
     const ui = await mountReply($, surface)
     expect(await ui.find({ type: 'Button', key: 'simpler' })).toBeDefined()
-    // The reply itself is still drawn, under the button.
-    expect(await ui.find({ type: 'Markdown', text: FIRST_BLOCK })).toBeDefined()
+    // The reply itself is still drawn, under the button, by whatever draws it beneath this mod.
+    expect(await leaves(ui as never)).toEqual(['Simpler', FIRST_BLOCK])
     await ui.unmount()
   }
+})
+
+// Add-on notes (#620), standing in, since a mod's tests cannot import another mod's files. As the
+// real mod does, it owns the resume line that can open a reply: it answers what that line is through
+// its noun ($.addonNotes.resumeLine), draws it dim where it opens a reply, and hands the rest of the
+// block on. Everything it uses is inside register, which the kit loads as a module of its own, so
+// the broken one (its noun throws) is a register of its own rather than an option.
+const addonNotesDraws: Register = on => {
+  const PREFIX = '+ add-on: '
+  const resumeLine = (text: string) => {
+    const nl = text.indexOf('\n')
+    const line = (nl === -1 ? text : text.slice(0, nl)).trimEnd()
+    if (!line.startsWith(PREFIX) || !line.slice(PREFIX.length).trim()) return null
+    return { line, rest: nl === -1 ? '' : text.slice(nl + 1).trim() }
+  }
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, addonNotes: { resumeLine: async ({ text }: { text: string }) => resumeLine(text) } } as never
+  })
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const props = e.props as { text: string; isFirstOfReply: boolean }
+    if (!props.isFirstOfReply) return next(e)
+    const found = resumeLine(props.text)
+    if (!found) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const line = <Text key="resume" dimColor>{found.line}</Text>
+    if (!found.rest) return line
+    return (
+      <Box flexDirection="column">
+        {line}
+        {await next({ ...e, props: { ...e.props, text: found.rest } })}
+      </Box>
+    )
+  })
+}
+const addonNotesBroken: Register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const resumeLine = async () => {
+      throw new Error('add-on notes is broken')
+    }
+    return { ...built, addonNotes: { resumeLine } } as never
+  })
+}
+const AddonNotes = (tier: 'prepend' | 'append', register: Register = addonNotesDraws) => ({ name: 'addon-notes', tier, register })
+const OPENING = '+ add-on: Adding a direct link to the commission and carrying on.'
+
+// #701: both mods redraw a reply's first block. Hooks nest by tier and then by load order, which a
+// mod cannot choose, so a long reply opening with the resume line must get both, drawn the same way,
+// whichever of the two sits outermost: the dim line opening the reply, the button under it, the answer.
+for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as const) {
+  test(`a long reply opening with the add-on line gets the dim line, then the button, with add-on notes ${where} Simpler`, { plugins: [AddonNotes(tier)] }, async ($, on) => {
+    world(on)
+    await start($)
+    await answer($, `${OPENING}\n\n${LONG}`)
+    for (const surface of SURFACES) {
+      const ui = await mountReply($, surface, `${OPENING}\n\n${FIRST_BLOCK}`)
+      expect(await leaves(ui as never)).toEqual([OPENING, 'Simpler', FIRST_BLOCK])
+      expect((await ui.find({ type: 'Text', text: OPENING }))?.props.dimColor).toBe(true)
+      await ui.unmount()
+    }
+  })
+}
+
+test('with add-on notes not loaded, a reply opening with that line is one answer, the button above it all', async ($, on) => {
+  world(on)
+  await start($)
+  await answer($, `${OPENING}\n\n${LONG}`)
+  const ui = await mountReply($, 'terminal', `${OPENING}\n\n${FIRST_BLOCK}`)
+  expect(await leaves(ui as never)).toEqual(['Simpler', `${OPENING}\n\n${FIRST_BLOCK}`])
+  await ui.unmount()
+})
+
+test('an add-on notes that cannot read the line still leaves the button on the reply, said in the debug log', { plugins: [AddonNotes('append', addonNotesBroken)] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await answer($, `${OPENING}\n\n${LONG}`)
+  const ui = await mountReply($, 'terminal', `${OPENING}\n\n${FIRST_BLOCK}`)
+  expect(await ui.find({ type: 'Button', key: 'simpler' })).toBeDefined()
+  expect(w.debug.filter(l => /add-on notes could not read/.test(l))).toHaveLength(1)
+  expect(w.logs).toEqual([])
+  await ui.unmount()
 })
 
 test('the threshold: a short answer gets no button, and the engine draws the reply', async ($, on) => {
@@ -126,7 +243,8 @@ test('disappears once Dan types', async ($, on) => {
   expect(await ui.find({ key: 'simpler' })).toBeDefined()
   await type($, 'o')
   expect(await ui.find({ key: 'simpler' })).toBeUndefined()
-  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  // The reply is left to whatever draws it beneath, once.
+  expect(await leaves(ui as never)).toEqual([FIRST_BLOCK])
   await ui.unmount()
 })
 
@@ -261,4 +379,56 @@ test('a press log that cannot be read is named, and the count is tried again nex
   w.fail.keys = false
   await start($)
   expect(w.logs[1]).toBe('Simpler was not pressed in the last 100 days.')
+})
+
+// #701: "once a week, at a session start". Two sessions started together once the week is up each
+// read the last count's time before either records the new one, so the count is claimed on this Mac
+// before it is shown, and read again under the claim.
+test('the weekly count: two sessions starting at once once the week is up show it once', async ($, on) => {
+  const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
+  await Promise.all([start($), start($)])
+  expect(w.logs).toEqual(['Simpler was not pressed in the last 8 days.'])
+  expect(w.store.reportedAt).toBe(100 * DAY)
+  // The claim is let go once the count is recorded, so next week's can be made.
+  expect([...w.dirs.keys()]).toEqual([])
+})
+
+test('the weekly count: a claim another session holds means it is being shown there, so this one says nothing', async ($, on) => {
+  const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
+  w.dirs.set(CLAIM, 100 * DAY - 60_000)
+  await start($)
+  expect(w.logs).toEqual([])
+  // Not closed here: the session holding the claim records it.
+  expect(w.store.reportedAt).toBe(100 * DAY - 8 * DAY)
+})
+
+test('the weekly count: a claim left by a session that died holding it is taken over once it is old', async ($, on) => {
+  const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
+  w.dirs.set(CLAIM, 100 * DAY - 11 * 60_000)
+  await start($)
+  expect(w.logs).toEqual(['Simpler was not pressed in the last 8 days.'])
+  expect(w.store.reportedAt).toBe(100 * DAY)
+  expect([...w.dirs.keys()]).toEqual([])
+})
+
+test('the weekly count: a claim that cannot be made at all still shows the count, said in the debug log', async ($, on) => {
+  const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
+  w.disk.mkdirFails = 'mkdir: weekly.lock: Permission denied'
+  await start($)
+  expect(w.logs).toEqual(['Simpler was not pressed in the last 8 days.'])
+  expect(w.debug.filter(l => /could not claim the weekly count.*Permission denied/.test(l))).toHaveLength(1)
+})
+
+test('the weekly count: a session that gets the claim after the count was recorded says nothing', async ($, on) => {
+  const since = 100 * DAY - 8 * DAY
+  const w = world(on, { store: { reportedAt: since } })
+  // Another session records the count between this one's first read and its claim.
+  let reads = 0
+  w.between.afterGet = key => {
+    if (key === 'reportedAt' && ++reads === 1) w.store.reportedAt = 100 * DAY - 60_000
+  }
+  await start($)
+  expect(w.logs).toEqual([])
+  expect(w.store.reportedAt).toBe(100 * DAY - 60_000)
+  expect([...w.dirs.keys()]).toEqual([])
 })

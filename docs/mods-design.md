@@ -256,6 +256,15 @@ Not yet put to Dan in a round; each is the conservative reading of the spec, and
   dim grey line. When the reply adds nothing ("keep going"), the line is "+ add-on: Carrying on."
   The mod draws the line dim only where it opens a reply.
 - **The words typed are never changed**; the mod only adds context the model reads beside them.
+- **A `+` note while a question is open** (picker manners, #615) is left as typed, with no context
+  and no toast (#701). The step Claude is on is that question, which picker manners withdraws,
+  telling Claude to answer the message first; telling it as well to finish the step and fold the
+  note in later, with "Noted, applying after this step.", was the opposite instruction. The mod
+  reads picker manners' open question (`picker-manners.open`); one it cannot read leaves the note
+  an add-on, as with picker manners not loaded. The plainest reading, not put to Dan.
+- **The resume line for other mods** is read through `$.addonNotes.resumeLine({ text })`: the line
+  and the rest of the block, or null, by the rule the mod draws it with. Simpler reads it so its
+  button sits under the line (Simpler behaviour, below).
 
 ## Session registry retention (#633), settled 2026-10-04
 
@@ -302,6 +311,12 @@ No round: each follows from the spec, the settled placement above and the guards
   whether to move them.
 - **Which reply.** Only the latest main answer: a newer answer that does not earn it, or an
   interrupted turn, takes it away. A subagent's turn is not a reply to Dan and changes nothing.
+- **Beside the resume line** (#701). Simpler and add-on notes both redraw a reply's first block,
+  and which sits outermost is the load order, which no mod chooses. A long reply opening with add-on
+  notes' resume line reads the same either way: the dim line, the button under it, then the
+  answer, since the line opens the reply (its own row) and the button tops the answer. Simpler
+  draws the reply through whatever sits beneath it rather than a copy of its own, and asks add-on
+  notes where the line ends. The plainest reading of the two settled rows, not put to Dan.
 - **Gone once Dan types.** The first edit of the prompt box, or a message he sends from the phone.
   A background task's notice arriving does not count as Dan typing.
 - **The press.** The button goes at once; the request is sent as Dan's own words (`asUser`), naming
@@ -315,7 +330,12 @@ No round: each follows from the spec, the settled placement above and the guards
   one, one dim grey transcript line, the guards' note style: "Simpler was pressed 3 times in the
   last 7 days: after 2 design answers and 1 plan." It says so when there were none. The first
   session with the mod starts the week. A press log that cannot be read is named in a dim line and
-  the week stays open, so the next session tries again.
+  the week stays open, so the next session tries again. Two sessions starting together once the
+  week is up show it once (#701): the count is claimed on this Mac first, a folder
+  (`~/.claude/state/simpler/weekly.lock`) that only one caller can make, read again under the claim,
+  and let go once recorded. A claim older than 10 minutes was left by a session that died holding
+  it, and is taken over; one that cannot be made at all still shows the count, since a count shown
+  twice costs less than a week never shown.
 
 ### Auto session name (#635), behaviour decided while building (2026-10-04)
 
@@ -332,6 +352,12 @@ and open to his correction.
 - The idle point is the end of a main turn (a subagent's turn is not one). From the 10 minute mark
   on, each one may name the session: the first exchange when nothing was asked by then, and the one
   retry after a failure. A session idle at the time of a failure retries after Dan's next message.
+  The mark is read from when the session started as well as from the timer, so a write that failed
+  at the mark still leaves the next idle point to name it, as the failure line says (#701).
+- One Haiku call and one name per session (#701). `/rename` waits for the session to go idle, so a
+  mark that falls mid turn waits out the rest of that turn; the attempt keeps its claim fresh while
+  it waits, so the turn's end starts no second attempt. The name Haiku made is kept with the record,
+  so an attempt that takes over from one a reload cut off uses it rather than asking again.
 - The fallback route checks before it sets: when `/rename` refuses or answers with nothing
   recognisable, Dan's next message carries the name as `sessionTitle` only if that message shows
   the session still has no name. A different name on it, or a `/rename` of Dan's first, wins.

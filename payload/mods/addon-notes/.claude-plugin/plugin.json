@@ -4,5 +4,7 @@
   "description": "A message starting with + mid turn is an add-on folded in at the next break, and a short reply after an interrupt resumes the interrupted step with the addition.",
   "author": {
     "name": "Dan Wright"
-  }
+  },
+  "types": "./types/index.d.ts",
+  "dependencies": ["picker-manners"]
 }

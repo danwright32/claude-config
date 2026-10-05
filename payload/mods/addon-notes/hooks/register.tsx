@@ -1,4 +1,5 @@
-import type { PromptOrigin, Register } from 'claude-code'
+import type { EngineInterface, PromptOrigin, Register } from 'claude-code'
+import type { AddonNotes } from '../types/index.d.ts'
 import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, resumeLine } from './classify.ts'
 
 // Add-on notes (claude-config#620).
@@ -22,7 +23,37 @@ const fromDan = (origin: PromptOrigin | undefined): boolean => origin?.kind === 
 // most one reply read as a plain message, the behaviour without the mod.
 let interrupted = false
 
+// Picker manners (#615) holds the question it has open in front of Dan in its state. A + note typed
+// then is no add-on to the step Claude is on, since that step is the question, which picker manners
+// withdraws, telling Claude to answer the message first. So the note is left to picker manners rather
+// than told the opposite with a toast saying so (#701). Another mod's value is read, never trusted:
+// an open question is an object with an id. One that cannot be read leaves the note an add-on, as it
+// is with picker manners not loaded, and says so in the debug log.
+const PICKER_OPEN = { plugin: 'picker-manners', key: 'open' } as const
+const questionOpen = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    const o = (await $.state.get(PICKER_OPEN)).value as { id?: unknown } | null | undefined
+    return !!o && typeof o === 'object' && typeof o.id === 'string'
+  } catch (err) {
+    $.ui.log(`addon-notes: could not read whether a question is open: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
+    return false
+  }
+}
+
 export const register: Register = on => {
+  // The resume line is read for other mods here, by the rule this mod draws it by, so a mod that
+  // redraws the same reply block (Simpler, #701) reads it one way with this one.
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const addonNotes: AddonNotes = {
+      resumeLine: async ({ text }) => {
+        if (typeof text !== 'string') throw new Error(`addon-notes: text must be the block's text, not ${JSON.stringify(text)}`)
+        return resumeLine(text) ?? null
+      },
+    }
+    return { ...built, addonNotes }
+  })
+
   on('turn.complete', async ($, e, next) => {
     // A subagent's turn is not the session's (its agentId is set).
     if (e.agentId === undefined) interrupted = e.reason === 'aborted'
@@ -46,7 +77,7 @@ export const register: Register = on => {
     if (afterInterrupt && isAmendment(e.text)) {
       return next({ ...e, context: [...(e.context ?? []), AMENDMENT_CONTEXT] })
     }
-    if (midTurn && isAddOnNote(e.text)) {
+    if (midTurn && isAddOnNote(e.text) && !(await questionOpen($))) {
       const r = await next({ ...e, context: [...(e.context ?? []), ADD_ON_CONTEXT] })
       // Acknowledged only once the note entered; a refusal beneath is shown by Claude Code itself.
       if (r.drop === undefined) $.ui.toast(TOAST)
