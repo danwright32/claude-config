@@ -571,7 +571,10 @@ test('For good while Claude is working reaches it as a note, and as a prompt of 
   expect(w.prompts).toEqual([])
   expect(notesOf(w)).toContain('Dan answered For good to saving this to ~/.claude/projects/p/memory/note.md')
   await endTurn($)
-  await w.clock.settle()
+  // The clock never moves here: a prompt that waited on a timer of the mod's would never come
+  // (lessons review of #738: a timer that failed lost the prompt). A few real ticks let the prompt,
+  // which the turn's end does not wait on, arrive; the bound fails it by name rather than hanging.
+  for (let tick = 0; tick < 50 && !w.prompts.length; tick++) await new Promise(r => setTimeout(r, 0))
   expect(w.prompts.length).toBe(1)
   expect(w.prompts[0]).toContain('Dan answered For good to saving this to ~/.claude/projects/p/memory/note.md')
   const r = await call($, input)
