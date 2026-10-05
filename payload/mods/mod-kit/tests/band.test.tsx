@@ -221,12 +221,46 @@ test('a text run marked wrap wraps at the band edge, any other is cut there', wi
   await ui.unmount()
 })
 
-test('wrap on a button, wrap set to anything but true, or wrap inside a left rule is refused by name', withPublisher, async ($, on) => {
+test('wrap on a button, or wrap set to anything but true, is refused by name', withPublisher, async ($, on) => {
   engineBand(on)
   expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', lines: [[{ button: 'go', label: 'Go', wrap: true }]] })).toMatch(/refused: .*only a text run can wrap/)
   expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', lines: [[{ text: 'a', wrap: 'yes' }]] })).toMatch(/refused: .*wrap must be true/)
-  // A left rule draws one mark per line, so a line that wrapped onto two would leave its rule short.
-  expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', frame: { kind: 'left-rule' }, lines: [[{ text: 'a', wrap: true }]] })).toMatch(/refused: .*left rule/)
+})
+
+// #734: a run that wraps is taken inside a left rule, whose rule then spans every row the lines take
+// (the steps card's long click path was cut at the edge while the rule drew one mark per line). The
+// rule is one column laid over the row's whole height and clipped to it, with a mark for every row
+// the lines could take, since a terminal row holds at least one character. A row with no run that
+// wraps keeps its one mark per line, above.
+test('a left rule around a run that wraps is one rule over the row\'s whole height', withPublisher, async ($, on) => {
+  engineBand(on)
+  const path = 'Settings, then Security, then Web application firewall, then Custom rules, then Create rule'
+  expect(
+    await show($, {
+      mod: 'publisher',
+      id: 'w',
+      slot: 'steps',
+      frame: { kind: 'left-rule', color: 'warning' },
+      lines: [[{ text: 'Steps for you', color: 'warning' }], { divider: true }, [{ text: path, indent: 3, wrap: true }], [{ text: 'Copy' }, { button: 'go', label: 'Go' }]],
+    }),
+  ).toBe('done')
+  const ui = await $.ui.mount(band())
+  // The surface's own table takes the tree as drawn.
+  await ui.drawn()
+  const rule = await ui.find({ type: 'Box', key: 'publisher/w:rule' })
+  expect(rule?.props).toMatchObject({ position: 'absolute', top: 0, bottom: 0, left: 0, width: 1, overflow: 'hidden' })
+  const marks = (rule?.children ?? []) as { props: { color?: string }; children: unknown[] }[]
+  expect(marks).toHaveLength(1)
+  expect(marks[0]?.props.color).toBe('warning')
+  const rows = String(marks[0]?.children.join('')).split('\n')
+  expect(rows.every(r => r === '│')).toBe(true)
+  // The heading, the divider and the last line one row each, and the wrapping line one per character
+  // it holds at most, indent included.
+  expect(rows.length).toBeGreaterThanOrEqual(3 + 3 + path.length)
+  // The lines stand clear of the rule as they do beside one mark per line: a column for it, one gap.
+  expect((await ui.find({ type: 'Box', key: 'publisher/w:lines' }))?.props).toMatchObject({ paddingLeft: 2 })
+  expect((await ui.find({ type: 'Text', text: path }))?.props.wrap).toBe('wrap')
+  await ui.unmount()
 })
 
 test('a row published again under its id is replaced in place, and a cleared one is gone', withPublisher, async ($, on) => {

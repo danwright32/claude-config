@@ -1,5 +1,6 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import { DROPPED_AFTER_MS } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 // mod-kit, standing in: a mod cannot import another mod's files, and the kit loads this stand in as
@@ -689,6 +690,68 @@ test('only the end of the turn "step N done" started counts: one already running
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
   await turnEnd($, 'T2')
   expect(await band($)).toBeUndefined()
+  expect(w.toasts).toEqual([])
+})
+
+// #734: a "step N done" prompt queued behind a running turn and then dropped (Esc drops the queue)
+// starts no turn, so the guard above never arms. Once nothing has run for DROPPED_AFTER_MS with the
+// step still sent and its turn never started, Done comes back with the same toast. The clock is the
+// test's: nothing here waits for real.
+const RELEASED = 'Claude did not say whether step 1 took. Press Done to ask again.'
+test('a Done whose prompt is dropped behind a running turn comes back once nothing has run for a while, and says so (#734)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'fix the tests', 'T1')
+  await press($, 'done')
+  // Claude works on past the bound: a prompt waiting behind a running turn is never taken for dropped.
+  await clock.advance(DROPPED_AFTER_MS * 3)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  // Esc: the running turn ends interrupted, and the queued prompt goes with it.
+  await turnEnd($, 'T1', 'aborted')
+  await clock.advance(DROPPED_AFTER_MS - 1)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  expect(w.toasts).toEqual([])
+  await clock.advance(1)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(w.toasts).toEqual([RELEASED])
+  // A verdict Claude gives later still lands.
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+})
+
+test('a Done pressed with nothing running whose prompt starts no turn comes back too (#734)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  // The prompt went in, but a prompt hook refused it, so no turn began.
+  await press($, 'done')
+  await clock.advance(DROPPED_AFTER_MS)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(w.toasts).toEqual([RELEASED])
+})
+
+// The queued prompt's turn starts only after the settings hooks that end a turn and begin the next
+// have run, which can take seconds; it is never released in that gap, nor while its turn runs, and
+// the fallback armed at the press does not fire early just after the turn it waited behind ended.
+test('a queued Done whose turn starts after the turn ahead of it ends is never released by the fallback (#734)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'fix the tests', 'T1')
+  await press($, 'done')
+  await clock.advance(DROPPED_AFTER_MS - 1_000)
+  await turnEnd($, 'T1')
+  // Past the press's own bound, a few seconds after the turn ahead ended: still waiting.
+  await clock.advance(30_000)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  await turnStart($, 'step 1 done', 'T2')
+  await clock.advance(DROPPED_AFTER_MS * 2)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+  await turnEnd($, 'T2')
   expect(w.toasts).toEqual([])
 })
 

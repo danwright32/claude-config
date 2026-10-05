@@ -153,13 +153,22 @@ const openQuestionOf = (value: unknown): { id: string; text: string } | undefine
   return o && typeof o === 'object' && typeof o.id === 'string' && typeof o.question?.question === 'string' ? { id: o.id, text: o.question.question } : undefined
 }
 // A question is notified once Dan can see it (#706), whichever order the two mods run in. Picker
-// manners' write of the question it holds open is it shown, and notified at once. A question seen
-// only as a call (this mod above picker manners, or a question Claude Code shows itself) is
-// notified QUESTION_SHOWN_MS after it was asked if it is still open by then, or at once when picker
-// manners' write of it comes first: one refused at once (more than one question in a call, a next
-// issue picker while quiet, one talked past) never reached Dan and sends nothing. Its pane mark is
-// set as it is asked, as before.
+// manners' write of the question it holds open is it shown, and notified at once: picker manners
+// writes it only after its own refusals and mod-kit's screen (the secret guard) have let it through.
+// A question Claude Code shows itself is marked only once every refusing guard and settings hook has
+// let it through (#732): from this mod's classic.PreToolUse hook, which the engine raises beneath
+// every tool.call hook, never from its tool.call hook, which runs before the guards beneath it
+// decide. A secret scan can take seconds, and a question it refuses must not put its text into a
+// notification or the shared registry. It is then notified QUESTION_SHOWN_MS later if still open,
+// since a refusal by Claude Code itself comes after the hooks.
 const QUESTION_SHOWN_MS = 1_000
+// The session's own questions this mod's tool.call hook has seen, by call, with their text, until
+// the classic.PreToolUse hook marks them or the call ends. A subagent's are never held: the classic
+// hook's input does not say whose a call is.
+const asking = new Map<string, string>()
+// The one spelling of its key, for the hook that holds a question and the one that marks it (lessons
+// review of #737): the call's id, which the engine gives every call and lets no mod strip.
+const askKey = (e: unknown) => String((e as { tool_use_id?: unknown }).tool_use_id ?? '')
 let unsent: { id: string; send: () => void; timer: { cancel: () => void } } | undefined
 const sendUnsent = (id: string) => {
   if (unsent?.id !== id) return
@@ -577,6 +586,19 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A question Claude Code shows itself, marked and notified only once everything beneath has let it
+  // through (#732, above): every mod's tool.call hook has decided by now, and next(e) runs the
+  // settings hooks, never the question.
+  on('classic.PreToolUse', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const decided = await next(e)
+    const key = askKey(e)
+    const text = asking.get(key)
+    if (decided.deny !== undefined || text === undefined) return decided
+    asking.delete(key)
+    await questionOpened($, key, text, await nowOr($), false)
+    return decided
+  })
+
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
     // Recorded before anything else, so a permission prompt raised inside it is matched to it (#694).
@@ -610,7 +632,9 @@ export const register: Register = on => {
 
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
-      await questionOpened($, id, qs[0]?.question ?? 'a question', now, false)
+      // Marked by the classic.PreToolUse hook below once the guards have let it through (#732).
+      const key = askKey(e)
+      asking.set(key, qs[0]?.question ?? 'a question')
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
@@ -623,7 +647,8 @@ export const register: Register = on => {
         }
         // Only the question's own mark comes off: a permission prompt still open stands (#694). One
         // that ended before it was notified never reached Dan, and is not notified now (#706).
-        dropUnsent(id)
+        asking.delete(key)
+        dropUnsent(key)
         question = undefined
         callEnded(id)
         progress = { ...counted(withWaiting(progress ?? empty(now)), why), lastActivityAt: after }

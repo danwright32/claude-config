@@ -351,7 +351,9 @@ plainest reading of the decisions above:
   picker manners, or a question Claude Code shows itself) is notified one second after it was asked
   if it is still open then, or at once when picker manners' write of it comes first. So a question
   picker manners refuses at once (more than one in a call, a next issue picker while quiet, one
-  talked past) sends no notification in either order. Its pane mark is still set as it is asked.
+  talked past) sends no notification in either order. Since #732 a question Claude Code shows
+  itself is marked only from the tracker's `classic.PreToolUse` hook, once every guard and settings
+  hook has let it through, so one refused after a slow scan is never marked or notified either.
 - **Every refusal counts toward failed, whichever mod made it.** A call refused by a mod sitting
   outside the tracker (the collision guard, ask before saving, picker manners above it) never
   reaches the tracker's own hook, but its result's row does, so the rows count too; a call the hook
@@ -681,11 +683,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   line carries Copy, with the same toasts ("Copied the link for step 1."). The Link has no text of
   its own, since on a terminal without hyperlinks a Link with text is drawn as the text then the
   address, which would show it twice. The click path and an exact location are text, one line
-  each, cut at the edge like every band line. Docked beside a fullscreen transcript, the pane asks
-  to be as wide as the card's widest line other than the link, up to 80 columns, so a click path is
-  not cut there; a width Dan drags it to wins (open: Copy link on every link rather than only a long
-  one, the 80 column cap, and whether a line should wrap instead, which the left rule's one mark per
-  line rules out today).
+  each, and wrap at the edge rather than being cut (#734), the amber rule reaching down every row
+  they take; the link and the value are still cut, since Copy link and Copy take them whole. Docked
+  beside a fullscreen transcript, the pane asks to be as wide as the card's widest line other than
+  the link, up to 80 columns, so a click path wraps less there; a width Dan drags it to wins (open:
+  Copy link on every link rather than only a long one, and the 80 column cap).
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
@@ -698,6 +700,15 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   prompt waits behind, and a subagent's turn do not count. A verdict Claude gives later still
   lands. "sent" is never kept in the store, since the turn that would answer it does not reach the
   next session (open: the end of that turn as the limit rather than a time, and the toast's words).
+- **A Done whose prompt starts no turn** (#734). A "step N done" queued behind a running turn and
+  then dropped (Esc drops the queue), or one a prompt hook refused, starts no turn, so the end of
+  its turn never comes. Once no main turn has run for two minutes with the step still sent and its
+  turn never started, Done comes back with the same toast. The two minutes count from the press, or
+  from the end of the last main turn, never while one runs, so a prompt waiting behind a long turn
+  is never taken for dropped. They outlast the settings hooks that run between one turn's end and
+  the next turn's start (the Stop hooks, 15 seconds at most, and the prompt hooks, 10, each event's
+  in parallel), so a queued prompt whose turn starts after them keeps its "sent" (open: the two
+  minutes).
 - **Copy.** Copies the open step's value on the surface pressed, with a toast saying it was copied
   or why not (open: whether a successful copy needs a toast at all).
 - **The last step.** Once every step is finished the card goes away and nothing is kept (open:
@@ -707,7 +718,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   in a worktree session come back in the main checkout and in any other worktree of it (#708); a
   card a worktree session kept under the worktree's own folder before that is found there and moved,
   its unfinished steps folded under its heading into any card already under the root, so both are
-  held for Claude to re-check and neither is lost.
+  held for Claude to re-check and neither is lost. A step held under both (its title and link) is
+  listed once, from the first fold (#734).
   A repository that cannot be read is never taken as none: the toast says the steps could not be
   saved for the next session, rather than keeping them under the worktree's folder again.
   At the next session start there they are held, not shown, and the conversation's first message
@@ -782,8 +794,11 @@ hotkey, its description dim and indented 3 columns under it, and `submit` last, 
 refuses a `question` row, so no mod draws a question its own way; the two hand built rows had drifted
 into two looks on one surface. A text run may carry `wrap: true`, drawn on as many lines as it needs
 rather than cut at the band's edge (a question's text and its descriptions wrap, so the brackets at
-the end of an issue review option are never cut off); a wrapping run inside a left rule is refused,
-since that rule draws one mark per line.
+the end of an issue review option are never cut off). Inside a left rule (#734), a row with no run
+that wraps keeps one rule mark per line; a row with one draws its rule as a single column laid over
+the row's whole height and clipped to it, holding a mark for every row its lines could take (one per
+character of a wrapping line, since a terminal row holds at least one), so the rule reaches down
+every wrapped row however wide the band is.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
@@ -851,10 +866,15 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   not loaded nothing refuses; a screen that cannot ask refuses the call with a card (L42), and so
   does the secret guard's own when its check fails. Only the secret guard is asked: no build and
   the style check refuse what a call would change or write, which an answered call does not.
-  `tools/check-mod-shared-parts.sh` fails a mod that answers a call with a result and never asks.
+  `tools/check-mod-shared-parts.sh` fails each `tool.call` hook that answers a call with a result
+  and never asks in its own body (#732): a screen in the hook beside it covers nothing, a screen
+  named only in a comment asks nothing, and a hook written as a named function is read where that
+  function is defined.
 - **While Dan is away** the keystroke guard holds its action through `$.scopeModes.hold` before
   any check of the app in front, since he cannot bring it forward from his phone. An away check
-  that fails refuses the action rather than ask a question nobody may see.
+  that fails refuses the action rather than ask a question nobody may see, and its toast says the
+  away check could not be read ("Couldn't tell whether you are away, so typing into Overture was
+  stopped."), never "Blocked typing into Overture", which reads as the action judged (L11, #732).
 - **How it is tested.** A mod's tests can load only that mod for real. An inline stand-in cannot
   carry another mod's module (the engine requires a helper taking `$` to be declared at the top of
   a module file), and one plugin holding two real guards is refused for registering `tool.call`
@@ -862,8 +882,11 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   stand-in refuser loaded both above it (`prepend`) and beneath it (`append`), and with a settings
   hook's refusal; each answering mod with a stand-in screen; mod-kit's screen with a stand-in
   secret guard; and the secret guard's screen with a stand-in answering mod above it.
-- **Left as it is.** The goal tracker marks and notifies a question before picker manners and the
-  secret guard decide; it is not a guard and was not moved here.
+- **The goal tracker waits for them too (#732).** It is not a guard, but its mark and notification
+  carry the question's text, so it marks a question only once the refusing guards have let it
+  through: a question picker manners shows from picker manners' write of it, made after its screen,
+  and one Claude Code shows itself from the tracker's own `classic.PreToolUse` hook, after `next`.
+  A question the secret guard refuses, however long its scan takes, is never marked or notified.
 
 ## Is it live (#617), built 2026-10-04
 

@@ -79,6 +79,20 @@ describe('fold', () => {
     // A malformed card kept from before adds nothing.
     expect(fold(into, { heading: 'x', steps: 'no' } as never)).toEqual(into)
   })
+
+  // #734: a step held under both the repository root and a pre-#708 worktree key is the same step,
+  // listed once on the very first fold, whether the root's copy is still open or finished.
+  test('a step the card already holds is not listed again on the first fold, under its heading', () => {
+    const cname = step({ title: 'Add the CNAME', url: 'https://d.example' })
+    const into = made({ heading: 'DNS', steps: [cname, step()] })
+    const from = made({ heading: 'DNS', steps: [cname] })
+    expect(fold(into, from)).toEqual(into)
+    const finished = { ...into, steps: into.steps.map((s, i) => (i === 0 ? { ...s, finished: 'checked' as const } : s)) }
+    expect(fold(finished, from)).toEqual(finished)
+    // The same title at another link is another step, and is still added.
+    const other = made({ heading: 'DNS', steps: [step({ title: 'Add the CNAME', url: 'https://e.example' })] })
+    expect(fold(into, other).steps.map(s => s.title)).toEqual(['Add the CNAME', 'Turn on the WAF rule', 'DNS: Add the CNAME'])
+  })
 })
 
 describe('carriedNote', () => {
@@ -127,6 +141,22 @@ describe('cardLines', () => {
     expect(l[6]).toEqual([{ text: '3. Purge the cache' }])
   })
 
+  // #734: a long click path or exact location wraps under its step rather than being cut at the edge
+  // with an ellipsis, now that mod-kit's left rule spans wrapped lines. The link and the value are
+  // still cut, since Copy link and Copy each take them whole.
+  test('the click path and an exact location wrap; the link and the value do not', () => {
+    const c = made({
+      heading: 'x',
+      steps: [step({ clicks: 'Settings, Security, Web application firewall, Custom rules, Create rule', value: 'ip.src eq 1.2.3.4' })],
+    })
+    const l = lines(c) as (P & { wrap?: boolean })[][]
+    expect(l.find(x => x[0]?.text?.startsWith('Settings'))?.[0]?.wrap).toBe(true)
+    expect(l.find(x => x[0]?.text?.startsWith('https://'))?.[0]?.wrap).toBeUndefined()
+    expect(l.find(x => x[0]?.text === 'ip.src eq 1.2.3.4')?.[0]?.wrap).toBeUndefined()
+    const at = made({ heading: 'x', steps: [step({ url: undefined, location: 'Salesforce desktop app, Setup, Object Manager, Account, Fields' })] })
+    expect((lines(at) as (P & { wrap?: boolean })[][]).find(x => x[0]?.text?.startsWith('Salesforce'))?.[0]?.wrap).toBe(true)
+  })
+
   test('a finished step is dimmed and struck through, then how it finished: already done and per you grey, checked green', () => {
     let c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B' }), step({ title: 'C' })] })
     const r1 = finish(c, 2, 'checked')
@@ -157,7 +187,8 @@ describe('cardLines', () => {
     // The click path is not a link.
     expect(l[3]?.[0]?.href).toBeUndefined()
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]
-    expect(at[2]).toEqual([{ text: 'Keychain Access, login', indent: 3 }])
+    // Text, never a link; it wraps rather than being cut (#734).
+    expect(at[2]).toEqual([{ text: 'Keychain Access, login', indent: 3, wrap: true }])
   })
 
   test('a value of several lines shows on one line, and the indent follows the number width', () => {

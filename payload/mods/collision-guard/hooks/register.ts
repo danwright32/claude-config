@@ -252,6 +252,9 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
 // Handed from the classic.PreToolUse hook that let a call through to the tool.call hook around it,
 // by the call's id, so only a call this guard judged and let through is noted.
 const toNote = new Map<string, ToNote>()
+// The one spelling of that key, for the side that stores a plan and the side that reads it back
+// (#732): two spellings would part on a call with no id and the edit would never be noted.
+const planKey = (e: unknown) => String((e as { tool_use_id?: unknown }).tool_use_id ?? '')
 
 export const register: Register = on => {
   // Judged here, beneath every mod's tool.call hook and after the settings hooks beneath this one
@@ -266,15 +269,16 @@ export const register: Register = on => {
     const input = e as unknown as Record<string, unknown>
     const c = await check($, input)
     if (c && 'deny' in c) return { deny: c.deny }
-    // Keyed by the call's id, which the engine gives every call, one raised without any included
-    // (measured 2026-10-04, and tested), so two calls never share a plan.
-    if (c) toNote.set(String(input.tool_use_id), c)
+    // Keyed by the call's id, which the engine gives every call, one raised without any included,
+    // and which no mod above can strip (measured 2026-10-04, and tested), so two calls never share
+    // a plan.
+    if (c) toNote.set(planKey(e), c)
     return decided
   })
 
   on('tool.call', async ($, e, next) => {
     if (!watches(String(e.tool))) return next(e)
-    const id = String((e as unknown as { tool_use_id?: string }).tool_use_id ?? '')
+    const id = planKey(e)
     let result: Awaited<ReturnType<typeof next>>
     let plan: ToNote | undefined
     try {

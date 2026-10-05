@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, finish, fold, nextStep, paneColumns, sent } from './card.ts'
+import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, nextStep, paneColumns, sent } from './card.ts'
 import type { StepsVerdict } from './card.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
@@ -198,6 +198,44 @@ const refresh = async ($: EngineInterface) => {
 const unsend = ($: EngineInterface, n: number) =>
   change($, card => (card && card.steps[n]?.isSent ? { card: sent(card, n, false), out: true } : { card, out: false }))
 
+// Done back on step `n` (0 based) when Claude never said whether it took, and the toast saying so.
+// One wording whichever way it was found (#708, #734).
+const giveDoneBack = async ($: EngineInterface, n: number) => {
+  if (!(await unsend($, n))) return
+  await refresh($)
+  $.ui.toast(`Claude did not say whether step ${n + 1} took. Press Done to ask again.`)
+}
+
+// #734: a "step N done" prompt queued behind a running turn and then dropped (Esc drops the queue),
+// or one a prompt hook refused, starts no turn, so the turn.complete guard below never arms and
+// the step would stay sent for the session. So once no main turn has run for DROPPED_AFTER_MS with
+// the step still sent and its turn never started, Done comes back. Armed at the press and again at
+// each main turn's end; only the latest arming may act, so the one armed at the press cannot fire
+// seconds after the turn it waited behind ended, while the settings hooks still run.
+let runningTurn: string | null = null
+let armed = 0
+let fallback: { cancel: () => void } | undefined
+const armFallback = ($: EngineInterface) => {
+  const mine = ++armed
+  fallback?.cancel()
+  try {
+    fallback = $.clock.after(DROPPED_AFTER_MS, () => {
+      void giveBackDropped($, mine).catch(err => $.ui.log(`manual-steps: could not bring back a Done whose prompt was dropped: ${message(err)}`, { to: 'debug' }))
+    })
+  } catch (err) {
+    $.ui.log(`manual-steps: could not arm the fallback that brings back a Done whose prompt was dropped: ${message(err)}`, { to: 'debug' })
+  }
+}
+const giveBackDropped = async ($: EngineInterface, mine: number) => {
+  if (mine !== armed || runningTurn !== null) return
+  const card = (await $.state.get(cardRef)).value ?? null
+  const i = card ? card.steps.findIndex(s => s.isSent) : -1
+  if (i < 0) return
+  // Its turn started: the end of that turn decides, below.
+  if ((await $.state.get(waitingRef)).value?.step === i + 1) return
+  await giveDoneBack($, i)
+}
+
 const pressDone = async ($: EngineInterface) => {
   const n = await change($, card => {
     const i = card ? nextStep(card) : undefined
@@ -212,7 +250,9 @@ const pressDone = async ($: EngineInterface) => {
     await unsend($, n)
     await refresh($)
     $.ui.toast(`Could not tell Claude step ${n + 1} is done: ${message(err)}. Press Done again.`)
+    return
   }
+  armFallback($)
 }
 
 // What each Copy on the open step copies, and what its toast calls it.
@@ -329,6 +369,8 @@ export const register: Register = on => {
   // Done was pressed is not it: the prompt waits behind that turn.
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
+    // Only the main loop raises turn.start; a subagent's run raises none.
+    runningTurn = e.turnId
     const n = /^step (\d+) done$/.exec(e.text.trim())?.[1]
     const card = (await $.state.get(cardRef)).value ?? null
     if (n !== undefined && card?.steps[Number(n) - 1]?.isSent) await $.state.set(waitingRef, { turnId: e.turnId, step: Number(n) })
@@ -341,13 +383,16 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
+    runningTurn = null
     const waiting = (await $.state.get(waitingRef)).value ?? null
-    if (!waiting || waiting.turnId !== e.turnId) return r
-    await $.state.set(waitingRef, null)
-    if (await unsend($, waiting.step - 1)) {
-      await refresh($)
-      $.ui.toast(`Claude did not say whether step ${waiting.step} took. Press Done to ask again.`)
+    if (!waiting || waiting.turnId !== e.turnId) {
+      // A step still sent whose turn has not started may be queued behind this one, or dropped
+      // with it: the fallback above waits from now (#734).
+      if ((await $.state.get(cardRef)).value?.steps.some(s => s.isSent)) armFallback($)
+      return r
     }
+    await $.state.set(waitingRef, null)
+    await giveDoneBack($, waiting.step - 1)
     return r
   })
 

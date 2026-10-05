@@ -353,3 +353,16 @@ test('an away check that fails refuses the action rather than ask a question nob
   expect(refusal(r)).toContain("Couldn't tell whether you are away")
   expect(w.cards[0]?.guard).toBe('Keystroke guard')
 })
+
+// The toast says what failed, the away check, never "Blocked typing into Overture", which reads as
+// though the action itself was judged and refused (L11, #732).
+test('an away check that fails toasts that the check failed, in each of the two actions', { plugins: [kit, brokenScopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY, 'b3'))
+  await $.tool.call(bash('open -a "Google Chrome" report.html', 'b4'))
+  expect(w.toasts).toEqual([
+    "Couldn't tell whether you are away, so typing into Overture was stopped.",
+    "Couldn't tell whether you are away, so bringing Google Chrome to the front was stopped.",
+  ])
+})

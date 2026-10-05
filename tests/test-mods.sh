@@ -164,10 +164,13 @@ mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c ===
 # A pane drawn its own way (the goals pane: a live list read at each draw, not a card) is not a copy.
 mkmodsrc "$M9" clean-live-pane "on('ui.render', { component: 'Pane', requestId: 'goals' }, (\$, e) => <Text dimColor>{row.sentence}</Text>)"
 mkmodsrc "$M9" clean-sender "const sent = await \$.session.send({ to: { sessionId }, text }); if (!sent.isDelivered) failed.push(sent.reason)"
-# A comment may name what mod-kit draws, in quotes too: a comment draws nothing (#698).
+# A comment may name what mod-kit draws, in quotes too: a comment draws nothing (#698). A line
+# starting with * counts as a comment only inside one (#732).
 mkmodsrc "$M9" clean-comment "// mod-kit alone hooks 'AbovePrompt' and draws each 'ToolResult' card
 /* the band is mod-kit's 'AbovePrompt' hook */
+/**
  * its \"ToolResult\" row is the boxed card
+ */
 export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
 # The two mods still holding their own write reader until #712 moves them are named as exceptions,
 # on every run, rather than failing it or passing in silence (L129, L523).
@@ -276,6 +279,98 @@ out="$(bash "$SHARED" "$M9S" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'answers-unscreened ' | grep -q 'modkit.screen(e)' \
   && check "and is named, pointed at \$.modkit.screen" ok || check "and is named, pointed at \$.modkit.screen" "$out"
 case "$out" in *asks-first*|*passes-on*) check "a mod that asks first, or passes on next's result, is not named" "$out" ;; *) check "a mod that asks first, or passes on next's result, is not named" ok ;; esac
+# #732: each answering tool.call hook asks the screen itself (L135). A screen in one hook does not
+# cover another beside it, a screen named only in a comment asks nothing, and a hook whose body is
+# a named function is read where that function is defined.
+M9P="$TMPROOT/m9p"
+mkmodsrc "$M9P" one-of-two "export const register = on => {
+  on('tool.call', { tool: 'mcp__x__pin' }, async (\$, e) => {
+    const refused = await \$.modkit.screen(e)
+    if (refused) return refused
+    return { result: 'Pinned.' }
+  })
+  on('tool.call', { tool: 'mcp__x__done' }, async (\$, e) => {
+    return { result: 'Done.' }
+  })
+}"
+mkmodsrc "$M9P" both-screened "export const register = on => {
+  on('tool.call', { tool: 'mcp__x__pin' }, async (\$, e) => {
+    const refused = await \$.modkit.screen(e)
+    return refused ?? { result: 'Pinned.' }
+  })
+  on(\"tool.call\", { tool: 'mcp__x__done' }, async (\$, e) => {
+    const refused = await \$.modkit.screen(e)
+    return refused ?? { result: 'Done.' }
+  })
+}"
+mkmodsrc "$M9P" screen-in-a-comment "export const register = on => {
+  // \$.modkit.screen(e) is asked by the hook beside this one
+  on('tool.call', { tool: 'mcp__x__done' }, async (\$, e) => ({ result: 'Done.' }))
+}"
+mkmodsrc "$M9P" named-unscreened "const answer = async (\$, e) => {
+  return { result: 'Saved.' }
+}
+export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+mkmodsrc "$M9P" named-screened "async function answer(\$, e) {
+  const refused = await \$.modkit.screen(e)
+  if (refused) return refused
+  return { result: 'Saved.' }
+}
+export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+# A return type holding braces is the signature, never the body (lessons review of #737).
+mkmodsrc "$M9P" named-typed-screened "async function answer(\$, e): Promise<{ result: string } | { deny: string }> {
+  const refused = await \$.modkit.screen(e)
+  return refused ?? { result: 'Saved.' }
+}
+export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+mkmodsrc "$M9P" named-literal-type-screened "function answer(\$, e): { result: string } {
+  \$.modkit.screen(e)
+  return { result: 'Saved.' }
+}
+export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod with an answering hook that never asks the screen fails, beside one that does" ok \
+  || check "a mod with an answering hook that never asks the screen fails, beside one that does" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'one-of-two ' | grep 'modkit.screen(e)' | grep -q '/hooks/register.ts:7' \
+  && check "and names the unscreened hook by its line, not the screened one beside it" ok \
+  || check "and names the unscreened hook by its line, not the screened one beside it" "$out"
+for m in screen-in-a-comment named-unscreened; do
+  printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.screen(e)' && check "and names $m" ok || check "and names $m" "$out"
+done
+case "$out" in *both-screened*|*named-screened*|*named-typed-screened*|*named-literal-type-screened*) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" "$out" ;; *) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" ok ;; esac
+# #732 (lessons review of #731): a walk for a checkout is caught however its .git entry is spelled,
+# joined, bare or inside a longer path, and a name that merely starts with .git is not one.
+M9G="$TMPROOT/m9g"
+mkmodsrc "$M9G" clean-git-words "const ignore = path.join(root, '.gitignore'); const wf = '.github/workflows'; const url = 'https://github.com/x/y.git'"
+out="$(bash "$SHARED" "$M9G" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a name that merely starts with .git, or a repository address, is not a walk" ok \
+  || check "a name that merely starts with .git, or a repository address, is not a walk" "exit=$code out=$out"
+mkmodsrc "$M9G" tree-joined "if (await \$.fs.exists(path.join(dir, '.git'))) return dir"
+mkmodsrc "$M9G" tree-bare "const MARKER = '.git'"
+mkmodsrc "$M9G" tree-template "const head = await \$.fs.read(\`\${d}/.git/HEAD\`)"
+out="$(bash "$SHARED" "$M9G" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a walk for a checkout spelled any way fails the run" ok || check "a walk for a checkout spelled any way fails the run" "exit=$code out=$out"
+for m in tree-joined tree-bare tree-template; do
+  printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.workingTree(' && check "and names $m, pointing it at modkit.workingTree" ok \
+    || check "and names $m, pointing it at modkit.workingTree" "$out"
+done
+case "$out" in *clean-git-words*) check "and the names that merely start with .git still pass" "$out" ;; *) check "and the names that merely start with .git still pass" ok ;; esac
+# #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
+# code after a block comment, or on a line starting with * as a continuation, is checked, and a
+# string holding // is code.
+M9C="$TMPROOT/m9c"
+mkmodsrc "$M9C" after-block-comment "/* the band */ on('ui.render', { component: 'AbovePrompt' }, draw)"
+mkmodsrc "$M9C" star-continuation "const area = width
+  * height; on('ui.render', { component: 'ToolResult' }, draw)"
+mkmodsrc "$M9C" slashes-in-a-string "const note = 'see // here'; on('ui.render', { component: 'AbovePrompt' }, draw)"
+out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "code beside a comment on its line fails the run" ok || check "code beside a comment on its line fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'after-block-comment keeps its own band at /hooks/register.ts:1:' \
+  && check "and code after a block comment is read" ok || check "and code after a block comment is read" "$out"
+printf '%s\n' "$out" | grep -q 'star-continuation keeps its own card at /hooks/register.ts:2:' \
+  && check "and a line starting with * as a continuation is read" ok || check "and a line starting with * as a continuation is read" "$out"
+printf '%s\n' "$out" | grep -q 'slashes-in-a-string keeps its own band' \
+  && check "and a string holding // is code, not a comment" ok || check "and a string holding // is code, not a comment" "$out"
 out="$(bash "$SHARED" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the shared parts check too" ok \
   || check "a missing mods folder is refused by the shared parts check too" "exit=$code out=$out"
@@ -383,6 +478,29 @@ printf '%s\n' "$out" | grep -q 'sourceless lists kit under dependencies, but no 
   && check "a mod with no source is reported as such" ok || check "a mod with no source is reported as such" "$out"
 ! printf '%s\n' "$out" | grep -qE '(late-noun|elsewhere) lists' \
   && check "and the mods whose code uses it are not named" ok || check "and the mods whose code uses it are not named" "$out"
+# #735: a regex literal and JSX text are read as what they are. A regex holding // or /* was taken
+# for a comment and hid the code after it, so a use there read as none; JSX text's // dropped the
+# rest of its line, and its apostrophe opened a quote that took in a comment, whose noun then
+# counted as a use.
+M11D="$TMPROOT/m11d"
+mkdepmod "$M11D" kit '[]' "export const register = () => {}"
+mkdir -p "$M11D/kit/types"
+printf '{ "name": "kit", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' > "$M11D/kit/.claude-plugin/plugin.json"
+printf 'declare module "claude-code" {\n  interface EngineInterface {\n    kit: { go: () => Promise<void> }\n  }\n}\n' > "$M11D/kit/types/index.d.ts"
+mkdepmod "$M11D" after-regex '["kit"]' "const SLASHES = /\\/\\//g; export const register = on => { on('tool.call', async (\$, e, next) => { await \$.kit.go(); return next(e) }) }"
+mkdepmod "$M11D" after-regex-star '["kit"]' "const STARS = /\\/*/
+export const register = on => { on('tool.call', async (\$, e, next) => { await \$.kit.go(); return next(e) }) }"
+mkdepmod "$M11D" jsx-slashes '["kit"]' "export const register = () => {}"
+printf '%s\n' "export const View = () => <Text>see https://example.com</Text>; export const go = async (\$) => { await \$.kit.go() }" > "$M11D/jsx-slashes/hooks/view.tsx"
+mkdepmod "$M11D" jsx-apostrophe '["kit"]' "export const register = () => {}"
+printf '%s\n' "export const View = () => <Text>Dan's card</Text> // \$.kit.go() would draw it" > "$M11D/jsx-apostrophe/hooks/view.tsx"
+out="$(bash "$DEPS" "$M11D" 2>&1)"; code=$?
+for m in after-regex after-regex-star jsx-slashes; do
+  ! printf '%s\n' "$out" | grep -q "$m lists" && check "a use after $m is read as a use" ok || check "a use after $m is read as a use" "exit=$code out=$out"
+done
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'jsx-apostrophe lists kit under dependencies but never uses it' \
+  && check "a noun in a comment after JSX text holding an apostrophe is no use" ok \
+  || check "a noun in a comment after JSX text holding an apostrophe is no use" "exit=$code out=$out"
 out="$(bash "$DEPS" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the dependency check" ok \
   || check "a missing mods folder is refused by the dependency check" "exit=$code out=$out"
@@ -396,41 +514,31 @@ fi
 #     question: { question: string } } (#694), and its own tests can only stand in for picker manners,
 #     so its reading is checked here against the contract picker manners declares (lessons review of
 #     #696, L52). Shown failing on a contract whose shape moved, then held on the real one.
+# Both contract checks read a block's members at its own top level with comments taken out (#735),
+# through the one reader of source every mod scan shares.
+TS_LIB="$ROOT/tools/lib"
 picker_contract(){   # $1 = picker manners' types file -> prints what does not match, exits 1 when anything does not
-  python3 - "$1" <<'PY'
+  python3 - "$1" "$TS_LIB" <<'PY'
 import re, sys
+sys.path.insert(0, sys.argv[2])
+from ts_source import block_after, object_members, top_members
 try:
     text = open(sys.argv[1]).read()
 except OSError as e:
     print(f"cannot read {sys.argv[1]}: {e}")
     sys.exit(1)
-def block_after(pattern, top_only):
-    """The body of the brace block that pattern opens, to its own closing brace; with top_only, what
-    is nested in it blanked. None when there is no such block or it never closes."""
-    m = re.search(pattern, text)
-    if not m:
-        return None
-    depth, out = 1, []
-    for c in text[m.end():]:
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return "".join(out)
-        out.append(c if depth == 1 or not top_only or c == "\n" else " ")
-    return None
 wrong = []
-state = block_after(r"'picker-manners'\s*:\s*\{", True)
-if state is None or not re.search(r"\bopen\s*:\s*PickersOpen\s*\|\s*null", state):
+state = block_after(text, r"'picker-manners'\s*:\s*\{")
+if state is None or not re.match(r"PickersOpen\s*\|\s*null\b", top_members(state).get("open", "")):
     wrong.append("PluginState 'picker-manners' does not declare open: PickersOpen | null")
-body = block_after(r"export type PickersOpen\s*=\s*\{", False)
+body = block_after(text, r"export type PickersOpen\s*=\s*\{")
 if body is None:
     wrong.append("there is no PickersOpen type")
 else:
-    if not re.search(r"^\s*id\s*:\s*string\b", body, re.M):
+    members = top_members(body)
+    if members.get("id") != "string":
         wrong.append("PickersOpen has no id: string")
-    if not re.search(r"^\s*question\s*:\s*\{\s*question\s*:\s*string\b", body, re.M):
+    if (object_members(members.get("question", "")) or {}).get("question") != "string":
         wrong.append("PickersOpen has no question: { question: string }")
 print("; ".join(wrong))
 sys.exit(1 if wrong else 0)
@@ -453,6 +561,28 @@ else
   out="$(picker_contract "$M12/nested.d.ts" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "an inline object type ahead of open still finds open" ok \
     || check "an inline object type ahead of open still finds open" "exit=$code out=$out"
+  # #735: a member counts only at the block's own top level, never nested in another member's type
+  # or standing in a comment.
+  perl -pe 's/^  id: string$/  callId: string\n  meta: {\n    id: string\n  }/' "$PM_TYPES" > "$M12/nested-id.d.ts"
+  perl -pe 's/^  id: string$/  \/*\n  id: string\n  *\/\n  callId: string/' "$PM_TYPES" > "$M12/commented-id.d.ts"
+  perl -pe 's/^  question: \{ question: string;/  question: { meta: { question: string }; text: string;/' "$PM_TYPES" > "$M12/nested-question.d.ts"
+  perl -pe "s/'picker-manners': \{ open:/'picker-manners': { \/* open: PickersOpen | null *\/ shown:/" "$PM_TYPES" > "$M12/commented-open.d.ts"
+  for f in nested-id commented-id nested-question commented-open; do
+    cmp -s "$PM_TYPES" "$M12/$f.d.ts" && check "the $f fixture was made" "perl did not change the contract"
+  done
+  for f in nested-id:'PickersOpen has no id: string' commented-id:'PickersOpen has no id: string' nested-question:'PickersOpen has no question: { question: string }' commented-open:'does not declare open: PickersOpen | null'; do
+    out="$(picker_contract "$M12/${f%%:*}.d.ts" 2>&1)"; code=$?
+    [ "$code" -eq 1 ] && case "$out" in *"${f#*:}"*) true ;; *) false ;; esac \
+      && check "a contract with only ${f%%:*} fails the goal tracker's reading" ok \
+      || check "a contract with only ${f%%:*} fails the goal tracker's reading" "exit=$code out=$out"
+  done
+  # Members separated by commas, as TypeScript allows, with a generic's comma among them, are read
+  # the same as ones on lines of their own (lessons review of #737).
+  printf '%s\n' "export type PickersOpen = { id: string, meta: Record<string, unknown>, question: { question: string, header: string }, chosen: string[] }" \
+    "declare module 'claude-code' { interface PluginState { 'picker-manners': { open: PickersOpen | null, quiet: boolean } } }" > "$M12/commas.d.ts"
+  out="$(picker_contract "$M12/commas.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "a contract whose members are separated by commas is read the same" ok \
+    || check "a contract whose members are separated by commas is read the same" "exit=$code out=$out"
   out="$(picker_contract "$PM_TYPES" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
     || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"
@@ -466,35 +596,23 @@ fi
 #     as picker manners' contract is above. Shown failing on a contract whose shape moved, then held
 #     on the real one.
 save_contract(){   # $1 = ask before saving's types file -> prints what does not match, exits 1 when anything does not
-  python3 - "$1" <<'PY'
+  python3 - "$1" "$TS_LIB" <<'PY'
 import re, sys
+sys.path.insert(0, sys.argv[2])
+from ts_source import block_after, top_members
 try:
     text = open(sys.argv[1]).read()
 except OSError as e:
     print(f"cannot read {sys.argv[1]}: {e}")
     sys.exit(1)
-def block_after(pattern, top_only):
-    m = re.search(pattern, text)
-    if not m:
-        return None
-    depth, out = 1, []
-    for c in text[m.end():]:
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return "".join(out)
-        out.append(c if depth == 1 or not top_only or c == "\n" else " ")
-    return None
 wrong = []
-state = block_after(r"'ask-before-saving'\s*:\s*\{", True)
-if state is None or not re.search(r"\bpending\s*:\s*AskBeforeSavingQuestion\[\]", state):
+state = block_after(text, r"'ask-before-saving'\s*:\s*\{")
+if state is None or not re.match(r"AskBeforeSavingQuestion\[\]$", top_members(state).get("pending", "")):
     wrong.append("PluginState 'ask-before-saving' does not declare pending: AskBeforeSavingQuestion[]")
-body = block_after(r"export type AskBeforeSavingQuestion\s*=\s*\{", True)
+body = block_after(text, r"export type AskBeforeSavingQuestion\s*=\s*\{")
 if body is None:
     wrong.append("there is no AskBeforeSavingQuestion type")
-elif not re.search(r"^\s*id\s*:\s*string\b", body, re.M):
+elif top_members(body).get("id") != "string":
     wrong.append("AskBeforeSavingQuestion has no id: string")
 print("; ".join(wrong))
 sys.exit(1 if wrong else 0)
@@ -512,6 +630,19 @@ else
   [ "$code" -eq 1 ] && case "$out" in *"AskBeforeSavingQuestion has no id: string"*) true ;; *) false ;; esac \
     && check "an ask before saving contract whose question id moved fails the goal tracker's reading" ok \
     || check "an ask before saving contract whose question id moved fails the goal tracker's reading" "exit=$code out=$out"
+  # #735: as for picker manners, a member counts only at the block's own top level and outside comments.
+  perl -pe 's/^  id: string$/  callId: string\n  meta: {\n    id: string\n  }/' "$ABS_TYPES" > "$M13/nested-id.d.ts"
+  perl -pe 's/^  id: string$/  \/*\n  id: string\n  *\/\n  callId: string/' "$ABS_TYPES" > "$M13/commented-id.d.ts"
+  perl -pe "s/'ask-before-saving': \{ pending:/'ask-before-saving': { \/* pending: AskBeforeSavingQuestion[] *\/ waiting:/" "$ABS_TYPES" > "$M13/commented-pending.d.ts"
+  for f in nested-id commented-id commented-pending; do
+    cmp -s "$ABS_TYPES" "$M13/$f.d.ts" && check "the $f fixture was made" "perl did not change the contract"
+  done
+  for f in nested-id:'AskBeforeSavingQuestion has no id: string' commented-id:'AskBeforeSavingQuestion has no id: string' commented-pending:'does not declare pending: AskBeforeSavingQuestion[]'; do
+    out="$(save_contract "$M13/${f%%:*}.d.ts" 2>&1)"; code=$?
+    [ "$code" -eq 1 ] && case "$out" in *"${f#*:}"*) true ;; *) false ;; esac \
+      && check "an ask before saving contract with only ${f%%:*} fails the goal tracker's reading" ok \
+      || check "an ask before saving contract with only ${f%%:*} fails the goal tracker's reading" "exit=$code out=$out"
+  done
   out="$(save_contract "$ABS_TYPES" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "ask before saving's contract declares the waiting saves as the goal tracker reads them" ok \
     || check "ask before saving's contract declares the waiting saves as the goal tracker reads them" "exit=$code out=$out"
