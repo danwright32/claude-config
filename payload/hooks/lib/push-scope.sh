@@ -370,8 +370,8 @@ ps__segment_is_pr_create() {   # $1 = one segment
 ps_repo_dir() {
   local cmd="$1" cwd="${2:-}" cand="" named=""
 
-  # `git -C <path> … push`
-  cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | awk 'NR <= 1')"
+  # `git -C <path> … push`, the path read as the shell reads it (claude-config#589).
+  cand="$(ps_git_c_target "$cmd")"
   if [ -n "$cand" ]; then
     named="$(ps__named_path "$cand" "$cwd")"
     if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
@@ -452,6 +452,73 @@ while True:
         want_arg = True
         continue
     at_start = tok in OPENERS
+' 2>/dev/null
+}
+
+# The directory a `git -C <path>` in COMMAND position names (claude-config#589): the push's own -C
+# when the push carries one, otherwise the first git command's, which is what the pattern this
+# replaced answered. Read with the same shell tokenizer as ps_cd_target, because the pattern took
+# everything up to the first space, so `git -C "/a b/wt" push` became `"/a`, which resolved to
+# nothing, and every global push gate stood down on a push it should have judged. It also only
+# saw a -C straight after `git`, so `git -c k=v -C <wt> push` judged the SESSION repository. Several
+# -C options compose the way git composes them: each relative one is taken from the one before.
+# Only a leading tilde is expanded; a variable is printed as written, so the caller refuses it.
+ps_git_c_target() {   # $1 = command; prints the path, or nothing
+  PS_CMD="$1" python3 -c '
+import os, re, shlex
+lex = shlex.shlex(os.environ.get("PS_CMD", ""), posix=True, punctuation_chars=True)
+lex.whitespace_split = True
+OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
+ENDERS = OPENERS | {")", "}"}
+ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+VALUED = {"-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+toks = []
+while True:
+    try:
+        t = lex.get_token()
+    except ValueError:
+        break
+    if t is None or t == lex.eof:
+        break
+    toks.append(t)
+def expand(p):
+    return os.path.expanduser(p) if p.startswith("~") else p
+first, i, n, at_start = "", 0, len(toks), True
+while i < n:
+    t = toks[i]
+    if at_start and ASSIGN.match(t):
+        i += 1
+        continue
+    if not at_start:
+        at_start = t in OPENERS
+        i += 1
+        continue
+    j = i
+    if toks[j].split("/")[-1] == "rtk":
+        j += 1
+    if j >= n or toks[j].split("/")[-1] != "git":
+        at_start = t in OPENERS
+        i += 1
+        continue
+    j += 1
+    where = ""
+    while j < n and toks[j].startswith("-") and toks[j] not in ENDERS:
+        if toks[j] == "-C" and j + 1 < n and toks[j + 1] not in ENDERS:
+            p = expand(toks[j + 1])
+            where = p if (not where or p.startswith("/")) else os.path.join(where, p)
+            j += 2
+        elif toks[j] in VALUED:
+            j += 2
+        else:
+            j += 1
+    if where:
+        if j < n and toks[j] in ("push", "push)", "push}"):
+            print(where, end="")
+            raise SystemExit(0)
+        first = first or where
+    at_start = False
+    i = j
+print(first, end="")
 ' 2>/dev/null
 }
 

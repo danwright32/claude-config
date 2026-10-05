@@ -32,7 +32,8 @@
 # about the cost of.
 #
 # Fails OPEN in every direction it cannot see: not a repository, no scanners found, a suite that
-# could not be executed. It blocks on ONE thing, a scanner that ran and failed. Finding NO
+# could not be executed. It blocks on a scanner that ran and failed, and, in its own words, on a
+# scanner that could not run because another suite run held its lock past the wait (#642). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
@@ -288,6 +289,77 @@ $scanners
 EOF
 
 wait
+
+# A SCANNER THAT NEVER RAN BECAUSE ANOTHER SUITE RUN HELD ITS LOCK (claude-config#642). The sync
+# suite takes a machine wide lock and refuses, exit 5, with "test suite: another run is already
+# going", when another run holds it. Twice on 2026-10-04 that refusal read here as "a scanner that
+# reads the WHOLE repository fails" with an empty detail; each time the section passed 71/0 alone a
+# minute later. A refusal is not a verdict, so it is neither a failure nor a pass: the gate holds
+# its place and tries again on a poll, to a named deadline (L1012), and if the lock is still held
+# then it blocks saying THAT, with the remedy, rather than accusing the scanner (L11).
+#
+# The deadline is counted in ATTEMPTS, so an injected sleep (SCANNERS_SLEEP, for the tests) cannot
+# turn it into a spin (L524, L704). 90 seconds by default: the hook's own timeout is 180, and a run
+# of every scanner was measured at 15 to 18 seconds, so a wait of 90 plus a full rerun still lands
+# inside it.
+_sc_lock_wait="${SCANNERS_LOCK_WAIT_SECONDS:-90}"
+case "$_sc_lock_wait" in ''|*[!0-9]*) _sc_lock_wait=90 ;; esac
+_sc_lock_poll="${SCANNERS_LOCK_POLL_SECONDS:-5}"
+case "$_sc_lock_poll" in ''|*[!0-9]*|0) _sc_lock_poll=5 ;; esac
+_sc_sleep="${SCANNERS_SLEEP:-sleep}"
+_sc_lock_refused(){   # $1 = run index -> 0 when that run refused because another run held the lock
+  [ "$(cat "$_sc_work/$1.rc" 2>/dev/null)" = "5" ] || return 1
+  grep -q '^test suite: another run is already going' "$_sc_work/$1.out" 2>/dev/null
+}
+_sc_locked_list(){   # prints the indexes of runs that refused on the lock
+  local i=1
+  while [ "$i" -le "$_sc_n" ]; do
+    _sc_lock_refused "$i" && printf '%s\n' "$i"
+    i=$(( i + 1 ))
+  done
+}
+_sc_tries_left=$(( _sc_lock_wait / _sc_lock_poll ))
+_sc_locked="$(_sc_locked_list)"
+while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ]; do
+  "$_sc_sleep" "$_sc_lock_poll"
+  _sc_tries_left=$(( _sc_tries_left - 1 ))
+  while IFS= read -r _sc_i; do
+    [ -n "$_sc_i" ] || continue
+    _sc_s="$(sed -n 1p "$_sc_work/$_sc_i.what")"; _sc_sec="$(sed -n 2p "$_sc_work/$_sc_i.what")"
+    rm -f "$_sc_work/$_sc_i.rc"
+    if [ -n "$_sc_sec" ]; then
+      ( SECTION_ONLY="$_sc_sec" bash "$_sc_s" > "$_sc_work/$_sc_i.out" 2>&1; printf '%s' "$?" > "$_sc_work/$_sc_i.rc" ) &
+    else
+      ( bash "$_sc_s" > "$_sc_work/$_sc_i.out" 2>&1; printf '%s' "$?" > "$_sc_work/$_sc_i.rc" ) &
+    fi
+  done <<LOCKED
+$_sc_locked
+LOCKED
+  wait
+  _sc_locked="$(_sc_locked_list)"
+done
+if [ -n "$_sc_locked" ]; then
+  {
+    echo "PUSH BLOCKED: a whole tree scanner could not run, because another test run is going."
+    echo ""
+    echo "These never ran, so they neither passed nor failed: each refused to start while another"
+    echo "suite run held its lock, and the lock was still held after waiting ${_sc_lock_wait}s for it:"
+    while IFS= read -r _sc_i; do
+      [ -n "$_sc_i" ] || continue
+      printf '    %s\n' "$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
+      grep -m1 '^test suite: another run is already going' "$_sc_work/$_sc_i.out" 2>/dev/null | sed 's/^/      /'
+    done <<LOCKED
+$_sc_locked
+LOCKED
+    echo ""
+    echo "Retry the push when that run finishes. The line above names the process holding the lock"
+    echo "and, when it is an orphan of a run that was killed, the command that ends it."
+    echo ""
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    echo "Explain to the user first why skipping is legitimate. Never override silently."
+  } >&2
+  exit 2
+fi
 
 # Read every result back. A run whose exit code was never written did not finish saying anything,
 # and that is not a pass: it is a scanner whose verdict is missing, which must not read as a clean

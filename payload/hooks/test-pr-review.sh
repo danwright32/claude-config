@@ -56,6 +56,7 @@ printf '%s\x1e' "$@" > "$FAKE_LOG/args"
 env > "$FAKE_LOG/env"
 cat > "$FAKE_LOG/stdin"
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
+[ -n "${FAKE_CLAUDE_STDERR_FILE:-}" ] && cat "$FAKE_CLAUDE_STDERR_FILE" >&2
 [ -n "${FAKE_CLAUDE_EXIT:-}" ] && { echo "fake claude: simulated failure" >&2; exit "$FAKE_CLAUDE_EXIT"; }
 [ -n "${FAKE_CLAUDE_EMPTY:-}" ] && exit 0
 if [ -n "${FAKE_CLAUDE_OUT_FILE:-}" ]; then cat "$FAKE_CLAUDE_OUT_FILE"; exit 0; fi
@@ -232,6 +233,60 @@ wait_final "$HEAD_SHA" || bad "the failed review wrote its file"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "a failed review refuses" "1" "$rc"
 check "saying it failed and why" "claude exited 3" "$out"
+
+# 3e2. the reviewer failed and its stderr carried SECRETS (claude-config#581). On 2026-09-24 in
+#      Bidspoke a failed start printed Claude Code's warnings about wildcard permission rules, which
+#      quote each rule verbatim, and a rule held a live Supabase secret key inside a curl command, so
+#      the gate echoed the key into the session. The fake values are assembled at run time so this
+#      file holds no secret shaped literal for a scanner to trip on.
+reset_state
+SB="sb_""secret_""Zq9fakeFAKEfake0123456789abcd"
+SK="sk-""ant-fakeFAKEfake0123456789abcdef"
+JWT="eyJ""hbGciOiJIUzI1NiJ9.eyJ""zdWIiOiJmYWtlIn0.c2lnbmF0dXJlZmFrZQ"
+BEARER="tok""FAKEfake0123456789bearer"
+GHP="ghp""_FAKEfake0123456789abcdefghijABCDEFGHIJ"
+cat > "$WORKDIR/stderr-secrets" <<EOS
+Warning: permission rule Bash(curl -H "apikey: $SB" https://x.supabase.co/rest/v1/*) uses a wildcard
+Settings warning in .claude/settings.local.json: Bash(curl -H "Authorization: Bearer $BEARER" *)
+Error: request failed: Authorization: Bearer $BEARER
+Error: the key $SK was rejected
+Error: a token $JWT and $GHP were seen
+EOS
+FAKE_CLAUDE_EXIT=1 FAKE_CLAUDE_STDERR_FILE="$WORKDIR/stderr-secrets" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "the failed review with secrets on stderr wrote its file"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+stored="$(cat "$(final_of "$HEAD_SHA")")"
+check_eq "a failed review carrying secrets still refuses" "1" "$rc"
+check "still saying why it failed" "claude exited 1" "$out"
+for secret in "$SB" "$SK" "$JWT" "$BEARER" "$GHP"; do
+  check_not "the merge refusal never echoes a secret from the reviewer's stderr (${secret:0:6})" "$secret" "$out"
+  check_not "the stored review never holds a secret from the reviewer's stderr (${secret:0:6})" "$secret" "$stored"
+done
+check_not "a permission rule warning is dropped, not shown" "permission rule" "$out"
+check_not "a settings warning is dropped, not shown" "settings.local.json" "$out"
+check "a redaction says so" "[REDACTED]" "$out"
+# A review file written BEFORE the fix holds its stderr raw, so the gate redacts on the way out too.
+f="$(final_of "$HEAD_SHA")"
+printf 'repo=x\nstatus=error\nstarted=1\nfinished=2\n\nclaude exited 1 and no review was read back. Its last lines:\nWarning: permission rule Bash(curl -H "apikey: %s" *)\nError: Authorization: Bearer %s\n' "$SB" "$BEARER" > "$f"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
+check "an old raw review still refuses with its reason" "claude exited 1" "$out"
+check_not "an old raw review's secret is redacted at display" "$SB" "$out"
+check_not "an old raw review's bearer token is redacted at display" "$BEARER" "$out"
+# With its rule file missing the redactor withholds and fails, never passes the text through (L42).
+mkdir -p "$WORKDIR/norules"
+cp "$DIR/lib/ai-review-common.sh" "$WORKDIR/norules/"
+out="$(printf 'Error: the key %s\n' "$SK" | bash -c '. "$1" && ar_redact' _ "$WORKDIR/norules/ai-review-common.sh")"; rc=$?
+check_eq "a redactor without its rules fails" "1" "$rc"
+check_not "a redactor without its rules never passes the text through" "$SK" "$out"
+check "and says it withheld it" "withheld" "$out"
+# An answer in neither shape is shown as evidence, and is redacted the same way.
+reset_state
+FAKE_CLAUDE_OUT="I could not review this. The key apikey: $SB is in the diff." prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "the unparsed review with a secret wrote its file"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
+check "the unparsed answer is still shown as evidence" "I could not review this" "$out"
+check_not "an unparsed answer's secret is redacted" "$SB" "$out"
+check_not "the stored unparsed answer holds no secret" "$SB" "$(cat "$(final_of "$HEAD_SHA")")"
 
 # 3f. the reviewer came back empty.
 reset_state
