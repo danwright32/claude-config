@@ -159,7 +159,7 @@ mkmodsrc(){   # $1 = mods dir  $2 = mod name  $3 = the hooks module's source
   printf '%s\n' "$3" > "$1/$2/hooks/register.ts"
 }
 mkmodsrc "$M9" clean-mod "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
-mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'; if (name === 'tee') add(f)"
+mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'; if (name === 'tee') add(f); const hasGit = dir => built.fs.exists(\`\${dir}/.git\`)"
 # A mod that sends once and reports a refusal is what every sender looks like after #688, so it passes.
 # A pane drawn its own way (the goals pane: a live list read at each draw, not a card) is not a copy.
 mkmodsrc "$M9" clean-live-pane "on('ui.render', { component: 'Pane', requestId: 'goals' }, (\$, e) => <Text dimColor>{row.sentence}</Text>)"
@@ -171,7 +171,8 @@ mkmodsrc "$M9" clean-comment "// mod-kit alone hooks 'AbovePrompt' and draws eac
 export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
 # The two mods still holding their own write reader until #712 moves them are named as exceptions,
 # on every run, rather than failing it or passing in silence (L129, L523).
-mkmodsrc "$M9" collision-guard "switch (name) { case 'tee': add(f) }"
+mkmodsrc "$M9" collision-guard "switch (name) { case 'tee': add(f) }
+const hasGit = dir => \$.fs.stat(\`\${dir === '/' ? '' : dir}/.git\`)"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "mod-kit itself may hold the shared parts, and a clean mod passes" ok \
   || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
@@ -180,6 +181,10 @@ case "$out" in *clean-comment*) check "a comment naming the band or a result row
 printf '%s\n' "$out" | grep 'collision-guard' | grep -q '#712' \
   && check "a known exception to the write reader is named on every run, with the issue that ends it" ok \
   || check "a known exception to the write reader is named on every run, with the issue that ends it" "$out"
+# #726: the working tree a path sits in is mod-kit's now; the collision guard's own walk moves in #712.
+printf '%s\n' "$out" | grep 'collision-guard keeps its own working-tree' | grep -q '#712 moves it onto \$.modkit.workingTree' \
+  && check "the collision guard's own working tree walk is a known exception until #712" ok \
+  || check "the collision guard's own working tree walk is a known exception until #712" "$out"
 # #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
 # rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
 # filter however it is spelled, so each form a mod could write is caught, with the remedy for it.
@@ -232,7 +237,11 @@ mkmodsrc "$M9" own-reason "return why.trim().replace(/\\.\$/, '') || 'no reason 
 # with the collision guard's and no build's.
 mkmodsrc "$M9" own-writes "if (name === 'tee') out.push(...args.filter(w => !w.startsWith('-')))"
 mkmodsrc "$M9" own-writes-dq "const ALL = new Set([\"mv\", \"tee\"])"
+# #726: a mod finding the checkout a path sits in by its own walk for a .git entry.
+mkmodsrc "$M9" own-tree "for (let d = path; d !== '/'; d = parent(d)) if (await \$.fs.exists(d + '/.git')) return d"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'own-tree ' | grep -q 'modkit.workingTree(' \
+  && check "and points a mod with its own working tree walk at modkit.workingTree" ok || check "and points a mod with its own working tree walk at modkit.workingTree" "$out"
 [ "$code" -eq 1 ] && check "a mod with its own copy of a shared part fails the run" ok \
   || check "a mod with its own copy of a shared part fails the run" "exit=$code out=$out"
 printf '%s\n' "$out" | grep 'own-writes ' | grep -q 'modkit.writes(' \

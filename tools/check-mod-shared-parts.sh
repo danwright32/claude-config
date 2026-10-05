@@ -28,6 +28,9 @@
 #   write-reader                                                use $.modkit.writes({ command, cwd, home }),
 #             reading which files a shell command writes (a    the one reader (#705: three copies disagreed)
 #             list naming tee, which every copy has)
+#   working-tree                                                use $.modkit.workingTree({ path }), the one
+#             finding the checkout a path sits in by walking   walk (#726: ask before saving needed the
+#             up for its .git entry (a path ending /.git)      collision guard's, which no mod can import)
 #
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
 # on every run, with that issue, rather than failing the run or passing in silence (L129, L523).
@@ -66,13 +69,15 @@ PARTS=(
   "pane|strikethrough=\{[^}]*\.strikethrough\}|'\\\\u2502'|'│'|\$.modkit.pane({ mod, id, lines, frame }) (the band: \$.modkit.bandRow)"
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
+  "working-tree|/\\.git[\"'\`]|\$.modkit.workingTree({ path })"
 )
 
 # $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
 exception(){
   case "$1:$2" in
-    # The collision guard's shellWrites and no build's file readers predate mod-kit's (#705).
-    collision-guard:write-reader|scope-modes:write-reader) echo '#712' ;;
+    # The collision guard's shellWrites and no build's file readers predate mod-kit's (#705), and
+    # the collision guard's walk for a checkout predates mod-kit's workingTree (#726).
+    collision-guard:write-reader|scope-modes:write-reader|collision-guard:working-tree) echo '#712' ;;
   esac
 }
 

@@ -5,6 +5,7 @@ import { compose, drop, isDivider, paneRefusal, put, questionRefusal, questionRo
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
+import { workingTree } from './tree.ts'
 import { writes } from './writes.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
@@ -86,6 +87,7 @@ export const register: Register = (on, options) => {
       writes: async ({ command, cwd, home }) => writes(commands(command), cwd, home),
       git: async ({ words }) => git(words),
       pipeline: async ({ command }) => pipeline(command),
+      workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)

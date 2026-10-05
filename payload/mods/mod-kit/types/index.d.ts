@@ -90,6 +90,13 @@ export type ModKit = {
    */
   pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
   /**
+   * The git working tree an absolute path sits in: the nearest folder at or above it holding a
+   * `.git` entry (a folder, or the file a linked worktree has), found on the disk, never by running
+   * git, at most 64 folders up; null when there is none. Rejects a path that is not absolute, and a
+   * look the disk cannot answer, rather than answering null. The one reading every mod uses (L613).
+   */
+  workingTree: (input: { path: string }) => Promise<string | null>
+  /**
    * Shows a row in the band above the prompt, or replaces the row this mod already shows under the
    * same id (it keeps its place). Claude Code gives the band ONE drawing, so no mod but mod-kit
    * hooks it (tools/check-mod-shared-parts.sh); every mod publishes its rows here and mod-kit draws

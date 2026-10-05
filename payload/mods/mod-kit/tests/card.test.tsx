@@ -137,6 +137,39 @@ test("a heredoc's body is shared on $.modkit.pipeline's commands", { plugins: [h
   expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
 })
 
+// #726: the working tree a path sits in, asked of the disk through the kit. The reader stands in
+// for ask before saving, and the disk is the test's: a .git folder at /tmp/repo and nowhere else.
+const treeReader: { name: string; register: Register } = {
+  name: 'tree-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      try {
+        return { deny: JSON.stringify(await $.modkit.workingTree({ path: String((e as { command?: string }).command) })) }
+      } catch (err) {
+        return { deny: `refused: ${String((err as Error).message ?? err)}` }
+      }
+    })
+  },
+}
+
+test('the working tree a path sits in is shared as $.modkit.workingTree, a look the disk cannot answer refused', { plugins: [treeReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('fs.exists', ($, e) => {
+    if (e.path === '/locked/.git') throw new Error('the disk is gone')
+    return { value: e.path === '/tmp/repo/.git' } as never
+  })
+  const ask = async (path: string) => {
+    const r = (await $.tool.call({ tool: 'Bash', command: path } as never)) as { deny?: string; text?: string }
+    return r.deny ?? r.text
+  }
+  expect(await ask('/tmp/repo/docs/CLAUDE.md')).toBe('"/tmp/repo"')
+  expect(await ask('/tmp/backup/CLAUDE.md')).toBe('null')
+  // The engine skips a hook that throws, so the failed look reaches the kit as no answer at all;
+  // either way it is refused, never taken for "no checkout".
+  expect(await ask('/locked/CLAUDE.md')).toMatch(/^refused: /)
+  expect(await ask('relative/CLAUDE.md')).toBe('refused: a working tree is found from an absolute path, not relative/CLAUDE.md')
+})
+
 // Any mod's own tool result drawn as the boxed card (#663), from plain data: a title whose runs can
 // carry colour (a state word leading it), then body lines. The blocked card is one use of it.
 // A plugin in a test runs in its own environment, so the card is spelled inside the hook.
