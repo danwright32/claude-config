@@ -89,7 +89,7 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
 }
 
 # The READ KEY of one pull request review's findings (claude-config#788): a random value kept
-# beside the review in <file>.readkey, created on first ask, printed on stdout. It appears only in
+# beside the review (named below), created on first ask, printed on stdout. It appears only in
 # the messages that carry the findings (the merge gate's refusal and the nudge), so a merge command
 # presenting it as PR_REVIEW_READ=<key> proves those findings reached the session doing the merge.
 # Without it the gate used to judge them read because it had PRINTED them, and on #774 another hook

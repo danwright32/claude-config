@@ -212,7 +212,7 @@ out="$(PR_REVIEW_READ=0000dead prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$
 check_eq "a wrong key is refused" "1" "$rc"
 out="$(PR_REVIEW_READ="$k1" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "the key from the refusal allows the merge" "0" "$rc"
-check "and says the findings were read" "read" "$out"
+check "and says the findings were read on their key" "read: this merge presented their key" "$out"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "once read, a later check of the same head allows" "0" "$rc"
 
@@ -443,6 +443,9 @@ out="$(fire_gate "echo 'PR_REVIEW_READ=$gk' && gh pr merge 7 --squash")"; rc=$?
 check_eq "a key that is only mentioned in another command does not count" "2" "$rc"
 out="$(fire_gate "PR_REVIEW_READ=$gk true && gh pr merge 7 --squash")"; rc=$?
 check_eq "a key in front of a different command does not count" "2" "$rc"
+# Quoted, as a shell would accept it, the key is the same key.
+out="$(fire_gate "PR_REVIEW_READ=\"$gk\" gh pr merge 7 --squash")"; rc=$?
+check_eq "a quoted key in front of the merge is read as the key" "0" "$rc"
 out="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
 check_eq "the merge carrying the key from the refusal is allowed" "0" "$rc"
 # An acknowledgement belongs to the review it read: a review file written again for the same head,

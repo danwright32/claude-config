@@ -92,7 +92,12 @@ while IFS= read -r rk_seg; do
   rk_seg="${rk_seg#"${rk_seg%%[![:space:]]*}"}"
   rk_found=""
   while [[ "$rk_seg" =~ ^([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]]*)[[:space:]]+(.*)$ ]]; do
-    [ "${BASH_REMATCH[1]}" = "PR_REVIEW_READ" ] && rk_found="${BASH_REMATCH[2]}"
+    if [ "${BASH_REMATCH[1]}" = "PR_REVIEW_READ" ]; then
+      # One layer of quotes, as the shell would remove it: PR_REVIEW_READ="<key>" is the key.
+      rk_found="${BASH_REMATCH[2]}"
+      case "$rk_found" in \"*\") rk_found="${rk_found#\"}"; rk_found="${rk_found%\"}" ;;
+        \'*\') rk_found="${rk_found#\'}"; rk_found="${rk_found%\'}" ;; esac
+    fi
     rk_seg="${BASH_REMATCH[3]}"
   done
   if [ -n "$rk_found" ] && mt_runs_merge "$rk_seg"; then
