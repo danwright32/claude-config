@@ -448,11 +448,35 @@ test('a failure from an attempt that lost its claim changes nothing for the one 
   expect(w.renames.map(r => r.args)).toEqual(['Taken over name'])
 })
 
+// #701: the ten minute mark can fall in the middle of a turn, and /rename waits for that turn to end,
+// which can be long after the claim's few minutes. The attempt keeps its claim fresh while it waits,
+// so the turn's end finds it held: one Haiku call and one name, as the spec allows.
+test('a /rename waiting through a long turn keeps its claim: one Haiku call and one rename', async ($, on) => {
+  let release = () => {}
+  const held = new Promise<void>(r => { release = r })
+  const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  // The turn running at the ten minute mark goes on for four more minutes, then ends.
+  await w.clock.advance(4 * MIN)
+  await turnEnds($)
+  await w.clock.settle()
+  release()
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.renames.map(r => r.args)).toEqual(['Name A'])
+  expect(w.logs).toEqual([])
+})
+
 // Lessons review of #657: the final write after /rename answers also belongs only to the attempt
-// still holding the claim, since /rename waits for the session to go idle and can outlast it.
-test('an attempt whose claim was taken over during /rename does not overwrite the record', async ($, on) => {
+// still holding the claim. A claim goes stale only when its attempt stops keeping it fresh (a reload
+// drops the attempt's timers; here its writes fail for the while), and the attempt that takes over
+// uses the name already made rather than asking Haiku again (#701).
+test('an attempt whose claim went stale during /rename does not overwrite the record, and the name is not asked for twice', async ($, on) => {
   const writes: { outcome?: string }[] = []
+  const s = { failing: false }
   on('state.set', async ($, e, next) => {
+    if (s.failing) return { deny: 'state store unavailable' } as never
     const r = await next(e)
     // A hook sees the result in its envelope; only a write that landed counts.
     if ((r as { value?: { isSet?: boolean } }).value?.isSet) writes.push(e.value as { outcome?: string })
@@ -463,12 +487,36 @@ test('an attempt whose claim was taken over during /rename does not overwrite th
   const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
   await start($)
   await w.clock.advance(10 * MIN)
-  // The first claim goes stale while its /rename waits, and the next idle point takes over.
+  await w.clock.settle()
+  // The first attempt waits in /rename and cannot keep its claim fresh, so it goes stale.
+  s.failing = true
   await w.clock.advance(3 * MIN + 1)
+  s.failing = false
   await turnEnds($)
   await w.clock.settle()
-  expect(w.renames.map(r => r.args)).toEqual(['Name A', 'Name B'])
+  expect(w.prompts.length).toBe(1)
+  expect(w.renames.map(r => r.args)).toEqual(['Name A', 'Name A'])
   release()
   await w.clock.settle()
   expect(writes.filter(v => v.outcome === 'named').length).toBe(1)
+  expect(w.logs).toEqual([])
+})
+
+// #701: the failure line at the ten minute mark promises another try at the next idle point, so a
+// write that failed there must not leave the session waiting for a mark that never comes again.
+test('a session whose ten minute write failed is named at the next idle point once the store recovers', async ($, on) => {
+  const s = failingState(on)
+  const w = world(on)
+  await start($)
+  s.failing = true
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  expect(w.logs.length).toBe(1)
+  expect(w.prompts.length).toBe(0)
+  s.failing = false
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
+  expect(w.logs.length).toBe(1)
 })

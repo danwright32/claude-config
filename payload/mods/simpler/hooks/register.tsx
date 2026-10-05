@@ -18,6 +18,26 @@ const DAY = 24 * 60 * 60 * 1000
 const why = (err: unknown): string => (err instanceof Error ? err.message : String(err)).slice(0, 200)
 const folderName = (path: string): string | null => path.replace(/\/+$/, '').split('/').pop() || null
 
+// Add-on notes (#620) owns the resume line that can open a reply ("+ add-on: ... and carrying on."):
+// what it is and how it is read. It is asked through its noun, so the two mods read one line one way
+// (#701). With add-on notes not loaded a reply has no such line. A noun of $ is only spelled at its
+// call site, so absence is told by the call itself: reading resumeLine off a missing noun is a
+// TypeError, while add-on notes failing is anything else, said once in the debug log when `say` is
+// set (never from a drawing, which writes nothing).
+type AddonNotesNoun = { resumeLine: (q: { text: string }) => Promise<{ line: string; rest: string } | null> }
+let toldResume = false
+const resumeOf = async ($: EngineInterface, text: string, say = false): Promise<{ line: string; rest: string } | null> => {
+  try {
+    return (await ($ as unknown as { addonNotes: AddonNotesNoun }).addonNotes.resumeLine({ text })) ?? null
+  } catch (err) {
+    if (say && !(err instanceof TypeError) && !toldResume) {
+      toldResume = true
+      $.ui.log(`simpler: add-on notes could not read a reply's opening line, so the button goes above it: ${why(err)}`, { to: 'debug' })
+    }
+    return null
+  }
+}
+
 const press = async ($: EngineInterface) => {
   // Read now, never the value the drawing captured, so a press after Dan typed does nothing.
   const { value: offer } = await $.state.get(OFFER)
@@ -48,39 +68,88 @@ const press = async ($: EngineInterface) => {
   }
 }
 
+// The weekly count is claimed on this Mac before it is shown, so of two sessions starting together
+// once the week is up, only one shows it (#701): each reads the last count's time before either can
+// record the new one, and the store has no compare and set. The claim is a folder, which mkdir makes
+// for exactly one caller; it is let go once the count is recorded. One older than CLAIM_STALE_MS was
+// left by a session that died holding it, and is taken over (two sessions taking over the same dead
+// claim in the same instant could both show the count, which is the cost of that rare case).
+const CLAIM_STALE_MS = 10 * 60 * 1000
+type WeekClaim = { kind: 'held'; release: () => Promise<void> } | { kind: 'taken' } | { kind: 'unclaimed'; why: string }
+const claimWeek = async ($: EngineInterface, now: number): Promise<WeekClaim> => {
+  try {
+    const home = await $.env.get('HOME')
+    if (!home) return { kind: 'unclaimed', why: 'HOME is not set' }
+    const dir = `${home}/.claude/state/simpler`
+    const lock = `${dir}/weekly.lock`
+    const run = (argv: string[]) => $.process.run(argv, { timeoutMs: 10_000 })
+    const release = async () => {
+      await run(['rmdir', lock]).catch(() => undefined)
+    }
+    await run(['mkdir', '-p', dir])
+    for (let tries = 0; tries < 2; tries++) {
+      const made = await run(['mkdir', lock])
+      if (made.exitCode === 0) return { kind: 'held', release }
+      if (!/exists/i.test(made.stderr)) return { kind: 'unclaimed', why: made.stderr.trim() || `mkdir exited ${made.exitCode}` }
+      const held = await $.fs.stat(lock).catch(() => null)
+      // Another session holds it and is showing the count; or it went between the two, so try again.
+      if (held && now - held.mtimeMs < CLAIM_STALE_MS) return { kind: 'taken' }
+      if (held) await release()
+    }
+    return { kind: 'taken' }
+  } catch (err) {
+    return { kind: 'unclaimed', why: why(err) }
+  }
+}
+
 // Once a week at a session start, one dim line naming which kinds of answer needed simplifying.
 // A log that cannot be read is named and the week is not closed, so the next session tries again
 // rather than the count silently skipping a week (L215).
 const weekly = async ($: EngineInterface) => {
   const now = await $.clock.now()
-  let kinds: string[]
-  let since: number
+  let claim: WeekClaim | undefined
   try {
-    const reportedAt = await $.store.get(REPORTED_AT)
-    if (typeof reportedAt !== 'number') {
-      // The first session with this mod starts the first week; there is nothing to count yet.
-      await $.store.set(REPORTED_AT, now)
+    let kinds: string[]
+    let since: number
+    try {
+      const reportedAt = await $.store.get(REPORTED_AT)
+      if (typeof reportedAt !== 'number') {
+        // The first session with this mod starts the first week; there is nothing to count yet.
+        await $.store.set(REPORTED_AT, now)
+        return
+      }
+      if (now - reportedAt < REPORT_EVERY_MS) return
+      claim = await claimWeek($, now)
+      if (claim.kind === 'taken') return
+      if (claim.kind === 'unclaimed') {
+        // Shown anyway: a count shown twice costs less than a week that is never shown.
+        $.ui.log(`simpler: could not claim the weekly count, so another session starting now may show it too: ${claim.why}`, { to: 'debug' })
+      }
+      // Read again under the claim: a session that showed it before this one got the claim has
+      // recorded it by now.
+      const recorded = await $.store.get(REPORTED_AT)
+      if (typeof recorded !== 'number' || now - recorded < REPORT_EVERY_MS) return
+      since = recorded
+      kinds = []
+      for (const key of await $.store.keys()) {
+        const at = pressAt(key)
+        if (at === undefined || at <= since || at > now) continue
+        const v = (await $.store.get(key)) as { kind?: unknown } | undefined
+        kinds.push(typeof v?.kind === 'string' ? v.kind : 'unrecorded answer')
+      }
+    } catch (err) {
+      $.ui.log(`Simpler couldn't read its press log, so this week's count is not shown: ${why(err)}`)
       return
     }
-    if (now - reportedAt < REPORT_EVERY_MS) return
-    since = reportedAt
-    kinds = []
-    for (const key of await $.store.keys()) {
-      const at = pressAt(key)
-      if (at === undefined || at <= since || at > now) continue
-      const v = (await $.store.get(key)) as { kind?: unknown } | undefined
-      kinds.push(typeof v?.kind === 'string' ? v.kind : 'unrecorded answer')
+    $.ui.log(weeklyLine(kinds, Math.round((now - since) / DAY)))
+    try {
+      await $.store.set(REPORTED_AT, now)
+    } catch (err) {
+      // Shown, but not closed: the next session repeats it rather than losing a week.
+      $.ui.log(`simpler: could not record that the weekly count was shown: ${why(err)}`, { to: 'debug' })
     }
-  } catch (err) {
-    $.ui.log(`Simpler couldn't read its press log, so this week's count is not shown: ${why(err)}`)
-    return
-  }
-  $.ui.log(weeklyLine(kinds, Math.round((now - since) / DAY)))
-  try {
-    await $.store.set(REPORTED_AT, now)
-  } catch (err) {
-    // Shown, but not closed: the next session repeats it rather than losing a week.
-    $.ui.log(`simpler: could not record that the weekly count was shown: ${why(err)}`, { to: 'debug' })
+  } finally {
+    if (claim?.kind === 'held') await claim.release()
   }
 }
 
@@ -97,7 +166,10 @@ export const register: Register = on => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
     const j = e.reason === 'answer' ? judge(e.answer) : null
-    const offer: SimplerOffer | null = j ? { head: replyHead(e.answer), kind: j.kind, reason: j.reason, words: j.words } : null
+    // Matched on the answer under its resume line, if it opens with one: add-on notes, where it sits
+    // above this mod, hands on only that part of the block (#701).
+    const resume = j ? await resumeOf($, e.answer, true) : null
+    const offer: SimplerOffer | null = j ? { head: replyHead(resume ? resume.rest : e.answer), kind: j.kind, reason: j.reason, words: j.words } : null
     await $.state.set(OFFER, offer)
     return r
   })
@@ -113,18 +185,33 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Drawn at the top of the answer it is about, on the reply's first block. The reply is drawn as
-  // Markdown with its text as a prop (children leave it empty), which is the form proved clickable
-  // in Dan's terminal on 2026-10-04 (#619).
+  // Drawn at the top of the answer it is about, on the reply's first block, with the reply itself
+  // drawn by whatever sits beneath this mod (next), so another mod's drawing of the same block is
+  // kept rather than replaced (#701). Hooks nest by tier and load order, which no mod chooses, so the
+  // reply reads the same either way when it opens with add-on notes' resume line: the dim line, the
+  // button under it, then the answer. Add-on notes above this mod has drawn the line and handed on
+  // the rest; beneath it, the line is handed down alone for add-on notes to draw, then the rest.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (!e.props.isFirstOfReply) return next(e)
     const { value: offer } = await $.state.get(OFFER)
-    if (!offer || !sameReply(offer.head, e.props.text)) return next(e)
-    const { Box, Button, Markdown } = $.ui.resolve(e)
+    if (!offer) return next(e)
+    const resume = await resumeOf($, e.props.text)
+    if (!sameReply(offer.head, resume ? resume.rest : e.props.text)) return next(e)
+    const { Box, Button } = $.ui.resolve(e)
+    const button = <Button key="simpler" label="Simpler" onPress={() => press($)} />
+    if (!resume) {
+      return (
+        <Box flexDirection="column">
+          {button}
+          {await next(e)}
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="column">
-        <Button key="simpler" label="Simpler" onPress={() => press($)} />
-        <Markdown text={e.props.text} />
+        {await next({ ...e, props: { ...e.props, text: resume.line } })}
+        {button}
+        {await next({ ...e, props: { ...e.props, text: resume.rest } })}
       </Box>
     )
   })

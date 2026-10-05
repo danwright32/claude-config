@@ -16,6 +16,9 @@ const HAIKU_MS = 30_000
 // An attempt holds a claim so a second caller (a reload's timer, a turn ending) stands down. A claim
 // older than this belongs to an attempt a reload cut off, and is taken over.
 const CLAIM_MS = 3 * 60_000
+// While an attempt waits on /rename, which waits for the session to go idle and so can outlast the
+// claim by the rest of a long turn, it renews its claim this often, well inside CLAIM_MS (#701).
+const RENEW_MS = CLAIM_MS / 3
 const WHO = 'Auto session name'
 
 // An engine refusal arrives led by '<plugin>: $.noun.verb: '; the reason is what follows.
@@ -51,6 +54,7 @@ const fresh = (sessionId: string, now: number, isInteractive: boolean | null, kn
   knownTitle,
   isRenamedByHand: false,
   pendingTitle: null,
+  madeName: null,
   claim: null,
 })
 
@@ -99,50 +103,70 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   const id = `${now}.${++attempts}.${Math.random().toString(36).slice(2, 8)}`
   const mine = (cur: Rec | null) => cur?.claim?.id === id
   const claimed = await update($, cur => {
-    if (!cur || cur.isInteractive !== true || cur.outcome !== 'waiting' || !cur.isDue) return undefined
+    if (!cur || cur.isInteractive !== true || cur.outcome !== 'waiting') return undefined
+    // Due by the record's own start as well as by the timer's mark, so a write that failed at the
+    // ten minute mark still leaves every later idle point able to name it, as its line promised (#701).
+    if (!cur.isDue && now - cur.startedAt < WAIT_MS) return undefined
     if (cur.claim && now - cur.claim.at < CLAIM_MS) return undefined
-    if (cur.isRenamedByHand || cur.knownTitle) return { ...cur, outcome: 'left', claim: null }
-    return { ...cur, claim: { id, at: now } }
+    if (cur.isRenamedByHand || cur.knownTitle) return { ...cur, isDue: true, outcome: 'left', claim: null }
+    return { ...cur, isDue: true, claim: { id, at: now } }
   })
   if (!claimed || claimed.outcome !== 'waiting' || !mine(claimed)) return
   const release = () => update($, cur => (cur && mine(cur) ? { ...cur, claim: null } : undefined))
 
-  let messages
-  try {
-    messages = await $.session.messages()
-  } catch (err) {
-    return fail($, `the conversation could not be read (${errText(err)})`, mine)
-  }
-  // Nothing asked and answered yet: the first exchange's end tries again, and this is no failure.
-  if (!hasExchange(messages)) {
-    await release()
-    return
+  // A name an earlier attempt made and recorded, before a reload cut it off, is used as it is:
+  // Haiku is asked at most once for a session (#635 spec item 5, #701).
+  let name = claimed.madeName ?? ''
+  if (!name) {
+    let messages
+    try {
+      messages = await $.session.messages()
+    } catch (err) {
+      return fail($, `the conversation could not be read (${errText(err)})`, mine)
+    }
+    // Nothing asked and answered yet: the first exchange's end tries again, and this is no failure.
+    if (!hasExchange(messages)) {
+      await release()
+      return
+    }
+
+    let reply: string
+    try {
+      const r = await $.model.complete({ model: 'haiku', prompt: namePrompt(messages), maxTokens: 60, effort: 'low', timeoutMs: HAIKU_MS })
+      if (!r.isAnswered) return fail($, haikuWhy(r as { reason?: string; status?: number }), mine)
+      reply = r.text
+    } catch (err) {
+      return fail($, `the call to Haiku was refused (${errText(err)})`, mine)
+    }
+    const cleaned = cleanName(reply)
+    if ('refused' in cleaned) return fail($, cleaned.refused === 'empty' ? "Haiku's reply was empty" : "Haiku's reply was too long to be a name", mine)
+    name = cleaned.name
   }
 
-  let reply: string
-  try {
-    const r = await $.model.complete({ model: 'haiku', prompt: namePrompt(messages), maxTokens: 60, effort: 'low', timeoutMs: HAIKU_MS })
-    if (!r.isAnswered) return fail($, haikuWhy(r as { reason?: string; status?: number }), mine)
-    reply = r.text
-  } catch (err) {
-    return fail($, `the call to Haiku was refused (${errText(err)})`, mine)
-  }
-  const cleaned = cleanName(reply)
-  if ('refused' in cleaned) return fail($, cleaned.refused === 'empty' ? "Haiku's reply was empty" : "Haiku's reply was too long to be a name", mine)
-  const name = cleaned.name
-
-  // Checked again at naming time: a rename Dan made while Haiku was answering wins.
+  // Checked again at naming time: a rename Dan made while Haiku was answering wins. The name is kept
+  // on the record, so an attempt that takes over from this one uses it rather than asking again.
+  const made = name
   const still = await update($, cur => {
     if (!cur || !mine(cur)) return undefined
     if (cur.isRenamedByHand || cur.knownTitle) return { ...cur, outcome: 'left', claim: null }
     // Unchanged: no write, so a busy record cannot fail a check that changes nothing.
-    return undefined
+    return cur.madeName === made ? undefined : { ...cur, madeName: made }
   })
   if (!still || still.outcome !== 'waiting' || !mine(still)) return
 
   // First route: the built-in /rename, queued by the engine until the session is idle. Its answer
   // is read by the shape of its success text. A refusal, or an answer that says nothing, falls back
   // to returning sessionTitle on Dan's next message, which first checks whether the name took.
+  // /rename waits for the session to go idle, so when the ten minute mark fell mid turn it waits out
+  // the rest of that turn, which can be long past CLAIM_MS. While this attempt is alive it keeps its
+  // claim fresh, so the turn's end finds it held and starts no second attempt (#701). A reload drops
+  // this timer with the attempt, and only then does the claim go stale and get taken over.
+  const renew = $.clock.every(RENEW_MS, () => {
+    void $.clock
+      .now()
+      .then(at => update($, cur => (cur && mine(cur) ? { ...cur, claim: { id, at } } : undefined)))
+      .catch(err => $.ui.log(`${MOD}: could not keep the naming claim fresh (${errText(err)})`, { to: 'debug' }))
+  })
   let outcome: 'set' | 'refused' | 'unknown'
   let detail = ''
   try {
@@ -152,6 +176,8 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   } catch (err) {
     outcome = 'refused'
     detail = errText(err)
+  } finally {
+    renew.cancel()
   }
   // Only while this attempt still holds the claim: /rename waits for the session to go idle, and a
   // newer attempt may have taken over in the meantime.
