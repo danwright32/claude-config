@@ -34,8 +34,10 @@ and settles its own surfaces in rounds of its own before it is built.
    the answer arrive later, as ask before saving does. `tools/check-mod-noun-waits.sh`, run by
    `tests/test-mods.sh`, fails a mod whose noun's code waits on `$.ui.ask` or on a promise only a
    later event settles (its resolve kept, handed on or called back) with no timer under 10 s
-   settling it in the same executor; it was seen to fail on picker manners' `$.pickers.wait`. It
-   does not follow a promise made outside a noun's code and handed to it.
+   settling it in the same executor. Before #744 removed it, picker manners' `$.pickers.wait` failed
+   it (`payload/mods/picker-manners/hooks/register.ts:89` at 53c803b, which `git show` still
+   reproduces); in the tree, the `waits-in-map` fixture in `tests/test-mods.sh` is that shape and
+   fails it on every run. It does not follow a promise made outside a noun's code and handed to it.
 
 ## Guard surfaces (#607, #608, #609)
 

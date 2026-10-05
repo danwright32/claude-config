@@ -765,6 +765,12 @@ if [ -d "$ROOT/payload/mods" ]; then
   [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \
     || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
 fi
+# Every check this suite runs can be run directly, as its header says, so each is committed
+# executable (the lessons review of #744: the noun wait check was committed 644 beside its 755
+# siblings, which this suite's own `bash <check>` could never notice).
+for t in "$CHECK" "$SHARED" "$DEPS" "$WAITS"; do
+  [ -x "$t" ] && check "${t#"$ROOT"/} is executable" ok || check "${t#"$ROOT"/} is executable" "not executable"
+done
 
 # 13. The goal tracker reads ask before saving's waiting saves, `ask-before-saving.pending`, as a list
 #     whose first entry has id: string (#706), and its own tests can only stand in for ask before
