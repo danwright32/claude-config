@@ -145,7 +145,16 @@ if [ -n "$own_record" ]; then
   own_reader=""
   while IFS= read -r _cand; do
     [ -n "$_cand" ] || continue
-    case "/$_cand" in */hooks/*|*/.githooks/*|*/.husky/*) own_reader="$_cand"; break ;; esac
+    # In a hooks directory only a SCRIPT counts: no extension (how git hooks are named) or a
+    # script's own. Notes kept beside the hooks are still notes (lessons review of PR #807).
+    case "/$_cand" in
+      */hooks/*|*/.githooks/*|*/.husky/*)
+        case "${_cand##*/}" in
+          *.sh|*.bash|*.py|*.js|*.mjs|*.cjs|*.ts) own_reader="$_cand"; break ;;
+          *.*) ;;
+          *) own_reader="$_cand"; break ;;
+        esac ;;
+    esac
     case "$(git ls-files -s -- "$_cand" 2>/dev/null | awk 'NR==1 { print $1 }')" in   # tracked-only: the mode git committed is what runs
       100755) own_reader="$_cand"; break ;;
     esac
