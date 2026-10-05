@@ -272,6 +272,37 @@ out="$(bash "$DEPS" "$M11B" 2>&1)"; code=$?
   && ! printf '%s\n' "$out" | grep -q 'never uses it' \
   && check "a dependency whose contract cannot be read is reported as unreadable, never as unused" ok \
   || check "a dependency whose contract cannot be read is reported as unreadable, never as unused" "exit=$code out=$out"
+# The lessons review of #696: what counts as use is code, wherever the mod keeps it, read against
+# the whole contract.
+M11C="$TMPROOT/m11c"
+mkdepmod "$M11C" kit '[]' "export const register = () => {}"
+mkdir -p "$M11C/kit/types"
+printf '{ "name": "kit", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' > "$M11C/kit/.claude-plugin/plugin.json"
+printf 'declare module "claude-code" {\n  interface EngineInterface {\n    kitInfo: { version: string; nested: { deep: boolean } }\n    kit: { go: () => Promise<void> }\n  }\n}\n' > "$M11C/kit/types/index.d.ts"
+# A noun declared after a member with an inline object type is still one of the contract's.
+mkdepmod "$M11C" late-noun '["kit"]' "export const register = on => { on('tool.call', async (\$, e, next) => { await \$.kit.go(); return next(e) }) }"
+# Code outside hooks/ that the hooks module imports is the mod's code too.
+mkdepmod "$M11C" elsewhere '["kit"]' "import { go } from '../lib/go.ts'
+export const register = on => { on('tool.call', async (\$, e, next) => { await go(\$); return next(e) }) }"
+mkdir -p "$M11C/elsewhere/lib"
+printf 'export const go = async ($) => { await $.kit.go() }\n' > "$M11C/elsewhere/lib/go.ts"
+out="$(bash "$DEPS" "$M11C" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a noun after an inline object type, and a use outside hooks/, both count" ok \
+  || check "a noun after an inline object type, and a use outside hooks/, both count" "exit=$code out=$out"
+# A comment mentioning the noun or the name is not a use.
+mkdepmod "$M11C" commented '["kit"]' "// \$.kit.go() is how this would be called, and { plugin: 'kit' } how a press would be matched
+/* 'kit' and \$.kit.go() in a block comment */
+export const register = on => { on('tool.call', async (\$, e, next) => next(e)) } // 'kit'"
+# A mod listing a dependency with no source at all is reported, never passed or accused.
+mkdepmod "$M11C" sourceless '["kit"]' ""
+rm -f "$M11C/sourceless/hooks/register.ts"
+out="$(bash "$DEPS" "$M11C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'commented lists kit under dependencies but never uses it' \
+  && check "a dependency only a comment mentions fails the run" ok || check "a dependency only a comment mentions fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'sourceless lists kit under dependencies, but no source file of sourceless was found' \
+  && check "a mod with no source is reported as such" ok || check "a mod with no source is reported as such" "$out"
+! printf '%s\n' "$out" | grep -qE '(late-noun|elsewhere) lists' \
+  && check "and the mods whose code uses it are not named" ok || check "and the mods whose code uses it are not named" "$out"
 out="$(bash "$DEPS" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the dependency check" ok \
   || check "a missing mods folder is refused by the dependency check" "exit=$code out=$out"
