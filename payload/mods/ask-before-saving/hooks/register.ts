@@ -90,13 +90,17 @@ const whereOf = async ($: EngineInterface): Promise<Where> => {
 // Whether a variable can reach a Bash call's fresh shell without the command naming it (#777): set
 // in Claude Code's environment, which every shell it starts inherits, or in a shell profile. Asked
 // only for a variable a mention of lasting memory is built from. $.env.get takes literal names alone,
-// so the environment is asked through printenv (exit 0: set). A printenv that cannot run, or a
-// profile that exists and cannot be read, fails the hook, which fails closed.
+// so the environment is asked through printenv (exit 0: set, exit 1: unset). A printenv that cannot
+// run or fails, or a profile that exists and cannot be read, fails the hook, which fails closed.
 const PROFILES = ['.zshenv', '.zprofile', '.zshrc', '.bash_profile', '.bashrc', '.profile']
 const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
   let profiles: string | undefined
   return async name => {
-    if ((await $.process.run(['/usr/bin/printenv', name], { timeoutMs: 5000 })).exitCode === 0) return true
+    // Exit 0 is set and exit 1 is unset; any other answer is printenv failing, which must refuse the
+    // save rather than read as unset (lessons review of #783).
+    const env = await $.process.run(['/usr/bin/printenv', name], { timeoutMs: 5000 })
+    if (env.exitCode === 0) return true
+    if (env.exitCode !== 1) throw new Error(`printenv ${name} failed with exit ${env.exitCode}: ${env.stderr.trim() || 'no message'}`)
     if (profiles === undefined) {
       const texts: string[] = []
       for (const p of PROFILES) {

@@ -116,6 +116,8 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     if (e.argv[0] !== '/usr/bin/printenv') throw new Error(`unexpected command: ${e.argv.join(' ')}`)
     printenv.push(String(e.argv[1]))
     const value = env[String(e.argv[1])]
+    // A printenv that fails (exit 2) for a name the test marks so.
+    if (String(e.argv[1]) === 'PRINTENV_BREAKS') return { value: { exitCode: 2, stdout: '', stderr: 'printenv: write error', isStdoutTruncated: false, isStderrTruncated: false } } as never
     return { value: { exitCode: value === undefined ? 1 : 0, stdout: value ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   const at = { cwd: CWD }
@@ -327,6 +329,15 @@ test('the subagent call from #777, a python heredoc building fixture homes in a 
   expect(refusalOf(await call($, { tool: 'Bash', command: real }))).toContain(ASKS)
   expect(refusalOf(await call($, { tool: 'Bash', command: real, agentId: 'agent-a1' }))).toContain('a subagent never asks him')
   expect(w.ran.length).toBe(2)
+})
+
+// Lessons review of #783: any exit but 0 read as "unset", so a printenv that failed let the save
+// through unasked. Only exit 1 means unset; anything else fails the hook, which refuses.
+test('a printenv that fails is never read as the variable being unset: the save is refused', withKit, async ($, on) => {
+  const w = world(on)
+  const r = await call($, { tool: 'Bash', command: 'python3 -c "print(1)" # $PRINTENV_BREAKS/CLAUDE.md' })
+  expect(refusalOf(r)).toContain('could not check whether this writes lasting memory')
+  expect(w.ran).toEqual([])
 })
 
 test('a path through a variable Claude Code\'s environment holds still counts, so its save is refused', withKit, async ($, on) => {
