@@ -535,10 +535,24 @@ ones marked open are the builder's choice, waiting on Dan.
 - **Who asked:** an issue another person reported (the mod reads the issue's author, and drops
   the message when the issue was filed from Dan's own account, which is how both Dan's and
   Claude's issues are filed), a pasted Slack thread, or a person Dan named. A message with a dash
-  is refused.
+  is refused. Dan's own accounts are every account `gh auth status` lists as logged in on the Mac
+  (danwright32, and dwright-pennie, which owns repo-digest), read with only the logins taken so
+  no token is read; when gh cannot list them, the active account alone counts and the card says
+  so (#704).
+- **A message waits until Dan presses Mark sent**, never until the next card: a later card for
+  the same PR that names nobody keeps the message as it was, sent or not, and a message marked
+  sent stays sent while a new card carries the same words; new words wait again (#704).
 - **Cards are kept per repository** in the mod's store, the newest 50, so `/live` lists them in
   any later session, newest first, then every message not yet marked sent; `/live` also pins
-  each unsent message in the band again, so Copy and Mark sent are at hand.
+  each unsent message in the band again, so Copy and Mark sent are at hand. The repository is
+  the one GitHub's own link for the PR names, folded to lowercase, so a card Claude typed in
+  another case or under a repository's old name (gh accepts both) is one list with the rest;
+  cards an earlier build kept under another case are read with them and moved onto the one key
+  when that repository's cards are next written. Copy and Mark sent find their card in whichever
+  repository it is kept, so they work in any session (#704). `/live` asks GitHub for the name the
+  session folder's repository has now (`gh repo view`, which follows renames), so a checkout whose
+  origin still carries an old name lists the cards kept under the new one; when GitHub cannot be
+  asked it lists what is kept under the remote's name and says the rest may be missing.
 - **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
   row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),
   then why live could not be confirmed, what changed, "See it:" and the link, and the numbered
@@ -550,6 +564,8 @@ ones marked open are the builder's choice, waiting on Dan.
   session state, whose reference names this mod, rather than read from the store, whose owner a
   read from another mod's hook does not name; so a card made in another session is no verdict
   here, and winding down asks for the card again rather than guess. A malformed repo or PR throws.
+  The verdict is keyed on the repository as GitHub's own link names it, in lowercase, and asked
+  in any case, so wind down, asking in GitHub's spelling, finds a card Claude typed otherwise (#702).
 - Open: the title for a project with no recorded deploy step ("Merged, no deploy step
   recorded:"), its colour (drawn grey until Dan settles it), the violet drawn as the terminal's magenta, the toast's words (the
   card's title), and the Copy and Mark sent buttons having no shortcut keys.

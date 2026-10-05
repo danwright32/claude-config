@@ -1,4 +1,7 @@
-/** A merged change's card as kept in the store, one list per repository (`cards:<owner/name>`). */
+/**
+ * A merged change's card as kept in the store, one list per repository (`cards:<owner/name>`, the
+ * repository as GitHub's own link for the PR names it, in lowercase).
+ */
 export type IsItLiveCard = {
   repo: string
   pr: number
@@ -20,9 +23,10 @@ export type IsItLiveVerdict = { state: IsItLiveCard['state']; at: number }
 /** Read by other mods (scope-modes' wind down, #687): await it. */
 export type IsItLive = {
   /**
-   * The verdict of the newest card made in this session for `pr` in `repo` (owner/name), or null
-   * when no card has been made for it. Throws on a repo that is not owner/name or a pr that is not
-   * a pull request number, so a malformed question is never answered as no card.
+   * The verdict of the newest card made in this session for `pr` in `repo` (owner/name, in any
+   * case: GitHub's names are one name in any case), or null when no card has been made for it.
+   * Throws on a repo that is not owner/name or a pr that is not a pull request number, so a
+   * malformed question is never answered as no card.
    */
   verdict: (q: { repo: string; pr: number }) => Promise<IsItLiveVerdict | null>
 }
@@ -34,7 +38,10 @@ declare module 'claude-code' {
   interface PluginState {
     /** Session state rather than the store: its ref names this plugin, so any mod's read finds it. */
     'is-it-live': {
-      /** Each card's verdict this session, keyed `owner/name#pr`, the newest card's winning. */
+      /**
+       * Each card's verdict this session, keyed `owner/name#pr` with the repository as GitHub's own
+       * link for the PR names it, in lowercase; the newest card's winning.
+       */
       verdicts: Record<string, IsItLiveVerdict>
     }
   }
