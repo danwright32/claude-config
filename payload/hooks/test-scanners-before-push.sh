@@ -36,6 +36,12 @@ case "${TMPROOT%/}" in
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
+# Every run of the gate in this suite keeps its record of passed scans in the throwaway, never in
+# the real ~/.claude/state/scanners-passed, where a test's pass would be trusted by a later real
+# push (claude-config#789, L2). Exported once, here, so no case can forget it; the guard at the end
+# checks no fixture's record reached the real folder anyway.
+export SCANNERS_STATE_DIR="$TMPROOT/scanners-state"
+
 # A repository shaped like this one: the marker the hook keys on, plus whatever scanners the test
 # wants. Everything happens in a throwaway git repo, never against the real one (L2).
 mkrepo(){            # $1 = name  -> prints the repo path
@@ -453,6 +459,21 @@ else
   # skipped in silence, because a suite that quietly checks less is how coverage disappears (L98).
   echo "  (no repository at $REAL, so the selection against a real tree was not checked here; it is checked where this repo is)"
 fi
+
+# --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
+#     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
+#     fixture's record in the real folder would be a test result a later real push trusts (L2).
+#     Judged by each fixture's OWN key, never by whether the folder changed, because other
+#     sessions' real pushes write there during this run (L375).
+REAL_STATE="$HOME/.claude/state/scanners-passed"
+_leaked=""
+for _fx in "$TMPROOT"/*/; do
+  [ -d "$_fx/.git" ] || continue
+  _fx_key="$(printf '%s' "$(cd "$_fx" && pwd -P)" | shasum -a 256 | awk '{print $1}')"
+  [ -e "$REAL_STATE/$_fx_key.txt" ] && { _leaked="$_leaked $(basename "$_fx")"; rm -f "$REAL_STATE/$_fx_key.txt"; }
+done
+[ -z "$_leaked" ] && check "no fixture wrote a pass record into the real state folder" ok \
+  || check "no fixture wrote a pass record into the real state folder" "these did, and were removed:$_leaked"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
