@@ -533,6 +533,15 @@ check_eq "findings the nudge showed still refuse a merge without the key" "1" "$
 out="$(PR_REVIEW_READ="$nk" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "and the nudge's key allows it" "0" "$rc"
 
+# 5a. With no read key to give (the review records no finish time), the nudge says so and names
+#     the remedy, rather than saying the merge waits on a key it never shows (L11).
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstatus=ok\nkind=pr\nfindings=1\n\nApp/Sync.swift:3: x (L1). Should be: y.\n' "$HEAD_SHA" > "$(final_of "$HEAD_SHA")"
+out="$(printf '{"session_id":"k1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "the nudge says no read key could be made" "No read key could be made" "$out"
+check "and names the restart" "pr-review.sh restart" "$out"
+
 # 5b. The nudge's sentence fits the count: one finding is singular, and a clean review says it is
 #     clean rather than that the merge waits on findings it does not have (L21).
 reset_state

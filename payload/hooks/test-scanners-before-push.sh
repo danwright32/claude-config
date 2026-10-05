@@ -475,7 +475,16 @@ PROBE_STATE="$TMPROOT/probe-state"
 SCANNERS_STATE_DIR="$PROBE_STATE" fire "$RK" "git push" >/dev/null
 [ -f "$PROBE_STATE/$(fx_key "$RK").txt" ] && check "the leak guard names records the way the gate writes them" ok \
   || check "the leak guard names records the way the gate writes them" "gate wrote: $(ls "$PROBE_STATE" 2>/dev/null | tr '\n' ' ')"
-REAL_STATE="$HOME/.claude/state/scanners-passed"
+# ...and the FOLDER: run with no SCANNERS_STATE_DIR under a fake home, and the record must land
+# where the guard below looks, relative to that home, or a change to the gate's default would
+# leave the guard watching a folder nothing writes.
+FAKEHOME="$TMPROOT/fakehome"; mkdir -p "$FAKEHOME"
+RK2="$(mkrepo keyprobe2)"; add_scanner "$RK2" alpha 0; commit_all "$RK2"
+( unset SCANNERS_STATE_DIR; HOME="$FAKEHOME" fire "$RK2" "git push" >/dev/null )
+state_rel=".claude/state/scanners-passed"
+[ -f "$FAKEHOME/$state_rel/$(fx_key "$RK2").txt" ] && check "the leak guard watches the folder the gate writes to by default" ok \
+  || check "the leak guard watches the folder the gate writes to by default" "gate wrote: $(cd "$FAKEHOME" && find . -type f | tr '\n' ' ')"
+REAL_STATE="$HOME/$state_rel"
 _leaked=""
 for _fx in "$TMPROOT"/*/; do
   [ -e "$_fx/.git" ] || continue
