@@ -1,11 +1,11 @@
 #!/bin/bash
 # check-mod-noun-waits.sh <mods dir>: no mod's own $ noun waits on a person, or on anything else with
 # no bound under 10 seconds (#744). Claude Code cuts a call to a plugin's noun off at 10 s: measured
-# live on 2.1.289, `$.probe.wait` was rejected at 10,003 ms with "did not answer within 10000ms".
-# `claude plugin test` does not apply that limit, so such a noun passes every test of its own and
-# fails only in a session. Picker manners' `$.pickers.wait` did exactly that: its tool.call hook
-# waited through it for a press in the band, the wait was rejected at 10 s, and Claude Code's own
-# dialog then asked every question a second time.
+# live on 2026-10-05 (2.1.289), `$.probe.wait` was rejected at 10,003 ms with "did not answer within
+# 10000ms". `claude plugin test` does not apply that limit, so such a noun passes every test of its
+# own and fails only in a session. Picker manners' `$.pickers.wait` did exactly that: its tool.call
+# hook waited through it for a press in the band, the wait was rejected at 10 s, and Claude Code's
+# own dialog then asked every question a second time.
 #
 # The reason, not one named case (L362): a noun's code makes a promise that only a later event
 # settles, with nothing bounding it under 10 s. Read as:

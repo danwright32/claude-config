@@ -1048,10 +1048,10 @@ dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a 
 or one that is no mod in the folder, whose contract cannot be read whole, or that has no source at
 all (#694). It runs `tools/check-mod-noun-waits.sh`, which fails a mod whose own `$` noun waits on a
 person (`$.ui.ask`) or on a promise only a later event settles with no timer under 10 seconds
-settling it: Claude Code cuts a noun call off at 10 s and `claude plugin test` does not, so such a
-noun passes its own tests and fails only in a session (#744). And it checks that ask before saving's
-contract declares its waiting saves in the shape the goal tracker reads, each member read at its
-block's own top level with comments taken out (#735).
+settling it: Claude Code cuts a noun call off at 10 s (measured on 2026-10-05) and `claude plugin
+test` does not, so such a noun passes its own tests and fails only in a session (#744). And it
+checks that ask before saving's contract declares its waiting saves in the shape the goal tracker
+reads, each member read at its block's own top level with comments taken out (#735).
 
 ## Local state (per Mac, never synced)
 

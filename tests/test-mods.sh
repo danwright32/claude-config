@@ -560,9 +560,10 @@ fi
 
 # 12. No mod's own $ noun waits on a person, or on anything else with no bound under 10 seconds
 #     (#744). Claude Code cuts a noun call off at 10 s ("did not answer within 10000ms", measured
-#     live on 2.1.289), and `claude plugin test` does not, so a noun that waits on a press passes
-#     every test of its own and fails in a session: picker manners' $.pickers.wait asked every
-#     question twice that way. Each fixture is one form of that reason, never one named case (L362).
+#     live on 2026-10-05, 2.1.289), and `claude plugin test` does not, so a noun that waits on a
+#     press passes every test of its own and fails in a session: picker manners' $.pickers.wait
+#     asked every question twice that way. Each fixture is one form of that reason, never one named
+#     case (L362).
 WAITS="$ROOT/tools/check-mod-noun-waits.sh"
 M12W="$TMPROOT/m12w"
 mknounmod(){   # $1 = mods dir  $2 = name  $3 = the noun its contract declares; the hooks module's source on stdin
@@ -625,7 +626,8 @@ export const register = on => {
   })
 }
 TS
-# A timer bounds the wait only when it settles the promise, and only under 10 s.
+# A timer bounds the wait only when it settles the promise, and only under the 10 s limit measured
+# on 2026-10-05.
 mknounmod "$M12W" long-timer pause <<'TS'
 const WAIT_MS = 15 * 1_000
 export const register = on => {
@@ -688,7 +690,8 @@ export const register = on => {
 TS
 # What must pass: a wait a timer under 10 s settles, one settled at once, a comment or a string
 # naming the forbidden shape, and a wait outside every noun's code, which is not this check's to
-# judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun).
+# judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun). The
+# 10 s is the limit measured on 2026-10-05.
 mknounmod "$M12W" bounded short <<'TS'
 const waiters = new Map()
 const ANSWER_MS = 5_000

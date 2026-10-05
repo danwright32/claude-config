@@ -25,13 +25,13 @@ and settles its own surfaces in rounds of its own before it is built.
 3. **Ask before focus moves.** Anything that brings an app forward is announced and waits for Dan
    (CLAUDE.md, and the keystroke guard enforces it).
 4. **A mod's own `$` noun answers within 10 seconds.** Claude Code cuts a call to a plugin's noun
-   off at 10 s: measured live on 2.1.289 (#744), a probe plugin's `$.probe.wait` was rejected at
-   10,003 ms with "did not answer within 10000ms". `claude plugin test` does not apply that limit,
-   so a noun that waits longer passes every test of its own and fails only in a session. So a noun
-   never waits on a person (Dan's answer has no bound) or on anything else with no bound under
-   10 s: it answers at once, or settles from a timer under 10 s. A hook that must wait on Dan asks
-   through an engine `$` call, which does not spend its budget, or refuses and lets the answer
-   arrive later, as ask before saving does. `tools/check-mod-noun-waits.sh`, run by
+   off at 10 s: measured live on 2026-10-05 on 2.1.289 (#744), a probe plugin's `$.probe.wait` was
+   rejected at 10,003 ms with "did not answer within 10000ms". `claude plugin test` does not apply
+   that limit, so a noun that waits longer passes every test of its own and fails only in a
+   session. So a noun never waits on a person (Dan's answer has no bound) or on anything else with
+   no bound under 10 s: it answers at once, or settles from a timer under 10 s. A hook that must
+   wait on Dan asks through an engine `$` call, which does not spend its budget, or refuses and lets
+   the answer arrive later, as ask before saving does. `tools/check-mod-noun-waits.sh`, run by
    `tests/test-mods.sh`, fails a mod whose noun's code waits on `$.ui.ask` or on a promise only a
    later event settles (its resolve kept, handed on or called back) with no timer under 10 s
    settling it in the same executor; it was seen to fail on picker manners' `$.pickers.wait`. It
