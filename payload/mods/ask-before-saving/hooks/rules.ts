@@ -91,13 +91,19 @@ export const mentioned = (text: string, home: string): string[] => {
   return out
 }
 
-// The spec's words that make a rule permanent in Dan's own message, as an instruction: "from now
-// on" anywhere, "always" or "never" leading a sentence or clause or after please or should, and
-// "remember" as a request, leading one and followed by that, to, this, a colon or a comma
-// ("please remember to", "Remember: ..."). Read anywhere, "never mind the screenshots" and "it
-// always fails" skipped the question (#705), and "Remember when we shipped it?" did too.
+// The spec's words that make a rule permanent in Dan's own message, as an instruction aimed at
+// Claude: "from now on" anywhere, "always" or "never" leading the message, a sentence, a line or
+// what a colon introduces (after an opening word such as "ok", "also" or "and", and "please", "you
+// should" or "you must"), or after "please", "you should" or "you must" anywhere; and "remember" as
+// a request in the same places, followed by that, to, this, a colon or a comma ("please remember
+// to", "Remember: ..."). Read anywhere, "never mind the screenshots" and "it always fails" skipped
+// the question (#705), and "Remember when we shipped it?" did too; "and", "but", "so", "should" and
+// "must" inside a sentence lead narrative ("It ran and never finished", "that should never take
+// this long", #726), so they count only as the sentence's opening word.
 const FROM_NOW_ON = /\bfrom now on\b/i
-const LEAD = String.raw`(?:^|[.!?;:,\n]\s*|\b(?:please|and|but|so|also|you should|you must|should|must)\s+)`
+const OPENER = String.raw`(?:(?:ok(?:ay)?|yes|yeah|yep|no|thanks|thank you|right|sure|great|good|cool|also|and|but|so|then|oh|hey)\b[,\s]\s*)*`
+const ASKED = String.raw`(?:please|you should|you must)\s+`
+const LEAD = String.raw`(?:(?:^|[.!?:\n]\s*)${OPENER}(?:${ASKED})?|\b${ASKED})`
 const ALWAYS_NEVER = new RegExp(`${LEAD}(?:always|never)\\b(?!\\s+mind\\b)`, 'i')
 const REMEMBER = new RegExp(`${LEAD}remember(?:\\s+(?:that|to|this)\\b|\\s*[:,])`, 'i')
 // Words that limit it to the moment, which win: saving without asking is the harm, asking is not.

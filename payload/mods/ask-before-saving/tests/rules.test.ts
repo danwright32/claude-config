@@ -54,6 +54,12 @@ test("Dan's words make a rule permanent only when they give one: the spec's phra
     'please remember to ask before deploying',
     'you should never push to main',
     'Thanks. And remember: the staging deploy is manual.',
+    // #726: an instruction aimed at Claude still counts, wherever it starts.
+    'Also, always use pnpm here',
+    'I think you should always ask first',
+    'Could you please never deploy on Fridays',
+    'So never do that again.',
+    'Rule: always run the linter first',
   ])
     expect(`${s}: ${madePermanent(s)}`).toBe(`${s}: true`)
   for (const s of [
@@ -72,6 +78,15 @@ test("Dan's words make a rule permanent only when they give one: the spec's phra
     'Remember when we shipped the band last week?',
     'remember the deploy failed yesterday?',
     'do you remember that file?',
+    // #726: "and", "but", "so", "should" and "must" in the middle of a sentence lead narrative, not
+    // an instruction aimed at Claude, and the save went through unasked.
+    'It ran and never finished',
+    'that should never take this long',
+    'the build should always pass first',
+    'it also never worked on my phone',
+    'we must never let that happen again',
+    'I tried it twice; never got it working',
+    'It failed, never mind why',
     // Words limiting it to today or this session win over the permanent ones: asking is the harmless side.
     'From now on skip the screenshots, at least for today',
     'always use the staging key this session',
