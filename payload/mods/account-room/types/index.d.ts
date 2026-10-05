@@ -22,8 +22,18 @@ export type AccountRoomLimit = {
 }
 export type AccountRoomReading = { takenAt: number; five?: AccountRoomLimit; week?: AccountRoomLimit }
 
-/** What Switch is doing: nothing, a step under way since a moment, or a sign out not confirmed. */
-export type AccountRoomPhase = { kind: 'idle' } | { kind: 'working'; step: 'logout' | 'login'; since: number } | { kind: 'failed' }
+/**
+ * Why a Switch stopped before its sign in page, as measured (#736): no logout route was set up, so
+ * nothing was attempted; the logout command failed or could not be run; the signed out check could
+ * not be run; the check ran and did not print "signed out"; or a reload cut the run off.
+ */
+export type AccountRoomStop = 'no-route' | 'logout-failed' | 'check-not-run' | 'not-confirmed' | 'interrupted'
+
+/**
+ * What Switch is doing: nothing, a step under way since a moment, or stopped at the sign out. A
+ * stop stored by a build before #736 has no cause; that build only ever said "not confirmed".
+ */
+export type AccountRoomPhase = { kind: 'idle' } | { kind: 'working'; step: 'logout' | 'login'; since: number } | { kind: 'failed'; cause?: AccountRoomStop }
 
 /** The nickname dialog's account, while it is open. */
 export type AccountRoomAsking = { id: string; email: string; org: string; current: string | null }

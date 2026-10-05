@@ -1,6 +1,6 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession } from '../types/index.d.ts'
+import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession, AccountRoomStop } from '../types/index.d.ts'
 import { card, fromRateLimits, nameOf, triggered, verdict } from './room.ts'
 import type { Account, Offset, Reading, Unavailable, Verdict } from './room.ts'
 import { accountKey, macsIn, combine, merge, parseMacFile, parseNicknames, serialize, withSighting } from './store.ts'
@@ -254,11 +254,13 @@ const recompute = ($: EngineInterface) =>
       return
     }
     let phase: AccountRoomPhase = (await $.state.get(phaseRef)).value ?? { kind: 'idle' }
-    // A reload while Switch ran left nobody running it: the sign out was not confirmed.
+    // A reload while Switch ran left nobody running it.
     if (phase.kind === 'working' && !switching) {
-      // In the logout step the sign out was never confirmed. In the login step it was, and whether
-      // the sign in finished is unknown, so the card goes back to its offer rather than claim a failure.
-      phase = phase.step === 'logout' ? { kind: 'failed' } : { kind: 'idle' }
+      // In the logout step the run was cut off before anything was confirmed, and nothing checked
+      // the page afterwards, so the card says it was cut off (#736). In the login step the sign out
+      // was confirmed, and whether the sign in finished is unknown, so the card goes back to its
+      // offer rather than claim a failure.
+      phase = phase.step === 'logout' ? { kind: 'failed', cause: 'interrupted' } : { kind: 'idle' }
       await $.state.set(phaseRef, phase)
     }
     const nick = await loadNicknames($, s.home)
@@ -320,21 +322,29 @@ const LOGOUT_TIMEOUT_MS = 60_000
 const CHECK_TIMEOUT_MS = 30_000
 
 type SignOutRoute = { logoutCommand: string; signedOutCheck: string }
-type SignOut = { isConfirmed: true } | { isConfirmed: false; why: string }
+// The cause is what the card says and the why is the toast's detail, so each stop names what was
+// actually measured: nothing attempted, the command, the check not run, or the check's answer (#736).
+type SignOut = { isConfirmed: true } | { isConfirmed: false; cause: AccountRoomStop; why: string }
 
 const short = (s: string) => (s.trim().length > 120 ? `${s.trim().slice(0, 120)}...` : s.trim())
 
 const signOut = async ($: EngineInterface, route: SignOutRoute): Promise<SignOut> => {
-  if (!route.logoutCommand || !route.signedOutCheck) return { isConfirmed: false, why: 'no browser logout route has been proven yet (#659)' }
+  if (!route.logoutCommand || !route.signedOutCheck) return { isConfirmed: false, cause: 'no-route', why: 'no browser logout route has been proven yet (#659)' }
+  let out: { exitCode: number; stderr: string }
   try {
-    const out = await $.process.run(['/bin/sh', '-c', route.logoutCommand], { timeoutMs: LOGOUT_TIMEOUT_MS })
-    if (out.exitCode !== 0) return { isConfirmed: false, why: `the logout command exited ${out.exitCode}: ${short(out.stderr) || 'no output'}` }
-    const check = await $.process.run(['/bin/sh', '-c', route.signedOutCheck], { timeoutMs: CHECK_TIMEOUT_MS })
-    if (check.exitCode === 0 && check.stdout.trim() === 'signed out') return { isConfirmed: true }
-    return { isConfirmed: false, why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
+    out = await $.process.run(['/bin/sh', '-c', route.logoutCommand], { timeoutMs: LOGOUT_TIMEOUT_MS })
   } catch (err) {
-    return { isConfirmed: false, why: `the logout could not be run: ${String((err as Error)?.message ?? err)}` }
+    return { isConfirmed: false, cause: 'logout-failed', why: `the logout command could not be run: ${message(err)}` }
   }
+  if (out.exitCode !== 0) return { isConfirmed: false, cause: 'logout-failed', why: `the logout command exited ${out.exitCode}: ${short(out.stderr) || 'no output'}` }
+  let check: { exitCode: number; stdout: string }
+  try {
+    check = await $.process.run(['/bin/sh', '-c', route.signedOutCheck], { timeoutMs: CHECK_TIMEOUT_MS })
+  } catch (err) {
+    return { isConfirmed: false, cause: 'check-not-run', why: `the signed out check could not be run: ${message(err)}` }
+  }
+  if (check.exitCode === 0 && check.stdout.trim() === 'signed out') return { isConfirmed: true }
+  return { isConfirmed: false, cause: 'not-confirmed', why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
 }
 
 type Options = { logoutCommand?: unknown; signedOutCheck?: unknown; readingsFolder?: unknown }
@@ -345,7 +355,7 @@ const runSwitch = async ($: EngineInterface, best: Account, options: Options) =>
     const out = await signOut($, { logoutCommand: str(options.logoutCommand), signedOutCheck: str(options.signedOutCheck) })
     if (!out.isConfirmed) {
       $.ui.toast(`Switch stopped: ${out.why}`)
-      await $.state.set(phaseRef, { kind: 'failed' })
+      await $.state.set(phaseRef, { kind: 'failed', cause: out.cause })
       return
     }
     await $.state.set(phaseRef, { kind: 'working', step: 'login', since: await $.clock.now() })
@@ -425,11 +435,16 @@ const ask = async ($: EngineInterface, a: AccountRoomAsking) => {
     // Opened at session start, unasked, Claude Code holds the question back below 144 columns, so a
     // narrower window shows nothing at all. The question keeps waiting, and the transcript says so
     // with the command that asks for it, which opens at any width (live check, 2026-10-05).
-    // Claude Code's own reason is said, never a width this mod did not measure (L11).
-    const why = 'reason' in opened ? String(opened.reason) : 'Claude Code has not placed it'
+    // Claude Code's own reason is said, never a width this mod did not measure (L11); a reason that
+    // came back empty is no reason, so the fallback is said instead of an empty pair of brackets.
+    const given = 'reason' in opened && typeof opened.reason === 'string' ? opened.reason.trim() : ''
+    const why = given || 'Claude Code has not placed it'
     $.ui.log(`account-room: the nickname dialog is waiting to be shown: ${why}`, { to: 'debug' })
-    const what = a.current === null ? `${a.email} has no nickname yet, and the question` : `The nickname question for ${a.email}`
-    once($, 'nickname-waiting', `Account room: ${what} is waiting to be shown (${why}). Run /accounts rename to answer it now.`)
+    // A login file with no email leaves the account named by its org, or as this account.
+    const who = a.email || (a.org ? `the ${a.org} account` : 'this account')
+    const what = a.current === null ? `${who} has no nickname yet, and the question` : `The nickname question for ${who}`
+    // Once per account: a later unplaced ask for another account is its own news (L707).
+    once($, `nickname-waiting:${a.id}`, `Account room: ${what} is waiting to be shown (${why}). Run /accounts rename to answer it now.`)
   }
 }
 
@@ -468,6 +483,18 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
     else if (!Object.prototype.hasOwnProperty.call(nick.names, s.id)) await ask($, { id: s.id, email: s.email, org: s.org, current: null })
   }
+  await recompute($)
+}
+
+/** One measurement's windows taken in: this session's live reading, this Mac's file, the card. */
+const takeIn = async ($: EngineInterface, windows: Parameters<typeof fromRateLimits>[0]) => {
+  const s = (await $.state.get(sessionRef)).value
+  if (!s) return
+  const reading = fromRateLimits(windows, await $.clock.now())
+  if (!reading) return
+  // Limit by limit, so a response reporting one window keeps the other (L510).
+  await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
+  await record($, s, reading)
   await recompute($)
 }
 
@@ -517,15 +544,14 @@ export const register: Register = (on, options) => {
   })
 
   on('session.measure', async ($, e, next) => {
-    const s = (await $.state.get(sessionRef)).value
-    if (s && e.changed.includes('rateLimits')) {
-      const reading = fromRateLimits(e.rateLimits, await $.clock.now())
-      if (reading) {
-        // Limit by limit, so a response reporting one window keeps the other (L510).
-        await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
-        await record($, s, reading)
-        await recompute($)
-      }
+    // The reading work (saving it, reading every Mac's figures, drawing the card) runs once this
+    // hook has returned, so a slow write or a held lock never holds up the measurement for the
+    // mods beneath (#736). A failure there is said once, never dropped (L73).
+    if (e.changed.includes('rateLimits')) {
+      const windows = e.rateLimits
+      $.clock.after(0, () => {
+        takeIn($, windows).catch(err => once($, 'measure-failed', `Account room: a rate limit reading could not be taken in: ${message(err)}`))
+      })
     }
     return next(e)
   })

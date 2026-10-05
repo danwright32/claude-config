@@ -157,9 +157,24 @@ test('while Switch works the lead is the progress with elapsed seconds, and the 
 
 test('a sign out that is not confirmed turns the lead red, claiming only that, with Try again and Dismiss', () => {
   const v = verdict(account('here', 'This', reading(10, 95)), [account('work', 'Work', reading(12, 30))], NOW)
-  const c = card({ verdict: v, phase: { kind: 'failed' }, now: NOW, offset: ET, unavailable: [] })
+  const c = card({ verdict: v, phase: { kind: 'failed', cause: 'not-confirmed' }, now: NOW, offset: ET, unavailable: [] })
   expect(text(c.lines as Line[])[0]).toBe("claude.ai didn't confirm the sign out. Nothing else was changed.  [ Try again ] [ Dismiss ]")
   expect((c.lines[0] as { color?: string }[])[0]).toMatchObject({ color: 'error' })
+  // A failure stored by a build before #736 carried no cause, and that build only ever said this.
+  expect(text(card({ verdict: v, phase: { kind: 'failed' }, now: NOW, offset: ET, unavailable: [] }).lines as Line[])[0]).toBe(text(c.lines as Line[])[0])
+})
+
+test('a Switch stopped for another reason says what was measured, never that claude.ai was asked (#736, L11, L440)', () => {
+  const v = verdict(account('here', 'This', reading(10, 95)), [account('work', 'Work', reading(12, 30))], NOW)
+  const lead = (cause: 'no-route' | 'logout-failed' | 'check-not-run' | 'interrupted') => {
+    const c = card({ verdict: v, phase: { kind: 'failed', cause }, now: NOW, offset: ET, unavailable: [] })
+    expect((c.lines[0] as { color?: string }[])[0]).toMatchObject({ color: 'error' })
+    return text(c.lines as Line[])[0]
+  }
+  expect(lead('no-route')).toBe('No sign out was attempted: no browser logout route is set up. Nothing was changed.  [ Try again ] [ Dismiss ]')
+  expect(lead('logout-failed')).toBe('The browser logout command failed. Nothing else was changed.  [ Try again ] [ Dismiss ]')
+  expect(lead('check-not-run')).toBe('The signed out check could not be run. Nothing else was changed.  [ Try again ] [ Dismiss ]')
+  expect(lead('interrupted')).toBe('A reload cut Switch off before the sign out was confirmed. Nothing else was changed.  [ Try again ] [ Dismiss ]')
 })
 
 test('the no room card: amber lead with Dismiss, then the soonest reset and the unread account', () => {

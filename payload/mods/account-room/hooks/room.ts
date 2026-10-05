@@ -1,4 +1,4 @@
-import type { AccountRoomLimit, AccountRoomPhase, AccountRoomReading } from '../types/index.d.ts'
+import type { AccountRoomLimit, AccountRoomPhase, AccountRoomReading, AccountRoomStop } from '../types/index.d.ts'
 
 // The account room's judgments (#659), pure so each is tested on its own. Behaviour is the spec
 // agreed with Dan on 2026-10-04 (issue #659); the look and every sentence are the design rounds of
@@ -179,9 +179,25 @@ const figures = (a: Account, now: number, offset: Offset): string => {
 const listed = (names: string[]) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
 
 /**
+ * The red lead for a Switch that stopped at the sign out, one sentence per measured cause (#736,
+ * L11, L440). "claude.ai didn't confirm the sign out" is the design round's sentence and is kept for
+ * the one case it describes, a check that ran and did not print "signed out"; the others say what
+ * was found instead of claiming a check that never ran. Typed as a complete record, so a new cause
+ * cannot fall back on another's sentence (L113).
+ */
+export const STOPPED: Record<AccountRoomStop, string> = {
+  'no-route': 'No sign out was attempted: no browser logout route is set up. Nothing was changed.',
+  'logout-failed': 'The browser logout command failed. Nothing else was changed.',
+  'check-not-run': 'The signed out check could not be run. Nothing else was changed.',
+  'not-confirmed': "claude.ai didn't confirm the sign out. Nothing else was changed.",
+  interrupted: 'A reload cut Switch off before the sign out was confirmed. Nothing else was changed.',
+}
+
+/**
  * The boxed card in the band (design rounds 1 to 3 and the wording rounds): an amber lead line with
  * its buttons, then one line of figures or of the soonest reset. While Switch works the lead itself
- * is the progress with elapsed seconds and the buttons go; a sign out not confirmed turns it red.
+ * is the progress with elapsed seconds and the buttons go; a Switch stopped at the sign out turns it
+ * red, saying why (STOPPED).
  */
 export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: Offset; unavailable: readonly Unavailable[] }): Card => {
   const v = f.verdict
@@ -193,7 +209,7 @@ export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: O
       const doing = f.phase.step === 'logout' ? 'signing claude.ai out in the browser' : 'opening the sign in page'
       lines.push([{ text: `Switching to ${name}: ${doing}… ${secs}s`, color: AMBER }])
     } else if (f.phase.kind === 'failed') {
-      lines.push([{ text: "claude.ai didn't confirm the sign out. Nothing else was changed.", color: RED }, GAP, { button: 'retry', label: 'Try again' }, SPACE, { button: 'dismiss', label: 'Dismiss' }])
+      lines.push([{ text: STOPPED[f.phase.cause ?? 'not-confirmed'], color: RED }, GAP, { button: 'retry', label: 'Try again' }, SPACE, { button: 'dismiss', label: 'Dismiss' }])
     } else {
       lines.push([{ text: `This account is low. ${name} has room`, color: AMBER }, GAP, { button: 'switch', label: 'Switch' }, SPACE, { button: 'dismiss', label: 'Dismiss' }])
     }

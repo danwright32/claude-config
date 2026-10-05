@@ -107,19 +107,27 @@ type World = {
   openFails: boolean
   /** A pane opened unasked waits undrawn, as Claude Code does below 144 terminal columns. */
   openWaits: boolean
+  /** The reason Claude Code gives for a waiting pane. */
+  openReason: string
   /** Asking whether a path exists fails, as a disk going away would. */
   existsFails: boolean
   /** Asking whether the readings folder exists fails, and nothing else does. */
   folderExistsFails: boolean
   /** `claude auth login` cannot even be started. */
   authLoginThrows: boolean
+  /** The signed out check cannot even be started. */
+  checkThrows: boolean
+  /** Reading this session's live reading back from the session's state fails. */
+  liveReadFails: boolean
+  /** The phase a reload left stored, answered to the next read of it. */
+  phaseAfterReload?: unknown
 }
 const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, existsFails: false, folderExistsFails: false, authLoginThrows: false, ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, existsFails: false, folderExistsFails: false, authLoginThrows: false, checkThrows: false, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
   const toasts: string[] = []
   const logs: string[] = []
   // The lines that reach the transcript, as against the debug log.
@@ -155,7 +163,26 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: names.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: T0, isLink: false })) } as never
   })
   let lockHeld = w.staleLockMs > 0
-  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: T0 - w.staleLockMs } }) as never)
+  let lockTouched = T0 - w.staleLockMs
+  // Another session takes the lock now and keeps it, as one writing behind a slow disk would.
+  const holdLock = () => {
+    lockHeld = true
+    lockTouched = clock.now()
+  }
+  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: lockTouched } }) as never)
+  on('state.get', ($, e, next) => {
+    const at = e as unknown as { plugin?: string; key?: string }
+    // The session's state answers nothing usable for the live reading.
+    if (w.liveReadFails && at.plugin === 'account-room' && at.key === 'live') return { value: undefined } as never
+    // What a reload of the mod leaves: the next read of the stored phase answers this, though
+    // nothing in the module instance now loaded is running a Switch.
+    if (w.phaseAfterReload && at.plugin === 'account-room' && at.key === 'phase') {
+      const value = w.phaseAfterReload
+      w.phaseAfterReload = undefined
+      return { value: { value, version: 1 } } as never
+    }
+    return next(e)
+  })
   on('process.run', async ($, e) => {
     runs.push([...e.argv])
     if (e.argv[0] === '/bin/sh' && e.argv[2] === 'LOGOUT' && w.logoutGate) await w.logoutGate
@@ -197,7 +224,10 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (cmd === 'date' && rest[0] === '-r') return r(ok(Number(rest[1]) * 1000 >= Date.UTC(2026, 10, 1, 6, 0) ? '-0500\n' : '-0400\n'))
     if (cmd === 'date') return r(ok('-0400\n'))
     if (cmd === '/bin/sh' && rest[1] === 'LOGOUT') return r(w.logout)
-    if (cmd === '/bin/sh' && rest[1] === 'CHECK') return r(w.check)
+    if (cmd === '/bin/sh' && rest[1] === 'CHECK') {
+      if (w.checkThrows) throw new Error('spawn /bin/sh EAGAIN')
+      return r(w.check)
+    }
     if (cmd === 'claude') {
       if (w.authLoginThrows) throw new Error('spawn claude ENOENT')
       return r(w.authLogin)
@@ -215,7 +245,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('ui.open', ($, e) => {
     if (w.openFails) throw new Error('no surface to open it on')
     opened.push(e.id)
-    if (w.openWaits) return { value: { isPlaced: false, reason: 'the terminal is 120 columns wide; a pane opened unasked needs 144' } } as never
+    if (w.openWaits) return { value: { isPlaced: false, reason: w.openReason } } as never
     return { value: { isPlaced: true } } as never
   })
   on('ui.close', ($, e) => {
@@ -235,7 +265,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, logs, transcript, runs, opened, closed, clock }
+  return { w, toasts, logs, transcript, runs, opened, closed, clock, holdLock }
 }
 
 type Session = { session: { start: (e: never) => Promise<unknown>; measure: (e: never) => Promise<unknown> } }
@@ -422,8 +452,9 @@ test('Switch shows its progress with elapsed seconds, and with no proven logout 
   expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 0s/)
   expect(await ui.find({ type: 'Button', key: 'account-room:switch' })).toBeUndefined()
   await clock.advance(1)
-  expect(await shown(ui)).toMatch(/^claude\.ai didn't confirm the sign out\. Nothing else was changed\./)
-  expect((await ui.find({ type: 'Text', text: "claude.ai didn't confirm the sign out. Nothing else was changed." }))?.props).toMatchObject({ color: 'error' })
+  // Nothing was attempted, so the card says that, never that claude.ai was asked (#736).
+  expect(await shown(ui)).toMatch(/^No sign out was attempted: no browser logout route is set up\. Nothing was changed\./)
+  expect((await ui.find({ type: 'Text', text: 'No sign out was attempted: no browser logout route is set up. Nothing was changed.' }))?.props).toMatchObject({ color: 'error' })
   expect((await ui.find({ type: 'Button', key: 'account-room:retry' }))?.props).toMatchObject({ label: 'Try again' })
   expect(runs.some(r => r[0] === 'claude')).toBe(false)
   await ui.unmount()
@@ -461,8 +492,17 @@ test('a logout whose check does not print signed out, or that fails, stops befor
   w.logout = { exitCode: 1, stdout: '', stderr: 'browser not running' }
   await ui.press({ key: 'account-room:retry', plugin: 'mod-kit' })
   await clock.settle()
-  expect(await shown(ui)).toMatch(/^claude\.ai didn't confirm the sign out/)
+  // The command failed before any check ran, so that is what the card says (#736).
+  expect(await shown(ui)).toMatch(/^The browser logout command failed\. Nothing else was changed\./)
   expect(runs.some(r => r[0] === 'claude')).toBe(false)
+  // A check that cannot even be started is not a page that declined to confirm.
+  w.logout = ok()
+  w.checkThrows = true
+  await ui.press({ key: 'account-room:retry', plugin: 'mod-kit' })
+  await clock.settle()
+  expect(await shown(ui)).toMatch(/^The signed out check could not be run\. Nothing else was changed\./)
+  expect(runs.some(r => r[0] === 'claude')).toBe(false)
+  w.checkThrows = false
   // Try again with a working route goes on to the sign in page.
   w.logout = ok()
   await ui.press({ key: 'account-room:retry', plugin: 'mod-kit' })
@@ -530,7 +570,7 @@ test('a failed Switch does not outlive the low spell: when the account runs low 
   await measure($, clock, limits(97, 50))
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
   await clock.advance(1)
-  expect(await shown(ui)).toMatch(/^claude\.ai didn't confirm/)
+  expect(await shown(ui)).toMatch(/^No sign out was attempted/)
   await measure($, clock, limits(5, 50))
   await measure($, clock, limits(96, 50))
   expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
@@ -739,4 +779,57 @@ test('with no Claude login (an API key session) the mod does nothing and says wh
   expect(opened).toEqual([])
   expect(w.files[OWN]).toBeUndefined()
   expect(logs.some(l => /no Claude account/.test(l))).toBe(true)
+})
+
+test('a reload that cut Switch off mid sign out says so: nothing was checked (#736)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  // What a reload leaves: the stored phase says the sign out step was under way, and nothing in this
+  // module instance is running it.
+  w.phaseAfterReload = { kind: 'working', step: 'logout', since: T0 }
+  await measure($, clock, limits(98, 50))
+  expect(w.phaseAfterReload).toBeUndefined()
+  expect(await shown(ui)).toMatch(/^A reload cut Switch off before the sign out was confirmed\. Nothing else was changed\./)
+  await ui.unmount()
+})
+
+test('a rate limit measurement is never held up by the reading work: a held lock delays nothing (#736)', withKit, async ($, on) => {
+  const { clock, holdLock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  // Another session holds the write lock and keeps it: the reading work waits up to 5 seconds on it.
+  holdLock()
+  let answered = false
+  void $.session.measure({ context: { window: 200_000 }, rateLimits: limits(40, 50), changed: ['rateLimits'] } as never).then(() => (answered = true))
+  await clock.settle()
+  expect(answered).toBe(true)
+})
+
+test('reading work that fails after the measurement has gone on is said once, never dropped (#736, L73)', withKit, async ($, on) => {
+  const { clock, transcript, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  w.liveReadFails = true
+  await measure($, clock, limits(40, 50))
+  await measure($, clock, limits(41, 50))
+  expect(transcript.filter(t => /^Account room: a rate limit reading could not be taken in: \S/.test(t))).toHaveLength(1)
+})
+
+test('the waiting question line falls back on what is known: no reason, no email (#736)', withKit, async ($, on) => {
+  const noEmail = JSON.stringify({ oauthAccount: { accountUuid: 'acct-work', organizationUuid: 'org-1', emailAddress: '', organizationName: 'Acme' } })
+  const { clock, transcript } = world(on, { files: { [LOGIN]: noEmail }, openWaits: true, openReason: '' })
+  await start($, clock)
+  const said = transcript.filter(t => /^Account room: /.test(t))
+  expect(said).toEqual(['Account room: the Acme account has no nickname yet, and the question is waiting to be shown (Claude Code has not placed it). Run /accounts rename to answer it now.'])
+})
+
+test('a waiting question is said once per account, so a later ask for another one is not silenced (#736)', withKit, async ($, on) => {
+  const { clock, transcript } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, openWaits: true })
+  await start($, clock)
+  type Cmd = { command: { run: (e: never) => Promise<{ text?: string }> } }
+  await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename' } as never)
+  await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename work' } as never)
+  await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename work' } as never)
+  const said = transcript.filter(t => /^Account room: The nickname question for /.test(t))
+  expect(said.map(t => /for (\S+)/.exec(t)?.[1])).toEqual(['home@example.com', 'work@example.com'])
 })
