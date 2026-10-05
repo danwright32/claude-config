@@ -429,7 +429,7 @@ test('/live says so when GitHub cannot be asked for the repo\'s current name, an
   world(on, { remote: 'git@github.com:danwright32/old-slate.git', repoName: { exitCode: 1, stdout: '', stderr: 'HTTP 502' } })
   await card($, CARD)
   expect(await live($)).toBe(
-    'No merged changes have a card in this project yet.\n\nGitHub could not be asked for the name this repository has now (HTTP 502), so cards kept under another name for it are not listed.',
+    'No merged changes have a card in this project yet.\n\nGitHub could not be asked for the name this repository has now (HTTP 502), so any cards kept under another name for it may be missing.',
   )
 })
 
@@ -438,6 +438,17 @@ test('a later card for the same PR that names nobody keeps the unsent message, i
   await card($, { ...CARD, deploy: 'deploying', checked: undefined, requester: { name: 'Kris', via: 'slack' }, message: 'Deploying now.' })
   await card($, CARD)
   expect(await live($)).toContain('Not sent yet:\n- Message for Kris (#412): Deploying now.')
+  expect(await shown($)).toEqual(['Message for Kris', 'Deploying now.'])
+})
+
+test("a requester dropped as Dan's own leaves an earlier card's unsent message waiting, and Claude is told both", withKit, async ($, on) => {
+  const w = world(on)
+  await card($, { ...CARD, deploy: 'deploying', checked: undefined, requester: { name: 'Kris', via: 'slack' }, message: 'Deploying now.' })
+  w.w.issue = { exitCode: 0, stdout: JSON.stringify({ author: { login: 'danwright32' } }) }
+  const r = await card($, { ...CARD, requester: { name: 'Sam', via: 'issue', issue: 88 }, message: 'It is live.' })
+  const said = (r.context ?? []).join(' ')
+  expect(said).toContain('The message for Sam was dropped: issue #88 was filed from your own account')
+  expect(said).toContain('The earlier message for Kris still waits until Dan marks it sent.')
   expect(await shown($)).toEqual(['Message for Kris', 'Deploying now.'])
 })
 

@@ -194,7 +194,7 @@ export const register: Register = on => {
       if (mine.note) notes.push(`Who filed issue #${requester.issue}: is it live ${mine.note}.`)
       // GitHub logins are one name in any case.
       if (mine.logins.some(l => fold(l) === fold(author as string))) {
-        notes.push(`The message was dropped: issue #${requester.issue} was filed from your own account, so Dan or you asked for it.`)
+        notes.push(`The message for ${requester.name} was dropped: issue #${requester.issue} was filed from your own account, so Dan or you asked for it.`)
         requester = undefined
         message = undefined
       }
@@ -216,10 +216,13 @@ export const register: Register = on => {
       if (before?.sentAt !== undefined && before.message === message) kept.sentAt = before.sentAt
     } else if (before?.requester && before.message) {
       // A card naming nobody leaves the message an earlier card owed as it was, sent or not: it
-      // waits until Dan presses Mark sent (#704), never until the next card.
+      // waits until Dan presses Mark sent (#704), never until the next card. That holds too when
+      // this card's requester was dropped as Dan's own, since the earlier one asked for something
+      // else; Claude is told it still waits, beside the note that this card's was dropped.
       kept.requester = before.requester
       kept.message = before.message
       if (before.sentAt !== undefined) kept.sentAt = before.sentAt
+      else if (input.requester) notes.push(`The earlier message for ${before.requester.name} still waits until Dan marks it sent.`)
     }
     await saveCards($, repo, [kept, ...had.filter(c => c.pr !== input.pr)])
     const verdicts = (await $.state.get(verdictsRef)).value ?? {}
@@ -282,7 +285,7 @@ export const register: Register = on => {
     const cards = [...byPr.values()]
     // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.
     for (const c of cards) await pin($, c)
-    const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so cards kept under another name for it are not listed.` : ''
+    const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''
     return { text: liveList(cards) + unasked }
   })
 }
