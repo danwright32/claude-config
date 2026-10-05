@@ -563,8 +563,10 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
   } else {
     const a = assess({ tail, size, lastGrowth: mtime * 1000 }, now)
     stuck = a.state !== 'running'
-    const repeats = a.state === 'repeating' ? (a.lines.length === 1 ? `the same line, "${a.line}"` : `the same ${a.lines.length} lines in turn, "${a.lines.join('" then "')}"`) : ''
-    state = a.state === 'repeating' ? `it keeps repeating ${repeats}` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
+    // Measured facts only: the repeated text itself is the job's, and reaches the judge only inside
+    // the fenced output below, never in the lines addressed to it (lessons review of #721, L28).
+    const repeats = a.state === 'repeating' ? (a.lines.length === 1 ? 'the same line' : `a pass of ${a.lines.length} lines`) : ''
+    state = a.state === 'repeating' ? `it keeps repeating ${repeats}, shown at the end of its output below` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
   }
   const v = await judge($, promptFor(job, now - job.startedAt, tail ?? '(could not be read)', state))
   if (!v) return { kind: 'unjudged', name: short, session: job.session }

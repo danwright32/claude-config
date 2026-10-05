@@ -100,11 +100,23 @@ describe('lookParts', () => {
   test('jobs counted, and every kept job named with its run time', () => {
     const jobs = [
       { label: 'a', runMs: MIN, kept: false, stuck: false },
-      { label: 'b', runMs: MIN, kept: false, stuck: true },
+      { label: 'b', runMs: MIN, kept: false, stuck: false },
       { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: false },
       { label: 'watcher', runMs: 3 * HOUR, kept: true, stuck: false },
     ]
     expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('2 jobs running | dev server kept 30m | watcher kept 3h 0m')
+  })
+  // #706 (spec item 2 of #611): a job the watcher measured as stuck, repeating itself or silent ten
+  // minutes, is marked stuck on the bar, ahead of the running ones; a kept one says so after its name.
+  // Otherwise a job gone stuck while no turn runs shows nowhere at all.
+  test('a stuck job is marked stuck on the bar, a running one first and a kept one by name', () => {
+    const jobs = [
+      { label: 'a', runMs: MIN, kept: false, stuck: false },
+      { label: 'b', runMs: MIN, kept: false, stuck: true },
+      { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: true },
+    ]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job stuck | 1 job running | dev server kept 30m, stuck')
+    expect(texts(lookParts({ modes: [], pr: null, jobs: [jobs[1] as (typeof jobs)[number]], unpushed: null, now }))).toBe('1 job stuck')
   })
   // #697: an unpushed count that could not be read again is never a zero: the commits keep their
   // place on the line, with the age of the last reading, as a PR whose refresh failed does.

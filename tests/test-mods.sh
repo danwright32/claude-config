@@ -392,6 +392,65 @@ else
     && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no PICKER_OPEN for picker-manners open in goal-tracker"
 fi
 
+# 13. The goal tracker reads ask before saving's waiting saves, `ask-before-saving.pending`, as a list
+#     whose first entry has id: string (#706), and its own tests can only stand in for ask before
+#     saving, so its reading is checked here against the contract ask before saving declares (L52),
+#     as picker manners' contract is above. Shown failing on a contract whose shape moved, then held
+#     on the real one.
+save_contract(){   # $1 = ask before saving's types file -> prints what does not match, exits 1 when anything does not
+  python3 - "$1" <<'PY'
+import re, sys
+try:
+    text = open(sys.argv[1]).read()
+except OSError as e:
+    print(f"cannot read {sys.argv[1]}: {e}")
+    sys.exit(1)
+def block_after(pattern, top_only):
+    m = re.search(pattern, text)
+    if not m:
+        return None
+    depth, out = 1, []
+    for c in text[m.end():]:
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(c if depth == 1 or not top_only or c == "\n" else " ")
+    return None
+wrong = []
+state = block_after(r"'ask-before-saving'\s*:\s*\{", True)
+if state is None or not re.search(r"\bpending\s*:\s*AskBeforeSavingQuestion\[\]", state):
+    wrong.append("PluginState 'ask-before-saving' does not declare pending: AskBeforeSavingQuestion[]")
+body = block_after(r"export type AskBeforeSavingQuestion\s*=\s*\{", True)
+if body is None:
+    wrong.append("there is no AskBeforeSavingQuestion type")
+elif not re.search(r"^\s*id\s*:\s*string\b", body, re.M):
+    wrong.append("AskBeforeSavingQuestion has no id: string")
+print("; ".join(wrong))
+sys.exit(1 if wrong else 0)
+PY
+}
+ABS_TYPES="$ROOT/payload/mods/ask-before-saving/types/index.d.ts"
+if [ ! -f "$ABS_TYPES" ]; then
+  echo "note: ask before saving is not in payload/mods, so the goal tracker reads no waiting save of its and there is no contract to check."
+  check "ask before saving is absent, which is not a pass over its contract" ok
+else
+  M13="$TMPROOT/m13"; mkdir -p "$M13"
+  sed 's/^  id: string$/  callId: string/' "$ABS_TYPES" > "$M13/moved.d.ts"
+  grep -q '^  callId: string$' "$M13/moved.d.ts" || check "the moved fixture was made" "sed did not change the contract"
+  out="$(save_contract "$M13/moved.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 1 ] && case "$out" in *"AskBeforeSavingQuestion has no id: string"*) true ;; *) false ;; esac \
+    && check "an ask before saving contract whose question id moved fails the goal tracker's reading" ok \
+    || check "an ask before saving contract whose question id moved fails the goal tracker's reading" "exit=$code out=$out"
+  out="$(save_contract "$ABS_TYPES" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "ask before saving's contract declares the waiting saves as the goal tracker reads them" ok \
+    || check "ask before saving's contract declares the waiting saves as the goal tracker reads them" "exit=$code out=$out"
+  grep -q "SAVE_PENDING = { plugin: 'ask-before-saving', key: 'pending' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
+    && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no SAVE_PENDING for ask-before-saving pending in goal-tracker"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
