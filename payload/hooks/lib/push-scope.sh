@@ -235,6 +235,23 @@ sys.stdout.write("".join(seg + "\x1e" for seg in out))
 ' 2>/dev/null
 }
 
+# One segment's words as the shell reads them, quotes removed and a quoted word holding a space
+# kept whole, joined by 0x1f for `IFS=$'\x1f' read -r -a` (claude-config#589). The ONE word reader
+# for the segment questions below, so a fix to how a segment is read reaches every one of them.
+# A segment python cannot read (an unbalanced quote, no python3) falls back to whitespace words,
+# the direction that still lets a push be seen and the gates fire.
+ps__seg_words() {   # $1 = one segment
+  local words
+  if words="$(PS_SEG="$1" python3 -c '
+import os, shlex, sys
+sys.stdout.write("\x1f".join(shlex.split(os.environ["PS_SEG"], posix=True)))
+' 2>/dev/null)" && [ -n "$words" ]; then
+    printf '%s' "$words"
+  else
+    printf '%s\n' "$1" | awk '{ $1 = $1; gsub(/ /, "\037"); printf "%s", $0 }'
+  fi
+}
+
 ps__segment_is_push() {
   # Tokenize the way the shell does, quotes and all (claude-config#589). This used to split on
   # whitespace on the grounds that quoting only matters for arguments it skips, and it matters for
@@ -242,16 +259,9 @@ ps__segment_is_push() {
   # b/wt" as if it were the subcommand, and the push was not seen as a push at all, so every global
   # push gate stood down on it. The crude split is kept only for when python3 cannot read the
   # segment (an unbalanced quote), which is the direction that still fires the gates.
-  local seg="$1" toks
+  local seg="$1"
   local -a tok
-  if toks="$(PS_SEG="$seg" python3 -c '
-import os, shlex, sys
-sys.stdout.write("\x1f".join(shlex.split(os.environ["PS_SEG"], posix=True)))
-' 2>/dev/null)" && [ -n "$toks" ]; then
-    IFS=$'\x1f' read -r -a tok <<< "$toks"
-  else
-    read -r -a tok <<< "$seg"
-  fi
+  IFS=$'\x1f' read -r -a tok <<< "$(ps__seg_words "$seg")"
   local i=0 n=${#tok[@]} t
 
   # A subshell or group opening the segment, `(git push)` or `( cd x && git push )`, is
@@ -331,7 +341,9 @@ ps_is_gh_pr_create() {   # $1 = command
 
 ps__segment_is_pr_create() {   # $1 = one segment
   local -a tok
-  read -r -a tok <<< "$1"
+  # The same shell reading as ps__segment_is_push (#589): a quoted assignment holding a space,
+  # GH_TOKEN="a b" gh pr create, split on whitespace left `b"` as the command.
+  IFS=$'\x1f' read -r -a tok <<< "$(ps__seg_words "$1")"
   local i=0 n=${#tok[@]} t depth=0 opens closes
   while [ "$i" -lt "$n" ]; do
     t="${tok[$i]}"
