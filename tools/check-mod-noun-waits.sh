@@ -136,7 +136,7 @@ def definition(files, name):
     """Where the function called name is defined in the mod: (file, start, end), or None."""
     pattern = r"\b(?:const|let|var)\s+" + re.escape(name) + r"\b[^=]*=(?!=)|\bfunction\s+" + re.escape(name) + r"\b"
     for f in files:
-        found = _definition(f.code, name)
+        found = _definition(f.code, name, f.kinds)
         if found:
             start = re.search(pattern, f.code).start()
             return f, start, start + len(found)
