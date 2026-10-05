@@ -216,6 +216,16 @@ check "and says the findings were read on their key" "read: this merge presented
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "once read, a later check of the same head allows" "0" "$rc"
 
+# 3a2. a review file with findings but no finish stamp cannot be given a read key, and the refusal
+#      says THAT, never that the state folder is at fault (L11).
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+printf 'repo=repo\nstatus=ok\nkind=pr\nfindings=1\n\nApp/Sync.swift:3: x (L1). Should be: y.\n' > "$(final_of "$HEAD_SHA")"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "a review with no finish stamp refuses" "1" "$rc"
+check "and says the review records no finish time" "no finish time" "$out"
+check_not "and does not blame the state folder" "could be made in" "$out"
+
 # 3b. finished clean: allowed at once.
 reset_state
 FAKE_CLAUDE_OUT="No issues found." prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
@@ -443,6 +453,10 @@ out="$(fire_gate "echo 'PR_REVIEW_READ=$gk' && gh pr merge 7 --squash")"; rc=$?
 check_eq "a key that is only mentioned in another command does not count" "2" "$rc"
 out="$(fire_gate "PR_REVIEW_READ=$gk true && gh pr merge 7 --squash")"; rc=$?
 check_eq "a key in front of a different command does not count" "2" "$rc"
+# Before an assignment holding a space (scoping the merge to one of Dan's accounts), still the key.
+out="$(fire_gate "PR_REVIEW_READ=$gk GH_TOKEN=\$(gh auth token -u x) gh pr merge 7 --squash")"; rc=$?
+check_eq "a key before an account scoped merge is read as the key" "0" "$rc"
+rm -f "$(final_of "$HEAD_SHA").acknowledged"
 # Quoted, as a shell would accept it, the key is the same key.
 out="$(fire_gate "PR_REVIEW_READ=\"$gk\" gh pr merge 7 --squash")"; rc=$?
 check_eq "a quoted key in front of the merge is read as the key" "0" "$rc"

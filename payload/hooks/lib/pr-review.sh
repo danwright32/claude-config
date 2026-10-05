@@ -275,7 +275,11 @@ do_check() {
         echo "    PR_REVIEW_READ=$readkey <the merge command>"
         echo "The key is only in this message, so a merge carrying it proves the findings were shown. A merge without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
       else
-        echo "    (no read key could be made in $AR_STATE_DIR, so no merge can show these were read; fix that, or merge with the override after telling Dan why)"
+        if [ -z "$fin" ]; then
+          echo "    (this review file records no finish time, so it cannot be given a read key and no merge can show these were read; run it again with: bash ~/.claude/hooks/lib/pr-review.sh restart --dir $top --sha ${full_sha:-$sha})"
+        else
+          echo "    (no read key could be written beside $final, so no merge can show these were read; fix that, or merge with the override after telling Dan why)"
+        fi
       fi
       [ -n "${PR_REVIEW_READ:-}" ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
       ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"

@@ -225,14 +225,47 @@ mt_command_segments() {  # $1 = command
   body="${body//||/$'\n'}"
   body="${body//;/$'\n'}"
   while IFS= read -r seg; do
-    seg="${seg#"${seg%%[![:space:]]*}"}"
-    while [[ "$seg" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+(.*)$ ]]; do
-      seg="${BASH_REMATCH[1]}"
-    done
-    printf '%s\n' "$seg"
+    mt_split_assignments "$seg"
+    printf '%s\n' "$MT_REST"
   done <<MTEOF
 $body
 MTEOF
+}
+
+# A segment's leading `NAME=value` assignments, read as the shell reads them: a value runs to the
+# first space OUTSIDE quotes and outside a $( ... ), so `GH_TOKEN=$(gh auth token -u x) gh pr merge`
+# is one assignment and then the merge. Cutting at the first space left `auth token -u x) gh pr
+# merge`, whose first word merges nothing, and every merge gate stood down on the form a session
+# uses to merge as one of Dan's accounts (found by the lessons review of #795).
+# Sets MT_ASSIGNS, one NAME=value per line with one layer of quotes removed from the value, and
+# MT_REST, the command that follows. A segment that is assignments only leaves MT_REST empty.
+mt_split_assignments() {  # $1 = one segment
+  local s="$1" name val c q depth i n
+  MT_ASSIGNS=""
+  s="${s#"${s%%[![:space:]]*}"}"
+  while [[ "$s" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; do
+    name="${BASH_REMATCH[1]}"
+    i=$(( ${#name} + 1 )); n=${#s}; val=""; q=""; depth=0
+    while [ "$i" -lt "$n" ]; do
+      c="${s:$i:1}"
+      if [ -n "$q" ]; then
+        if [ "$c" = "$q" ]; then q=""; [ "$depth" -gt 0 ] && val="$val$c"; else val="$val$c"; fi
+      else
+        case "$c" in
+          \"|\') q="$c"; [ "$depth" -gt 0 ] && val="$val$c" ;;
+          \() depth=$((depth + 1)); val="$val$c" ;;
+          \)) [ "$depth" -gt 0 ] && depth=$((depth - 1)); val="$val$c" ;;
+          ' '|$'\t') [ "$depth" -eq 0 ] && break; val="$val$c" ;;
+          *) val="$val$c" ;;
+        esac
+      fi
+      i=$((i + 1))
+    done
+    MT_ASSIGNS="$MT_ASSIGNS$name=$val"$'\n'
+    s="${s:$i}"
+    s="${s#"${s%%[![:space:]]*}"}"
+  done
+  MT_REST="$s"
 }
 
 mt_command_heads() {  # $1 = command

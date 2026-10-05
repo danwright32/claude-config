@@ -89,18 +89,12 @@ read_key_body="${read_key_body//&&/$'\n'}"
 read_key_body="${read_key_body//||/$'\n'}"
 read_key_body="${read_key_body//;/$'\n'}"
 while IFS= read -r rk_seg; do
-  rk_seg="${rk_seg#"${rk_seg%%[![:space:]]*}"}"
-  rk_found=""
-  while [[ "$rk_seg" =~ ^([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]]*)[[:space:]]+(.*)$ ]]; do
-    if [ "${BASH_REMATCH[1]}" = "PR_REVIEW_READ" ]; then
-      # One layer of quotes, as the shell would remove it: PR_REVIEW_READ="<key>" is the key.
-      rk_found="${BASH_REMATCH[2]}"
-      case "$rk_found" in \"*\") rk_found="${rk_found#\"}"; rk_found="${rk_found%\"}" ;;
-        \'*\') rk_found="${rk_found#\'}"; rk_found="${rk_found%\'}" ;; esac
-    fi
-    rk_seg="${BASH_REMATCH[3]}"
-  done
-  if [ -n "$rk_found" ] && mt_runs_merge "$rk_seg"; then
+  # The segment's leading assignments read as the shell reads them (mt_split_assignments, the same
+  # reader the merge matcher uses), so a key before `GH_TOKEN=$(gh auth token -u x) gh pr merge`
+  # is found, and quotes around the key are removed as the shell would.
+  mt_split_assignments "$rk_seg"
+  rk_found="$(printf '%s' "$MT_ASSIGNS" | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
+  if [ -n "$rk_found" ] && [ -n "$MT_REST" ] && mt_runs_merge "$MT_REST"; then
     case "$rk_found" in *[!a-f0-9]*) ;; *) read_key="$rk_found" ;; esac
     break
   fi

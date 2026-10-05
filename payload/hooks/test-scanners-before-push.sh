@@ -465,11 +465,21 @@ fi
 #     fixture's record in the real folder would be a test result a later real push trusts (L2).
 #     Judged by each fixture's OWN key, never by whether the folder changed, because other
 #     sessions' real pushes write there during this run (L375).
+#
+#     The guard derives each fixture's record name itself, so it is first CALIBRATED against the
+#     gate: one passing run into a private folder must leave a record under exactly that name, or
+#     the guard below would look for names the gate never writes and pass whatever leaked (L1).
+fx_key(){ printf '%s' "$(cd "$1" && pwd -P)" | shasum -a 256 | awk '{print $1}'; }
+RK="$(mkrepo keyprobe)"; add_scanner "$RK" alpha 0; commit_all "$RK"
+PROBE_STATE="$TMPROOT/probe-state"
+SCANNERS_STATE_DIR="$PROBE_STATE" fire "$RK" "git push" >/dev/null
+[ -f "$PROBE_STATE/$(fx_key "$RK").txt" ] && check "the leak guard names records the way the gate writes them" ok \
+  || check "the leak guard names records the way the gate writes them" "gate wrote: $(ls "$PROBE_STATE" 2>/dev/null | tr '\n' ' ')"
 REAL_STATE="$HOME/.claude/state/scanners-passed"
 _leaked=""
 for _fx in "$TMPROOT"/*/; do
   [ -e "$_fx/.git" ] || continue
-  _fx_key="$(printf '%s' "$(cd "$_fx" && pwd -P)" | shasum -a 256 | awk '{print $1}')"
+  _fx_key="$(fx_key "$_fx")"
   [ -e "$REAL_STATE/$_fx_key.txt" ] && { _leaked="$_leaked $(basename "$_fx")"; rm -f "$REAL_STATE/$_fx_key.txt"; }
 done
 [ -z "$_leaked" ] && check "no fixture wrote a pass record into the real state folder" ok \

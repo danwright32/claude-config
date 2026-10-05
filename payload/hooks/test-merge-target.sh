@@ -139,6 +139,22 @@ for w in 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY tools/wait
 done
 eq "$(mt_pr_number 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY tools/wait_for_checks.py 1421 --merge')" \
   "1421" "the variable spelling names its pull request"
+# A leading assignment whose value holds a space, a command substitution or a quoted string, is ONE
+# word to the shell. Cut at its first space, `GH_TOKEN=$(gh auth token -u x) gh pr merge 7` left
+# `auth token -u x) gh pr merge 7`, which merges nothing by its first word, so every merge gate
+# stood down on the form a session uses to merge as one of Dan's accounts (found by the lessons
+# review of #795).
+for w in 'GH_TOKEN=$(gh auth token -u danwright32) gh pr merge 7 --squash' \
+         'MSG="two words" gh pr merge 7 --squash' \
+         "NOTE='a b c' gh pr merge 7" \
+         'A=1 GH_TOKEN=$(gh auth token -u x) B="c d" gh pr merge 7'; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after an assignment holding a space was not read as a merge: $w"; fi
+done
+mt_split_assignments 'PR_REVIEW_READ="ab12" GH_TOKEN=$(gh auth token -u x) gh pr merge 7'
+eq "$MT_REST" "gh pr merge 7" "the command after assignments holding spaces"
+eq "${MT_ASSIGNS%%$'\n'*}" "PR_REVIEW_READ=ab12" "an assignment's value with its quotes removed"
+mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
+eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.
 if mt_runs_merge '$PY tools/wait_for_checks.py 7'; then
   fail "the tool merely waiting for checks, run by a variable, was read as a merge"
