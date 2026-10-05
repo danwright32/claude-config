@@ -109,16 +109,20 @@ export const sqlRefusal = (sql: string | undefined, client: string, harmless: (t
 }
 
 // Each client's command line, read by its own options: every piece of SQL it runs (psql runs every
-// -c, sqlite every argument after the database), a script file it runs (psql -f, sqlite -init),
-// which cannot be read, and a file its output goes to (psql -o and -L, MySQL --tee).
-type Client = { sql: string[]; file: boolean; outputs: string[] }
-type Options = { sql: string; file: string; output: string; value: string; longSql: string[]; longFile: string[]; longOutput: string[]; longValue: string[] }
+// -c, sqlite every argument after the database, MySQL its -e and the --init-command it runs on
+// connecting), a script file it runs (psql -f, sqlite -init), which cannot be read, a file its
+// output goes to (psql -o and -L, MySQL --tee), and a shell it runs (MySQL's --pager=<command>).
+// `attached` are the options whose value can only be written in the same word, MySQL's -p and its
+// password (#724: -pxeupdate read the update after its e as SQL, and a password ending in e took
+// the real -e as its SQL, so the SQL after it went unjudged).
+type Client = { sql: string[]; file: boolean; outputs: string[]; shell: boolean }
+type Options = { sql: string; file: string; output: string; value: string; attached: string; longSql: string[]; longFile: string[]; longOutput: string[]; longValue: string[]; longShell: string[] }
 const CLIENTS: Record<string, Options> = {
-  psql: { sql: 'c', file: 'f', output: 'oL', value: 'dFhpPRTUv', longSql: ['--command'], longFile: ['--file'], longOutput: ['--output', '--log-file'], longValue: ['--dbname', '--host', '--port', '--username', '--set', '--variable', '--pset', '--field-separator', '--record-separator', '--table-attr'] },
-  mysql: { sql: 'e', file: '', output: '', value: 'uhPDS', longSql: ['--execute'], longFile: [], longOutput: ['--tee'], longValue: ['--user', '--host', '--port', '--database', '--socket'] },
+  psql: { sql: 'c', file: 'f', output: 'oL', value: 'dFhpPRTUv', attached: '', longSql: ['--command'], longFile: ['--file'], longOutput: ['--output', '--log-file'], longValue: ['--dbname', '--host', '--port', '--username', '--set', '--variable', '--pset', '--field-separator', '--record-separator', '--table-attr'], longShell: [] },
+  mysql: { sql: 'e', file: '', output: '', value: 'uhPDS', attached: 'p#', longSql: ['--execute', '--init-command'], longFile: [], longOutput: ['--tee'], longValue: ['--user', '--host', '--port', '--database', '--socket'], longShell: ['--pager'] },
 }
 const readClient = (cmd: string, args: readonly string[]): Client => {
-  const out: Client = { sql: [], file: false, outputs: [] }
+  const out: Client = { sql: [], file: false, outputs: [], shell: false }
   if (cmd === 'sqlite3') {
     const plain: string[] = []
     for (let i = 0; i < args.length; i++) {
@@ -147,13 +151,16 @@ const readClient = (cmd: string, args: readonly string[]): Client => {
         value()
       } else if (o.longOutput.includes(name)) out.outputs.push(value())
       else if (o.longValue.includes(name)) value()
+      // MySQL's --pager takes its command only after =; alone it pages through $PAGER.
+      else if (o.longShell.includes(name) && eq >= 0) out.shell = true
       continue
     }
-    if (!/^-[A-Za-z]/.test(a)) continue
+    if (!/^-[A-Za-z#]/.test(a)) continue
     for (let j = 1; j < a.length; j++) {
       const letter = a[j] as string
       const rest = a.slice(j + 1)
       const value = () => rest || (args[++i] ?? '')
+      if (o.attached.includes(letter)) break
       if (o.sql.includes(letter)) out.sql.push(value())
       else if (o.file.includes(letter)) {
         out.file = true
@@ -171,6 +178,7 @@ const readClient = (cmd: string, args: readonly string[]): Client => {
 export const clientRefusal = (cmd: string, args: readonly string[], harmless: (target: string) => boolean): string | undefined => {
   if (cmd !== 'psql' && cmd !== 'mysql' && cmd !== 'sqlite3') return undefined
   const c = readClient(cmd, args)
+  if (c.shell) return `run a shell command through ${cmd}`
   // A script file it runs cannot be read, and with no SQL given it reads stdin, which cannot either.
   if (c.file || !c.sql.length) return 'run SQL that could not be read'
   const out = c.outputs.find(t => !harmless(t))

@@ -1,6 +1,7 @@
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesHeld } from '../types/index.d.ts'
-import type { Program } from './program.ts'
+import { codeVerdict } from './code.ts'
+import { scriptFileOf, type Program } from './program.ts'
 
 // Away and home (#621). While Dan is away nothing opens on the Mac and nothing takes focus: what
 // needs him at the Mac is held, and on coming home each session shows what it held in one boxed
@@ -53,8 +54,11 @@ export const needsTheMac = (call: { raw: string; commands: { words: string[]; pr
       return files.length ? `Open ${files.join(', ')} in BBEdit` : 'Open BBEdit'
     }
     if (cmd === 'osascript') {
-      // A script whose text the reader never saw (a heredoc's body) may do anything on the Mac.
+      // A script whose text the reader never saw may do anything on the Mac: a heredoc's body, a
+      // script file (#724: `osascript notify.scpt` ran while away), or a script it runs by name.
       if (program && 'unreadable' in program) return 'Run an AppleScript on the Mac'
+      if (scriptFileOf(words) !== undefined) return 'Run an AppleScript on the Mac'
+      if (program && codeVerdict('osascript', program.text)?.does === 'unreadable') return 'Run an AppleScript on the Mac'
       const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program ? [program.text] : [])].join(' ')
       if (SCRIPT_DIALOG.test(script)) return 'Show a dialog on the Mac'
       if (!SCRIPT_ACTS.test(script)) continue

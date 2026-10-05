@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { heldCard, heldTool, needsTheMac } from '../hooks/away.ts'
 import { programsOf } from '../hooks/program.ts'
+import { listed } from './listed.ts'
 
-// Each command with its program, read as the mod's tool call hook reads it.
-const needs = (raw: string, ...words: string[][]) => {
-  const programs = programsOf(words)
-  return needsTheMac({ raw, commands: words.map((w, i) => ({ words: w, ...(programs[i] ? { program: programs[i] } : {}) })) })
+// Each command with its program, read as the mod's tool call hook reads it; a '|' between two
+// commands is a pipe (listed.ts).
+const needs = (raw: string, ...items: (string[] | '|')[]) => {
+  const list = listed(...items)
+  const programs = programsOf(list)
+  return needsTheMac({ raw, commands: list.map(({ words }, i) => ({ words, ...(programs[i] ? { program: programs[i] } : {}) })) })
 }
 
 describe('needsTheMac: what is held while Dan is away', () => {
@@ -42,8 +45,19 @@ describe('needsTheMac: what is held while Dan is away', () => {
   })
   test('an AppleScript fed by a here-string or echo is judged by its text; one fed by a heredoc, which cannot be read, is held', () => {
     expect(needs(`osascript <<< 'tell application "Finder" to activate'`, ['osascript', '<<<tell application "Finder" to activate'])).toBe('Bring an app to the front')
-    expect(needs(`echo 'tell application "Finder" to activate' | osascript`, ['echo', 'tell application "Finder" to activate'], ['osascript'])).toBe('Bring an app to the front')
+    expect(needs(`echo 'tell application "Finder" to activate' | osascript`, ['echo', 'tell application "Finder" to activate'], '|', ['osascript'])).toBe('Bring an app to the front')
     expect(needs(`osascript <<'EOF'`, ['osascript', '<<EOF'])).toBe('Run an AppleScript on the Mac')
+  })
+  // #724: a script file was never judged, so one that shows a dialog or activates an app ran.
+  test('an AppleScript in a file, or one that runs a script it cannot read, is held', () => {
+    expect(needs('osascript notify.scpt', ['osascript', 'notify.scpt'])).toBe('Run an AppleScript on the Mac')
+    expect(needs('osascript -s o ~/bin/front.applescript Overture', ['osascript', '-s', 'o', '~/bin/front.applescript', 'Overture'])).toBe('Run an AppleScript on the Mac')
+    expect(needs('osascript -l JavaScript front.js', ['osascript', '-l', 'JavaScript', 'front.js'])).toBe('Run an AppleScript on the Mac')
+    expect(needs('osascript < front.applescript', ['osascript', '<', 'front.applescript'])).toBe('Run an AppleScript on the Mac')
+    expect(needs(`osascript -e 'run script file "x.scpt"'`, ['osascript', '-e', 'run script file "x.scpt"'])).toBe('Run an AppleScript on the Mac')
+    // A script file run by anything but osascript is no AppleScript.
+    expect(needs('python3 tools/report.py', ['python3', 'tools/report.py'])).toBeUndefined()
+    expect(needs('osascript -l JavaScript', ['osascript', '-l', 'JavaScript'])).toBeUndefined()
   })
 })
 

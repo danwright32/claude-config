@@ -14,50 +14,161 @@ import type { Lang } from './program.ts'
 export type CodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
 type Rule = { re: RegExp; seen: string | ((m: RegExpExecArray) => string) }
-type Surface = { process: Rule[]; write: Rule[]; dynamic: Rule[]; judge?: (code: string) => CodeVerdict | undefined }
+// `canonical` rewrites the language's other spellings of a capability to the one the rules read.
+type Surface = { process: Rule[]; write: Rule[]; dynamic: Rule[]; judge?: (code: string) => CodeVerdict | undefined; canonical?: (code: string) => string }
 
-// A Python or Ruby call's arguments, split at the top level commas: the text after the opening
-// bracket is cut into string literals, brackets, commas and the rest, so a comma or bracket inside
-// a string stays in it. (These are the code's own literals; the shell's words came from mod-kit.)
+// A Python or Ruby call's arguments, split at the top level commas, and where the call ends: the
+// text after the opening bracket is cut into string literals, brackets, commas and the rest, so a
+// comma or bracket inside a string stays in it. (These are the code's own literals; the shell's
+// words came from mod-kit.)
 const TOKEN = /(['"])(?:\\[\s\S]|(?!\1)[^\\])*\1|[([{]|[)\]}]|,|[^'"()[\]{},]+|['"]/g
-const argsAt = (code: string, open: number): string[] => {
-  const out: string[] = []
+const callAt = (code: string, open: number): { args: string[]; end: number } => {
+  const args: string[] = []
   let depth = 0
   let cur = ''
-  for (const [t] of code.slice(open + 1).matchAll(TOKEN)) {
+  for (const m of code.slice(open + 1).matchAll(TOKEN)) {
+    const t = m[0]
     if ('([{'.includes(t)) depth++
     else if (')]}'.includes(t)) {
-      if (depth === 0) break
+      if (depth === 0) {
+        if (cur.trim()) args.push(cur.trim())
+        return { args, end: open + 1 + (m.index ?? 0) + 1 }
+      }
       depth--
     } else if (t === ',' && depth === 0) {
-      out.push(cur.trim())
+      args.push(cur.trim())
       cur = ''
       continue
     }
     cur += t
   }
-  if (cur.trim()) out.push(cur.trim())
-  return out
+  if (cur.trim()) args.push(cur.trim())
+  return { args, end: code.length }
 }
+const argsAt = (code: string, open: number): string[] => callAt(code, open).args
 const stringValue = (arg: string | undefined): string | undefined => /^[rbuf]*(['"])(.*)\1$/s.exec(arg ?? '')?.[2]
+const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-// Python's open, in each of its spellings: the builtin, io.open and codecs.open take the mode
-// second, a pathlib Path's .open takes it first, and os.open takes flags. A mode with w, a, x or +
-// writes or updates.
+// Python's open, read by where each API takes its mode (#724: `Image.open('a.png')` and
+// `gzip.open('data.json.gz')` were refused because the filename held an a). The builtin and the
+// modules whose open takes (file, mode), io, codecs, gzip, bz2, lzma, tarfile, wave and the rest,
+// take it second or as mode=; dbm and shelve take a flag second (c and n create, w writes; shelve's
+// default is c); os.open takes O_ flags; any other .open is a method, a pathlib Path's taking the
+// mode first: its argument counts as the mode only when it reads as one, so a filename alone is a
+// read. A mode with w, a, x or + before any : (tarfile's 'w:gz') writes or updates.
+const MODE_SECOND = new Set(['io', 'codecs', 'gzip', 'bz2', 'lzma', 'tarfile', 'wave', 'aifc', 'sunau', 'builtins', 'Image'])
+const FLAG_SECOND = new Map([['dbm', 'r'], ['gnu', 'r'], ['ndbm', 'r'], ['dumb', 'r'], ['shelve', 'c']])
+const PY_MODE = /^[rwxabtU+]+(?::\w*)?$/
+const writesMode = (mode: string) => /[wax+]/.test(mode.split(':')[0] as string)
 const pythonOpen = (code: string): CodeVerdict | undefined => {
-  for (const m of code.matchAll(/(\bos\.|\bio\.|\bcodecs\.|\.|(?<![\w.]))open\s*\(/g)) {
-    const how = m[1] as string
+  for (const m of code.matchAll(/(?:\b([A-Za-z_]\w*)\s*\.\s*|(\.)\s*|(?<![\w.]))open\s*\(/g)) {
+    const receiver = m[1] ?? (m[2] ? '' : undefined)
     const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
-    if (how === 'os.') {
+    const kw = (name: string) => stringValue(args.find(a => new RegExp(`^${name}\\s*=`).test(a))?.replace(/^\w+\s*=\s*/, ''))
+    if (receiver === 'os') {
       if (/O_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)/.test(args[1] ?? '')) return { does: 'write files', seen: 'os.open for writing' }
       continue
     }
-    const kw = args.find(a => /^mode\s*=/.test(a))
-    const mode = stringValue(kw ? kw.replace(/^mode\s*=\s*/, '') : how === '.' ? args[0] : args[1])
-    if (mode !== undefined && /[waxX+]/.test(mode)) return { does: 'write files', seen: `open in mode ${mode}` }
+    const flagDefault = receiver === undefined ? undefined : FLAG_SECOND.get(receiver)
+    if (flagDefault !== undefined) {
+      const flag = kw('flag') ?? stringValue(args[1]) ?? flagDefault
+      if (/[cnw]/.test(flag)) return { does: 'write files', seen: `${receiver === 'shelve' ? 'shelve' : 'dbm'}.open with flag ${flag}` }
+      continue
+    }
+    const positional = args.filter(a => !/^\w+\s*=/.test(a)).map(stringValue)
+    const mode =
+      kw('mode') ??
+      (receiver === undefined || MODE_SECOND.has(receiver) ? positional[1] : [positional[0], positional[1]].find(a => a !== undefined && PY_MODE.test(a)))
+    if (mode !== undefined && writesMode(mode)) return { does: 'write files', seen: `open in mode ${mode}` }
   }
   return undefined
 }
+
+// Python binds a module or one of its functions in many spellings, each rewritten here to the one
+// the rules read (#724: `__import__('os').system(...)` and `from os import system` ran unjudged).
+// A module named by a string (__import__, import_module, sys.modules) becomes its name; `import X as
+// Y` and `Y = X` make Y. read as X.; `from X import a as b` makes b read as X.a; a star import
+// judges every bare call once more as that module's; and posix and nt are os.
+const SAME_MODULE = new Map([['posix', 'os'], ['nt', 'os']])
+const pyModule = (m: string) => SAME_MODULE.get(m) ?? m
+const pythonCanonical = (code: string): string => {
+  let text = ''
+  let at = 0
+  for (const m of code.matchAll(/\b(?:__import__|import_module)\s*\(/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1
+    if ((m.index ?? 0) < at) continue
+    const call = callAt(code, open)
+    const name = stringValue(call.args[0])
+    if (name === undefined || !/^[\w.]+$/.test(name)) continue
+    text += code.slice(at, m.index) + name
+    at = call.end
+  }
+  text = (text + code.slice(at)).replace(/\bsys\s*\.\s*modules\s*\[\s*[rbu]*(['"])([\w.]+)\1\s*\]/g, '$2')
+  const modules = new Map<string, string>()
+  const imported = new Set<string>()
+  for (const m of text.matchAll(/(?:^|[;\n])[ \t]*import\s+([^;\n#]+)/g)) {
+    for (const part of (m[1] as string).split(',')) {
+      const p = /^\s*([\w.]+)(?:\s+as\s+(\w+))?\s*$/.exec(part)
+      if (!p) continue
+      const mod = pyModule(p[1] as string)
+      imported.add(p[1] as string)
+      if (p[2]) modules.set(p[2], mod)
+      else if (mod !== p[1]) modules.set(p[1] as string, mod)
+    }
+  }
+  for (const m of text.matchAll(/(?:^|[;\n])[ \t]*(\w+)\s*=\s*([\w.]+)\s*(?=$|[;\n#])/g)) {
+    const target = m[2] as string
+    if (imported.has(target) || modules.has(target)) modules.set(m[1] as string, modules.get(target) ?? pyModule(target))
+  }
+  const names = new Map<string, string>()
+  const stars: string[] = []
+  for (const m of text.matchAll(/(?:^|[;\n])[ \t]*from\s+([\w.]+)\s+import\s+(\([^)]*\)|[^;\n#]+)/g)) {
+    const mod = pyModule(m[1] as string)
+    const list = (m[2] as string).replace(/[()]/g, '')
+    if (list.trim() === '*') stars.push(mod)
+    else
+      for (const part of list.split(',')) {
+        const p = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(part)
+        if (p) names.set((p[2] ?? p[1]) as string, `${mod}.${p[1]}`)
+      }
+  }
+  for (const [alias, mod] of modules) text = text.replace(new RegExp(`(?<![\\w.])${escaped(alias)}\\s*\\.`, 'g'), `${mod}.`)
+  for (const [name, full] of names) text = text.replace(new RegExp(`(?<![\\w.])${escaped(name)}\\b`, 'g'), full)
+  const bound = text
+  for (const mod of stars) text += `\n${bound.replace(/(?<![\w.])([A-Za-z_]\w*)(?=\s*\()/g, `${mod}.$1`)}`
+  return text
+}
+
+// node binds fs under any name, by require or import, or takes its functions out by destructuring;
+// each is rewritten to fs. so the rules see `fs.rm(` however it was reached (#724).
+const NODE_FS = /^(?:node:)?fs(?:\/promises)?$/
+const nodeCanonical = (code: string): string => {
+  const aliases: string[] = []
+  const names = new Map<string, string>()
+  // require('fs') or import('fs'), and its .promises, the module's name in the group `mod`.
+  const from = `(?:await\\s+)?(?:require|import)\\s*\\(\\s*(?<q>['"\`])(?<mod>[^'"\`]+)\\k<q>\\s*\\)(?:\\s*\\.\\s*promises)?`
+  const isFs = (m: RegExpMatchArray) => NODE_FS.test(m.groups?.mod ?? m[3] ?? '')
+  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([\\w$]+)\\s*=\\s*${from}`, 'g'))) if (isFs(m)) aliases.push(m[1] as string)
+  for (const m of code.matchAll(/\bimport\s+(?:\*\s+as\s+)?([\w$]+)\s+from\s+(['"])([^'"]+)\2/g)) if (isFs(m)) aliases.push(m[1] as string)
+  const parts = (list: string, sep: RegExp) => {
+    for (const part of list.split(',')) {
+      const [orig, bound] = part.split(sep).map(s => s.trim())
+      if (orig && /^[\w$]+$/.test(orig)) names.set(bound && /^[\w$]+$/.test(bound) ? bound : orig, orig)
+    }
+  }
+  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${from}`, 'g'))) if (isFs(m)) parts(m[1] as string, /:/)
+  for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/g)) if (isFs(m)) parts(m[1] as string, /\s+as\s+/)
+  let text = code
+  for (const alias of aliases) text = text.replace(new RegExp(`(?<![\\w$.])${escaped(alias)}\\s*\\.`, 'g'), 'fs.')
+  for (const [name, orig] of names) text = text.replace(new RegExp(`(?<![\\w$.])${escaped(name)}(?![\\w$])`, 'g'), `fs.${orig}`)
+  return text
+}
+
+// A ruby builtin reached through its own module is the builtin (#724: Kernel.system,
+// ::Kernel.system and Kernel::system ran unjudged), and Const::name is Const.name (IO::popen).
+const rubyCanonical = (code: string): string => code.replace(/\b([A-Z]\w*)\s*::\s*(?=[a-z_])/g, '$1.').replace(/(?:::)?\bKernel\s*\.\s*/g, '')
+// A perl builtin reached through CORE::, CORE::GLOBAL:: or POSIX:: is the builtin (#724).
+const perlCanonical = (code: string): string => code.replace(/(?:(?<!&)&\s*)?\bCORE::(?:GLOBAL::)?(?=\w)|\bPOSIX::(?=\w)/g, '')
 
 // Ruby's File.open and File.new take the mode second, as a string or File:: flags.
 const rubyOpen = (code: string): CodeVerdict | undefined => {
@@ -74,7 +185,7 @@ const rubyOpen = (code: string): CodeVerdict | undefined => {
 // Perl's open: a mode or a two argument target starting with > or +< (or +>) writes, and one with
 // | at either end, or the |- and -| modes, runs a process.
 const perlOpen = (code: string): CodeVerdict | undefined => {
-  for (const m of code.matchAll(/(?<![\w$@%&:]|->)open\s*\(?/g)) {
+  for (const m of code.matchAll(/(?<![\w$@%:]|->|(?<!&)&)open\s*\(?/g)) {
     const rest = code.slice((m.index ?? 0) + m[0].length).split(';')[0] ?? ''
     for (const s of rest.matchAll(/(['"])(.*?)\1/g)) {
       const v = (s[2] as string).trim()
@@ -105,6 +216,7 @@ const SURFACES: Record<Lang, Surface> = {
       { re: /\bgetattr\s*\(\s*(?:os|subprocess|shutil|builtins)\b/, seen: 'getattr on os' },
     ],
     judge: pythonOpen,
+    canonical: pythonCanonical,
   },
   node: {
     process: [
@@ -125,13 +237,17 @@ const SURFACES: Record<Lang, Surface> = {
       { re: /\bvm\s*\.\s*(?:runIn\w*|compileFunction|Script)\b/, seen: 'vm' },
       { re: /\bprocess\.(?:binding|dlopen)\b/, seen: 'process.binding' },
     ],
+    canonical: nodeCanonical,
   },
   ruby: {
     process: [
       { re: /(?<![\w.:])(system|exec|spawn|fork|syscall)\b(?!\?)/, seen: m => m[1] as string },
       { re: /`[^`]*`/, seen: 'backticks' },
       { re: /%x[[{(<|!/]/, seen: '%x' },
-      { re: /\b(IO\.popen|Open3|Process\.spawn|Process\.exec|PTY)\b/, seen: m => m[1] as string },
+      { re: /\b(IO\.popen|Open3|Process\.spawn|Process\.exec|Process\.fork|PTY)\b/, seen: m => m[1] as string },
+      // A builtin named to send or method runs on any receiver ("".send(:system, ...)), where a
+      // method of that name on an object (conn.exec) is not the builtin.
+      { re: /\b(?:send|__send__|public_send|method|instance_method)\s*\(?\s*[:'"](system|exec|spawn|fork|syscall|`)/, seen: m => (m[1] === '`' ? 'backticks' : (m[1] as string)) },
       { re: /(?<![\w.])open\s*\(?\s*['"]\|/, seen: 'open of a pipe' },
     ],
     write: [
@@ -144,24 +260,27 @@ const SURFACES: Record<Lang, Surface> = {
       { re: /(?<![\w.])(require|require_relative|load)\s*\(?\s*(?!['"])[\w$@]/, seen: m => `${m[1]} of a computed path` },
     ],
     judge: rubyOpen,
+    canonical: rubyCanonical,
   },
   perl: {
     process: [
-      { re: /(?<![\w$@%&:{]|->)(system|exec|fork)\b/, seen: m => m[1] as string },
+      { re: /(?<![\w$@%:{]|->|(?<!&)&)(system|exec|fork)\b/, seen: m => m[1] as string },
+      { re: /\bIPC::(Open[23]|Run3?|Cmd|System::Simple)\b/, seen: m => `IPC::${m[1]}` },
       { re: /`[^`]*`/, seen: 'backticks' },
       { re: /\bqx\s*[^\w\s]/, seen: 'qx' },
     ],
     write: [
-      { re: /(?<![\w$@%&:{]|->)(unlink|rename|mkdir|rmdir|chmod|chown|truncate|symlink|link|utime)\b/, seen: m => m[1] as string },
+      { re: /(?<![\w$@%:{]|->|(?<!&)&)(unlink|rename|mkdir|rmdir|chmod|chown|truncate|symlink|link|utime)\b/, seen: m => m[1] as string },
       { re: /\b(File::Copy|File::Path|copy|move|mkpath|rmtree|make_path|remove_tree)\s*[(:]/, seen: m => m[1] as string },
     ],
     dynamic: [
       // eval of a string; an eval block (`eval { ... }`) only catches errors.
-      { re: /(?<![\w$@%&:]|->)eval\b\s*(?!\{)\S/, seen: 'eval of a string' },
+      { re: /(?<![\w$@%:]|->|(?<!&)&)eval\b\s*(?!\{)\S/, seen: 'eval of a string' },
       { re: /\bdo\s+['"$]/, seen: 'do of a file' },
       { re: /\brequire\s+['"$]/, seen: 'require of a file' },
     ],
     judge: perlOpen,
+    canonical: perlCanonical,
   },
   osascript: {
     process: [{ re: /\bdo shell script\b/i, seen: 'do shell script' }],
@@ -196,8 +315,10 @@ const first = (rules: Rule[], code: string): string | undefined => {
 }
 
 /** What inline code in a language can do that no build refuses, or undefined when it only reads. */
-export const codeVerdict = (lang: Lang, code: string): CodeVerdict | undefined => {
+export const codeVerdict = (lang: Lang, inline: string): CodeVerdict | undefined => {
   const s = SURFACES[lang]
+  // Read in the one spelling the rules know, whichever of the language's others it was written in.
+  const code = s.canonical?.(inline) ?? inline
   const process = first(s.process, code)
   if (process) return { does: 'run a process', seen: process }
   const judged = s.judge?.(code)

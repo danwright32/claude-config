@@ -1,11 +1,74 @@
 // The one reader of shell commands every mod uses (L613): each simple command a Bash call would
 // run, as its words with quotes removed, judged in command position (L673). Lessons review findings
 // on the guards built it up: a heredoc body is text, a here-string is not a heredoc, a heredoc that
-// never ends is judged after all, and the words that only run the next command are looked past.
+// never ends is judged after all, the words that only run the next command are looked past, and
+// only a | feeds one command what another prints (#724).
 
-const RUNNERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice'])
 const SHELLS = new Set(['sh', 'bash', 'zsh'])
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+// The reserved words that lead a command inside a compound one, looked past so the command is in
+// command position (lessons review of #724: `then git commit` was a command named then); and the
+// words that open and close a group whose body shares one standard input, as a subshell's does.
+const LEADS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{'])
+const OPENS = new Set(['if', 'while', 'until', 'for', 'select', '{'])
+const CLOSES = new Set(['fi', 'done', '}'])
+
+// The words that only run the command after them (sudo cat .env is cat .env), each read by its own
+// options, so a value is never taken for the command (#724: nice -n 10 gave a command named 10, and
+// timeout, stdbuf and xargs hid the command from every guard). `values` take a value in the same
+// word or the next (sudo -u dan, stdbuf -oL), `attached` only in the same word (xargs -i{}), `long`
+// are the long options taking the next word unless written with =, `leading` the words before the
+// command (timeout's duration), and `noRun` the options under which it runs nothing (command -v
+// only prints where a command is). A Map, so a command named constructor is no runner (L738).
+type Runner = { values?: string; attached?: string; long?: string[]; leading?: number; noRun?: string }
+const TIMEOUT: Runner = { values: 'ks', long: ['--kill-after', '--signal'], leading: 1 }
+const RUNNERS = new Map<string, Runner>([
+  ['sudo', { values: 'CDghpRrTtUu', long: ['--chdir', '--chroot', '--close-from', '--command-timeout', '--group', '--host', '--other-user', '--prompt', '--role', '--type', '--user'] }],
+  ['doas', { values: 'Cu' }],
+  ['env', { values: 'CPSu', long: ['--chdir', '--split-string', '--unset'] }],
+  ['command', { noRun: 'vV' }],
+  ['exec', { values: 'a' }],
+  ['nohup', {}],
+  ['time', { values: 'fo', long: ['--format', '--output'] }],
+  ['nice', { values: 'n', long: ['--adjustment'] }],
+  ['timeout', TIMEOUT],
+  ['gtimeout', TIMEOUT],
+  ['stdbuf', { values: 'eio', long: ['--error', '--input', '--output'] }],
+  ['xargs', { values: 'aEdIJLnPRSs', attached: 'eil', long: ['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'] }],
+  ['caffeinate', { values: 'tw' }],
+])
+
+// Where the command a runner at `at` runs begins, past its options and their values, its leading
+// words and any assignments; undefined when it runs none, so it is the command itself.
+const runs = (words: string[], at: number, r: Runner): number | undefined => {
+  let i = at + 1
+  for (; i < words.length; i++) {
+    const w = words[i] as string
+    if (w === '--') {
+      i++
+      break
+    }
+    // env's lone - is its -i.
+    if (w === '-') continue
+    if (w.startsWith('--')) {
+      if (!w.includes('=') && r.long?.includes(w)) i++
+      continue
+    }
+    if (!w.startsWith('-')) break
+    for (let j = 1; j < w.length; j++) {
+      const letter = w[j] as string
+      if (r.noRun?.includes(letter)) return undefined
+      if (r.attached?.includes(letter)) break
+      if (r.values?.includes(letter)) {
+        if (j === w.length - 1) i++
+        break
+      }
+    }
+  }
+  i += r.leading ?? 0
+  while (ASSIGNMENT.test(words[i] ?? '')) i++
+  return i < words.length ? i : undefined
+}
 
 // A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
 // apostrophe in it would open a quote that swallows the commands after it.
@@ -29,24 +92,54 @@ const dropHeredocs = (cmd: string): string => {
   return [...out, ...body].join('\n')
 }
 
-// Words, split on separators outside quotes. A quoted script spanning lines stays one word.
-const split = (cmd: string): string[][] => {
-  const cmds: string[][] = []
+// Words, split on separators outside quotes. A quoted script spanning lines stays one word. Each
+// command carries `from`, the place in the list of the command whose output a | feeds it (#724).
+// Standard input is nothing at the top (a Bash call has none to give), the command before after a
+// | or |&, and inside a subshell or an if, while, until, for or { } group whatever feeds the group,
+// for every command in it, since each shares it; ;, &&, ||, & and a new line link no two commands,
+// and a new line right after a | carries the pipe on. A group's closing word (`)`, `fi`, `done`,
+// `}`) is fed nothing, and what follows a | after it is fed the group's output as that word.
+type Split = { words: string[]; from?: number }
+const split = (cmd: string): Split[] => {
+  const cmds: Split[] = []
   let words: string[] = []
   let word = ''
   let inWord = false
   let quote: '"' | "'" | undefined
   // Parentheses opened inside a word ($(, <(, $((), whose closing ones belong to the word too.
   let wordParens = 0
+  // What feeds the command being read, and what feeds each subshell open around it.
+  let from: number | undefined
+  const subshells: (number | undefined)[] = []
+  const push = (w: string[]) => cmds.push(from === undefined ? { words: w } : { words: w, from })
   const endWord = () => {
     if (inWord) words.push(word)
     word = ''
     inWord = false
   }
-  const endCmd = () => {
+  // After a list separator a command reads what its subshell reads.
+  const listed = () => {
+    from = subshells[subshells.length - 1]
+  }
+  const endCmd = (): boolean => {
     endWord()
-    if (words.length) cmds.push(words)
+    const ended = words.length > 0
+    const first = words[0] as string
+    if (ended && CLOSES.has(first)) {
+      subshells.pop()
+      listed()
+      cmds.push({ words })
+    } else if (ended) {
+      push(words)
+      // Each opener among the reserved words it starts with opens a group (`do if`, `then {`), so
+      // every closer is matched by its own opener.
+      for (const w of words) {
+        if (OPENS.has(w)) subshells.push(from)
+        if (!LEADS.has(w)) break
+      }
+    }
     words = []
+    return ended
   }
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
@@ -90,9 +183,30 @@ const split = (cmd: string): string[][] => {
       // A subshell's parenthesis is a command of its own (#700), so what runs inside it is read in
       // command position and a reader that follows a cd can tell where the subshell ends.
       endCmd()
-      cmds.push([c])
-    } else if (c === ';' || c === '|' || c === '&' || c === '\n') endCmd()
-    else if (c === ' ' || c === '\t') endWord()
+      if (c === '(') {
+        push([c])
+        subshells.push(from)
+      } else {
+        subshells.pop()
+        cmds.push({ words: [c] })
+        listed()
+      }
+    } else if (c === '|') {
+      endCmd()
+      if (cmd[i + 1] === '|') {
+        i++
+        listed()
+      } else {
+        // |& pipes standard error too.
+        if (cmd[i + 1] === '&') i++
+        from = cmds.length ? cmds.length - 1 : undefined
+      }
+    } else if (c === ';' || c === '&') {
+      endCmd()
+      listed()
+    } else if (c === '\n') {
+      if (endCmd()) listed()
+    } else if (c === ' ' || c === '\t') endWord()
     else {
       word += c
       inWord = true
@@ -102,37 +216,52 @@ const split = (cmd: string): string[][] => {
   return cmds
 }
 
-// Past assignments and the words that only run the next command (sudo cat .env is cat .env). A
-// runner with no command after it (a bare env) is the command itself.
+// Past assignments, the reserved words that lead a command, and the words that only run the next
+// command. A runner with no command after it (a bare env) is the command itself.
 const strip = (words: string[]): string[] => {
   let i = 0
   for (;;) {
     const w = words[i] ?? ''
-    if (ASSIGNMENT.test(w)) i++
-    else if (RUNNERS.has(w) && words.slice(i + 1).some(x => !x.startsWith('-') && !ASSIGNMENT.test(x))) {
+    if (ASSIGNMENT.test(w) || LEADS.has(w)) {
       i++
-      while ((words[i] ?? '').startsWith('-')) i++
-    } else break
+      continue
+    }
+    const runner = RUNNERS.get(w.split('/').pop() ?? '')
+    const next = runner && runs(words, i, runner)
+    if (next === undefined) break
+    i = next
   }
   return words.slice(i)
 }
 
-export const commands = (cmd: string): string[][] => {
-  const out: string[][] = []
-  for (const raw of split(dropHeredocs(cmd))) {
-    const words = strip(raw)
-    if (words.length === 0) continue
+/** One simple command: its words, and the words of the command whose output a | feeds into it. */
+export type Command = { words: string[]; pipedFrom?: string[] }
+
+/** Each simple command a Bash call would run, with what a pipe feeds it, if anything. */
+export const pipeline = (cmd: string): Command[] => {
+  const out: Command[] = []
+  const read = split(dropHeredocs(cmd))
+  const stripped = read.map(r => strip(r.words))
+  read.forEach((r, k) => {
+    const words = stripped[k] as string[]
+    if (words.length === 0) return
+    // The command feeding it, named past its own runner as every command is.
+    const feeder = r.from === undefined ? undefined : stripped[r.from]?.length ? stripped[r.from] : read[r.from]?.words
     const name = (words[0] as string).split('/').pop() ?? ''
     const c = words.indexOf('-c')
-    // A command run through a shell's -c is read as the commands it runs.
+    // A command run through a shell's -c is read as the commands it runs, each that no | of its own
+    // feeds reading what feeds the shell.
     if (SHELLS.has(name) && c > 0 && words[c + 1] !== undefined) {
-      out.push(...commands(words[c + 1] as string))
-      continue
+      for (const inner of pipeline(words[c + 1] as string)) out.push(inner.pipedFrom || !feeder || inner.words[0] === ')' ? inner : { ...inner, pipedFrom: feeder })
+      return
     }
-    out.push(words)
-  }
+    out.push(feeder ? { words, pipedFrom: feeder } : { words })
+  })
   return out
 }
+
+/** Each simple command a Bash call would run, as its words. */
+export const commands = (cmd: string): string[][] => pipeline(cmd).map(c => c.words)
 
 // A git command's subcommand, after git's own global options, and the folder -C points it at. The
 // one reading of a git command every mod uses (the style check's commit, the collision guard's

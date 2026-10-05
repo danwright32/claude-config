@@ -50,7 +50,9 @@ export type ModKit = {
   card: (input: ModKitCard) => Promise<void>
   /**
    * The simple commands a Bash call would run, each as its words with quotes removed: heredoc
-   * bodies dropped, assignments and sudo/env/exec and the like looked past, a shell's -c read as
+   * bodies dropped, assignments, the reserved words leading a command (then, do, else, `{`, `!`) and
+   * sudo, env, timeout, nice, xargs and the like looked past, each runner by its own options, a
+   * shell's -c read as
    * the commands it runs, a subshell's parentheses each a command of their own (`['(']`, `[')']`),
    * while one inside a word (`$(`, `<(`) stays part of it. The one reader every mod uses (L613).
    */
@@ -68,6 +70,15 @@ export type ModKit = {
   writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
   git: (input: { words: string[] }) => Promise<ModKitGit | undefined>
+  /**
+   * The same commands as `commands`, each with `pipedFrom`, the words of the command whose output
+   * a `|` (or `|&`) feeds into it, absent when nothing does. `;`, `&&`, `||`, `&` and a new line
+   * link no two commands, and every command in a subshell, an if, while, until, for or `{ }` group,
+   * or a shell's -c reads what feeds it; a piped group's output arrives as its closing word (`)`,
+   * `}`, `done`, `fi`). Only the reader can see which
+   * separator stood outside the quotes, so no mod works it out from the list (#724).
+   */
+  pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
   /**
    * Shows a row in the band above the prompt, or replaces the row this mod already shows under the
    * same id (it keeps its place). Claude Code gives the band ONE drawing, so no mod but mod-kit
@@ -113,6 +124,9 @@ export type ModKit = {
  * `id` is the pane's id as the mod opened it with `$.ui.open`.
  */
 export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; frame?: ModKitBandFrame }
+
+/** One simple command, as `pipeline` reads it: its words, and those of the command a `|` feeds it from. */
+export type ModKitCommand = { words: string[]; pipedFrom?: string[] }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
 

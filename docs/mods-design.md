@@ -568,6 +568,33 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   `\w`, `\g` to a file, `\copy ... to <file>`, sqlite's `.output`, `.once`, `.backup` and `.save`,
   MySQL's `tee`, each allowed to the scratchpad, and a shell when the target is `|command` or a
   `program`.
+- After #714 merged (#724). Only a `|` (or `|&`) feeds a command what another prints: the command
+  before it in a list joined by `;`, `&&`, `||`, `&` or a new line feeds it nothing, so
+  `cd repo && python3 --version`, `git status; node -v` and `ls && bash` run, where no build had
+  refused them as scripts it could not read. Only the reader can see which separator stood outside
+  the quotes, so mod-kit's `$.modkit.pipeline({ command })` gives the same commands as
+  `$.modkit.commands`, each with `pipedFrom`, the words of the command a `|` feeds it from; every
+  command in a piped subshell, an `if`, `while`, `until`, `for` or `{ }` group, or a shell's `-c` or
+  `-lc`, reads what feeds it, and a group's output piped on cannot be read. The reader also looks
+  past the reserved words that lead a command (`then git commit` reached every guard as a command
+  named then), and past each word that only runs the command after it by that word's own options, so `timeout 5`, `nice -n 10`, `stdbuf -oL`, `env -u HOME`, `sudo -u dan` and
+  `xargs -I {}` no longer hide the interpreter, git or file command behind them from any guard;
+  `command -v` runs nothing and is the command itself. Inline code is read in its language's one
+  spelling of a capability before it is judged: python's `__import__('os')`, `import_module`,
+  `sys.modules`, `import os as o`, `o = os`, `from os import system as run`, a star import and
+  `posix` all reach `os`; node's fs renamed, imported or destructured is `fs`; ruby's
+  `Kernel.system`, `::Kernel.system`, `Kernel::system` and `IO::popen` are the builtins, and
+  `send(:system)` or `method(:exec)` on any object runs a process; perl's `CORE::`,
+  `CORE::GLOBAL::` and `POSIX::` builtins are the builtins, and `IPC::Open3` and its kin run a
+  process. Python's `open` is read by where each API takes its mode, so `Image.open('a.png')` and
+  `gzip.open('data.json.gz')` only read; dbm and shelve are read by their flag (shelve creates by
+  default), a method's first argument is its mode only when it reads as one, and only the part
+  before tarfile's `:` decides. MySQL's `-p` takes only the password attached to it, so no letter
+  of a password is read as `-e`; its `--init-command` is SQL it runs, and `--pager=<command>` runs a
+  shell. Away holds an AppleScript in a file (`osascript notify.scpt`, or one redirected in) and one
+  that runs a script it cannot read (`run script`), as it holds one fed by a heredoc. Not read yet:
+  a wrapper in front of what `find -exec` runs, `env -S`, and a heredoc or here-string feeding the
+  commands a shell's `-c` runs.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
   issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR

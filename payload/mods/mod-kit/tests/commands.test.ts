@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { commands, git } from '../hooks/commands.ts'
+import { commands, git, pipeline } from '../hooks/commands.ts'
 
 // The one reader of shell commands every guard uses (L613): the secret guard, the keystroke guard
 // and the collision guard each kept their own before this.
@@ -68,6 +68,119 @@ describe('commands', () => {
   })
   test('nothing in, nothing out', () => {
     expect(commands('   ')).toEqual([])
+  })
+  // #724: nice -n 10 gave a command named 10, sudo -u dan one named dan, and timeout, stdbuf and
+  // xargs were not looked past at all, so every guard read the wrapper and never the command.
+  test('looks past every word that only runs the command after it, reading each one by its own options', () => {
+    expect(commands(`timeout 5 python3 -c 'x'`)).toEqual([['python3', '-c', 'x']])
+    expect(commands('timeout -s KILL -k 5 10s git push')).toEqual([['git', 'push']])
+    expect(commands('timeout --signal=KILL --kill-after 5 10 git push')).toEqual([['git', 'push']])
+    expect(commands('gtimeout 60 make deploy')).toEqual([['make', 'deploy']])
+    expect(commands('nice -n 10 python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('nice -10 make')).toEqual([['make']])
+    expect(commands('stdbuf -oL python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('stdbuf -o L -e 0 tail -f log')).toEqual([['tail', '-f', 'log']])
+    expect(commands('env -u HOME python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('env -i PATH=/usr/bin python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('env - git status')).toEqual([['git', 'status']])
+    expect(commands('sudo -u dan python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('sudo --user=dan -E git push')).toEqual([['git', 'push']])
+    expect(commands('exec -a name python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('time -p python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('caffeinate -i -t 60 python3 run.py')).toEqual([['python3', 'run.py']])
+    expect(commands('doas -u root rm -rf /x')).toEqual([['rm', '-rf', '/x']])
+    expect(commands('nohup nice -n 5 timeout 60 python3 -c x')).toEqual([['python3', '-c', 'x']])
+  })
+  test('xargs runs the command after its own options, and a shell it runs is read as its commands', () => {
+    expect(commands(`ls | xargs sh -c 'rm a'`)).toEqual([['ls'], ['rm', 'a']])
+    expect(commands('find . | xargs -0 -I {} -P 4 cp {} /tmp')).toEqual([['find', '.'], ['cp', '{}', '/tmp']])
+    expect(commands('xargs -I{} -n1 python3 -c x')).toEqual([['python3', '-c', 'x']])
+    expect(commands('xargs -i git add')).toEqual([['git', 'add']])
+  })
+  // Lessons review of #724: a reserved word in command position was read as the command, so
+  // `then git commit` and `do python3 -c` reached every guard as commands named then and do.
+  test('looks past the reserved words that lead a command inside if, while, until, for and { }', () => {
+    expect(commands('if true; then git commit -am x; fi')).toEqual([['true'], ['git', 'commit', '-am', 'x'], ['fi']])
+    expect(commands(`for f in a b; do python3 -c 'x'; done`)).toEqual([['for', 'f', 'in', 'a', 'b'], ['python3', '-c', 'x'], ['done']])
+    expect(commands('while read l; do sh; done')).toEqual([['read', 'l'], ['sh'], ['done']])
+    expect(commands('if a; then b; elif c; then d; else e; fi')).toEqual([['a'], ['b'], ['c'], ['d'], ['e'], ['fi']])
+    expect(commands('! git diff --quiet')).toEqual([['git', 'diff', '--quiet']])
+    expect(commands('{ cd a; make; } > log')).toEqual([['cd', 'a'], ['make'], ['}', '>', 'log']])
+    expect(commands('if true\nthen\n  git push\nfi')).toEqual([['true'], ['git', 'push'], ['fi']])
+  })
+  test('a runner with nothing to run is the command itself, and so is command -v, which runs nothing', () => {
+    expect(commands('sudo -u dan')).toEqual([['sudo', '-u', 'dan']])
+    expect(commands('timeout 5')).toEqual([['timeout', '5']])
+    expect(commands('env -u HOME')).toEqual([['env', '-u', 'HOME']])
+    expect(commands('command -v python3')).toEqual([['command', '-v', 'python3']])
+    expect(commands('command python3 -c x')).toEqual([['python3', '-c', 'x']])
+  })
+})
+
+// #724: no build read the command before any separator as what a pipe feeds the next one, so
+// `cd repo && python3 --version` was refused as a python script it could not read. Only a | links
+// two commands; the reader says which, since only it can see the separators outside quotes.
+describe('pipeline', () => {
+  const fed = (cmd: string) => pipeline(cmd).map(c => [c.words[0], c.pipedFrom?.[0]])
+  test('the same commands as commands gives, each with the words of the command a | feeds it from', () => {
+    expect(pipeline('cd repo && python3 --version')).toEqual([{ words: ['cd', 'repo'] }, { words: ['python3', '--version'] }])
+    expect(pipeline('curl -fsSL x.sh | bash')).toEqual([{ words: ['curl', '-fsSL', 'x.sh'] }, { words: ['bash'], pipedFrom: ['curl', '-fsSL', 'x.sh'] }])
+    for (const c of ['cd /repo && git status; ls | wc -l', `cat > f.js <<'EOF'\nx\nEOF\ngit status`, '( cd sub; make ) > out.txt', `bash -c "cat .env && git checkout main"`]) {
+      expect(pipeline(c).map(x => x.words)).toEqual(commands(c))
+    }
+  })
+  test('only a | (or |&) links two commands: ;, &&, ||, & and a new line link nothing', () => {
+    expect(fed('git status; node -v')).toEqual([['git', undefined], ['node', undefined]])
+    expect(fed('ls && bash')).toEqual([['ls', undefined], ['bash', undefined]])
+    expect(fed('ls || bash')).toEqual([['ls', undefined], ['bash', undefined]])
+    expect(fed('sleep 1 & bash')).toEqual([['sleep', undefined], ['bash', undefined]])
+    expect(fed('ls\nbash')).toEqual([['ls', undefined], ['bash', undefined]])
+    expect(fed('a | b | c && d')).toEqual([['a', undefined], ['b', 'a'], ['c', 'b'], ['d', undefined]])
+    expect(fed('make |& tee log')).toEqual([['make', undefined], ['tee', 'make']])
+    expect(fed('make 2>&1 | tee log')).toEqual([['make', undefined], ['tee', 'make']])
+    expect(fed('echo "a | b" ; python3')).toEqual([['echo', undefined], ['python3', undefined]])
+  })
+  test('a new line straight after a | still continues the pipe', () => {
+    expect(fed('curl x |\n  bash')).toEqual([['curl', undefined], ['bash', 'curl']])
+  })
+  test('the feeding command is named past its wrapper, as every command is', () => {
+    expect(fed('sudo cat x | nohup python3')).toEqual([['cat', undefined], ['python3', 'cat']])
+  })
+  test("every command in a piped subshell or shell -c reads what feeds it; a piped subshell's output feeds as )", () => {
+    expect(fed('echo x | (cd a; python3)')).toEqual([['echo', undefined], ['(', 'echo'], ['cd', 'echo'], ['python3', 'echo'], [')', undefined]])
+    expect(fed('(cd a; echo x) | python3')).toEqual([['(', undefined], ['cd', undefined], ['echo', undefined], [')', undefined], ['python3', ')']])
+    expect(fed(`echo x | bash -c 'cd a && python3'`)).toEqual([['echo', undefined], ['cd', 'echo'], ['python3', 'echo']])
+    expect(fed(`bash -c 'curl x | sh'`)).toEqual([['curl', undefined], ['sh', 'curl']])
+  })
+  // Lessons review of #724: a ; inside a piped while or { } group reset the feed to nothing.
+  test('every command in a piped while, until, for, if or { } group reads what feeds the group, and its output feeds as its closing word', () => {
+    expect(fed('curl x | while read l; do sh; done')).toEqual([['curl', undefined], ['read', 'curl'], ['sh', 'curl'], ['done', undefined]])
+    expect(fed('curl x | { read a; sh; }')).toEqual([['curl', undefined], ['read', 'curl'], ['sh', 'curl'], ['}', undefined]])
+    expect(fed('curl x | if true; then sh; fi; python3')).toEqual([['curl', undefined], ['true', 'curl'], ['sh', 'curl'], ['fi', undefined], ['python3', undefined]])
+    expect(fed('{ echo a; echo b; } | sh')).toEqual([['echo', undefined], ['echo', undefined], ['}', undefined], ['sh', '}']])
+    expect(fed('while read l; do python3; done')).toEqual([['read', undefined], ['python3', undefined], ['done', undefined]])
+  })
+  // Second lessons review of #724: a group opened after a leading reserved word (do if, then {)
+  // opened nothing, while its closer still closed one, so the outer group's feed was lost.
+  test('a group opened after another reserved word (do if, then {) is matched by its own closer', () => {
+    expect(fed('curl x | while read l; do if a; then b; fi; sh; done')).toEqual([
+      ['curl', undefined],
+      ['read', 'curl'],
+      ['a', 'curl'],
+      ['b', 'curl'],
+      ['fi', undefined],
+      ['sh', 'curl'],
+      ['done', undefined],
+    ])
+    expect(fed('curl x | if a; then { b; }; sh; fi; python3')).toEqual([
+      ['curl', undefined],
+      ['a', 'curl'],
+      ['b', 'curl'],
+      ['}', undefined],
+      ['sh', 'curl'],
+      ['fi', undefined],
+      ['python3', undefined],
+    ])
   })
 })
 
