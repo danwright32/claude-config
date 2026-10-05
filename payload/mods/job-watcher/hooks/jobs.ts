@@ -1,9 +1,13 @@
 // The background job watcher's rules, apart from the hooks (claude-config#611).
 
-// A job started in the background ("running in background with ID: X.") and a foreground command
-// Claude Code moved to the background at its timeout ("moved to the background (ID: X).", seen in a
-// session on 2026-10-04) both name the job and its output file (#706).
-const STARTED = /background(?: with ID: | \(ID: )([^\s)]+?)\)?\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
+// A job started in the background names itself and its output file ("running in background with ID:
+// X. Output is being written to: Y."), and so does a foreground command Claude Code moved there at its
+// timeout ("Command did not complete within its 120s timeout and was moved to the background (ID: X).
+// Output is being written to: Y.", seen in a session on 2026-10-04; #706). A command's own output can
+// quote either text (a cat of a test file, a grep of this mod), so a start is read only where it is
+// Claude Code's own: a call that asked for the background, or a result that opens with those words.
+const STARTED = /background with ID: (\S+?)\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
+const MOVED = /^Command did not complete within its \S+ timeout and was moved to the background \(ID: ([^\s)]+)\)\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
 // The same lines this many times running, at the end of the output, are a job repeating itself.
 const REPEAT_MIN = 20
 // A pass of up to this many lines, repeated: a loop printing its error and then "retrying" on every
@@ -12,8 +16,8 @@ const CYCLE_MAX = 4
 // No new output for this long is a job gone silent (the spec's ten minutes).
 const SILENT_MS = 10 * 60_000
 
-export const startedJob = (resultText: string): { id: string; outputPath: string } | undefined => {
-  const m = STARTED.exec(resultText)
+export const startedJob = (resultText: string, call: { inBackground: boolean }): { id: string; outputPath: string } | undefined => {
+  const m = call.inBackground ? STARTED.exec(resultText) : MOVED.exec(resultText.trimStart())
   return m ? { id: m[1] as string, outputPath: m[2] as string } : undefined
 }
 

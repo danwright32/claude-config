@@ -545,6 +545,11 @@ const judgeOne = async ($: EngineInterface, job: Leftover, now: number, claims: 
 
 const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, now: number): Promise<Outcome | undefined> => {
   const short = shortCommand(job.command)
+  // Looked at again now the claim is held (lessons review of #721): another session may have judged
+  // and stopped it, and let go of its claim, between this one's first look and its claim.
+  const held = await groupsHolding($, job.outputPath)
+  if (held === 'nobody' || (Array.isArray(held) && !held.includes(group))) return undefined
+  if ((await ownedByRunning($, group)) === true) return undefined
   const stat = (await run($, ['stat', '-f', '%z %m', job.outputPath]))?.trim().split(/\s+/).map(Number)
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
   const size = stat?.[0]
@@ -703,7 +708,7 @@ export const register: Register = on => {
     // Any Bash result saying a job started: one run in the background, or a foreground command
     // Claude Code moved there at its timeout (#706). A refusal started nothing.
     if (e.tool === 'Bash' && result.deny === undefined) {
-      const started = startedJob(String(result.text ?? ''))
+      const started = startedJob(String(result.text ?? ''), { inBackground: input.run_in_background === true })
       // Recording has its own failure boundary: the job has started whatever happens here, so a
       // throw is said to Claude and never fails the call that started it (lessons review of #634).
       if (started) {

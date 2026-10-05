@@ -263,7 +263,10 @@ plainest reading of the decisions above:
   outside the watcher never reaches it, so the reminder about unkept jobs goes into such a result's
   row as the conversation keeps it: Claude reads it there, and Dan's screen draws the row as it was.
 - **Which jobs.** A foreground command Claude Code moves to the background at its timeout is
-  recorded like one started in the background. A Monitor task is not: Claude Code stops each one at
+  recorded like one started in the background, read only from a result that opens with Claude
+  Code's own words for it, so a command whose output merely quotes a start (a cat of a test file)
+  records nothing; a background start is read only from a call that asked for one. A Monitor task
+  is not recorded: Claude Code stops each one at
   its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
   run on unseen.
 

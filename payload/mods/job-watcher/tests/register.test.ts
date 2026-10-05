@@ -70,6 +70,8 @@ type Job = {
   failExtraOf?: string
   /** Another process (a tail -f, say) holding its output file too, listed by lsof first. */
   alsoHeldBy?: number
+  /** Stopped by another session the moment this one claims it, after this one's own checks. */
+  goneOnClaim?: boolean
   /** Commands that answer late: the command name and how long, on the mocked clock. */
   slow?: { cmd: string; ms: number }
 }
@@ -153,6 +155,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       if (w.claims.has(name)) return res(1, '', `mkdir: ${CLAIMS}/${name}: File exists`)
       w.claims.set(name, Math.floor((o.clock?.now?.() ?? 0) / 1000))
       w.claimed.push(name)
+      for (const j of list) if (j.goneOnClaim) j.gone = true
       return ok('')
     }
     if (cmd === 'stat' && claimName(args[args.length - 1]) !== undefined) {
@@ -233,6 +236,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (e.tool === 'Bash' && input.run_in_background) {
       started += 1
       const text = startedText(`job${started}`)
+      return { result: text, text } as never
+    }
+    // A foreground command whose own output quotes both start texts: a cat of a test file.
+    if (e.tool === 'Bash' && String(input.command).startsWith('cat ')) {
+      const text = `line 1\n${startedText('job7')}\nCommand did not complete within its 120s timeout and was moved to the background (ID: job8). Output is being written to: ${outOf('job8')}.\n`
       return { result: text, text } as never
     }
     // A foreground command still running at its timeout, which Claude Code moves to the background.
@@ -1594,6 +1602,33 @@ test('an untraced leftover held only by a running Claude Code process is that pr
   expect(w.asked).toEqual([])
   expect(w.kills).toEqual([])
   expect(w.logs).toEqual([])
+})
+
+// The lessons review of #721: a session that read the job alive just before another stopped it and
+// let go of its claim must look again once it holds the claim, or it judges a job already ended.
+test('a leftover another session stopped between this one looking and claiming is not judged', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, goneOnClaim: true }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.claimed).toEqual(['old1-501'])
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+// The lessons review of #721 (major): with no run_in_background needed for a job moved there at its
+// timeout, a foreground command whose output merely quotes a start must not be recorded.
+test('a foreground command whose output quotes a job starting records nothing', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  const r = await $.tool.call({ tool: 'Bash', command: 'cat tests/register.test.ts' } as never)
+  expect(w.extra).toEqual([])
+  expect(contextOf(r)).not.toContain(REMINDER)
 })
 
 test('a job listed by two closed records is judged once', withDeps, async ($, on) => {

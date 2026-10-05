@@ -4,19 +4,27 @@ import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerd
 const MIN = 60_000
 
 describe('a background job, from what starting it said', () => {
+  const STARTED_TEXT = 'Command running in background with ID: btv0drbh3. Output is being written to: /private/tmp/x/tasks/btv0drbh3.output. You will be notified when it completes.'
+  const MOVED_TEXT =
+    'Command did not complete within its 120s timeout and was moved to the background (ID: b8wxdk1kr). Output is being written to: /private/tmp/x/tasks/b8wxdk1kr.output. You will be notified when it completes. To check interim output, use Read on that file path.'
   test('its id and output file are read from the tool result', () => {
-    const text = 'Command running in background with ID: btv0drbh3. Output is being written to: /private/tmp/x/tasks/btv0drbh3.output. You will be notified when it completes.'
-    expect(startedJob(text)).toEqual({ id: 'btv0drbh3', outputPath: '/private/tmp/x/tasks/btv0drbh3.output' })
+    expect(startedJob(STARTED_TEXT, { inBackground: true })).toEqual({ id: 'btv0drbh3', outputPath: '/private/tmp/x/tasks/btv0drbh3.output' })
   })
   test('a result that did not start one is not a job', () => {
-    expect(startedJob('ok')).toBeUndefined()
+    expect(startedJob('ok', { inBackground: true })).toBeUndefined()
+    expect(startedJob('ok', { inBackground: false })).toBeUndefined()
   })
   // #706: a foreground command Claude Code moves to the background at its timeout is a job too. The
   // text is this build's own, seen in a session on 2026-10-04.
   test('a command moved to the background at its timeout is read the same way', () => {
-    const text =
-      'Command did not complete within its 120s timeout and was moved to the background (ID: b8wxdk1kr). Output is being written to: /private/tmp/x/tasks/b8wxdk1kr.output. You will be notified when it completes. To check interim output, use Read on that file path.'
-    expect(startedJob(text)).toEqual({ id: 'b8wxdk1kr', outputPath: '/private/tmp/x/tasks/b8wxdk1kr.output' })
+    expect(startedJob(MOVED_TEXT, { inBackground: false })).toEqual({ id: 'b8wxdk1kr', outputPath: '/private/tmp/x/tasks/b8wxdk1kr.output' })
+  })
+  // The lessons review of #721: a foreground command whose own output quotes either text (a cat of
+  // a test file, a grep of this mod) started nothing. Only Claude Code's own result, opening with its
+  // own words, is a job moved there; a background start is known by the call that asked for one.
+  test('a foreground command whose output quotes a start started nothing', () => {
+    expect(startedJob(`line 1\n${STARTED_TEXT}\n`, { inBackground: false })).toBeUndefined()
+    expect(startedJob(`line 1\n${MOVED_TEXT}\n`, { inBackground: false })).toBeUndefined()
   })
 })
 
