@@ -248,6 +248,11 @@ mt_split_assignments() {  # $1 = one segment
     i=$(( ${#name} + 1 )); n=${#s}; val=""; q=""; depth=0
     while [ "$i" -lt "$n" ]; do
       c="${s:$i:1}"
+      # A backslash outside single quotes keeps the next character in the value, so an escaped
+      # quote or space neither closes a quote nor ends the word.
+      if [ "$c" = "\\" ] && [ "$q" != "'" ] && [ $((i + 1)) -lt "$n" ]; then
+        val="$val${s:$((i + 1)):1}"; i=$((i + 2)); continue
+      fi
       if [ -n "$q" ]; then
         if [ "$c" = "$q" ]; then q=""; [ "$depth" -gt 0 ] && val="$val$c"; else val="$val$c"; fi
       else

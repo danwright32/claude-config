@@ -147,7 +147,9 @@ eq "$(mt_pr_number 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY 
 for w in 'GH_TOKEN=$(gh auth token -u danwright32) gh pr merge 7 --squash' \
          'MSG="two words" gh pr merge 7 --squash' \
          "NOTE='a b c' gh pr merge 7" \
-         'A=1 GH_TOKEN=$(gh auth token -u x) B="c d" gh pr merge 7'; do
+         'A=1 GH_TOKEN=$(gh auth token -u x) B="c d" gh pr merge 7' \
+         'MSG="a \" b" gh pr merge 7' \
+         'A=a\ b gh pr merge 7'; do
   if mt_runs_merge "$w"; then pass; else fail "a merge after an assignment holding a space was not read as a merge: $w"; fi
 done
 mt_split_assignments 'PR_REVIEW_READ="ab12" GH_TOKEN=$(gh auth token -u x) gh pr merge 7'
