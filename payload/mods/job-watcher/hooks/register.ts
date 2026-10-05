@@ -45,6 +45,8 @@ const notices: string[] = []
 let toldUnpublished = false
 let toldClockFailed = false
 // A look still running when the next minute comes is not overlapped by a second (lessons review).
+// It describes the look in flight, not the session, so a session start never resets it: an earlier
+// session's look may still be running then, and a second would overlap it (#694).
 let looking = false
 // One timer, started again by each session start so it looks with that session's engine interface.
 let tick: { cancel: () => void } | undefined
@@ -422,7 +424,6 @@ export const register: Register = on => {
     notices.length = 0
     toldUnpublished = false
     toldClockFailed = false
-    looking = false
     tick?.cancel()
     tick = $.clock.every(TICK_MS, () => lookSafely($))
     await $.tool.register(KEEP_SPEC)

@@ -33,11 +33,43 @@ const deps: { name: string; register: Register } = {
 const withDeps = { plugins: [deps] }
 const MIN = 60_000
 
+// Picker manners (#615), standing in, since a mod's tests cannot import another mod's files. As the
+// real mod does, it adds $.pickers, answers every AskUserQuestion in its own tool.call hook without
+// ever calling next (more than one question is refused), and holds the open question in its state
+// while it waits, writing null once the question ends. Dan's answer comes from the world, which
+// sees the session as it stood while the question was open.
+const PickerManners = (tier: 'prepend' | 'append'): { name: string; tier: 'prepend' | 'append'; register: Register } => ({
+  name: 'picker-manners',
+  tier,
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const wait = async ({ id }: { id: string }) => ({ kind: 'answer', answer: (await built.process.run(['__answer', id])).stdout })
+      return { ...built, pickers: { wait } } as never
+    })
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e) => {
+      const questions = (e.questions ?? []) as unknown as { question: string }[]
+      const q = questions[0]
+      if (!q || questions.length > 1) return { deny: 'Ask one question per call: Dan answers pickers one at a time.' }
+      const id = (e as unknown as { tool_use_id?: string }).tool_use_id ?? 'call-1'
+      const open = { plugin: 'picker-manners', key: 'open' } as never
+      await $.state.set(open, { id, question: q, chosen: [] } as never)
+      try {
+        const outcome = await ($ as unknown as { pickers: { wait: (i: { id: string }) => Promise<{ answer: string }> } }).pickers.wait({ id })
+        return { result: { questions: e.questions, answers: { [q.question]: outcome.answer } } } as never
+      } finally {
+        await $.state.set(open, null as never)
+      }
+    })
+  },
+})
+
 type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string; kind?: string }; failed?: string; goal?: string; request?: string }
 
 // failExtraFrom: registry writes fail from this one on (1 is the first). taskWithoutId: a
 // TaskCreate answers with no task id.
 // notifyFails: terminal-notifier exits 1. permissionDenied: the permission prompt is answered no.
+// permissionThrows: the call the prompt belongs to throws once it is answered.
 type WorldOpts = {
   duringAsk?: (w: { progress: Rec[] }) => void
   registryFails?: boolean
@@ -47,11 +79,17 @@ type WorldOpts = {
   taskWithoutId?: boolean
   notifyFails?: boolean
   permissionDenied?: boolean
+  permissionThrows?: boolean
 }
 const world = (on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined }
+  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined, duringPicker: undefined as Rec | undefined }
   let writes = 0
   on('process.run', ($, e) => {
+    // Dan answering the question picker manners shows: "Yes".
+    if (e.argv[0] === '__answer') {
+      w.duringPicker = w.progress[w.progress.length - 1]
+      return { value: { exitCode: 0, stdout: 'Yes', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === 'terminal-notifier') {
       w.notified.push(e.argv.slice(1))
       if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -69,6 +107,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
   on('ui.log', ($, e) => {
     if (e.text.startsWith('EXTRA progress ')) w.progress.push(JSON.parse(e.text.slice('EXTRA progress '.length)))
     else if (e.to !== 'debug') w.logs.push(e.text)
+    else w.debug.push(e.text)
     return { value: undefined }
   })
   on('classic.PermissionRequest', () => ({}) as never)
@@ -88,7 +127,10 @@ const world = (on: On, opts: WorldOpts = {}) => {
       await new Promise<void>(r => (w.answer = r))
       w.duringPermission = w.progress[w.progress.length - 1]
       if (opts.permissionDenied) return { deny: 'The user did not allow this.' } as never
+      if (opts.permissionThrows) throw new Error('the test suite could not be started')
     }
+    // A Bash call running beside it, with no description either, until the test lets it finish.
+    if (e.tool === 'Bash' && (e as unknown as { command?: string }).command === 'npm run lint') await new Promise<void>(r => (w.lint = r))
     if (e.tool === 'ProposeGoal') return { result: { condition: (e as unknown as { condition: string }).condition, askUser: false }, text: 'set' } as never
     if (e.tool === 'TaskCreate' && opts.taskWithoutId) return { result: { task: {} }, text: 'created' } as never
     if (e.tool === 'TaskCreate') {
@@ -442,6 +484,118 @@ test('another call returning while a permission is open leaves the session waiti
   expect(last(w)?.waiting).toBeUndefined()
 })
 
+// #694 item 1: the prompt belongs to the call it was raised inside, held by that call's id, never
+// matched by tool and "what for" text, which for any Bash call with no description is just "a Bash
+// command". prompted starts the call Claude Code stops to ask about and raises its prompt (with
+// promptInput, as the prompt names it) while the call waits; the call comes back wrapped, since it
+// only settles once the test answers.
+const raise = ($: Raiser, input: Record<string, unknown>) =>
+  $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: input } as never)
+const prompted = async ($: Raiser, w: { answer: (() => void) | undefined }, input: Record<string, unknown>, promptInput = input) => {
+  const call = $.tool.call({ tool: 'Bash', ...input } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await raise($, promptInput)
+  return { call }
+}
+const running = async ($: Raiser, w: { lint: (() => void) | undefined }) => {
+  const call = $.tool.call(bash('npm run lint'))
+  for (let i = 0; i < 50 && !w.lint; i++) await Promise.resolve()
+  return { call }
+}
+
+test('a parallel Bash call with no description returning while a permission is open leaves the session waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const lint = await running($ as never, w)
+  const { call } = await prompted($ as never, w, { command: 'npm test' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'a Bash command' })
+  w.lint?.()
+  await lint.call
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'a Bash command' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test("the prompt's own call returning clears it while another Bash call with no description runs on", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const lint = await running($ as never, w)
+  const { call } = await prompted($ as never, w, { command: 'npm test' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+  w.lint?.()
+  await lint.call
+})
+
+// A hook beneath the tracker may rewrite a call, so a prompt can name an input no running call has:
+// it then belongs to one of the calls of its tool running when it was raised, and stays until each
+// has returned, never cleared early by the first.
+test('a prompt whose input matches no running call waits for every call of its tool that was running', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const lint = await running($ as never, w)
+  const { call } = await prompted($ as never, w, { command: 'npm test' }, { command: 'npm test --ci' })
+  w.lint?.()
+  await lint.call
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// The calls running are not the session's to forget: a session start while one runs still lets a
+// prompt raised inside it be matched to it, and come off when it returns (the class of #694 item 4).
+test('a session start while a call runs still matches a prompt raised inside that call', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const call = $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await start($)
+  await raise($ as never, { command: 'npm test' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// A call that rejects (an interrupt while the prompt is open does) has ended, so its prompt has too.
+test('a permission whose call rejects once answered still clears waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { permissionThrows: true })
+  await start($)
+  const { call } = await prompted($ as never, w, { command: 'npm test' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  const outcome = await call.then(
+    () => 'settled',
+    () => 'rejected',
+  )
+  expect(outcome).toBe('rejected')
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// #694 item 2: a question settling clears only its own mark; a permission still open stands.
+test('a question asked and answered while a permission is open leaves the permission mark', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let during: Rec | undefined
+  const w = world(on, { duringAsk: x => (during = x.progress[x.progress.length - 1]) })
+  await start($)
+  const { call } = await prompted($ as never, w, { command: 'npm test', description: 'Run the test suite' })
+  await clock.advance(1_000)
+  await $.tool.call(ask('Which colour?'))
+  expect(during?.waiting).toMatchObject({ kind: 'question', question: 'Which colour?' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'Run the test suite' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
 test('a permission Dan refuses still clears waiting', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on, { permissionDenied: true })
@@ -492,6 +646,71 @@ test('a notification that cannot be sent is said once in a dim line, and never b
   const said = w.logs.filter(l => l.includes('could not send a notification'))
   expect(said.length).toBe(1)
   expect(said[0]).toContain('no permission to notify')
+})
+
+// #694 item 6: hooks on one event nest by tier and then by load order, outermost first, and a hook
+// that answers without calling next keeps every hook beneath it from seeing the call. Picker manners
+// answers every AskUserQuestion that way, so wherever it sits above the tracker the tracker's own
+// tool.call hook never sees the question. Both orders are loaded here: picker manners in the tier
+// above the tracker's (prepend), and in the tier beneath it (append).
+const ORDERS = [
+  ['above', 'prepend'],
+  ['beneath', 'append'],
+] as const
+const shipIt = { tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'Ship it?', header: 'Ship', options: [], multiSelect: false }] } as never
+
+for (const [where, tier] of ORDERS) {
+  test(`a question picker manners answers is marked and notified once, with picker manners ${where} the tracker`, { plugins: [deps, PickerManners(tier)] }, async ($, on) => {
+    mock.clock(on, { now: 0 })
+    const w = world(on)
+    await start($)
+    const r = (await $.tool.call(shipIt)) as { result?: { answers?: Record<string, string> } }
+    // Picker manners answered it, never the engine's own picker beneath.
+    expect(r.result?.answers).toEqual({ 'Ship it?': 'Yes' })
+    expect(w.duringPicker?.waiting).toMatchObject({ question: 'Ship it?', kind: 'question' })
+    expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+    expect(last(w)?.waiting).toBeUndefined()
+  })
+}
+
+// Above the tracker, the question's end is seen only as picker manners' null: it takes off the
+// question's mark alone, and a permission prompt still open stands (#694 item 2 on this path too).
+test('a question picker manners holds open above the tracker leaves an open permission mark when it ends', { plugins: [deps, PickerManners('prepend')] }, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const { call } = await prompted($ as never, w, { command: 'npm test', description: 'Run the test suite' })
+  await clock.advance(1_000)
+  await $.tool.call(shipIt)
+  expect(w.duringPicker?.waiting).toMatchObject({ kind: 'question', question: 'Ship it?' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'Run the test suite' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// Another mod's value is read, never trusted: an open question that cannot be read marks nothing.
+const Garbled: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'picker-manners',
+  tier: 'prepend',
+  register: on => {
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e) => {
+      const open = { plugin: 'picker-manners', key: 'open' } as never
+      await $.state.set(open, { id: 7, question: 'Ship it?' } as never)
+      await $.state.set(open, null as never)
+      return { result: { questions: e.questions, answers: {} } } as never
+    })
+  },
+}
+test('an open question picker manners writes in a shape that cannot be read marks and notifies nothing', { plugins: [deps, Garbled] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call(shipIt)
+  expect(w.notified).toEqual([])
+  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
+  // Said in the debug log, never passed off as no question at all (L11).
+  expect(w.debug.filter(l => l.includes("picker manners' open question could not be read"))).toHaveLength(1)
 })
 
 // The goal text (Dan, 2026-10-04, picker): the /goal condition when one is set, otherwise the
