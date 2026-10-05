@@ -55,6 +55,9 @@ const modKit: { name: string; register: Register } = {
 const REPO = 'test-owner/readings'
 const REPO_OPTION = { readingsRepo: REPO }
 const withKit = { plugins: [modKit], options: REPO_OPTION }
+// The manifest's defaults carry the proven Chrome route (#659), so a test of Switch with no route
+// set up empties both commands itself, as somebody blanking the settings would.
+const NO_ROUTE = { plugins: [modKit], options: { ...REPO_OPTION, logoutCommand: '', signedOutCheck: '' } }
 
 // An older mod-kit, whose slot list has no 'room' (a Mac the sync has not yet brought up to date):
 // it refuses the card, so the refusal path is exercised.
@@ -131,6 +134,8 @@ type World = {
   authLoginThrows: boolean
   /** The signed out check cannot even be started. */
   checkThrows: boolean
+  /** The time limit the signed out check was last run with. */
+  checkTimeoutMs: number | undefined
   /** Reading this session's live reading back from the session's state fails. */
   liveReadFails: boolean
   /** The phase a reload left stored, answered to the next read of it. */
@@ -145,7 +150,7 @@ const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, checkTimeoutMs: undefined, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
   // Every gh command the mod ran, and each write it asked GitHub for with the sha it gave.
   const gh: string[][] = []
   const puts: { path: string; sha?: string }[] = []
@@ -309,6 +314,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (cmd === 'date') return r(ok('-0400\n'))
     if (cmd === '/bin/sh' && rest[1] === 'LOGOUT') return r(w.logout)
     if (cmd === '/bin/sh' && rest[1] === 'CHECK') {
+      w.checkTimeoutMs = e.init?.timeoutMs
       if (w.checkThrows) throw new Error('spawn /bin/sh EAGAIN')
       return r(w.check)
     }
@@ -571,7 +577,7 @@ test('Dismiss hides the card for this session only: nothing shared is written, s
   await ui.unmount()
 })
 
-test('Switch shows its progress with elapsed seconds, and with no proven logout route it stops red, opening no sign in page', withKit, async ($, on) => {
+test('Switch shows its progress with elapsed seconds, and with no logout route set up it stops red, opening no sign in page', NO_ROUTE, async ($, on) => {
   const { clock, runs } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
   await start($, clock)
   const ui = await mountBand($ as never)
@@ -697,6 +703,20 @@ test('a logout whose check does not print signed out, or that fails, stops befor
   await ui.unmount()
 })
 
+test("the signed out check gets a minute, because Chrome saves a cookie's removal to disk late (#659)", { ...withKit, ...ROUTE }, async ($, on) => {
+  // Proven on 2026-10-05: claude.ai's session cookie left Chrome's cookie file 31 seconds after
+  // the logout, and Chrome writes cookie changes about every 30 seconds, so 30 was too short.
+  const { w, clock, runs } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
+  await clock.settle()
+  expect(runs.filter(r => r[0] === 'claude')).toHaveLength(1)
+  expect(w.checkTimeoutMs).toBe(60_000)
+  await ui.unmount()
+})
+
 test('a weekly reset after the clocks change reads in the offset of that day', withKit, async ($, on) => {
   const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
@@ -707,14 +727,14 @@ test('a weekly reset after the clocks change reads in the offset of that day', w
   await ui.unmount()
 })
 
-test('a Switch stopped at the sign out says why in a toast, so Try again is not the only diagnosis (L148)', withKit, async ($, on) => {
+test('a Switch stopped at the sign out says why in a toast, so Try again is not the only diagnosis (L148)', NO_ROUTE, async ($, on) => {
   const { clock, toasts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
   await start($, clock)
   const ui = await mountBand($ as never)
   await measure($, clock, limits(97, 50))
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
   await clock.advance(1)
-  expect(toasts).toEqual(['Switch stopped: no browser logout route has been proven yet (#659)'])
+  expect(toasts).toEqual(['Switch stopped: no browser logout route is set up'])
   await ui.unmount()
 })
 
@@ -749,7 +769,7 @@ test('an email that is not a plain address is never handed to claude auth login'
   await ui.unmount()
 })
 
-test('a failed Switch does not outlive the low spell: when the account runs low again the card offers Switch afresh', withKit, async ($, on) => {
+test('a failed Switch does not outlive the low spell: when the account runs low again the card offers Switch afresh', NO_ROUTE, async ($, on) => {
   const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
   await start($, clock)
   const ui = await mountBand($ as never)

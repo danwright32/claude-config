@@ -483,17 +483,17 @@ const stopTicker = () => {
 // Switch's first step (#659): sign claude.ai out in the browser, so the sign in page that follows
 // cannot approve the old account. Dan, 2026-10-04: he has to log out in the browser no matter what.
 //
-// The route is NOT proven yet. Finding it means testing on a real browser signed in to claude.ai,
-// which signs Dan out, so it is left open (named in the PR). Until then both commands are empty and
-// every Switch stops at this step, saying the page did not confirm the sign out, which is true.
-//
-// Once proven, the route is two shell commands in the manifest's userConfig defaults (so both Macs
-// get it with the mod): `logoutCommand` signs the browser out, and `signedOutCheck` must then print
+// The route is two shell commands in the manifest's userConfig defaults (so both Macs get it with the
+// mod), proven on a real Chrome signed in to claude.ai on 2026-10-05 (#659): bin/chrome-logout.sh
+// loads claude.ai's logout page in Chrome's last used profile, and bin/chrome-signed-out.sh looks
+// for claude.ai's session cookie there. With either setting emptied, Switch stops at this step.
+// `logoutCommand` signs the browser out, and `signedOutCheck` must then print
 // exactly `signed out` and exit 0. A logout command that fails stops Switch; one that succeeds is
 // still not taken as a sign out until the check confirms the signed out state (L156, L184).
 
 const LOGOUT_TIMEOUT_MS = 60_000
-const CHECK_TIMEOUT_MS = 30_000
+// A minute, because Chrome writes a cookie's removal to disk late: 31 seconds in the 2026-10-05 proof.
+const CHECK_TIMEOUT_MS = 60_000
 
 type SignOutRoute = { logoutCommand: string; signedOutCheck: string }
 // The cause is what the card says and the why is the toast's detail, so each stop names what was
@@ -503,7 +503,7 @@ type SignOut = { isConfirmed: true } | { isConfirmed: false; cause: AccountRoomS
 const short = (s: string) => (s.trim().length > 120 ? `${s.trim().slice(0, 120)}...` : s.trim())
 
 const signOut = async ($: EngineInterface, route: SignOutRoute): Promise<SignOut> => {
-  if (!route.logoutCommand || !route.signedOutCheck) return { isConfirmed: false, cause: 'no-route', why: 'no browser logout route has been proven yet (#659)' }
+  if (!route.logoutCommand || !route.signedOutCheck) return { isConfirmed: false, cause: 'no-route', why: 'no browser logout route is set up' }
   let out: { exitCode: number; stderr: string }
   try {
     out = await $.process.run(['/bin/sh', '-c', route.logoutCommand], { timeoutMs: LOGOUT_TIMEOUT_MS })
