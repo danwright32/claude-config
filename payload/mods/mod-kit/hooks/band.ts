@@ -38,6 +38,8 @@ const partRefusal = (p: ModKitBandPart): string | undefined => {
   const href = (p as { href?: unknown }).href
   if (href !== undefined && 'button' in p) return 'only a text run can be a link; a button is pressed, not followed'
   if (href !== undefined && (typeof href !== 'string' || !href.trim())) return `a link's href must be its address, not ${JSON.stringify(href)}`
+  // One could end the terminal's hyperlink sequence early and have what follows written as is.
+  if (typeof href === 'string' && /[\u0000-\u001f\u007f-\u009f]/.test(href)) return `a link's href ${JSON.stringify(href)} holds a control character`
   return undefined
 }
 

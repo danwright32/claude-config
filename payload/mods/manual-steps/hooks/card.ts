@@ -47,7 +47,10 @@ export const cardFrom = (input: unknown): Made | Refused => {
       return {
         refusal: `${name} has no link or exact location, so Dan would have to hunt for it. Give its url (https://...), or where there is no page, the exact place: the app, screen and section.`,
       }
-    if (url && !/^https?:\/\/[^\s/]+/.test(url)) return { refusal: `${name}: its link "${url}" is not a web address; give the whole https:// link.` }
+    // The whole link, not only its start: a space or a control character anywhere is no address,
+    // and a control character would reach the terminal's hyperlink as it is (#708).
+    if (url && !/^https?:\/\/[^\s/\u0000-\u001f\u007f-\u009f]+[^\s\u0000-\u001f\u007f-\u009f]*$/.test(url))
+      return { refusal: `${name}: its link ${JSON.stringify(url)} is not a web address; give the whole https:// link.` }
     const checked = s.checked
     if (typeof checked !== 'string' || !(CHECKED as readonly string[]).includes(checked))
       return {
@@ -64,6 +67,21 @@ export const cardFrom = (input: unknown): Made | Refused => {
     steps.push(step)
   }
   return { card: { heading: oneLine(heading), steps } }
+}
+
+/**
+ * `into` with the unfinished steps of `from` after its own, each titled with `from`'s heading. For a
+ * card kept under a worktree's own folder before #708 beside one kept under the repository root:
+ * both are held for Claude to re-check, so nothing is lost and nothing shows unchecked. A step
+ * already there (its title and link) is not added again, so folding twice changes nothing.
+ */
+export const fold = (into: StepsCard, from: StepsCard): StepsCard => {
+  const has = new Set(into.steps.map(s => `${s.title}\n${s.url ?? s.location}`))
+  const extra = (Array.isArray(from.steps) ? from.steps : [])
+    .filter(s => s && typeof s.title === 'string' && !s.finished)
+    .map(s => ({ ...s, title: `${from.heading}: ${s.title}` }))
+    .filter(s => !has.has(`${s.title}\n${s.url ?? s.location}`))
+  return extra.length ? { ...into, steps: [...into.steps, ...extra] } : into
 }
 
 /** The index of the step to do next: the first not yet finished. */

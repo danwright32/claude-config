@@ -424,6 +424,9 @@ test('an href that is not an address, or one on a button, is refused at publish,
   expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', href: '' }]] })).toMatch(/refused: .*href/)
   expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', href: 7 }]] })).toMatch(/refused: .*href/)
   expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ button: 'go', label: 'Go', href: 'https://a.example' }]] })).toMatch(/refused: .*only a text run can be a link/)
+  // A control character could end the terminal's hyperlink sequence early and write what follows.
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', href: 'https://a.example/\u001b]8;;\u0007x' }]] })).toMatch(/refused: .*control character/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', href: 'https://a.example/\u0007' }]] })).toMatch(/refused: .*control character/)
 })
 
 test('an unknown frame kind, a malformed divider, or a bad indent is refused at publish, never drawn wrong', withPublisher, async ($, on) => {

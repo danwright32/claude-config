@@ -578,7 +578,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
 
 - **The handover.** Claude pins steps through the `steps` tool: a heading and a list of steps,
   each with a title, a direct `https://` link or, where there is no page, an exact location, the
-  click path and any value to paste. A step with no link or location is refused, naming it. Each
+  click path and any value to paste. A step with no link or location is refused, naming it, and
+  so is a link with a space or a control character anywhere in it (#708). Each
   step must also say what Claude found when it checked it against the current state
   (`already-done`, `not-done`, `cannot-check`), so the hand-off rule's check is a required field
   rather than a line in a prompt; a step without it is refused. Pinning replaces the card.
@@ -630,7 +631,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
 - **Carry over.** Unfinished steps are kept per project (the repository root, else the folder) in
   the mod's store on this Mac. The root is the main checkout's for a worktree, so steps handed over
   in a worktree session come back in the main checkout and in any other worktree of it (#708); a
-  card a worktree session kept under the worktree's own folder before that is found there and moved.
+  card a worktree session kept under the worktree's own folder before that is found there and moved,
+  its unfinished steps folded under its heading into any card already under the root, so both are
+  held for Claude to re-check and neither is lost.
   A repository that cannot be read is never taken as none: the toast says the steps could not be
   saved for the next session, rather than keeping them under the worktree's folder again.
   At the next session start there they are held, not shown, and the conversation's first message
@@ -667,7 +670,8 @@ one slot keep the order they were first published in, and a row published again 
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
 line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
 the amber; `href` makes a run Claude Code's Link to that address, #708, with no text of its own when
-the run's text is the address, so a terminal without hyperlinks does not draw it twice) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
+the run's text is the address, so a terminal without hyperlinks does not draw it twice; an href
+holding a control character is refused, since one could end the hyperlink's sequence early) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
 survey's row: the hotkey in the accent colour, a colon, the label, `1: 7 days`, or the label alone
 with no hotkey, #667). A button is Claude Code's own, drawn with the
 key `<mod>:<button>`, and its press reaches the publisher through

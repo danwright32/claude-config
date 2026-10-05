@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, finish, nextStep, paneColumns, sent } from './card.ts'
+import { cardFrom, cardLines, carriedNote, finish, fold, nextStep, paneColumns, sent } from './card.ts'
 import type { StepsVerdict } from './card.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
@@ -57,17 +57,20 @@ const persist = async ($: EngineInterface) => {
   }
 }
 
-// The steps kept for this project by an earlier session, moved from where #614 kept them when that
-// was elsewhere.
+// The steps kept for this project by an earlier session, with any #614 kept under the worktree's own
+// folder moved to the repository root: on their own, or folded into the card already there, which
+// Claude re-checks before anything shows. Written before the old entry is removed, so a failure
+// between the two loses nothing, and the fold of a second run adds nothing.
 const readKept = async ($: EngineInterface): Promise<StepsCard | undefined> => {
   const { key, legacy } = await projectKeys($)
   const kept = (await $.store.get(key)) as StepsCard | undefined
-  if (kept !== undefined || legacy === key) return kept
+  if (legacy === key) return kept
   const old = (await $.store.get(legacy)) as StepsCard | undefined
-  if (old === undefined) return undefined
-  await $.store.set(key, old)
+  if (old === undefined) return kept
+  const moved = kept === undefined ? old : fold(kept, old)
+  await $.store.set(key, moved)
   await $.store.delete(legacy)
-  return old
+  return moved
 }
 
 // Read, change and write the card with ifVersion, again on a miss, so a Done pressed twice before
@@ -156,13 +159,20 @@ const placeNew = async ($: EngineInterface, card: StepsCard): Promise<string | u
   const place = (await $.state.get(placeRef)).value ?? null
   if (isPane(place)) {
     if (!(await publishPane($, place, card))) return undefined
-    await $.state.set(placeRef, null)
-    await $.ui.close({ id: place }).catch(() => undefined)
-    await clearPane($, place)
+    await leavePane($)
   }
   if (await openPane($, UNASKED_PANE, card)) return undefined
   await $.state.set(placeRef, 'band')
   return publishBand($, card)
+}
+
+// Out of whichever pane holds the card, as it goes to the band, so it never shows in both.
+const leavePane = async ($: EngineInterface) => {
+  const place = (await $.state.get(placeRef)).value ?? null
+  if (!isPane(place)) return
+  await $.state.set(placeRef, null)
+  await $.ui.close({ id: place }).catch(() => undefined)
+  await clearPane($, place)
 }
 
 // Takes the card away: out of the band and the pane.
@@ -401,14 +411,15 @@ export const register: Register = on => {
     // Asked, so the pane is placed at any width; under its own id, so asking does not lower the
     // width a later card opened unasked needs.
     if (await openPane($, ASKED_PANE, card)) return { text: 'The steps card is open.' }
+    await leavePane($)
     await $.state.set(placeRef, 'band')
     const failed = await publishBand($, card)
     return { text: failed ? `The steps card could not be shown: ${failed}.` : 'The steps card is in the band above the prompt.' }
   })
 
-  // Dan closing either pane does not finish the steps: the card stays pinned, in the band.
-  on('ui.close', { id: 'steps' }, closedByHand)
-  on('ui.close', { id: 'steps-card' }, closedByHand)
+  // Dan closing either pane does not finish the steps: the card stays pinned, in the band. One hook
+  // answering for every id in PANES, so a pane id added there cannot be left without it.
+  on('ui.close', closedByHand)
 }
 
 const closedByHand: Hook<'ui.close'> = async ($, e, next) => {

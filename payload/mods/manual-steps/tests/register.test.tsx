@@ -124,9 +124,10 @@ const ROOT = '/repo'
 // which it remembers), the prompt, the clipboard and toasts, each recorded. `wide` is a 160 column
 // terminal, else 120, a laptop. `root` is where the session runs, `repoRoot` the repository's root
 // (the main checkout's for a worktree), null outside one.
-type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean }
+// `placesNoPanes` is a session whose attached surfaces place no panes at all, asked or not.
+type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, ...init }
+  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   const opens: { id: string; columns?: number }[] = []
@@ -169,6 +170,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   on('ui.open', ($, e) => {
     opened.push(e.id)
     opens.push({ id: e.id, columns: e.columns })
+    if (w.placesNoPanes) return { value: { isPlaced: false, reason: 'the attached surfaces place no panes' } } as never
     if (w.isAsking) asked.add(e.id)
     const floor = asked.has(e.id) ? 110 : 144
     const columns = w.wide ? 160 : 120
@@ -589,6 +591,27 @@ test('a card a worktree session kept under the worktree before #708 is found, an
   expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
 })
 
+// #708 lessons review: with a card under the root too, the worktree's own was never read again.
+test('a card kept under the worktree beside one under the root is folded into the held card for Claude to re-check, never lost', withKit, async ($, on) => {
+  const tree = `${ROOT}/.claude/worktrees/a1`
+  const atRoot: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  const inTree: StepsCard = {
+    heading: 'DNS',
+    steps: [
+      { title: 'Made the record', url: 'https://c.example', finished: 'checked' },
+      { title: 'Add the CNAME', url: 'https://d.example' },
+    ],
+  }
+  const w = world(on, { root: tree, repoRoot: ROOT }, { [`card:${ROOT}`]: atRoot, [`card:${tree}`]: inTree })
+  await start($)
+  const note = (await context($)).find(b => b.name === 'manualSteps')?.text ?? ''
+  expect(note).toMatch(/step 1: Purge the cache \(https:\/\/b\.example\)/)
+  expect(note).toMatch(/step 2: DNS: Add the CNAME \(https:\/\/d\.example\)/)
+  expect(note).not.toMatch(/Made the record/)
+  expect(Object.keys(w.mem)).toEqual([`card:${ROOT}`])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache', 'DNS: Add the CNAME'])
+})
+
 test('a reload mid session keeps the live card live: verdicts land, and no carried note is sent', withKit, async ($, on) => {
   const w = world(on)
   await start($)
@@ -679,6 +702,20 @@ test('/steps with the card in the pane opened unasked moves it to its own pane a
   expect(w.prompts).toEqual(['step 1 done'])
   await call($, VERDICT, { step: 1, checked: 'checked' })
   expect(w.closed).toEqual([unasked, askedId])
+  expect(await paneShown($)).toBeUndefined()
+})
+
+// #708 lessons review: the band took the card while the pane opened unasked still showed it.
+test('/steps where its pane cannot be placed moves the card to the band and closes the pane that held it', withKit, async ($, on) => {
+  const w = world(on, { wide: true })
+  await start($)
+  await hand($, [step()])
+  const unasked = w.opened[0]
+  expect(await paneShown($)).toBeDefined()
+  w.w.placesNoPanes = true
+  expect(await slashSteps($, w.w)).toBe('The steps card is in the band above the prompt.')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(w.closed).toContain(unasked)
   expect(await paneShown($)).toBeUndefined()
 })
 

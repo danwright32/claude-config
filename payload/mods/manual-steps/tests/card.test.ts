@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, carriedNote, finish, nextStep, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, finish, fold, nextStep, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -21,6 +21,12 @@ describe('cardFrom', () => {
   test('refuses a link that is not a web address', () => {
     const r = cardFrom({ heading: 'x', steps: [step({ url: 'dash.cloudflare.com' })] })
     expect('refusal' in r && r.refusal).toMatch(/Step 1 .*link .*https/)
+  })
+  // The whole link, not only its start (#708 lessons review): a space or a control character
+  // anywhere in it is no address, and a control character would reach the terminal's hyperlink.
+  test('refuses a link with a space or a control character anywhere in it', () => {
+    for (const url of ['https://dash.cloudflare.com/waf rules', 'https://dash.cloudflare.com/\u001b]8;;\u0007', 'https://a.example/\u0000', 'https://a\u0007b.example/x'])
+      expect(cardFrom({ heading: 'x', steps: [step({ url })] })).toMatchObject({ refusal: expect.stringMatching(/Step 1 .*link .*https/) })
   })
   test('refuses a step that does not say whether it was checked against the current state', () => {
     const r = cardFrom({ heading: 'x', steps: [step({ checked: undefined })] })
@@ -60,6 +66,18 @@ describe('finish', () => {
     if ('refusal' in r) throw new Error(r.refusal)
     expect(r.card.steps[0]).toMatchObject({ isSent: false })
     expect(r.card.steps[0]?.finished).toBeUndefined()
+  })
+})
+
+describe('fold', () => {
+  test('adds the other card\'s unfinished steps under its heading, and folding twice adds nothing more', () => {
+    const into = made({ heading: 'Cloudflare WAF', steps: [step()] })
+    const from = made({ heading: 'DNS', steps: [step({ title: 'Made the record', checked: 'already-done' }), step({ title: 'Add the CNAME', url: 'https://d.example' })] })
+    const once = fold(into, from)
+    expect(once.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', 'DNS: Add the CNAME'])
+    expect(fold(once, from)).toEqual(once)
+    // A malformed card kept from before adds nothing.
+    expect(fold(into, { heading: 'x', steps: 'no' } as never)).toEqual(into)
   })
 })
 
