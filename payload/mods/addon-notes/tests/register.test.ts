@@ -245,3 +245,35 @@ test('with picker manners loaded and no question open, a + note mid turn is stil
   expect(w.seen).toEqual([{ text: '+ also link the commission', context: [ADD_ON_CONTEXT] }])
   expect(w.toasts).toEqual([TOAST])
 })
+
+// Picker manners' value is another mod's, read and never trusted: a shape that is no open question
+// (a write from an older or newer contract), or a read that fails, leaves the note an add-on, as it
+// is with picker manners not loaded, and a failed read is said in the debug log.
+const pickerMannersGarbled: Register = on => {
+  on('tool.call', { tool: 'Bash' }, async ($, e) => {
+    await $.state.set({ plugin: 'picker-manners', key: 'open' } as never, 'Ship it?' as never)
+    return { deny: 'written' } as never
+  })
+}
+
+test('a picker manners value that is no open question leaves a + note an add-on', { plugins: [{ name: 'picker-manners', register: pickerMannersGarbled }] }, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'Bash', command: 'x' } as never)
+  await $.prompt.submit(typed('+ also link the commission', 't1'))
+  expect(w.seen).toEqual([{ text: '+ also link the commission', context: [ADD_ON_CONTEXT] }])
+  expect(w.toasts).toEqual([TOAST])
+})
+
+test('a question state that cannot be read leaves a + note an add-on, and says so in the debug log', async ($, on) => {
+  const debug: string[] = []
+  on('state.get', () => ({ deny: 'state store unavailable' }) as never)
+  on('ui.log', ($, e) => {
+    if (e.to === 'debug') debug.push(e.text)
+    return { value: undefined } as never
+  })
+  const w = world(on)
+  await $.prompt.submit(typed('+ also link the commission', 't1'))
+  expect(w.seen).toEqual([{ text: '+ also link the commission', context: [ADD_ON_CONTEXT] }])
+  expect(w.toasts).toEqual([TOAST])
+  expect(debug.filter(l => /could not read whether a question is open.*state store unavailable/.test(l))).toHaveLength(1)
+})
