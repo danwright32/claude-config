@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, finish, nextStep, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, finish, nextStep, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -63,6 +63,19 @@ describe('finish', () => {
   })
 })
 
+describe('carriedNote', () => {
+  // Telling Dan they are all done wrote nothing, so the kept card came back every session (#708).
+  // The note's only way out is the steps tool, where a step found done is already-done and a card
+  // with every step so is cleared; register.test proves that route clears the kept card.
+  test('asks for every step to go back through the steps tool, a done one as already-done, and offers no way out that keeps the card', () => {
+    const note = carriedNote(made({ heading: 'Cloudflare WAF', steps: [step(), step({ title: 'Purge the cache' })] }))
+    expect(note).toMatch(/steps tool/)
+    expect(note).toMatch(/already-done/)
+    expect(note).toMatch(/clear/)
+    expect(note).not.toMatch(/or tell Dan they are all done/)
+  })
+})
+
 describe('cardLines', () => {
   type P = { text?: string; button?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
   const lines = (c: StepsCard) => cardLines(c) as P[][]
@@ -114,6 +127,18 @@ describe('cardLines', () => {
     const c = sent(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] }), 0, true)
     const l = lines(c)
     expect(l.map(textOf)).toEqual(['x', '1. Turn on the WAF rule  sent', 'Keychain Access, login'])
+  })
+
+  // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
+  // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows.
+  test('the open step\'s link is a link part carrying the whole address; an exact location stays text', () => {
+    const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
+    const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string })[][]
+    expect(l[2]).toEqual([{ text: url, href: url, indent: 3 }])
+    // The click path is not a link.
+    expect(l[3]?.[0]?.href).toBeUndefined()
+    const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]
+    expect(at[2]).toEqual([{ text: 'Keychain Access, login', indent: 3 }])
   })
 
   test('a value of several lines shows on one line, and the indent follows the number width', () => {

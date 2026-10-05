@@ -591,19 +591,47 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   whether closing should instead hide the card). Both are drawn by mod-kit with one drawing of a
   card (#690): the pane is published before it opens, so it never opens empty, and a pane mod-kit
   refuses is not opened at all; the card goes to the band.
+- **Asking does not lower the width** (#708). Claude Code places an unasked pane from 110 columns
+  rather than 144 once its id has been asked for, in that session and later ones, until Dan closes
+  it by hand, and the card closing its own pane does not count. So `/steps` opens the card under its
+  own pane id (`steps`) and a new card tries a different one (`steps-card`): at a 120 column laptop
+  a new card is still the band after any number of `/steps`. `/steps` with the card in the unasked
+  pane moves it to its own and closes the other, and a card pinned while a pane shows one goes into
+  that pane rather than opening a second; one mod-kit will not draw there closes that pane and goes
+  to the band.
+- **The link.** A step's link is drawn as Claude Code's Link, a real terminal hyperlink, so a long
+  dashboard link cut at the edge still opens and copies whole (#708). The click path and an exact
+  location are text, one line each, cut at the edge like every band line. Docked beside a fullscreen
+  transcript, the pane asks to be as wide as the card's widest line other than the link, up to 80
+  columns, so a click path is not cut there; a width Dan drags it to wins (open: the 80 column cap,
+  and whether a line should wrap instead, which the left rule's one mark per line rules out today).
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
   `not-done`, which opens the step again with its Done. A Done that cannot reach Claude opens the
   step again with a toast saying why.
+- **A Done Claude never answers** (#708). While "sent" shows, Claude Code's own working indicator
+  is what says the turn is alive. When the turn "step N done" started ends, answered, interrupted or
+  failed, with no verdict on that step, Done comes back and a toast says "Claude did not say whether
+  step N took. Press Done to ask again." A turn already running when Done was pressed, which the
+  prompt waits behind, and a subagent's turn do not count. A verdict Claude gives later still
+  lands. "sent" is never kept in the store, since the turn that would answer it does not reach the
+  next session (open: the end of that turn as the limit rather than a time, and the toast's words).
 - **Copy.** Copies the open step's value on the surface pressed, with a toast saying it was copied
   or why not (open: whether a successful copy needs a toast at all).
 - **The last step.** Once every step is finished the card goes away and nothing is kept (open:
   whether the finished card should stay a while).
 - **Carry over.** Unfinished steps are kept per project (the repository root, else the folder) in
-  the mod's store on this Mac. At the next session start there they are held, not shown, and the
-  conversation's first message tells Claude to re-check them and pin the ones left; until then
-  Done cannot be recorded on them, and `/steps` shows them as they were kept.
+  the mod's store on this Mac. The root is the main checkout's for a worktree, so steps handed over
+  in a worktree session come back in the main checkout and in any other worktree of it (#708); a
+  card a worktree session kept under the worktree's own folder before that is found there and moved.
+  At the next session start there they are held, not shown, and the conversation's first message
+  tells Claude to re-check them and pin them again with the steps tool, a step found done as
+  `already-done`, even when every one is: a card all already done is not pinned and the kept steps
+  are cleared, where only telling Dan would leave them to come back at every session start (#708).
+  Until then Done cannot be recorded on them, and `/steps` shows them as they were kept. Only a
+  session's own start holds them: a reload of the mod mid session runs its start again, and the
+  card already in the session is the one Dan is working through, so it stays live (#708).
 - **Away.** While Dan is away (#621) a new card is not shown on the Mac: it goes to the held card
   through `$.scopeModes.hold`, its row labelled with the card's heading, and pressing that row asks
   Claude to check the steps again and pin them. It is still kept for the next session. With the

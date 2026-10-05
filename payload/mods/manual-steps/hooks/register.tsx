@@ -1,6 +1,6 @@
-import type { EngineInterface, Register } from 'claude-code'
-import type { StepsCard } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, finish, nextStep, sent } from './card.ts'
+import type { EngineInterface, Hook, Register } from 'claude-code'
+import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, finish, nextStep, paneColumns, sent } from './card.ts'
 import type { StepsVerdict } from './card.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
@@ -12,7 +12,11 @@ import type { StepsVerdict } from './card.ts'
 // project in $.store and held at the next session start there until Claude has re-checked them.
 
 const MOD = 'manual-steps'
-const PANE = 'steps'
+// The pane /steps opens, and the one a new card tries unasked: never the same id, since Claude Code
+// places an unasked pane from 110 columns rather than 144 once its id has been asked for (#708).
+const ASKED_PANE = 'steps' satisfies StepsPaneId
+const UNASKED_PANE = 'steps-card' satisfies StepsPaneId
+const PANES: readonly StepsPaneId[] = [ASKED_PANE, UNASKED_PANE]
 const PANE_TITLE = 'Manual steps'
 const TOOL = 'mcp__manual-steps__steps'
 const VERDICT_TOOL = 'mcp__manual-steps__steps_done'
@@ -20,29 +24,49 @@ const AMBER = 'warning'
 
 const cardRef = { plugin: 'manual-steps', key: 'card' } as const
 const placeRef = { plugin: 'manual-steps', key: 'place' } as const
+const waitingRef = { plugin: 'manual-steps', key: 'waiting' } as const
 
 const message = (err: unknown) => String((err as Error)?.message ?? err)
+const isPane = (place: unknown): place is StepsPaneId => (PANES as readonly unknown[]).includes(place)
 
-// The project a card belongs to: the repository root, or the folder when there is none.
-const projectKey = async ($: EngineInterface) => {
-  const root = await $.session.root().catch(() => undefined)
-  return `card:${root ?? (await $.session.cwd())}`
+// The project a card belongs to: the repository's root, the main checkout's for a worktree, so a
+// worktree session and the main checkout share one card; else the folder the session started in.
+// `legacy` is where #614 kept it, the session's own folder, so a card a worktree session kept
+// before #708 is still found.
+const projectKeys = async ($: EngineInterface) => {
+  const folder = (await $.session.root().catch(() => undefined)) ?? (await $.session.cwd())
+  const repo = await $.session.repo().catch(() => null)
+  return { key: `card:${repo?.root ?? folder}`, legacy: `card:${folder}` }
 }
 
 // Kept for the next session in this project: written whenever the card changes, removed once
-// nothing is left to do. A failure here loses only the carry over, so it is said and the action
-// stands (fail loud, not silent).
+// nothing is left to do. Never with "sent", since the turn that would answer it does not reach the
+// next session. A failure here loses only the carry over, so it is said and the action stands
+// (fail loud, not silent).
 const persist = async ($: EngineInterface) => {
   const card = (await $.state.get(cardRef)).value ?? null
   try {
-    const key = await projectKey($)
+    const { key } = await projectKeys($)
     if (card && nextStep(card) !== undefined) {
       const { isCarried: _carried, ...kept } = card
-      await $.store.set(key, kept)
+      await $.store.set(key, { ...kept, steps: kept.steps.map(({ isSent: _sent, ...s }) => s) })
     } else await $.store.delete(key)
   } catch (err) {
     $.ui.toast(`The manual steps could not be saved for the next session: ${message(err)}.`)
   }
+}
+
+// The steps kept for this project by an earlier session, moved from where #614 kept them when that
+// was elsewhere.
+const readKept = async ($: EngineInterface): Promise<StepsCard | undefined> => {
+  const { key, legacy } = await projectKeys($)
+  const kept = (await $.store.get(key)) as StepsCard | undefined
+  if (kept !== undefined || legacy === key) return kept
+  const old = (await $.store.get(legacy)) as StepsCard | undefined
+  if (old === undefined) return undefined
+  await $.store.set(key, old)
+  await $.store.delete(legacy)
+  return old
 }
 
 // Read, change and write the card with ifVersion, again on a miss, so a Done pressed twice before
@@ -72,10 +96,10 @@ const publishBand = async ($: EngineInterface, card: StepsCard): Promise<string 
   }
 }
 
-/** Shows the card in the side pane, drawn by mod-kit as the band draws it (#690); the reason when mod-kit refused it. */
-const publishPane = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
+/** Shows the card in the side pane `id`, drawn by mod-kit as the band draws it (#690); the reason when mod-kit refused it. */
+const publishPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard): Promise<string | undefined> => {
   try {
-    await $.modkit.pane({ mod: MOD, id: PANE, frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card) as never })
+    await $.modkit.pane({ mod: MOD, id, frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card) as never })
     return undefined
   } catch (err) {
     $.ui.log(`manual-steps: the steps card could not be shown in the pane: ${message(err)}`, { to: 'debug' })
@@ -83,27 +107,36 @@ const publishPane = async ($: EngineInterface, card: StepsCard): Promise<string 
   }
 }
 
-const clearPane = async ($: EngineInterface) => {
+const clearPane = async ($: EngineInterface, id: StepsPaneId) => {
   try {
-    await $.modkit.clearPane({ mod: MOD, id: PANE })
+    await $.modkit.clearPane({ mod: MOD, id })
   } catch (err) {
     $.ui.log(`manual-steps: the steps card could not be taken out of the pane: ${message(err)}`, { to: 'debug' })
   }
 }
 
-// The side pane with the card in it, published before the pane opens so it never opens empty. True
-// once placed. One Claude Code did not place is closed rather than left waiting, so it can never
-// appear later beside the same card in the band, and one mod-kit refused to draw is not opened.
-const openPane = async ($: EngineInterface, card: StepsCard): Promise<boolean> => {
-  if (await publishPane($, card)) return false
-  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE }).catch(() => ({ isPlaced: false as const, reason: 'no pane' }))
+// The side pane `id` with the card in it, published before the pane opens so it never opens empty.
+// True once placed, when it takes over from the band or the other pane. One Claude Code did not
+// place is closed rather than left waiting, so it can never appear later beside the same card in
+// the band, and one mod-kit refused to draw is not opened. Docked, it asks to be as wide as the
+// card's lines (#708).
+const openPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard): Promise<boolean> => {
+  if (await publishPane($, id, card)) return false
+  const opened = await $.ui
+    .open({ id, title: PANE_TITLE, columns: paneColumns(card) })
+    .catch(() => ({ isPlaced: false as const, reason: 'no pane' }))
   if (opened.isPlaced) {
-    await $.state.set(placeRef, 'pane')
+    const was = (await $.state.get(placeRef)).value ?? null
+    await $.state.set(placeRef, id)
+    if (isPane(was) && was !== id) {
+      await $.ui.close({ id: was }).catch(() => undefined)
+      await clearPane($, was)
+    }
     await clearBand($)
     return true
   }
-  await $.ui.close({ id: PANE }).catch(() => undefined)
-  await clearPane($)
+  await $.ui.close({ id }).catch(() => undefined)
+  await clearPane($, id)
   return false
 }
 
@@ -115,10 +148,18 @@ const clearBand = async ($: EngineInterface) => {
   }
 }
 
-// A new card: the side pane when a pane opened unasked fits (Claude Code places one from 144
-// columns), else the band.
+// A new card: in the pane already showing one, else the side pane when a pane opened unasked fits
+// (Claude Code places one from 144 columns), else the band. A pane mod-kit will not draw the new
+// card in is closed, so it cannot go on showing the old one beside the band.
 const placeNew = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
-  if (await openPane($, card)) return undefined
+  const place = (await $.state.get(placeRef)).value ?? null
+  if (isPane(place)) {
+    if (!(await publishPane($, place, card))) return undefined
+    await $.state.set(placeRef, null)
+    await $.ui.close({ id: place }).catch(() => undefined)
+    await clearPane($, place)
+  }
+  if (await openPane($, UNASKED_PANE, card)) return undefined
   await $.state.set(placeRef, 'band')
   return publishBand($, card)
 }
@@ -128,8 +169,8 @@ const hide = async ($: EngineInterface) => {
   const place = (await $.state.get(placeRef)).value ?? null
   await $.state.set(placeRef, null)
   await clearBand($)
-  if (place === 'pane') await $.ui.close({ id: PANE }).catch(() => undefined)
-  await clearPane($)
+  if (isPane(place)) await $.ui.close({ id: place }).catch(() => undefined)
+  for (const id of PANES) await clearPane($, id)
 }
 
 // After the card changed: published again wherever it is shown.
@@ -138,9 +179,13 @@ const refresh = async ($: EngineInterface) => {
   if (!card || nextStep(card) === undefined) return hide($)
   const place = (await $.state.get(placeRef)).value ?? null
   if (place === null) return
-  const failed = place === 'pane' ? await publishPane($, card) : await publishBand($, card)
+  const failed = isPane(place) ? await publishPane($, place, card) : await publishBand($, card)
   if (failed) $.ui.toast(`The steps card could not be updated: ${failed}.`)
 }
+
+// Step `n` (0 based) open again with its Done, when it is still waiting on Claude. True when it was.
+const unsend = ($: EngineInterface, n: number) =>
+  change($, card => (card && card.steps[n]?.isSent ? { card: sent(card, n, false), out: true } : { card, out: false }))
 
 const pressDone = async ($: EngineInterface) => {
   const n = await change($, card => {
@@ -153,7 +198,7 @@ const pressDone = async ($: EngineInterface) => {
   try {
     await $.prompt.submit({ text: `step ${n + 1} done`, asUser: true })
   } catch (err) {
-    await change($, card => (card && card.steps[n]?.isSent ? { card: sent(card, n, false), out: undefined } : { card, out: undefined }))
+    await unsend($, n)
     await refresh($)
     $.ui.toast(`Could not tell Claude step ${n + 1} is done: ${message(err)}. Press Done again.`)
   }
@@ -241,12 +286,17 @@ export const register: Register = on => {
     })
     await $.command.register({ name: 'steps', description: 'Show the manual steps card again' })
     // Carried over from an earlier session here: held, not shown, until Claude has re-checked them
-    // and pinned them again (the context note below asks for that).
+    // and pinned them again (the context note below asks for that). Only at a session's own start:
+    // a reload of the mod runs this again with $.state kept, and the card already in it is the one
+    // Dan is working through, not one to hold (#708).
     try {
-      const kept = (await $.store.get(await projectKey($))) as StepsCard | undefined
-      if (kept && Array.isArray(kept.steps) && nextStep(kept) !== undefined) {
-        await $.state.set(cardRef, { ...kept, isCarried: true })
-        await $.state.set(placeRef, null)
+      const held = await $.state.get(cardRef)
+      if (held.version === 0) {
+        const kept = await readKept($)
+        if (kept && Array.isArray(kept.steps) && nextStep(kept) !== undefined) {
+          const set = await $.state.set(cardRef, { ...kept, isCarried: true }, { ifVersion: 0 })
+          if (set.isSet) await $.state.set(placeRef, null)
+        }
       }
     } catch (err) {
       $.ui.log(`Manual steps could not read the steps kept from an earlier session: ${message(err)}`)
@@ -258,6 +308,32 @@ export const register: Register = on => {
     const card = (await $.state.get(cardRef)).value ?? null
     if (!card?.isCarried) return next(e)
     return next({ ...e, blocks: [...e.blocks, { name: 'manualSteps', text: carriedNote(card) }] })
+  })
+
+  // The turn "step N done" started, noted so its end can be judged. A turn already running when
+  // Done was pressed is not it: the prompt waits behind that turn.
+  on('turn.start', async ($, e, next) => {
+    const r = await next(e)
+    const n = /^step (\d+) done$/.exec(e.text.trim())?.[1]
+    const card = (await $.state.get(cardRef)).value ?? null
+    if (n !== undefined && card?.steps[Number(n) - 1]?.isSent) await $.state.set(waitingRef, { turnId: e.turnId, step: Number(n) })
+    return r
+  })
+
+  // That turn ended, answered, interrupted or failed, with the step still waiting on Claude: its
+  // Done comes back and a toast says why, so a Done is never stuck on "sent" (#708). A verdict
+  // Claude gives later still lands, since a step need not be waiting to take one.
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined) return r
+    const waiting = (await $.state.get(waitingRef)).value ?? null
+    if (!waiting || waiting.turnId !== e.turnId) return r
+    await $.state.set(waitingRef, null)
+    if (await unsend($, waiting.step - 1)) {
+      await refresh($)
+      $.ui.toast(`Claude did not say whether step ${waiting.step} took. Press Done to ask again.`)
+    }
+    return r
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
@@ -311,24 +387,28 @@ export const register: Register = on => {
   on('command.run', { command: 'steps' }, async $ => {
     const card = (await $.state.get(cardRef)).value ?? null
     if (!card || nextStep(card) === undefined) return { text: 'No manual steps are pinned for this project.' }
-    // Asked, so the pane is placed at any width.
-    if (await openPane($, card)) return { text: 'The steps card is open.' }
+    // Asked, so the pane is placed at any width; under its own id, so asking does not lower the
+    // width a later card opened unasked needs.
+    if (await openPane($, ASKED_PANE, card)) return { text: 'The steps card is open.' }
     await $.state.set(placeRef, 'band')
     const failed = await publishBand($, card)
     return { text: failed ? `The steps card could not be shown: ${failed}.` : 'The steps card is in the band above the prompt.' }
   })
 
-  // Dan closing the pane does not finish the steps: the card stays pinned, in the band.
-  on('ui.close', { id: PANE }, async ($, e, next) => {
-    const r = await next(e)
-    if (e.origin.kind !== 'person') return r
-    await clearPane($)
-    const card = (await $.state.get(cardRef)).value ?? null
-    if (card && !card.isCarried && nextStep(card) !== undefined) {
-      await $.state.set(placeRef, 'band')
-      const failed = await publishBand($, card)
-      if (failed) $.ui.toast(`The steps card could not be moved to the band: ${failed}.`)
-    } else await $.state.set(placeRef, null)
-    return r
-  })
+  // Dan closing either pane does not finish the steps: the card stays pinned, in the band.
+  on('ui.close', { id: 'steps' }, closedByHand)
+  on('ui.close', { id: 'steps-card' }, closedByHand)
+}
+
+const closedByHand: Hook<'ui.close'> = async ($, e, next) => {
+  const r = await next(e)
+  if (e.origin.kind !== 'person' || !isPane(e.id)) return r
+  await clearPane($, e.id)
+  const card = (await $.state.get(cardRef)).value ?? null
+  if (card && !card.isCarried && nextStep(card) !== undefined) {
+    await $.state.set(placeRef, 'band')
+    const failed = await publishBand($, card)
+    if (failed) $.ui.toast(`The steps card could not be moved to the band: ${failed}.`)
+  } else await $.state.set(placeRef, null)
+  return r
 }
