@@ -269,6 +269,27 @@ grep -q 'ran none of its own checks' <<< "$o13" \
   && check "and says the section ran none of its own checks" ok \
   || check "and says the section ran none of its own checks" "out=$o13"
 
+# A section the runner could not run at all must still be named as UNMEASURED when ANOTHER
+# section's failure refuses the push, or a section nobody judged reads as covered (L98; the
+# lessons review of PR #776). One section fails on the prelude, the other is unmeasured.
+R14="$(mkrepo linuxmixed)"
+perl -pi -e 's/^echo a$/echo a-edited/; s/^echo b$/echo b-edited/' "$R14/tests/test-claude-sync.sh"
+cat > "$R14/tests/run-on-linux.sh" <<'STUB'
+#!/usr/bin/env bash
+case "${SECTION_ONLY:-}" in
+  *beta*) echo "stub: could not run"; exit 3 ;;
+esac
+echo "SUITE-SECTIONS prelude_pass=29 prelude_fail=4 target_pass=12 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=41 total_fail=4"
+exit 1
+STUB
+chmod +x "$R14/tests/run-on-linux.sh"
+o14="$(runlinux "$R14")"; c14=$?
+[ "$c14" -eq 4 ] && check "a prelude failure beside an unmeasured section still exits as the prelude" ok \
+                 || check "a prelude failure beside an unmeasured section still exits as the prelude" "exit=$c14 out=$o14"
+grep -q 'UNMEASURED' <<< "$o14" \
+  && check "and the unmeasured section is still said to be UNMEASURED" ok \
+  || check "and the unmeasured section is still said to be UNMEASURED" "out=$o14"
+
 # The section's OWN checks failing is still the section's failure, with the prelude failing too
 # or not: the counts only ever narrow the blame, never move it off a section that failed.
 R11="$(mkrepo linuxtarget)"

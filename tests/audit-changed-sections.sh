@@ -173,6 +173,18 @@ done <<TITLES
 $(printf '%s' "$titles" | sort -u)
 TITLES
 
+# UNMEASURED is said, and it is not a pass. Nothing here can be concluded about those sections, and
+# the difference between "Linux is happy with them" and "Linux was never asked" is the whole value
+# of running them there at all (L98, L11). Said FIRST, before either refusal below exits, or a
+# section nobody judged is dropped from the output whenever another section fails, and reads as
+# covered (the lessons review of PR #776).
+case "$unmeasured" in *[![:space:]]*)
+  echo "" >&2
+  echo "audit-changed-sections: these changed sections were NOT judged, because the Linux runner could not run here:" >&2
+  printf '%s' "$unmeasured" | sed 's/^/  /' >&2
+  echo "That is UNMEASURED, not a pass. The push is not blocked on a question this machine cannot ask; CI will still ask it." >&2 ;;
+esac
+
 case "$bad" in *[![:space:]]*)
   echo "" >&2
   if [ -n "${AUDIT_ON_LINUX:-}" ]; then
@@ -202,16 +214,6 @@ case "$prelude_bad" in *[![:space:]]*)
     echo "This change does not edit the prelude, so the failure is in the base this was cut from, or in code outside the suite that the prelude exercises (the tool, a hook, or the environment the run happens in). To tell which, run the same section on the unchanged base: if it fails there too, the base is broken and this change is not the cause." >&2
   fi
   exit 4 ;;
-esac
-
-# UNMEASURED is said, and it is not a pass. Nothing here can be concluded about those sections, and
-# the difference between "Linux is happy with them" and "Linux was never asked" is the whole value
-# of running them there at all (L98, L11).
-case "$unmeasured" in *[![:space:]]*)
-  echo "" >&2
-  echo "audit-changed-sections: these changed sections were NOT judged, because the Linux runner could not run here:" >&2
-  printf '%s' "$unmeasured" | sed 's/^/  /' >&2
-  echo "That is UNMEASURED, not a pass. The push is not blocked on a question this machine cannot ask; CI will still ask it." >&2 ;;
 esac
 
 # The closing line is derived from what actually ran, never from the count of sections looked at
