@@ -254,10 +254,16 @@ repo = os.environ["ADD_SCOPE_REPO"]
 for p in sys.stdin.read().splitlines():
     if not p:
         continue
+    # A DELETED file has nothing left to stat, so it is judged by the directory it was removed
+    # from, whose modification time the removal sets (generous, as the rest of this is).
+    full = os.path.join(repo, p)
     try:
-        st = os.lstat(os.path.join(repo, p))
+        st = os.lstat(full)
     except OSError:
-        continue
+        try:
+            st = os.lstat(os.path.dirname(full.rstrip("/")) or repo)
+        except OSError:
+            continue
     times = (int(st.st_mtime), int(st.st_ctime))
     if any(a <= t <= b for t in times for a, b in spans):
         print(p)

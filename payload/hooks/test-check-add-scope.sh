@@ -170,6 +170,17 @@ set_mtime "$REPO/second.txt" "$((now - 95))"
 run "git add -A"
 allowed "a scripted write recorded after the last read of the transcript is credited too"
 rm -f "$REPO/second.txt"
+# A file the session's script DELETED has nothing left to stat, so it is judged by the directory it
+# was removed from, whose modification time the removal sets.
+mkdir -p "$REPO/gone"; printf 'x\n' > "$REPO/gone/old.txt"
+git -C "$REPO" add gone/old.txt; git -C "$REPO" -c commit.gpgsign=false commit -q -m gone
+bash_call t585d "python3 $FIX/clean.py" "$((now - 80))" "$((now - 70))"
+rm -f "$REPO/gone/old.txt"
+set_mtime "$REPO/gone" "$((now - 75))"
+fresh_cache
+run "git add -A"
+allowed "a file this session's script deleted is this session's too"
+git -C "$REPO" -c commit.gpgsign=false commit -q -am "gone removed" >/dev/null 2>&1 || true
 
 echo "check add scope: a checkout somebody else is working in"
 

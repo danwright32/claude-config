@@ -234,6 +234,14 @@ runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
 allowed "a read after a cd into payload is allowed"
 runbash "cd payload && echo hi > $FIX/elsewhere/out.md" "$FIX/dev"
 allowed "a write to an absolute path outside payload, after a cd into it, is allowed"
+# A flag is not a path, so it is never resolved against where the command runs.
+runbash "mkdir -p $FIX/elsewhere/out" "$FIX/dev/payload"
+allowed "a flag on a writer run from inside payload is not read as a payload path"
+# A branch switch names a branch, not a file: only the paths after -- are what checkout rewrites.
+runbash "git checkout main" "$FIX/dev/payload"
+allowed "a git checkout of a branch from inside payload is not read as a payload write"
+runbash "git checkout main -- LESSONS.md" "$FIX/dev/payload"
+refused "but a git checkout of a payload file after -- still is"
 runbash "python3 - <<'PY'
 import json
 print(json.load(open('$FIX/dev/payload/LESSONS.md')))

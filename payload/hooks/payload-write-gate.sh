@@ -272,9 +272,11 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
         if nb and not nb.startswith("$"):
             base = nb
         continue
+    # A flag is never a path, so none is resolved against where the command runs.
     if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
         for w in args:
-            add(w, base)
+            if not w.startswith("-"):
+                add(w, base)
     elif head in ("perl", "ruby") and any(re.match(r"^-[A-Za-z]*i", w) for w in args):
         for w in args:
             if not w.startswith("-"):
@@ -286,12 +288,20 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
     elif head == "git":
         sub = next((w for w in args if not w.startswith("-")), "")
         if sub in GIT_WRITERS:
-            for w in args[args.index(sub) + 1:]:
+            rest = args[args.index(sub) + 1:]
+            # checkout and restore name a branch or commit before `--`, and only the paths after
+            # it are rewritten; a bare `git checkout main` switches branches and names no path.
+            if sub in ("checkout", "restore") and "--" in rest:
+                rest = rest[rest.index("--") + 1:]
+            elif sub == "checkout":
+                rest = []
+            for w in rest:
                 if not w.startswith("-"):
                     add(w, base)
     elif head in WRITERS:
         for w in args:
-            add(w, base)
+            if not w.startswith("-"):
+                add(w, base)
 
 # An inline script that can write, and names a payload path. Most of this repo own payload edits
 # are made this way, and the path is routinely held in a variable before it is opened, so the test
