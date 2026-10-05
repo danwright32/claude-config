@@ -367,8 +367,10 @@ want_code 2 "#723 a truncated push the reviewer calls untested is still refused"
 want_stderr "could not judge" "#723 the refusal says the gate could not judge the push in full"
 want_stderr "tests/register.test.js" "#723 and names the test file that was cut"
 want_stderr "fewer commits|smaller push|split" "#723 and says how to make it judgeable"
-if printf '%s' "$ERR" | grep -q 'have no test covering them'; then fail=$((fail+1)); echo "FAIL: #723 a truncated push was refused as missing tests: [$ERR]"
-else pass=$((pass+1)); fi
+case "$ERR" in
+  *'have no test covering them'*) fail=$((fail+1)); echo "FAIL: #723 a truncated push was refused as missing tests: [$ERR]" ;;
+  *) pass=$((pass+1)) ;;
+esac
 if grep -q 'in full' "$JUDGE_IN" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: #723 the prompt claims test changes in full over a cut"
 else pass=$((pass+1)); fi
 if grep -q 'TRUNCATED' "$JUDGE_IN" 2>/dev/null && grep -q 'tests/register.test.js' "$JUDGE_IN"; then pass=$((pass+1))
