@@ -13,12 +13,29 @@ type Row = { mod: string; id: string; slot: string; frame?: { kind: string }; li
 const deps: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
-    const read = (cmd: string): string[][] =>
-      cmd
+    // mod-kit drops a heredoc's body before reading, and so does this stand-in; a command naming
+    // __reader_fails stands for a reader that throws.
+    const dropBodies = (cmd: string) => {
+      const out: string[] = []
+      let end: string | undefined
+      for (const line of cmd.split('\n')) {
+        if (end !== undefined) {
+          if (line.trim() === end) end = undefined
+          continue
+        }
+        out.push(line)
+        end = /<<-?\s*'?"?([A-Za-z_]+)/.exec(line.replace(/<<</g, ''))?.[1]
+      }
+      return out.join('\n')
+    }
+    const read = (cmd: string): string[][] => {
+      if (cmd.includes('__reader_fails')) throw new Error('the reader broke')
+      return dropBodies(cmd)
         .split(/&&|;|\||\n/)
         .map(part => [...part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)].map(m => m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2')))
         .map(w => w.filter(x => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(x) || false))
         .filter(w => w.length > 0)
+    }
     // mod-kit's retry of a mod's refused send (its hooks/send.ts), standing in: once more when
     // refused, never after a throw, the reason tidied. mod-kit's own tests prove the real one.
     on('session.send', async ($, e, next) => {
@@ -130,8 +147,12 @@ const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
 type Session = { sessionId: string }
-type Gh = { pr: { number: number; state: string; url?: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
+// The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
+// unless headRefName says otherwise) and by `gh pr view` only by its own number.
+type Gh = { pr: { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
 type Opts = {
+  /** What a `gh pr create` call prints, as gh does: the new PR's link. */
+  created?: string
   /** is it live's verdict for the PR asked about: a card's state, no card, or a read that throws. */
   verdict?: { state: string; at: number } | null | { throws: string }
   open?: Session[]
@@ -188,8 +209,9 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'gh') {
       const gh = o.gh ?? { pr: null, issues: {} }
       if (gh.fails) return fail(1, gh.fails)
-      if (a[0] === 'pr' && a[1] === 'list') return ok(JSON.stringify(gh.pr ? [gh.pr] : []))
-      if (a[0] === 'pr' && a[1] === 'view') return gh.pr ? ok(JSON.stringify(gh.pr)) : fail(1, 'no pull requests found')
+      const head = gh.pr?.headRefName ?? 'scope-modes-616'
+      if (a[0] === 'pr' && a[1] === 'list') return ok(JSON.stringify(gh.pr && a[a.indexOf('--head') + 1] === head ? [{ headRefName: head, ...gh.pr }] : []))
+      if (a[0] === 'pr' && a[1] === 'view') return gh.pr && a[2] === String(gh.pr.number) ? ok(JSON.stringify({ headRefName: head, ...gh.pr })) : fail(1, 'no pull requests found')
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN' }))
     }
@@ -238,7 +260,9 @@ const world = (on: On, o: Opts = {}) => {
       w.asked.push(q)
       return { result: { questions: (e as unknown as { questions: unknown[] }).questions, answers: { [q]: o.ask ?? 'Yes' } }, text: `answered ${o.ask ?? 'Yes'}` } as never
     }
-    w.reached.push(String((e as { command?: string }).command ?? (e as { file_path?: string }).file_path ?? e.tool))
+    const command = (e as { command?: string }).command
+    w.reached.push(String(command ?? (e as { file_path?: string }).file_path ?? e.tool))
+    if (command?.includes('gh pr create') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
     return { result: 'ran', text: 'ran' } as never
   })
   on('ui.render', ($, e) => {
@@ -333,6 +357,31 @@ test('no build allows reading, tests, scratchpad notes and issue work, and refus
   expect(await call($ as never, bash('echo hacked > src/app.ts'))).toMatch(/did not write to app\.ts/)
   expect(await call($ as never, bash("sed -i '' s/a/b/ src/app.ts"))).toMatch(/did not edit app\.ts/)
   expect(await call($ as never, bash('gh pr create --fill'))).toMatch(/did not run gh pr create/)
+})
+
+test('no build refuses a script fed to python or a shell by a heredoc, and reads what a shell runs through -lc (#702)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const heredoc = await call($ as never, bash("python3 - <<'EOF'\nopen('/repo/app.ts','w').write('x')\nEOF", 'h1'))
+  expect(heredoc).toMatch(/^Blocked: no build is on, so this did not run a python3 script it cannot read \(fed by a heredoc\)\. Code passed inline \(python3 -c, node -e\) is read and judged/)
+  expect(await call($ as never, bash("cat <<'EOF' | sh\necho x > /repo/app.ts\nEOF"))).toMatch(/did not run a sh script it cannot read \(fed by a heredoc\)/)
+  expect(await call($ as never, bash("bash -lc 'echo x > /repo/app.ts'"))).toMatch(/did not write to app\.ts/)
+  expect(await call($ as never, bash("python3 -c 'print(1)'"))).toBe('ran')
+  expect(w.reached).toEqual(["python3 -c 'print(1)'"])
+  expect(w.cards[0]).toEqual({ toolUseId: 'h1', guard: 'No build', reason: 'No build is on, so this would not run a python3 script it cannot read (fed by a heredoc).', safeWay: 'Claude asks you: Switch to build?' })
+})
+
+test('a mode whose check of a call throws refuses the call rather than letting it through (L42)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  // Nothing on: nothing is checked, so nothing can fail.
+  expect(await call($ as never, bash('echo __reader_fails'))).toBe('ran')
+  await command($ as never, 'nobuild')
+  const r = await call($ as never, bash('echo __reader_fails'))
+  expect(r).toMatch(/^Blocked: no build is on and its check of this call failed \(.*\), so the call did not run\./)
+  expect(r).toMatch(/the reader broke/)
+  expect(w.reached).toEqual(['echo __reader_fails'])
 })
 
 test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts no build', withDeps, async ($, on) => {
@@ -470,6 +519,119 @@ test("winding down allows the fix that blocks this issue's merge, and denies new
   expect(w.cards.map(c => c.guard)).toEqual(['Winding down', 'Winding down', 'Winding down'])
 })
 
+// ---- Winding down's target, as the milestone audit found it (#702) ----
+
+test('turning winding down on again keeps the PR it already found, rather than reading the target afresh', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+  // The session is back on main now; saying the phrase again must not drop PR #12.
+  w.o.branch = 'main'
+  await say($ as never, 'ok, wind down now')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+  expect(w.toasts).toEqual([])
+})
+
+test('turned on from the default branch, winding down finishes the PRs this session opened, an agent\'s included', withDeps, async ($, on) => {
+  const pr31 = (state: string) => ({ number: 31, state, url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [{ number: 700 }] })
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31('OPEN'), issues: { 700: 'OPEN' } } })
+  await start($ as never, clock)
+  // An agent working in a worktree the session is not in opens the PR.
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
+  await command($ as never, 'winddown')
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 is not merged yet\./)
+  w.o.gh = { pr: pr31('MERGED'), issues: { 700: 'CLOSED' } }
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchHere = false
+  w.o.branchOnGitHub = false
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+  // GitHub was asked about PR #31 in the repository its link names.
+  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName')).toBe(true)
+})
+
+test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
+  const pr = { number: 31, state: 'MERGED', url: 'https://github.com/o/other/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/other/pull/31\n', gh: { pr, issues: {} }, verdict: { state: 'live', at: T0 }, branchOnGitHub: false })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --repo o/other --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/whether fix-31 is gone here could not be read \(PR #31 is in o\/other, whose checkout this session cannot see\)/)
+  expect(block).toMatch(/whether a worktree is still on fix-31 could not be read \(PR #31 is in o\/other, whose checkout this session cannot see\)/)
+  // GitHub's copy of the branch is checked in that repository.
+  expect(block).not.toMatch(/gone from GitHub/)
+  expect(w.runs.some(r => r.join(' ') === 'git -C /repo ls-remote --exit-code --heads https://github.com/o/other.git fix-31')).toBe(true)
+  expect(w.toasts).toEqual([])
+})
+
+// The lessons review of #714 at b154bc9.
+test('a PR opened through bash -lc is noted like any other', withDeps, async ($, on) => {
+  const pr31 = { number: 31, state: 'OPEN', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31, issues: {} } })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: "bash -lc 'gh pr create --fill'", tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+})
+
+test("a session on a branch with no PR of its own still finishes the PRs it opened, as the docs say", withDeps, async ($, on) => {
+  const pr31 = { number: 31, state: 'MERGED', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { clock } = world(on, { branch: 'feature-x', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31, issues: {} }, verdict: { state: 'live', at: T0 } })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/there is no PR for feature-x yet/)
+  expect(block).toMatch(/the branch fix-31 still exists here/)
+})
+
+test('no build reads what a find -exec runs through a shell', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  expect(await call($ as never, bash("find src -exec sh -c 'echo x > /repo/app.ts' _ {} +"))).toMatch(/did not write to app\.ts/)
+  expect(await call($ as never, bash("find src -name '*.ts' -exec wc -l {} +"))).toBe('ran')
+  expect(w.reached).toEqual(["find src -name '*.ts' -exec wc -l {} +"])
+})
+
+test('a gh pr create that printed no link notes no PR; one that cannot be read to note is said', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', created: 'Warning: 2 uncommitted changes\n' })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  w.o.created = 'https://github.com/o/r/pull/32\n'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title __reader_fails', tool_use_id: 'g2' } as never)
+  expect(w.toasts).toEqual([expect.stringMatching(/^Scope modes could not note the PR this call opened \(.*the reader broke.*\), so winding down will not know to finish it\.$/)])
+  await command($ as never, 'winddown')
+  // Neither PR was noted, so on a clean default branch there is nothing to finish.
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('on the default branch, winding down follows the session onto the branch it moves to', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.branch = 'scope-modes-616'
+  w.o.gh = merged('OPEN')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+})
+
+test("an agent sent to fix this PR's merge is allowed though its prompt names the PR or the issue it closes", withDeps, async ($, on) => {
+  const pr = { number: 665, state: 'OPEN', url: 'https://github.com/o/r/pull/665', headRefName: 'fix-ci', closingIssuesReferences: [{ number: 700 }] }
+  const { w, clock } = world(on, { branch: 'fix-ci', gh: { pr, issues: {} } })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  const agent = (prompt: string, id: string) => call($ as never, { tool: 'Agent', prompt, description: 'x', tool_use_id: id } as never)
+  expect(await agent('Watch CI on PR #665 and report why it failed', 'a1')).toBe('ran')
+  expect(await agent('Fix the failing check for issue #700', 'a2')).toBe('ran')
+  expect(await agent('Build #701', 'a3')).toMatch(/did not dispatch an agent for issue #701/)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['a3'])
+})
+
 test('the session ending turns every mode off: nothing carries into a new session', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
@@ -503,6 +665,32 @@ test('away: Claude is told to publish pages for the phone; opening on the Mac is
   expect(w.cards).toEqual([{ toolUseId: 'o1', guard: 'Away', reason: 'Held for when you are back: Open report.html in Google Chrome.', safeWay: 'Claude publishes a private page for your phone instead.' }])
   // No card while away: Dan is not at the Mac to press it.
   expect(w.bands).toEqual([])
+})
+
+test('away holds a browser opened by another tool, the Artifact open action and an AppleScript dialog, and a press replays the call (#702)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 'p1' } as never)).toMatch(
+    /^Held: Dan is away from the Mac, so "Open https:\/\/x\.dev\/a in the Playwright browser" waits for him to come back\./,
+  )
+  expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p2' } as never)).toMatch(/"Open https:\/\/claude\.ai\/artifact\/abc" waits/)
+  expect(await call($ as never, bash(`osascript -e 'display dialog "Done?"'`, 'p3'))).toMatch(/"Show a dialog on the Mac" waits/)
+  // Publishing the page for the phone goes ahead.
+  expect(await call($ as never, { tool: 'Artifact', file_path: '/tmp/p.html', tool_use_id: 'p4' } as never)).toBe('ran')
+  expect(w.reached).toEqual(['/tmp/p.html'])
+  expect(w.cards.map(c => c.reason)).toEqual([
+    'Held for when you are back: Open https://x.dev/a in the Playwright browser.',
+    'Held for when you are back: Open https://claude.ai/artifact/abc.',
+    'Held for when you are back: Show a dialog on the Mac.',
+  ])
+  await command($ as never, 'home')
+  const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
+  await ui.press({ key: 'scope-modes:held-1' })
+  await ui.unmount()
+  expect(w.prompts).toEqual([
+    'Dan is back and picked this from what was held while he was away: Open https://x.dev/a in the Playwright browser. Do it now. What was held: mcp__playwright__browser_navigate {"url":"https://x.dev/a"}',
+  ])
 })
 
 test('no build and away together both show, scope first', withDeps, async ($, on) => {

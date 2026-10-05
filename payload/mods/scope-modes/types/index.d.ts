@@ -4,8 +4,13 @@ export type ScopeModesScope = 'NO BUILD' | 'WINDING DOWN'
 export type ScopeModesPlace = 'home' | 'away'
 /** One thing held while Dan was away: `label` is its row in the held card, `prompt` what Claude is asked to do when he presses it. */
 export type ScopeModesHeld = { id: string; label: string; prompt: string }
-/** What winding down is finishing, read when it turned on. */
-export type ScopeModesTarget = { root: string; branch: string; isDefault: boolean; issues: number[]; pr: number | null }
+/**
+ * What winding down is finishing, read when it turned on: the branch the session is on, the issue
+ * numbers its name carries, and once found, its PR and the issues that PR closes.
+ */
+export type ScopeModesTarget = { root: string; branch: string; isDefault: boolean; issues: number[]; pr: number | null; closes?: number[] }
+/** A PR this session opened (a `gh pr create` by the session or any of its agents), in the repository its link names. */
+export type ScopeModesOpened = { repo: string; number: number; closes?: number[] }
 
 /** Called from another mod (manual steps, #614, holds its items here while Dan is away): await it. */
 export type ScopeModes = {
@@ -32,6 +37,8 @@ declare module 'claude-code' {
       heldSeq: number
       /** What winding down finishes; null outside a repository; unreadable when the read failed, read again at the next check. */
       target: ScopeModesTarget | null | { unreadable: string }
+      /** The PRs this session opened, which winding down finishes when the session's own branch has none (#702). */
+      opened: ScopeModesOpened[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
     }

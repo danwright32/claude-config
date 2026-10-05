@@ -44,6 +44,44 @@ describe('triggersIn', () => {
       'Keep it.', 'Keep it?', 'Ok, stay.', 'Great. Keep things!', 'Read only mode?', 'Read only for now?'])
       expect(triggersIn(t)).toEqual([])
   })
+  test('the away, home, no coding and build phrases used in passing switch nothing (#702: the rule from #686 holds for every phrase)', () => {
+    for (const t of [
+      'add an idle timeout for when the user is stepping away from the form',
+      'when the user is back at the desk, refresh the token',
+      "there's no coding yet in that repo",
+      'once it merges, CI will go ahead and build the image',
+      'the queue should pause after the issue is filed',
+      'the workers wind down after the job finishes',
+      'the guide says to just file, don\'t build anything custom',
+      // A question asks rather than instructs.
+      'Stepping away from the form, what happens to the draft?',
+      'Are you back at your desk?',
+      'Should I go ahead and build?',
+      // The let's wind down family too (lessons review of #714).
+      'the workers start winding down.',
+      'once the sprint ends, time to wind down.',
+      'users said it is time to wind down for the night',
+    ])
+      expect(triggersIn(t)).toEqual([])
+  })
+  test('the same phrases aimed at Claude still switch, as a sentence or clause of their own', () => {
+    expect(triggersIn('Heads up, I am stepping away for a bit.')).toEqual([{ kind: 'place', place: 'away' }])
+    expect(triggersIn('Thanks. Back at my mac.')).toEqual([{ kind: 'place', place: 'home' }])
+    expect(triggersIn('Research the sync first. No coding yet.')).toEqual([{ kind: 'scope', scope: 'NO BUILD' }])
+    expect(triggersIn('Research the sync first, no coding yet.')).toEqual([{ kind: 'scope', scope: 'NO BUILD' }])
+    expect(triggersIn('ok, go ahead and build')).toEqual([{ kind: 'build' }])
+    expect(triggersIn("Just file, don't build it yet.")).toEqual([{ kind: 'scope', scope: 'NO BUILD' }])
+    // Led by the words a request to Claude opens with, which the anywhere match used to allow.
+    expect(triggersIn('can you pause after this issue')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('pls go ahead and build')).toEqual([{ kind: 'build' }])
+    expect(triggersIn("Let's go ahead and build.")).toEqual([{ kind: 'build' }])
+    expect(triggersIn('you can go ahead and build now')).toEqual([{ kind: 'build' }])
+    expect(triggersIn('so the worker can go ahead and build')).toEqual([])
+    expect(triggersIn('Great work today, let’s wind down.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('ok, time to wind down for the night')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('Thanks. Start winding down.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+    expect(triggersIn('Nice.\nPause after this PR and clean up.')).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
+  })
   test('one mode named twice in a message comes back once', () => {
     expect(triggersIn("let's wind down now")).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
   })

@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { heldCard, needsTheMac } from '../hooks/away.ts'
+import { heldCard, heldTool, needsTheMac } from '../hooks/away.ts'
+import { programsOf } from '../hooks/program.ts'
 
-const needs = (raw: string, ...words: string[][]) => needsTheMac({ raw, commands: words })
+// Each command with its program, read as the mod's tool call hook reads it.
+const needs = (raw: string, ...words: string[][]) => {
+  const programs = programsOf(words)
+  return needsTheMac({ raw, commands: words.map((w, i) => ({ words: w, ...(programs[i] ? { program: programs[i] } : {}) })) })
+}
 
 describe('needsTheMac: what is held while Dan is away', () => {
   test('opening anything on the Mac, named by what it opens', () => {
@@ -27,6 +32,39 @@ describe('needsTheMac: what is held while Dan is away', () => {
   test('everything else runs as usual', () => {
     expect(needs('npm test', ['npm', 'test'])).toBeUndefined()
     expect(needs('cat open.txt', ['cat', 'open.txt'])).toBeUndefined()
+  })
+  // The milestone audit (#702): what still opened something or took focus while away.
+  test('an AppleScript dialog, which takes focus; a notification banner does not', () => {
+    expect(needs(`osascript -e 'display dialog "hi"'`, ['osascript', '-e', 'display dialog "hi"'])).toBe('Show a dialog on the Mac')
+    expect(needs(`osascript -e 'display alert "x"'`, ['osascript', '-e', 'display alert "x"'])).toBe('Show a dialog on the Mac')
+    expect(needs(`osascript -e 'choose file'`, ['osascript', '-e', 'choose file'])).toBe('Show a dialog on the Mac')
+    expect(needs(`osascript -e 'display notification "done"'`, ['osascript', '-e', 'display notification "done"'])).toBeUndefined()
+  })
+  test('an AppleScript fed by a here-string or echo is judged by its text; one fed by a heredoc, which cannot be read, is held', () => {
+    expect(needs(`osascript <<< 'tell application "Finder" to activate'`, ['osascript', '<<<tell application "Finder" to activate'])).toBe('Bring an app to the front')
+    expect(needs(`echo 'tell application "Finder" to activate' | osascript`, ['echo', 'tell application "Finder" to activate'], ['osascript'])).toBe('Bring an app to the front')
+    expect(needs(`osascript <<'EOF'`, ['osascript', '<<EOF'])).toBe('Run an AppleScript on the Mac')
+  })
+})
+
+describe('heldTool: the tools that open something on the Mac by another route than Bash (#702)', () => {
+  test('a browser opened or pointed somewhere, by Playwright or in Chrome', () => {
+    expect(heldTool('mcp__playwright__browser_navigate', { url: 'https://x.dev/a?token=abc' })).toBe('Open https://x.dev/a in the Playwright browser')
+    expect(heldTool('mcp__plugin_playwright_playwright__browser_navigate', { url: 'https://x.dev' })).toBe('Open https://x.dev in the Playwright browser')
+    expect(heldTool('mcp__playwright__browser_tabs', { action: 'new' })).toBe('Open a tab in the Playwright browser')
+    expect(heldTool('mcp__claude-in-chrome__navigate', { url: 'https://x.dev', tabId: 1 })).toBe('Open https://x.dev in Chrome')
+    expect(heldTool('mcp__claude-in-chrome__tabs_create_mcp', {})).toBe('Open a tab in Chrome')
+  })
+  test("the Artifact tool's open action, which opens the page in the browser", () => {
+    expect(heldTool('Artifact', { action: 'open', url: 'https://claude.ai/artifact/abc' })).toBe('Open https://claude.ai/artifact/abc')
+  })
+  test('reading a page already open, publishing a page, or any other tool goes ahead', () => {
+    expect(heldTool('mcp__playwright__browser_snapshot', {})).toBeUndefined()
+    expect(heldTool('mcp__playwright__browser_tabs', { action: 'list' })).toBeUndefined()
+    expect(heldTool('mcp__claude-in-chrome__get_page_text', { tabId: 1 })).toBeUndefined()
+    expect(heldTool('Artifact', { file_path: '/tmp/p.html' })).toBeUndefined()
+    expect(heldTool('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc' })).toBeUndefined()
+    expect(heldTool('Read', { file_path: '/tmp/a' })).toBeUndefined()
   })
 })
 

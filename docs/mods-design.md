@@ -466,6 +466,13 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
 
 - Only Dan's own prompts switch a mode (his Enter, or his phone through Remote Control); a peer
   session's message, a plugin or a notification never does, so nothing else can lift no build.
+- Only phrasings aimed at Claude switch a mode, never the words in passing (Dan's picker,
+  2026-10-04, PR #686). The milestone audit (#702) found the away, home, no coding and build
+  phrases still matched anywhere ("the user is stepping away from the form" switched every session
+  to away), so every phrase now has to start an instruction of its own: the message, a sentence,
+  a line, or a clause after a comma, semicolon or colon, led by nothing but the words a request
+  to Claude opens with ("ok", "so", "please", "can you", "let's", "you can", and "I'm" for away
+  and home). A phrase in a sentence ending in a question mark never counts.
 - One scope mode at a time: turning on no build while winding down replaces it, and the other way.
   Away is separate and can be on with either; both show, the scope mode first.
 - The words: `/nobuild` answers "No build is on.", `/winddown` "Winding down is on.", `/build` "No
@@ -476,6 +483,48 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls
   its `switch_to_build` tool, so only Dan's press lifts no build: the dialog reads "Claude wants to
   <change>. Switch to build?" with Yes and No.
+- What no build reads (#702). A shell or interpreter's program is judged where the guard can read
+  it: inline (`python3 -c`, `node -e` or `-p`, `perl -ne`, a shell's `-lc`, whose commands are read
+  by mod-kit's reader like `bash -c`), a here-string, or text `echo` or `printf` pipes in. A program
+  fed by a heredoc, or piped in from anything else, is refused as one it cannot read, as psql fed a
+  heredoc already was: mod-kit's reader drops a heredoc's body, and this mod keeps no reader of its
+  own (L613). The refusal tells Claude that inline code is read and judged, so code that only reads
+  still runs. Also refused: `curl -o` and `-O`, `wget` writing a file, `find -delete` and `-exec`
+  on what it finds, `awk -i inplace` and `ruby -pi`. Allowed, which it refused before: a GraphQL
+  query through `gh api graphql` and a mutation that is issue, label or milestone work; SQL whose
+  strings, comments or functions (`replace()`) read like a write; and Claude's own notes outside
+  the project, its memory files and plan mode's plans under the home folder's `.claude`. A check
+  of a call that throws refuses the call, under any mode, since a skipped hook would let it run.
+- After the lessons review of #714: every inline script is judged where the interpreter runs every
+  one (`perl -e a -e b`, ruby, node, osascript); what a `find -exec` runs is read as a command of
+  its own, its git reading and program included, so `-exec git checkout` and `-exec sh -c` are
+  judged; every operation in a GraphQL document is judged, a mutation that spreads a fragment
+  being one it cannot read; SQL is read with and without backslash escapes, so `'it\'s'` cannot
+  hide a write, and quotes that close under neither reading cannot be judged; and the clients' own
+  commands are judged: `\copy ... from` and sqlite's `.import` change data, `\i`, `\gexec`,
+  `.read` and `source` run SQL it cannot read, and `\!`, `.shell` and `.system` run a shell.
+- How inline code is judged, since the third review of #714 found a hand list of write idioms let
+  every route not on it through. Inline code is found by each language's own option grammar
+  (`hooks/program.ts`): a flag that takes a value takes the rest of its cluster or the next word, so
+  ruby's `-rtime` and perl's `-Mfeature` are no `-e`, perl's `-lane` is `-l -a -n -e`, and node's
+  `-pe` is `-p -e`; every script given is judged where the language runs every one, and a program
+  in a file (`awk -f`, `sed -f`) cannot be read. The code is then judged per language by what it can
+  do (`hooks/code.ts`), for python, node (and deno, bun), ruby, perl, AppleScript, awk and sed:
+  write or update a file (python's `open` in any of w, a, x or +, pathlib, `os` and `shutil`;
+  node's `fs` write, stream and remove calls; ruby's `File`, `IO`, `FileUtils`; perl's `open` for
+  writing, `unlink`, `rename`; AppleScript's write permission; awk's print to a file; sed's `w`),
+  run a process (python's `os.system`, `os.exec*`, `subprocess`, `pty`; node's `child_process`;
+  ruby's `system`, `exec`, `spawn`, backticks, `%x`, `IO.popen`; perl's `system`, `exec`, backticks,
+  `qx`, `open` to a pipe; AppleScript's `do shell script`; awk's `system` and pipes; sed's `e`),
+  or build code at run time (`eval`, `exec` of a string, `new Function`, `__import__` or `require`
+  of a computed name), which cannot be read. The refusal names what was seen. It reads the text,
+  not a parse, so a word that only looks like a call errs toward a refusal; code that writes
+  through a library it calls (SQL through a python driver, say) is not seen. A database client is
+  read by its own options (`hooks/sql.ts`): every `-c` psql runs, every argument sqlite runs, a
+  script file (`-f`, `-init`) as one it cannot read, and what it writes itself: psql's `-o`, `\o`,
+  `\w`, `\g` to a file, `\copy ... to <file>`, sqlite's `.output`, `.once`, `.backup` and `.save`,
+  MySQL's `tee`, each allowed to the scratchpad, and a shell when the target is `|command` or a
+  `program`.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
   issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR
@@ -485,8 +534,30 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   finish; outside a repository too. A check that cannot read GitHub never counts as finished. It is
   checked at each turn end and each minute, and the toast reads "Wind down finished: safe to close
   this session."
+- What winding down finishes, as the milestone audit (#702) left it. Turning it on again (the
+  phrase or `/winddown`) keeps the target it has, PR included, rather than reading it afresh. While
+  the session sits on its default branch with no PR, each check reads the branch again and follows
+  the session onto one. With no PR for the session's own branch, it finishes every PR this session
+  opened: each `gh pr create` the session or any of its agents runs is noted from the link gh
+  prints, so a PR an agent opened in a worktree the session is not in is finished before "safe to
+  close"; each is read in the repository its link names, its branch the PR's own head. A PR in
+  another repository than the session's has its branch on GitHub checked there, while its local
+  branch and worktree, in a checkout this session cannot see, are said to be unreadable rather than
+  read as cleaned, so winding down does not call it finished. A note that cannot be made is
+  toasted, since winding down would not know that PR. An agent named after this
+  branch's PR, an issue that PR closes, or a PR the session opened goes ahead (the PR is looked up
+  first when it has not been yet); any other issue number is still new work.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app
-  forward, cliclick and Peekaboo. A row reads as what it would do ("Open report.html in Google
+  forward, cliclick and Peekaboo. Since the milestone audit (#702) also an AppleScript dialog
+  (`display dialog`, `display alert`, `choose file` and the like; a notification banner takes no
+  focus and goes ahead), an AppleScript fed by a heredoc, which cannot be read, browser tools that
+  open a page or a tab (Playwright's `browser_navigate` and a new tab, Chrome's `navigate` and
+  `tabs_create`), and the Artifact tool's open action; publishing a page goes ahead. A held tool
+  call's row replays that call, its input given to Claude. The keystroke guard's own actions are
+  not held by this mod: that mod's hook runs before this one (mod folders load in name order) and
+  asks its heads up in the band, which the phone cannot show. The remedy belongs in that mod,
+  calling `$.scopeModes.hold` before it asks, as manual steps does; it was recorded as a finding
+  from #702. A row reads as what it would do ("Open report.html in Google
   Chrome", "Type into Overture"), its button "Open" or "Do it". Pressing one takes the row away and
   asks Claude to do that one thing, so it still passes every guard (the keystroke guard's heads up
   included). The same thing held twice is one row. A /clear ends the session and every mode with it.
