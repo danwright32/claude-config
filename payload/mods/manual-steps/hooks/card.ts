@@ -47,7 +47,10 @@ export const cardFrom = (input: unknown): Made | Refused => {
       return {
         refusal: `${name} has no link or exact location, so Dan would have to hunt for it. Give its url (https://...), or where there is no page, the exact place: the app, screen and section.`,
       }
-    if (url && !/^https?:\/\/[^\s/]+/.test(url)) return { refusal: `${name}: its link "${url}" is not a web address; give the whole https:// link.` }
+    // The whole link, not only its start: a space or a control character anywhere is no address,
+    // and a control character would reach the terminal's hyperlink as it is (#708).
+    if (url && !/^https?:\/\/[^\s/\u0000-\u001f\u007f-\u009f]+[^\s\u0000-\u001f\u007f-\u009f]*$/.test(url))
+      return { refusal: `${name}: its link ${JSON.stringify(url)} is not a web address; give the whole https:// link.` }
     const checked = s.checked
     if (typeof checked !== 'string' || !(CHECKED as readonly string[]).includes(checked))
       return {
@@ -64,6 +67,21 @@ export const cardFrom = (input: unknown): Made | Refused => {
     steps.push(step)
   }
   return { card: { heading: oneLine(heading), steps } }
+}
+
+/**
+ * `into` with the unfinished steps of `from` after its own, each titled with `from`'s heading. For a
+ * card kept under a worktree's own folder before #708 beside one kept under the repository root:
+ * both are held for Claude to re-check, so nothing is lost and nothing shows unchecked. A step
+ * already there (its title and link) is not added again, so folding twice changes nothing.
+ */
+export const fold = (into: StepsCard, from: StepsCard): StepsCard => {
+  const has = new Set(into.steps.map(s => `${s.title}\n${s.url ?? s.location}`))
+  const extra = (Array.isArray(from.steps) ? from.steps : [])
+    .filter(s => s && typeof s.title === 'string' && !s.finished)
+    .map(s => ({ ...s, title: `${from.heading}: ${s.title}` }))
+    .filter(s => !has.has(`${s.title}\n${s.url ?? s.location}`))
+  return extra.length ? { ...into, steps: [...into.steps, ...extra] } : into
 }
 
 /** The index of the step to do next: the first not yet finished. */
@@ -88,14 +106,18 @@ export const finish = (card: StepsCard, n: number, verdict: StepsVerdict): Made 
   return { card: { ...card, steps: card.steps.map((s, k) => (k === n - 1 ? next : s)) } }
 }
 
-/** One part of a card line, in mod-kit's band row shape (plain data). */
-export type CardPart = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number } | { button: 'done' | 'copy'; label: string }
+/** One part of a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
+export type CardPart =
+  | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
+  | { button: 'done' | 'copy' | 'copy-link'; label: string }
 
 /**
  * The card's lines: the amber heading, then each step on its own line. Only the next step is open,
  * bold in the terminal's own text colour, with Done and, indented under it, its link or location,
  * its clicks and any value with Copy. A later step is its title alone; a finished one is dimmed and
- * struck through, then how it finished.
+ * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
+ * Code's Link, so one cut at the edge still opens and copies whole where the terminal draws
+ * hyperlinks, with Copy link beside it for the terminals that do not, Apple Terminal among them (#708).
  */
 export const cardLines = (card: StepsCard): CardPart[][] => {
   const lines: CardPart[][] = [[{ text: card.heading, color: AMBER }]]
@@ -113,12 +135,28 @@ export const cardLines = (card: StepsCard): CardPart[][] => {
     lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: 'done' as const, label: 'Done' }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
-    const where = s.url ?? s.location
-    if (where) lines.push([{ text: where, indent }])
+    if (s.url) lines.push([{ text: s.url, href: s.url, indent }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
+    else if (s.location) lines.push([{ text: s.location, indent }])
     if (s.clicks) lines.push([{ text: s.clicks, indent }])
     if (s.value) lines.push([{ text: oneLine(s.value), indent }, { text: '  ' }, { button: 'copy', label: 'Copy' }])
   })
   return lines
+}
+
+/** The widest a docked pane asks to be: past it, the transcript beside it gets too narrow. */
+export const MAX_PANE_COLUMNS = 80
+// The left rule and the gap after it.
+const RULE = 2
+
+/**
+ * How wide the side pane asks to be while docked: its widest line, so a click path or an exact
+ * location is not cut at the dock's edge (#708), up to MAX_PANE_COLUMNS. A link is not measured,
+ * since it opens and copies whole however much of it shows; a button is its label in brackets.
+ */
+export const paneColumns = (card: StepsCard): number => {
+  const width = (l: CardPart[]) =>
+    l.reduce((sum, p) => sum + ('button' in p ? p.label.length + 2 : p.href ? 0 : (p.indent ?? 0) + p.text.length), 0)
+  return Math.min(MAX_PANE_COLUMNS, RULE + Math.max(...cardLines(card).map(width)))
 }
 
 /** What the next session's Claude reads about steps carried over from an earlier one in this project. */
@@ -127,6 +165,8 @@ export const carriedNote = (card: StepsCard): string => {
   return [
     `Manual steps carried over from an earlier session in this project, not yet shown to Dan: "${card.heading}".`,
     ...left.map(({ s, n }) => `- step ${n}: ${s.title} (${s.url ?? s.location})`),
-    'Before they are shown, check each against the current state, then pin the ones still to do with the manual-steps steps tool (checked set for each), or tell Dan they are all done.',
+    // The tool is the only way out: a card whose every step is already-done is not pinned and the
+    // kept steps are cleared, where saying so in a reply would leave them to come back (#708).
+    'Before they are shown, check each against the current state, then pin them again with the manual-steps steps tool, checked set for each: already-done for one you find done. Do that even when every one is done, since that is what clears the kept steps; otherwise they come back at every session start here.',
   ].join('\n')
 }

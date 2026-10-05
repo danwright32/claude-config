@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { StepsCard } from '../types/index.d.ts'
 
@@ -119,12 +119,18 @@ const TOOL = 'mcp__manual-steps__steps'
 const VERDICT = 'mcp__manual-steps__steps_done'
 const ROOT = '/repo'
 
-// Claude Code beneath the mod: the session, the plugin's store in memory, panes that fit or do not
-// as each test sets, the prompt, the clipboard and toasts, each recorded.
-type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean }
+// Claude Code beneath the mod: the session, the plugin's store in memory, panes placed by Claude
+// Code's own rule (asked, at any width; unasked, from 144 columns, or 110 for an id once asked,
+// which it remembers), the prompt, the clipboard and toasts, each recorded. `wide` is a 160 column
+// terminal, else 120, a laptop. `root` is where the session runs, `repoRoot` the repository's root
+// (the main checkout's for a worktree), null outside one.
+// `placesNoPanes` is a session whose attached surfaces place no panes at all, asked or not.
+type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, ...init }
+  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, ...init }
   const mem: Record<string, unknown> = { ...store }
+  const asked = new Set<string>()
+  const opens: { id: string; columns?: number }[] = []
   const opened: string[] = []
   const closed: string[] = []
   const prompts: string[] = []
@@ -132,7 +138,8 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   const copies: string[] = []
   const tools: string[] = []
   const commands: string[] = []
-  mock.env(on, env)
+  // Read at each call, so a test can change one part way through.
+  on('env.get', ($, e) => ({ value: env[e.name] }) as never)
   on('store.get', ($, e) => ({ value: mem[e.key] }) as never)
   on('store.set', ($, e) => {
     if (w.storeFails) throw new Error('the store is over 4 MiB')
@@ -143,9 +150,15 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     delete mem[e.key]
     return { value: undefined } as never
   })
-  on('session.root', () => ({ value: ROOT }) as never)
-  on('session.cwd', () => ({ value: ROOT }) as never)
+  on('session.root', () => ({ value: w.root }) as never)
+  on('session.cwd', () => ({ value: w.root }) as never)
+  on('session.repo', () => {
+    if (w.repoFails) throw new Error('git could not read the working copy')
+    return { value: w.repoRoot === null ? null : { root: w.repoRoot, remote: null, internal: false, name: null } } as never
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
   on('tool.register', ($, e) => {
     tools.push(String((e as { name?: string }).name))
     return { value: undefined } as never
@@ -156,7 +169,13 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   })
   on('ui.open', ($, e) => {
     opened.push(e.id)
-    return { value: w.wide ? { isPlaced: true } : { isPlaced: false, reason: 'unasked panes need 144 columns; the terminal is 120' } } as never
+    opens.push({ id: e.id, columns: e.columns })
+    if (w.placesNoPanes) return { value: { isPlaced: false, reason: 'the attached surfaces place no panes' } } as never
+    if (w.isAsking) asked.add(e.id)
+    const floor = asked.has(e.id) ? 110 : 144
+    const columns = w.wide ? 160 : 120
+    if (w.isAsking || columns >= floor) return { value: { isPlaced: true } } as never
+    return { value: { isPlaced: false, reason: `unasked panes need ${floor} columns; the terminal is ${columns}` } } as never
   })
   on('ui.close', ($, e) => {
     closed.push(e.id)
@@ -181,7 +200,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, mem, opened, closed, prompts, toasts, copies, tools, commands }
+  return { w, mem, opened, opens, closed, prompts, toasts, copies, tools, commands }
 }
 
 type Mounted = { press: (t: object) => Promise<unknown>; find: (q: object) => Promise<{ props: Record<string, unknown>; children: unknown[] } | undefined>; unmount: () => Promise<void> }
@@ -203,20 +222,38 @@ const band = async ($: Engine) => {
   const rows = JSON.parse(out.deny ?? out.text ?? '[]') as Row[]
   return rows.find(r => r.mod === 'manual-steps' && r.id === 'steps')
 }
-// The card's pane as the stand in mod-kit holds it now.
+// The card's pane as the stand in mod-kit holds it now, under whichever of its ids; never two.
 const paneShown = async ($: Engine) => {
   const out = (await $.tool.call({ tool: 'Bash', tool_use_id: 'p1', command: 'panes' } as never)) as { deny?: string; text?: string }
-  return (JSON.parse(out.deny ?? out.text ?? '[]') as Row[]).find(r => r.mod === 'manual-steps' && r.id === 'steps')
+  const mine = (JSON.parse(out.deny ?? out.text ?? '[]') as Row[]).filter(r => r.mod === 'manual-steps')
+  expect(mine.length).toBeLessThanOrEqual(1)
+  return mine[0]
 }
 const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(l => l.map(p => (p.text as string) ?? `[${p.button as string}]`).join(''))
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 // Dan pressing a button the card shows in the band, as he would: on mod-kit's drawing.
-const press = async ($: Engine, button: 'done' | 'copy') => {
+const press = async ($: Engine, button: 'done' | 'copy' | 'copy-link') => {
   const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: bandProps } as never)
   await ui.press({ key: `manual-steps:${button}` })
   await ui.unmount()
 }
+// Dan typing /steps: a pane it opens is asked for, which Claude Code places at any width.
+const slashSteps = async ($: Engine, w: World) => {
+  w.isAsking = true
+  try {
+    return ((await ($ as unknown as { command: { run: (e: object) => Promise<{ text?: string }> } }).command.run({ command: 'steps' })) as { text?: string }).text
+  } finally {
+    w.isAsking = false
+  }
+}
+// What Claude reads beside Dan's next message.
+const context = async ($: Engine) => (await ($ as unknown as { prompt: { context: (e: object) => Promise<{ blocks: { name: string; text: string }[] }> } }).prompt.context({ blocks: [] })).blocks
+// A main loop turn starting with a prompt, and ending.
+type Turns = { turn: { start: (e: object) => Promise<unknown>; complete: (e: object) => Promise<unknown> } }
+const turnStart = ($: Engine, text: string, turnId: string) => ($ as unknown as Turns).turn.start({ text, turnId })
+const turnEnd = ($: Engine, turnId: string, reason: 'answer' | 'aborted' = 'answer', agentId?: string) =>
+  ($ as unknown as Turns).turn.complete({ answer: 'Checked it.', durationMs: 5, isAborted: reason === 'aborted', turnId, reason, ...(agentId ? { agentId } : {}) })
 
 test('the tools and /steps exist only where a person is at the prompt', withKit, async ($, on) => {
   const w = world(on)
@@ -243,10 +280,10 @@ test('at laptop width the card is the steps row of the band, with the amber left
   const out = await hand($, [step(), step({ title: 'Purge the cache' })])
   expect(out).toMatch(/step 1 of 2 is next/)
   // The pane was tried unasked and did not fit, so it was closed rather than left waiting.
-  expect(w.opened).toEqual(['steps'])
-  expect(w.closed).toEqual(['steps'])
+  expect(w.opened).toHaveLength(1)
+  expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -257,7 +294,8 @@ test('when the terminal is wide the card is the side pane, and the band stays cl
   expect(await band($)).toBeUndefined()
   // Drawn by mod-kit with the band's own drawing, the amber left rule included (#690).
   expect(await paneShown($)).toMatchObject({ frame: { kind: 'left-rule', color: 'warning' } })
-  const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: 'steps', props: { bodyColumns: 50 } } as never)
+  expect(w.opened).toHaveLength(1)
+  const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: w.opened[0], props: { bodyColumns: 50 } } as never)
   expect(await ui.find({ type: 'Text', text: 'Cloudflare WAF' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '1. Turn on the WAF rule' }))?.props).toMatchObject({ bold: true })
   expect((await ui.find({ type: 'Button', key: 'manual-steps:done' }))?.props.label).toBe('Done')
@@ -272,7 +310,7 @@ test('when the terminal is wide the card is the side pane, and the band stays cl
   // Claude's verdict ends the card, and the pane with it.
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
   expect(await paneShown($)).toBeUndefined()
-  expect(w.closed).toEqual(['steps'])
+  expect(w.closed).toEqual(w.opened)
 })
 
 // A pane mod-kit will not draw is never opened empty: the card goes to the band instead.
@@ -282,7 +320,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -369,6 +407,25 @@ test('Copy puts the value on the clipboard, and says when it could not', withKit
   expect(w.toasts[1]).toBe('Could not copy the value for step 1 (no-clipboard).')
 })
 
+// #708: Claude Code draws no hyperlinks on Apple Terminal, where a long link is plain text cut at
+// the edge, so Copy link is what takes the whole address on every terminal.
+test('Copy link puts the open step\'s whole link on the clipboard, and says when it could not', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf`
+  await hand($, [step({ url, value: 'ip.src eq 1.2.3.4' })])
+  await press($, 'copy-link')
+  expect(w.copies).toEqual([url])
+  expect(w.toasts).toEqual(['Copied the link for step 1.'])
+  w.w.copied = false
+  await press($, 'copy-link')
+  expect(w.toasts[1]).toBe('Could not copy the link for step 1 (no-clipboard).')
+  // Copy beside the value still copies the value.
+  w.w.copied = true
+  await press($, 'copy')
+  expect(w.copies[2]).toBe('ip.src eq 1.2.3.4')
+})
+
 test('when mod-kit refuses the row, the handover says the card could not be shown', withKit, async ($, on) => {
   world(on, {}, {}, { KIT_REFUSE: 'mod-kit is not loaded' })
   await start($)
@@ -426,12 +483,11 @@ test('a handover is kept per project for the next session, and /steps shows it a
   await hand($, [step()])
   expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
   expect(await band($)).toBeDefined()
-  // Asked, the pane is placed at any width, and the band row gives way to it.
-  w.w.wide = true
-  const r = (await ($ as unknown as { command: { run: (e: object) => Promise<{ text?: string }> } }).command.run({ command: 'steps' })) as { text?: string }
-  expect(r.text).toBe('The steps card is open.')
-  expect(w.opened).toEqual(['steps', 'steps'])
+  // Asked, the pane is placed at any width (this terminal is 120), and the band row gives way to it.
+  expect(await slashSteps($, w.w)).toBe('The steps card is open.')
+  expect(w.opened).toHaveLength(2)
   expect(await band($)).toBeUndefined()
+  expect((await paneShown($))?.lines.length).toBe(3)
 })
 
 // Dan closing the pane by hand (the card then moves to the band) is not covered here: the test
@@ -467,8 +523,243 @@ test('when the scope modes mod cannot answer, the card is shown rather than lost
 })
 
 test('/steps with nothing pinned says so', withKit, async ($, on) => {
-  world(on)
+  const w = world(on)
   await start($)
-  const r = (await ($ as unknown as { command: { run: (e: object) => Promise<{ text?: string }> } }).command.run({ command: 'steps' })) as { text?: string }
-  expect(r.text).toBe('No manual steps are pinned for this project.')
+  expect(await slashSteps($, w.w)).toBe('No manual steps are pinned for this project.')
+})
+
+// #708: the gaps the milestone audit found.
+
+test('the carried note names a way out that clears: every step re-pinned as already-done empties the store, and no note comes back', withKit, async ($, on) => {
+  const card: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  const w = world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  expect((await context($)).find(b => b.name === 'manualSteps')?.text).toMatch(/already-done/)
+  // Claude checks, finds it done, and does what the note asks.
+  expect(await hand($, [step({ title: 'Purge the cache', url: 'https://b.example', checked: 'already-done' })])).toMatch(/already done, so nothing was pinned/)
+  expect(stored(w.mem)).toBeUndefined()
+  expect((await context($)).find(b => b.name === 'manualSteps')).toBeUndefined()
+  // The next session in the project has nothing carried.
+  await start($)
+  expect((await context($)).find(b => b.name === 'manualSteps')).toBeUndefined()
+  expect(await slashSteps($, w.w)).toBe('No manual steps are pinned for this project.')
+})
+
+test('steps are kept under the repository root, so a worktree session and the main checkout share one card', withKit, async ($, on) => {
+  const w = world(on, { root: `${ROOT}/.claude/worktrees/a1`, repoRoot: ROOT })
+  await start($)
+  await hand($, [step()])
+  expect(Object.keys(w.mem)).toEqual([`card:${ROOT}`])
+  expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
+})
+
+test('a card kept by the main checkout is carried into a worktree session of the same repository', withKit, async ($, on) => {
+  const card: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  world(on, { root: `${ROOT}/.claude/worktrees/a1`, repoRoot: ROOT }, { [`card:${ROOT}`]: card })
+  await start($)
+  expect((await context($)).find(b => b.name === 'manualSteps')?.text).toMatch(/step 1: Purge the cache/)
+})
+
+// Not knowing the repository is not the same as being outside one: kept under the worktree's own
+// folder, the card would be lost to the main checkout, the defect #708 fixed.
+test('a repository that cannot be read keeps nothing under the folder, and says the steps were not saved', withKit, async ($, on) => {
+  const w = world(on, { root: `${ROOT}/.claude/worktrees/a1`, repoRoot: ROOT, repoFails: true })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
+  expect(Object.keys(w.mem)).toEqual([])
+  expect(w.toasts).toHaveLength(1)
+  // The kit skips a hook beneath that throws and answers that nothing implements the call, so the
+  // reason is the engine's, not this world's.
+  expect(w.toasts[0]).toMatch(/^The manual steps could not be saved for the next session: .+\.$/)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+})
+
+test('outside a repository the steps are kept under the folder', withKit, async ($, on) => {
+  const w = world(on, { root: '/notes', repoRoot: null })
+  await start($)
+  await hand($, [step()])
+  expect(Object.keys(w.mem)).toEqual(['card:/notes'])
+})
+
+test('a card a worktree session kept under the worktree before #708 is found, and moved to the repository root', withKit, async ($, on) => {
+  const tree = `${ROOT}/.claude/worktrees/a1`
+  const card: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  const w = world(on, { root: tree, repoRoot: ROOT }, { [`card:${tree}`]: card })
+  await start($)
+  expect((await context($)).find(b => b.name === 'manualSteps')?.text).toMatch(/step 1: Purge the cache/)
+  expect(Object.keys(w.mem)).toEqual([`card:${ROOT}`])
+  expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
+})
+
+// #708 lessons review: with a card under the root too, the worktree's own was never read again.
+test('a card kept under the worktree beside one under the root is folded into the held card for Claude to re-check, never lost', withKit, async ($, on) => {
+  const tree = `${ROOT}/.claude/worktrees/a1`
+  const atRoot: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  const inTree: StepsCard = {
+    heading: 'DNS',
+    steps: [
+      { title: 'Made the record', url: 'https://c.example', finished: 'checked' },
+      { title: 'Add the CNAME', url: 'https://d.example' },
+    ],
+  }
+  const w = world(on, { root: tree, repoRoot: ROOT }, { [`card:${ROOT}`]: atRoot, [`card:${tree}`]: inTree })
+  await start($)
+  const note = (await context($)).find(b => b.name === 'manualSteps')?.text ?? ''
+  expect(note).toMatch(/step 1: Purge the cache \(https:\/\/b\.example\)/)
+  expect(note).toMatch(/step 2: DNS: Add the CNAME \(https:\/\/d\.example\)/)
+  expect(note).not.toMatch(/Made the record/)
+  expect(Object.keys(w.mem)).toEqual([`card:${ROOT}`])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache', 'DNS: Add the CNAME'])
+})
+
+test('a reload mid session keeps the live card live: verdicts land, and no carried note is sent', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Purge the cache' })])
+  await press($, 'done')
+  // The mod reloaded: Claude Code runs session.start again and keeps $.state.
+  await start($)
+  expect((await context($)).find(b => b.name === 'manualSteps')).toBeUndefined()
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 2 is next/)
+  expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
+  expect(w.toasts).toEqual([])
+})
+
+test('a Done Claude never answers comes back when the turn it started ends, and says so', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await press($, 'done')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  // "sent" is never kept for another session: that turn will not answer there.
+  expect(stored(w.mem)?.steps[0]?.isSent).toBeUndefined()
+  await turnStart($, 'step 1 done', 'T2')
+  await turnEnd($, 'T2')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(w.toasts).toEqual(['Claude did not say whether step 1 took. Press Done to ask again.'])
+  // A verdict Claude gives later still lands.
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+})
+
+test('an interrupted turn brings Done back too', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await press($, 'done')
+  await turnStart($, 'step 1 done', 'T2')
+  await turnEnd($, 'T2', 'aborted')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(w.toasts).toHaveLength(1)
+})
+
+test('only the end of the turn "step N done" started counts: one already running, or a subagent\'s, leaves it sent', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  // Done pressed while Claude was busy: the prompt waits behind the running turn.
+  await turnStart($, 'fix the tests', 'T1')
+  await press($, 'done')
+  await turnEnd($, 'T1')
+  await turnEnd($, 'T9', 'answer', 'agent-1')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  // Its own turn runs, and Claude answers in it: nothing comes back and nothing is said.
+  await turnStart($, 'step 1 done', 'T2')
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+  await turnEnd($, 'T2')
+  expect(await band($)).toBeUndefined()
+  expect(w.toasts).toEqual([])
+})
+
+test('/steps does not lower the width a card opened unasked needs: the next one at laptop width is still the band', withKit, async ($, on) => {
+  const w = world(on, { wide: false })
+  await start($)
+  await hand($, [step()])
+  expect(await band($)).toBeDefined()
+  expect(await slashSteps($, w.w)).toBe('The steps card is open.')
+  // The pane /steps opens is not the one a new card tries unasked.
+  expect(new Set(w.opened).size).toBe(2)
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+  // A later card, unasked, at 120 columns: the band, as at any laptop width.
+  await hand($, [step({ title: 'Purge the cache' })])
+  expect((await bandText($))[1]).toBe('1. Purge the cache  [done]')
+  expect(await paneShown($)).toBeUndefined()
+})
+
+test('/steps with the card in the pane opened unasked moves it to its own pane and closes the other, so there are never two', withKit, async ($, on) => {
+  const w = world(on, { wide: true })
+  await start($)
+  await hand($, [step()])
+  const unasked = w.opened[0]
+  expect(await slashSteps($, w.w)).toBe('The steps card is open.')
+  const askedId = w.opened[1]
+  expect(askedId).not.toBe(unasked)
+  expect(w.closed).toEqual([unasked])
+  expect(await paneShown($)).toMatchObject({ id: askedId })
+  // Done from the pane /steps opened, and the last verdict closes that pane.
+  const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: askedId, props: { bodyColumns: 50 } } as never)
+  await ui.press({ key: 'manual-steps:done' })
+  await ui.unmount()
+  expect(w.prompts).toEqual(['step 1 done'])
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  expect(w.closed).toEqual([unasked, askedId])
+  expect(await paneShown($)).toBeUndefined()
+})
+
+// #708 lessons review: the band took the card while the pane opened unasked still showed it.
+test('/steps where its pane cannot be placed moves the card to the band and closes the pane that held it', withKit, async ($, on) => {
+  const w = world(on, { wide: true })
+  await start($)
+  await hand($, [step()])
+  const unasked = w.opened[0]
+  expect(await paneShown($)).toBeDefined()
+  w.w.placesNoPanes = true
+  expect(await slashSteps($, w.w)).toBe('The steps card is in the band above the prompt.')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(w.closed).toContain(unasked)
+  expect(await paneShown($)).toBeUndefined()
+})
+
+test('a new card mod-kit will not draw in the open pane goes to the band, and the pane with the old card closes', withKit, async ($, on) => {
+  const env: Record<string, string> = {}
+  const w = world(on, { wide: true }, {}, env)
+  await start($)
+  await hand($, [step()])
+  expect(await paneShown($)).toBeDefined()
+  env.KIT_REFUSE_PANE = 'the pane is held by another mod'
+  expect(await hand($, [step({ title: 'Purge the cache' })])).toMatch(/step 1 of 1 is next/)
+  expect((await bandText($))[1]).toBe('1. Purge the cache  [done]')
+  expect(w.closed).toContain(w.opened[0])
+  expect(await paneShown($)).toBeUndefined()
+})
+
+test('a card pinned while /steps has the pane open replaces the card in that pane, opening nothing more', withKit, async ($, on) => {
+  const w = world(on, { wide: false })
+  await start($)
+  await hand($, [step()])
+  await slashSteps($, w.w)
+  const opens = w.opened.length
+  await hand($, [step({ title: 'Purge the cache' })])
+  expect(w.opened).toHaveLength(opens)
+  expect(await band($)).toBeUndefined()
+  expect((await paneShown($))?.lines[1]?.[0]).toMatchObject({ text: '1. Purge the cache' })
+})
+
+test('the pane asks for a dock as wide as the open step\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
+  const w = world(on, { wide: true })
+  await start($)
+  const clicks = 'Websites, example.com, Security, WAF, Custom rules, Create rule'
+  // Each card finished before the next, so each opens the pane afresh.
+  const pinFresh = async (over: Record<string, unknown>) => {
+    await hand($, [step(over)])
+    await call($, VERDICT, { step: 1, checked: 'checked' })
+  }
+  await pinFresh({ clicks })
+  // The rule and its gap, the indent under the title, then the click path.
+  expect(w.opens[0]?.columns).toBe(2 + 3 + clicks.length)
+  // A link is not measured: it opens whole however much of it shows.
+  await pinFresh({ url: `https://dash.cloudflare.com/${'a'.repeat(150)}` })
+  expect(w.opens[1]?.columns).toBeLessThan(40)
+  await pinFresh({ clicks: 'x'.repeat(200) })
+  expect(w.opens[2]?.columns).toBe(80)
+  expect(w.opens).toHaveLength(3)
 })

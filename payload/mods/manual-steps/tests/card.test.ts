@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, finish, nextStep, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, finish, fold, nextStep, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -21,6 +21,12 @@ describe('cardFrom', () => {
   test('refuses a link that is not a web address', () => {
     const r = cardFrom({ heading: 'x', steps: [step({ url: 'dash.cloudflare.com' })] })
     expect('refusal' in r && r.refusal).toMatch(/Step 1 .*link .*https/)
+  })
+  // The whole link, not only its start (#708 lessons review): a space or a control character
+  // anywhere in it is no address, and a control character would reach the terminal's hyperlink.
+  test('refuses a link with a space or a control character anywhere in it', () => {
+    for (const url of ['https://dash.cloudflare.com/waf rules', 'https://dash.cloudflare.com/\u001b]8;;\u0007', 'https://a.example/\u0000', 'https://a\u0007b.example/x'])
+      expect(cardFrom({ heading: 'x', steps: [step({ url })] })).toMatchObject({ refusal: expect.stringMatching(/Step 1 .*link .*https/) })
   })
   test('refuses a step that does not say whether it was checked against the current state', () => {
     const r = cardFrom({ heading: 'x', steps: [step({ checked: undefined })] })
@@ -63,6 +69,31 @@ describe('finish', () => {
   })
 })
 
+describe('fold', () => {
+  test('adds the other card\'s unfinished steps under its heading, and folding twice adds nothing more', () => {
+    const into = made({ heading: 'Cloudflare WAF', steps: [step()] })
+    const from = made({ heading: 'DNS', steps: [step({ title: 'Made the record', checked: 'already-done' }), step({ title: 'Add the CNAME', url: 'https://d.example' })] })
+    const once = fold(into, from)
+    expect(once.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', 'DNS: Add the CNAME'])
+    expect(fold(once, from)).toEqual(once)
+    // A malformed card kept from before adds nothing.
+    expect(fold(into, { heading: 'x', steps: 'no' } as never)).toEqual(into)
+  })
+})
+
+describe('carriedNote', () => {
+  // Telling Dan they are all done wrote nothing, so the kept card came back every session (#708).
+  // The note's only way out is the steps tool, where a step found done is already-done and a card
+  // with every step so is cleared; register.test proves that route clears the kept card.
+  test('asks for every step to go back through the steps tool, a done one as already-done, and offers no way out that keeps the card', () => {
+    const note = carriedNote(made({ heading: 'Cloudflare WAF', steps: [step(), step({ title: 'Purge the cache' })] }))
+    expect(note).toMatch(/steps tool/)
+    expect(note).toMatch(/already-done/)
+    expect(note).toMatch(/clear/)
+    expect(note).not.toMatch(/or tell Dan they are all done/)
+  })
+})
+
 describe('cardLines', () => {
   type P = { text?: string; button?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
   const lines = (c: StepsCard) => cardLines(c) as P[][]
@@ -83,7 +114,7 @@ describe('cardLines', () => {
       'Cloudflare WAF',
       '1. Create the API token  already done',
       '2. Turn on the rule  [done]',
-      'https://dash.cloudflare.com/waf',
+      'https://dash.cloudflare.com/waf  [copy-link]',
       'Security, WAF, Custom rules, Deploy',
       'ip.src eq 1.2.3.4  [copy]',
       '3. Purge the cache',
@@ -114,6 +145,19 @@ describe('cardLines', () => {
     const c = sent(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] }), 0, true)
     const l = lines(c)
     expect(l.map(textOf)).toEqual(['x', '1. Turn on the WAF rule  sent', 'Keychain Access, login'])
+  })
+
+  // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
+  // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows,
+  // and Copy link beside it, since Claude Code draws no hyperlinks on Apple Terminal.
+  test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
+    const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
+    const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
+    expect(l[2]).toEqual([{ text: url, href: url, indent: 3 }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
+    // The click path is not a link.
+    expect(l[3]?.[0]?.href).toBeUndefined()
+    const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]
+    expect(at[2]).toEqual([{ text: 'Keychain Access, login', indent: 3 }])
   })
 
   test('a value of several lines shows on one line, and the indent follows the number width', () => {

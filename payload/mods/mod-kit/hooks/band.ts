@@ -34,6 +34,12 @@ const partRefusal = (p: ModKitBandPart): string | undefined => {
   const wrap = (p as { wrap?: unknown }).wrap
   if (wrap !== undefined && 'button' in p) return 'only a text run can wrap; a button is drawn whole'
   if (wrap !== undefined && wrap !== true) return `a text run's wrap must be true or left out, not ${JSON.stringify(wrap)}`
+  // Refused rather than drawn as plain text: a link that cannot be followed is what #708 fixed.
+  const href = (p as { href?: unknown }).href
+  if (href !== undefined && 'button' in p) return 'only a text run can be a link; a button is pressed, not followed'
+  if (href !== undefined && (typeof href !== 'string' || !href.trim())) return `a link's href must be its address, not ${JSON.stringify(href)}`
+  // One could end the terminal's hyperlink sequence early and have what follows written as is.
+  if (typeof href === 'string' && /[\u0000-\u001f\u007f-\u009f]/.test(href)) return `a link's href ${JSON.stringify(href)} holds a control character`
   return undefined
 }
 

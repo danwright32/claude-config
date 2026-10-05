@@ -169,9 +169,11 @@ export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | '
  * part before it on the line, so on a line's first part it is where the line starts), so a description can sit under
  * the option it describes. `wrap: true` carries a run too long for the band on to the lines under
  * it; any other run is cut at the band's edge. Refused in a row with a left rule, which draws one
- * mark per line.
+ * mark per line. `href` makes the run Claude Code's Link to that address, a real terminal
+ * hyperlink, so a long one cut at the edge still opens and copies whole where the terminal draws
+ * hyperlinks (#708).
  */
-export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true }
+export type ModKitBandText = { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true }
 /**
  * Claude Code's own Button, `[ label ]`; `button` is its id within the publishing mod. `plain: true`
  * draws it in Claude Code's plain style, a survey's row: the hotkey in the accent colour, a colon,
