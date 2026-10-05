@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, shellWrites, wantedFiles, watchedGit, workingTree } from '../hooks/collide.ts'
+import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -98,97 +98,41 @@ describe("the other session's latest request, from its transcript", () => {
   })
 })
 
-// #654: the files a shell command writes, read from the words mod-kit's command reader gives. A
-// test cannot import another mod, so each case is written as the words the reader returns for it,
-// which mod-kit's own tests pin (tests/commands.test.ts, "an output redirect is its own word").
-describe('the files a shell command writes', () => {
-  const writes = (cmds: string[][], cwd = '/repo') => shellWrites(cmds, cwd, '/Users/dan')
-  const paths = (cmds: string[][], cwd = '/repo') => writes(cmds, cwd).map(w => w.path)
-
-  test("the live check's printf append (#639): printf 'one more line\\n' >> notes.txt", () => {
-    expect(paths([['printf', 'one more line\\n', '>>', 'notes.txt']])).toEqual(['/repo/notes.txt'])
-  })
-  test('every output redirect, and never a descriptor or /dev/null', () => {
-    expect(paths([['echo', 'a', '>', 'a.txt'], ['make', '2>', 'err.log'], ['ls', '&>', 'all.log'], ['ls', '&>>', 'more.log'], ['echo', '>|', 'c.txt']])).toEqual([
-      '/repo/a.txt',
-      '/repo/err.log',
-      '/repo/all.log',
-      '/repo/more.log',
-      '/repo/c.txt',
+// #654: the files a shell command writes, read by mod-kit's write reader since #712, and judged
+// here as this guard judges them. Which files each command names is the reader's, and every case
+// this guard's own reader had moved to mod-kit's tests with it (tests/writes.test.ts: redirects
+// and `>&`, tee, sed, perl and touch, cp and mv into a folder, a cd, a subshell, a file named twice,
+// read only commands, what cannot be named, rm, rm -r in every spelling, mv's sources, a glob), so
+// these pin only the judging: what is an edit, what a removal, what is left alone.
+describe('the files a shell command writes, as this guard judges them', () => {
+  const none = { files: [], changes: [] }
+  test('a file content goes into is an edit, its sources kept only where the copy may land inside it', () => {
+    expect(judgedWrites({ ...none, files: [{ path: '/repo/a.txt' }, { path: '/repo/b.txt', sources: ['/repo/a.txt'], mayBeFolder: true }, { path: '/repo/dir/c.txt', sources: ['/repo/c.txt'] }] })).toEqual([
+      { path: '/repo/a.txt' },
+      { path: '/repo/b.txt', sources: ['/repo/a.txt'] },
+      { path: '/repo/dir/c.txt' },
     ])
-    expect(paths([['make', '2>&1', '>', '/dev/null']])).toEqual([])
   })
-  test('tee, in place sed and perl, and touch', () => {
-    expect(paths([['printf', 'x'], ['tee', '-a', 'log.txt', '/abs/two.txt']])).toEqual(['/repo/log.txt', '/abs/two.txt'])
-    expect(paths([['sed', '-i', '', 's/a/b/', 'src/a.ts', 'src/b.ts']])).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
-    expect(paths([['sed', '-i.bak', '-e', 's/a/b/', '-e', 's/c/d/', 'x.txt']])).toEqual(['/repo/x.txt'])
-    expect(paths([['sed', '--in-place', 's/a/b/', 'z.txt']])).toEqual(['/repo/z.txt'])
-    expect(paths([['perl', '-pi', '-e', 's/a/b/', 'y.txt']])).toEqual(['/repo/y.txt'])
-    expect(paths([['perl', '-i.bak', '-pe', 's/a/b/', 'w.txt']])).toEqual(['/repo/w.txt'])
-    expect(paths([['touch', '-t', '202601010000', 'new.md', 'other.md']])).toEqual(['/repo/new.md', '/repo/other.md'])
+  test('a file stamped or emptied is an edit; a folder made or a mode changed is left alone', () => {
+    const changes = [
+      { path: '/repo/new.md', does: 'touch' },
+      { path: '/repo/log.txt', does: 'truncate' },
+      { path: '/repo/lib', does: 'folder' },
+      { path: '/repo/run.sh', does: 'mode' },
+    ]
+    expect(judgedWrites({ files: [], changes })).toEqual([{ path: '/repo/new.md' }, { path: '/repo/log.txt' }])
   })
-  test('cp writes its destination, mv its destination and its sources', () => {
-    expect(writes([['cp', 'a.txt', 'b.txt']])).toEqual([{ path: '/repo/b.txt', sources: ['/repo/a.txt'] }])
-    expect(paths([['cp', 'a.txt', 'b.txt', 'dir/']])).toEqual(['/repo/dir/a.txt', '/repo/dir/b.txt'])
-    expect(paths([['cp', '-t', 'dest', 'a.txt']])).toEqual(['/repo/dest/a.txt'])
-    expect(paths([['mv', 'old.txt', 'new/']])).toEqual(['/repo/new/old.txt', '/repo/old.txt'])
-  })
-  test('a cd earlier in the command moves where a relative path lands, and ~ is home', () => {
-    expect(paths([['cd', 'sub'], ['echo', 'x', '>>', '../up.txt'], ['echo', 'y', '>', 'here.txt']])).toEqual(['/repo/up.txt', '/repo/sub/here.txt'])
-    expect(paths([['echo', 'x', '>', '~/notes.txt']])).toEqual(['/Users/dan/notes.txt'])
-    // cd - goes back to a folder nothing here knows, so a relative path after it is not named.
-    expect(paths([['cd', '-'], ['echo', 'x', '>', 'rel.txt'], ['echo', 'y', '>', '/abs/a.txt']])).toEqual(['/abs/a.txt'])
-  })
-  // #700: the words mod-kit's reader gives for (cd sub && printf x >> notes.txt), each parenthesis a
-  // command of its own (mod-kit's tests, "a subshell's parentheses are each a command of their own").
-  test('a cd inside a subshell moves where its writes land, and ends with the subshell', () => {
-    expect(paths([['('], ['cd', 'sub'], ['printf', 'x', '>>', 'notes.txt'], [')']])).toEqual(['/repo/sub/notes.txt'])
-    expect(paths([['('], ['cd', 'sub'], ['make'], [')'], ['>', 'out.txt'], ['echo', 'y', '>', 'after.txt']])).toEqual(['/repo/out.txt', '/repo/after.txt'])
-    // Nested, and a closing one with no opening (a case pattern's) leaves the folder as it is.
-    expect(paths([['('], ['cd', 'a'], ['('], ['cd', 'b'], [')'], ['echo', '>', 'x'], [')'], [')'], ['echo', '>', 'y']])).toEqual(['/repo/a/x', '/repo/y'])
-  })
-  test('one file written twice is named once', () => {
-    expect(paths([['echo', 'a', '>', 'n.txt'], ['echo', 'b', '>>', 'n.txt']])).toEqual(['/repo/n.txt'])
-  })
-  test('a read only command writes nothing', () => {
-    expect(paths([['cat', 'notes.txt'], ['grep', 'x'], ['sed', '-n', '1,5p', 'notes.txt'], ['ls', '-la'], ['git', 'diff'], ['perl', '-ne', 'print', 'notes.txt'], ['wc', '<', 'notes.txt']])).toEqual([])
-    // The i in -Ilib is part of the include folder, not -i.
-    expect(paths([['perl', '-Ilib', 'script.pl', 'x.txt']])).toEqual([])
-  })
-  // Decided (docs/mods-design.md, #654): what the reader cannot name is not guessed at.
-  test('a path it cannot name, and a script, write nothing it can see', () => {
-    expect(paths([['echo', 'x', '>', '$OUT'], ['echo', 'y', '>', '*.txt'], ['cd', '$DIR'], ['echo', 'z', '>', 'rel.txt']])).toEqual([])
-    expect(paths([['python3', '-c', "open('notes.txt','a').write('x')"], ['bash', './update.sh']])).toEqual([])
-    // A redirect with nothing after it names no file.
-    expect(paths([['echo', 'x', '>']])).toEqual([])
-  })
-  // #674: rm takes a file away, the most destructive write, so it is named too.
-  test('rm and unlink name each file they remove', () => {
-    expect(writes([['rm', 'notes.txt', '/abs/b.txt']])).toEqual([
-      { path: '/repo/notes.txt', removes: true },
-      { path: '/abs/b.txt', removes: true },
-    ])
-    expect(writes([['rm', '-f', '--', '-odd.txt']])).toEqual([{ path: '/repo/-odd.txt', removes: true }])
-    expect(writes([['unlink', 'x.txt']])).toEqual([{ path: '/repo/x.txt', removes: true }])
-  })
-  test('rm -r names a folder and everything under it, in any spelling', () => {
-    for (const flag of ['-r', '-R', '-rf', '-fR', '--recursive']) {
-      expect(writes([['rm', flag, 'src/']])).toEqual([{ path: '/repo/src', removes: true, tree: true }])
-    }
-    expect(writes([['cd', 'sub'], ['rm', '-rf', '..']])).toEqual([{ path: '/repo', removes: true, tree: true }])
-  })
-  test('a path written and then removed keeps the removal (lessons review of #691)', () => {
-    expect(writes([['echo', 'x', '>', 'd'], ['rm', '-r', 'd']])).toEqual([{ path: '/repo/d', removes: true, tree: true }])
-    expect(writes([['rm', 'f'], ['rm', '-r', 'f']])).toEqual([{ path: '/repo/f', removes: true, tree: true }])
-  })
-  test('mv takes its sources away whole, a folder with everything under it (lessons review of #691)', () => {
-    expect(writes([['mv', 'src', '/elsewhere/']])).toEqual([
-      { path: '/elsewhere/src' },
+  test('a removal is judged as one, a folder with everything under it where the reader says so', () => {
+    expect(judgedWrites({ files: [], changes: [{ path: '/repo/x.txt', does: 'remove' }, { path: '/repo/src', does: 'remove', tree: true }] })).toEqual([
+      { path: '/repo/x.txt', removes: true },
       { path: '/repo/src', removes: true, tree: true },
     ])
   })
-  test('an rm of a glob or a variable is not guessed at (#654)', () => {
-    expect(paths([['rm', '*.txt'], ['rm', '-rf', '$DIR']])).toEqual([])
+  test('a path written and then removed keeps the removal (lessons review of #691)', () => {
+    expect(judgedWrites({ files: [{ path: '/repo/d' }], changes: [{ path: '/repo/d', does: 'remove', tree: true }] })).toEqual([{ path: '/repo/d', removes: true, tree: true }])
+  })
+  test('what the words cannot name is not guessed at (#654)', () => {
+    expect(judgedWrites({ files: [{ word: '$OUT' } as never], changes: [{ word: '*.txt', does: 'remove' } as never] })).toEqual([])
   })
 })
 
@@ -254,30 +198,5 @@ describe('the files a message to another session names', () => {
   })
   test('a message naming no file is none', () => {
     expect(wantedFiles('Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped.')).toBeUndefined()
-  })
-})
-
-describe('the git working tree a path sits in, asked of the disk', () => {
-  const disk = (gits: string[]) => {
-    const asked: string[] = []
-    return { asked, hasGit: async (dir: string) => (asked.push(dir), gits.includes(dir)) }
-  }
-  test('the nearest folder at or above the path holding a .git entry, nearest first', async () => {
-    const d = disk(['/Users/dan/Apps/other'])
-    expect(await workingTree('/Users/dan/Apps/other/src/a.ts', d.hasGit)).toBe('/Users/dan/Apps/other')
-    expect(d.asked).toEqual(['/Users/dan/Apps/other/src/a.ts', '/Users/dan/Apps/other/src', '/Users/dan/Apps/other'])
-  })
-  test('a folder that is itself a working tree, as rm -r of a checkout names it', async () => {
-    expect(await workingTree('/Users/dan/Apps/other', disk(['/Users/dan/Apps/other']).hasGit)).toBe('/Users/dan/Apps/other')
-  })
-  test('none, after asking every folder up to the root once', async () => {
-    const d = disk([])
-    expect(await workingTree('/Users/dan/Desktop/n.txt', d.hasGit)).toBeUndefined()
-    expect(d.asked).toEqual(['/Users/dan/Desktop/n.txt', '/Users/dan/Desktop', '/Users/dan', '/Users', '/'])
-  })
-  test('bounded however deep the path', async () => {
-    const d = disk([])
-    expect(await workingTree('/' + Array.from({ length: 200 }, (_, i) => `d${i}`).join('/'), d.hasGit)).toBeUndefined()
-    expect(d.asked.length).toBe(64)
   })
 })

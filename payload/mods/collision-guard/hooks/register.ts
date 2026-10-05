@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, shellWrites, wantedFiles, watchedGit, workingTree, type Rec, type ShellWrite, type Verdict } from './collide.ts'
+import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -116,14 +116,15 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
   return refuse($, toolUseId, reason, SAFE[v.verdict], note)
 }
 
-// The files a Bash call writes, as far as its words name them (collide.ts, shellWrites). A cp or mv
-// onto one existing folder lands inside it; a path the disk cannot answer for is taken as the file
-// itself, the reading that still judges a clash on that name.
-const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<ShellWrite[]> => {
+// The files a Bash call writes, as far as its words name them, read by mod-kit's one write reader
+// (#712) and judged as collide.ts's judgedWrites says. A cp or mv onto one existing folder lands
+// inside it; a path the disk cannot answer for is taken as the file itself, the reading that still
+// judges a clash on that name.
+const writtenFiles = async ($: EngineInterface, command: string): Promise<ShellWrite[]> => {
   const cwd = await $.session.cwd()
-  const home = await $.env.get('HOME').catch(() => undefined)
+  const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
   const out: ShellWrite[] = []
-  for (const w of shellWrites(cmds, cwd, home)) {
+  for (const w of judgedWrites(await $.modkit.writes({ command, cwd, home }))) {
     let isDir = false
     if (w.sources) isDir = (await $.fs.stat(w.path).catch(() => undefined))?.kind === 'dir'
     const { sources, ...write } = w
@@ -132,7 +133,7 @@ const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<Shell
     // landing inside it do not stand for that removal, so it is kept too (#700).
     if (isDir && sources && write.removes) found.push(write)
     // A file named twice is kept once, keeping a removal's flags whichever came first, as
-    // shellWrites does (lessons review of #691).
+    // judgedWrites does (lessons review of #691).
     for (const f of found) {
       const had = out.find(o => o.path === f.path)
       if (!had) out.push(f)
@@ -155,26 +156,22 @@ const recordRoot = async ($: EngineInterface, list: { open: Rec[]; selfId: strin
 // anything inside another git working tree (Dan, 2026-10-04, #700), so a session working in that
 // checkout is judged against it. Scratch outside its root is never recorded (#674): it would push
 // real edits out of the twenty the judge reads and raise checks between sessions sharing scratch.
-// Nor is a path in no checkout at all. The working tree is found on the disk by its .git entry
-// (collide.ts, workingTree), never by running git per path; each folder is looked at once per call,
-// and nothing is kept between calls, so a checkout cloned during the session counts at once.
+// Nor is a path in no checkout at all. The working tree is found on the disk by its .git entry,
+// never by running git per path, through mod-kit's one walk for it ($.modkit.workingTree, #712);
+// nothing is kept between calls, so a checkout cloned during the session counts at once. A path
+// whose checkout the disk cannot say (a folder it cannot read, or one deeper than the walk goes) is
+// recorded: noting it costs at most a judgment that comes back Proceed, where leaving it out would
+// hide a real clash from the other session (mod-kit refuses rather than guessing, lessons review of
+// #731; this guard had taken a failed look for no checkout).
 const recorder = async ($: EngineInterface, list: { open: Rec[]; selfId: string | null }) => {
   const root = await recordRoot($, list)
   const tmpdir = await $.env.get('TMPDIR').catch(() => undefined)
-  const looked = new Map<string, Promise<boolean>>()
-  const hasGit = (dir: string) => {
-    let found = looked.get(dir)
-    if (!found) {
-      found = $.fs
-        .stat(`${dir === '/' ? '' : dir}/.git`)
-        .then(s => s.kind === 'dir' || s.kind === 'file')
-        .catch(() => false)
-      looked.set(dir, found)
-    }
-    return found
-  }
-  return async (path: string): Promise<boolean> =>
-    insideRoot(path, root) || (!isScratch(path, tmpdir) && (await workingTree(path, hasGit)) !== undefined)
+  const inCheckout = (path: string): Promise<boolean> =>
+    $.modkit.workingTree({ path }).then(
+      tree => tree !== null,
+      () => true,
+    )
+  return async (path: string): Promise<boolean> => insideRoot(path, root) || (!isScratch(path, tmpdir) && (await inCheckout(path)))
 }
 
 const unreadableRefusal =($: EngineInterface, toolUseId: string, names: string[]) =>
@@ -225,7 +222,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   // Edit is, and noted as this session's own once it has run. An rm is judged the same way (#674),
   // and an rm -r or mv of a folder once, on every file another session edited inside it: one
   // judgment, one card or toast, and one message to each session naming its own files.
-  const written = await writtenFiles($, cmds)
+  const written = await writtenFiles($, command)
   if (!written.length) return undefined
   const list = await $.sessions.list()
   if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)

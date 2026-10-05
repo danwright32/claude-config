@@ -53,24 +53,36 @@ export type ModKit = {
    * bodies dropped, assignments, the reserved words leading a command (then, do, else, `{`, `!`) and
    * sudo, env, timeout, nice, xargs and the like looked past, each runner by its own options, a
    * shell's -c read as the commands it runs (alone or in a cluster, `bash -lc`, `zsh -ec`, `sh -ce`,
-   * for sh, bash, zsh, dash and ksh), a subshell's parentheses each a command of their own
-   * (`['(']`, `[')']`), while one inside a word (`$(`, `<(`) stays part of it. The one reader every
-   * mod uses (L613).
+   * for sh, bash, zsh, dash and ksh), and so is a shell's script fed on standard input (a heredoc, a
+   * here-string, or what echo, printf or cat pipes in, #712), env -S's string split into the command
+   * it runs, what a find -exec runs read after the find as a command of its own (#730), a subshell's
+   * parentheses each a command of their own (`['(']`, `[')']`), while one inside a word (`$(`, `<(`)
+   * stays part of it, a case's `case WORD in` and `esac` each a command, its patterns none, and an
+   * input redirect (`<file`, `<<EOF`, `<<<text`) a word of its own however it is spaced. The one
+   * reader every mod uses (L613).
    */
   commands: (input: { command: string }) => Promise<string[][]>
   /**
-   * The files a Bash call would put content into, read from the same simple commands, with `cwd`
-   * the folder it runs in and `home` the home folder: redirects, tee, cp, mv, ln, install, rsync
-   * and ditto's destinations (a copy into a folder lands under each source's name), sed, perl, ruby
-   * and gawk editing in place (every file), dd's of=, and curl and wget's files (an output file, a
-   * file saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or
-   * `-P`, and curl's cookie jar, dumped headers and trace, wget's log), each relative path resolved
-   * after any cd before it, and a variable the command set before it (`F=path; ... "$F"`, `export
-   * F=path`) read as its value where the reader can be sure of it (#743). And the writes its words
-   * do not name: a patch (git apply, git am, patch), an inline script that writes (python3 -c,
-   * node -e), a script fed on standard input, a download the server names (`curl -J`, `wget --content-disposition`), a recursive wget, or one of
-   * the addresses in a file (`wget -i`, the file in `inputs`). The one reader of what a command
-   * writes (L613); a file only touched, removed or changed in mode is not reported.
+   * The files a Bash call would change, read from the same commands `pipeline` gives, with `cwd`
+   * the folder it runs in and `home` the home folder. `files`, the files it puts content into:
+   * redirects (`>& file` too), tee, cp, mv, ln, install, rsync and ditto's destinations (a copy into
+   * a folder lands under each source's name), sed, perl, ruby and gawk editing in place (every file,
+   * marked `edits`), dd's of=, find's -fprint, and curl and wget's files (an output file, a file
+   * saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or `-P`,
+   * and curl's cookie jar, dumped headers and trace, wget's log; `wget --spider` saves none), each
+   * relative path resolved after any cd before it, a cd in a subshell ending with it, and a variable
+   * the command set before it (`F=path; ... "$F"`, `export F=path`) read as its value where the
+   * reader can be sure of it (#743). `changes`, the other changes it makes to files (#712): removed
+   * (rm, unlink, rmdir, a mv's source, find -delete, shred -u), stamped (touch), emptied (truncate,
+   * shred), made (mkdir) or changed in mode (chmod, chown, chgrp), `tree` when the whole folder is
+   * reached (rm -r, -R, a mv's source, find -delete). And `unnamed`, the writes its words do not
+   * name: a patch (git apply, git am, patch), a program the reader's judge finds writes files, runs a
+   * process or cannot be read (inline or fed on standard input, for every interpreter however it is
+   * versioned), a script fed on standard input from a file (the file in `inputs`) or from something
+   * that cannot be read, a command xargs gives its files to, a download the server names (`curl -J`,
+   * `wget --content-disposition`), a recursive wget, or one of the addresses in a file (`wget -i`,
+   * the file in `inputs`). The one reader of what a command changes (L613); a script file named as
+   * an operand is not guessed at.
    */
   writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
@@ -78,10 +90,19 @@ export type ModKit = {
   /**
    * The same commands as `commands`, each with `pipedFrom`, the words of the command whose output
    * a `|` (or `|&`) feeds into it, absent when nothing does. `;`, `&&`, `||`, `&` and a new line
-   * link no two commands, and every command in a subshell, an if, while, until, for or `{ }` group,
-   * or a shell's -c reads what feeds it; a piped group's output arrives as its closing word (`)`,
-   * `}`, `done`, `fi`). Only the reader can see which
-   * separator stood outside the quotes, so no mod works it out from the list (#724).
+   * link no two commands, and every command in a subshell, an if, while, until, for, case or `{ }`
+   * group, or a shell's script, reads what feeds it; a piped group's output arrives as its closing
+   * word (`)`, `}`, `done`, `fi`, `esac`). Only the reader can see which separator stood outside the
+   * quotes, so no mod works it out from the list (#724).
+   *
+   * Each command a shell or interpreter runs also carries what it runs (#712): `program`, the text
+   * of its inline code or of what its standard input gives it (`stdin`), or why that cannot be read
+   * (`unreadable`: fed by what curl pipes into it, a heredoc with no body, a group's output, or the
+   * rest of a script the shell reads); `script`, the file it runs instead, named as its operand or
+   * fed on standard input (`cat x.scpt | osascript`); `language`, the language of either; and
+   * `verdict`, what the program can do, judged per language (writes files, runs a process, or builds
+   * code at run time and cannot be read), absent when it only reads. `xargs` marks a command xargs
+   * runs, whose operands come from its input (#730).
    *
    * Each command also carries `heredocs`, the body of every heredoc that feeds it, absent when none
    * does (#698), for a reader that judges what a heredoc feeds (`python3 - <<'EOF'`, `bash <<'EOF'`),
@@ -156,9 +177,25 @@ export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; fra
 
 /**
  * One simple command, as `pipeline` reads it: its words, those of the command a `|` feeds it from,
- * and each heredoc feeding it, by its `<<` word's place.
+ * each heredoc feeding it, by its `<<` word's place, and for a shell or an interpreter what it runs.
  */
-export type ModKitCommand = { words: string[]; pipedFrom?: string[]; heredocs?: { word: number; body: string }[] }
+export type ModKitCommand = {
+  words: string[]
+  pipedFrom?: string[]
+  heredocs?: { word: number; body: string }[]
+  xargs?: true
+  language?: ModKitLanguage
+  program?: ModKitProgram
+  script?: { files: string[]; stdin?: true }
+  verdict?: ModKitCodeVerdict
+}
+
+/** The languages whose inline code the reader judges. */
+export type ModKitLanguage = 'python' | 'node' | 'ruby' | 'perl' | 'osascript' | 'awk' | 'sed'
+/** A command's program: its text (`stdin` when it came on standard input), or why it cannot be read. */
+export type ModKitProgram = { text: string; stdin?: true } | { unreadable: string }
+/** What a program can do that only reading does not, and the words that showed it. */
+export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
 
@@ -166,17 +203,32 @@ export type ModKitGit = { sub: string | undefined; args: string[]; dir: string |
  * One file a command writes: `word` as the command spells it, `path` the absolute path when the
  * words name one (absent for a path built from a variable other than HOME the command did not set
  * to a value the reader can be sure of, a command's output, a pattern, or a relative path after a
- * cd that cannot be followed), and a copy's `sources`. A `word` holding `$F` with a `path` is a
- * variable the command set, read as its value (#743).
+ * cd that cannot be followed), a copy's `sources`, `edits` for one edited in place, and
+ * `mayBeFolder` for a copy of one source onto one name, which lands inside it when it is an existing
+ * folder, as only the disk can say. A `word` holding `$F` with a `path` is a variable the command
+ * set, read as its value (#743).
  */
-export type ModKitWrite = { word: string; path?: string; sources?: string[] }
+export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true }
 
 /**
- * What a command writes: the files its words name, and the writes they do not (`what` names it, "a
- * patch" or "an inline python3 script"; `words` is the command; `inputs` the files to read to find
- * out, such as the patch file, absolute).
+ * One change a command makes to a file that puts no content in it: removed, stamped (touch),
+ * emptied (truncate, shred), made a folder (mkdir) or its mode or owner changed; `tree` when it
+ * reaches everything under a folder. `word` and `path` as in a write.
  */
-export type ModKitWrites = { files: ModKitWrite[]; unnamed: { what: string; words: string[]; inputs: string[] }[] }
+export type ModKitChange = { word: string; path?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true }
+
+/**
+ * What a command changes: the files its words name content goes into, the other changes it makes
+ * to files, and the writes its words do not name (`what` names it, "a patch" or "an inline python3
+ * script"; `words` is the command; `inputs` the files to read to find out, such as the patch file,
+ * absolute; `into` the folder a download lands in, where the words name one; `script` when it is a
+ * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs).
+ */
+export type ModKitWrites = {
+  files: ModKitWrite[]
+  changes: ModKitChange[]
+  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true }[]
+}
 
 /**
  * One answer to a question in the band. `button` is its id within the mod (its press arrives as

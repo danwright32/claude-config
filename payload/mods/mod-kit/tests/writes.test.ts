@@ -64,7 +64,9 @@ describe('writes: copying, moving and linking', () => {
     expect(paths('cp -t ~/other a.md')).toEqual([`${HOME}/other/a.md`])
   })
   test('a copy names its sources, so a reader can tell what was put there', () => {
-    expect(read('cp rules.md CLAUDE.md').files).toEqual([{ word: 'CLAUDE.md', path: `${CWD}/CLAUDE.md`, sources: [`${CWD}/rules.md`] }])
+    expect(read('cp rules.md CLAUDE.md').files).toEqual([{ word: 'CLAUDE.md', path: `${CWD}/CLAUDE.md`, sources: [`${CWD}/rules.md`], mayBeFolder: true }])
+    // Into a folder, each lands under its own name, so none may be a folder in its turn.
+    expect(read('cp a.md b.md ~/other/').files.map(f => f.mayBeFolder)).toEqual([undefined, undefined])
   })
   test('rsync writes its local destination, and a remote one is no file here', () => {
     expect(paths('rsync -av --exclude .git notes.md ~/.claude/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
@@ -137,6 +139,7 @@ describe('writes: downloads', () => {
   test('-J lets the server name the file, which the words cannot give, so it is a write they do not name', () => {
     expect(read('curl -J -O https://x.com/get?f=CLAUDE.md')).toEqual({
       files: [{ word: 'get', path: `${CWD}/get` }],
+      changes: [],
       unnamed: [{ what: 'a curl download the server names', words: ['curl', '-J', '-O', 'https://x.com/get?f=CLAUDE.md'], inputs: [] }],
     })
     expect(read('curl -OJ https://x.com/get').unnamed.map(u => u.what)).toEqual(['a curl download the server names'])
@@ -160,7 +163,7 @@ describe('writes: downloads', () => {
   test('a wget whose files the words cannot name is a write they do not name', () => {
     expect(read('wget --content-disposition https://x.com/get').unnamed.map(u => u.what)).toEqual(['a wget download the server names'])
     expect(read('wget -r https://x.com/docs/').unnamed.map(u => u.what)).toEqual(['a wget download of many files'])
-    expect(read('wget -i urls.txt')).toEqual({ files: [], unnamed: [{ what: 'a wget download of the addresses in a file', words: ['wget', '-i', 'urls.txt'], inputs: [`${CWD}/urls.txt`] }] })
+    expect(read('wget -i urls.txt')).toEqual({ files: [], changes: [], unnamed: [{ what: 'a wget download of the addresses in a file', words: ['wget', '-i', 'urls.txt'], inputs: [`${CWD}/urls.txt`] }] })
   })
 })
 
@@ -185,16 +188,22 @@ describe('writes: what the words do not name', () => {
   test('an inline script that only reads is not a write', () => {
     expect(read(`python3 -c "print(open('CLAUDE.md').read())"`).unnamed).toEqual([])
   })
-  test('a script fed on standard input cannot be read from its words, so it is named as such', () => {
+  // #712: the reader now reads a heredoc's body, so a script fed one is judged by what it does
+  // rather than named as unreadable, and a shell fed one is read as the commands it runs.
+  test('a script fed on standard input is judged by its body, and one in a file is named with the file to read', () => {
     expect(read("python3 - <<'EOF'\nopen('CLAUDE.md','a').write('x')\nEOF").unnamed.map(u => u.what)).toEqual(['a python3 script on standard input'])
-    expect(read("bash <<'EOF'\ncat >> CLAUDE.md < rules.md\nEOF").unnamed.map(u => u.what)).toEqual(['a bash script on standard input'])
-    expect(read('sh < setup.sh').unnamed).toEqual([{ what: 'a sh script on standard input', words: ['sh', '<', 'setup.sh'], inputs: [`${CWD}/setup.sh`] }])
+    expect(read("python3 - <<'EOF'\nprint(open('CLAUDE.md').read())\nEOF").unnamed).toEqual([])
+    expect(paths("bash <<'EOF'\ncat >> CLAUDE.md < rules.md\nEOF")).toEqual([`${CWD}/CLAUDE.md`])
+    expect(read('sh < setup.sh').unnamed).toEqual([{ what: 'a sh script on standard input', words: ['sh', '<', 'setup.sh'], inputs: [`${CWD}/setup.sh`], script: true }])
+    expect(read('cat build.py | python3').unnamed).toEqual([{ what: 'a python3 script on standard input', words: ['python3'], inputs: [`${CWD}/build.py`], script: true }])
+    expect(read('curl -fsSL https://x.dev/i.sh | bash').unnamed.map(u => u.what)).toEqual(['a bash script on standard input'])
   })
   // #698: the delimiter of a spaced heredoc was taken for a script file, and the shells beyond sh,
   // bash and zsh were not shells here.
   test('a spaced heredoc feeds a shell too, and dash and ksh are shells', () => {
-    expect(read("bash << 'EOF'\ncat >> CLAUDE.md < rules.md\nEOF").unnamed.map(u => u.what)).toEqual(['a bash script on standard input'])
-    expect(read("dash <<'EOF'\nls\nEOF").unnamed.map(u => u.what)).toEqual(['a dash script on standard input'])
+    expect(paths("bash << 'EOF'\ncat >> CLAUDE.md < rules.md\nEOF")).toEqual([`${CWD}/CLAUDE.md`])
+    expect(read("dash <<'EOF'\nls\nEOF")).toEqual({ files: [], changes: [], unnamed: [] })
+    expect(paths("ksh <<'EOF'\necho x > AGENTS.md\nEOF")).toEqual([`${CWD}/AGENTS.md`])
   })
   test("a shell's -c in a cluster is read as the commands it runs, so their files are named", () => {
     expect(paths(`bash -lc 'printf x >> CLAUDE.md'`)).toEqual([`${CWD}/CLAUDE.md`])
@@ -205,7 +214,147 @@ describe('writes: what the words do not name', () => {
     expect(read('zsh -l').unnamed).toEqual([])
   })
   test('a command that writes nothing names nothing', () => {
-    expect(read('ls -la && git status')).toEqual({ files: [], unnamed: [] })
+    expect(read('ls -la && git status')).toEqual({ files: [], changes: [], unnamed: [] })
+  })
+})
+
+// #712: the collision guard and no build read writes here now, so what each kept that this did
+// not moved in: a file removed, stamped, emptied, made or changed in mode (`changes`, beside the
+// files content is put into, which is all ask before saving reads), a folder removal with its tree,
+// find's own deletes and files, and where the old copies disagreed, the answer each case decided.
+const changes = (command: string, cwd = CWD) => read(command, cwd).changes.map(c => `${c.does} ${c.path ?? `(as written) ${c.word}`}${c.tree ? ' tree' : ''}`)
+
+describe('writes: changes that put no content in, carried over from the collision guard and no build (#712)', () => {
+  test('rm, unlink and rmdir remove each file they name', () => {
+    expect(changes('rm notes.txt /abs/b.txt')).toEqual([`remove ${CWD}/notes.txt`, 'remove /abs/b.txt'])
+    expect(changes('rm -f -- -odd.txt')).toEqual([`remove ${CWD}/-odd.txt`])
+    expect(changes('unlink x.txt; rmdir old')).toEqual([`remove ${CWD}/x.txt`, `remove ${CWD}/old`])
+  })
+  test('rm -r removes a folder and everything under it, in any spelling', () => {
+    for (const flag of ['-r', '-R', '-rf', '-fR', '--recursive']) expect(changes(`rm ${flag} src/`)).toEqual([`remove ${CWD}/src tree`])
+    expect(changes('cd sub; rm -rf ..')).toEqual([`remove ${CWD} tree`])
+  })
+  test('mv takes its sources away whole, beside the destination it writes', () => {
+    expect(read('mv src /elsewhere/')).toEqual({
+      files: [{ word: '/elsewhere/src', path: '/elsewhere/src', sources: [`${CWD}/src`] }],
+      changes: [{ word: 'src', path: `${CWD}/src`, does: 'remove', tree: true }],
+      unnamed: [],
+    })
+  })
+  test('a path written and then removed is reported both ways, so a reader can keep the removal', () => {
+    expect(paths('echo x > d; rm -r d')).toEqual([`${CWD}/d`])
+    expect(changes('echo x > d; rm -r d')).toEqual([`remove ${CWD}/d tree`])
+  })
+  test('a removal of a glob or a variable is given as written, never guessed at', () => {
+    expect(changes('rm *.txt; rm -rf $DIR')).toEqual(['remove (as written) *.txt', 'remove (as written) $DIR tree'])
+  })
+  test('touch stamps, truncate and shred empty, mkdir makes a folder, chmod, chown and chgrp change a mode', () => {
+    expect(changes('touch -t 202601010000 new.md other.md')).toEqual([`touch ${CWD}/new.md`, `touch ${CWD}/other.md`])
+    expect(changes('truncate -s 0 log.txt; shred -u secret.txt')).toEqual([`truncate ${CWD}/log.txt`, `truncate ${CWD}/secret.txt`, `remove ${CWD}/secret.txt`])
+    expect(changes('mkdir -p a/b; mkdir -m 755 d')).toEqual([`folder ${CWD}/a/b`, `folder ${CWD}/d`])
+    expect(changes('chmod +x run.sh; chmod -R 755 dir; chown dan:staff a b; chgrp -R staff g; chmod --reference=ref.txt c')).toEqual([
+      `mode ${CWD}/run.sh`,
+      `mode ${CWD}/dir tree`,
+      `mode ${CWD}/a`,
+      `mode ${CWD}/b`,
+      `mode ${CWD}/g tree`,
+      `mode ${CWD}/c`,
+    ])
+  })
+  test('find -delete removes what it finds under each folder it starts from, and -fprint writes a file', () => {
+    expect(changes(`find build -name '*.o' -delete`)).toEqual([`remove ${CWD}/build tree`])
+    expect(changes('find -delete')).toEqual([`remove ${CWD} tree`])
+    expect(paths('find src -fprint list.txt')).toEqual([`${CWD}/list.txt`])
+    // What -exec runs is read as a command of its own, the folder standing for {}.
+    expect(changes(`find src -name '*.bak' -exec rm {} \\;`)).toEqual([`remove ${CWD}/src`])
+  })
+  test('a file edited in place is marked as edited, beside files written whole', () => {
+    expect(read(`sed -i 's/a/b/' a.md; echo x > b.md`).files).toEqual([
+      { word: 'a.md', path: `${CWD}/a.md`, edits: true },
+      { word: 'b.md', path: `${CWD}/b.md` },
+    ])
+  })
+})
+
+// The collision guard's own reader's cases (its tests/collide.test.ts until #712), each still read.
+describe("writes: the collision guard's cases, carried over (#712)", () => {
+  test('every output redirect, and a file named twice once', () => {
+    expect(paths('echo a > a.txt; make 2> err.log; ls &> all.log; ls &>> more.log; echo >| c.txt; echo b >> a.txt')).toEqual(
+      ['a.txt', 'err.log', 'all.log', 'more.log', 'c.txt'].map(f => `${CWD}/${f}`),
+    )
+  })
+  test('sed and perl in every in place spelling', () => {
+    expect(paths(`sed -i.bak -e 's/a/b/' -e 's/c/d/' x.txt; sed --in-place 's/a/b/' z.txt; perl -i.bak -pe 's/a/b/' w.txt`)).toEqual([`${CWD}/x.txt`, `${CWD}/z.txt`, `${CWD}/w.txt`])
+  })
+  test('nested subshells each end their own cd', () => {
+    expect(paths('(cd a; (cd b); echo > x); echo > y')).toEqual([`${CWD}/a/x`, `${CWD}/y`])
+  })
+  test('a read only command writes nothing', () => {
+    expect(read(`cat notes.txt | grep x; sed -n '1,5p' notes.txt; ls -la; git diff; perl -ne 'print' notes.txt; wc < notes.txt; perl -Ilib script.pl x.txt`)).toEqual({ files: [], changes: [], unnamed: [] })
+  })
+})
+
+describe('writes: where the old copies disagreed (#712)', () => {
+  // The collision guard read `>& file` as a write; this reader stepped over it as a descriptor copy.
+  test('>& with a file after it writes the file; with a number or - it copies a descriptor', () => {
+    expect(paths('make >& build.log')).toEqual([`${CWD}/build.log`])
+    expect(paths('make >&build.log')).toEqual([`${CWD}/build.log`])
+    expect(paths('echo x >&2; make 2>& 1; ls >&-')).toEqual([])
+  })
+  // No build knew wget --spider downloads nothing; this reader named the file it would have saved.
+  test('wget --spider only checks the address, and saves nothing', () => {
+    expect(paths('wget --spider https://example.com/CLAUDE.md')).toEqual([])
+    expect(paths('wget --spider -o check.log https://example.com/a')).toEqual([`${CWD}/check.log`])
+  })
+  // A download whose files the words cannot name says where it lands when the words do.
+  test('a download the words cannot name says the folder it lands in, when they name one', () => {
+    expect(read('curl -J -O --output-dir /tmp/x https://x.com/get').unnamed.map(u => u.into)).toEqual(['/tmp/x'])
+    expect(read('wget -r -P /tmp/y https://x.com/docs/').unnamed.map(u => u.into)).toEqual(['/tmp/y'])
+    expect(read('wget -r https://x.com/docs/').unnamed.map(u => u.into)).toEqual([undefined])
+  })
+  test("a case clause's commands are read like any other, and its pattern's ) is no subshell", () => {
+    expect(paths('case $x in a) echo y > f;; esac; echo z > g')).toEqual([`${CWD}/f`, `${CWD}/g`])
+    expect(paths('(cd sub; case $x in a) echo y > f;; esac); echo z > g')).toEqual([`${CWD}/sub/f`, `${CWD}/g`])
+  })
+})
+
+describe('writes: what a program can do, judged by mod-kit\'s per language judge (#712)', () => {
+  // INLINE_WRITE, a list of write idioms, and an exact list of interpreter names, gave way to the
+  // judge no build built (code.ts): what writes, runs a process or cannot be read is a write the
+  // words do not name, for every interpreter however it is versioned.
+  test('inline code that writes, runs a process, or builds code at run time is a write the words do not name', () => {
+    expect(read(`python3.12 -c "open('a','w').write('x')"`).unnamed.map(u => u.what)).toEqual(['an inline python3.12 script'])
+    expect(read(`python3 -c "import subprocess; subprocess.run(['ls'])"`).unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+    expect(read(`python3 -c "eval(input())"`).unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+    expect(read(`awk '{ print > "out.txt" }' in.txt`).unnamed.map(u => u.what)).toEqual(['an inline awk script'])
+    // #712 from #726: open of a path that is itself a call, json.dump to an opened file.
+    expect(read(`python3 -c "open(os.path.expanduser('~/.claude/CLAUDE.md'), 'a').write('x')"`).unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+    expect(read(`python3 -c "import json; json.dump({}, open('CLAUDE.md', 'w'))"`).unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+    expect(read(`ruby -e 'File.open("CLAUDE.md", "w") { |f| f.puts 1 }'`).unnamed.map(u => u.what)).toEqual(['an inline ruby script'])
+    expect(read(`ruby -e 'IO.write("CLAUDE.md", "x")'`).unnamed.map(u => u.what)).toEqual(['an inline ruby script'])
+  })
+  test('inline code that only reads writes nothing', () => {
+    expect(read(`python3 -c "print(open('CLAUDE.md').read())"`).unnamed).toEqual([])
+    expect(read(`node -e "console.log(require('fs').readFileSync('a','utf8'))"`).unnamed).toEqual([])
+    expect(read(`awk '{print $1}' in.txt`).unnamed).toEqual([])
+  })
+  // #730: a heredoc or here-string feeding a shell's -c feeds the commands it runs.
+  test("a heredoc feeding a shell's -c is read as the program of the command there", () => {
+    expect(read(`bash -c 'python3' <<'EOF'\nopen('a','w')\nEOF`).unnamed.map(u => u.what)).toEqual(['a python3 script on standard input'])
+  })
+})
+
+describe('writes: a command xargs runs (#730)', () => {
+  // xargs gives the command after it its files from its own input, so no word names them.
+  test('a command that writes or changes files, given its files by xargs, is a write the words do not name', () => {
+    expect(read('ls | xargs rm').unnamed).toEqual([{ what: 'rm given its files by xargs', words: ['rm'], inputs: [] }])
+    expect(read(`find . -name '*.md' | xargs sed -i 's/a/b/'`).unnamed.map(u => u.what)).toEqual(['sed given its files by xargs'])
+    expect(read('find . -print0 | xargs -0 -I {} cp {} /tmp/out/').unnamed.map(u => u.what)).toEqual(['cp given its files by xargs'])
+    expect(read(`ls | xargs sh -c 'rm "$@"' _`).unnamed.map(u => u.what)).toEqual(['rm given its files by xargs'])
+  })
+  test('one that only reads is nothing', () => {
+    expect(read('ls | xargs cat').unnamed).toEqual([])
+    expect(read(`ls | xargs sed -n '1p'`).unnamed).toEqual([])
   })
 })
 

@@ -84,10 +84,13 @@ request in it.
 A Bash command that writes a file is judged and recorded the same way an Edit is: the same cards,
 toasts and messages, with no surface of its own. The files come from mod-kit's command reader
 (`$.modkit.commands`), which now gives an output redirect (`>`, `>>`, `>|`, `2>`, `&>`, `2>&1`) as
-its own word however it is spaced; the collision guard reads which files the words name
-(`hooks/collide.ts`, `shellWrites`): redirect targets, `tee`'s files, `sed -i` and `perl -i`'s
-files, `touch`'s files, and the destination of `cp` and `mv` (a file inside it when it is a
-folder), plus `mv`'s sources, which it takes away. Paths are made absolute against the session's
+its own word however it is spaced. Since #712 the collision guard reads which files a command
+writes through mod-kit's one write reader (`$.modkit.writes`, below), as `hooks/collide.ts`'s
+`judgedWrites` judges them: every file content goes into (redirect targets, `tee`'s files, `sed -i`
+and `perl -i`'s files, the destination of `cp` and `mv`, a file inside it when it is a folder, and
+every other write the shared reader names), stamped (`touch`) or emptied (`truncate`), as an edit;
+and every file removed, `mv`'s sources among them, as a removal. A folder made or a mode changed
+touches no other session's work and is not judged. Paths are made absolute against the session's
 folder, following a `cd` earlier in the same command. The reader gives a subshell's parentheses as
 commands of their own (#700), so in `(cd sub && printf x >> notes.txt)` the write is
 `sub/notes.txt`, and a `cd` made inside a subshell ends with it; a parenthesis inside a word (`$(`,
@@ -110,12 +113,31 @@ mod-kit now carries one reader of which files a command writes, `$.modkit.writes
 from `shellWrites` and widened to the routes ask before saving and no build had each missed: `ln`,
 `install`, `rsync`, `ditto`, `dd`, `curl -o`, `wget -O`, `ruby` and `gawk` editing in place, every
 file of a `sed -i`, and the writes the words do not name (a patch, an inline script, a script on
-standard input) reported as such rather than guessed at. Ask before saving reads it; the collision
-guard and no build move onto it in #712, and until then `tools/check-mod-shared-parts.sh` names
-them as known exceptions on every run. Since #743 it reads a variable the command set before a
-write as its value (`F=path; ... "$F"`), asking the shared reader for the assignments it otherwise
-drops (`commands(cmd, { assignments: true })`, off for every other caller); what it cannot be sure
-of stays as written (Ask before saving, below).
+standard input) reported as such rather than guessed at. Ask before saving reads it, and since
+#712 so does the collision guard; no build moves onto it in #712's second part, and until then
+`tools/check-mod-shared-parts.sh` names it as a known exception on every run. Since #743 it reads a variable the command set before a write as its value
+(`F=path; ... "$F"`), asking the shared reader for the assignments it otherwise drops
+(`pipeline(cmd, { assignments: true })`, through `commandWrites`, off for every other caller); what
+it cannot be sure of stays as written (Ask before saving, below).
+
+What #712 brought into it, from the two copies it replaced. Beside `files`, the files content goes
+into, it reports `changes`: a file removed (`rm`, `unlink`, `rmdir`, a `mv`'s source, `find
+-delete`, `shred -u`), stamped (`touch`), emptied (`truncate`, `shred`), made (`mkdir`) or changed
+in mode (`chmod`, `chown`, `chgrp`), with `tree` where the whole folder is reached (`rm -r`, `-R`, a
+`mv`'s source, `find -delete`); ask before saving reads only `files`, so a removal is not taken for a
+save. A file edited in place is marked `edits`, a copy of one source onto one name `mayBeFolder` (it
+lands inside the name when that is a folder, which only the disk can say). Where the copies
+disagreed, each case was decided and tested: `>& file` writes the file (the collision guard's
+reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
+-delete` removes what it finds (no build's), and a download whose files no word names says the
+folder it lands in (`into`) when the words name one. Inline code is judged by the per language
+judge no build built (below), copied into mod-kit (`hooks/code.ts`, with the option reader in
+`hooks/program.ts`; no build reads them there from #712's second part), in place of the write reader's own list of write idioms and of interpreter
+names, so a program that writes, runs a process or cannot be read is a write the words do not name,
+for `python3.12` or `/usr/local/bin/python3.11` as for `python3`; a script file fed on standard
+input (`sh < setup.sh`, `cat build.py | python3`) is one too, marked `script`, its files to read in
+`inputs`. A file command xargs gives its files to (`ls | xargs rm`) is a write the words do not
+name (#730).
 
 Since #698 and #726 the shared reader reads a shell's `-c` in a cluster too (`bash -lc`, `zsh -ec`,
 `sh -ce`, for sh, bash, zsh, dash and ksh: the script is the first word after the options, `-o` and
@@ -126,7 +148,19 @@ saves under the address's own name (curl takes the query and fragment off, as cu
 keeps the query, as GNU wget documents), into `--output-dir` or `-P`, and reports a name the server
 gives, a recursive wget and `wget -i` as writes the words do not name. The walk up for a checkout's
 `.git` entry described below is mod-kit's too now (`$.modkit.workingTree`), which ask before saving
-reads; the collision guard keeps its own copy, a known exception until #712.
+reads, and since #712 the collision guard as well.
+
+Since #712 and #730 the reader also reads what each shell and interpreter runs, so every mod reads
+it once: each command `$.modkit.pipeline` gives carries its `program` (inline code, or what its
+standard input gives it: a heredoc's body, a here-string, text `echo` or `printf` pipes in, or a
+heredoc piped in through `cat`), the `script` file it runs instead (an operand, a file redirected or
+piped in through `cat`), its `language` and the `verdict` of the per language judge. A shell whose
+script it can read is read as the commands it runs, whether the script came by `-c` or on standard
+input (`bash <<'EOF'`, `cat <<'EOF' | sh`), and a heredoc or here-string feeding a `-c` feeds the
+commands it runs. It reads a `case`'s clauses without taking a pattern's `)` for a subshell's close,
+`env -S`'s string as the command it runs, what `find -exec` runs past any wrapper in front of it,
+an input redirect (`cat<<EOF`, `cmd<file`) as a word of its own however it is spaced, and marks a
+command xargs runs (`xargs`), since its operands come from its input.
 
 ### rm, and scratch kept out of the record (#674), decided 2026-10-04
 
@@ -165,8 +199,11 @@ its own root (its repository, or its own folder when it works outside one: the r
 else its `cwd`), and since #700 (Dan, 2026-10-04) any path inside another git checkout, so a
 session working in that checkout is judged against it. A checkout is found on the disk, never by
 running git: the nearest folder at or above the path holding a `.git` entry (a folder, or the file
-a linked worktree has), looked at once per folder per call, at most 64 folders up, and nothing kept
-between calls, so a repository cloned during the session counts at once. Scratch is left out
+a linked worktree has), through mod-kit's one walk for it (`$.modkit.workingTree`, since #712), at
+most 64 folders up, and nothing kept between calls, so a repository cloned during the session counts
+at once. A path whose checkout the disk cannot say (a folder it cannot read, or one deeper than the
+walk goes) is recorded, since mod-kit refuses rather than guesses: noting it costs at most a judgment
+that comes back Proceed, where the guard's own walk had taken a failed look for no checkout. Scratch is left out
 unless it lies inside the session's own root: `/tmp`, `/private/tmp` (the scratchpad lives there),
 `/var/folders` and wherever `$TMPDIR` points, a checkout cloned into scratch included, so it cannot
 push real edits out of the twenty the judge reads or raise checks between sessions that share

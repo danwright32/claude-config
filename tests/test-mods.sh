@@ -159,7 +159,7 @@ mkmodsrc(){   # $1 = mods dir  $2 = mod name  $3 = the hooks module's source
   printf '%s\n' "$3" > "$1/$2/hooks/register.ts"
 }
 mkmodsrc "$M9" clean-mod "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
-mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'; if (name === 'tee') add(f); const hasGit = dir => built.fs.exists(\`\${dir}/.git\`)"
+mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'; if (name === 'tee') add(f); const hasGit = dir => built.fs.exists(\`\${dir}/.git\`); const P = /\\bchild_process\\b/"
 # A mod that sends once and reports a refusal is what every sender looks like after #688, so it passes.
 # A pane drawn its own way (the goals pane: a live list read at each draw, not a card) is not a copy.
 mkmodsrc "$M9" clean-live-pane "on('ui.render', { component: 'Pane', requestId: 'goals' }, (\$, e) => <Text dimColor>{row.sentence}</Text>)"
@@ -172,22 +172,60 @@ mkmodsrc "$M9" clean-comment "// mod-kit alone hooks 'AbovePrompt' and draws eac
  * its \"ToolResult\" row is the boxed card
  */
 export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
-# The two mods still holding their own write reader until #712 moves them are named as exceptions,
-# on every run, rather than failing it or passing in silence (L129, L523).
-mkmodsrc "$M9" collision-guard "switch (name) { case 'tee': add(f) }
-const hasGit = dir => \$.fs.stat(\`\${dir === '/' ? '' : dir}/.git\`)"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "mod-kit itself may hold the shared parts, and a clean mod passes" ok \
   || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
-case "$out" in *"6 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"5 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 case "$out" in *clean-comment*) check "a comment naming the band or a result row is not taken for a copy" "$out" ;; *) check "a comment naming the band or a result row is not taken for a copy" ok ;; esac
-printf '%s\n' "$out" | grep 'collision-guard' | grep -q '#712' \
-  && check "a known exception to the write reader is named on every run, with the issue that ends it" ok \
-  || check "a known exception to the write reader is named on every run, with the issue that ends it" "$out"
-# #726: the working tree a path sits in is mod-kit's now; the collision guard's own walk moves in #712.
-printf '%s\n' "$out" | grep 'collision-guard keeps its own working-tree' | grep -q '#712 moves it onto \$.modkit.workingTree' \
-  && check "the collision guard's own working tree walk is a known exception until #712" ok \
-  || check "the collision guard's own working tree walk is a known exception until #712" "$out"
+# #712 moved the collision guard's write reader and walk for a checkout onto mod-kit, so the
+# collision guard keeping a copy now fails the run like any other mod, never named as an exception
+# again (L373: the exception's premise is spent). No build's readers (scope-modes) stay a known
+# exception until #712's second part moves them, named on every run with the issue that ends it.
+M9X="$TMPROOT/m9x"
+mkmodsrc "$M9X" collision-guard "switch (name) { case 'tee': add(f) }
+const hasGit = dir => \$.fs.stat(\`\${dir === '/' ? '' : dir}/.git\`)"
+mkmodsrc "$M9X" scope-modes "const ALL_ARGS = new Set(['mv', 'rm', 'tee'])
+const PROCESS = /\\bsubprocess\\b/"
+mkmodsrc "$M9X" own-judge "const PROCESS = /\\bchild_process\\b/"
+out="$(bash "$SHARED" "$M9X" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "after #712 the collision guard keeping its own reader fails the run" ok \
+  || check "after #712 the collision guard keeping its own reader fails the run" "exit=$code out=$out"
+for want in 'collision-guard keeps its own write-reader at' 'collision-guard keeps its own working-tree at' 'own-judge keeps its own program-reader at'; do
+  case "$out" in *"$want"*) check "and names: $want" ok ;; *) check "and names: $want" "$out" ;; esac
+done
+case "$out" in *'collision-guard keeps its own write-reader, a known exception'*) check "and the collision guard is no known exception" "$out" ;; *) check "and the collision guard is no known exception" ok ;; esac
+for part in write-reader program-reader; do
+  printf '%s\n' "$out" | grep "scope-modes keeps its own $part, a known exception until #712" | grep -q 'moves it onto' \
+    && check "no build's $part is a known exception until #712's second part" ok || check "no build's $part is a known exception until #712's second part" "$out"
+done
+printf '%s\n' "$out" | grep 'own-judge keeps its own program-reader' | grep -q 'modkit.pipeline(' \
+  && check "and points a mod judging code its own way at what modkit.pipeline gives" ok || check "and points a mod judging code its own way at what modkit.pipeline gives" "$out"
+# #712, #730: a mod's tests may read with mod-kit's own readers, through a copy under tests/mod-kit
+# (a test cannot import another mod's files), held byte for byte to mod-kit's (L422). A copy that
+# differs fails, naming the cp that brings it back; running that cp passes (L406); a copy of a file
+# mod-kit does not have fails too.
+M9C="$TMPROOT/m9c"
+mkmodsrc "$M9C" mod-kit "export const reader = 1"
+mkdir -p "$M9C/mod-kit/types"; printf 'export type T = 1\n' > "$M9C/mod-kit/types/index.d.ts"
+mkmodsrc "$M9C" reads-real "export const register = () => {}"
+mkdir -p "$M9C/reads-real/tests/mod-kit/hooks" "$M9C/reads-real/tests/mod-kit/types"
+cp "$M9C/mod-kit/hooks/register.ts" "$M9C/reads-real/tests/mod-kit/hooks/register.ts"
+cp "$M9C/mod-kit/types/index.d.ts" "$M9C/reads-real/tests/mod-kit/types/index.d.ts"
+out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a mod's tests reading with a copy of mod-kit's own reader pass while it matches" ok \
+  || check "a mod's tests reading with a copy of mod-kit's own reader pass while it matches" "exit=$code out=$out"
+printf 'export const reader = 2\n' > "$M9C/mod-kit/hooks/register.ts"
+out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a copy that no longer matches mod-kit's fails the run" ok || check "a copy that no longer matches mod-kit's fails the run" "exit=$code out=$out"
+remedy="$(printf '%s\n' "$out" | grep "reads-real's tests/mod-kit/hooks/register.ts differs" | sed 's/.*: \(cp .*\)$/\1/')"
+case "$remedy" in cp*) check "and names the cp that brings it back" ok ;; *) check "and names the cp that brings it back" "$out" ;; esac
+[ -n "$remedy" ] && eval "$remedy"
+out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "and running that cp passes the run again" ok || check "and running that cp passes the run again" "exit=$code out=$out"
+printf 'x\n' > "$M9C/reads-real/tests/mod-kit/hooks/gone.ts"
+out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q "reads-real's tests/mod-kit/hooks/gone.ts copies no file of mod-kit's" \
+  && check "a copy of a file mod-kit does not have fails the run, named" ok || check "a copy of a file mod-kit does not have fails the run, named" "exit=$code out=$out"
 # #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
 # rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
 # filter however it is spelled, so each form a mod could write is caught, with the remedy for it.

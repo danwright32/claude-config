@@ -3,15 +3,14 @@ import type { On, Register } from 'claude-code'
 
 // Stand-ins for the two mods this one depends on. An inline plugin cannot reach this file's
 // variables, so the registry stand-in asks the world below for the sessions (a process.run the
-// world answers) and every write it or the kit is handed comes back as a transcript line.
+// world answers) and every write it or the kit is handed comes back as a transcript line. mod-kit's
+// readers answer from the table below (`__modkit`), each answer measured from mod-kit's own reader
+// for the request these tests make (#712, L48), as ask before saving's world holds one; mod-kit's
+// own tests pin the reader. Its walk for a checkout asks the world's disk for each folder's .git
+// entry, as mod-kit's does.
 const deps: { name: string; register: Register } = {
   name: 'deps',
   register: on => {
-    const read = (cmd: string): string[][] =>
-      cmd
-        .split(/&&|;|\n/)
-        .map(part => [...part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)].map(m => m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2')))
-        .filter(w => w.length > 0)
     // mod-kit's retry of a mod's refused send (its hooks/send.ts), standing in: once more when
     // refused, never after a throw, the reason tidied. mod-kit's own tests prove the real one.
     on('session.send', async ($, e, next) => {
@@ -30,20 +29,29 @@ const deps: { name: string; register: Register } = {
     })
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
+      const kit = async (method: string, input: unknown) => {
+        const r = await built.process.run(['__modkit', method, JSON.stringify(input)])
+        if (r.exitCode !== 0) throw new Error(r.stderr)
+        return r.stdout === '' ? undefined : JSON.parse(r.stdout)
+      }
       return {
         ...built,
         modkit: {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
-          commands: async ({ command }: { command: string }) => read(command),
-          git: async ({ words }: { words: string[] }) => {
-            if ((words[0] ?? '').split('/').pop() !== 'git') return undefined
-            const rest = words.slice(1)
-            let dir: string | undefined
-            while (rest[0] === '-C') {
-              dir = rest[1]
-              rest.splice(0, 2)
+          commands: async (input: { command: string }) => kit('commands', input),
+          writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
+          git: async (input: { words: string[] }) => kit('git', input),
+          // A folder with no .git entry the world names is none; one the world cannot read refuses.
+          workingTree: async ({ path }: { path: string }) => {
+            let dir = path.replace(/\/+$/, '') || '/'
+            for (let looked = 0; looked < 64; looked++) {
+              const s = (await built.fs.stat(`${dir === '/' ? '' : dir}/.git`).catch(() => undefined)) as { kind?: string } | undefined
+              if (s?.kind === 'unreadable') throw new Error(`the disk cannot read ${dir}`)
+              if (s && (s.kind === 'dir' || s.kind === 'file')) return dir
+              if (dir === '/') return null
+              dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
             }
-            return { sub: rest[0], args: rest.slice(1), dir }
+            throw new Error(`could not tell whether ${path} is in a checkout`)
           },
         },
         sessions: {
@@ -71,13 +79,128 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+// What mod-kit's readers give for each request these tests make (commands, writes and git), each
+// measured from the reader itself (#712).
+const KIT = new Map<string, unknown>([
+  ["commands {\"command\":\"git checkout main\"}", [["git","checkout","main"]]],
+  ["git {\"words\":[\"git\",\"checkout\",\"main\"]}", {"sub":"checkout","args":["main"]}],
+  ["writes {\"command\":\"git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git -C /other reset --hard origin/main\"}", [["git","-C","/other","reset","--hard","origin/main"]]],
+  ["git {\"words\":[\"git\",\"-C\",\"/other\",\"reset\",\"--hard\",\"origin/main\"]}", {"sub":"reset","args":["--hard","origin/main"],"dir":"/other"}],
+  ["writes {\"command\":\"git -C /other reset --hard origin/main\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git status\"}", [["git","status"]]],
+  ["git {\"words\":[\"git\",\"status\"]}", {"sub":"status","args":[]}],
+  ["writes {\"command\":\"git status\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"printf 'one more line\\\\n' >> notes.txt\"}", [["printf","one more line\\n",">>","notes.txt"]]],
+  ["git {\"words\":[\"printf\",\"one more line\\\\n\",\">>\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"printf 'one more line\\\\n' >> notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo done >> notes.txt\"}", [["echo","done",">>","notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"done\",\">>\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"echo done >> notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"printf x >> notes.txt; false\"}", [["printf","x",">>","notes.txt"],["false"]]],
+  ["git {\"words\":[\"printf\",\"x\",\">>\",\"notes.txt\"]}", null],
+  ["git {\"words\":[\"false\"]}", null],
+  ["writes {\"command\":\"printf x >> notes.txt; false\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo x >> notes.txt\"}", [["echo","x",">>","notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">>\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"echo x >> notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"sed -i \\\"\\\" s/a/b/ notes.txt\"}", [["sed","-i","","s/a/b/","notes.txt"]]],
+  ["git {\"words\":[\"sed\",\"-i\",\"\",\"s/a/b/\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"sed -i \\\"\\\" s/a/b/ notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt","edits":true}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cat notes.txt\"}", [["cat","notes.txt"]]],
+  ["git {\"words\":[\"cat\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"cat notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"python3 -c \\\"open('notes.txt','a').write('x')\\\"\"}", [["python3","-c","open('notes.txt','a').write('x')"]]],
+  ["git {\"words\":[\"python3\",\"-c\",\"open('notes.txt','a').write('x')\"]}", null],
+  ["writes {\"command\":\"python3 -c \\\"open('notes.txt','a').write('x')\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[{"what":"an inline python3 script","words":["python3","-c","open('notes.txt','a').write('x')"],"inputs":[]}]}],
+  ["commands {\"command\":\"cp /tmp/notes.txt docs\"}", [["cp","/tmp/notes.txt","docs"]]],
+  ["git {\"words\":[\"cp\",\"/tmp/notes.txt\",\"docs\"]}", null],
+  ["writes {\"command\":\"cp /tmp/notes.txt docs\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"docs","path":"/repo/docs","sources":["/tmp/notes.txt"],"mayBeFolder":true}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cp /tmp/x.txt notes.txt\"}", [["cp","/tmp/x.txt","notes.txt"]]],
+  ["git {\"words\":[\"cp\",\"/tmp/x.txt\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"cp /tmp/x.txt notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt","sources":["/tmp/x.txt"],"mayBeFolder":true}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo x > notes.txt\"}", [["echo","x",">","notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"echo x > notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"rm notes.txt\"}", [["rm","notes.txt"]]],
+  ["git {\"words\":[\"rm\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"rm notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"notes.txt","path":"/repo/notes.txt","does":"remove"}],"unnamed":[]}],
+  ["commands {\"command\":\"unlink notes.txt\"}", [["unlink","notes.txt"]]],
+  ["git {\"words\":[\"unlink\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"unlink notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"notes.txt","path":"/repo/notes.txt","does":"remove"}],"unnamed":[]}],
+  ["commands {\"command\":\"rm -f old.txt\"}", [["rm","-f","old.txt"]]],
+  ["git {\"words\":[\"rm\",\"-f\",\"old.txt\"]}", null],
+  ["writes {\"command\":\"rm -f old.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"old.txt","path":"/repo/old.txt","does":"remove"}],"unnamed":[]}],
+  ["commands {\"command\":\"rm -rf src\"}", [["rm","-rf","src"]]],
+  ["git {\"words\":[\"rm\",\"-rf\",\"src\"]}", null],
+  ["writes {\"command\":\"rm -rf src\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"mv src /tmp/old-src\"}", [["mv","src","/tmp/old-src"]]],
+  ["git {\"words\":[\"mv\",\"src\",\"/tmp/old-src\"]}", null],
+  ["writes {\"command\":\"mv src /tmp/old-src\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/old-src","path":"/tmp/old-src","sources":["/repo/src"],"mayBeFolder":true}],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"cp -r /tmp/sub docs; rm -r docs/sub\"}", [["cp","-r","/tmp/sub","docs"],["rm","-r","docs/sub"]]],
+  ["git {\"words\":[\"cp\",\"-r\",\"/tmp/sub\",\"docs\"]}", null],
+  ["git {\"words\":[\"rm\",\"-r\",\"docs/sub\"]}", null],
+  ["writes {\"command\":\"cp -r /tmp/sub docs; rm -r docs/sub\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"docs","path":"/repo/docs","sources":["/tmp/sub"],"mayBeFolder":true}],"changes":[{"word":"docs/sub","path":"/repo/docs/sub","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"cp /tmp/a.ts docs; rm -r docs\"}", [["cp","/tmp/a.ts","docs"],["rm","-r","docs"]]],
+  ["git {\"words\":[\"cp\",\"/tmp/a.ts\",\"docs\"]}", null],
+  ["git {\"words\":[\"rm\",\"-r\",\"docs\"]}", null],
+  ["writes {\"command\":\"cp /tmp/a.ts docs; rm -r docs\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"docs","path":"/repo/docs","sources":["/tmp/a.ts"],"mayBeFolder":true}],"changes":[{"word":"docs","path":"/repo/docs","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"echo > d; rm -r d\"}", [["echo",">","d"],["rm","-r","d"]]],
+  ["git {\"words\":[\"echo\",\">\",\"d\"]}", null],
+  ["git {\"words\":[\"rm\",\"-r\",\"d\"]}", null],
+  ["writes {\"command\":\"echo > d; rm -r d\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"d","path":"/repo/d"}],"changes":[{"word":"d","path":"/repo/d","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"rm '/Users/dan/Documents/Documents - Dan’s MacBook Pro/app.ts'\"}", [["rm","/Users/dan/Documents/Documents - Dan’s MacBook Pro/app.ts"]]],
+  ["git {\"words\":[\"rm\",\"/Users/dan/Documents/Documents - Dan’s MacBook Pro/app.ts\"]}", null],
+  ["writes {\"command\":\"rm '/Users/dan/Documents/Documents - Dan’s MacBook Pro/app.ts'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"/Users/dan/Documents/Documents - Dan’s MacBook Pro/app.ts","path":"/Users/dan/Documents/Documents - Dan’s MacBook Pro/app.ts","does":"remove"}],"unnamed":[]}],
+  ["commands {\"command\":\"rm -r '/Users/dan/Documents/Documents - Dan’s MacBook Pro'\"}", [["rm","-r","/Users/dan/Documents/Documents - Dan’s MacBook Pro"]]],
+  ["git {\"words\":[\"rm\",\"-r\",\"/Users/dan/Documents/Documents - Dan’s MacBook Pro\"]}", null],
+  ["writes {\"command\":\"rm -r '/Users/dan/Documents/Documents - Dan’s MacBook Pro'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"/Users/dan/Documents/Documents - Dan’s MacBook Pro","path":"/Users/dan/Documents/Documents - Dan’s MacBook Pro","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"rm -r src/\"}", [["rm","-r","src/"]]],
+  ["git {\"words\":[\"rm\",\"-r\",\"src/\"]}", null],
+  ["writes {\"command\":\"rm -r src/\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"src/","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"rm -r src\"}", [["rm","-r","src"]]],
+  ["git {\"words\":[\"rm\",\"-r\",\"src\"]}", null],
+  ["writes {\"command\":\"rm -r src\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}],
+  ["commands {\"command\":\"echo x > /tmp/out.txt && echo y > /private/tmp/claude-501/s/scratchpad/674/n.md && echo z >> notes.txt\"}", [["echo","x",">","/tmp/out.txt"],["echo","y",">","/private/tmp/claude-501/s/scratchpad/674/n.md"],["echo","z",">>","notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">\",\"/tmp/out.txt\"]}", null],
+  ["git {\"words\":[\"echo\",\"y\",\">\",\"/private/tmp/claude-501/s/scratchpad/674/n.md\"]}", null],
+  ["git {\"words\":[\"echo\",\"z\",\">>\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"echo x > /tmp/out.txt && echo y > /private/tmp/claude-501/s/scratchpad/674/n.md && echo z >> notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/out.txt","path":"/tmp/out.txt"},{"word":"/private/tmp/claude-501/s/scratchpad/674/n.md","path":"/private/tmp/claude-501/s/scratchpad/674/n.md"},{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo x > /tmp/out.txt; echo z >> notes.txt\"}", [["echo","x",">","/tmp/out.txt"],["echo","z",">>","notes.txt"]]],
+  ["writes {\"command\":\"echo x > /tmp/out.txt; echo z >> notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/out.txt","path":"/tmp/out.txt"},{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo x > /tmp/shared.txt\"}", [["echo","x",">","/tmp/shared.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">\",\"/tmp/shared.txt\"]}", null],
+  ["writes {\"command\":\"echo x > /tmp/shared.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/shared.txt","path":"/tmp/shared.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo x >> /wt/feature/notes.txt\"}", [["echo","x",">>","/wt/feature/notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">>\",\"/wt/feature/notes.txt\"]}", null],
+  ["writes {\"command\":\"echo x >> /wt/feature/notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/wt/feature/notes.txt","path":"/wt/feature/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo a > /tmp/clone/x.txt; echo b > /private/tmp/claude-501/s/scratchpad/700/n.md; echo c > /Volumes/fast/tmp/clone/y.txt; echo d > /Users/dan/Desktop/n.txt; echo e >> notes.txt\"}", [["echo","a",">","/tmp/clone/x.txt"],["echo","b",">","/private/tmp/claude-501/s/scratchpad/700/n.md"],["echo","c",">","/Volumes/fast/tmp/clone/y.txt"],["echo","d",">","/Users/dan/Desktop/n.txt"],["echo","e",">>","notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"a\",\">\",\"/tmp/clone/x.txt\"]}", null],
+  ["git {\"words\":[\"echo\",\"b\",\">\",\"/private/tmp/claude-501/s/scratchpad/700/n.md\"]}", null],
+  ["git {\"words\":[\"echo\",\"c\",\">\",\"/Volumes/fast/tmp/clone/y.txt\"]}", null],
+  ["git {\"words\":[\"echo\",\"d\",\">\",\"/Users/dan/Desktop/n.txt\"]}", null],
+  ["git {\"words\":[\"echo\",\"e\",\">>\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"echo a > /tmp/clone/x.txt; echo b > /private/tmp/claude-501/s/scratchpad/700/n.md; echo c > /Volumes/fast/tmp/clone/y.txt; echo d > /Users/dan/Desktop/n.txt; echo e >> notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/clone/x.txt","path":"/tmp/clone/x.txt"},{"word":"/private/tmp/claude-501/s/scratchpad/700/n.md","path":"/private/tmp/claude-501/s/scratchpad/700/n.md"},{"word":"/Volumes/fast/tmp/clone/y.txt","path":"/Volumes/fast/tmp/clone/y.txt"},{"word":"/Users/dan/Desktop/n.txt","path":"/Users/dan/Desktop/n.txt"},{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo x > /Volumes/locked/notes.txt\"}", [["echo","x",">","/Volumes/locked/notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">\",\"/Volumes/locked/notes.txt\"]}", null],
+  ["writes {\"command\":\"echo x > /Volumes/locked/notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/Volumes/locked/notes.txt","path":"/Volumes/locked/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"bash <<'EOF'\\necho done >> notes.txt\\nEOF\"}", [["echo","done",">>","notes.txt"]]],
+  ["writes {\"command\":\"bash <<'EOF'\\necho done >> notes.txt\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"truncate -s 0 notes.txt\"}", [["truncate","-s","0","notes.txt"]]],
+  ["git {\"words\":[\"truncate\",\"-s\",\"0\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"truncate -s 0 notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"notes.txt","path":"/repo/notes.txt","does":"truncate"}],"unnamed":[]}],
+  ["commands {\"command\":\"make >& notes.txt\"}", [["make",">&","notes.txt"]]],
+  ["git {\"words\":[\"make\",\">&\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"make >& notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+])
+
 type Judge = string | 'no-answer'
 // Each send's outcome in turn: delivered, refused with this reason, or a throw.
 type Send = true | { refused: string } | 'throws'
 // How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
 // refuses it.
 type Ran = 'ok' | 'error' | { deny: string }
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; tmpdir?: string }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -86,8 +209,16 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 const world = (on: On, o: Opts = {}) => {
   const w = { reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[], runs: [] as string[] }
   on('process.run', ($, e) => {
-    w.runs.push(e.argv.join(' '))
     const [cmd, ...args] = e.argv
+    // mod-kit's readers, answered from the table; a request it has no answer for fails the test by
+    // name rather than being read some other way. Not one of the runs a test watches.
+    if (cmd === '__modkit') {
+      const key = `${args[0]} ${args[1]}`
+      if (!KIT.has(key)) throw new Error(`the reader table has no answer for ${key}: measure it from mod-kit's reader and add it`)
+      const out = KIT.get(key)
+      return ok(out === null ? '' : JSON.stringify(out))
+    }
+    w.runs.push(e.argv.join(' '))
     if (cmd === '__sessions') return ok(JSON.stringify({ open: [rec('me', o.self), ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 'me' }))
     if (cmd === 'tail' && o.tail === 'fails') return { value: { exitCode: 1, stdout: '', stderr: 'Permission denied', isStdoutTruncated: false, isStderrTruncated: false } }
     if (cmd === 'tail' && o.tail === 'no-request') return ok(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'hi' } }) + '\n')
@@ -115,11 +246,15 @@ const world = (on: On, o: Opts = {}) => {
     return { isDelivered: false, reason: outcome.refused } as never
   })
   on('session.cwd', () => ({ value: '/repo' }) as never)
-  // The .git entries on the disk, a folder or a linked worktree's file; anything else is no entry.
+  // The .git entries on the disk, a folder or a linked worktree's file; anything else is no entry,
+  // and a folder under `locked` is one the disk cannot read (a hook that throws is skipped by the
+  // engine, so the world says so as a kind of its own, which the stand-in walk refuses on).
   const gits = o.gits
-  if (gits) {
+  const locked = o.locked
+  if (gits || locked) {
     on('fs.stat', ($, e) => {
-      const kind = gits[(e as unknown as { path: string }).path] ?? 'other'
+      const path = (e as unknown as { path: string }).path
+      const kind = locked && path.startsWith(locked) ? 'unreadable' : (gits?.[path] ?? 'other')
       return { value: { kind, size: 0, mtimeMs: 0, isLink: false } } as never
     })
   }
@@ -658,6 +793,28 @@ test('another session working in that checkout is judged against the file this o
   await $.tool.call(edit('/other/src/a.ts'))
   expect(w.prompts.length).toBe(1)
   expect(w.edits).toEqual(['/other/src/a.ts'])
+})
+
+// #712: the walk for a checkout is mod-kit's, which refuses rather than guess when the disk cannot
+// answer (lessons review of #731). This guard had taken a failed look for "no checkout" and left the
+// path out; now it is recorded, so another session working there is still judged against it.
+test('a write to a path whose checkout the disk cannot say is recorded, never taken for no checkout', withDeps, async ($, on) => {
+  const w = world(on, { locked: '/Volumes/locked' })
+  await $.tool.call(bash('echo x > /Volumes/locked/notes.txt'))
+  expect(w.reached).toContain('Bash')
+  expect(w.edits).toEqual(['/Volumes/locked/notes.txt'])
+})
+
+// #712: on mod-kit's readers, a shell fed its script by a heredoc is read as the commands it runs,
+// and what this guard's own reader missed is judged: a file emptied by truncate, written by >&.
+test('a write inside a heredoc fed to a shell, a truncate and a >& are judged like any other write', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  for (const command of ["bash <<'EOF'\necho done >> notes.txt\nEOF", 'truncate -s 0 notes.txt', 'make >& notes.txt']) {
+    const r = await $.tool.call(bash(command, 'hd1'))
+    expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
+  }
+  expect(w.reached).toEqual([])
+  expect(w.prompts.length).toBe(3)
 })
 
 // #707: a guard that refuses decides before this one judges, whichever order the mods load in. The

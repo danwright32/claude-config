@@ -131,10 +131,19 @@ const heredocReader: { name: string; register: Register } = {
   },
 }
 
-test("a heredoc's body is shared on $.modkit.pipeline's commands", { plugins: [heredocReader] }, async ($, on) => {
+// #712: and the program each command runs, read once by the kit, with what that program can do.
+test("a heredoc's body, and the program each command runs, are shared on $.modkit.pipeline's commands", { plugins: [heredocReader] }, async ($, on) => {
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
-  const r = (await $.tool.call({ tool: 'Bash', command: "python3 - <<'EOF'\nprint(1)\nEOF" } as never)) as { deny?: string; text?: string }
-  expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+  const r = (await $.tool.call({ tool: 'Bash', command: "python3 - <<'EOF'\nimport os; os.system('ls')\nEOF" } as never)) as { deny?: string; text?: string }
+  expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([
+    {
+      words: ['python3', '-', '<<EOF'],
+      heredocs: [{ word: 2, body: "import os; os.system('ls')" }],
+      language: 'python',
+      program: { text: "import os; os.system('ls')", stdin: true },
+      verdict: { does: 'run a process', seen: 'os.system' },
+    },
+  ])
 })
 
 // #726: the working tree a path sits in, asked of the disk through the kit. The reader stands in
