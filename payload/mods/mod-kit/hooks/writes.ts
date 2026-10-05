@@ -102,9 +102,11 @@ const sedInPlace = (args: string[]): string[] => {
 // perl's (and ruby's) files when -i edits them in place. In a cluster such as -pi.bak or -pie, what
 // follows the i is its suffix; a script letter (perl's e or E, ruby's e) takes the rest of the
 // cluster, or the next word, as the script; a value letter takes the rest of the cluster as its value.
-const PERL = { script: 'eE', valued: 'IMmxCdD0l' }
-const RUBY = { script: 'e', valued: 'IrCEFxWTK0' }
-const inPlaceCluster = (args: string[], letters: { script: string; valued: string }): string[] => {
+// A digits letter takes only the digits after it (perl's -0777 or -0x1F, -l015), so the letters
+// after those are options again: -0pi and -lpi edit in place.
+const PERL = { script: 'eE', valued: 'IMmxCdD', digits: '0l' }
+const RUBY = { script: 'e', valued: 'IrCEFxWTK', digits: '0' }
+const inPlaceCluster = (args: string[], letters: { script: string; valued: string; digits: string }): string[] => {
   let inPlace = false
   let scripted = false
   const ops: string[] = []
@@ -133,6 +135,10 @@ const inPlaceCluster = (args: string[], letters: { script: string; valued: strin
       // The rest of the cluster is this letter's value (-Ilib, -MPOSIX), never more letters, so
       // the i in -Ilib is not -i.
       if (letters.valued.includes(l)) break
+      if (letters.digits.includes(l)) {
+        const value = /^(?:x[0-9a-fA-F]*|[0-7]*)/.exec(cluster.slice(j + 1))?.[0] ?? ''
+        j += value.length
+      }
     }
   }
   if (!inPlace) return []

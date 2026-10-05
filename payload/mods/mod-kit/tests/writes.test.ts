@@ -88,6 +88,14 @@ describe('writes: editing in place', () => {
     expect(paths("perl -pi -e 's/a/b/' CLAUDE.md")).toEqual([`${CWD}/CLAUDE.md`])
     expect(paths("perl -Ilib -ne 'print' CLAUDE.md")).toEqual([])
   })
+  // Review of #718: -0 and -l take only digits, so the letters after them are still options.
+  test('perl -0pi, -lpi and -0777pi write their files: -0 and -l take digits, not the rest of the cluster', () => {
+    expect(paths("perl -0pi -e 's/a/b/' CLAUDE.md")).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths("perl -lpi -e 's/a/b/' CLAUDE.md")).toEqual([`${CWD}/CLAUDE.md`])
+    expect(paths("perl -0777pi -e 's/a/b/' AGENTS.md")).toEqual([`${CWD}/AGENTS.md`])
+    expect(paths("perl -0x1Fpi -e 's/a/b/' AGENTS.md")).toEqual([`${CWD}/AGENTS.md`])
+    expect(paths("perl -0777 -ne 'print' CLAUDE.md")).toEqual([])
+  })
   test('ruby -i and awk -i inplace write their files too', () => {
     expect(paths("ruby -pi -e 'sub(/a/, \"b\")' CLAUDE.md")).toEqual([`${CWD}/CLAUDE.md`])
     expect(paths("awk -i inplace '{print}' CLAUDE.md AGENTS.md")).toEqual([`${CWD}/CLAUDE.md`, `${CWD}/AGENTS.md`])
