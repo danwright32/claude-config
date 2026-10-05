@@ -51,7 +51,8 @@ export type ModKit = {
   /**
    * The simple commands a Bash call would run, each as its words with quotes removed: heredoc
    * bodies dropped, assignments and sudo/env/exec and the like looked past, a shell's -c read as
-   * the commands it runs. The one reader every mod uses (L613).
+   * the commands it runs, a subshell's parentheses each a command of their own (`['(']`, `[')']`),
+   * while one inside a word (`$(`, `<(`) stays part of it. The one reader every mod uses (L613).
    */
   commands: (input: { command: string }) => Promise<string[][]>
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
