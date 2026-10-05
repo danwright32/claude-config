@@ -38,7 +38,13 @@ cat > "$FAKE" <<'STUB'
 echo "$*" >> "$STUB_LOG"
 case "$1 $2" in
   "plugin validate") case "$3" in *broken*) printf '  hooks: bad event\n\nValidation failed\n'; exit 1 ;; esac; echo 'Validation passed' ;;
-  "plugin test") case "$3" in *redtest*) printf ' 0 pass\n 1 fail\n'; exit 1 ;; esac; printf ' 1 pass\n 0 fail\n' ;;
+  "plugin test") case "$3" in
+      *redtest*) printf ' 0 pass\n 1 fail\n'; exit 1 ;;
+      # Claude Code's own answer while its cached rollout switch is saved off (2.1.289, #740).
+      *switchedoff*) printf 'hooks modules are turned off in this process: the rollout switch was saved off. Start `claude` once with network access, then run the tests again\n'; exit 1 ;;
+      # A failure with no verdict line the reason filter keeps.
+      *noverdict*) printf 'line one\nline two\nsomething odd happened\n'; exit 7 ;;
+    esac; printf ' 1 pass\n 0 fail\n' ;;
   *) exit 2 ;;
 esac
 STUB
@@ -123,6 +129,31 @@ out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M1" 2>&1)"; code=$?
 [ "$code" -eq 3 ] && check "no claude means exit 3, unmeasured" ok || check "no claude means exit 3, unmeasured" "exit=$code out=$out"
 case "$out" in *UNMEASURED*) check "and says UNMEASURED" ok ;; *) check "and says UNMEASURED" "$out" ;; esac
 
+# 6b. Claude Code answering that hooks modules are switched off is machine state the suite cannot
+#     set, so it is UNMEASURED with its own exit code and the engine's words, never a failure of
+#     every mod with an empty reason (#740, L411, L11).
+M6B="$TMPROOT/m6b"; mkmod "$M6B" switchedoff-a; printf 'x\n' > "$M6B/switchedoff-a/hooks/a.test.ts"
+mkmod "$M6B" switchedoff-b; printf 'x\n' > "$M6B/switchedoff-b/hooks/a.test.ts"
+runit "$M6B"
+[ "$code" -eq 4 ] && check "mods switched off in Claude Code means exit 4, unmeasured" ok \
+  || check "mods switched off in Claude Code means exit 4, unmeasured" "exit=$code out=$out"
+case "$out" in *"failed claude plugin test"*) check "and no mod is reported as failing" "$out" ;; *) check "and no mod is reported as failing" ok ;; esac
+printf '%s\n' "$out" | grep UNMEASURED | grep -q 'hooks modules are turned off in this process' \
+  && check "and the engine's reason is carried on the UNMEASURED line" ok || check "and the engine's reason is carried on the UNMEASURED line" "$out"
+# A definite failure beside it still outranks the unmeasured rest.
+mkmod "$M6B" broken-too
+runit "$M6B"
+[ "$code" -eq 1 ] && check "a refused mod beside switched off ones still fails the run" ok \
+  || check "a refused mod beside switched off ones still fails the run" "exit=$code out=$out"
+
+# 6c. A failure carrying no verdict line names the exit code and the last lines of output, never an
+#     empty reason (#740).
+M6C="$TMPROOT/m6c"; mkmod "$M6C" noverdict-mod; printf 'x\n' > "$M6C/noverdict-mod/hooks/a.test.ts"
+runit "$M6C"
+[ "$code" -eq 1 ] && check "a test failure with no verdict line fails the run" ok || check "a test failure with no verdict line fails the run" "exit=$code out=$out"
+line="$(printf '%s\n' "$out" | grep 'noverdict-mod failed')"
+case "$line" in *"exit 7"*"something odd happened"*) check "naming the exit code and the last output" ok ;; *) check "naming the exit code and the last output" "$out" ;; esac
+
 # 7. A mods folder that does not exist is refused, not passed as empty.
 out="$(CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused" ok || check "a missing mods folder is refused" "exit=$code out=$out"
@@ -139,6 +170,11 @@ else
   out="$(CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
   if [ "$code" -eq 3 ]; then
     echo "note: no claude command on this machine, so the real mods are reported UNMEASURED rather than passed."
+    check "the real mods could not be measured here" ok
+  elif [ "$code" -eq 4 ]; then
+    # Claude Code's cached rollout switch, which this suite cannot set (#740, L411).
+    echo "note: Claude Code has hooks modules switched off on this machine, so the real mods are UNMEASURED rather than passed:"
+    printf '%s\n' "$out" | grep UNMEASURED | sed 's/^/  /'
     check "the real mods could not be measured here" ok
   else
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
