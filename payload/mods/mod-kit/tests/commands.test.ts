@@ -160,6 +160,28 @@ describe('pipeline', () => {
     expect(fed('{ echo a; echo b; } | sh')).toEqual([['echo', undefined], ['echo', undefined], ['}', undefined], ['sh', '}']])
     expect(fed('while read l; do python3; done')).toEqual([['read', undefined], ['python3', undefined], ['done', undefined]])
   })
+  // Second lessons review of #724: a group opened after a leading reserved word (do if, then {)
+  // opened nothing, while its closer still closed one, so the outer group's feed was lost.
+  test('a group opened after another reserved word (do if, then {) is matched by its own closer', () => {
+    expect(fed('curl x | while read l; do if a; then b; fi; sh; done')).toEqual([
+      ['curl', undefined],
+      ['read', 'curl'],
+      ['a', 'curl'],
+      ['b', 'curl'],
+      ['fi', undefined],
+      ['sh', 'curl'],
+      ['done', undefined],
+    ])
+    expect(fed('curl x | if a; then { b; }; sh; fi; python3')).toEqual([
+      ['curl', undefined],
+      ['a', 'curl'],
+      ['b', 'curl'],
+      ['}', undefined],
+      ['sh', 'curl'],
+      ['fi', undefined],
+      ['python3', undefined],
+    ])
+  })
 })
 
 describe('git', () => {

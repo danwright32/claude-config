@@ -131,7 +131,12 @@ const split = (cmd: string): Split[] => {
       cmds.push({ words })
     } else if (ended) {
       push(words)
-      if (OPENS.has(first)) subshells.push(from)
+      // Each opener among the reserved words it starts with opens a group (`do if`, `then {`), so
+      // every closer is matched by its own opener.
+      for (const w of words) {
+        if (OPENS.has(w)) subshells.push(from)
+        if (!LEADS.has(w)) break
+      }
     }
     words = []
     return ended
