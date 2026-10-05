@@ -38,7 +38,13 @@ and settles its own surfaces in rounds of its own before it is built.
    settling it in the same executor. Before #744 removed it, picker manners' `$.pickers.wait` failed
    it (`payload/mods/picker-manners/hooks/register.ts:89` at 53c803b, which `git show` still
    reproduces); in the tree, the `waits-in-map` fixture in `tests/test-mods.sh` is that shape and
-   fails it on every run. It does not follow a promise made outside a noun's code and handed to it.
+   fails it on every run. Since #756 it also follows a promise made outside a noun's code (in
+   another hook) and kept in a variable, map or list a noun reads, and counts a wait bounded when
+   the noun races it against a timer under 10 s made in another executor, a helper's included.
+   A noun's 10 s does not stop while its own `$` calls are in flight, unlike a hook's budget:
+   measured live on 2026-10-05 (2.1.289, #756), a noun whose only wait was
+   `$.process.run(['/bin/sleep', '13'])` was rejected at 10,003 ms, like the 13 s timer control at
+   10,002 ms. So `$.ui.ask` in a noun is always cut, and so is any other slow `$` call there.
 
 ## Guard surfaces (#607, #608, #609)
 
