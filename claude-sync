@@ -3904,7 +3904,9 @@ write_settings_extras(){
     [ -n "$had" ] || rm -f "$cur"
     rm -f "$tmp"
     echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_ALLOWED}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
-    [ -t 2 ] || notify "settings.json could not be written: status line and shared settings"
+    # Said, not notified: an unreadable settings.json already raises the hooks block's notification on
+    # the same apply, and a second one per run for the same fault is the alert people learn to
+    # dismiss (review of #775, L36).
     return 0
   fi
   # Decided on the VALUE: jq reformats whatever it writes, and settings.json is a WatchPath, so a
@@ -5638,10 +5640,14 @@ payload_path_applied(){   # $1 = path relative to payload/
       # left to apply: off is false, never a deletion.
       [ -f "$PAYLOAD/$p" ] || return 0
       command -v jq >/dev/null 2>&1 || return 0
+      # Asked through the apply's own reading, so a file the apply REFUSES (a key off the allowlist,
+      # a value that is not a boolean, not an object) has nothing to apply rather than being unapplied
+      # for ever: no pull could satisfy it, and the apply already says why (review of #775, L260).
+      local want; want="$(shared_settings_wanted 2>/dev/null)"
+      [ "$want" = '{}' ] && return 0
       [ -f "$CLAUDE_HOME/settings.json" ] || return 1
-      jq -en --slurpfile cur "$CLAUDE_HOME/settings.json" --slurpfile s "$PAYLOAD/$p" --arg ok "$SHARED_SETTINGS_ALLOWED" '
-        ($ok | split(" ")) as $ok
-        | [ $s[0] | to_entries[] | select(.key as $k | $ok | index($k)) | . as $e | $cur[0][$e.key] == $e.value ] | all' >/dev/null 2>&1
+      jq -en --slurpfile cur "$CLAUDE_HOME/settings.json" --argjson s "$want" \
+        '[ $s | to_entries[] | . as $e | $cur[0][$e.key] == $e.value ] | all' >/dev/null 2>&1
       return $?
       ;;
   esac

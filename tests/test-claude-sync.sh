@@ -18723,6 +18723,15 @@ _sx8main="$(git -C "$SX8B" show main:payload/CLAUDE.md 2>/dev/null || true)"
 check "#695 fixture: the send really published" "case \"\$_sx8main\" in *'edited on this Mac'*) true ;; *) false ;; esac"
 check "#695 a send leaves the shared file in the shared repo as the repo holds it" \
   "[ \"\$(git -C '$SX8B' show main:payload/settings.shared.json 2>/dev/null | jq -r '.ultracode')\" = true ]"
+# A SHARED FILE THE APPLY REFUSES has nothing to apply, so status must not list it as unapplied for
+# ever: no pull can ever satisfy it, and the refusal is already said by the apply (review of #775).
+git -C "$SX8D" pull -q origin main 2>/dev/null
+printf '{"ultracode": "yes"}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'a bad shared value' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#695 fixture: the clone holds the refused shared file" "[ \"\$(jq -r '.ultracode' '$SX8C/payload/settings.shared.json')\" = yes ]"
+out_sx8c="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 a shared file the apply refuses is not listed as unapplied" "! line_has \"\$out_sx8c\" 'settings.shared.json' 'has not applied'"
 
 # AN ALLOWED KEY OF THE WRONG TYPE is refused by name too (review of #775): ultracode is a boolean,
 # and "yes" or null written into settings.json is a value Claude Code may read either way.
@@ -18730,7 +18739,7 @@ SX9R="$WORK/sx9-repo"; sx_repo "$SX9R" '{"ultracode": "yes"}' ''
 SX9H="$WORK/sx9-home"; mkdir -p "$SX9H"; printf '%s\n' "$SX_ORIG" > "$SX9H/settings.json"; _sx9sum="$(cksum < "$SX9H/settings.json")"
 out_sx9="$(sx_pull "$SX9H" "$SX9R")"
 check "#695 an allowed key of the wrong type is refused, naming it" "line_has \"\$out_sx9\" 'settings.shared.json' 'ultracode' 'boolean'"
-check "#695 and nothing from that file is written" "[ \"\$(cksum < '$SX9H/settings.json')\" = \"\$_sx9sum\" ]"
+check "#695 and nothing from a file with a wrong type is written" "[ \"\$(cksum < '$SX9H/settings.json')\" = \"\$_sx9sum\" ]"
 
 # A MAC WITH NO settings.json gets one only when a write succeeds (review of #775): a stub left by a
 # failed write is a file the Mac did not have. A failed write is forced by a jq that always fails.
