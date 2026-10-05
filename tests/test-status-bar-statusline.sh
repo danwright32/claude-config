@@ -84,6 +84,28 @@ printf '{}\n' > "$H/.claude.json"; runit "$(input s1)"
 case "$out" in *"| Opus 5.5 (high)") check "no login (an API key) shows no account" ok ;; *) check "no login (an API key) shows no account" "$out" ;; esac
 printf 'garbage' > "$H/.claude.json"; runit "$(input s1)"
 case "$out" in *"| account unknown") check "an unreadable login file is account unknown, never blank" ok ;; *) check "an unreadable login file is account unknown, never blank" "$out" ;; esac
+
+# 5b. A nickname set in the account room (/accounts rename) replaces the name and org, as Dan
+#     expected in the live check on 2026-10-05. The account room keys it by the first 16 hex digits
+#     of SHA-256 over "<account id>:<org id>"; 58f60981898d32e8 is that for acct-1 and org-1,
+#     computed once with Python's hashlib rather than by the script under test (L70).
+NICK="$H/.claude/mods/account-room-nicknames.json"; mkdir -p "$H/.claude/mods"
+printf '{"oauthAccount":{"accountUuid":"acct-1","organizationUuid":"org-1","displayName":"Dan","emailAddress":"dan@example.com","organizationName":"Pennie"}}\n' > "$H/.claude.json"
+printf '{"v":1,"names":{"58f60981898d32e8":"Work"}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Opus 5.5 (high) | Work") check "a nickname replaces the name and org" ok ;; *) check "a nickname replaces the name and org" "$out" ;; esac
+printf '{"v":1,"names":{"58f60981898d32e8":null}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Dan, Pennie") check "a skipped nickname (null) keeps the name and org" ok ;; *) check "a skipped nickname (null) keeps the name and org" "$out" ;; esac
+printf '{"v":1,"names":{"0000000000000000":"Other"}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Dan, Pennie") check "another account's nickname is not used" ok ;; *) check "another account's nickname is not used" "$out" ;; esac
+printf 'not json' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Dan, Pennie") check "an unreadable nicknames file keeps the name and org" ok ;; *) check "an unreadable nicknames file keeps the name and org" "$out" ;; esac
+printf '{"v":1,"names":{"58f60981898d32e8":"Work\\u001b[31m"}}\n' > "$NICK"; runit "$(input s1)"
+case "$raw" in *$'\033[31m'*) check "a nickname cannot colour the line" "$(printf '%q' "$raw")" ;; *) check "a nickname cannot colour the line" ok ;; esac
+printf '{"v":1,"names":{"58f60981898d32e8":"Caf\u00e9 \u5bb6"}}\n' > "$NICK"
+raw="$(printf '%s' "$(input s1)" | HOME="$H" STATUSLINE_NOW="$NOW" LC_ALL=C LANG=C bash "$SCRIPT" 2>&1)"
+out="$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')"
+case "$out" in *"| Café 家") check "a non ASCII nickname survives a C locale" ok ;; *) check "a non ASCII nickname survives a C locale" "$out" ;; esac
+rm -f "$NICK"
 login Dan Personal
 
 # 6. Limits: a reset already past shows the share alone; no limits at all (an API key) shows none.

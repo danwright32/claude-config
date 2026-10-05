@@ -16,7 +16,9 @@
 #   Supabase project        SUPABASE_PROJECT_NAME or SUPABASE_URL in the nearest .env, nothing else
 #   cache time left         the mod's facts file for this session, the one thing only the mod knows
 #   account and org         ~/.claude.json, read again on every refresh, so a login changed in one
-#                           window shows in all of them (picker, 2026-10-04)
+#                           window shows in all of them (picker, 2026-10-04); the account room's
+#                           nickname for it, from ~/.claude/mods/account-room-nicknames.json, in
+#                           their place when one is set (2026-10-05)
 # A fact that cannot be read says so ("cache unknown", "account unknown"), never a blank.
 #
 # STATUSLINE_NOW (seconds since the epoch) stands in for the clock in tests.
@@ -156,6 +158,19 @@ fi
 login="$HOME/.claude.json"
 if [ -f "$login" ]; then
   if account="$(jq -r '.oauthAccount // empty | [(.displayName // .emailAddress // empty), (.organizationName // empty)] | map(select(. != "")) | join(", ")' "$login" 2>/dev/null)"; then
+    # A nickname given in the account room (/accounts rename) replaces the name and org (Dan, live
+    # check 2026-10-05). It is keyed as the account room keys it: the first 16 hex digits of
+    # SHA-256 over "<account id>:<org id>". No nickname, a skipped one (null) or a file that cannot
+    # be read leaves the name and org as they are.
+    ids="$(jq -r '.oauthAccount // empty | select(.accountUuid and .organizationUuid) | "\(.accountUuid):\(.organizationUuid)"' "$login" 2>/dev/null)"
+    nicks="$HOME/.claude/mods/account-room-nicknames.json"
+    if [ -n "$ids" ] && [ -f "$nicks" ] && command -v shasum >/dev/null 2>&1; then
+      key="$(printf '%s' "$ids" | shasum -a 256 | cut -c1-16)"
+      # Control bytes only are removed, which reads the same in every locale; a printable class
+      # would drop every byte of "Café" under the C locale a status line may run in.
+      nick="$(jq -r --arg k "$key" '.names[$k] // empty | strings' "$nicks" 2>/dev/null | head -1 | LC_ALL=C tr -d '\000-\037\177')"
+      [ -n "$nick" ] && account="$nick"
+    fi
     [ -n "$account" ] && parts+=("$account")
   else
     parts+=("account unknown")
