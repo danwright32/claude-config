@@ -39,11 +39,18 @@ const modKit: { name: string; register: Register } = {
         question: async (q: Ask) => {
           // A test makes the band refuse a question through the environment, the one thing it can set here.
           if ((await built.env.get('BAND_REFUSES')) === '1' || JSON.stringify(q).includes('REFUSE-ME')) throw new Error('a question needs a mod and an id')
+          // One that refuses only after a moment, so another save can be queued behind it meanwhile.
+          if (JSON.stringify(q).includes('REFUSE-SLOWLY')) {
+            await new Promise(r => setTimeout(r, 100))
+            throw new Error('the band is busy')
+          }
           const all = await rows()
           const i = all.findIndex(r => r.mod === q.mod && r.id === q.id)
           await built.state.set(ref, (i < 0 ? [...all, q] : all.map((r, n) => (n === i ? q : r))) as never)
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
+          // A question whose text asks for it stands for a band that cannot take it away.
+          if ((await rows()).some(r => r.mod === mod && r.id === id && JSON.stringify(r).includes('CLEAR-FAILS'))) throw new Error('the band is gone')
           await built.state.set(ref, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
       }
@@ -399,6 +406,34 @@ test('a press on a save already answered does nothing to the save asked after it
   const again = await mount($)
   expect(await shown(again)).toContain('- second')
   await again.unmount()
+})
+
+// Review of #718: the answer took the save out of the queue, then a band that could not take the
+// question away threw, and the answer was lost: nothing saved, nothing said.
+test("a question the band cannot take away still carries Dan's answer through, and says why", withKit, async ($, on) => {
+  const w = world(on)
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- CLEAR-FAILS use pnpm\n' })
+  await answer($, 'for-good')
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
+  expect(notesOf(w)).toContain('For good: saved to ~/Apps/slate/AGENTS.md')
+  expect(w.toasts.join('\n')).toContain('could not be taken out of the band: the band is gone')
+})
+
+// Review of #718: a save queued behind one whose question then failed to show was never asked,
+// since only the save at the front is shown and nothing showed the next one.
+test('a save queued behind one whose question could not be shown is asked in its place', withKit, async ($, on) => {
+  const w = world(on)
+  const [first, second] = await Promise.all([
+    call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- REFUSE-SLOWLY rule\n' }),
+    call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' }),
+  ])
+  expect(refusalOf(first)).toContain('could not be shown')
+  expect(refusalOf(second)).toContain('Dan is being asked')
+  const ui = await mount($)
+  expect(await shown(ui)).toContain('- second')
+  await ui.unmount()
+  await answer($, 'for-good')
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
 })
 
 test('a question the band cannot show still refuses the save, and says why', withKit, async ($, on) => {

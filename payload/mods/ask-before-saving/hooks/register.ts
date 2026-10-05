@@ -164,6 +164,8 @@ export const register: Register = on => {
       await update($, pendingRef, p => (p ?? []).filter(x => x.id !== q.id))
       const where = files.join(', ')
       $.ui.toast(`The question about saving to ${where} could not be shown: ${message(err)}`)
+      // A save queued behind this one meanwhile is now at the front, and nothing else would show it.
+      await showFirst($)
       return { deny: `Not saved: the question asking Dan whether this is a standing rule could not be shown (${message(err)}). Ask him in your reply instead.` }
     }
     return { deny: REFUSED }
@@ -210,9 +212,15 @@ const answer = async ($: EngineInterface, choice: Answer, id: string) => {
   })
   // Already answered (a second press), or gone at session end: nothing to do.
   if (!q) return
-  await $.modkit.clearBandRow({ mod: MOD, id: rowId(q.id) })
-  await showFirst($)
   const where = q.files.join(', ')
+  // Taken out of the queue already, so Dan's answer is carried through whatever the band does: a
+  // question left drawn is said, never allowed to lose the answer.
+  try {
+    await $.modkit.clearBandRow({ mod: MOD, id: rowId(q.id) })
+  } catch (err) {
+    $.ui.toast(`The question about saving to ${where} could not be taken out of the band: ${message(err)}`)
+  }
+  await showFirst($)
 
   if (choice === 'not-at-all') {
     await tell($, `Dan answered Not at all to saving this to ${where}: nothing was saved. Do not save it.`)

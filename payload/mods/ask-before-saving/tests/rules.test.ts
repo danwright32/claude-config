@@ -68,6 +68,10 @@ test("Dan's words make a rule permanent only when they give one: the spec's phra
     'it always fails on the first run',
     'I never said that',
     'do you remember where that file went?',
+    // Review of #718: "remember" leading a message is no request by itself.
+    'Remember when we shipped the band last week?',
+    'remember the deploy failed yesterday?',
+    'do you remember that file?',
     // Words limiting it to today or this session win over the permanent ones: asking is the harmless side.
     'From now on skip the screenshots, at least for today',
     'always use the staging key this session',

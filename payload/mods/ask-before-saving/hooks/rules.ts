@@ -93,12 +93,13 @@ export const mentioned = (text: string, home: string): string[] => {
 
 // The spec's words that make a rule permanent in Dan's own message, as an instruction: "from now
 // on" anywhere, "always" or "never" leading a sentence or clause or after please or should, and
-// "remember" as a request ("remember that", "please remember", leading a sentence). Read anywhere,
-// "never mind the screenshots" and "it always fails" skipped the question (#705).
+// "remember" as a request, leading one and followed by that, to, this, a colon or a comma
+// ("please remember to", "Remember: ..."). Read anywhere, "never mind the screenshots" and "it
+// always fails" skipped the question (#705), and "Remember when we shipped it?" did too.
 const FROM_NOW_ON = /\bfrom now on\b/i
 const LEAD = String.raw`(?:^|[.!?;:,\n]\s*|\b(?:please|and|but|so|also|you should|you must|should|must)\s+)`
 const ALWAYS_NEVER = new RegExp(`${LEAD}(?:always|never)\\b(?!\\s+mind\\b)`, 'i')
-const REMEMBER = new RegExp(`${LEAD}remember\\b|\\bremember\\s+(?:that|to|this)\\b`, 'i')
+const REMEMBER = new RegExp(`${LEAD}remember(?:\\s+(?:that|to|this)\\b|\\s*[:,])`, 'i')
 // Words that limit it to the moment, which win: saving without asking is the harm, asking is not.
 const JUST_NOW = /\b(?:for now|for today|today|tonight|this time|just this once|this session|for this session|right now)\b/i
 
