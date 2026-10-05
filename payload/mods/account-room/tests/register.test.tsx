@@ -590,7 +590,9 @@ test('in a window too narrow to show the nickname question, the transcript says 
   expect(said).toHaveLength(1)
   expect(said[0]).toContain('work@example.com')
   expect(said[0]).toContain('/accounts rename')
-  expect(said[0]).toContain('144 columns')
+  // Claude Code's own reason, as it gave it, and that the account has no nickname, which is known.
+  expect(said[0]).toContain('the terminal is 120 columns wide; a pane opened unasked needs 144')
+  expect(said[0]).toContain('has no nickname yet')
 })
 
 test('Enter in the field saves too; an empty name saves nothing and the dialog stays', withKit, async ($, on) => {

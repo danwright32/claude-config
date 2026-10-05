@@ -425,8 +425,11 @@ const ask = async ($: EngineInterface, a: AccountRoomAsking) => {
     // Opened at session start, unasked, Claude Code holds the question back below 144 columns, so a
     // narrower window shows nothing at all. The question keeps waiting, and the transcript says so
     // with the command that asks for it, which opens at any width (live check, 2026-10-05).
-    $.ui.log(`account-room: the nickname dialog is waiting to be shown: ${'reason' in opened ? String(opened.reason) : 'not placed'}`, { to: 'debug' })
-    once($, 'nickname-waiting', `Account room: ${a.email} has no nickname yet. The question shows once this window is 144 columns wide, or run /accounts rename to answer it now.`)
+    // Claude Code's own reason is said, never a width this mod did not measure (L11).
+    const why = 'reason' in opened ? String(opened.reason) : 'Claude Code has not placed it'
+    $.ui.log(`account-room: the nickname dialog is waiting to be shown: ${why}`, { to: 'debug' })
+    const what = a.current === null ? `${a.email} has no nickname yet, and the question` : `The nickname question for ${a.email}`
+    once($, 'nickname-waiting', `Account room: ${what} is waiting to be shown (${why}). Run /accounts rename to answer it now.`)
   }
 }
 
