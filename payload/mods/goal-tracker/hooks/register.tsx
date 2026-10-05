@@ -318,7 +318,7 @@ const resultText = (content: unknown): string =>
 const STILL_WORKING_MS = 60_000
 let beat: { cancel: () => void } | undefined
 const stillWorking = async ($: EngineInterface) => {
-  if (!running.size || !progress) return
+  if (!running.size) return
   let now: number
   try {
     now = await $.clock.now()
@@ -326,6 +326,9 @@ const stillWorking = async ($: EngineInterface) => {
     // The clock's failure is said on the next call's result; nothing is written without a time.
     return
   }
+  // Read after the clock (lessons review of #725): a /clear meanwhile may have begun again with
+  // nothing to write onto, and a record holding only a time is no progress at all.
+  if (!progress) return
   progress = { ...progress, lastActivityAt: now }
   await publish($, now)
 }

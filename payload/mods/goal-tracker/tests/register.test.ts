@@ -973,6 +973,51 @@ test('a /clear starts the progress again: no old request, steps, goal or failure
   expect(last(w)?.request).toBe('Now the import')
 })
 
+// The lessons review of #725: a /clear that lands while the minute's write waits on the clock, and
+// whose own clock read fails, leaves nothing to write onto; the minute's write then writes nothing,
+// never a record holding only a time.
+test('a /clear landing while a running call is written leaves no record holding only a time', withDeps, async ($, on) => {
+  // The test is the clock: it gives the minutes, holds one clock read, and breaks another.
+  let mode: 'ok' | 'hold' | 'break' = 'ok'
+  let release: (() => void) | undefined
+  let held: (() => void) | undefined
+  const readHeld = new Promise<void>(r => (held = r))
+  on('clock.now', async () => {
+    if (mode === 'hold') {
+      mode = 'break'
+      held?.()
+      await new Promise<void>(r => (release = r))
+      return { value: 5 * MIN } as never
+    }
+    if (mode === 'break') throw new Error('clock broke')
+    return { value: 0 } as never
+  })
+  const minutes: (() => void)[] = []
+  let asked: (() => void) | undefined
+  on('clock.every', async () => {
+    await new Promise<void>(r => {
+      minutes.push(r)
+      asked?.()
+    })
+    return { value: undefined } as never
+  })
+  on('clock.after', () => new Promise<never>(() => undefined) as never)
+  const w = world(on)
+  await start($)
+  const call = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the test suite' } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  mode = 'hold'
+  if (!minutes.length) await new Promise<void>(r => (asked = r))
+  minutes.shift()?.()
+  await readHeld
+  await clear($)
+  release?.()
+  w.answer?.()
+  await call.catch(() => undefined)
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+  expect(w.progress.filter(p => (p as { steps?: unknown }).steps === undefined)).toEqual([])
+})
+
 // #706: a call still running is the session working. A test suite or build running over ten minutes
 // keeps the session's last activity fresh while it runs, and the activity after it is stamped when
 // it returned, never when it began.

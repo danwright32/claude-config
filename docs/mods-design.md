@@ -254,10 +254,6 @@ plainest reading of the decisions above:
   closed session's jobs are judged as before. A group whose ownership `ps` cannot read is left
   running and named as not judged. A job listed by two records (the one a /clear closed and the
   next) is judged once.
-- **The judge reads the job's text only as data.** The repeated line or pass a leftover keeps
-  printing reaches the judge only inside the fenced output; the line about its output states
-  measured facts ("it keeps repeating a pass of 2 lines"), never the text (lessons review of #721,
-  approved by Dan).
 - **One session judges a leftover.** A session claims a leftover by making a folder for it under
   `~/.claude/state/job-watcher/claims` (only one session can make it) and removes it once the job
   is judged; a second session starting meanwhile leaves that job alone and says nothing of it. A
@@ -285,6 +281,11 @@ plainest reading of the decisions above:
   is not recorded: Claude Code stops each one at
   its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
   run on unseen.
+
+Decided with Dan on 2026-10-04 (his approval of a lessons review finding on #721, recorded on
+#706): the leftover judge reads a job's text only as data. The repeated line or pass a leftover
+keeps printing reaches the judge only inside the fenced output; the line about its output states
+measured facts ("it keeps repeating a pass of 2 lines"), never the text.
 
 ## Goals pane (#612), settled 2026-10-04
 
