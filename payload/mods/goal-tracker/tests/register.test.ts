@@ -80,6 +80,13 @@ type WorldOpts = {
   notifyFails?: boolean
   permissionDenied?: boolean
   permissionThrows?: boolean
+  /** The test's mocked clock: a question shown by Claude Code itself stays open questionOpenMs on
+   * it, and a "slow" Bash call runs slowMs on it. */
+  clock?: { sleep: (ms: number) => Promise<void> }
+  questionOpenMs?: number
+  slowMs?: number
+  /** What ask before saving holds while a save waits on Dan. */
+  pending?: unknown
 }
 const world = (on: On, opts: WorldOpts = {}) => {
   const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined, duringPicker: undefined as Rec | undefined }
@@ -90,6 +97,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
       w.duringPicker = w.progress[w.progress.length - 1]
       return { value: { exitCode: 0, stdout: 'Yes', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (e.argv[0] === '__pending') return { value: { exitCode: 0, stdout: JSON.stringify(opts.pending ?? []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (e.argv[0] === 'terminal-notifier') {
       w.notified.push(e.argv.slice(1))
       if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -115,10 +123,17 @@ const world = (on: On, opts: WorldOpts = {}) => {
   on('prompt.submit', ($, e) => ({ text: e.text }) as never)
   on('command.run', () => ({ text: '' }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
+  // The rows the conversation keeps. Nothing in the test kit stores one (2.1.289), so the call then
+  // fails beneath; `appendRow` catches that, after the plugins above have seen the row.
+  on('session.append', ($, e, next) => next(e))
   on('tool.call', async ($, e) => {
     if (e.tool === 'AskUserQuestion') opts.duringAsk?.(w)
     if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
     if (e.tool === 'AskUserQuestion' && opts.askRefused) return { deny: 'the question was refused' } as never
+    // Claude Code's own question dialog, open while Dan reads it.
+    if (e.tool === 'AskUserQuestion' && opts.questionOpenMs && opts.clock) await opts.clock.sleep(opts.questionOpenMs)
+    if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('slow') && opts.clock) await opts.clock.sleep(opts.slowMs ?? 12 * MIN)
     if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('bigfail')) return { result: 'exit 1', text: 'Exit code 1\n' + 'x'.repeat(5000) + '\nsecret=abc', isError: true } as never
     if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('fail')) return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
     // A call Claude Code asks Dan to allow first: the permission prompt is raised inside the call.
@@ -440,12 +455,32 @@ const ask = (question: string) => ({ tool: 'AskUserQuestion', questions: [{ ques
 const idle = ($: { classic: { Notification: (e: never) => Promise<unknown> } }) =>
   $.classic.Notification({ hook_event_name: 'Notification', session_id: 'me', transcript_path: '/t', cwd: '/repo', message: 'Claude is waiting for your input', notification_type: 'idle_prompt' } as never)
 
+// A question Claude Code shows itself, open for five seconds while Dan reads it.
+const OPEN_MS = 5_000
+type Asker = { tool: { call: (e: never) => Promise<unknown> } }
+const asked = async ($: Asker, clock: { advance: (ms: number) => Promise<void> }, q: never) => {
+  const call = $.tool.call(q)
+  await clock.advance(OPEN_MS)
+  return call
+}
+
 test('a question to Dan sends one notification naming the project, with the question', withDeps, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  const w = world(on)
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
   await start($)
-  await $.tool.call(ask('Which date format for the CSV?'))
+  await asked($, clock, ask('Which date format for the CSV?'))
   expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format for the CSV?']])
+})
+
+// #706: the notification is for a question Dan sees. One refused at once (by picker manners
+// beneath the tracker, or anything else beneath it) never reached him, so it sends none.
+test('a question refused at once sends no notification', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { askRefused: true, clock })
+  await start($)
+  await $.tool.call(ask('Ship it?'))
+  await clock.advance(OPEN_MS)
+  expect(w.notified).toEqual([])
 })
 
 // A Bash call that Claude Code stops to ask Dan about: the prompt is raised while the call waits.
@@ -614,21 +649,21 @@ test("an idle prompt with nothing being asked says What's next?", withDeps, asyn
 })
 
 test("an idle prompt while a question is open sends nothing more: the question's notification stands", withDeps, async ($, on) => {
-  mock.clock(on, { now: 0 })
+  const clock = mock.clock(on, { now: 0 })
   let during: Promise<unknown> | undefined
-  const w = world(on, { duringAsk: () => (during = idle($)) })
+  const w = world(on, { duringAsk: () => (during = idle($)), clock, questionOpenMs: OPEN_MS })
   await start($)
-  await $.tool.call(ask('Ship it?'))
+  await asked($, clock, ask('Ship it?'))
   await during
   expect(w.notified.map(n => n[1])).toEqual(['Ovation is waiting on you'])
 })
 
 // Lessons review of 4cb9221: a question starting with a dash is the question, never an option.
 test('a question that starts with a dash reaches the notification as text, not as an option', withDeps, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  const w = world(on)
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
   await start($)
-  await $.tool.call(ask('-remove the old build?'))
+  await asked($, clock, ask('-remove the old build?'))
   const args = w.notified[0] ?? []
   const message = args[args.indexOf('-message') + 1] ?? ''
   expect(message.startsWith('-')).toBe(false)
@@ -636,11 +671,11 @@ test('a question that starts with a dash reaches the notification as text, not a
 })
 
 test('a notification that cannot be sent is said once in a dim line, and never breaks the question', withDeps, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  const w = world(on, { notifyFails: true })
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { notifyFails: true, clock, questionOpenMs: OPEN_MS })
   await start($)
-  const r = (await $.tool.call(ask('One?'))) as { deny?: unknown; result?: unknown }
-  await $.tool.call(ask('Two?'))
+  const r = (await asked($, clock, ask('One?'))) as { deny?: unknown; result?: unknown }
+  await asked($, clock, ask('Two?'))
   expect(r.deny).toBeUndefined()
   expect(w.notified.length).toBe(2)
   const said = w.logs.filter(l => l.includes('could not send a notification'))
@@ -763,4 +798,193 @@ test("a permission mark left over is cleared by Dan's next message", withDeps, a
   expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
   await prompt($, 'carry on')
   expect(last(w)?.waiting).toBeUndefined()
+})
+
+// #706: picker manners in either order. Above it, the tracker sees the call; a question picker
+// manners refuses at once (more than one in a call, a next issue picker while quiet, one talked past)
+// never reached Dan, so it sends no notification. Beneath it, the tracker never sees the call, so the
+// refusal is counted toward failed from the result's row, which every mod's refusal reaches.
+const twoQuestions = {
+  tool: 'AskUserQuestion',
+  tool_use_id: 'q2',
+  questions: [
+    { question: 'Ship it?', header: 'Ship', options: [], multiSelect: false },
+    { question: 'Tag it?', header: 'Tag', options: [], multiSelect: false },
+  ],
+} as never
+test('a question picker manners refuses beneath the tracker sends no notification', { plugins: [deps, PickerManners('append')] }, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const r = (await $.tool.call(twoQuestions)) as { deny?: string }
+  expect(r.deny).toContain('Ask one question per call')
+  await clock.advance(OPEN_MS)
+  expect(w.notified).toEqual([])
+})
+
+type Appender = { session: { append: (e: never) => Promise<unknown> } }
+const appendRow = async ($: Appender, blocks: { id: string; error?: string }[], agentId?: string) => {
+  try {
+    await $.session.append({
+      door: 'tool-result',
+      origin: { kind: 'tool', tool: 'Write' },
+      uuid: `row-${blocks.map(b => b.id).join('-')}`,
+      ...(agentId ? { agentId } : {}),
+      message: {
+        type: 'user',
+        role: 'user',
+        content: blocks.map(b => ({ type: 'tool_result', tool_use_id: b.id, content: b.error ?? 'done', ...(b.error ? { is_error: true } : {}) })),
+      },
+    } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+}
+
+test('a question picker manners refuses above the tracker counts toward failed, from its row', { plugins: [deps, PickerManners('prepend')] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call(bash('fail 1'))
+  await $.tool.call(bash('fail 2'))
+  await $.tool.call(twoQuestions)
+  expect(last(w)?.failed).toBeUndefined()
+  await appendRow($, [{ id: 'q2', error: 'Ask one question per call: Dan answers pickers one at a time.' }])
+  expect(last(w)?.failed).toBe('Ask one question per call: Dan answers pickers one at a time.')
+})
+
+// #706: a refusal by a mod outside the tracker (the collision guard, ask before saving) never reaches
+// its tool.call hook; its row does, so three in a row show the session failed.
+test('refusals by mods outside the tracker count toward failed from their rows, and a success clears it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  for (const id of ['w1', 'w2', 'w3']) await appendRow($, [{ id, error: 'Stopped: another session is editing this file.' }])
+  expect(last(w)?.failed).toBe('Stopped: another session is editing this file.')
+  await appendRow($, [{ id: 'w4' }])
+  expect(last(w)?.failed).toBeUndefined()
+})
+
+test('a call the tracker already counted is not counted again from its row', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  for (const id of ['b1', 'b2']) {
+    await $.tool.call({ tool: 'Bash', command: 'fail', tool_use_id: id } as never)
+    await appendRow($, [{ id, error: 'Exit code 1' }])
+  }
+  expect(last(w)?.failed).toBeUndefined()
+})
+
+test("a subagent's refused calls are its own, not the session's", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  for (const id of ['s1', 's2', 's3']) await appendRow($, [{ id, error: 'refused' }], 'sub1')
+  expect(w.progress.filter(p => p.failed !== undefined)).toEqual([])
+})
+
+// #706: a save waiting in the band for Dan's answer (ask before saving) is a question waiting on him:
+// marked for the pane, notified once, and no idle "What's next?" while it waits. Read from its writes
+// of the questions it holds (`ask-before-saving.pending`), which every plugin sees.
+// It refuses the save and holds the question (a call to '__save' here), and lets it go once Dan
+// answers ('__answered'). What it holds comes from the world: an inline plugin cannot reach this
+// file's variables.
+const AskBeforeSaving: { name: string; register: Register } = {
+  name: 'ask-before-saving',
+  register: on => {
+    const pending = { plugin: 'ask-before-saving', key: 'pending' } as never
+    on('tool.call', { tool: '__save' as never }, async $ => {
+      await $.state.set(pending, JSON.parse((await $.process.run(['__pending'])).stdout) as never)
+      return { deny: 'Not saved yet. Dan is being asked in the band.' } as never
+    })
+    on('tool.call', { tool: '__answered' as never }, async $ => {
+      await $.state.set(pending, [] as never)
+      return { result: 'answered' } as never
+    })
+  },
+}
+const command = ($: { tool: { call: (e: never) => Promise<unknown> } }, name: 'save' | 'answered') => $.tool.call({ tool: `__${name}` } as never)
+const SAVE = { id: 'toolu_9', tool: 'Write', input: {}, files: ['~/.claude/CLAUDE.md'], text: 'Always run the tests.' }
+
+test('a save waiting in the band marks the session waiting, notifies once, and holds back What next', { plugins: [deps, AskBeforeSaving] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { pending: [SAVE] })
+  await start($)
+  await command($, 'save')
+  await command($, 'save')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Save this as a standing rule?', kind: 'question' })
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Save this as a standing rule?']])
+  await idle($)
+  expect(w.notified.length).toBe(1)
+  await command($, 'answered')
+  expect(last(w)?.waiting).toBeUndefined()
+  await idle($)
+  expect(w.notified[1]).toEqual(['-title', 'Claude Code', '-message', "What's next?"])
+})
+
+test('a save question that cannot be read marks and notifies nothing, and is said', { plugins: [deps, AskBeforeSaving] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { pending: [{ id: 9 }] })
+  await start($)
+  await command($, 'save')
+  expect(w.notified).toEqual([])
+  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
+  expect(w.logs.filter(l => l.includes('could not read the save question ask before saving holds'))).toHaveLength(1)
+})
+
+// #706: the handoff mod's Use button submits the saved opening prompt as Dan's own words, from the
+// plugin; it is the new session's goal as a typed first message is. Another plugin's prompt is not.
+const fromPlugin = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, name: string, text: string) =>
+  $.prompt.submit({ text, origin: { kind: 'plugin', name, asUser: true }, wait: false } as never)
+test("the handoff's opening prompt is the session's first request, and another plugin's prompt is not", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await fromPlugin($, 'collision-guard', 'Another session wanted this file')
+  await $.tool.call(bash('ls'))
+  expect(last(w)?.request).toBeUndefined()
+  await fromPlugin($, 'handoff', 'Carry on with the Gmail send fix from the handoff notes')
+  expect(last(w)?.request).toBe('Carry on with the Gmail send...')
+})
+
+// #706: a /clear ends the conversation and the process goes on under a new session id, with no
+// session.start: the tracker begins again then, so the new conversation never carries the old one's
+// request, steps, goal or failures.
+const clear = ($: { session: { end: (e: never) => Promise<unknown> } }) => $.session.end({ reason: 'clear', sessionId: 'me', resume: {} } as never)
+test('a /clear starts the progress again: no old request, steps, goal or failures', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await prompt($, 'Fix the export')
+  await goalCommand($, 'the export writes a CSV')
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  for (const c of ['fail 1', 'fail 2', 'fail 3']) await $.tool.call(bash(c))
+  expect(last(w)).toMatchObject({ failed: 'Exit code 1', goal: 'the export writes a CSV', request: 'Fix the export', total: 1 })
+  await clock.advance(5 * MIN)
+  await clear($)
+  await $.tool.call(bash('fail 4'))
+  const after = last(w) as Rec & { startedAt?: number }
+  expect(after).toMatchObject({ total: 0, done: 0, current: null, startedAt: 5 * MIN })
+  expect(after.failed).toBeUndefined()
+  expect(after.goal).toBeUndefined()
+  expect(after.request).toBeUndefined()
+  await prompt($, 'Now the import')
+  expect(last(w)?.request).toBe('Now the import')
+})
+
+// #706: a call still running is the session working. A test suite or build running over ten minutes
+// keeps the session's last activity fresh while it runs, and the activity after it is stamped when
+// it returned, never when it began.
+test('a long tool call keeps the session from reading stalled while it runs, and after it returns', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, slowMs: 12 * MIN })
+  await start($)
+  await $.tool.call(bash('ls'))
+  const call = $.tool.call(bash('slow suite'))
+  await clock.advance(11 * MIN)
+  expect(last(w)?.lastActivityAt).toBeGreaterThanOrEqual(10 * MIN)
+  await clock.advance(MIN)
+  await call
+  expect(last(w)?.lastActivityAt).toBe(12 * MIN)
 })

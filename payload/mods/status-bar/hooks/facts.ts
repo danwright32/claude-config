@@ -62,7 +62,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 /**
  * The amber needs-a-look line, most urgent first so a narrow window cuts off what can wait longest:
  * the scope modes in bold (no build or winding down, and away, can be on at once, each its own
- * bold item divided like the rest), then a failing or running PR, running jobs, kept jobs, unpushed
+ * bold item divided like the rest), then a failing or running PR, stuck jobs, running jobs, kept jobs, unpushed
  * commits. Empty when nothing needs a look and no mode is on, so the band does not show.
  */
 export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
@@ -70,9 +70,12 @@ export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | 
   // A reading whose refresh since failed is kept with its age, never blanked (L682).
   const age = (r: { readAt: number; isStale: boolean }) => (r.isStale ? `, as of ${span(f.now - r.readAt)} ago` : '')
   if (f.pr && (f.pr.checks === 'failing' || f.pr.checks === 'running')) items.push(`PR #${f.pr.number} checks ${f.pr.checks}${age(f.pr)}`)
-  const running = f.jobs.filter(j => !j.kept).length
+  // A job the watcher measured as stuck is marked so, ahead of the ones running fine (#706).
+  const stuck = f.jobs.filter(j => !j.kept && j.stuck).length
+  if (stuck) items.push(`${plural(stuck, 'job', 'jobs')} stuck`)
+  const running = f.jobs.filter(j => !j.kept && !j.stuck).length
   if (running) items.push(`${plural(running, 'job', 'jobs')} running`)
-  for (const j of f.jobs.filter(j => j.kept)) items.push(`${j.label} kept ${span(j.runMs)}`)
+  for (const j of f.jobs.filter(j => j.kept)) items.push(`${j.label} kept ${span(j.runMs)}${j.stuck ? ', stuck' : ''}`)
   if (f.unpushed && f.unpushed.count > 0) items.push(`${plural(f.unpushed.count, 'unpushed commit', 'unpushed commits')}${age(f.unpushed)}`)
   const parts: LookPart[] = []
   for (const m of f.modes) {

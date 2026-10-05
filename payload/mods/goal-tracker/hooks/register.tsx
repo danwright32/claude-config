@@ -85,17 +85,22 @@ const notifySoon = ($: EngineInterface, title: () => Promise<string>, message: s
     .then(t => notify($, t, message, sound))
     .catch(err => $.ui.log(`goal-tracker: could not send a notification: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' }))
 }
+const waitingOnYou = ($: EngineInterface, text: string) => notifySoon($, async () => `${await projectName($)} is waiting on you`, text)
 // A clock that cannot be read stamps a goal or a request with the last activity's time instead.
 const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() => progress?.lastActivityAt ?? 0)
 
-// What the session waits on Dan for, each kept apart so that one ending never erases the other
-// (#694): the open question, and the open permission prompt with the calls it may belong to. The
-// pane shows the latest of the two.
+// What the session waits on Dan for, each kept apart so that one ending never erases another
+// (#694): the open question, a save waiting in the band for his answer (#706), and the open
+// permission prompt with the calls it may belong to. The pane shows the one asked latest.
 type Waiting = NonNullable<Progress['waiting']>
 let question: { id: string; mark: Waiting } | undefined
+let saving: { id: string; mark: Waiting } | undefined
 let permission: { calls: Set<string>; mark: Waiting } | undefined
-const waitingNow = (): Waiting | undefined =>
-  question && permission ? (permission.mark.since > question.mark.since ? permission.mark : question.mark) : (question?.mark ?? permission?.mark)
+const waitingNow = (): Waiting | undefined => {
+  let latest: Waiting | undefined
+  for (const m of [question?.mark, saving?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
+  return latest
+}
 const withWaiting = (p: Progress): Progress => {
   const w = waitingNow()
   if (w === p.waiting) return p
@@ -147,15 +152,59 @@ const openQuestionOf = (value: unknown): { id: string; text: string } | undefine
   const o = value as { id?: unknown; question?: { question?: unknown } } | null
   return o && typeof o === 'object' && typeof o.id === 'string' && typeof o.question?.question === 'string' ? { id: o.id, text: o.question.question } : undefined
 }
-// A question in front of Dan: marked for the pane and notified, once per question.
-const questionOpened = async ($: EngineInterface, id: string, text: string, now: number) => {
-  if (question?.id === id) return
+// A question is notified once Dan can see it (#706), whichever order the two mods run in. Picker
+// manners' write of the question it holds open is it shown, and notified at once. A question seen
+// only as a call (this mod above picker manners, or a question Claude Code shows itself) is
+// notified QUESTION_SHOWN_MS after it was asked if it is still open by then, or at once when picker
+// manners' write of it comes first: one refused at once (more than one question in a call, a next
+// issue picker while quiet, one talked past) never reached Dan and sends nothing. Its pane mark is
+// set as it is asked, as before.
+const QUESTION_SHOWN_MS = 1_000
+let unsent: { id: string; send: () => void; timer: { cancel: () => void } } | undefined
+const sendUnsent = (id: string) => {
+  if (unsent?.id !== id) return
+  const u = unsent
+  unsent = undefined
+  u.timer.cancel()
+  u.send()
+}
+const dropUnsent = (id: string) => {
+  if (unsent?.id !== id) return
+  unsent.timer.cancel()
+  unsent = undefined
+}
+// A question in front of Dan: marked for the pane and notified, once per question. `shown` when
+// picker manners has put it in front of him.
+const questionOpened = async ($: EngineInterface, id: string, text: string, now: number, shown: boolean) => {
+  if (question?.id === id) {
+    if (shown) sendUnsent(id)
+    return
+  }
   question = { id, mark: { question: text, since: now, kind: 'question' } }
   if (progress) {
     progress = { ...withWaiting(progress), lastActivityAt: now }
     await publish($, now)
   }
-  notifySoon($, async () => `${await projectName($)} is waiting on you`, text)
+  const send = () => waitingOnYou($, text)
+  if (shown) return send()
+  if (unsent) dropUnsent(unsent.id)
+  // Sent only if that question is still the open one: one ended meanwhile never reached Dan.
+  unsent = { id, send, timer: $.clock.after(QUESTION_SHOWN_MS, () => (question?.id === id ? sendUnsent(id) : dropUnsent(id))) }
+}
+
+// A save to lasting memory waiting in the band for Dan's answer (ask before saving, #618) is the
+// session waiting on him, as a question is (#706): its write of the questions it holds
+// (`ask-before-saving.pending`, the first one shown) reaches every plugin's state.set hook. Marked
+// and notified once per question, in the band's own words, and cleared when none is left.
+const SAVE_PENDING = { plugin: 'ask-before-saving', key: 'pending' } as const
+const SAVE_QUESTION = 'Save this as a standing rule?'
+let toldUnreadableSave = false
+// Another plugin's value is read, never trusted: the first question's id, none left, or unreadable.
+const firstSaveOf = (value: unknown): { id: string } | null | undefined => {
+  if (!Array.isArray(value)) return undefined
+  if (!value.length) return null
+  const first = value[0] as { id?: unknown } | null
+  return first && typeof first === 'object' && typeof first.id === 'string' ? { id: first.id } : undefined
 }
 
 // The /goals pane (claude-config#612, docs/mods-design.md "Goals pane", settled 2026-10-04): every
@@ -200,10 +249,16 @@ const paneStart = async ($: EngineInterface) => {
   await $.command.register({ name: 'goals', description: "Every open session's goal and progress" })
 }
 
+// Dan's own words: typed at the terminal, sent from his phone through Remote Control, or a handoff's
+// opening prompt, which the handoff mod submits as his when he presses its Use button (#706). The
+// one rule for every place this module asks whether a prompt is Dan's.
+type Origin = { kind: string; name?: string; asUser?: boolean }
+const isDans = (origin: Origin): boolean =>
+  origin.kind === 'composer' || origin.kind === 'bridge' || (origin.kind === 'plugin' && origin.name === 'handoff' && origin.asUser === true)
+
 // Closed by Dan's next message (picker): a slash command, /goals itself included, is not one.
-const paneOnPrompt = async ($: EngineInterface, e: { text: string; origin: { kind: string } }) => {
-  const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
-  if (isOpen && isPerson && !e.text.trim().startsWith('/')) {
+const paneOnPrompt = async ($: EngineInterface, e: { text: string; origin: Origin }) => {
+  if (isOpen && isDans(e.origin) && !e.text.trim().startsWith('/')) {
     stopFollowing()
     // A close that fails never holds up Dan's message (L73); it is said in the debug log.
     try {
@@ -235,28 +290,87 @@ const counted = (p: Progress, why: string | undefined): Progress => {
   streak += 1
   return streak >= FAIL_STREAK ? { ...p, failed: why } : p
 }
+// A call another mod refused without calling next (the collision guard, ask before saving, picker
+// manners above this one) never reaches this module's tool.call hook, but its result's row does,
+// whatever order the mods run in (#706). So the rows count too, all but those of the calls the hook
+// already counted, by tool_use_id; taken out as each row comes, and capped meanwhile.
+const countedCalls = new Set<string>()
+const COUNTED_MAX = 200
+const noteCounted = (id: unknown) => {
+  if (typeof id !== 'string') return
+  countedCalls.add(id)
+  for (const old of countedCalls) {
+    if (countedCalls.size <= COUNTED_MAX) break
+    countedCalls.delete(old)
+  }
+}
+// A tool result's text as the model reads it: a string, or its text blocks.
+const resultText = (content: unknown): string =>
+  typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map(b => ((b as { type?: string }).type === 'text' ? String((b as { text?: unknown }).text ?? '') : '')).join('\n')
+      : ''
+
+// A call still running is the session working (#706): a test suite or build over ten minutes was
+// shown as stalled, since activity was written only once a call returned. While any call runs, its
+// activity is written each minute.
+const STILL_WORKING_MS = 60_000
+let beat: { cancel: () => void } | undefined
+const stillWorking = async ($: EngineInterface) => {
+  if (!running.size || !progress) return
+  let now: number
+  try {
+    now = await $.clock.now()
+  } catch {
+    // The clock's failure is said on the next call's result; nothing is written without a time.
+    return
+  }
+  progress = { ...progress, lastActivityAt: now }
+  await publish($, now)
+}
+
+// Everything the module keeps belongs to one conversation: a session start, and a /clear, which ends
+// the conversation while the process goes on under a new session id with no session.start (#706),
+// begin again rather than carry the last one's request, steps, goal, failures or waiting marks. The
+// calls running are left alone: they are calls in flight, and each takes itself off as it ends.
+const beginAgain = async ($: EngineInterface) => {
+  // A clock that cannot be read leaves progress to begin on the first tool call that can read it.
+  progress = await $.clock.now().then(empty, () => undefined)
+  lastTried = Number.NEGATIVE_INFINITY
+  streak = 0
+  notices.length = 0
+  toldUnwritten = false
+  toldNoClock = false
+  toldNoNotify = false
+  project = undefined
+  question = undefined
+  saving = undefined
+  permission = undefined
+  if (unsent) dropUnsent(unsent.id)
+  countedCalls.clear()
+  toldUnreadableQuestion = false
+  toldUnreadableSave = false
+}
 
 export const register: Register = on => {
   // Everything the module keeps belongs to one session: a later start in the same process begins
   // again rather than reading the last one's (lessons review of #634).
   on('session.start', async ($, e, next) => {
-    // A clock that cannot be read leaves progress to begin on the first tool call that can read it,
-    // and never stops the pane and /goals being set up.
-    progress = await $.clock.now().then(empty, () => undefined)
-    lastTried = Number.NEGATIVE_INFINITY
-    streak = 0
-    notices.length = 0
-    toldUnwritten = false
-    toldNoClock = false
-    toldNoNotify = false
+    // A clock that cannot be read never stops the pane and /goals being set up.
+    await beginAgain($)
     startCwd = e.cwd
-    project = undefined
-    question = undefined
-    permission = undefined
-    toldUnreadableQuestion = false
-    // The calls running are left alone: they are calls in flight, not this session's record, and each
-    // takes itself off as it ends, so a prompt raised inside one is still matched to it.
+    beat?.cancel()
+    beat = $.clock.every(STILL_WORKING_MS, () => stillWorking($))
     await paneStart($)
+    return next(e)
+  })
+
+  // A /clear: the next conversation in this process starts its progress afresh (#706). Nothing is
+  // written here: the registry closes this session's record now, and the next tool call writes the
+  // new conversation's progress at once.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') await beginAgain($)
     return next(e)
   })
 
@@ -344,7 +458,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     await paneOnPrompt($, e)
     const result = await next(e)
-    const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    const isPerson = isDans(e.origin)
     const text = e.text.trim()
     // Dan sending a message is never a session waiting on his permission: a mark whose call could
     // not be matched as it returned is cleared here at the latest (lessons review of f0a8ff9).
@@ -381,9 +495,10 @@ export const register: Register = on => {
     const r = await next(e)
     if ((r as { value?: { isSet?: boolean } }).value?.isSet !== true) return r
     const shown = openQuestionOf(e.value)
-    if (shown) await questionOpened($, shown.id, shown.text, await nowOr($))
+    if (shown) await questionOpened($, shown.id, shown.text, await nowOr($), true)
     else if (e.value === null) {
       if (question) {
+        dropUnsent(question.id)
         question = undefined
         if (progress) {
           progress = withWaiting(progress)
@@ -402,7 +517,58 @@ export const register: Register = on => {
     return r
   })
 
-  // "What's next?" only while nothing is being asked: an open question or permission sent its own.
+  // A save waiting in the band for Dan's answer (above), read from ask before saving's writes.
+  on('state.set', SAVE_PENDING, async ($, e, next) => {
+    const r = await next(e)
+    if ((r as { value?: { isSet?: boolean } }).value?.isSet !== true) return r
+    const first = firstSaveOf(e.value)
+    if (first === null) {
+      if (saving) {
+        saving = undefined
+        if (progress) {
+          progress = withWaiting(progress)
+          await publish($, await nowOr($))
+        }
+      }
+    } else if (first) {
+      if (saving?.id !== first.id) {
+        const now = await nowOr($)
+        saving = { id: first.id, mark: { question: SAVE_QUESTION, since: now, kind: 'question' } }
+        if (progress) {
+          progress = withWaiting(progress)
+          await publish($, now)
+        }
+        waitingOnYou($, SAVE_QUESTION)
+      }
+    } else {
+      $.ui.log("goal-tracker: ask before saving's waiting question could not be read, so it is not marked or notified.", { to: 'debug' })
+      if (!toldUnreadableSave) {
+        toldUnreadableSave = true
+        $.ui.log('The goal tracker could not read the save question ask before saving holds, so a save waiting on you is not marked or notified.')
+      }
+    }
+    return r
+  })
+
+  // Each tool result's row, counted toward failed unless this module's tool.call hook already
+  // counted its call (above). A subagent's rows are its own, as its calls are.
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    let changed = false
+    for (const b of e.message.content) {
+      const block = b as { type?: string; tool_use_id?: unknown; content?: unknown; is_error?: boolean }
+      if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string' || countedCalls.delete(block.tool_use_id)) continue
+      progress ??= withWaiting(empty(await nowOr($)))
+      const before = progress.failed
+      progress = counted(progress, block.is_error ? oneLine(resultText(block.content) || 'it failed') : undefined)
+      if (progress.failed !== before) changed = true
+    }
+    if (changed) await publish($, await nowOr($))
+    return next(e)
+  })
+
+  // "What's next?" only while nothing is being asked: an open question, a save waiting in the band or
+  // a permission sent its own.
   on('classic.Notification', async ($, e, next) => {
     if (e.notification_type === 'idle_prompt' && !waitingNow()) notifySoon($, async () => 'Claude Code', "What's next?")
     return next(e)
@@ -441,7 +607,7 @@ export const register: Register = on => {
 
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
-      await questionOpened($, id, qs[0]?.question ?? 'a question', now)
+      await questionOpened($, id, qs[0]?.question ?? 'a question', now, false)
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
@@ -452,10 +618,13 @@ export const register: Register = on => {
         } catch {
           // The time the question was asked stands in for a clock that cannot be read.
         }
-        // Only the question's own mark comes off: a permission prompt still open stands (#694).
+        // Only the question's own mark comes off: a permission prompt still open stands (#694). One
+        // that ended before it was notified never reached Dan, and is not notified now (#706).
+        dropUnsent(id)
         question = undefined
         callEnded(id)
         progress = { ...counted(withWaiting(progress ?? empty(now)), why), lastActivityAt: after }
+        noteCounted(input.tool_use_id)
         await publish($, after)
       }
       let result
@@ -480,46 +649,51 @@ export const register: Register = on => {
       }
       throw err
     }
+    // What follows the call is stamped with when it returned, never when it began: a call that ran
+    // twelve minutes left the session reading stalled after it returned (#706).
+    const at = await $.clock.now().catch(() => now)
     const waitingBefore = progress.waiting
     if (callEnded(id)) progress = withWaiting(progress)
     const before = progress
     const why = failureOf(result)
 
     if (fromSubagent || why !== undefined) {
-      progress = { ...(fromSubagent ? progress : counted(progress, why)), lastActivityAt: now }
+      progress = { ...(fromSubagent ? progress : counted(progress, why)), lastActivityAt: at }
+      if (!fromSubagent) noteCounted(input.tool_use_id)
     } else {
       progress = counted(progress, undefined)
+      noteCounted(input.tool_use_id)
       if (e.tool === 'TodoWrite') {
         const todos = Array.isArray(input.todos) ? (input.todos as { content: string; status: unknown; activeForm: string }[]) : []
         const odd = todos.find(t => !isStepStatus(t?.status))
         // A list carrying a status the tracker cannot count is not stored at all, and Claude is told.
         if (odd) {
           notices.push(unknownStatus(odd.status))
-          progress = { ...progress, lastActivityAt: now }
-        } else progress = fromTodos(progress, todos as { content: string; status: StepStatus; activeForm: string }[], now)
+          progress = { ...progress, lastActivityAt: at }
+        } else progress = fromTodos(progress, todos as { content: string; status: StepStatus; activeForm: string }[], at)
       } else if (e.tool === 'ProposeGoal' && typeof input.condition === 'string' && input.condition.trim()) {
         // A goal Claude proposed is the goal once the call succeeds (set, or approved by Dan).
-        progress = { ...progress, goal: input.condition.trim(), lastActivityAt: now }
+        progress = { ...progress, goal: input.condition.trim(), lastActivityAt: at }
       } else if (e.tool === 'TaskCreate') {
         const task = (result.result as { task?: { id?: string; subject?: string } } | undefined)?.task
         // A result with no task id cannot be followed, but the call is still activity.
         progress = task?.id
-          ? taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, now)
-          : { ...progress, lastActivityAt: now }
+          ? taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, at)
+          : { ...progress, lastActivityAt: at }
       } else if (e.tool === 'TaskUpdate') {
         const status = input.status
         // An update carrying a status the tracker cannot count is not stored at all, and Claude is told.
         if (status !== undefined && status !== 'deleted' && !isStepStatus(status)) {
           notices.push(unknownStatus(status))
-          progress = { ...progress, lastActivityAt: now }
-        } else progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
+          progress = { ...progress, lastActivityAt: at }
+        } else progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, at)
       } else {
-        progress = { ...progress, lastActivityAt: now }
+        progress = { ...progress, lastActivityAt: at }
       }
     }
 
     // A change to the list or to failed is written at once; plain activity at most every thirty seconds.
-    if (progress.steps !== before.steps || progress.failed !== before.failed || progress.goal !== before.goal || progress.waiting !== waitingBefore || now - lastTried >= ACTIVITY_WRITE_MS) await publish($, now)
+    if (progress.steps !== before.steps || progress.failed !== before.failed || progress.goal !== before.goal || progress.waiting !== waitingBefore || at - lastTried >= ACTIVITY_WRITE_MS) await publish($, at)
     return withNotice(result)
   })
 }

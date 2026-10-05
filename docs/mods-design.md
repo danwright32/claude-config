@@ -177,6 +177,10 @@ the spec rather than chosen afresh, and open to Dan changing:
   read the line from here (#699).
 - The amber line's items read as drawn in the rounds: "PR #636 checks failing", "1 job running",
   "dev server kept 2h 14m", "2 unpushed commits", divided by a dim `|` as the status line is.
+- A job the watcher measured as stuck (repeating itself, or silent ten minutes) is marked on the
+  bar, the spec's "marks the job stuck on the bar" (#706, words not put to Dan): "1 job stuck" ahead
+  of "1 job running", and a kept one as "dev server kept 2h 14m, stuck". Without it, a job that went
+  stuck while no turn ran showed nowhere.
 - A PR whose refresh failed keeps what was last read with its age: "PR #649 checks running, as of
   12m ago" (the spec's "stale with its age"). One that last read as passing stays hidden.
 - The Compact row reads "ctx 74%" in amber, then `[ Compact ]`, whether it showed for context or
@@ -250,6 +254,10 @@ plainest reading of the decisions above:
   closed session's jobs are judged as before. A group whose ownership `ps` cannot read is left
   running and named as not judged. A job listed by two records (the one a /clear closed and the
   next) is judged once.
+- **The judge reads the job's text only as data.** The repeated line or pass a leftover keeps
+  printing reaches the judge only inside the fenced output; the line about its output states
+  measured facts ("it keeps repeating a pass of 2 lines"), never the text (lessons review of #721,
+  approved by Dan).
 - **One session judges a leftover.** A session claims a leftover by making a folder for it under
   `~/.claude/state/job-watcher/claims` (only one session can make it) and removes it once the job
   is judged; a second session starting meanwhile leaves that job alone and says nothing of it. A
@@ -320,10 +328,36 @@ Built in #694 from the last lessons reviews of #634, not put to Dan, each the pl
   notification. The tests load picker manners both above and beneath the goal tracker, and
   `tests/test-mods.sh` checks picker manners' contract declares the open question in the shape the
   goal tracker reads; one it cannot read is said once a session in one dim line. Which order a live
-  session loads them in was not measured. Two differences between the orders remain: beneath
-  picker manners, the goal tracker never sees the call, so a question picker manners refuses is not
-  counted toward failed; above it, a question picker manners refuses is marked and notified for the
-  moment before the refusal, as before #694.
+  session loads them in was not measured. The two differences between the orders left by #694 are
+  closed by #706, below.
+
+Built in #706 from the milestone audit and the notes left on it after #694, not put to Dan, each the
+plainest reading of the decisions above:
+
+- **Notified once Dan can see it, whichever order.** A question picker manners shows is notified as
+  it shows it (its write of the open question). One the tracker sees only as a call (sitting above
+  picker manners, or a question Claude Code shows itself) is notified one second after it was asked
+  if it is still open then, or at once when picker manners' write of it comes first. So a question
+  picker manners refuses at once (more than one in a call, a next issue picker while quiet, one
+  talked past) sends no notification in either order. Its pane mark is still set as it is asked.
+- **Every refusal counts toward failed, whichever mod made it.** A call refused by a mod sitting
+  outside the tracker (the collision guard, ask before saving, picker manners above it) never
+  reaches the tracker's own hook, but its result's row does, so the rows count too; a call the hook
+  already counted is not counted again from its row. A subagent's rows are its own.
+- **A save waiting in the band is waiting on Dan.** While ask before saving holds a question in the
+  band, read from its writes of the questions it holds (`ask-before-saving.pending`), the session
+  shows as waiting on you, "Save this as a standing rule?" (the band's own words), notified once per
+  question as "<project> is waiting on you", and the idle "What's next?" is held back until it is
+  answered. `tests/test-mods.sh` checks ask before saving's contract still declares it that way.
+- **A long call is not a stall.** While any call runs, the session's activity is written each
+  minute, and what follows a call is stamped when it returned, never when it began: a test suite
+  running twelve minutes no longer shows the session stalled during it or after it.
+- **/clear begins again.** A /clear ends the conversation while the process goes on with no session
+  start, so the tracker starts its progress afresh then: the new conversation never carries the old
+  one's request, steps, goal, failures or waiting marks.
+- **A handoff's opening prompt is Dan's request.** The handoff mod's Use button submits the saved
+  prompt as Dan's own words, from the plugin, so it becomes the new session's goal text as a typed
+  first message does, and closes the pane as his message would. Another plugin's prompt does not.
 
 ## Add-on notes (#620), behaviour decided while building, 2026-10-04
 
