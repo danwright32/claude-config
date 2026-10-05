@@ -282,7 +282,8 @@ export const register: Register = on => {
     const names = [repo, ...(current && fold(current) !== fold(repo) ? [current] : [])]
     const byPr = new Map<string, IsItLiveCard>()
     for (const name of names) for (const c of await cardsOf($, name)) byPr.set(`${fold(c.repo)}#${c.pr}`, c)
-    const cards = [...byPr.values()]
+    // Newest first across both names, as cardsOf gives one name's: the band pins in this order.
+    const cards = [...byPr.values()].sort((a, b) => b.at - a.at)
     // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.
     for (const c of cards) await pin($, c)
     const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''

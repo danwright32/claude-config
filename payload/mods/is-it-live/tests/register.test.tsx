@@ -418,6 +418,18 @@ test('cards kept under a key in another case are still listed, and a new card lo
   expect(await live($)).toBe(['- Live: Filter bookings by venue (#412)', '- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
 })
 
+test('/live after a rename lists and pins the cards of both names newest first, never grouped by name (lessons review of #710)', withKit, async ($, on) => {
+  const old = (pr: number, at: number) => ({ repo: 'danwright32/old-slate', pr, title: `Change ${pr}`, url: `https://github.com/danwright32/old-slate/pull/${pr}`, state: 'live', at, requester: { name: 'Kris', via: 'named' }, message: `About ${pr}.` })
+  const now = (pr: number, at: number) => ({ ...old(pr, at), repo: 'danwright32/slate', url: `https://github.com/danwright32/slate/pull/${pr}` })
+  world(on, {
+    remote: 'git@github.com:danwright32/old-slate.git',
+    stored: { 'cards:danwright32/old-slate': [old(300, T0 - 1000), old(302, T0 - 3000)], 'cards:danwright32/slate': [now(301, T0 - 2000)] },
+  })
+  expect((await live($)).split('\n').slice(0, 3)).toEqual(['- Live: Change 300 (#300)', '- Live: Change 301 (#301)', '- Live: Change 302 (#302)'])
+  // Each unsent message is pinned again, the newest first in the band too.
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.', 'About 301.', 'About 302.'])
+})
+
 test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
   const w = world(on, { remote: 'git@github.com:danwright32/old-slate.git' })
   await card($, CARD)
