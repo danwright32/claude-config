@@ -533,7 +533,10 @@ ones marked open are the builder's choice, waiting on Dan.
   another case or under a repository's old name (gh accepts both) is one list with the rest;
   cards an earlier build kept under another case are read with them and moved onto the one key
   when that repository's cards are next written. Copy and Mark sent find their card in whichever
-  repository it is kept, so they work in any session (#704).
+  repository it is kept, so they work in any session (#704). `/live` asks GitHub for the name the
+  session folder's repository has now (`gh repo view`, which follows renames), so a checkout whose
+  origin still carries an old name lists the cards kept under the new one; when GitHub cannot be
+  asked it lists what is kept under the remote's name and says the rest may be missing.
 - **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
   row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),
   then why live could not be confirmed, what changed, "See it:" and the link, and the numbered

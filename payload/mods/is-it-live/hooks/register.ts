@@ -271,9 +271,18 @@ export const register: Register = on => {
   on('command.run', { command: 'live' }, async $ => {
     const repo = repoOf((await $.session.repo())?.remote)
     if (!repo) return { text: 'This folder has no GitHub repository, so it has no cards.' }
-    const cards = await cardsOf($, repo)
+    // Cards are kept under the name GitHub's own link gives the repository, which after a rename is
+    // not the name a checkout's origin may still carry, so GitHub is asked for its name now (it
+    // follows renames). When it cannot be asked, the remote's name alone is read, and /live says so.
+    const now = await run($, ['gh', 'repo', 'view', repo, '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
+    const current = (now.out ?? '').trim()
+    const names = [repo, ...(current && fold(current) !== fold(repo) ? [current] : [])]
+    const byPr = new Map<string, IsItLiveCard>()
+    for (const name of names) for (const c of await cardsOf($, name)) byPr.set(`${fold(c.repo)}#${c.pr}`, c)
+    const cards = [...byPr.values()]
     // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.
     for (const c of cards) await pin($, c)
-    return { text: liveList(cards) }
+    const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so cards kept under another name for it are not listed.` : ''
+    return { text: liveList(cards) + unasked }
   })
 }

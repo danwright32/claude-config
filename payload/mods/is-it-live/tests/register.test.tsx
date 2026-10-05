@@ -86,7 +86,7 @@ const withKit = { plugins: [modKit] }
 const T0 = 1_800_000_000_000
 const REPO = 'danwright32/slate'
 type Gh = { exitCode: number; stdout: string; stderr?: string }
-type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; copied: boolean; stored?: Record<string, unknown> }
+type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; repoName: Gh; remote: string; copied: boolean; stored?: Record<string, unknown> }
 
 // GitHub, the clipboard, the store, toasts and Claude Code's own band beneath the mod.
 const world = (on: On, init: Partial<World> = {}) => {
@@ -96,6 +96,9 @@ const world = (on: On, init: Partial<World> = {}) => {
     me: { exitCode: 0, stdout: 'danwright32\n' },
     // Every account gh is logged in to on this Mac, as `gh auth status --json hosts --jq` lists them.
     accounts: { exitCode: 0, stdout: 'danwright32\n' },
+    // The session folder's origin, and the name GitHub gives that repository now (`gh repo view`).
+    remote: `git@github.com:${REPO}.git`,
+    repoName: { exitCode: 0, stdout: `${REPO}\n` },
     copied: true,
     ...init,
   }
@@ -115,10 +118,12 @@ const world = (on: On, init: Partial<World> = {}) => {
           ? w.me
           : a.startsWith('gh auth status')
             ? w.accounts
-            : { exitCode: 1, stdout: '', stderr: 'unexpected' }
+            : a.startsWith('gh repo view')
+              ? w.repoName
+              : { exitCode: 1, stdout: '', stderr: 'unexpected' }
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
-  on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: `git@github.com:${REPO}.git`, isOwn: false } }) as never)
+  on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: w.remote, isOwn: false } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('tool.register', () => ({ value: undefined }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -411,6 +416,21 @@ test('cards kept under a key in another case are still listed, and a new card lo
   expect(await live($)).toBe(['- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
   await card($, CARD)
   expect(await live($)).toBe(['- Live: Filter bookings by venue (#412)', '- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
+})
+
+test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
+  const w = world(on, { remote: 'git@github.com:danwright32/old-slate.git' })
+  await card($, CARD)
+  expect(await live($)).toBe('- Live: Filter bookings by venue (#412)')
+  expect(w.runs).toContainEqual(['gh', 'repo', 'view', 'danwright32/old-slate', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
+})
+
+test('/live says so when GitHub cannot be asked for the repo\'s current name, and lists what is kept under the remote\'s', withKit, async ($, on) => {
+  world(on, { remote: 'git@github.com:danwright32/old-slate.git', repoName: { exitCode: 1, stdout: '', stderr: 'HTTP 502' } })
+  await card($, CARD)
+  expect(await live($)).toBe(
+    'No merged changes have a card in this project yet.\n\nGitHub could not be asked for the name this repository has now (HTTP 502), so cards kept under another name for it are not listed.',
+  )
 })
 
 test('a later card for the same PR that names nobody keeps the unsent message, in /live and in the band', withKit, async ($, on) => {
