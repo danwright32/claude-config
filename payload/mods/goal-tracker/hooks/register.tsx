@@ -477,8 +477,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // "What's next?" only while nothing is being asked: an open question, a save waiting in the band or
-  // a permission sent its own.
+  // "What's next?" only while nothing is being asked: an open question (ask before saving's included)
+  // or a permission sent its own.
   on('classic.Notification', async ($, e, next) => {
     if (e.notification_type === 'idle_prompt' && !waitingNow()) notifySoon($, async () => 'Claude Code', "What's next?")
     return next(e)
