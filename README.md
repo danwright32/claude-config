@@ -813,7 +813,23 @@ guarding it are watched failing.
 
 Every push also runs each section the push CHANGED on its own
 (`tests/audit-changed-sections.sh`), which is the only run in which a missing prerequisite shows up.
-A push that does not touch the suite costs nothing there.
+A push that does not touch the suite costs nothing there. Before a session's push the hook
+`linux-sections-before-push.sh` runs those sections on Linux in a container (`tests/run-on-linux.sh`)
+when Docker is running, and reads the suite's own counts so that a failing prelude under a passing
+section is reported as the prelude, with the way to tell a broken base from this change (#625).
+
+In this repository that same hook refuses a session's push straight to `main`
+(`ALLOW_DIRECT_MAIN_PUSH=1` for one push, explained first): a change goes up as a branch and a pull
+request, whose CI runs every suite on Linux. The pre push Linux run cannot stand in for that. On
+2026-10-05 its record on Daniels-MacBook-Pro-2 read 0 judged of the 15 pushes it had a section to
+check, because Docker's daemon was not running, and it only ever covers sections of the sync suite
+(#596). The automatic `sync from <host>` commits are pushed by claude-sync, not by a session, so
+the refusal never sees them.
+
+CI's environment step is the list the container is built from, and
+`tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
+invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
+more) that the step does not name (#624).
 
 The older knob still exists for when you want everything up to a point rather than one section:
 
