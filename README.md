@@ -1041,7 +1041,11 @@ Two things are deliberately not carried:
 
 Before a push, `tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates
 every mod and runs its own `*.test.ts` and `*.test.tsx` with `claude plugin test`. Where no `claude` command exists
-(CI's Linux runner) it reports UNMEASURED rather than a pass.
+(CI's Linux runner) it reports UNMEASURED rather than a pass, and the same, with its own exit code
+and the engine's words, when `claude` answers that hooks modules are turned off in this process
+(its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
+set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
+exit code and the last lines of output instead of an empty reason.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
