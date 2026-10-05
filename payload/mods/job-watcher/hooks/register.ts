@@ -192,9 +192,10 @@ const lookSafely = async ($: EngineInterface) => {
     deadline = $.clock.after(LOOK_MAX_MS, () => resolve('given up'))
   })
   const pass = lookAll($, live).then(() => 'finished' as const)
-  // A look given up may still fail later, when nothing waits on it any more: its reason goes to the
-  // debug log rather than nowhere (lessons review of #709).
-  pass.catch(err => $.ui.log(`job-watcher: a look at the jobs failed: ${message(err)}`, { to: 'debug' }))
+  // A look given up may still settle later. lookAll catches inside every job and around the clock, so
+  // nothing it does rejects (lessons review of #709: no path to a log line a test could reach); this
+  // only keeps an impossible rejection from being reported as unhandled.
+  pass.catch(() => undefined)
   try {
     if ((await Promise.race([pass, givenUp])) === 'finished') toldLookGivenUp = false
     else if (!toldLookGivenUp) {

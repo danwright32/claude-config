@@ -85,6 +85,8 @@ type World = {
   onExtra?: (value: string) => void
   /** Leftover claims already on disk, by folder name, with when each was made (seconds). */
   claims?: Record<string, number>
+  /** The claims cannot be made: 'folder', the claims folder itself; 'claim', each claim in it. */
+  claimsFail?: 'folder' | 'claim'
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -143,10 +145,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     }
     // The leftover claims: one folder each, made by mkdir alone when it is not there yet.
     const claimName = (p: string | undefined) => (p?.startsWith(`${CLAIMS}/`) ? p.slice(CLAIMS.length + 1) : undefined)
-    if (cmd === 'mkdir' && args[0] === '-p') return ok('')
+    if (cmd === 'mkdir' && args[0] === '-p') return o.claimsFail === 'folder' ? res(1, '', `mkdir: ${CLAIMS}: Permission denied`) : ok('')
     if (cmd === 'mkdir') {
       const name = claimName(args[args.length - 1])
       if (name === undefined) return res(1, '', 'unexpected')
+      if (o.claimsFail === 'claim') return res(1, '', `mkdir: ${CLAIMS}/${name}: Permission denied`)
       if (w.claims.has(name)) return res(1, '', `mkdir: ${CLAIMS}/${name}: File exists`)
       w.claims.set(name, Math.floor((o.clock?.now?.() ?? 0) / 1000))
       w.claimed.push(name)
@@ -1550,6 +1553,47 @@ test('a claim left by a session that died while judging is taken over after ten 
   await judged(clock)
   expect(w.kills).toEqual([['-TERM', '-501']])
   expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop).'])
+})
+
+test('a claim that cannot be made leaves the leftover running, not judged, and said', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+    claimsFail: 'claim',
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['1 leftover job not judged, left running (until curl -sf http://localhost:3000/...).'])
+})
+
+test('a claims folder that cannot be made leaves every leftover running, not judged, and said', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, [{ tail: REFUSED, size: 9000 }, { tail: 'listening on 3000\n', size: 18, mtime: 0 }], {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL), leftover(2, 'npm run dev')])] },
+    verdict: () => STOP('curl loop'),
+    claimsFail: 'folder',
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['2 leftover jobs not judged, left running (until curl -sf http://localhost:3000/..., npm run dev).'])
+})
+
+test('an untraced leftover held only by a running Claude Code process is that process job, not mentioned', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, owner: 82846 }, {
+    sessions: { closed: [closedRec('cleared', [leftover(1, CURL, { pgid: null })])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
 })
 
 test('a job listed by two closed records is judged once', withDeps, async ($, on) => {
