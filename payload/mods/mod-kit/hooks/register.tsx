@@ -133,15 +133,19 @@ export const register: Register = (on, options) => {
 // `columns` is how wide the site is, so a divider reaches its edge. The one drawing of a card, so
 // the band and the pane cannot drift apart as cards gain shapes.
 const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: number, row: ModKitPane) => {
-  const { Box, Button, Text } = $.ui.resolve(e)
+  const { Box, Button, Link, Text } = $.ui.resolve(e)
   const part = (p: ModKitBandPart, i: number) => {
     const drawn =
       'button' in p ? (
         // The press reaches the publisher through its ui.press hook on this key; nothing to do here.
         <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} plain={p.plain} onPress={() => undefined} />
       ) : (
+        // A link inside the run's own Text, so it keeps the run's style and is cut or wrapped as the
+        // run says, while the address it opens and copies stays whole (#708). Where the terminal
+        // draws no hyperlinks (Apple Terminal) a Link with text is drawn as the text then the
+        // address, so a run whose text is its own address is a Link with neither, which shows it once.
         <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap={p.wrap ? 'wrap' : 'truncate-end'}>
-          {p.text}
+          {p.href === undefined ? p.text : p.text === p.href ? <Link href={p.href} /> : <Link href={p.href}>{p.text}</Link>}
         </Text>
       )
     return p.indent ? (

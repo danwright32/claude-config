@@ -91,14 +91,15 @@ export const finish = (card: StepsCard, n: number, verdict: StepsVerdict): Made 
 /** One part of a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
 export type CardPart =
   | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
-  | { button: 'done' | 'copy'; label: string }
+  | { button: 'done' | 'copy' | 'copy-link'; label: string }
 
 /**
  * The card's lines: the amber heading, then each step on its own line. Only the next step is open,
  * bold in the terminal's own text colour, with Done and, indented under it, its link or location,
  * its clicks and any value with Copy. A later step is its title alone; a finished one is dimmed and
  * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
- * Code's Link, so one cut at the edge still opens and copies whole (#708).
+ * Code's Link, so one cut at the edge still opens and copies whole where the terminal draws
+ * hyperlinks, with Copy link beside it for the terminals that do not, Apple Terminal among them (#708).
  */
 export const cardLines = (card: StepsCard): CardPart[][] => {
   const lines: CardPart[][] = [[{ text: card.heading, color: AMBER }]]
@@ -116,7 +117,7 @@ export const cardLines = (card: StepsCard): CardPart[][] => {
     lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: 'done' as const, label: 'Done' }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
-    if (s.url) lines.push([{ text: s.url, href: s.url, indent }])
+    if (s.url) lines.push([{ text: s.url, href: s.url, indent }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
     else if (s.location) lines.push([{ text: s.location, indent }])
     if (s.clicks) lines.push([{ text: s.clicks, indent }])
     if (s.value) lines.push([{ text: oneLine(s.value), indent }, { text: '  ' }, { button: 'copy', label: 'Copy' }])

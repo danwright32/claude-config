@@ -96,7 +96,7 @@ describe('cardLines', () => {
       'Cloudflare WAF',
       '1. Create the API token  already done',
       '2. Turn on the rule  [done]',
-      'https://dash.cloudflare.com/waf',
+      'https://dash.cloudflare.com/waf  [copy-link]',
       'Security, WAF, Custom rules, Deploy',
       'ip.src eq 1.2.3.4  [copy]',
       '3. Purge the cache',
@@ -130,11 +130,12 @@ describe('cardLines', () => {
   })
 
   // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
-  // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows.
-  test('the open step\'s link is a link part carrying the whole address; an exact location stays text', () => {
+  // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows,
+  // and Copy link beside it, since Claude Code draws no hyperlinks on Apple Terminal.
+  test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
-    const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string })[][]
-    expect(l[2]).toEqual([{ text: url, href: url, indent: 3 }])
+    const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
+    expect(l[2]).toEqual([{ text: url, href: url, indent: 3 }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
     // The click path is not a link.
     expect(l[3]?.[0]?.href).toBeUndefined()
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]

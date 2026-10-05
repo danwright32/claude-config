@@ -599,12 +599,18 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   pane moves it to its own and closes the other, and a card pinned while a pane shows one goes into
   that pane rather than opening a second; one mod-kit will not draw there closes that pane and goes
   to the band.
-- **The link.** A step's link is drawn as Claude Code's Link, a real terminal hyperlink, so a long
-  dashboard link cut at the edge still opens and copies whole (#708). The click path and an exact
-  location are text, one line each, cut at the edge like every band line. Docked beside a fullscreen
-  transcript, the pane asks to be as wide as the card's widest line other than the link, up to 80
-  columns, so a click path is not cut there; a width Dan drags it to wins (open: the 80 column cap,
-  and whether a line should wrap instead, which the left rule's one mark per line rules out today).
+- **The link** (#708). A step's link is drawn as Claude Code's Link, so where the terminal draws
+  hyperlinks (Ghostty, iTerm2, kitty, WezTerm, VS Code, Warp, the desktop app) a long dashboard
+  link cut at the edge still opens and copies whole. Claude Code draws none on Apple Terminal, where
+  the link is plain text cut at the edge, so the link line also carries **Copy link**, as the value
+  line carries Copy, with the same toasts ("Copied the link for step 1."). The Link has no text of
+  its own, since on a terminal without hyperlinks a Link with text is drawn as the text then the
+  address, which would show it twice. The click path and an exact location are text, one line
+  each, cut at the edge like every band line. Docked beside a fullscreen transcript, the pane asks
+  to be as wide as the card's widest line other than the link, up to 80 columns, so a click path is
+  not cut there; a width Dan drags it to wins (open: Copy link on every link rather than only a long
+  one, the 80 column cap, and whether a line should wrap instead, which the left rule's one mark per
+  line rules out today).
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
@@ -658,7 +664,8 @@ is cleared. Rows in
 one slot keep the order they were first published in, and a row published again under its id is
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
 line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
-the amber) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
+the amber; `href` makes a run Claude Code's Link to that address, #708, with no text of its own when
+the run's text is the address, so a terminal without hyperlinks does not draw it twice) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
 survey's row: the hotkey in the accent colour, a colon, the label, `1: 7 days`, or the label alone
 with no hotkey, #667). A button is Claude Code's own, drawn with the
 key `<mod>:<button>`, and its press reaches the publisher through

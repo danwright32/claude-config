@@ -381,6 +381,51 @@ test('a part with an indent starts that many columns in', withPublisher, async (
   await ui.unmount()
 })
 
+// #708: a long dashboard link cut at the band's edge showed broken and could not be copied. A run
+// with an href is Claude Code's own Link, a real terminal hyperlink, so it opens and copies whole
+// however much of its text shows.
+test('a run with an href is drawn as Claude Code\'s Link to the whole address, cut at the edge like any run', withPublisher, async ($, on) => {
+  engineBand(on)
+  const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf?zone=example.com`
+  expect(await show($, { mod: 'publisher', id: 's', slot: 'steps', frame: { kind: 'left-rule' }, lines: [[{ text: url, href: url, indent: 3 }], [{ text: 'Security, WAF' }]] })).toBe('done')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(band(surface))
+    const links = (await ui.findAll({ type: 'Link' })) as unknown as { props: { href?: string; label?: string }; children?: unknown[] }[]
+    expect(links).toHaveLength(1)
+    expect(links[0]?.props.href).toBe(url)
+    // A run whose text is its own address is a Link with no text of its own: where the terminal
+    // draws no hyperlinks (Apple Terminal), a Link with text is drawn as the text then the address,
+    // which would show the address twice; one with neither shows it once.
+    expect(links[0]?.children ?? []).toEqual([])
+    expect(links[0]?.props.label).toBeUndefined()
+    // Inside a run's own Text, so it takes the run's style and is cut at the edge, never wrapped.
+    const run = (await ui.findAll({ type: 'Text' })).find(t => (t.children as { type?: string }[]).some(c => c?.type === 'Link')) as unknown as
+      | { props: { wrap?: string } }
+      | undefined
+    expect(run?.props.wrap).toBe('truncate-end')
+    // A run with no href is no link.
+    expect((await ui.find({ type: 'Text', text: 'Security, WAF' }))?.children).toEqual(['Security, WAF'])
+    await ui.unmount()
+  }
+})
+
+test('a run with an href and text of its own is a Link carrying that text', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, { mod: 'publisher', id: 's', slot: 'steps', lines: [[{ text: 'the WAF page', href: 'https://dash.cloudflare.com/waf' }]] })
+  const ui = await $.ui.mount(band())
+  const link = (await ui.find({ type: 'Link' })) as unknown as { props: { href?: string }; children?: unknown[] } | undefined
+  expect(link?.props.href).toBe('https://dash.cloudflare.com/waf')
+  expect(link?.children).toEqual(['the WAF page'])
+  await ui.unmount()
+})
+
+test('an href that is not an address, or one on a button, is refused at publish, never drawn as plain text', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', href: '' }]] })).toMatch(/refused: .*href/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ text: 'a', href: 7 }]] })).toMatch(/refused: .*href/)
+  expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', lines: [[{ button: 'go', label: 'Go', href: 'https://a.example' }]] })).toMatch(/refused: .*only a text run can be a link/)
+})
+
 test('an unknown frame kind, a malformed divider, or a bad indent is refused at publish, never drawn wrong', withPublisher, async ($, on) => {
   engineBand(on)
   expect(await show($, { mod: 'publisher', id: 'x', slot: 'steps', frame: { kind: 'double' }, lines: [] })).toMatch(/refused: .*frame kind "double"/)

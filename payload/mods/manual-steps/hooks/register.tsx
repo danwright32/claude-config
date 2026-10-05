@@ -204,16 +204,20 @@ const pressDone = async ($: EngineInterface) => {
   }
 }
 
-const pressCopy = async ($: EngineInterface, surface: string | undefined) => {
+// What each Copy on the open step copies, and what its toast calls it.
+const COPIES = { value: 'value', url: 'link' } as const
+
+const pressCopy = async ($: EngineInterface, field: keyof typeof COPIES, surface: string | undefined) => {
   const card = (await $.state.get(cardRef)).value ?? null
   const i = card ? nextStep(card) : undefined
-  const value = card && i !== undefined ? card.steps[i]?.value : undefined
-  if (i === undefined || !value) return
+  const text = card && i !== undefined ? card.steps[i]?.[field] : undefined
+  if (i === undefined || !text) return
+  const what = COPIES[field]
   try {
-    const r = await $.ui.copy({ text: value, surface: surface as never })
-    $.ui.toast(r.isCopied ? `Copied the value for step ${i + 1}.` : `Could not copy the value for step ${i + 1} (${r.reason}).`)
+    const r = await $.ui.copy({ text, surface: surface as never })
+    $.ui.toast(r.isCopied ? `Copied the ${what} for step ${i + 1}.` : `Could not copy the ${what} for step ${i + 1} (${r.reason}).`)
   } catch (err) {
-    $.ui.toast(`Could not copy the value for step ${i + 1} (${message(err)}).`)
+    $.ui.toast(`Could not copy the ${what} for step ${i + 1} (${message(err)}).`)
   }
 }
 
@@ -380,7 +384,13 @@ export const register: Register = on => {
     return { element: e.element }
   })
   on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy' }, async ($, e) => {
-    await pressCopy($, e.surface)
+    await pressCopy($, 'value', e.surface)
+    return { element: e.element }
+  })
+  // Claude Code draws no hyperlinks on Apple Terminal, where a long link is text cut at the edge,
+  // so this is what takes the whole address there (#708).
+  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy-link' }, async ($, e) => {
+    await pressCopy($, 'url', e.surface)
     return { element: e.element }
   })
 

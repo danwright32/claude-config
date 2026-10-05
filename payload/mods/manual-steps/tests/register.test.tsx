@@ -228,7 +228,7 @@ const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(l => l.
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 // Dan pressing a button the card shows in the band, as he would: on mod-kit's drawing.
-const press = async ($: Engine, button: 'done' | 'copy') => {
+const press = async ($: Engine, button: 'done' | 'copy' | 'copy-link') => {
   const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: bandProps } as never)
   await ui.press({ key: `manual-steps:${button}` })
   await ui.unmount()
@@ -278,7 +278,7 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -315,7 +315,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -400,6 +400,25 @@ test('Copy puts the value on the clipboard, and says when it could not', withKit
   w.w.copied = false
   await press($, 'copy')
   expect(w.toasts[1]).toBe('Could not copy the value for step 1 (no-clipboard).')
+})
+
+// #708: Claude Code draws no hyperlinks on Apple Terminal, where a long link is plain text cut at
+// the edge, so Copy link is what takes the whole address on every terminal.
+test('Copy link puts the open step\'s whole link on the clipboard, and says when it could not', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf`
+  await hand($, [step({ url, value: 'ip.src eq 1.2.3.4' })])
+  await press($, 'copy-link')
+  expect(w.copies).toEqual([url])
+  expect(w.toasts).toEqual(['Copied the link for step 1.'])
+  w.w.copied = false
+  await press($, 'copy-link')
+  expect(w.toasts[1]).toBe('Could not copy the link for step 1 (no-clipboard).')
+  // Copy beside the value still copies the value.
+  w.w.copied = true
+  await press($, 'copy')
+  expect(w.copies[2]).toBe('ip.src eq 1.2.3.4')
 })
 
 test('when mod-kit refuses the row, the handover says the card could not be shown', withKit, async ($, on) => {
