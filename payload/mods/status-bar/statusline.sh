@@ -16,7 +16,9 @@
 #   Supabase project        SUPABASE_PROJECT_NAME or SUPABASE_URL in the nearest .env, nothing else
 #   cache time left         the mod's facts file for this session, the one thing only the mod knows
 #   account and org         ~/.claude.json, read again on every refresh, so a login changed in one
-#                           window shows in all of them (picker, 2026-10-04)
+#                           window shows in all of them (picker, 2026-10-04); the account room's
+#                           nickname for it, from ~/.claude/mods/account-room-nicknames.json, in
+#                           their place when one is set (2026-10-05)
 # A fact that cannot be read says so ("cache unknown", "account unknown"), never a blank.
 #
 # STATUSLINE_NOW (seconds since the epoch) stands in for the clock in tests.
@@ -164,7 +166,9 @@ if [ -f "$login" ]; then
     nicks="$HOME/.claude/mods/account-room-nicknames.json"
     if [ -n "$ids" ] && [ -f "$nicks" ] && command -v shasum >/dev/null 2>&1; then
       key="$(printf '%s' "$ids" | shasum -a 256 | cut -c1-16)"
-      nick="$(jq -r --arg k "$key" '.names[$k] // empty | strings' "$nicks" 2>/dev/null | head -1 | tr -cd '[:print:]')"
+      # Control bytes only are removed, which reads the same in every locale; a printable class
+      # would drop every byte of "Café" under the C locale a status line may run in.
+      nick="$(jq -r --arg k "$key" '.names[$k] // empty | strings' "$nicks" 2>/dev/null | head -1 | LC_ALL=C tr -d '\000-\037\177')"
       [ -n "$nick" ] && account="$nick"
     fi
     [ -n "$account" ] && parts+=("$account")

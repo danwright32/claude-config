@@ -101,6 +101,10 @@ printf 'not json' > "$NICK"; runit "$(input s1)"
 case "$out" in *"| Dan, Pennie") check "an unreadable nicknames file keeps the name and org" ok ;; *) check "an unreadable nicknames file keeps the name and org" "$out" ;; esac
 printf '{"v":1,"names":{"58f60981898d32e8":"Work\\u001b[31m"}}\n' > "$NICK"; runit "$(input s1)"
 case "$raw" in *$'\033[31m'*) check "a nickname cannot colour the line" "$(printf '%q' "$raw")" ;; *) check "a nickname cannot colour the line" ok ;; esac
+printf '{"v":1,"names":{"58f60981898d32e8":"Caf\u00e9 \u5bb6"}}\n' > "$NICK"
+raw="$(printf '%s' "$(input s1)" | HOME="$H" STATUSLINE_NOW="$NOW" LC_ALL=C LANG=C bash "$SCRIPT" 2>&1)"
+out="$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')"
+case "$out" in *"| Café 家") check "a non ASCII nickname survives a C locale" ok ;; *) check "a non ASCII nickname survives a C locale" "$out" ;; esac
 rm -f "$NICK"
 login Dan Personal
 
