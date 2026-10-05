@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { heldCard, heldTool, needsTheMac } from '../hooks/away.ts'
 import { programsOf } from '../hooks/program.ts'
+import { listed } from './listed.ts'
 
-// Each command with its program, read as the mod's tool call hook reads it.
-const needs = (raw: string, ...words: string[][]) => {
-  const programs = programsOf(words)
-  return needsTheMac({ raw, commands: words.map((w, i) => ({ words: w, ...(programs[i] ? { program: programs[i] } : {}) })) })
+// Each command with its program, read as the mod's tool call hook reads it; a '|' between two
+// commands is a pipe (listed.ts).
+const needs = (raw: string, ...items: (string[] | '|')[]) => {
+  const list = listed(...items)
+  const programs = programsOf(list)
+  return needsTheMac({ raw, commands: list.map(({ words }, i) => ({ words, ...(programs[i] ? { program: programs[i] } : {}) })) })
 }
 
 describe('needsTheMac: what is held while Dan is away', () => {
@@ -42,7 +45,7 @@ describe('needsTheMac: what is held while Dan is away', () => {
   })
   test('an AppleScript fed by a here-string or echo is judged by its text; one fed by a heredoc, which cannot be read, is held', () => {
     expect(needs(`osascript <<< 'tell application "Finder" to activate'`, ['osascript', '<<<tell application "Finder" to activate'])).toBe('Bring an app to the front')
-    expect(needs(`echo 'tell application "Finder" to activate' | osascript`, ['echo', 'tell application "Finder" to activate'], ['osascript'])).toBe('Bring an app to the front')
+    expect(needs(`echo 'tell application "Finder" to activate' | osascript`, ['echo', 'tell application "Finder" to activate'], '|', ['osascript'])).toBe('Bring an app to the front')
     expect(needs(`osascript <<'EOF'`, ['osascript', '<<EOF'])).toBe('Run an AppleScript on the Mac')
   })
 })

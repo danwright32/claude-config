@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { inScratch, noBuildRefusal, type Cmd } from '../hooks/nobuild.ts'
 import { execsOf, programsOf } from '../hooks/program.ts'
+import { listed } from './listed.ts'
 
 // Commands as mod-kit's reader hands them over: each simple command's words with quotes removed
 // (heredoc bodies dropped, `&` a separator, so `2>&1` arrives as `2>` then a command `1`), and git
@@ -12,16 +13,18 @@ const gitOf = (words: string[]) => {
   return { sub: rest[0], args: rest.slice(1) }
 }
 // Each command's program read as the mod's tool call hook reads it, from the same list, and the
-// commands a find -exec runs read after it the same way, as that hook reads them.
-const cmds = (...lines: string[][]): Cmd[] => {
-  const programs = programsOf(lines)
-  return lines.flatMap((words, i) => [
+// commands a find -exec runs read after it the same way, as that hook reads them. A '|' between two
+// commands is a pipe (listed.ts).
+const cmds = (...items: (string[] | '|')[]): Cmd[] => {
+  const list = listed(...items)
+  const programs = programsOf(list)
+  return list.flatMap(({ words }, i) => [
     { words, git: gitOf(words), ...(programs[i] ? { program: programs[i] } : {}) },
     ...execsOf(words).flatMap(inner => cmds(inner)),
   ])
 }
 const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/0a1b/scratchpad'
-const bash = (...lines: string[][]) => noBuildRefusal({ tool: 'Bash', input: {}, commands: cmds(...lines) })
+const bash = (...items: (string[] | '|')[]) => noBuildRefusal({ tool: 'Bash', input: {}, commands: cmds(...items) })
 const tool = (name: string, input: Record<string, unknown>) => noBuildRefusal({ tool: name, input, commands: [] })
 
 describe('inScratch', () => {
@@ -38,7 +41,7 @@ describe('inScratch', () => {
 describe('allowed in no build', () => {
   test('reading, research, tests and checks', () => {
     expect(bash(['cat', 'README.md'], ['rg', '-n', 'foo', 'src'])).toBeUndefined()
-    expect(bash(['npm', 'test'], ['tail', '-20'])).toBeUndefined()
+    expect(bash(['npm', 'test'], '|', ['tail', '-20'])).toBeUndefined()
     expect(bash(['bash', 'tests/test-mods.sh', '2>'], ['1'])).toBeUndefined()
     expect(bash(['git', 'status'], ['git', 'log', '--oneline', '-5'], ['git', 'diff'], ['git', 'branch'], ['git', 'branch', '--merged', 'main'])).toBeUndefined()
     expect(tool('Read', { file_path: '/Users/x/app.ts' })).toBeUndefined()
@@ -134,14 +137,14 @@ describe('refused in no build', () => {
     const fed = (r: ReturnType<typeof bash>) => r?.what
     expect(fed(bash(['python3', '-', '<<EOF']))).toBe('run a python3 script it cannot read (fed by a heredoc)')
     expect(fed(bash(['bash', '<<EOF']))).toBe('run a bash script it cannot read (fed by a heredoc)')
-    expect(fed(bash(['cat', '<<EOF'], ['sh']))).toBe('run a sh script it cannot read (fed by a heredoc)')
-    expect(fed(bash(['curl', '-fsSL', 'https://x.dev/i.sh'], ['bash']))).toBe('run a bash script it cannot read (fed by what curl pipes into it)')
+    expect(fed(bash(['cat', '<<EOF'], '|', ['sh']))).toBe('run a sh script it cannot read (fed by a heredoc)')
+    expect(fed(bash(['curl', '-fsSL', 'https://x.dev/i.sh'], '|', ['bash']))).toBe('run a bash script it cannot read (fed by what curl pipes into it)')
     // The refusal says how code that only reads can still run: inline, where it is read.
     expect(bash(['python3', '-', '<<EOF'])?.hint).toMatch(/-c/)
   })
   test('a script the reader kept is judged: a here-string, echo piped in, a clustered inline flag', () => {
     expect(what(bash(['python3', "<<<open('/repo/app.ts','w').write('x')"]))).toMatch(/^write files from python3 \(/)
-    expect(what(bash(['echo', "require('fs').rmSync('src',{recursive:true})"], ['node']))).toMatch(/^write files from node \(/)
+    expect(what(bash(['echo', "require('fs').rmSync('src',{recursive:true})"], '|', ['node']))).toMatch(/^write files from node \(/)
     expect(what(bash(['python3', '-Bc', "open('app.ts','w').write('x')"]))).toMatch(/^write files from python3 \(/)
     expect(what(bash(['node', '-p', "require('fs').writeFileSync('a','b')"]))).toMatch(/^write files from node \(/)
     expect(what(bash(['perl', '-ne', 'open(F, ">x"); unlink("a.ts")']))).toMatch(/^write files from perl \(/)

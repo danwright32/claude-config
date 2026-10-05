@@ -87,23 +87,26 @@ const NEST = 3
 // One read's list of commands, each built the same way: its git reading, its program, a shell's
 // program read as more commands, and what a find -exec runs read as commands of its own (lessons
 // review of #714: `find . -exec git checkout {} ;` and `-exec sh -c` went unread).
-const readList = async ($: EngineInterface, list: readonly string[][], depth: number): Promise<Cmd[]> => {
+const readList = async ($: EngineInterface, list: readonly { words: string[]; pipedFrom?: string[] }[], depth: number): Promise<Cmd[]> => {
   const programs = programsOf(list)
   const out: Cmd[] = []
   for (let i = 0; i < list.length; i++) {
-    const words = list[i] as string[]
+    const { words, pipedFrom } = list[i] as { words: string[]; pipedFrom?: string[] }
     const g = await $.modkit.git({ words })
     const p = programs[i]
     const inner = p && 'text' in p && isShell(words) ? p.text : undefined
     const deep = depth >= NEST
     const program = inner !== undefined && deep ? { unreadable: 'nested too deep in shells to read' } : p
     out.push({ words, ...(g ? { git: { sub: g.sub, args: g.args } } : {}), ...(program ? { program } : {}) })
-    if (inner !== undefined && !deep) out.push(...(await readCommands($, inner, depth + 1)))
-    for (const exec of execsOf(words)) out.push(...(deep ? [{ words: exec, program: { unreadable: 'nested too deep in shells to read' } }] : await readList($, [exec], depth + 1)))
+    if (inner !== undefined && !deep) out.push(...(await readCommands($, inner, depth + 1, pipedFrom)))
+    for (const exec of execsOf(words)) out.push(...(deep ? [{ words: exec, program: { unreadable: 'nested too deep in shells to read' } }] : await readList($, [{ words: exec }], depth + 1)))
   }
   return out
 }
-const readCommands = async ($: EngineInterface, raw: string, depth = 0): Promise<Cmd[]> => readList($, await $.modkit.commands({ command: raw }), depth)
+// Read through mod-kit's pipeline, which says which command a | feeds each from (#724). What a
+// shell runs reads what feeds the shell, wherever no | of its own feeds it, as mod-kit reads -c.
+const readCommands = async ($: EngineInterface, raw: string, depth = 0, pipedFrom?: string[]): Promise<Cmd[]> =>
+  readList($, (await $.modkit.pipeline({ command: raw })).map(c => (c.pipedFrom || !pipedFrom ? c : { ...c, pipedFrom })), depth)
 
 const run = async ($: EngineInterface, argv: string[]) => {
   try {
