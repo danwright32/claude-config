@@ -312,6 +312,45 @@ if [ -d "$ROOT/payload/mods" ]; then
     || check "every mod in payload/mods uses each dependency it lists" "exit=$code out=$out"
 fi
 
+# 12. The goal tracker reads picker manners' open question, `picker-manners.open`, as { id: string,
+#     question: { question: string } } (#694), and its own tests can only stand in for picker manners,
+#     so its reading is checked here against the contract picker manners declares (lessons review of
+#     #696, L52). Shown failing on a contract whose shape moved, then held on the real one.
+picker_contract(){   # $1 = picker manners' types file -> prints what does not match, exits 1 when anything does not
+  python3 - "$1" <<'PY'
+import re, sys
+try:
+    text = open(sys.argv[1]).read()
+except OSError as e:
+    print(f"cannot read {sys.argv[1]}: {e}")
+    sys.exit(1)
+wrong = []
+if not re.search(r"'picker-manners'\s*:\s*\{[^}]*\bopen\s*:\s*PickersOpen\s*\|\s*null", text):
+    wrong.append("PluginState 'picker-manners' does not declare open: PickersOpen | null")
+body = re.search(r"export type PickersOpen\s*=\s*\{(.*?)\n\}", text, re.S)
+if not body:
+    wrong.append("there is no PickersOpen type")
+else:
+    if not re.search(r"^\s*id\s*:\s*string\b", body.group(1), re.M):
+        wrong.append("PickersOpen has no id: string")
+    if not re.search(r"^\s*question\s*:\s*\{\s*question\s*:\s*string\b", body.group(1), re.M):
+        wrong.append("PickersOpen has no question: { question: string }")
+print("; ".join(wrong))
+sys.exit(1 if wrong else 0)
+PY
+}
+M12="$TMPROOT/m12"; mkdir -p "$M12"
+sed 's/^  id: string$/  callId: string/' "$ROOT/payload/mods/picker-manners/types/index.d.ts" > "$M12/moved.d.ts"
+out="$(picker_contract "$M12/moved.d.ts" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && case "$out" in *"PickersOpen has no id: string"*) true ;; *) false ;; esac \
+  && check "a picker manners contract whose open question moved fails the goal tracker's reading" ok \
+  || check "a picker manners contract whose open question moved fails the goal tracker's reading" "exit=$code out=$out"
+out="$(picker_contract "$ROOT/payload/mods/picker-manners/types/index.d.ts" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
+  || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"
+grep -q "PICKER_OPEN = { plugin: 'picker-manners', key: 'open' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
+  && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no PICKER_OPEN for picker-manners open in goal-tracker"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

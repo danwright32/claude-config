@@ -141,6 +141,7 @@ const callEnded = (id: string): boolean => {
 // the call's id, which picker manners keys the open question by, makes it one mark and one
 // notification.
 const PICKER_OPEN = { plugin: 'picker-manners', key: 'open' } as const
+let toldUnreadableQuestion = false
 // Another plugin's value is read, never trusted: the question's id and its text, or nothing.
 const openQuestionOf = (value: unknown): { id: string; text: string } | undefined => {
   const o = value as { id?: unknown; question?: { question?: unknown } } | null
@@ -252,6 +253,7 @@ export const register: Register = on => {
     project = undefined
     question = undefined
     permission = undefined
+    toldUnreadableQuestion = false
     // The calls running are left alone: they are calls in flight, not this session's record, and each
     // takes itself off as it ends, so a prompt raised inside one is still matched to it.
     await paneStart($)
@@ -388,7 +390,15 @@ export const register: Register = on => {
           await publish($, await nowOr($))
         }
       }
-    } else $.ui.log("goal-tracker: picker manners' open question could not be read, so it is not marked or notified.", { to: 'debug' })
+    } else {
+      // Each time in the debug log, and once a session in one dim line, the guards' note style: from
+      // here on the questions picker manners shows go unmarked (lessons review of #696).
+      $.ui.log("goal-tracker: picker manners' open question could not be read, so it is not marked or notified.", { to: 'debug' })
+      if (!toldUnreadableQuestion) {
+        toldUnreadableQuestion = true
+        $.ui.log('The goal tracker could not read the question picker manners holds open, so a question it shows is not marked as waiting on you or notified.')
+      }
+    }
     return r
   })
 
