@@ -133,12 +133,20 @@ first="$(record_total "$W")"
 # Incompressible bytes gzip to a little MORE than raw, so the total sits just above 180,000.
 if [ -n "$first" ] && [ "$first" -ge 180000 ] && [ "$first" -le 181000 ]; then ok; else bad "recorded total should be about 180,000 for two incompressible chunks, got '$first'"; fi
 
-# --- growth inside the margin passes and leaves the record where it was -------------------------
+# --- growth inside the margin passes and MOVES the record to it (claude-config#586) -------------
+# It used to leave the record where it was, so every change inside the margin left the next push
+# holding the bill: in Slate the record sat 11 KB behind main and a branch that changed no client
+# code read +2.7% against it. That decision is reversed, so the check asserting it is inverted.
 chunk "$W" ".next/static/chunks/small-ghi.js" 3000 60     # +1.7%, under 10 KB
 run_hook "$W" "git push"
 want_rc 0 "growth inside the margin passes"
 want_says "inside the margin" "and says the growth was inside the margin"
-[ "$(record_total "$W")" = "$first" ] && ok || bad "growth inside the margin must not move the record (was $first, now $(record_total "$W"))"
+moved="$(record_total "$W")"
+if [ -n "$moved" ] && [ "$moved" -gt "$first" ]; then ok; else bad "growth inside the margin must move the record to the new total (was $first, now '$moved')"; fi
+want_says "record moves to" "and says the record moved"
+# The next push with no client change reads as unchanged, not as the growth an earlier push made.
+run_hook "$W" "git push"
+want_says "unchanged" "a push after growth inside the margin reads as unchanged, not as that growth again"
 
 # --- the POSITIVE CONTROL: a planted dependency past both margins fails and names the culprits --
 chunk "$W" ".next/static/chunks/luxon-jkl.js" 24000 60    # about Luxon's gzipped weight
@@ -150,8 +158,8 @@ want_says "main-abc.js" "and the largest existing chunk"
 want_says "five largest" "as the five largest"
 want_says "ACCEPT_BUNDLE_GROWTH=1" "and offers the acceptance hatch"
 want_says "explain to the user" "and tells the reader to explain before overriding"
-want_says "$(printf '%s' "$first" | sed 's/\([0-9]\)\([0-9]\{3\}\)$/\1,\2/')" "and names the recorded total it grew from"
-[ "$(record_total "$W")" = "$first" ] && ok || bad "a refused push must not move the record"
+want_says "$(printf '%s' "$moved" | sed 's/\([0-9]\)\([0-9]\{3\}\)$/\1,\2/')" "and names the recorded total it grew from"
+[ "$(record_total "$W")" = "$moved" ] && ok || bad "a refused push must not move the record"
 
 # Both margins must be exceeded, not one: a large bundle growing by a lot of bytes but a small
 # share passes, and a tiny bundle growing by a large share but few bytes passes.
@@ -173,7 +181,7 @@ run_hook "$W" "ACCEPT_BUNDLE_GROWTH=1 git push"
 want_rc 0 "accepted growth passes"
 want_says "accepted growth" "and says it was accepted"
 accepted="$(record_total "$W")"
-if [ -n "$accepted" ] && [ "$accepted" -gt "$first" ]; then ok; else bad "acceptance must raise the record (was $first, now '$accepted')"; fi
+if [ -n "$accepted" ] && [ "$accepted" -gt "$moved" ]; then ok; else bad "acceptance must raise the record (was $first, now '$accepted')"; fi
 run_hook "$W" "git push"
 want_rc 0 "the same bundle passes against the accepted record"
 want_says "unchanged" "and reads as unchanged"
@@ -333,6 +341,39 @@ want_rc 0 "the visible override still clears the missing measurer refusal"
 # the refusal above is the reader's absence and not a fixture that refuses everything (L159).
 run_hook "$W" "git push"
 want_rc 0 "the control still allows the same push with python3 present"
+
+# --- a repository that COMMITS its own bundle budget record judges itself (claude-config#586) ----
+# Slate keeps its record at .githooks/bundle-budget.txt and judges growth against the copy at the
+# merge base (Try-Pennie/slate PR #2834). A second, global record beside it would be a second answer
+# to one question, and the drifting one, so this guard stands down there and says why. Proved
+# against the same fixture that blocks without the file: growth past both margins.
+W="$(mk_repo "$WORKDIR/own-record")"
+chunk "$W" ".next/static/chunks/main.js" 100000 60
+run_hook "$W" "git push"
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60
+run_hook "$W" "git push"
+want_rc 2 "the control: without a committed record, growth past both margins blocks"
+mkdir -p "$W/.githooks"
+printf '140000\n' > "$W/.githooks/bundle-budget.txt"
+git -C "$W" -c user.name=t -c user.email=t@t add .githooks/bundle-budget.txt >/dev/null 2>&1
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm record >/dev/null 2>&1
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
+# A record file that NOTHING in the repository reads judges nothing, so it is not a reason to stand
+# down, and the guard must not claim a hook is doing the judging (lessons review of PR #782, L11).
+run_hook "$W" "git push"
+want_rc 2 "a committed record that nothing reads does not stand the guard down"
+want_says "nothing in this repository reads it" "and the guard says why it did not stand down"
+# Now a tracked hook that reads the record, which is the shape Slate has.
+printf '#!/usr/bin/env bash\nrecord=.githooks/bundle-budget.txt\n' > "$W/.githooks/pre-push"
+git -C "$W" -c user.name=t -c user.email=t@t add .githooks/pre-push >/dev/null 2>&1
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm hook >/dev/null 2>&1
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
+before_rec="$(record_total "$W")"
+run_hook "$W" "git push"
+want_rc 0 "a repository committing its own record and a hook reading it is not judged here"
+want_says ".githooks/bundle-budget.txt" "and the stand down names the record"
+want_says ".githooks/pre-push" "and names the file that reads it"
+[ "$(record_total "$W")" = "$before_rec" ] && ok || bad "standing down must not touch the global record"
 
 echo
 echo "passed: $pass, failed: $fail"

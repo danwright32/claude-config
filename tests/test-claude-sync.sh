@@ -6696,7 +6696,10 @@ _cir_re='(gh|"\$gh")[[:space:]]+(run[[:space:]]+list|pr[[:space:]]+checks|api)'
 # remote no slug can be derived from (L11: a message may claim only what its check measured). A
 # literal repos/<owner>/<name> path counts too, since `gh api` has no --repo and that path is how
 # it names one; a {owner}/{repo} placeholder or a variable does not match the character class.
-_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+# An ACCOUNT endpoint is about no repository at all, so naming one is not possible and its answer
+# cannot be about the wrong one: `gh api rate_limit`, which the CI gate asks when a read was refused
+# for a used up limit (claude-config#593), and `gh api user`. Exempted by that reason, as a shape.
+_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|api[[:space:]]+(rate_limit|user)([[:space:]]|$)'
 _cir_lines(){   # $1 = a copy of the tool to read
   # Comments stripped and continuation lines joined, exactly as every other source scan here does
   # it, so a query split over two lines is judged as the one line it really is.
@@ -9506,8 +9509,9 @@ check "#337 and the refusal says it can no longer claim to reproduce CI" \
 # the list of what the suite actually shells out to, so it is read from there rather than kept by
 # hand beside it: a dependency added to CI would otherwise be absent from the container, and the
 # suite would fail there for a reason that has nothing to do with the code (L96, L41).
-_lin_probed="$( { sed -n 's/^ *\([a-z][a-z0-9_-]*\) --version.*/\1/p' "$_WF"
-                  sed -n 's/.*command -v \([a-z][a-z0-9_-]*\).*/\1/p' "$_WF"; } | sort -u | grep -v '^$' )"
+# Through the runner's own plan, the one place that list is derived, which
+# tests/test-ci-environment-tools.sh also reads (claude-config#624, L41).
+_lin_probed="$(SYNC_LINUX_PRINT_PLAN=1 bash "$_LIN" 2>/dev/null | sed -n 's/^probed: //p' | tr ' ' '\n' | grep -v '^$' )"
 # Counted and rendered BEFORE the check rather than inside it. A `printf ... | grep` written into a
 # check, title included, is the shape the #55 scan bans, and it is right to: a pair of greps over
 # one captured value can be answered by two unrelated parts of it.
@@ -12171,6 +12175,22 @@ printf '%s\n' "\$*" >> "$WORK/ci-calls.log"
 # the third would report a working lookup as a broken one (L10, L11).
 [ "\${CI_STATE:-}" = "none" ] && exit 0
 [ -n "\${CI_STATE:-}" ] || exit 1
+# A gh whose account has used up its REST limit (claude-config#593), in the words the real one
+# prints, and the rate_limit endpoint (which costs nothing against the limit) saying when it resets.
+if [ "\${CI_STATE:-}" = "ratelimited" ]; then
+  case "\$*" in
+    *rate_limit*) printf '%s %s\n' "\${CI_REMAINING:-0}" "\${CI_RESET:-0}"; exit 0 ;;
+  esac
+  # One error body per kind, in gh's own words, so the classifier is judged on what GitHub sends
+  # rather than one line of my own (L52).
+  case "\${CI_RL_KIND:-primary}" in
+    primary)   echo "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    secondary) echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    429)       echo "gh: Too many requests (HTTP 429)" >&2 ;;
+    other403)  echo "gh: Resource not accessible by integration (HTTP 403)" >&2 ;;
+  esac
+  exit 1
+fi
 printf '%s\n' "\$CI_STATE"
 STUB
 chmod +x "$CIBIN/gh"
@@ -12279,6 +12299,43 @@ check "#221 and it says it could not read the answer, not that it failed" \
   "case \"\$out_unread\" in *'could not read whether'*) true ;; *) false ;; esac"
 check "#221 and unreadable carries its own marker" \
   "case \"\$out_unread\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+check "#593 an unreadable verdict that is not a rate limit does not claim to be one" \
+  "case \"\$out_unread\" in *'rate limit'*) false ;; *) true ;; esac"
+
+# RATE LIMITED is unreadable for a reason the reader can do nothing about but wait, and it has a
+# known end (claude-config#593). On 2026-10-02 a CI review in another session used up the account's
+# REST limit for over 40 minutes and config sync paused on both Macs with nothing saying why. So the
+# cause and the reset time are said, in Eastern time, as Dan reads every time.
+_rl_reset=$(( $(date +%s) + 1500 ))
+# Formatted by perl rather than the tool's own date helper, so the expectation cannot share a
+# mistake with the code it judges (L70).
+_rl_when="$(TZ=America/New_York perl -MPOSIX -e 'print strftime("%-I:%M %p ET", localtime($ARGV[0]))' "$_rl_reset")"
+out_rl="$(CI_RESET="$_rl_reset" ci_case ratelimited ratelimited)"
+dbg "#593 rate limited: $out_rl"
+check "#593 a rate limited verdict is still not applied" "! ci_applied ratelimited"
+check "#593 and it names the rate limit as the cause" \
+  "case \"\$out_rl\" in *'rate limit'*) true ;; *) false ;; esac"
+check "#593 and when it resets, in Eastern time ($_rl_when)" \
+  "case \"\$out_rl\" in *\"\$_rl_when\"*) true ;; *) false ;; esac"
+check "#593 and it is still the unreadable outcome, so the watcher log and the clock treat it as one" \
+  "case \"\$out_rl\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+# A secondary limit leaves the primary one with calls to spare and has no reset time to quote, so
+# it is named as that rather than given a time the reader would wait for in vain (L11).
+out_rl_old="$(SYNC_CI_UNREADABLE_AFTER=0 CI_RESET="$_rl_reset" ci_case ratelimited-old ratelimited)"
+check "#593 past the window a rate limited verdict is applied like any unreadable one, and still names the cause" \
+  "case \"\$out_rl_old\" in *'WITHOUT a verdict'*\"\$_rl_when\"*) true ;; *) false ;; esac"
+# The KIND is read from gh's error text, never inferred from the rate_limit endpoint: here the
+# primary limit reads as used up too, and the secondary body must still win.
+out_rl2="$(CI_RL_KIND=secondary CI_RESET="$_rl_reset" ci_case ratelimited2 ratelimited)"
+check "#593 a secondary rate limit is named from gh's own text, without quoting the primary reset time" \
+  "case \"\$out_rl2\" in *'secondary rate limit'*) case \"\$out_rl2\" in *\"\$_rl_when\"*) false ;; *) true ;; esac ;; *) false ;; esac"
+out_rl3="$(CI_RL_KIND=429 CI_RESET="$_rl_reset" ci_case ratelimited3 ratelimited)"
+check "#593 an HTTP 429 is read as a rate limit, and as the short secondary kind" \
+  "case \"\$out_rl3\" in *'secondary rate limit'*) true ;; *) false ;; esac"
+# A 403 that is NOT a rate limit stays plainly unreadable, so its advice still points at gh's login.
+out_rl4="$(CI_RL_KIND=other403 CI_RESET="$_rl_reset" ci_case ratelimited4 ratelimited)"
+check "#593 a 403 that is not a rate limit is not called one" \
+  "case \"\$out_rl4\" in *'rate limit'*) false ;; *'could not read whether'*) true ;; *) false ;; esac"
 
 # AN UNREADABLE VERDICT MUST NOT BLOCK FOR EVER (claude-config#327). Failing closed is right while
 # the answer might still arrive, and wrong once it is clear no answer is coming: gh not logged in,
@@ -18679,6 +18736,160 @@ rm -f "$S38HB/skills/s638/SKILL.md"
 out_638u="$(SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
 check "#638 a stale file in a skill that cannot load is not offered the pull remedy" \
   "! line_has \"\$out_638u\" 'earlier version' 'skills/s638'"
+
+section "== the status line and the shared settings are written into each Mac's settings.json (#772, #695) =="
+# 2026-10-05: the status bar mod reached Dans-MacBook-Pro and its status line never showed, because
+# the statusLine setting naming its script lives in each Mac's own settings.json, which the sync did
+# not write, and nothing said it was missing (#772). And Dan chose to have ONE other setting,
+# ultracode, carried between the Macs from an allowlisted payload file, without reopening the rule
+# that the rest of settings.json stays per Mac (#695).
+sx_repo(){   # $1 = a fresh repo dir  $2 = shared settings JSON, or empty for none  $3 = 1 to carry the status bar mod
+  git init -q "$1"; mkdir -p "$1/payload"
+  [ -n "$2" ] && printf '%s\n' "$2" > "$1/payload/settings.shared.json"
+  if [ "${3:-}" = 1 ]; then
+    mkdir -p "$1/payload/mods/status-bar"
+    printf '#!/usr/bin/env bash\necho status\n' > "$1/payload/mods/status-bar/statusline.sh"
+  fi
+  return 0
+}
+sx_pull(){   # $1 = home  $2 = repo -> output
+  CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true
+}
+SX_ORIG='{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"bash x.sh"}]}]},"model":"opus","effortLevel":"high","permissions":{"allow":["Bash(ls)"]}}'
+
+# A FRESH MAC: no statusLine and no ultracode.
+SX1R="$WORK/sx1-repo"; sx_repo "$SX1R" '{"ultracode": true}' 1
+SX1H="$WORK/sx1-home"; mkdir -p "$SX1H"; printf '%s\n' "$SX_ORIG" > "$SX1H/settings.json"
+out_sx1="$(sx_pull "$SX1H" "$SX1R")"
+dbg "#772 first pull on a fresh Mac: $out_sx1"
+check "#772 fixture: the status bar script arrived" "[ -f '$SX1H/mods/status-bar/statusline.sh' ]"
+check "#772 a pull writes statusLine naming this Mac's own copy of the script" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX1H/settings.json')\" = 'bash $SX1H/mods/status-bar/statusline.sh' ]"
+check "#772 as a command status line" "[ \"\$(jq -r '.statusLine.type' '$SX1H/settings.json')\" = command ]"
+check "#695 a pull sets ultracode from the shared settings file" "[ \"\$(jq -r '.ultracode' '$SX1H/settings.json')\" = true ]"
+check "#772 #695 every other setting is exactly as it was" \
+  "[ \"\$(jq -cS 'del(.statusLine, .ultracode)' '$SX1H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "#772 #695 and the pull names what it wrote" "line_has \"\$out_sx1\" 'settings.json' 'status line' && line_has \"\$out_sx1\" 'settings.json' 'ultracode'"
+# A second pull with nothing new leaves the file and its mtime alone: settings.json is a WatchPath,
+# and a needless rewrite would trigger the next sync. The mtime is SET into the past rather than
+# waited on, so a rewrite in the same second cannot hide (L290).
+touch -t 202001010000 "$SX1H/settings.json"; _sx1sum="$(cksum < "$SX1H/settings.json")"
+out_sx1b="$(sx_pull "$SX1H" "$SX1R")"
+check "#772 #695 a second pull with nothing new leaves settings.json byte for byte" "[ \"\$(cksum < '$SX1H/settings.json')\" = \"\$_sx1sum\" ]"
+check "#772 #695 and leaves its mtime untouched" "[ \"\$(_suite_mtime '$SX1H/settings.json')\" -lt 1600000000 ]"
+check "#772 #695 and claims to have written nothing there" "! line_has \"\$out_sx1b\" 'settings.json' 'status line' && ! line_has \"\$out_sx1b\" 'settings.json' 'ultracode'"
+
+# ONE ALREADY SET CORRECTLY, with a refresh interval of its own: kept exactly as it is.
+SX2H="$WORK/sx2-home"; mkdir -p "$SX2H"
+jq -c --arg c "bash $SX2H/mods/status-bar/statusline.sh" '. + {statusLine: {type: "command", command: $c, refreshInterval: 10}, ultracode: true}' <<< "$SX_ORIG" > "$SX2H/settings.json"
+_sx2sum="$(cksum < "$SX2H/settings.json")"
+sx_pull "$SX2H" "$SX1R" >/dev/null
+check "#772 a status line already naming this Mac's script is left byte for byte" "[ \"\$(cksum < '$SX2H/settings.json')\" = \"\$_sx2sum\" ]"
+
+# ONE SET TO SOMETHING ELSE: never overwritten, and named by status.
+SX3H="$WORK/sx3-home"; mkdir -p "$SX3H"
+jq -c '. + {statusLine: {type: "command", command: "bash /elsewhere/my-line.sh"}}' <<< "$SX_ORIG" > "$SX3H/settings.json"
+sx_pull "$SX3H" "$SX1R" >/dev/null
+check "#772 a status line pointing somewhere else is not overwritten" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX3H/settings.json')\" = 'bash /elsewhere/my-line.sh' ]"
+check "#772 #695 while the shared setting still lands beside it" "[ \"\$(jq -r '.ultracode' '$SX3H/settings.json')\" = true ]"
+out_sx3s="$(CLAUDE_HOME="$SX3H" SYNC_REPO="$SX1R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#772 status with a status line elsewhere: $out_sx3s"
+check "#772 status names a status line set to another command" \
+  "line_has \"\$out_sx3s\" 'statusLine' '/elsewhere/my-line.sh' && line_has \"\$out_sx3s\" 'statusLine' 'mods/status-bar/statusline.sh'"
+# Control (L159): the Mac set correctly gets no such line.
+out_sx2s="$(CLAUDE_HOME="$SX2H" SYNC_REPO="$SX1R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#772 and says nothing about a status line that is already right" "! grep -q 'statusLine' <<< \"\$out_sx2s\""
+
+# A MAC WITHOUT THE STATUS BAR MOD gets no status line at all, and a missing shared file sets nothing.
+SX4R="$WORK/sx4-repo"; sx_repo "$SX4R" '' ''
+SX4H="$WORK/sx4-home"; mkdir -p "$SX4H"; printf '%s\n' "$SX_ORIG" > "$SX4H/settings.json"; _sx4sum="$(cksum < "$SX4H/settings.json")"
+sx_pull "$SX4H" "$SX4R" >/dev/null
+check "#772 #695 a Mac with neither the mod nor a shared file keeps settings.json byte for byte" "[ \"\$(cksum < '$SX4H/settings.json')\" = \"\$_sx4sum\" ]"
+
+# A KEY OUTSIDE THE ALLOWLIST is refused by name and nothing from the file is written, so the file
+# cannot become a back door for model or effort.
+SX5R="$WORK/sx5-repo"; sx_repo "$SX5R" '{"ultracode": true, "model": "haiku"}' ''
+SX5H="$WORK/sx5-home"; mkdir -p "$SX5H"; printf '%s\n' "$SX_ORIG" > "$SX5H/settings.json"; _sx5sum="$(cksum < "$SX5H/settings.json")"
+out_sx5="$(sx_pull "$SX5H" "$SX5R")"
+dbg "#695 a shared file carrying a key outside the allowlist: $out_sx5"
+check "#695 a key outside the allowlist is refused, naming it" "line_has \"\$out_sx5\" 'settings.shared.json' 'model'"
+check "#695 and nothing from that file is written" "[ \"\$(cksum < '$SX5H/settings.json')\" = \"\$_sx5sum\" ]"
+
+# OFF IS false, never a deletion: a shared false turns a local true off.
+SX6R="$WORK/sx6-repo"; sx_repo "$SX6R" '{"ultracode": false}' ''
+SX6H="$WORK/sx6-home"; mkdir -p "$SX6H"; jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX6H/settings.json"
+sx_pull "$SX6H" "$SX6R" >/dev/null
+check "#695 a shared false turns ultracode off" "[ \"\$(jq -r '.ultracode' '$SX6H/settings.json')\" = false ]"
+
+# AN UNREADABLE settings.json fails loud and is left exactly as it was.
+SX7H="$WORK/sx7-home"; mkdir -p "$SX7H"; printf '{ not json\n' > "$SX7H/settings.json"; _sx7sum="$(cksum < "$SX7H/settings.json")"
+out_sx7="$(sx_pull "$SX7H" "$SX1R")"
+check "#695 #772 an unreadable settings.json is left exactly as it was" "[ \"\$(cksum < '$SX7H/settings.json')\" = \"\$_sx7sum\" ]"
+check "#695 #772 and the pull says the settings could not be written" "line_has \"\$out_sx7\" 'settings.json' 'ultracode' 'could not'"
+
+# APPLIED IS JUDGED BY THE VALUE, not by a file of that name: settings.shared.json never lands under
+# its own name, so a byte comparison would call it unapplied for ever (the comment above
+# payload_path_applied). Seen through status, which lists what this clone holds and has not applied.
+SX8B="$WORK/sx8-bare.git"; git init -q --bare -b main "$SX8B"
+SX8D="$WORK/sx8-dev"; git clone -q "$SX8B" "$SX8D" 2>/dev/null; mkdir -p "$SX8D/payload"; printf '# rules\n' > "$SX8D/payload/CLAUDE.md"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m base 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+SX8C="$WORK/sx8-clone"; git clone -q "$SX8B" "$SX8C" 2>/dev/null
+SX8H="$WORK/sx8-home"; mkdir -p "$SX8H"; printf '%s\n' "$SX_ORIG" > "$SX8H/settings.json"
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf '{"ultracode": true}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'share ultracode' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+# The clone moves to the new commit WITHOUT an apply, which is the state status reports on.
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#695 fixture: the clone holds the shared file and the Mac has not applied it" \
+  "[ -f '$SX8C/payload/settings.shared.json' ] && [ \"\$(jq -r '.ultracode' '$SX8H/settings.json')\" = null ]"
+out_sx8a="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 before the value is in settings.json, status lists the shared file as not applied" \
+  "line_has \"\$out_sx8a\" 'settings.shared.json' 'has not applied'"
+jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8b="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 once the value is there, status no longer lists it" "! line_has \"\$out_sx8b\" 'settings.shared.json' 'has not applied'"
+# And a send never publishes the shared file from settings.json, nor mirrors it away: it is edited in
+# the repo only. Applied first, so the Mac is not behind and the send really stages and publishes
+# (review of #775: a send refused for being behind proved nothing, L159).
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+jq -c '. + {ultracode: false}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+printf '# rules, edited on this Mac\n' > "$SX8H/CLAUDE.md"
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+_sx8main="$(git -C "$SX8B" show main:payload/CLAUDE.md 2>/dev/null || true)"
+check "#695 fixture: the send really published" "case \"\$_sx8main\" in *'edited on this Mac'*) true ;; *) false ;; esac"
+check "#695 a send leaves the shared file in the shared repo as the repo holds it" \
+  "[ \"\$(git -C '$SX8B' show main:payload/settings.shared.json 2>/dev/null | jq -r '.ultracode')\" = true ]"
+# A SHARED FILE THE APPLY REFUSES has nothing to apply, so status must not list it as unapplied for
+# ever: no pull can ever satisfy it, and the refusal is already said by the apply (review of #775).
+git -C "$SX8D" pull -q origin main 2>/dev/null
+printf '{"ultracode": "yes"}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'a bad shared value' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#695 fixture: the clone holds the refused shared file" "[ \"\$(jq -r '.ultracode' '$SX8C/payload/settings.shared.json')\" = yes ]"
+out_sx8c="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 a shared file the apply refuses is not listed as unapplied" "! line_has \"\$out_sx8c\" 'settings.shared.json' 'has not applied'"
+
+# AN ALLOWED KEY OF THE WRONG TYPE is refused by name too (review of #775): ultracode is a boolean,
+# and "yes" or null written into settings.json is a value Claude Code may read either way.
+SX9R="$WORK/sx9-repo"; sx_repo "$SX9R" '{"ultracode": "yes"}' ''
+SX9H="$WORK/sx9-home"; mkdir -p "$SX9H"; printf '%s\n' "$SX_ORIG" > "$SX9H/settings.json"; _sx9sum="$(cksum < "$SX9H/settings.json")"
+out_sx9="$(sx_pull "$SX9H" "$SX9R")"
+check "#695 an allowed key of the wrong type is refused, naming it" "line_has \"\$out_sx9\" 'settings.shared.json' 'ultracode' 'boolean'"
+check "#695 and nothing from a file with a wrong type is written" "[ \"\$(cksum < '$SX9H/settings.json')\" = \"\$_sx9sum\" ]"
+
+# A MAC WITH NO settings.json gets one only when a write succeeds (review of #775): a stub left by a
+# failed write is a file the Mac did not have. A failed write is forced by a jq that always fails.
+SX10H="$WORK/sx10-home"; mkdir -p "$SX10H/bin"
+printf '#!/usr/bin/env bash\ncase "$*" in *statusLine*) exit 5 ;; esac\nexec %s "$@"\n' "$(command -v jq)" > "$SX10H/bin/jq"; chmod +x "$SX10H/bin/jq"
+SX10R="$WORK/sx10-repo"; sx_repo "$SX10R" '' 1
+# Only the write's own filter mentions statusLine as an assignment target, so only that call fails.
+PATH="$SX10H/bin:$PATH" CLAUDE_HOME="$SX10H" SYNC_REPO="$SX10R" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#772 a failed write on a Mac with no settings.json leaves none behind" "[ ! -e '$SX10H/settings.json' ]"
+SX11H="$WORK/sx11-home"; mkdir -p "$SX11H"
+sx_pull "$SX11H" "$SX10R" >/dev/null
+check "#772 and a write that succeeds there creates it with the status line" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX11H/settings.json' 2>/dev/null)\" = 'bash $SX11H/mods/status-bar/statusline.sh' ]"
 
 suite_profile
 echo ""
