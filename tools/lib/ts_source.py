@@ -13,7 +13,9 @@ matcher need. Where a slash or a < could start either, it decides by what came b
 language does: after an expression (a name, a number, a closing bracket) it is division or less
 than, anywhere else a regex literal or a JSX element. A TSX generic arrow (<T,>, <T extends U>) is
 not an element. Known to misread: a type position generic call signature in a .tsx file written as
-<T>(...), which no mod writes.
+<T>(...), which no mod writes; and, in a named hook's arrow body, a statement that goes on past a
+line break only because the next line starts with ( [ or a template literal, or because the line
+ends in a comparison's > (taken for a generic's close), is read as ending at the break.
 
 As a command:
   ts_source.py strip-hooks <mods dir> <out dir>
@@ -352,12 +354,17 @@ def tool_call_hooks(text, jsx=False):
         if "=>" in span or re.search(r"\bfunction\b", span) or not handler:
             hooks.append((line, span))
             continue
-        hooks.append((line, _definition(code, handler.group(1))))
+        hooks.append((line, _definition(code, handler.group(1), raw_kinds)))
     return hooks
 
 
-def _definition(code, name):
-    """The code of the function named name, from its definition to the end of its body, or None."""
+# What a string, a regex literal or JSX text is, blanked in the code view: an operand.
+OPERANDS = (STRING, REGEX, TEXT)
+
+
+def _definition(code, name, kind):
+    """The code of the function named name, from its definition to the end of its body, or None.
+    kind is kinds() of the same text, which tells a blanked string from a space."""
     m = re.search(r"\b(?:const|let|var)\s+" + re.escape(name) + r"\b[^=]*=(?!=)|\bfunction\s+" + re.escape(name) + r"\b", code)
     if not m:
         return None
@@ -376,10 +383,10 @@ def _definition(code, name):
             angles, after_type_mark = 0, False
             i += 2
             continue
-        if arrow and not c.isspace() and c != "{":
+        if arrow and c != "{" and (not c.isspace() or kind[i] in OPERANDS):
             # An expression body, read whole to the end of its statement, a bracketed one included
-            # however it ends, the file's end among them (#739).
-            end = _statement_end(code, i)
+            # however it ends, the file's end among them (#739); a string is one too.
+            end = _statement_end(code, i, kind)
             return None if end is None else code[m.start() : end]
         if c == "<":
             angles += 1
@@ -411,10 +418,11 @@ def _definition(code, name):
     return None
 
 
-def _statement_end(code, i):
-    """In code, where the expression starting at i ends: at a ; or a line break outside its brackets,
-    at a bracket closing one it stands inside, or at the end of the file. Each bracket in it is read
-    whole, so a call spread over lines is one expression; None when one never closes."""
+def _statement_end(code, i, kind):
+    """In code, where the expression starting at i ends: at a ; outside its brackets, at a line break
+    there unless the statement goes on past it, at a bracket closing one it stands inside, or at the
+    end of the file. Each bracket in it is read whole, so a call spread over lines is one expression;
+    None when one never closes."""
     n = len(code)
     while i < n:
         c = code[i]
@@ -423,10 +431,37 @@ def _statement_end(code, i):
             if i is None:
                 return None
             continue
-        if c in ";\n)]}":
+        if c in ";)]}" or (c == "\n" and not _goes_on(code, i, kind)):
             return i
         i += 1
     return n
+
+
+# A line ending in one of these goes on into the next (=> included, never a generic's closing >, the
+# ++ or -- that ends what it follows, or TypeScript's non-null !) ...
+GOES_ON_AFTER = set("=+-*/%&|^<?:,.")
+# ... and so does one followed by a line starting with one of these (a ternary, ?? or ||, a .then).
+GOES_ON_BEFORE = set("=+-*/%&|^<>?:,.")
+
+
+def _goes_on(code, j, kind):
+    """Whether the statement holding the line break at j goes on past it, as the language reads it:
+    by the last code before the break and the first after it, a comment between them passed over and
+    a string or regex literal at either end taken as the operand it is."""
+    skip = lambda k: code[k].isspace() and kind[k] not in OPERANDS
+    a = j - 1
+    while a >= 0 and skip(a):
+        a -= 1
+    if a >= 0 and kind[a] == CODE:
+        last = code[a]
+        if last == ">" and code[a - 1 : a] == "=":
+            return True
+        if last in GOES_ON_AFTER and not (last in "+-" and code[a - 1 : a] == last):
+            return True
+    b = j + 1
+    while b < len(code) and skip(b):
+        b += 1
+    return b < len(code) and kind[b] == CODE and code[b] in GOES_ON_BEFORE
 
 
 ANSWERS = re.compile(r"\{\s*result\s*:|^\s*result\s*:", re.M)

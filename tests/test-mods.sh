@@ -339,6 +339,36 @@ mkmodsrc "$M9P" named-call-across-lines "export const register = on => { on('too
 const answer = async (\$, e) => done({
   result: 'Saved.',
 })"
+# Each way the body can end (lessons review of #739): the file's very end with no line break after
+# it, a ;, the close of a bracket around it, and a bracket that never closes, which is not known.
+mkmodsrc "$M9P" named-expression-at-eof ""
+printf '%s' "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => ({ result: 'Saved.' })" > "$M9P/named-expression-at-eof/hooks/register.ts"
+mkmodsrc "$M9P" named-expression-semicolon "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => ({ result: 'Saved.' }); const other = async (\$, e) => \$.modkit.screen(e)"
+mkmodsrc "$M9P" named-expression-in-block "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+function wrap() { const answer = async (\$, e) => ({ result: 'Saved.' }) } const other = async (\$, e) => \$.modkit.screen(e)"
+mkmodsrc "$M9P" named-expression-unclosed "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => ({ result: 'Saved.' }"
+# A line break ends the body only where the statement does: one going on with an operator at the end
+# of a line or the start of the next is read on, and one ending in a string is not.
+mkmodsrc "$M9P" named-ternary-across-lines "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => (await check(e))
+  ? undefined
+  : { result: 'Saved.' }"
+mkmodsrc "$M9P" named-then-chain "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => check(e)
+  .then(() => ({ result: 'Saved.' }))"
+mkmodsrc "$M9P" named-operator-at-line-end "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) =>
+  (await check(e)) ??
+  { result: 'Saved.' }"
+mkmodsrc "$M9P" named-string-at-line-end "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => ({ result: 'Saved.' }) && 'done'
+const other = async (\$, e) => \$.modkit.screen(e)"
+mkmodsrc "$M9P" clean-string-body "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => 'Saved.'
+const other = async (\$, e) => ({ result: 'Other.' })"
 out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod with an answering hook that never asks the screen fails, beside one that does" ok \
   || check "a mod with an answering hook that never asks the screen fails, beside one that does" "exit=$code out=$out"
@@ -349,10 +379,13 @@ for m in screen-in-a-comment named-unscreened; do
   printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.screen(e)' && check "and names $m" ok || check "and names $m" "$out"
 done
 case "$out" in *both-screened*|*named-screened*|*named-typed-screened*|*named-literal-type-screened*) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" "$out" ;; *) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" ok ;; esac
-for m in named-expression-last named-expression-goes-on named-call-across-lines; do
+for m in named-expression-last named-expression-goes-on named-call-across-lines named-expression-at-eof named-expression-semicolon named-expression-in-block named-ternary-across-lines named-then-chain named-operator-at-line-end named-string-at-line-end; do
   printf '%s\n' "$out" | grep -q "$m answers a tool call itself in its tool.call hook at /hooks/register.ts:1 but never asks" \
     && check "and reads $m's expression body whole, naming it" ok || check "and reads $m's expression body whole, naming it" "$out"
 done
+printf '%s\n' "$out" | grep -q "named-expression-unclosed's tool.call hook at /hooks/register.ts:1 answers through a named function that cannot be found" \
+  && check "and a body whose bracket never closes is said to be unknown, never passed" ok || check "and a body whose bracket never closes is said to be unknown, never passed" "$out"
+case "$out" in *clean-string-body*) check "a string body is the body, never the line after it" "$out" ;; *) check "a string body is the body, never the line after it" ok ;; esac
 # #732 (lessons review of #731): a walk for a checkout is caught however its .git entry is spelled,
 # joined, bare or inside a longer path, and a name that merely starts with .git is not one.
 M9G="$TMPROOT/m9g"
