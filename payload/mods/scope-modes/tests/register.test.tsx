@@ -13,12 +13,29 @@ type Row = { mod: string; id: string; slot: string; frame?: { kind: string }; li
 const deps: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
-    const read = (cmd: string): string[][] =>
-      cmd
+    // mod-kit drops a heredoc's body before reading, and so does this stand-in; a command naming
+    // __reader_fails stands for a reader that throws.
+    const dropBodies = (cmd: string) => {
+      const out: string[] = []
+      let end: string | undefined
+      for (const line of cmd.split('\n')) {
+        if (end !== undefined) {
+          if (line.trim() === end) end = undefined
+          continue
+        }
+        out.push(line)
+        end = /<<-?\s*'?"?([A-Za-z_]+)/.exec(line.replace(/<<</g, ''))?.[1]
+      }
+      return out.join('\n')
+    }
+    const read = (cmd: string): string[][] => {
+      if (cmd.includes('__reader_fails')) throw new Error('the reader broke')
+      return dropBodies(cmd)
         .split(/&&|;|\||\n/)
         .map(part => [...part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)].map(m => m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2')))
         .map(w => w.filter(x => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(x) || false))
         .filter(w => w.length > 0)
+    }
     // mod-kit's retry of a mod's refused send (its hooks/send.ts), standing in: once more when
     // refused, never after a throw, the reason tidied. mod-kit's own tests prove the real one.
     on('session.send', async ($, e, next) => {
@@ -335,6 +352,31 @@ test('no build allows reading, tests, scratchpad notes and issue work, and refus
   expect(await call($ as never, bash('gh pr create --fill'))).toMatch(/did not run gh pr create/)
 })
 
+test('no build refuses a script fed to python or a shell by a heredoc, and reads what a shell runs through -lc (#702)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const heredoc = await call($ as never, bash("python3 - <<'EOF'\nopen('/repo/app.ts','w').write('x')\nEOF", 'h1'))
+  expect(heredoc).toMatch(/^Blocked: no build is on, so this did not run a python3 script it cannot read \(fed by a heredoc\)\. Code passed inline \(python3 -c, node -e\) is read and judged/)
+  expect(await call($ as never, bash("cat <<'EOF' | sh\necho x > /repo/app.ts\nEOF"))).toMatch(/did not run a sh script it cannot read \(fed by a heredoc\)/)
+  expect(await call($ as never, bash("bash -lc 'echo x > /repo/app.ts'"))).toMatch(/did not write to app\.ts/)
+  expect(await call($ as never, bash("python3 -c 'print(1)'"))).toBe('ran')
+  expect(w.reached).toEqual(["python3 -c 'print(1)'"])
+  expect(w.cards[0]).toEqual({ toolUseId: 'h1', guard: 'No build', reason: 'No build is on, so this would not run a python3 script it cannot read (fed by a heredoc).', safeWay: 'Claude asks you: Switch to build?' })
+})
+
+test('a mode whose check of a call throws refuses the call rather than letting it through (L42)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  // Nothing on: nothing is checked, so nothing can fail.
+  expect(await call($ as never, bash('echo __reader_fails'))).toBe('ran')
+  await command($ as never, 'nobuild')
+  const r = await call($ as never, bash('echo __reader_fails'))
+  expect(r).toMatch(/^Blocked: no build is on and its check of this call failed \(.*\), so the call did not run\./)
+  expect(r).toMatch(/the reader broke/)
+  expect(w.reached).toEqual(['echo __reader_fails'])
+})
+
 test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts no build', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ask: 'No' })
   await start($ as never, clock)
@@ -503,6 +545,32 @@ test('away: Claude is told to publish pages for the phone; opening on the Mac is
   expect(w.cards).toEqual([{ toolUseId: 'o1', guard: 'Away', reason: 'Held for when you are back: Open report.html in Google Chrome.', safeWay: 'Claude publishes a private page for your phone instead.' }])
   // No card while away: Dan is not at the Mac to press it.
   expect(w.bands).toEqual([])
+})
+
+test('away holds a browser opened by another tool, the Artifact open action and an AppleScript dialog, and a press replays the call (#702)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 'p1' } as never)).toMatch(
+    /^Held: Dan is away from the Mac, so "Open https:\/\/x\.dev\/a in the Playwright browser" waits for him to come back\./,
+  )
+  expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p2' } as never)).toMatch(/"Open https:\/\/claude\.ai\/artifact\/abc" waits/)
+  expect(await call($ as never, bash(`osascript -e 'display dialog "Done?"'`, 'p3'))).toMatch(/"Show a dialog on the Mac" waits/)
+  // Publishing the page for the phone goes ahead.
+  expect(await call($ as never, { tool: 'Artifact', file_path: '/tmp/p.html', tool_use_id: 'p4' } as never)).toBe('ran')
+  expect(w.reached).toEqual(['/tmp/p.html'])
+  expect(w.cards.map(c => c.reason)).toEqual([
+    'Held for when you are back: Open https://x.dev/a in the Playwright browser.',
+    'Held for when you are back: Open https://claude.ai/artifact/abc.',
+    'Held for when you are back: Show a dialog on the Mac.',
+  ])
+  await command($ as never, 'home')
+  const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
+  await ui.press({ key: 'scope-modes:held-1' })
+  await ui.unmount()
+  expect(w.prompts).toEqual([
+    'Dan is back and picked this from what was held while he was away: Open https://x.dev/a in the Playwright browser. Do it now. What was held: mcp__playwright__browser_navigate {"url":"https://x.dev/a"}',
+  ])
 })
 
 test('no build and away together both show, scope first', withDeps, async ($, on) => {

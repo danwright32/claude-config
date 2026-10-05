@@ -1,5 +1,6 @@
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesHeld } from '../types/index.d.ts'
+import type { Program } from './program.ts'
 
 // Away and home (#621). While Dan is away nothing opens on the Mac and nothing takes focus: what
 // needs him at the Mac is held, and on coming home each session shows what it held in one boxed
@@ -20,16 +21,20 @@ const targetApp = (raw: string): string | undefined => {
   return app ? (app[1] as string) : base(path)
 }
 
-// An AppleScript that only reads (the frontmost app's name, a window list) takes no focus.
+// An AppleScript that only reads (the frontmost app's name, a window list) takes no focus, and nor
+// does a notification banner; a dialog does, and waits for a press nobody is there to give (#702).
 const SCRIPT_ACTS = /\b(?:keystroke|key code|click|activate|frontmost to true|set frontmost|open location|reopen|launch|open)\b/i
 const SCRIPT_TYPES = /\b(?:keystroke|key code|click)\b/i
+const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from list|color|application|remote application|URL|file name))\b/i
 
 /**
  * What a Bash call would do on the Mac that needs Dan there (open something, take focus, type or
  * click), as the line his held card names it by, or undefined when it needs nothing of the Mac.
+ * Each command comes with the program it runs (program.ts), so an AppleScript fed on standard
+ * input is judged too.
  */
-export const needsTheMac = (call: { raw: string; commands: string[][] }): string | undefined => {
-  for (const words of call.commands) {
+export const needsTheMac = (call: { raw: string; commands: { words: string[]; program?: Program }[] }): string | undefined => {
+  for (const { words, program } of call.commands) {
     const cmd = base(words[0] ?? '')
     const args = words.slice(1)
     if (cmd === 'open') {
@@ -48,7 +53,10 @@ export const needsTheMac = (call: { raw: string; commands: string[][] }): string
       return files.length ? `Open ${files.join(', ')} in BBEdit` : 'Open BBEdit'
     }
     if (cmd === 'osascript') {
-      const script = args.filter(a => !isFlag(a)).join(' ')
+      // A script whose text the reader never saw (a heredoc's body) may do anything on the Mac.
+      if (program && 'unreadable' in program) return 'Run an AppleScript on the Mac'
+      const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program ? [program.text] : [])].join(' ')
+      if (SCRIPT_DIALOG.test(script)) return 'Show a dialog on the Mac'
       if (!SCRIPT_ACTS.test(script)) continue
       const app = targetApp(call.raw)
       if (SCRIPT_TYPES.test(script)) return app ? `Type into ${app}` : 'Type into an app'
@@ -58,6 +66,31 @@ export const needsTheMac = (call: { raw: string; commands: string[][] }): string
       const app = targetApp(call.raw)
       return app ? `Click in ${app}` : `Click or type with ${cmd}`
     }
+  }
+  return undefined
+}
+
+/**
+ * What a call to a tool other than Bash would open on the Mac (#702), as its held row reads, or
+ * undefined: a browser opened or pointed somewhere, by Playwright or in Dan's Chrome, and the
+ * Artifact tool's open action, which opens the page in his browser. Reading a page already open
+ * and publishing a page go ahead. An MCP tool is `mcp__<server>__<tool>`, its server's name
+ * standing in a plugin's (`mcp__plugin_playwright_playwright__`).
+ */
+export const heldTool = (tool: string, input: Record<string, unknown>): string | undefined => {
+  const url = typeof input.url === 'string' ? shown(input.url) : undefined
+  if (tool === 'Artifact') return input.action === 'open' ? `Open ${url ?? 'the page'}` : undefined
+  const at = tool.lastIndexOf('__')
+  if (!tool.startsWith('mcp__') || at < 5) return undefined
+  const server = tool.slice(5, at).toLowerCase()
+  const name = tool.slice(at + 2)
+  if (server.includes('playwright')) {
+    if (name === 'browser_navigate') return `Open ${url ?? 'a page'} in the Playwright browser`
+    if (name === 'browser_tabs' && (input.action === 'new' || input.action === 'select')) return 'Open a tab in the Playwright browser'
+  }
+  if (server.includes('chrome')) {
+    if (name === 'navigate') return `Open ${url ?? 'a page'} in Chrome`
+    if (/^tabs_create/.test(name)) return 'Open a tab in Chrome'
   }
   return undefined
 }

@@ -1,7 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
-import { heldCard, needsTheMac } from './away.ts'
+import { heldCard, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
+import { isShell, programsOf } from './program.ts'
 import { isDans, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
@@ -75,6 +76,27 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
   const seq = ((await $.state.get(heldSeqRef)).value ?? 0) + 1
   await $.state.set(heldSeqRef, seq)
   await $.state.set(heldRef, [...held, { id: String(seq), label, prompt }])
+}
+
+// Every simple command a Bash call runs, through mod-kit's one reader, each with its git reading
+// and the program it runs (program.ts). A shell's program is more commands, so one the reader kept
+// as text (`bash -lc '...'`, a here-string, echo piped in) is read the same way, as mod-kit reads
+// `bash -c` (#702). Nesting past a few shells deep is not read, and says so.
+const NEST = 3
+const readCommands = async ($: EngineInterface, raw: string, depth = 0): Promise<Cmd[]> => {
+  const list = await $.modkit.commands({ command: raw })
+  const programs = programsOf(list)
+  const out: Cmd[] = []
+  for (let i = 0; i < list.length; i++) {
+    const words = list[i] as string[]
+    const g = await $.modkit.git({ words })
+    const p = programs[i]
+    const inner = p && 'text' in p && isShell(words) ? p.text : undefined
+    const program = inner !== undefined && depth >= NEST ? { unreadable: 'nested too deep in shells to read' } : p
+    out.push({ words, ...(g ? { git: { sub: g.sub, args: g.args } } : {}), ...(program ? { program } : {}) })
+    if (inner !== undefined && depth < NEST) out.push(...(await readCommands($, inner, depth + 1)))
+  }
+  return out
 }
 
 const run = async ($: EngineInterface, argv: string[]) => {
@@ -264,6 +286,45 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
   return s
 }
 
+// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run.
+type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean }
+const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | undefined> => {
+  const { tool, input, toolUseId, scope, away } = j
+  const raw = tool === 'Bash' ? String(input.command ?? '') : ''
+  const commands = raw ? await readCommands($, raw) : []
+
+  if (scope === 'NO BUILD') {
+    const r = noBuildRefusal({ tool, input, commands })
+    if (r) {
+      await $.modkit.blocked({ toolUseId, guard: 'No build', reason: `No build is on, so this would not ${r.what}.`, safeWay: 'Claude asks you: Switch to build?' })
+      return {
+        deny: `Blocked: no build is on, so this did not ${r.what}.${r.hint ? ` ${r.hint}` : ''} Ask Dan one question by calling mcp__scope-modes__switch_to_build, naming what you would change; carry on with what no build allows until he says yes.`,
+      }
+    }
+  }
+  if (scope === 'WINDING DOWN') {
+    const t = (await $.state.get(targetRef)).value ?? null
+    const r = newWork({ tool, input, commands, issues: t && 'issues' in t ? t.issues : [] })
+    if (r) {
+      await $.modkit.blocked({ toolUseId, guard: 'Winding down', reason: `Winding down, so this would not ${r.what}.`, safeWay: 'Claude finishes this issue and files anything else.' })
+      return { deny: `Blocked: winding down, so this did not ${r.what}. Finish this issue; file anything new as an issue instead of working on it.` }
+    }
+  }
+  if (away) {
+    // A Bash call by what its commands do on the Mac; another tool by what it opens (#702).
+    const label = raw ? needsTheMac({ raw, commands }) : heldTool(tool, input)
+    if (label) {
+      const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+      await hold($, label, `Do it now. What was held: ${raw || `${tool} ${JSON.stringify(args)}`}`)
+      await $.modkit.blocked({ toolUseId, guard: 'Away', reason: `Held for when you are back: ${label}.`, safeWay: 'Claude publishes a private page for your phone instead.' })
+      return {
+        deny: `Held: Dan is away from the Mac, so "${label}" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).`,
+      }
+    }
+  }
+  return undefined
+}
+
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
   'NO BUILD': 'No build is on: read, research, run tests and checks, write scratchpad notes and do GitHub issue, milestone and label work. No edits outside the scratchpad, commits, branches, PRs, deploys or data changes.',
   'WINDING DOWN':
@@ -426,43 +487,16 @@ export const register: Register = on => {
     const away = (await placeOf($)) === 'away'
     if (!scope && !away) return next(e)
 
-    const raw = tool === 'Bash' ? String(input.command ?? '') : ''
-    const commands: Cmd[] = []
-    if (raw) {
-      for (const words of await $.modkit.commands({ command: raw })) {
-        const g = await $.modkit.git({ words })
-        commands.push({ words, ...(g ? { git: { sub: g.sub, args: g.args } } : {}) })
-      }
+    // A judge that throws refuses the call rather than letting it through: a tool call hook that
+    // fails is skipped, which would run the very thing the mode is on to stop (L42).
+    let refused: { deny: string } | undefined
+    try {
+      refused = await judge($, { tool, input, toolUseId, scope, away })
+    } catch (err) {
+      const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(away ? ['away'] : [])].join(' and ')
+      refused = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
-
-    if (scope === 'NO BUILD') {
-      const r = noBuildRefusal({ tool, input, commands })
-      if (r) {
-        await $.modkit.blocked({ toolUseId, guard: 'No build', reason: `No build is on, so this would not ${r.what}.`, safeWay: 'Claude asks you: Switch to build?' })
-        return {
-          deny: `Blocked: no build is on, so this did not ${r.what}. Ask Dan one question by calling mcp__scope-modes__switch_to_build, naming what you would change; carry on with what no build allows until he says yes.`,
-        }
-      }
-    }
-    if (scope === 'WINDING DOWN') {
-      const t = (await $.state.get(targetRef)).value ?? null
-      const r = newWork({ tool, input, commands, issues: t && 'issues' in t ? t.issues : [] })
-      if (r) {
-        await $.modkit.blocked({ toolUseId, guard: 'Winding down', reason: `Winding down, so this would not ${r.what}.`, safeWay: 'Claude finishes this issue and files anything else.' })
-        return { deny: `Blocked: winding down, so this did not ${r.what}. Finish this issue; file anything new as an issue instead of working on it.` }
-      }
-    }
-    if (away && raw) {
-      const label = needsTheMac({ raw, commands: commands.map(c => c.words) })
-      if (label) {
-        await hold($, label, `Do it now. What was held: ${raw}`)
-        await $.modkit.blocked({ toolUseId, guard: 'Away', reason: `Held for when you are back: ${label}.`, safeWay: 'Claude publishes a private page for your phone instead.' })
-        return {
-          deny: `Held: Dan is away from the Mac, so "${label}" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).`,
-        }
-      }
-    }
-    return next(e)
+    return refused ?? next(e)
   })
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it.

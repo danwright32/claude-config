@@ -7,28 +7,46 @@ export type Trigger = { kind: 'scope'; scope: 'NO BUILD' | 'WINDING DOWN' } | { 
 // Claude count, never the words in passing ("make this column read only", "the project is winding
 // down"): decided with Dan in a picker on 2026-10-04, recorded in PR #686, after a review found the
 // bare words fired on ordinary prose. A question asks rather than instructs, so it never counts.
+// The milestone audit (#702) found the away, home, no coding and build phrases still matched
+// anywhere ("the user is stepping away from the form" switched every session to away), so every
+// phrase now starts an instruction of its own: the message, a sentence, a line or a clause after a
+// comma, semicolon or colon, led by nothing but the words Dan opens one with.
 const APOS = "['’]"
+const LEAD = `(?:^\\s*|[.!?;:,]\\s+|\\n\\s*)(?:(?:ok(?:ay)?|so|and|then|now|please|right|heads up|thanks)[,!.]?\\s+)*`
+const ME = `(?:i${APOS}?m\\s+|i am\\s+)?`
+const own = (phrase: string) => new RegExp(`${LEAD}${phrase}`, 'i')
 const PHRASES: { re: RegExp; trigger: Trigger }[] = [
-  { re: /\bpause after (?:this|the|that) (?:issue|one|pr)\b/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
-  { re: /\bwind (?:it )?down (?:now|after (?:this|the|that))\b/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
+  { re: own('pause after (?:this|the|that) (?:issue|one|pr)\\b'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
+  { re: own('wind (?:it )?down (?:now|after (?:this|the|that))\\b'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   // Ends the sentence or names when, so "let's wind down the Redis instance" stays prose.
   { re: new RegExp(`\\b(?:let${APOS}?s|time to|please|start) wind(?:ing)? (?:it )?down(?=\\s*(?:[.!,;]|$|now\\b|for (?:today|tonight|the (?:day|night))\\b|after\\b))`, 'i'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /^\s*(?:ok,? )?wind (?:it )?down[.!]?\s*$/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
-  { re: /\bno coding yet\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
+  { re: own('no coding yet\\b'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   // A read only instruction is a sentence of its own ("Stay read only.", "Stay read only until I
   // say."), so "the database is in read only mode" or "keep it read only in the form" is prose.
   { re: /(?:^|[.!?]\s+)(?:ok,?\s+|please\s+)?(?:(?:stay|keep it|keep things)\s+read[ -]only(?:\s+(?:for now|until\b[^.!?]*))?|read[ -]only\s+(?:for now|mode|until\b[^.!?]*)),?(?:\s+please)?\s*(?:[.!]|$)/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
-  { re: new RegExp(`\\bjust file,? (?:it,? )?don${APOS}?t build\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
-  { re: new RegExp(`\\bdon${APOS}?t start (?:git|coding|building) yet\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
-  { re: /\bgo ahead and build\b/i, trigger: { kind: 'build' } },
-  { re: new RegExp(`\\b(?:i${APOS}?m )?stepping away\\b`, 'i'), trigger: { kind: 'place', place: 'away' } },
+  { re: own(`just file,? (?:it,? )?don${APOS}?t build\\b`), trigger: { kind: 'scope', scope: 'NO BUILD' } },
+  { re: own(`don${APOS}?t start (?:git|coding|building) yet\\b`), trigger: { kind: 'scope', scope: 'NO BUILD' } },
+  { re: own('go ahead and build\\b'), trigger: { kind: 'build' } },
+  { re: own(`${ME}stepping away\\b`), trigger: { kind: 'place', place: 'away' } },
   { re: /^\s*away[.!]?\s*$/i, trigger: { kind: 'place', place: 'away' } },
-  { re: new RegExp(`\\b(?:i${APOS}?m )?back at (?:my|the) (?:computer|desk|mac)\\b`, 'i'), trigger: { kind: 'place', place: 'home' } },
+  { re: own(`${ME}back at (?:my|the) (?:computer|desk|mac)\\b`), trigger: { kind: 'place', place: 'home' } },
 ]
+
+// Where the first match of `re` in `text` stands, skipping any inside a question: a match whose
+// sentence ends in a question mark asks rather than instructs.
+const instructionAt = (text: string, re: RegExp): number => {
+  for (const m of text.matchAll(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`))) {
+    const after = text.slice((m.index ?? 0) + m[0].length)
+    const end = /[.!?\n]/.exec(after)
+    if (end?.[0] !== '?') return m.index ?? 0
+  }
+  return -1
+}
 
 /** The modes a message from Dan turns on or off, in the order he wrote them. */
 export const triggersIn = (text: string): Trigger[] =>
-  PHRASES.map(p => ({ at: text.search(p.re), trigger: p.trigger }))
+  PHRASES.map(p => ({ at: instructionAt(text, p.re), trigger: p.trigger }))
     .filter(m => m.at >= 0)
     .sort((a, b) => a.at - b.at)
     .map(m => m.trigger)
