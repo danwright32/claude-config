@@ -17,3 +17,4 @@ which is NOT loaded into the session.
 - L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the split moves between runs and neighbours land elsewhere.
 - L672. A probe in a DIFFERENT JS realm cannot see the page's globals or a framework's element properties, so an ABSENCE read through one is never evidence.
 - L438. A measurement sampled from inside the same context as the thing measured can itself be the load, so judge by the events the platform emits.
+- L749. In a JS test, attach a may-reject promise's handler before the next await: a rejection landing during it fails the run though every test passed.
