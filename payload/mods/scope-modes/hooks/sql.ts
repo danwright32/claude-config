@@ -176,8 +176,9 @@ const readClient = (cmd: string, args: readonly string[]): Client => {
 
 /** Why no build refuses a database client's command line, or undefined; undefined for any other command. */
 export const clientRefusal = (cmd: string, args: readonly string[], harmless: (target: string) => boolean): string | undefined => {
-  if (cmd !== 'psql' && cmd !== 'mysql' && cmd !== 'sqlite3') return undefined
-  const c = readClient(cmd, args)
+  if (cmd !== 'psql' && cmd !== 'mysql' && cmd !== 'mariadb' && cmd !== 'sqlite3') return undefined
+  // mariadb is MariaDB's own name for the mysql client, read by the same options (#730).
+  const c = readClient(cmd === 'mariadb' ? 'mysql' : cmd, args)
   if (c.shell) return `run a shell command through ${cmd}`
   // A script file it runs cannot be read, and with no SQL given it reads stdin, which cannot either.
   if (c.file || !c.sql.length) return 'run SQL that could not be read'

@@ -1,10 +1,12 @@
 import type { Lang } from './program.ts'
 
 // What inline code can do, judged per language from that language's own surface (lessons review
-// of #714 at fad450f). No build refuses code that can write a file or run a process, and code that
-// builds code at run time, which cannot be read: a hand list of write idioms let every route not on
-// it through (os.system, subprocess, child_process, backticks, open(p, 'r+'), L257). Each rule
-// names what it saw, and the refusal says so.
+// of #714 at fad450f). Built for no build, which refuses code that can write a file or run a
+// process, and code that builds code at run time, which cannot be read: a hand list of write idioms
+// let every route not on it through (os.system, subprocess, child_process, backticks, open(p,
+// 'r+'), L257). Each rule names what it saw, and the refusal says so. Moved here from scope-modes in
+// #712, so the reader judges each command's program once and $.modkit.writes reports what inline
+// code writes by the same rules, in place of the write reader's own idiom list.
 //
 // It reads the text, not a parse of it, so it errs toward refusing: a word that only looks like a
 // call (a comment, a string) is refused too. What it still cannot see is said where it applies: a
@@ -83,6 +85,31 @@ const pythonOpen = (code: string): CodeVerdict | undefined => {
   }
   return undefined
 }
+
+// fileinput rewrites every file it reads when inplace is set, by name or as its second argument
+// (#730). The reader's canonical spelling makes `from fileinput import input` read as fileinput.
+const FALSE = /^(?:False|0|None)$/
+const pythonFileinput = (code: string): CodeVerdict | undefined => {
+  for (const m of code.matchAll(/\bfileinput\s*\.\s*(?:input|FileInput)\s*\(/g)) {
+    const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
+    const named = args.find(a => /^inplace\s*=/.test(a))?.replace(/^inplace\s*=\s*/, '')
+    const inplace = named ?? args.filter(a => !/^\w+\s*=/.test(a))[1]
+    if (inplace !== undefined && !FALSE.test(inplace.trim())) return { does: 'write files', seen: 'fileinput with inplace' }
+  }
+  return undefined
+}
+
+// pathlib's rename and replace move a file (#730). Told from str.replace, which takes two
+// arguments or more, and from a data frame's rename or replace, which take keywords, a mapping or a
+// function: only a call with one plain argument and no keywords is read as a move.
+const pythonMoves = (code: string): CodeVerdict | undefined => {
+  for (const m of code.matchAll(/\.\s*(rename|replace)\s*\(/g)) {
+    const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
+    if (args.length === 1 && !/^\w+\s*=|^[{[]|^lambda\b|^str\s*\./.test(args[0] as string)) return { does: 'write files', seen: m[1] as string }
+  }
+  return undefined
+}
+const pythonJudge = (code: string): CodeVerdict | undefined => pythonOpen(code) ?? pythonFileinput(code) ?? pythonMoves(code)
 
 // Python binds a module or one of its functions in many spellings, each rewritten here to the one
 // the rules read (#724: `__import__('os').system(...)` and `from os import system` ran unjudged).
@@ -215,7 +242,7 @@ const SURFACES: Record<Lang, Surface> = {
       { re: /\bimport_module\s*\(\s*(?!['"])/, seen: 'import_module of a computed name' },
       { re: /\bgetattr\s*\(\s*(?:os|subprocess|shutil|builtins)\b/, seen: 'getattr on os' },
     ],
-    judge: pythonOpen,
+    judge: pythonJudge,
     canonical: pythonCanonical,
   },
   node: {
@@ -246,8 +273,9 @@ const SURFACES: Record<Lang, Surface> = {
       { re: /%x[[{(<|!/]/, seen: '%x' },
       { re: /\b(IO\.popen|Open3|Process\.spawn|Process\.exec|Process\.fork|PTY)\b/, seen: m => m[1] as string },
       // A builtin named to send or method runs on any receiver ("".send(:system, ...)), where a
-      // method of that name on an object (conn.exec) is not the builtin.
-      { re: /\b(?:send|__send__|public_send|method|instance_method)\s*\(?\s*[:'"](system|exec|spawn|fork|syscall|`)/, seen: m => (m[1] === '`' ? 'backticks' : (m[1] as string)) },
+      // method of that name on an object (conn.exec) is not the builtin. The whole name, so
+      // send(:spawn_worker) and method(:fork_helper) name no builtin (#730).
+      { re: /\b(?:send|__send__|public_send|method|instance_method)\s*\(?\s*[:'"](?:(system|exec|spawn|fork|syscall)(?![\w?!])|`)/, seen: m => m[1] ?? 'backticks' },
       { re: /(?<![\w.])open\s*\(?\s*['"]\|/, seen: 'open of a pipe' },
     ],
     write: [
@@ -256,7 +284,8 @@ const SURFACES: Record<Lang, Surface> = {
     ],
     dynamic: [
       { re: /(?<![\w.:])(eval|instance_eval|class_eval|module_eval|instance_exec)\b/, seen: m => m[1] as string },
-      { re: /(?<![\w.])(send|public_send|__send__)\s*\(/, seen: m => m[1] as string },
+      // A send whose method is named by a literal is read above; one built at run time cannot be.
+      { re: /(?<![\w.])(?:send|public_send|__send__)\s*(?:\(\s*|\s+)(?!(?::\w+[?!=]?|(['"])\w+[?!=]?\1)\s*(?:[,)\n;]|$))/, seen: 'send of a computed name' },
       { re: /(?<![\w.])(require|require_relative|load)\s*\(?\s*(?!['"])[\w$@]/, seen: m => `${m[1]} of a computed path` },
     ],
     judge: rubyOpen,

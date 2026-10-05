@@ -114,8 +114,8 @@ from `shellWrites` and widened to the routes ask before saving and no build had 
 `install`, `rsync`, `ditto`, `dd`, `curl -o`, `wget -O`, `ruby` and `gawk` editing in place, every
 file of a `sed -i`, and the writes the words do not name (a patch, an inline script, a script on
 standard input) reported as such rather than guessed at. Ask before saving reads it, and since
-#712 so does the collision guard; no build moves onto it in #712's second part, and until then
-`tools/check-mod-shared-parts.sh` names it as a known exception on every run. Since #743 it reads a variable the command set before a write as its value
+#712 so do the collision guard and no build, so `tools/check-mod-shared-parts.sh` names no known
+exception any more. Since #743 it reads a variable the command set before a write as its value
 (`F=path; ... "$F"`), asking the shared reader for the assignments it otherwise drops
 (`pipeline(cmd, { assignments: true })`, through `commandWrites`, off for every other caller); what
 it cannot be sure of stays as written (Ask before saving, below).
@@ -131,8 +131,8 @@ disagreed, each case was decided and tested: `>& file` writes the file (the coll
 reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
 -delete` removes what it finds (no build's), and a download whose files no word names says the
 folder it lands in (`into`) when the words name one. Inline code is judged by the per language
-judge no build built (below), copied into mod-kit (`hooks/code.ts`, with the option reader in
-`hooks/program.ts`; no build reads them there from #712's second part), in place of the write reader's own list of write idioms and of interpreter
+judge no build built (below), moved into mod-kit (`hooks/code.ts`, with the option reader in
+`hooks/program.ts`), in place of the write reader's own list of write idioms and of interpreter
 names, so a program that writes, runs a process or cannot be read is a write the words do not name,
 for `python3.12` or `/usr/local/bin/python3.11` as for `python3`; a script file fed on standard
 input (`sh < setup.sh`, `cat build.py | python3`) is one too, marked `script`, its files to read in
@@ -586,14 +586,24 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls
   its `switch_to_build` tool, so only Dan's press lifts no build: the dialog reads "Claude wants to
   <change>. Switch to build?" with Yes and No.
+- No build is a guard against the usual routes Claude takes, not a sealed box (Dan, 2026-10-04,
+  recorded on #730): it reads what Claude reaches for when an edit is refused, and a determined route
+  around it (a script that writes what no word names) is not what it is for. #730 was the last pass
+  on its routes inside the mods milestone; any found after it collect in one backlog issue outside
+  the milestone (#760), never another round here.
 - What no build reads (#702). A shell or interpreter's program is judged where the guard can read
   it: inline (`python3 -c`, `node -e` or `-p`, `perl -ne`, a shell's `-lc`, whose commands are read
-  by mod-kit's reader like `bash -c`), a here-string, or text `echo` or `printf` pipes in. A program
-  fed by a heredoc, or piped in from anything else, is refused as one it cannot read, as psql fed a
-  heredoc already was: mod-kit's command list drops a heredoc's body, and this mod keeps no reader
-  of its own (L613). mod-kit gives the body on request since #698 (`heredocs` on each command
-  `$.modkit.pipeline` gives); no build moves onto it in #712. The refusal tells Claude that inline
-  code is read and judged, so code that only reads still runs. Also refused: `curl -o` and `-O`, `wget` writing a file, `find -delete` and `-exec`
+  by mod-kit's reader like `bash -c`), a here-string, or text `echo` or `printf` pipes in, and since
+  #712 a heredoc's body: no build reads every command and every file a call changes through
+  mod-kit's readers (`$.modkit.pipeline`, each command with its program and the judge's verdict, and
+  `$.modkit.writes`), keeping no reader of its own (L613), so `python3 - <<'EOF'` is judged by what
+  its body does and `bash <<'EOF'` as the commands it runs. A program piped in from anything else,
+  or fed by a heredoc with no body, is refused as one it cannot read, as psql fed a heredoc still
+  is. The refusal tells Claude that inline code or a heredoc is read and judged, so code that only
+  reads still runs. A script file runs, named as an operand or fed on standard input (`cat build.py
+  | python3`), as tests and checks do. A removal says so ("this would not remove dist"), as do a
+  folder made and a mode changed; a relative path after a `cd` is judged where it lands, so a note
+  written after `cd` into the scratchpad is one. Also refused: `curl -o` and `-O`, `wget` writing a file, `find -delete` and `-exec`
   on what it finds, `awk -i inplace` and `ruby -pi`. Allowed, which it refused before: a GraphQL
   query through `gh api graphql` and a mutation that is issue, label or milestone work; SQL whose
   strings, comments or functions (`replace()`) read like a write; and Claude's own notes outside
@@ -609,11 +619,11 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   `.read` and `source` run SQL it cannot read, and `\!`, `.shell` and `.system` run a shell.
 - How inline code is judged, since the third review of #714 found a hand list of write idioms let
   every route not on it through. Inline code is found by each language's own option grammar
-  (`hooks/program.ts`): a flag that takes a value takes the rest of its cluster or the next word, so
+  (mod-kit's `hooks/program.ts` since #712): a flag that takes a value takes the rest of its cluster or the next word, so
   ruby's `-rtime` and perl's `-Mfeature` are no `-e`, perl's `-lane` is `-l -a -n -e`, and node's
   `-pe` is `-p -e`; every script given is judged where the language runs every one, and a program
   in a file (`awk -f`, `sed -f`) cannot be read. The code is then judged per language by what it can
-  do (`hooks/code.ts`), for python, node (and deno, bun), ruby, perl, AppleScript, awk and sed:
+  do (mod-kit's `hooks/code.ts` since #712), for python, node (and deno, bun), ruby, perl, AppleScript, awk and sed:
   write or update a file (python's `open` in any of w, a, x or +, pathlib, `os` and `shutil`;
   node's `fs` write, stream and remove calls; ruby's `File`, `IO`, `FileUtils`; perl's `open` for
   writing, `unlink`, `rename`; AppleScript's write permission; awk's print to a file; sed's `w`),
@@ -653,9 +663,22 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   before tarfile's `:` decides. MySQL's `-p` takes only the password attached to it, so no letter
   of a password is read as `-e`; its `--init-command` is SQL it runs, and `--pager=<command>` runs a
   shell. Away holds an AppleScript in a file (`osascript notify.scpt`, or one redirected in) and one
-  that runs a script it cannot read (`run script`), as it holds one fed by a heredoc. Not read yet:
-  a wrapper in front of what `find -exec` runs, `env -S`, and a heredoc or here-string feeding the
-  commands a shell's `-c` runs.
+  that runs a script it cannot read (`run script`), as it holds one fed by a heredoc with no body.
+- The routes left from #724, closed in #730, each tested: a `case` pattern's `)` no longer cuts a
+  piped loop's feed (`curl x | while read l; do case $l in a) sh;; esac; done` is refused); ruby's
+  `send(:spawn_worker)` and `method(:fork_helper)` name no builtin, the whole name having to be one;
+  away holds `cat script.scpt | osascript`, the file being the script it runs; a wrapper in front of
+  what `find -exec` runs is looked past (`-exec timeout 5 python3 -c ...`); `env -S` runs the command
+  line it splits; a heredoc or here-string feeding a shell's `-c` feeds the commands it runs; a file
+  command xargs gives its files to cannot be read for which files (`ls | xargs rm` is refused, `ls |
+  xargs wc -l` runs); python's `fileinput` in place and pathlib's `.rename` and `.replace` write
+  files (a plain `str.replace` does not); `mariadb` is read as the mysql client it is; away holds a
+  JavaScript for Automation dialog (`app.displayDialog()`); and an input redirect written without a
+  space (`cat<<EOF`, `python3 -<<EOF`, `cmd<file`) is read. The session tests read with mod-kit's
+  own reader rather than a stand-in that split inside quotes: a test cannot import another mod's
+  files, so each mod whose tests need it keeps a byte for byte copy under `tests/mod-kit`, which
+  `tools/check-mod-shared-parts.sh` holds to mod-kit's own, naming the `cp` that brings a stale one
+  back.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
   issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR

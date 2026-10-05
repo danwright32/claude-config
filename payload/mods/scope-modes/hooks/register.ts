@@ -2,7 +2,6 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
-import { execsOf, isShell, programsOf } from './program.ts'
 import { isDans, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
@@ -79,34 +78,25 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
   await $.state.set(heldRef, [...held, { id: String(seq), label, prompt }])
 }
 
-// Every simple command a Bash call runs, through mod-kit's one reader, each with its git reading
-// and the program it runs (program.ts). A shell's program is more commands, so one the reader kept
-// as text (`bash -lc '...'`, a here-string, echo piped in) is read the same way, as mod-kit reads
-// `bash -c` (#702). Nesting past a few shells deep is not read, and says so.
-const NEST = 3
-// One read's list of commands, each built the same way: its git reading, its program, a shell's
-// program read as more commands, and what a find -exec runs read as commands of its own (lessons
-// review of #714: `find . -exec git checkout {} ;` and `-exec sh -c` went unread).
-const readList = async ($: EngineInterface, list: readonly { words: string[]; pipedFrom?: string[] }[], depth: number): Promise<Cmd[]> => {
-  const programs = programsOf(list)
+// Every simple command a Bash call runs, through mod-kit's one reader (#712): each with what a |
+// feeds it (#724), the program it runs and what that program can do, a shell's script read as the
+// commands it runs (its -c, a heredoc, a here-string, or what echo, printf or cat pipes in), and
+// what a find -exec runs read as a command of its own, so this mod keeps no reader of its own
+// (L613). Each is given its git reading.
+const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => {
   const out: Cmd[] = []
-  for (let i = 0; i < list.length; i++) {
-    const { words, pipedFrom } = list[i] as { words: string[]; pipedFrom?: string[] }
-    const g = await $.modkit.git({ words })
-    const p = programs[i]
-    const inner = p && 'text' in p && isShell(words) ? p.text : undefined
-    const deep = depth >= NEST
-    const program = inner !== undefined && deep ? { unreadable: 'nested too deep in shells to read' } : p
-    out.push({ words, ...(g ? { git: { sub: g.sub, args: g.args } } : {}), ...(program ? { program } : {}) })
-    if (inner !== undefined && !deep) out.push(...(await readCommands($, inner, depth + 1, pipedFrom)))
-    for (const exec of execsOf(words)) out.push(...(deep ? [{ words: exec, program: { unreadable: 'nested too deep in shells to read' } }] : await readList($, [{ words: exec }], depth + 1)))
+  for (const c of await $.modkit.pipeline({ command: raw })) {
+    const g = await $.modkit.git({ words: c.words })
+    out.push(g ? { ...c, git: { sub: g.sub, args: g.args } } : c)
   }
   return out
 }
-// Read through mod-kit's pipeline, which says which command a | feeds each from (#724). What a
-// shell runs reads what feeds the shell, wherever no | of its own feeds it, as mod-kit reads -c.
-const readCommands = async ($: EngineInterface, raw: string, depth = 0, pipedFrom?: string[]): Promise<Cmd[]> =>
-  readList($, (await $.modkit.pipeline({ command: raw })).map(c => (c.pipedFrom || !pipedFrom ? c : { ...c, pipedFrom })), depth)
+
+// The files a Bash call changes, from mod-kit's one write reader (#712), in the folder the session
+// works in and its home.
+const readWrites = async ($: EngineInterface, raw: string) =>
+  $.modkit.writes({ command: raw, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
+const NO_WRITES = { files: [], changes: [], unnamed: [] }
 
 const run = async ($: EngineInterface, argv: string[]) => {
   try {
@@ -408,7 +398,8 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
   const commands = raw ? await readCommands($, raw) : []
 
   if (scope === 'NO BUILD') {
-    const r = noBuildRefusal({ tool, input, commands })
+    const writes = raw ? await readWrites($, raw) : NO_WRITES
+    const r = noBuildRefusal({ tool, input, commands, writes })
     if (r) {
       await $.modkit.blocked({ toolUseId, guard: 'No build', reason: `No build is on, so this would not ${r.what}.`, safeWay: 'Claude asks you: Switch to build?' })
       return {

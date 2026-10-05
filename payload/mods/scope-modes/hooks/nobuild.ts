@@ -1,16 +1,20 @@
-import { codeVerdict } from './code.ts'
-import { isShell, languageOf, type Program } from './program.ts'
+import type { ModKitCommand, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { clientRefusal, sqlRefusal } from './sql.ts'
 
 // No build (#616): what Claude may and may not do while it is on, as the spec agreed with Dan.
 // Allowed: reading, research, tests and checks, read only queries, scratchpad notes, and all GitHub
 // issue, milestone and label work. Refused: code edits outside the scratchpad, commits, branches,
 // PRs, deploys and data changing SQL, including the routes around the refusal (shell redirects,
-// heredocs, sed -i). Pure: the shell is read by mod-kit's one reader and handed in as words, each
-// command's program (program.ts) read from those words.
+// heredocs, sed -i). Pure: the shell is read by mod-kit's one reader and handed in, each command
+// with the program it runs and what that program can do, and the files the call changes from
+// mod-kit's one write reader (#712), so this keeps no reader of its own (L613).
+//
+// It is a guard against the usual routes Claude takes, not a sealed box (Dan, 2026-10-04, #730):
+// what it reads is what Claude reaches for, and a determined route around it (a script that writes
+// what no word names) is not what it is for.
 
-/** One simple command, as `$.modkit.commands` splits it, with `$.modkit.git`'s reading when it is git and the program it runs when that is not a script file. */
-export type Cmd = { words: string[]; git?: { sub?: string; args: string[] }; program?: Program }
+/** One simple command, as `$.modkit.pipeline` gives it, with `$.modkit.git`'s reading when it is git. */
+export type Cmd = ModKitCommand & { git?: { sub?: string; args: string[] } }
 /** What the refused call would have done, and, where there is one, how what no build allows can still be done. */
 export type Refusal = { what: string; hint?: string }
 
@@ -30,21 +34,6 @@ const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 // Where a redirect may point and change nothing: the null device, the terminal, another descriptor.
 const SINKS = new Set(['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty'])
 const harmless = (target: string) => SINKS.has(target) || /^&?\d*-?$/.test(target) || inNotes(target)
-
-const REDIRECT = /^(?:\d*|&)>>?\|?(.*)$/
-// Every file a command's redirects write to. A redirect with nothing after it is a descriptor copy
-// (`2>&1` arrives as `2>` with the `&1` split off), which writes no file.
-const redirectTargets = (words: string[]): string[] => {
-  const out: string[] = []
-  for (let i = 0; i < words.length; i++) {
-    const m = REDIRECT.exec(words[i] as string)
-    if (!m) continue
-    const attached = m[1] as string
-    if (attached) out.push(attached)
-    else if (i + 1 < words.length) out.push(words[++i] as string)
-  }
-  return out
-}
 
 const GIT_WRITES = new Set(['add', 'am', 'apply', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'filter-branch', 'init', 'merge', 'mv', 'notes', 'pull', 'push', 'rebase', 'replace', 'reset', 'restore', 'revert', 'rm', 'switch', 'update-ref'])
 const BRANCH_WRITE_FLAGS = new Set(['-d', '-D', '-m', '-M', '-c', '-C', '-f', '-u', '--delete', '--move', '--copy', '--force', '--set-upstream-to', '--unset-upstream', '--edit-description'])
@@ -195,223 +184,49 @@ const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
 
 
 
-// The files a command writes or removes by its arguments.
-const DEST_ONLY = new Set(['cp', 'ln', 'install', 'rsync', 'ditto'])
-const ALL_ARGS = new Set(['mv', 'rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'truncate', 'shred', 'tee'])
-const FIRST_IS_MODE = new Set(['chmod', 'chown', 'chgrp'])
-const IN_PLACE = new Set(['sed', 'gsed', 'perl', 'ruby'])
-
-// The in place flag, alone (`-i`, `-i.bak`) or after switches that take no value in one cluster
-// (`-pi`, `-Ei`). Only those switches may come before it: an i inside a value is no flag, so
-// `ruby -rminitest/autorun` and `perl -MList::Util` read nothing in place (lessons review of #714).
-const IN_PLACE_FLAG: Record<string, RegExp> = {
-  sed: /^-[nrEsuz]*i/,
-  gsed: /^-[nrEsuz]*i/,
-  perl: /^-[anpswlcvtTuUWX0]*i/,
-  ruby: /^-[anpswlcvtTuUWX0]*i/,
-}
-const inPlaceFiles = (args: string[], cmdName: string): string[] | undefined => {
-  const flag = IN_PLACE_FLAG[cmdName] ?? /^-i/
-  const inPlace = args.some(a => a.startsWith('--in-place') || (!a.startsWith('--') && flag.test(a)))
-  if (!inPlace) return undefined
-  // The script is the first non-flag word unless -e (or perl's -e) gave it; -e and -f take a value.
-  const out: string[] = []
-  let scripted = false
-  let skippedScript = false
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string
-    if (a === '-e' || a === '-f' || a === '--expression' || a === '--file') {
-      scripted = true
-      i++
-      continue
-    }
-    if (isFlag(a)) continue
-    // macOS sed -i takes a suffix as its own word; an empty one arrives as ''.
-    if (a === '' && cmdName.endsWith('sed')) continue
-    if (!scripted && !skippedScript) {
-      skippedScript = true
-      continue
-    }
-    out.push(a)
-  }
-  return out
-}
-
-// gawk's in place edit (`-i inplace`): the files after its program, or every operand when -f or -e
-// gave the program. An operand `var=value` is an assignment, not a file.
-const AWK_VALUE_FLAGS = new Set(['-f', '-v', '-F', '-i', '-l', '-e', '-E', '--include', '--load', '--file', '--source', '--assign', '--field-separator'])
-const awkInPlaceFiles = (args: string[]): string[] | undefined => {
-  let inPlace = false
-  let programGiven = false
-  const operands: string[] = []
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string
-    const attached = /^(?:-i|--include=)(.+)$/.exec(a)
-    if (attached && /^inplace(?:\.awk)?$/.test(attached[1] as string)) inPlace = true
-    else if (AWK_VALUE_FLAGS.has(a)) {
-      if ((a === '-i' || a === '--include') && /^inplace(?:\.awk)?$/.test(args[i + 1] ?? '')) inPlace = true
-      if (['-f', '-e', '-E', '--file', '--source'].includes(a)) programGiven = true
-      i++
-    } else if (!isFlag(a)) operands.push(a)
-  }
-  if (!inPlace) return undefined
-  return (programGiven ? operands : operands.slice(1)).filter(o => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(o))
-}
-
-// curl's single letter flags that take a value, so a letter inside a value (`-HAccept: x`) is not
-// read as a flag; and the ones whose value is a file curl writes.
-const CURL_VALUE_LETTERS = new Set('AbcCdDeEFHKmoPQrtTuUwxXyYz'.split(''))
-const CURL_WRITE_LETTERS = new Set(['o', 'D', 'c'])
-const CURL_WRITE_LONG = new Set(['--output', '--dump-header', '--cookie-jar', '--trace', '--trace-ascii', '--etag-save', '--stderr'])
-const curlRefusal = (args: string[], outside: (p: string[]) => string | undefined): string | undefined => {
-  const targets: string[] = []
-  let remoteName = false
-  let outputDir: string | undefined
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string
-    if (a.startsWith('--')) {
-      const [flag, value] = a.includes('=') ? [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)] : [a, undefined]
-      if (CURL_WRITE_LONG.has(flag as string)) targets.push(value ?? args[++i] ?? '')
-      else if (flag === '--output-dir') outputDir = value ?? args[++i] ?? ''
-      else if (flag === '--remote-name' || flag === '--remote-name-all') remoteName = true
-      continue
-    }
-    if (!/^-[A-Za-z]/.test(a)) continue
-    for (let j = 1; j < a.length; j++) {
-      const letter = a[j] as string
-      if (letter === 'O') remoteName = true
-      if (!CURL_VALUE_LETTERS.has(letter)) continue
-      const value = a.slice(j + 1) || (args[++i] ?? '')
-      if (CURL_WRITE_LETTERS.has(letter)) targets.push(value)
-      break
-    }
-  }
-  const hit = outside(targets)
-  if (hit !== undefined) return `write to ${base(hit)}`
-  // -O names the file after the link, in the current folder unless --output-dir says otherwise.
-  if (remoteName && (outputDir === undefined || !harmless(outputDir))) return 'write a file with curl'
-  return undefined
-}
-
-// wget writes into the current folder unless told where: -O (the file, `-` the screen) or -P.
-const wgetRefusal = (args: string[], outside: (p: string[]) => string | undefined): string | undefined => {
-  let doc: string | undefined
-  let prefix: string | undefined
-  let spider = false
-  const logs: string[] = []
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string
-    if (a === '--spider') spider = true
-    else if (a.startsWith('--output-document')) doc = a.includes('=') ? a.slice(a.indexOf('=') + 1) : (args[++i] ?? '')
-    else if (a.startsWith('--directory-prefix')) prefix = a.includes('=') ? a.slice(a.indexOf('=') + 1) : (args[++i] ?? '')
-    else if (a.startsWith('--output-file') || a.startsWith('--append-output')) logs.push(a.includes('=') ? a.slice(a.indexOf('=') + 1) : (args[++i] ?? ''))
-    else if (/^-[A-Za-z]/.test(a) && !a.startsWith('--')) {
-      for (let j = 1; j < a.length; j++) {
-        const letter = a[j] as string
-        if (!'OPoaeiBtTwQUlARDXI'.includes(letter)) continue
-        const value = a.slice(j + 1) || (args[++i] ?? '')
-        if (letter === 'O') doc = value
-        else if (letter === 'P') prefix = value
-        else if (letter === 'o' || letter === 'a') logs.push(value)
-        break
-      }
-    }
-  }
-  const hit = outside([...(doc !== undefined ? [doc] : []), ...logs])
-  if (hit !== undefined) return `write to ${base(hit)}`
-  if (spider || doc !== undefined || (prefix !== undefined && harmless(prefix))) return undefined
-  return 'write a file with wget'
-}
-
-// find: -delete removes what it finds under its starting folders, and -fprint and its kin write a
-// file. What -exec runs is no business of this function: the tool call hook reads each such
-// command (program.ts's execsOf) as a command of its own, git reading and program included, and
-// hands it in beside the find (lessons review of #714).
-const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
-const findRefusal = (args: string[], outside: (p: string[]) => string | undefined): string | undefined => {
-  const firstExpr = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!')
-  const roots = firstExpr < 0 ? args : args.slice(0, firstExpr)
-  const starts = roots.length ? roots : ['.']
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string
-    if (a === '-delete' && outside(starts) !== undefined) return 'delete files with find'
-    if (FIND_FILE_ACTIONS.has(a)) {
-      const hit = outside([args[i + 1] ?? ''])
-      if (hit !== undefined) return `write to ${base(hit)}`
-    }
-    // Skip what -exec runs, so its words are not read as find's own.
-    if (['-exec', '-execdir', '-ok', '-okdir'].includes(a)) {
-      const end = args.findIndex((w, j) => j > i && (w === ';' || w === '+'))
-      i = end < 0 ? args.length : end
-    }
-  }
-  return undefined
-}
-
-const fileRefusal = (words: string[]): string | undefined => {
-  const cmd = name(words[0])
-  const args = words.slice(1)
-  const plain = args.filter(a => !isFlag(a) && !REDIRECT.test(a) && !a.startsWith('<'))
-  const outside = (paths: string[]) => paths.find(p => !harmless(p))
-  if (IN_PLACE.has(cmd)) {
-    const files = inPlaceFiles(args, cmd)
-    const hit = files && outside(files)
-    if (hit !== undefined) return `edit ${base(hit)}`
-  }
-  if (cmd === 'awk' || cmd === 'gawk') {
-    const files = awkInPlaceFiles(args)
-    const hit = files && outside(files)
-    if (hit !== undefined) return `edit ${base(hit)}`
-  }
-  if (cmd === 'curl') return curlRefusal(args, outside)
-  if (cmd === 'wget') return wgetRefusal(args, outside)
-  if (cmd === 'find') return findRefusal(args, outside)
-  if (DEST_ONLY.has(cmd) && plain.length >= 2) {
-    const hit = outside([plain[plain.length - 1] as string])
-    if (hit !== undefined) return `write to ${base(hit)}`
-  }
-  if (ALL_ARGS.has(cmd)) {
-    const hit = outside(plain)
-    if (hit !== undefined) return `write to ${base(hit)}`
-  }
-  if (FIRST_IS_MODE.has(cmd)) {
-    const hit = outside(plain.slice(1))
-    if (hit !== undefined) return `write to ${base(hit)}`
-  }
-  if (cmd === 'dd') {
-    const of = args.find(a => a.startsWith('of='))
-    if (of && !harmless(of.slice(3))) return `write to ${base(of.slice(3))}`
-  }
-  if (cmd === 'patch') return 'apply a patch'
-  return undefined
-}
-
 // The code an interpreter runs, judged where the guard can read it, and refused where it cannot: a
-// heredoc's body never reaches mod-kit's reader, and a pipe hands over whatever the command before
-// it prints (#702).
-const UNREAD_HINT = 'Code passed inline (python3 -c, node -e) is read and judged, so code that only reads can run that way.'
+// pipe hands over whatever the command before it prints (#702). mod-kit reads each command's
+// program and judges it in its own language (#712), so a heredoc's body is judged too, and a shell
+// whose script it can read reaches here as the commands it runs.
+const UNREAD_HINT = 'Code passed inline (python3 -c, node -e) or in a heredoc is read and judged, so code that only reads can run that way.'
 const programRefusal = (c: Cmd): Refusal | undefined => {
+  const runner = name(c.words[0])
   const p = c.program
-  if (!p) return undefined
-  const lang = languageOf(c.words)
-  const runner = lang || isShell(c.words) ? name(c.words[0]) : undefined
-  if (!runner) return undefined
-  if ('unreadable' in p) return { what: `run a ${runner} script it cannot read (${p.unreadable})`, hint: UNREAD_HINT }
-  // A shell's program is more commands, which the tool call hook reads and hands in beside it.
-  if (!lang) return undefined
-  // Judged by what the code can do in its own language (code.ts), naming what was seen.
-  const v = codeVerdict(lang, p.text)
+  if (p && 'unreadable' in p) return { what: `run a ${runner} script it cannot read (${p.unreadable})`, hint: UNREAD_HINT }
+  const v = c.verdict
   if (!v) return undefined
   if (v.does === 'unreadable') return { what: `run code from ${runner} it cannot read (${v.seen})`, hint: UNREAD_HINT }
   return { what: `${v.does} from ${runner} (${v.seen})` }
 }
 
+// What a call changes on the disk, from mod-kit's write reader (#712): a file content goes into, a
+// file removed, stamped, emptied, made or changed in mode, each allowed only where it changes
+// nothing (a sink) or is Claude's own notes; and a write whose files no word names, allowed only
+// when it lands in the notes. A script file run on standard input is allowed, as one named as an
+// operand is: running scripts is how tests and checks run.
+const CHANGED: Record<ModKitWrites['changes'][number]['does'], string> = { remove: 'remove', touch: 'write to', truncate: 'write to', folder: 'make the folder', mode: 'change the mode of' }
+const writesRefusal = (w: ModKitWrites): Refusal | undefined => {
+  for (const f of w.files) {
+    const p = f.path ?? f.word
+    if (!harmless(p)) return { what: `${f.edits ? 'edit' : 'write to'} ${base(p)}` }
+  }
+  for (const c of w.changes) {
+    const p = c.path ?? c.word
+    if (!harmless(p)) return { what: `${CHANGED[c.does]} ${base(p)}` }
+  }
+  for (const u of w.unnamed) {
+    if (u.script || (u.into !== undefined && harmless(u.into))) continue
+    return { what: u.what === 'a patch' ? 'apply a patch' : `change files its words do not name (${u.what})` }
+  }
+  return undefined
+}
+
+const DB_CLIENTS = new Set(['psql', 'mysql', 'mariadb', 'sqlite3'])
 const commandRefusal = (c: Cmd): Refusal | undefined => {
   let words = c.words
   // npx and bunx only fetch and run the tool named after them.
   while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((w, i) => i > 0 || !isFlag(w))
   const why = (what: string | undefined): Refusal | undefined => (what === undefined ? undefined : { what })
-  for (const t of redirectTargets(words)) if (!harmless(t)) return why(`write to ${base(t)}`)
   const cmd = name(words[0])
   if (c.git && gitRefusal(c.git)) return why(`run git ${c.git.sub}`)
   if (cmd === 'gh') return why(ghRefusal(words))
@@ -422,10 +237,11 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
     if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return why(`run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`)
   }
   if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return why(`run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`)
-  // A database client by every piece of SQL it runs and what it writes itself (sql.ts). Without SQL
-  // given, it reads a file or stdin (a heredoc body never reaches the reader), which cannot be read.
-  if (cmd === 'psql' || cmd === 'mysql' || cmd === 'sqlite3') return why(clientRefusal(cmd, words.slice(1), harmless))
-  return programRefusal({ ...c, words }) ?? why(fileRefusal(words))
+  // A database client by every piece of SQL it runs and what it writes itself (sql.ts), MariaDB's
+  // own name for its client included (#730). Without SQL given, it reads a file or stdin, which
+  // cannot be read.
+  if (DB_CLIENTS.has(cmd)) return why(clientRefusal(cmd, words.slice(1), harmless))
+  return programRefusal({ ...c, words })
 }
 
 const SQL_TOOL = /__(?:execute_sql|run_sql|query)$/
@@ -436,7 +252,7 @@ const EDITORS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
  * Why no build refuses this call, as the action it would have taken ("edit app.ts", "run git
  * commit"), or undefined when no build allows it.
  */
-export const noBuildRefusal = (call: { tool: string; input: Record<string, unknown>; commands: Cmd[] }): Refusal | undefined => {
+export const noBuildRefusal = (call: { tool: string; input: Record<string, unknown>; commands: Cmd[]; writes: ModKitWrites }): Refusal | undefined => {
   const { tool, input } = call
   if (EDITORS.has(tool)) {
     const path = String(input.file_path ?? input.notebook_path ?? '')
@@ -456,5 +272,5 @@ export const noBuildRefusal = (call: { tool: string; input: Record<string, unkno
     const why = commandRefusal(c)
     if (why) return why
   }
-  return undefined
+  return writesRefusal(call.writes)
 }
