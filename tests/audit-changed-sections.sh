@@ -17,6 +17,8 @@
 #
 # Exit 0 = every changed section ran alone and passed, or there was nothing to do (which is said in
 # those words rather than reported as a clean audit). Exit 1 = a changed section cannot run alone.
+# Exit 4 = a changed section's own checks passed but the prelude every section runs first failed,
+# which is worded as that rather than blamed on the section (claude-config#625).
 # Exit 2 = the suite changed but no section could be derived from the diff, which is a failure
 # rather than a pass: an empty answer here is indistinguishable from having checked everything
 # (LESSONS.md L98), and it is worded differently from a legitimate nothing-to-do (L11).
@@ -113,16 +115,45 @@ run_one(){   # $1 = section title -> that section's exit status
   fi
 }
 
-n=0; bad=""; unmeasured=""
+# WHICH PART of a failed run failed (claude-config#625). A section run on its own runs the PRELUDE
+# first, the checks every section depends on, and the suite reports the two apart on its
+# SUITE-SECTIONS line. On 2026-10-03 a push was blocked as "a test section this change touches FAILS
+# on Linux" while that same line read prelude_fail=4 target_fail=0: the changed section passed, and
+# the four failures were in the prelude, broken on unchanged main by a tool the container lacked.
+# A message naming the wrong culprit pushes toward an override (L11), so the counts are read and
+# each case is worded for what it measured. A run that printed no such line, or whose counts are
+# both zero, is still a failure of the section, because nothing says otherwise.
+_sec_count(){   # $1 = SUITE-SECTIONS line  $2 = field -> its number, or nothing
+  printf '%s\n' "$1" | tr ' ' '\n' | awk -F= -v k="$2" '$1 == k { print $2; exit }'
+}
+_run_out="$(mktemp "${TMPDIR:-/tmp}/audit-changed-sections.XXXXXXXX")" || _run_out=""
+[ -n "$_run_out" ] && trap 'rm -f "$_run_out"' EXIT
+
+n=0; bad=""; unmeasured=""; prelude_bad=""
 while IFS= read -r _t; do
   [ -n "$_t" ] || continue
   n=$((n + 1))
   echo ""
   echo "audit-changed-sections: running only $_t"
-  _rc=0; run_one "$_t" || _rc=$?
+  _rc=0
+  if [ -n "$_run_out" ]; then
+    run_one "$_t" 2>&1 | tee "$_run_out"; _rc=${PIPESTATUS[0]}
+  else
+    run_one "$_t" || _rc=$?
+  fi
   if [ "$_rc" -ne 0 ]; then
     if [ -n "${AUDIT_ON_LINUX:-}" ] && [ "$_rc" -eq 3 ]; then
       unmeasured="$unmeasured$_t
+"
+      continue
+    fi
+    _secline=""
+    [ -n "$_run_out" ] && _secline="$(grep -m1 '^SUITE-SECTIONS ' "$_run_out" 2>/dev/null || true)"
+    _pf="$(_sec_count "$_secline" prelude_fail)"; _tf="$(_sec_count "$_secline" target_fail)"
+    case "$_pf" in ''|*[!0-9]*) _pf=0 ;; esac
+    case "$_tf" in ''|*[!0-9]*) _tf=0 ;; esac
+    if [ "$_tf" -eq 0 ] && [ "$_pf" -gt 0 ]; then
+      prelude_bad="$prelude_bad$_t (the prelude failed $_pf check(s), the section's own checks passed)
 "
     else
       bad="$bad$_t
@@ -135,10 +166,33 @@ TITLES
 
 case "$bad" in *[![:space:]]*)
   echo "" >&2
-  echo "audit-changed-sections: these changed sections do not run on their own:" >&2
-  printf '%s' "$bad" | sed 's/^/  /' >&2
-  echo "Give the section its own fixture, or add a '# needs:' line naming the section it depends on. Running it alone is the only run where a missing prerequisite shows up at all." >&2
+  if [ -n "${AUDIT_ON_LINUX:-}" ]; then
+    echo "audit-changed-sections: these changed sections FAIL their own checks when run on Linux:" >&2
+    printf '%s' "$bad" | sed 's/^/  /' >&2
+    echo "Either the section fails on Linux outright, or it cannot run alone; the output above says which. Running it alone, on the operating system CI uses, is the only run where either shows up before CI." >&2
+  else
+    echo "audit-changed-sections: these changed sections do not run on their own:" >&2
+    printf '%s' "$bad" | sed 's/^/  /' >&2
+    echo "Give the section its own fixture, or add a '# needs:' line naming the section it depends on. Running it alone is the only run where a missing prerequisite shows up at all." >&2
+  fi
   exit 1 ;;
+esac
+
+# THE PRELUDE FAILED and the changed sections' own checks passed (claude-config#625). That is not
+# evidence against the sections, and it is not said as if it were. What it IS evidence of is
+# narrower than "the base is broken": the prelude also exercises code outside the suite file, so
+# a change to that code can break it too, and only running the base tells the two apart. Its own
+# exit status, so the push gate can word its refusal for what was measured.
+case "$prelude_bad" in *[![:space:]]*)
+  echo "" >&2
+  echo "audit-changed-sections: the PRELUDE failed${AUDIT_ON_LINUX:+ on Linux}, not the changed sections:" >&2
+  printf '%s' "$prelude_bad" | sed 's/^/  /' >&2
+  if [ "$preamble" -eq 1 ]; then
+    echo "This change also edits the prelude itself, so the failure may well be the change's own. Read the prelude's failures in the output above." >&2
+  else
+    echo "This change does not edit the prelude, so the failure is in the base this was cut from, or in code outside the suite that the prelude exercises (the tool, a hook, or the environment the run happens in). To tell which, run the same section on the unchanged base: if it fails there too, the base is broken and this change is not the cause." >&2
+  fi
+  exit 4 ;;
 esac
 
 # UNMEASURED is said, and it is not a pass. Nothing here can be concluded about those sections, and

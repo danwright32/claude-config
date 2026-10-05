@@ -54,6 +54,9 @@ AUDIT
   # A base to diff against, so the hook does not fall out early for want of one.
   git -C "$r" branch -f main HEAD 2>/dev/null
   git -C "$r" branch -f origin/main HEAD 2>/dev/null
+  # Work happens on a branch of its own, as it does in this repository since a push straight to
+  # the default branch is refused (claude-config#596). The checks of that refusal below move back.
+  git -C "$r" checkout -q -b feature 2>/dev/null
   printf '%s' "$r"
 }
 
@@ -206,6 +209,69 @@ R6="$(mkrepo override 1)"
 run "$R6" 'SKIP_LINUX_CHECK=1 git push'; o6="$OUT"
 [ "$RC" -eq 0 ] && check "the override lets a failing push through" ok \
                 || check "the override lets a failing push through" "rc=$RC out=$o6"
+
+# --- THE PRELUDE FAILED, NOT THE SECTION (claude-config#625). The audit answers 4 when the changed
+#     sections' own checks passed and the prelude before them failed. On 2026-10-03 this hook
+#     blamed the changed section for exactly that, while the suite's own counts said otherwise.
+R12="$(mkrepo prelude 4)"
+run "$R12" 'git push'; o12="$OUT"
+[ "$RC" -eq 2 ] && check "a prelude failing on Linux still blocks the push" ok \
+                || check "a prelude failing on Linux still blocks the push" "rc=$RC out=$o12"
+case "$o12" in *'prelude every test section runs first FAILS'*) check "and says the prelude failed" ok ;;
+  *) check "and says the prelude failed" "out=$o12" ;; esac
+case "$o12" in *'a test section this change touches FAILS'*) check "and does not blame the section" "out=$o12" ;;
+  *) check "and does not blame the section" ok ;; esac
+case "$o12" in *'unchanged base'*) check "and names how to tell a broken base from this change" ok ;;
+  *) check "and names how to tell a broken base from this change" "out=$o12" ;; esac
+
+# --- A PUSH STRAIGHT TO THE DEFAULT BRANCH (claude-config#596). The Linux run above judged none of
+#     the 15 pushes recorded on this Mac by 2026-10-05, and it only covers one suite's sections, so
+#     a change reaches main through a pull request whose CI runs everything on Linux.
+R13="$(mkrepo direct 0)"
+git -C "$R13" checkout -q main 2>/dev/null
+run "$R13" 'git push'; o13="$OUT"
+[ "$RC" -eq 2 ] && check "a bare push from the default branch is refused" ok \
+                || check "a bare push from the default branch is refused" "rc=$RC out=$o13"
+case "$o13" in *'pushes straight to main'*) check "and names the branch it would have pushed to" ok ;;
+  *) check "and names the branch it would have pushed to" "out=$o13" ;; esac
+case "$o13" in *'gh pr create'*) check "and hands over the pull request route instead" ok ;;
+  *) check "and hands over the pull request route instead" "out=$o13" ;; esac
+case "$o13" in *'stub audit ran'*) check "and refuses before running anything on Linux" "out=$o13" ;;
+  *) check "and refuses before running anything on Linux" ok ;; esac
+run "$R13" 'ALLOW_DIRECT_MAIN_PUSH=1 git push'; o13b="$OUT"
+[ "$RC" -eq 0 ] && check "its own override lets the push through" ok \
+                || check "its own override lets the push through" "rc=$RC out=$o13b"
+run "$R13" 'SKIP_LINUX_CHECK=1 git push'; o13c="$OUT"
+[ "$RC" -eq 2 ] && check "the Linux check's override does not also open the default branch (L448)" ok \
+                || check "the Linux check's override does not also open the default branch (L448)" "rc=$RC out=$o13c"
+
+R14="$(mkrepo refspec 0)"
+run "$R14" 'git push origin HEAD:main'; o14="$OUT"
+[ "$RC" -eq 2 ] && check "a refspec naming the default branch from a feature branch is refused" ok \
+                || check "a refspec naming the default branch from a feature branch is refused" "rc=$RC out=$o14"
+run "$R14" 'git push --force-with-lease origin +feature:refs/heads/main'; o14b="$OUT"
+[ "$RC" -eq 2 ] && check "a forced, fully spelled refspec to the default branch is refused" ok \
+                || check "a forced, fully spelled refspec to the default branch is refused" "rc=$RC out=$o14b"
+run "$R14" 'git push --all origin'; o14c="$OUT"
+[ "$RC" -eq 2 ] && check "pushing every branch is refused, since that includes the default" ok \
+                || check "pushing every branch is refused, since that includes the default" "rc=$RC out=$o14c"
+run "$R14" 'git add x && git commit -qm y && git push -u origin feature'; o14d="$OUT"
+[ "$RC" -eq 0 ] && check "a feature branch push is let through" ok \
+                || check "a feature branch push is let through" "rc=$RC out=$o14d"
+run "$R14" 'git push other main'; o14e="$OUT"
+[ "$RC" -eq 0 ] && check "a push to some other remote is not the shared default branch" ok \
+                || check "a push to some other remote is not the shared default branch" "rc=$RC out=$o14e"
+run "$R14" 'gh pr create --body "then git push origin main later"'; o14f="$OUT"
+[ "$RC" -eq 0 ] && check "a push only quoted inside an argument is not a push" ok \
+                || check "a push only quoted inside an argument is not a push" "rc=$RC out=$o14f"
+
+# The control for the refusal being scoped to this repository: with no Linux runner, a push from
+# the default branch is none of this hook's business.
+R15="$(mkrepo elsewhere 0)"; rm -f "$R15/tests/run-on-linux.sh"
+git -C "$R15" checkout -q main 2>/dev/null
+run "$R15" 'git push'; o15="$OUT"
+[ "$RC" -eq 0 ] && [ -z "$o15" ] && check "another repository's default branch push is left alone" ok \
+  || check "another repository's default branch push is left alone" "rc=$RC out=$o15"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

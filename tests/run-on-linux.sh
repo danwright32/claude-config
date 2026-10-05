@@ -55,7 +55,15 @@ esac
 #
 # command:package. bash and perl ship in the base image and are named anyway, so the list can be
 # compared against the workflow's without an exception nobody can see.
-TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps python3:python3"
+TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps python3:python3 node:nodejs"
+
+# The tools the workflow's environment step PROBES, read from the step itself, in ONE place
+# (claude-config#624). Two checks hold that list to something: every probed tool has a package
+# above (#337, in tests/test-claude-sync.sh), and every interpreter the tool and the suites
+# actually invoke is probed (tests/test-ci-environment-tools.sh). Both read it from here, through
+# the plan below, so the two cannot come to disagree about what the step names (L41).
+probed="$( { sed 's/#.*//' "$WORKFLOW" 2>/dev/null | sed -n 's/^ *\([a-z][a-z0-9_-]*\) --version.*/\1/p'
+             sed 's/#.*//' "$WORKFLOW" 2>/dev/null | sed -n 's/.*command -v \([a-z][a-z0-9_-]*\).*/\1/p'; } | sort -u | grep -v '^$' | tr '\n' ' ')"
 
 packages="$(printf '%s\n' $TOOL_PACKAGES | awk -F: '{print $2}' | sort -u | tr '\n' ' ')"
 target="${1:-}"
@@ -81,7 +89,7 @@ TAG="claude-sync-linux:$(printf '%s' "$key" | cut -c1-12)"
 # checked without building anything, and because "what would this run" is a fair question to be
 # able to ask of a script that starts containers.
 if [ -n "${SYNC_LINUX_PRINT_PLAN:-}" ]; then
-  printf 'runner: %s\nimage: %s\ntag: %s\npackages: %s\n' "$runner" "$IMAGE" "$TAG" "$packages"
+  printf 'runner: %s\nimage: %s\ntag: %s\npackages: %s\nprobed: %s\n' "$runner" "$IMAGE" "$TAG" "$packages" "$probed"
   exit 0
 fi
 
