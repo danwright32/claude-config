@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
-import { accountKey, combine, macsIn, merge, parseMacFile, parseNicknames, serialize, withSighting } from '../hooks/store.ts'
+import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from '../hooks/store.ts'
 import type { MacFile } from '../hooks/store.ts'
 
-// The two files the account room keeps (#659): one readings file per Mac in iCloud Drive, each Mac
-// writing only its own so iCloud never makes conflict copies (L83), and the nicknames file in the
-// claude-sync payload. Pure, so the merging and the refusals are tested on their own.
+// The two files the account room keeps (#659): one readings file per Mac in a private GitHub
+// repository (#750), each Mac writing only its own (L83), and the nicknames file in the claude-sync
+// payload. Pure, so the merging and the refusals are tested on their own.
 
 const H = 3_600_000
 const T = 1_000 * H
@@ -95,15 +95,102 @@ test('a readings file that does not parse is refused with why, never read as no 
   expect(typeof p === 'object' && Object.keys(p.accounts)).toEqual(['b'])
 })
 
-test("the folder listing names each Mac's file, and one iCloud has not downloaded as unavailable", () => {
-  expect(macsIn(['Daniels-MacBook-Pro-2.json', 'Dans-MacBook-Pro.json', '.DS_Store', 'notes.txt'], 'Daniels-MacBook-Pro-2')).toEqual([{ mac: 'Dans-MacBook-Pro', file: 'Dans-MacBook-Pro.json' }])
-  expect(macsIn(['.Dans-MacBook-Pro.json.icloud'], 'Daniels-MacBook-Pro-2')).toEqual([{ mac: 'Dans-MacBook-Pro', notDownloaded: true }])
-  // Our own file, even as a placeholder, is never another Mac.
-  expect(macsIn(['.Daniels-MacBook-Pro-2.json.icloud'], 'Daniels-MacBook-Pro-2')).toEqual([])
+test("the repository's readings folder names each Mac's file; anything else in it is not a Mac", () => {
+  expect(macFiles([
+    { name: 'Daniels-MacBook-Pro-2.json', type: 'file' },
+    { name: 'Dans-MacBook-Pro.json', type: 'file' },
+    { name: 'README.md', type: 'file' },
+    { name: '.hidden.json', type: 'file' },
+    { name: 'old.json', type: 'dir' },
+  ])).toEqual([
+    { mac: 'Daniels-MacBook-Pro-2', file: 'Daniels-MacBook-Pro-2.json' },
+    { mac: 'Dans-MacBook-Pro', file: 'Dans-MacBook-Pro.json' },
+  ])
 })
 
-test('nicknames: a name, or null for an account whose ask was skipped; anything else is refused', () => {
-  expect(parseNicknames('{"v":1,"names":{"a":"Work","b":null}}')).toEqual({ v: 1, names: { a: 'Work', b: null } })
+test("this Mac's file is rewritten only when a figure the card shows moved, an account is new or changed, or its newest reading is over 10 minutes old (#750)", () => {
+  const MIN = 60_000
+  const who = { id: 'a', email: 'a@x.com', org: 'Acme' }
+  const r = (five: number, at: number, fiveReset = T + 3 * H) => ({ takenAt: at, five: { used: five, resetsAt: fiveReset }, week: { used: 30, resetsAt: T + 50 * H } })
+  const cur = withSighting(undefined, 'm', who, r(40, T), T)
+  const after = (reading: ReturnType<typeof r> | undefined, now: number, w = who) => isWorthWriting(cur, withSighting(cur, 'm', w, reading, now), now)
+  // No file yet: the first sighting is written.
+  expect(isWorthWriting(undefined, cur, T)).toBe(true)
+  // The same figures a minute later: nothing to send.
+  expect(after(r(40, T + MIN), T + MIN)).toBe(false)
+  // A move the card cannot show (60% left either way) waits for the next one it can.
+  expect(after(r(40.4, T + MIN), T + MIN)).toBe(false)
+  expect(after(r(41, T + MIN), T + MIN)).toBe(true)
+  // A reset time that moved is a figure that moved.
+  expect(after(r(40, T + MIN, T + 4 * H), T + MIN)).toBe(true)
+  // A quiet stretch: at ten minutes nothing yet, past ten the newest reading is sent so the other
+  // Mac can tell this one is alive.
+  expect(after(r(40, T + 10 * MIN), T + 10 * MIN)).toBe(false)
+  expect(after(r(40, T + 10 * MIN + 1), T + 10 * MIN + 1)).toBe(true)
+  // A sighting with no reading refreshes no reading, however long it has been.
+  expect(after(undefined, T + 3 * H)).toBe(false)
+  // Who the account is changed, or an account this file has not held: written.
+  expect(after(undefined, T + MIN, { ...who, email: 'b@x.com' })).toBe(true)
+  expect(after(undefined, T + MIN, { id: 'z', email: 'z@x.com', org: 'Acme' })).toBe(true)
+})
+
+// The nicknames file exactly as the first build wrote it (#659, version 1, a name or null per key and
+// no time), kept as written so every later reader is held to it (L1010, L1013).
+const NICKNAMES_V1 = '{\n  "v": 1,\n  "names": {\n    "f16e53befe6fbe12": null,\n    "0a1b2c3d4e5f6071": "Work"\n  }\n}\n'
+
+test('nicknames written by the first build, with no times, still read: a name, or null where the ask was skipped (L1010, L1013)', () => {
+  expect(parseNicknames(NICKNAMES_V1)).toEqual({ names: { f16e53befe6fbe12: { name: null }, '0a1b2c3d4e5f6071': { name: 'Work' } } })
   expect(parseNicknames('{"v":1,"names":{"a":7}}')).toMatch(/not a name/)
   expect(parseNicknames('nope')).toMatch(/^not readable JSON/)
+})
+
+test('nicknames version 2: each entry carries when it was recorded; anything else is refused with why', () => {
+  expect(parseNicknames('{"v":2,"names":{"a":{"name":"Work","at":5},"b":{"name":null,"at":3}}}')).toEqual({ names: { a: { name: 'Work', at: 5 }, b: { name: null, at: 3 } } })
+  expect(parseNicknames('{"v":2,"names":{"a":"Work"}}')).toMatch(/the entry for a is not a name/)
+  expect(parseNicknames('{"v":2,"names":{"a":{"name":"Work","at":"noon"}}}')).toMatch(/the entry for a is not a name/)
+  // A later version is named, never read as no nicknames, so nothing is written over it (L105).
+  expect(parseNicknames('{"v":3,"names":{}}')).toMatch(/written by version 3/)
+  expect(parseNicknames('{"names":{}}')).toMatch(/not a nicknames file/)
+})
+
+test('two Macs answering one account: a name beats a skip whichever came later, in either order (#747)', () => {
+  const name = { name: 'dwright (team)', at: 100 }
+  const skipLater = { name: null, at: 200 }
+  const a = { names: { k: name } }
+  const b = { names: { k: skipLater } }
+  expect(mergeNicknames([a, b]).names.k).toEqual(name)
+  expect(mergeNicknames([b, a]).names.k).toEqual(name)
+  // A name the first build wrote, with no time, still beats a skip recorded later.
+  expect(mergeNicknames([{ names: { k: { name: 'Work' } } }, b]).names.k).toEqual({ name: 'Work' })
+})
+
+test('two names for one account: the later stands, in either order; one with no time counts as older (#747)', () => {
+  const early = { names: { k: { name: 'Home', at: 100 } } }
+  const late = { names: { k: { name: 'Personal', at: 200 } } }
+  expect(mergeNicknames([early, late]).names.k).toEqual({ name: 'Personal', at: 200 })
+  expect(mergeNicknames([late, early]).names.k).toEqual({ name: 'Personal', at: 200 })
+  expect(mergeNicknames([late, { names: { k: { name: 'Zed' } } }]).names.k).toEqual({ name: 'Personal', at: 200 })
+  // An exact tie settles the same way on every Mac, whichever file it read first.
+  const tieA = { names: { k: { name: 'Alpha', at: 300 } } }
+  const tieB = { names: { k: { name: 'Beta', at: 300 } } }
+  expect(mergeNicknames([tieA, tieB])).toEqual(mergeNicknames([tieB, tieA]))
+  // Accounts only one side knows are kept from both.
+  expect(Object.keys(mergeNicknames([{ names: { x: { name: 'X', at: 1 } } }, { names: { y: { name: null, at: 1 } } }]).names).sort()).toEqual(['x', 'y'])
+})
+
+test('recording an answer: a skip never replaces a name, a name replaces a skip, and a rename stands even over a clock that ran ahead (#747)', () => {
+  const named = { names: { k: { name: 'Work', at: 500 } } }
+  expect(withName(named, 'k', null, 900).names.k).toEqual({ name: 'Work', at: 500 })
+  expect(withName({ names: { k: { name: null, at: 900 } } }, 'k', 'Work', 100).names.k).toEqual({ name: 'Work', at: 100 })
+  // The other Mac stamped "Work" ahead of this Mac's clock: the rename is still the later answer.
+  expect(withName(named, 'k', 'Job', 400).names.k).toEqual({ name: 'Job', at: 501 })
+  expect(withName({ names: {} }, 'n', 'New', 7).names.n).toEqual({ name: 'New', at: 7 })
+})
+
+test('the nicknames file is written as version 2, one account per line in key order, and reads back the same', () => {
+  const f = { names: { b: { name: null, at: 3 }, a: { name: 'Work', at: 5 }, c: { name: 'Old' } } }
+  const text = serializeNicknames(f)
+  expect(text).toBe('{\n  "v": 2,\n  "names": {\n    "a": {"name":"Work","at":5},\n    "b": {"name":null,"at":3},\n    "c": {"name":"Old"}\n  }\n}\n')
+  expect(parseNicknames(text)).toEqual(f)
+  expect(serializeNicknames({ names: {} })).toBe('{\n  "v": 2,\n  "names": {}\n}\n')
 })

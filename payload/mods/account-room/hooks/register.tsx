@@ -1,16 +1,19 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession } from '../types/index.d.ts'
+import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession, AccountRoomStop } from '../types/index.d.ts'
+import { answerOf, contentsPath, entriesOf, fileOf, isRepoName, notRepoName, putBody, shaAfterPut, unseenWhy } from './github.ts'
+import type { Answer, RepoFile } from './github.ts'
 import { card, fromRateLimits, nameOf, triggered, verdict } from './room.ts'
-import type { Account, Offset, Reading, Unavailable, Verdict } from './room.ts'
-import { accountKey, macsIn, combine, merge, parseMacFile, parseNicknames, serialize, withSighting } from './store.ts'
+import type { Account, Offset, Reading, Unavailable, Unsaved, Verdict } from './room.ts'
+import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from './store.ts'
 import type { MacFile, Nicknames } from './store.ts'
 
 // The account room (#659). Behaviour agreed with Dan on 2026-10-04 (the issue); the look and every
 // sentence settled in design rounds the same day (docs/mods-design.md "Account room (#659)").
 //
 // - Every rate limit reading this session receives is recorded under the account and org the
-//   session started on (L175), in this Mac's readings file in iCloud Drive.
+//   session started on (L175), in this Mac's readings file in the private readings repository on
+//   GitHub (#750), rewritten only when a figure moved or its newest reading is over 10 minutes old.
 // - When this account reaches 95% on the 5 hour limit or 90% weekly, a boxed card in the band names
 //   the account with the most room, from every Mac's readings, with Switch and Dismiss.
 // - Switch signs claude.ai out in the browser (signOut below, route still to be proven), then
@@ -35,22 +38,47 @@ const dismissedRef = { plugin: 'account-room', key: 'isDismissed' } as const
 const askingRef = { plugin: 'account-room', key: 'asking' } as const
 const typedRef = { plugin: 'account-room', key: 'typed' } as const
 
-let chain: Promise<unknown> = Promise.resolve()
-const serial = <T,>(work: () => Promise<T>): Promise<T> => {
-  const next = chain.then(work)
-  chain = next.catch(() => undefined)
-  return next
+/** Work run one piece at a time, in the order it was handed over. */
+const queue = () => {
+  let chain: Promise<unknown> = Promise.resolve()
+  return <T,>(work: () => Promise<T>): Promise<T> => {
+    const next = chain.then(work)
+    chain = next.catch(() => undefined)
+    return next
+  }
 }
+// What the card shows, and its progress ticks, take turns on one queue. This Mac's readings
+// writes take turns on their own: a write waiting on GitHub must not stop Switch's elapsed
+// seconds counting, which is how a stalled step is told from a live one (#750).
+const serial = queue()
+const serialWrites = queue()
+// The live reading is read, combined and written back in one turn, so two measurements arriving
+// together cannot each combine over the same old value and drop the other's window (L443).
+const serialLive = queue()
 // Things said once per session, so a fault that repeats on every reading is not a note per reading.
 const noted = new Set<string>()
 // Whether this module instance is running a Switch: after a reload a "working" phase has no runner.
 let switching = false
 let ticker: { cancel: () => void } | undefined
 let lastBest: Account | undefined
+// This Mac's readings file as this session last read or wrote it, with its sha: what the next
+// reading is judged against and written over, so the same figures again cost no GitHub call. Any
+// write GitHub refuses drops it, and the next one reads the file afresh (L443).
+let ownFile: { repo: string; mac: string; file: MacFile | undefined; sha: string | undefined } | undefined
+// Why this Mac's readings are not reaching GitHub, from a failed write until one lands (the card).
+let unsaved: Unsaved | undefined
+// Every Mac's readings as last read from GitHub, kept a minute, so a card shown through a busy
+// stretch, and a press on it, does not wait on GitHub each time (#750).
+let readCache: { at: number; repo: string; value: Readings } | undefined
+const READ_FRESH_MS = 60_000
+// How many times a write GitHub refuses as stale is read again and tried.
+const WRITE_TRIES = 3
+// The readings repository, owner/name, from the readingsRepo setting (its manifest default names
+// danwright32/account-room-readings), so it can move without a code change (#750).
+let readingsRepo = ''
 
 const nicknamesPath = (home: string) => `${home}/.claude/mods/account-room-nicknames.json`
 const lockDir = (home: string) => `${home}/.claude/state/account-room`
-const iCloud = (home: string) => `${home}/Library/Mobile Documents/com~apple~CloudDocs/account-room`
 const message = (err: unknown) => String((err as Error)?.message ?? err)
 
 const once = ($: EngineInterface, key: string, text: string, debug = false) => {
@@ -68,11 +96,11 @@ const readText = async ($: EngineInterface, path: string): Promise<string | unde
 /**
  * Written whole and moved into place, so no reader on either Mac sees half a file. The temp file is
  * in this Mac's own state folder, never beside the target: the nicknames sit in the mirrored mods
- * tree and the readings in iCloud Drive, and either would carry a stray temp file to the other Mac.
+ * tree, which would carry a stray temp file to the other Mac.
  */
 const writeWhole = async ($: EngineInterface, home: string, path: string, text: string) => {
   await $.process.run(['mkdir', '-p', lockDir(home)])
-  // The target's folder too: on a Mac where no reading was ever saved it does not exist yet.
+  // The target's folder too: on a Mac where nothing was ever saved it does not exist yet.
   const mk = await $.process.run(['mkdir', '-p', path.slice(0, path.lastIndexOf('/'))])
   if (mk.exitCode !== 0) throw new Error(mk.stderr.trim() || `mkdir exited ${mk.exitCode}`)
   const tmp = `${lockDir(home)}/${crypto.randomUUID()}.tmp`
@@ -85,8 +113,10 @@ const writeWhole = async ($: EngineInterface, home: string, path: string, text: 
 }
 
 /**
- * Two sessions on this Mac write the same files, so each read, change and write holds a lock
- * (assume it runs twice). A lock left by a session that died is taken over after 30 seconds.
+ * Two sessions on this Mac write the same nicknames file, so each read, change and write holds a
+ * lock (assume it runs twice). A lock left by a session that died is taken over after 30 seconds.
+ * The readings file takes no lock: it lives on GitHub, whose sha check refuses a stale write, and
+ * a lock held across the network would hold up every other session for as long as GitHub took.
  */
 const locked = async <T,>($: EngineInterface, home: string, work: () => Promise<T>): Promise<T> => {
   await $.process.run(['mkdir', '-p', lockDir(home)])
@@ -130,93 +160,226 @@ const locked = async <T,>($: EngineInterface, home: string, work: () => Promise<
   throw new Error(`another session has held ${lock} for over 5 seconds`)
 }
 
-/** The nicknames, or why they cannot be read. A missing file is no names yet. */
-const loadNicknames = async ($: EngineInterface, home: string): Promise<Nicknames | string> => {
+/** The shared file alone, or why it cannot be read. A missing file is no names yet. */
+const loadNicknameFile = async ($: EngineInterface, home: string): Promise<Nicknames | string> => {
   try {
     const text = await readText($, nicknamesPath(home))
-    return text === undefined ? { v: 1, names: {} } : parseNicknames(text)
+    return text === undefined ? { names: {} } : parseNicknames(text)
   } catch (err) {
     return message(err)
   }
 }
 
-/** One name written into the shared file. A file that cannot be read is never overwritten (L105). */
-const writeNickname = async ($: EngineInterface, home: string, id: string, name: string | null) =>
+// When both Macs change the nicknames before a sync, claude-sync applies the other Mac's file and
+// sets this Mac's aside beside it as `account-room-nicknames.json.conflict-<Mac>` (it never carries
+// such a copy to the other Mac). The answers in it are still Dan's, so the mod merges them back by
+// its own rule, a name over a skip and the later of two names (#747). The sync itself stays blind to
+// what the file means; this mod is the one reader that knows.
+const COPY_PREFIX = 'account-room-nicknames.json.conflict-'
+
+/** The conflict copies beside the file, each read, or why it could not be. */
+const conflictCopies = async ($: EngineInterface, home: string): Promise<{ name: string; file: Nicknames | string }[]> => {
+  const dir = `${home}/.claude/mods`
+  let names: string[]
+  try {
+    // No folder yet is no copies. One that is there and cannot be listed is said, and any copies
+    // in it stay where they are until it can be (L215).
+    if (!(await $.fs.exists(dir))) return []
+    names = (await $.fs.list(dir)).map(e => e.name).filter(n => n.startsWith(COPY_PREFIX))
+  } catch (err) {
+    once($, 'copies-unlisted', `Account room: ${dir} could not be listed, so a nickname conflict copy in it is not merged: ${message(err)}`)
+    return []
+  }
+  const out: { name: string; file: Nicknames | string }[] = []
+  for (const name of names) {
+    const file = await readText($, `${dir}/${name}`).then(t => (t === undefined ? 'gone from the folder' : parseNicknames(t)), err => message(err))
+    // A copy that cannot be read is left where it is and named, never merged or moved (L105).
+    if (typeof file === 'string') once($, `copy-unreadable:${name}`, `Account room: the nickname conflict copy ${name} could not be read: ${file}. It is left where it is.`)
+    out.push({ name, file })
+  }
+  return out
+}
+
+/** The nicknames as both Macs gave them: the file merged with any conflict copy beside it. */
+const loadNicknames = async ($: EngineInterface, home: string): Promise<Nicknames | string> => {
+  const main = await loadNicknameFile($, home)
+  if (typeof main === 'string') return main
+  const copies = (await conflictCopies($, home)).flatMap(c => (typeof c.file === 'string' ? [] : [c.file]))
+  return copies.length ? mergeNicknames([main, ...copies]) : main
+}
+
+/**
+ * The shared file brought up to date under the lock: every readable conflict copy merged in, then
+ * one answer recorded when given, merged rather than replacing (#747). Written only when the
+ * nicknames it holds change, so a file the first build wrote stays as it is until there is
+ * something new to say. A file that cannot be read is never overwritten (L105). Once the file is
+ * read back holding the merge, each copy merged into it leaves the mirrored mods tree for this
+ * Mac's state folder, kept whole rather than deleted (L5).
+ */
+const updateNicknames = async ($: EngineInterface, home: string, answer?: { id: string; name: string | null }) =>
   locked($, home, async () => {
-    const cur = await loadNicknames($, home)
-    if (typeof cur === 'string') throw new Error(`the nicknames file could not be read: ${cur}`)
-    await writeWhole($, home, nicknamesPath(home), `${JSON.stringify({ v: 1, names: { ...cur.names, [id]: name } }, null, 2)}\n`)
+    const main = await loadNicknameFile($, home)
+    if (typeof main === 'string') throw new Error(`the nicknames file could not be read: ${main}`)
+    const copies = (await conflictCopies($, home)).filter((c): c is { name: string; file: Nicknames } => typeof c.file !== 'string')
+    let next = mergeNicknames([main, ...copies.map(c => c.file)])
+    if (answer) next = withName(next, answer.id, answer.name, await $.clock.now())
+    const text = serializeNicknames(next)
+    if (text !== serializeNicknames(main)) await writeWhole($, home, nicknamesPath(home), text)
+    if (!copies.length) return
+    const back = await loadNicknameFile($, home)
+    if (typeof back === 'string' || serializeNicknames(back) !== text) throw new Error('the nicknames file did not read back as written, so the conflict copies were left where they are')
+    await $.process.run(['mkdir', '-p', lockDir(home)])
+    const at = await $.clock.now()
+    for (const c of copies) {
+      const to = `${lockDir(home)}/${c.name}.merged-${at}`
+      const mv = await $.process.run(['mv', '-n', `${home}/.claude/mods/${c.name}`, to])
+      if (mv.exitCode !== 0) {
+        once($, `copy-unmoved:${c.name}`, `Account room: ${c.name} is merged into the nicknames, but could not be moved out of the mods folder: ${mv.stderr.trim() || `mv exited ${mv.exitCode}`}`)
+        continue
+      }
+      once($, `copy-merged:${c.name}`, `Account room: merged the nicknames claude-sync set aside as ${c.name} back into the shared file (a name beats a skip; the later of two names wins). The copy is kept as ${to}.`)
+    }
   })
 
-/** Every Mac's readings merged, and the other Macs whose file could not be read. */
-const loadReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<{ accounts: Map<string, Account>; unavailable: Unavailable[] }> => {
+/** One answer written into the shared file. */
+const writeNickname = async ($: EngineInterface, home: string, id: string, name: string | null) => updateNicknames($, home, { id, name })
+
+/** At session start: any conflict copy the sync left beside the file merged back into it (#747). */
+const settleNicknames = async ($: EngineInterface, home: string) => {
+  if (!(await conflictCopies($, home)).some(c => typeof c.file !== 'string')) return
+  await updateNicknames($, home).catch(err => once($, 'nicknames-settle', `Account room: the nickname conflict copies could not be merged back: ${message(err)}`))
+}
+
+// The readings repository through `gh api` (#750): requests and answers are built and read in
+// github.ts; the calls are here because $ cannot be passed across an import.
+const GH_TIMEOUT_MS = 20_000
+
+const ghApi = async ($: EngineInterface, args: string[], stdin?: string): Promise<Answer<unknown>> => {
+  try {
+    return answerOf(await $.process.run(['gh', 'api', ...args], { timeoutMs: GH_TIMEOUT_MS, ...(stdin === undefined ? {} : { stdin }) }))
+  } catch (err) {
+    return answerOf({ thrown: message(err) })
+  }
+}
+
+/** Why a 404 came back for the repository, naming the account gh used. */
+const unseen = async ($: EngineInterface, repo: string) => unseenWhy(repo, await ghApi($, ['user']))
+
+/** Every entry in the readings folder: none when the repository holds no readings yet. */
+const listReadings = async ($: EngineInterface, repo: string): Promise<Answer<{ name: string; type: string }[]>> => {
+  const r = await ghApi($, [contentsPath(repo, 'readings')])
+  if (r.ok) return entriesOf(r.value)
+  if (r.status !== 404) return r
+  // No readings folder yet, and no repository this account can see, are both 404: the repository
+  // itself tells them apart, so an empty one is never reported as a fault, nor a fault as empty (L215).
+  const there = await ghApi($, [`repos/${repo}`])
+  if (there.ok) return { ok: true, value: [] }
+  return there.status === 404 ? { ok: false, status: 404, why: await unseen($, repo) } : there
+}
+
+/** One file's text and sha; undefined when GitHub has no such file (404). */
+const readFile = async ($: EngineInterface, repo: string, path: string): Promise<Answer<RepoFile | undefined>> => {
+  const r = await ghApi($, [contentsPath(repo, path)])
+  if (!r.ok) return r.status === 404 ? { ok: true, value: undefined } : r
+  return fileOf(r.value, path)
+}
+
+/**
+ * A file written whole over the sha it was read at (none for a new file), so a write made since is
+ * refused (409, or 422 for a file that appeared) rather than overwritten. The file's new sha.
+ */
+const putFile = async ($: EngineInterface, repo: string, path: string, text: string, sha: string | undefined, commit: string): Promise<Answer<string | undefined>> => {
+  const r = await ghApi($, ['-X', 'PUT', contentsPath(repo, path), '--input', '-'], putBody(text, sha, commit))
+  if (r.ok) return { ok: true, value: shaAfterPut(r.value) }
+  return r.status === 404 ? { ok: false, status: 404, why: await unseen($, repo) } : r
+}
+
+/** Every Mac's readings merged, and those GitHub could not give, with why. */
+type Readings = { accounts: Map<string, Account>; unavailable: Unavailable[] }
+
+const fetchReadings = async ($: EngineInterface): Promise<Readings> => {
+  if (!isRepoName(readingsRepo)) return { accounts: new Map(), unavailable: [{ mac: null, why: notRepoName(readingsRepo) }] }
+  // A folder GitHub cannot list is said for every other Mac on the card, never read as no readings
+  // (L215). This Mac's own file is read too: it holds the other accounts used here.
+  const listed = await listReadings($, readingsRepo)
+  if (!listed.ok) return { accounts: new Map(), unavailable: [{ mac: null, why: listed.why }] }
+  const read = await Promise.all(macFiles(listed.value).map(async m => ({ m, f: await readFile($, readingsRepo, `readings/${m.file}`) })))
   const files: MacFile[] = []
   const unavailable: Unavailable[] = []
-  let names: string[] = []
-  // Asking whether the folder is there can fail as well as listing it, so both are inside the one
-  // boundary: an unanswerable folder is named on the card, never a recompute that throws (L215).
-  try {
-    if (await $.fs.exists(s.folder)) names = (await $.fs.list(s.folder)).map(e => e.name)
-  } catch (err) {
-    unavailable.push({ mac: 'iCloud Drive', why: `the readings folder could not be read: ${message(err)}` })
-  }
-  if (s.mac && names.includes(`.${s.mac}.json.icloud`)) unavailable.push({ mac: s.mac, why: 'not downloaded from iCloud yet' })
-  else if (s.mac && names.includes(`${s.mac}.json`)) {
-    const own = await readText($, `${s.folder}/${s.mac}.json`).then(t => (t === undefined ? 'gone from the folder' : parseMacFile(t)), err => message(err))
-    // This Mac's own file holds other accounts' readings too, so one that cannot be read is named.
-    if (typeof own === 'object') files.push(own)
-    else unavailable.push({ mac: s.mac, why: own })
-  }
-  for (const m of macsIn(names, s.mac ?? '')) {
-    if ('notDownloaded' in m) {
-      unavailable.push({ mac: m.mac, why: 'not downloaded from iCloud yet' })
-      continue
-    }
-    const f = await readText($, `${s.folder}/${m.file}`).then(t => (t === undefined ? 'gone from the folder' : parseMacFile(t)), err => message(err))
-    if (typeof f === 'string') unavailable.push({ mac: m.mac, why: f })
-    else files.push(f)
+  for (const { m, f } of read) {
+    const parsed = !f.ok ? f.why : f.value === undefined ? 'gone from the repository' : parseMacFile(f.value.text)
+    if (typeof parsed === 'string') unavailable.push({ mac: m.mac, why: parsed })
+    else files.push(parsed)
   }
   return { accounts: merge(files), unavailable }
 }
 
-/** One sighting of this session's account, with its reading when there is one, in this Mac's file. */
+/**
+ * Every Mac's readings, a good read kept for a minute (READ_FRESH_MS). A read with anything GitHub
+ * could not give is never kept, so the card stops saying so at the first read after it is fixed
+ * (review of #757).
+ */
+const loadReadings = async ($: EngineInterface): Promise<Readings> => {
+  const now = await $.clock.now()
+  if (readCache && readCache.repo === readingsRepo && now - readCache.at < READ_FRESH_MS) return readCache.value
+  const value = await fetchReadings($)
+  readCache = value.unavailable.length ? undefined : { at: now, repo: readingsRepo, value }
+  return value
+}
+
+/**
+ * One sighting of this session's account, with its reading when there is one, in this Mac's file
+ * on GitHub (#750). Written only when the file is worth rewriting (isWorthWriting), over the sha it
+ * was read at, so GitHub refuses a write made over a newer file; a refused write reads the file
+ * again and merges, up to WRITE_TRIES times, never forcing. A file that cannot be read is never
+ * written over (L105). Any failure is said on the card for this Mac and once per spell in the
+ * transcript, never dropped (L215).
+ */
 const record = ($: EngineInterface, s: AccountRoomSession, reading: Reading | undefined) =>
-  serial(async () => {
+  serialWrites(async () => {
     if (!s.mac) {
       once($, 'no-mac', "Account room: this Mac's name could not be read, so its readings are not saved.")
       return
     }
-    const path = `${s.folder}/${s.mac}.json`
-    // iCloud evicts a file it has synced to a placeholder beside it: the file is not missing, only
-    // not here, so writing a fresh one would replace every reading it holds (L105).
-    let evicted: boolean
-    try {
-      evicted = await $.fs.exists(`${s.folder}/.${s.mac}.json.icloud`)
-    } catch (err) {
-      // Unknown is not "no": writing on a guess could replace every reading the file holds (L215).
-      once($, 'own-evict-unknown', `Account room: could not tell whether this Mac's readings file is downloaded from iCloud, so nothing was saved: ${message(err)}`)
-      return
+    const mac = s.mac
+    const fail = (why: string) => {
+      unsaved = { mac, why }
+      once($, 'record-failed', `Account room: readings could not be saved to GitHub (${readingsRepo}): ${why}`)
     }
-    if (evicted) {
-      once($, 'own-evicted', `Account room: this Mac's readings file is not downloaded from iCloud yet, so no readings are saved until it is: ${path}`)
-      return
-    }
-    try {
-      await locked($, s.home, async () => {
-        const text = await readText($, path)
-        const cur = text === undefined ? undefined : parseMacFile(text)
+    if (!isRepoName(readingsRepo)) return fail(notRepoName(readingsRepo))
+    const path = `readings/${mac}.json`
+    let refused = ''
+    for (let i = 0; i < WRITE_TRIES; i++) {
+      let held = ownFile && ownFile.repo === readingsRepo && ownFile.mac === mac ? ownFile : undefined
+      if (!held) {
+        const got = await readFile($, readingsRepo, path)
+        if (!got.ok) return fail(got.why)
+        const parsed = got.value === undefined ? undefined : parseMacFile(got.value.text)
         // Never rewritten from one sighting: that would erase every other account's readings it
         // holds (L105). It is left for repair, and the card names it as unavailable.
-        if (typeof cur === 'string') {
-          once($, 'own-unreadable', `Account room: this Mac's readings file could not be read (${cur}), so no readings are saved until it is repaired or removed: ${path}`)
-          return
-        }
-        const now = await $.clock.now()
-        await writeWhole($, s.home, path, serialize(withSighting(cur, s.mac as string, s, reading, now)))
-      })
-    } catch (err) {
-      once($, 'record-failed', `Account room: readings could not be saved to ${s.folder}: ${message(err)}`)
+        if (typeof parsed === 'string') return fail(`this Mac's readings file on GitHub could not be read (${parsed}), so nothing is written over it until it is repaired or removed`)
+        held = ownFile = { repo: readingsRepo, mac, file: parsed, sha: got.value?.sha }
+      }
+      const now = await $.clock.now()
+      const next = withSighting(held.file, mac, s, reading, now)
+      // GitHub holds what was last read or written there, so with nothing new to send nothing is
+      // unsaved either: the card stops saying a save failed.
+      const saved = () => {
+        unsaved = undefined
+        noted.delete('record-failed')
+      }
+      if (!isWorthWriting(held.file, next, now)) return saved()
+      const put = await putFile($, readingsRepo, path, serialize(next), held.sha, `Readings from ${mac}`)
+      if (put.ok) {
+        ownFile = put.value === undefined ? undefined : { repo: readingsRepo, mac, file: next, sha: put.value }
+        // A write landed: the card stops saying otherwise, and the next failure is news again.
+        return saved()
+      }
+      ownFile = undefined
+      if (put.status !== 409 && put.status !== 422) return fail(put.why)
+      refused = put.why
     }
+    fail(`GitHub refused the write ${WRITE_TRIES} times as stale, the last time with: ${refused}`)
   })
 
 /**
@@ -238,9 +401,18 @@ const clearRow = async ($: EngineInterface) => {
   await $.modkit.clearBandRow({ mod: MOD, id: 'room' }).catch(err => once($, 'band-clear', `account-room: the band could not be updated: ${message(err)}`, true))
 }
 
-/** What the card shows now, from this session's live reading and every Mac's readings. */
-const recompute = ($: EngineInterface) =>
-  serial(async () => {
+/**
+ * What the card shows now, from this session's live reading and every Mac's readings. The other
+ * Macs' readings, which can wait on GitHub, are read before the pass joins the queue the progress
+ * ticks take turns on, so a slow read never stops Switch's elapsed seconds (second review of #757).
+ * A pass whose account turned low while it was reading has nothing read to draw from, and leaves
+ * the card to the pass that follows the reading that made it low.
+ */
+const recompute = async ($: EngineInterface) => {
+  const first = (await $.state.get(sessionRef)).value
+  const low = !!first && first.isInteractive && !(await $.state.get(dismissedRef)).value && triggered((await $.state.get(liveRef)).value ?? undefined, await $.clock.now()).length > 0
+  const readings = low ? await loadReadings($) : undefined
+  return serial(async () => {
     const s = (await $.state.get(sessionRef)).value
     if (!s || !s.isInteractive) return
     const live = (await $.state.get(liveRef)).value ?? undefined
@@ -253,19 +425,22 @@ const recompute = ($: EngineInterface) =>
       await clearRow($)
       return
     }
+    if (!readings) return
     let phase: AccountRoomPhase = (await $.state.get(phaseRef)).value ?? { kind: 'idle' }
-    // A reload while Switch ran left nobody running it: the sign out was not confirmed.
+    // A reload while Switch ran left nobody running it.
     if (phase.kind === 'working' && !switching) {
-      // In the logout step the sign out was never confirmed. In the login step it was, and whether
-      // the sign in finished is unknown, so the card goes back to its offer rather than claim a failure.
-      phase = phase.step === 'logout' ? { kind: 'failed' } : { kind: 'idle' }
+      // In the logout step the run was cut off before anything was confirmed, and nothing checked
+      // the page afterwards, so the card says it was cut off (#736). In the login step the sign out
+      // was confirmed, and whether the sign in finished is unknown, so the card goes back to its
+      // offer rather than claim a failure.
+      phase = phase.step === 'logout' ? { kind: 'failed', cause: 'interrupted' } : { kind: 'idle' }
       await $.state.set(phaseRef, phase)
     }
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
     const names = typeof nick === 'string' ? {} : nick.names
-    const nameFor = (id: string) => (Object.prototype.hasOwnProperty.call(names, id) ? (names[id] ?? null) : null)
-    const { accounts, unavailable } = await loadReadings($, s)
+    const nameFor = (id: string) => (Object.prototype.hasOwnProperty.call(names, id) ? (names[id]?.name ?? null) : null)
+    const { accounts, unavailable } = readings
     const here: Account = { id: s.id, email: s.email, org: s.org, nickname: nameFor(s.id), ...(live ? { reading: live } : {}) }
     const others = [...accounts.values()].filter(a => a.id !== s.id).map(a => ({ ...a, nickname: nameFor(a.id) }))
     const v = verdict(here, others, now)
@@ -273,6 +448,7 @@ const recompute = ($: EngineInterface) =>
     shown = { verdict: v, offset: await offsetsFor($, v, now), unavailable }
     await draw($, phase, now)
   })
+}
 
 /** The offset in force at every instant the card shows, plus now, read once per pass. */
 const offsetsFor = async ($: EngineInterface, v: Verdict, now: number): Promise<Offset> => {
@@ -289,7 +465,7 @@ let shown: { verdict: Verdict; offset: Offset; unavailable: Unavailable[] } | un
 
 const draw = async ($: EngineInterface, phase: AccountRoomPhase, now: number) => {
   if (!shown) return
-  const c = card({ verdict: shown.verdict, phase, now, offset: shown.offset, unavailable: shown.unavailable })
+  const c = card({ verdict: shown.verdict, phase, now, offset: shown.offset, unavailable: shown.unavailable, ...(unsaved ? { unsaved } : {}) })
   try {
     // An older mod-kit without the 'room' slot refuses the row, which is said below.
     await $.modkit.bandRow({ mod: MOD, id: 'room', slot: 'room', lines: c.lines, frame: c.frame })
@@ -320,24 +496,32 @@ const LOGOUT_TIMEOUT_MS = 60_000
 const CHECK_TIMEOUT_MS = 30_000
 
 type SignOutRoute = { logoutCommand: string; signedOutCheck: string }
-type SignOut = { isConfirmed: true } | { isConfirmed: false; why: string }
+// The cause is what the card says and the why is the toast's detail, so each stop names what was
+// actually measured: nothing attempted, the command, the check not run, or the check's answer (#736).
+type SignOut = { isConfirmed: true } | { isConfirmed: false; cause: AccountRoomStop; why: string }
 
 const short = (s: string) => (s.trim().length > 120 ? `${s.trim().slice(0, 120)}...` : s.trim())
 
 const signOut = async ($: EngineInterface, route: SignOutRoute): Promise<SignOut> => {
-  if (!route.logoutCommand || !route.signedOutCheck) return { isConfirmed: false, why: 'no browser logout route has been proven yet (#659)' }
+  if (!route.logoutCommand || !route.signedOutCheck) return { isConfirmed: false, cause: 'no-route', why: 'no browser logout route has been proven yet (#659)' }
+  let out: { exitCode: number; stderr: string }
   try {
-    const out = await $.process.run(['/bin/sh', '-c', route.logoutCommand], { timeoutMs: LOGOUT_TIMEOUT_MS })
-    if (out.exitCode !== 0) return { isConfirmed: false, why: `the logout command exited ${out.exitCode}: ${short(out.stderr) || 'no output'}` }
-    const check = await $.process.run(['/bin/sh', '-c', route.signedOutCheck], { timeoutMs: CHECK_TIMEOUT_MS })
-    if (check.exitCode === 0 && check.stdout.trim() === 'signed out') return { isConfirmed: true }
-    return { isConfirmed: false, why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
+    out = await $.process.run(['/bin/sh', '-c', route.logoutCommand], { timeoutMs: LOGOUT_TIMEOUT_MS })
   } catch (err) {
-    return { isConfirmed: false, why: `the logout could not be run: ${String((err as Error)?.message ?? err)}` }
+    return { isConfirmed: false, cause: 'logout-failed', why: `the logout command could not be run: ${message(err)}` }
   }
+  if (out.exitCode !== 0) return { isConfirmed: false, cause: 'logout-failed', why: `the logout command exited ${out.exitCode}: ${short(out.stderr) || 'no output'}` }
+  let check: { exitCode: number; stdout: string }
+  try {
+    check = await $.process.run(['/bin/sh', '-c', route.signedOutCheck], { timeoutMs: CHECK_TIMEOUT_MS })
+  } catch (err) {
+    return { isConfirmed: false, cause: 'check-not-run', why: `the signed out check could not be run: ${message(err)}` }
+  }
+  if (check.exitCode === 0 && check.stdout.trim() === 'signed out') return { isConfirmed: true }
+  return { isConfirmed: false, cause: 'not-confirmed', why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
 }
 
-type Options = { logoutCommand?: unknown; signedOutCheck?: unknown; readingsFolder?: unknown }
+type Options = { logoutCommand?: unknown; signedOutCheck?: unknown; readingsRepo?: unknown }
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 
 const runSwitch = async ($: EngineInterface, best: Account, options: Options) => {
@@ -345,7 +529,7 @@ const runSwitch = async ($: EngineInterface, best: Account, options: Options) =>
     const out = await signOut($, { logoutCommand: str(options.logoutCommand), signedOutCheck: str(options.signedOutCheck) })
     if (!out.isConfirmed) {
       $.ui.toast(`Switch stopped: ${out.why}`)
-      await $.state.set(phaseRef, { kind: 'failed' })
+      await $.state.set(phaseRef, { kind: 'failed', cause: out.cause })
       return
     }
     await $.state.set(phaseRef, { kind: 'working', step: 'login', since: await $.clock.now() })
@@ -425,11 +609,16 @@ const ask = async ($: EngineInterface, a: AccountRoomAsking) => {
     // Opened at session start, unasked, Claude Code holds the question back below 144 columns, so a
     // narrower window shows nothing at all. The question keeps waiting, and the transcript says so
     // with the command that asks for it, which opens at any width (live check, 2026-10-05).
-    // Claude Code's own reason is said, never a width this mod did not measure (L11).
-    const why = 'reason' in opened ? String(opened.reason) : 'Claude Code has not placed it'
+    // Claude Code's own reason is said, never a width this mod did not measure (L11); a reason that
+    // came back empty is no reason, so the fallback is said instead of an empty pair of brackets.
+    const given = 'reason' in opened && typeof opened.reason === 'string' ? opened.reason.trim() : ''
+    const why = given || 'Claude Code has not placed it'
     $.ui.log(`account-room: the nickname dialog is waiting to be shown: ${why}`, { to: 'debug' })
-    const what = a.current === null ? `${a.email} has no nickname yet, and the question` : `The nickname question for ${a.email}`
-    once($, 'nickname-waiting', `Account room: ${what} is waiting to be shown (${why}). Run /accounts rename to answer it now.`)
+    // A login file with no email leaves the account named by its org, or as this account.
+    const who = a.email || (a.org ? `the ${a.org} account` : 'this account')
+    const what = a.current === null ? `${who} has no nickname yet, and the question` : `The nickname question for ${who}`
+    // Once per account: a later unplaced ask for another account is its own news (L707).
+    once($, `nickname-waiting:${a.id}`, `Account room: ${what} is waiting to be shown (${why}). Run /accounts rename to answer it now.`)
   }
 }
 
@@ -460,9 +649,15 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
   }
   // Merged, never overwritten: a session.measure may already have stored a newer reading, which
   // wins limit by limit over this older start reading (L510).
-  const already = (await $.state.get(liveRef)).value ?? undefined
-  if (reading) await $.state.set(liveRef, combine(reading, already) as Reading)
+  if (reading) {
+    const start = reading
+    await serialLive(async () => {
+      const already = (await $.state.get(liveRef)).value ?? undefined
+      await $.state.set(liveRef, combine(start, already) as Reading)
+    })
+  }
   await record($, s, reading)
+  await settleNicknames($, s.home)
   if (s.isInteractive) {
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
@@ -471,8 +666,25 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
   await recompute($)
 }
 
+/** One measurement's windows taken in: this session's live reading, this Mac's file, the card. */
+const takeIn = async ($: EngineInterface, windows: Parameters<typeof fromRateLimits>[0]) => {
+  const s = (await $.state.get(sessionRef)).value
+  if (!s) return
+  const reading = fromRateLimits(windows, await $.clock.now())
+  if (!reading) return
+  // Limit by limit, so a response reporting one window keeps the other (L510).
+  await serialLive(async () => {
+    await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
+  })
+  await record($, s, reading)
+  await recompute($)
+}
+
 export const register: Register = (on, options) => {
   const opts = (options ?? {}) as Options
+  // Read from the setting each time the module loads, never from a session stored by an earlier
+  // build, whose shape need not carry it (review of #757, L1013).
+  readingsRepo = str(opts.readingsRepo)
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
@@ -503,7 +715,6 @@ export const register: Register = (on, options) => {
       isInteractive: e.isInteractive,
       home,
       mac,
-      folder: str(opts.readingsFolder) || iCloud(home),
     }
     await $.state.set(sessionRef, s)
     if (e.isInteractive) {
@@ -517,15 +728,14 @@ export const register: Register = (on, options) => {
   })
 
   on('session.measure', async ($, e, next) => {
-    const s = (await $.state.get(sessionRef)).value
-    if (s && e.changed.includes('rateLimits')) {
-      const reading = fromRateLimits(e.rateLimits, await $.clock.now())
-      if (reading) {
-        // Limit by limit, so a response reporting one window keeps the other (L510).
-        await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
-        await record($, s, reading)
-        await recompute($)
-      }
+    // The reading work (saving it, reading every Mac's figures, drawing the card) runs once this
+    // hook has returned, so a slow write or a held lock never holds up the measurement for the
+    // mods beneath (#736). A failure there is said once, never dropped (L73).
+    if (e.changed.includes('rateLimits')) {
+      const windows = e.rateLimits
+      $.clock.after(0, () => {
+        takeIn($, windows).catch(err => once($, 'measure-failed', `Account room: a rate limit reading could not be taken in: ${message(err)}`))
+      })
     }
     return next(e)
   })
@@ -587,13 +797,13 @@ export const register: Register = (on, options) => {
     if (!s) return { text: 'This session has no Claude account, so there is nothing to rename.' }
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') return { text: `The nicknames could not be read, so none can be changed: ${nick}` }
-    const current = (id: string) => (Object.prototype.hasOwnProperty.call(nick.names, id) ? (nick.names[id] ?? null) : null)
+    const current = (id: string) => (Object.prototype.hasOwnProperty.call(nick.names, id) ? (nick.names[id]?.name ?? null) : null)
     const q = rest.join(' ').trim()
     if (!q) {
       await ask($, { id: s.id, email: s.email, org: s.org, current: current(s.id) })
       return { text: '' }
     }
-    const { accounts } = await loadReadings($, s)
+    const { accounts } = await loadReadings($)
     if (!accounts.has(s.id)) accounts.set(s.id, { id: s.id, email: s.email, org: s.org })
     const lower = q.toLowerCase()
     const hits = [...accounts.values()].filter(a => (current(a.id) ?? '').toLowerCase() === lower || a.email.toLowerCase() === lower)

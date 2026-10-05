@@ -109,6 +109,13 @@ printf '{"v":1,"names":{"58f60981898d32e8":"\\u0001 \\u0001"}}\n' > "$NICK"; run
 case "$out" in *"| Dan, Pennie") check "spaces between control bytes keep the name and org" ok ;; *) check "spaces between control bytes keep the name and org" "$out" ;; esac
 printf '{"v":1,"names":{"58f60981898d32e8":"Work \\u0001"}}\n' > "$NICK"; runit "$(input s1)"
 case "$out" in *"| Opus 5.5 (high) | Work") check "a control byte after a space is trimmed with it" ok ;; *) check "a control byte after a space is trimmed with it" "$out" ;; esac
+# Version 2 (#747): each entry is {"name", "at"}, so a merge can tell a later name from an earlier one.
+printf '{\n  "v": 2,\n  "names": {\n    "58f60981898d32e8": {"name":"Work","at":1759671234567}\n  }\n}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Opus 5.5 (high) | Work") check "a version 2 nickname replaces the name and org" ok ;; *) check "a version 2 nickname replaces the name and org" "$out" ;; esac
+printf '{"v":2,"names":{"58f60981898d32e8":{"name":null,"at":1759671234567}}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Dan, Pennie") check "a version 2 skip keeps the name and org" ok ;; *) check "a version 2 skip keeps the name and org" "$out" ;; esac
+printf '{"v":2,"names":{"58f60981898d32e8":{"name":"  Work  ","at":1759671234567}}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Opus 5.5 (high) | Work") check "a version 2 nickname is trimmed too" ok ;; *) check "a version 2 nickname is trimmed too" "$out" ;; esac
 printf '{"v":1,"names":{"58f60981898d32e8":"Caf\u00e9 \u5bb6"}}\n' > "$NICK"
 raw="$(printf '%s' "$(input s1)" | HOME="$H" STATUSLINE_NOW="$NOW" LC_ALL=C LANG=C bash "$SCRIPT" 2>&1)"
 out="$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')"

@@ -1,4 +1,4 @@
-import type { AccountRoomLimit, AccountRoomPhase, AccountRoomReading } from '../types/index.d.ts'
+import type { AccountRoomLimit, AccountRoomPhase, AccountRoomReading, AccountRoomStop } from '../types/index.d.ts'
 
 // The account room's judgments (#659), pure so each is tested on its own. Behaviour is the spec
 // agreed with Dan on 2026-10-04 (issue #659); the look and every sentence are the design rounds of
@@ -152,8 +152,19 @@ export type Phase = AccountRoomPhase
 export type Part = { text: string; color?: string; dim?: boolean } | { button: string; label: string }
 export type Card = { lines: Part[][]; frame: { kind: 'box' } }
 
-/** Another Mac whose readings file could not be read, with why. */
-export type Unavailable = { mac: string; why: string }
+/**
+ * Readings GitHub could not give, with why: one Mac's file, or every other Mac's (mac null) when the
+ * repository's readings folder itself could not be listed.
+ */
+export type Unavailable = { mac: string | null; why: string }
+/** This Mac's own readings that could not be saved to the repository, with why. */
+export type Unsaved = { mac: string; why: string }
+
+/**
+ * What a limit's figure reads on the card: the whole percent left. One definition, so the card and
+ * the rule deciding a figure has moved enough to send to the other Macs never disagree (L16).
+ */
+export const leftOf = (used: number): number => Math.max(0, Math.min(100, Math.round(100 - used)))
 
 const AMBER = 'warning'
 const RED = 'error'
@@ -166,8 +177,7 @@ const figures = (a: Account, now: number, offset: Offset): string => {
   for (const w of ['five', 'week'] as const) {
     const l = a.reading?.[w]
     if (!l) continue
-    const used = effective(l, now) ?? 0
-    const left = Math.max(0, Math.min(100, Math.round(100 - used)))
+    const left = leftOf(effective(l, now) ?? 0)
     // A reset already passed is not the next one, which the reading cannot know.
     const reset = l.resetsAt !== null && l.resetsAt > now ? `, resets ${clockText(l.resetsAt, now, offset)}` : ''
     parts.push(`${left}% of ${LABEL[w]} left${reset}`)
@@ -179,11 +189,27 @@ const figures = (a: Account, now: number, offset: Offset): string => {
 const listed = (names: string[]) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
 
 /**
+ * The red lead for a Switch that stopped at the sign out, one sentence per measured cause (#736,
+ * L11, L440). "claude.ai didn't confirm the sign out" is the design round's sentence and is kept for
+ * the one case it describes, a check that ran and did not print "signed out"; the others say what
+ * was found instead of claiming a check that never ran. Typed as a complete record, so a new cause
+ * cannot fall back on another's sentence (L113).
+ */
+export const STOPPED: Record<AccountRoomStop, string> = {
+  'no-route': 'No sign out was attempted: no browser logout route is set up. Nothing was changed.',
+  'logout-failed': 'The browser logout command failed. Nothing else was changed.',
+  'check-not-run': 'The signed out check could not be run. Nothing else was changed.',
+  'not-confirmed': "claude.ai didn't confirm the sign out. Nothing else was changed.",
+  interrupted: 'A reload cut Switch off before the sign out was confirmed. Nothing else was changed.',
+}
+
+/**
  * The boxed card in the band (design rounds 1 to 3 and the wording rounds): an amber lead line with
  * its buttons, then one line of figures or of the soonest reset. While Switch works the lead itself
- * is the progress with elapsed seconds and the buttons go; a sign out not confirmed turns it red.
+ * is the progress with elapsed seconds and the buttons go; a Switch stopped at the sign out turns it
+ * red, saying why (STOPPED).
  */
-export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: Offset; unavailable: readonly Unavailable[] }): Card => {
+export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: Offset; unavailable: readonly Unavailable[]; unsaved?: Unsaved }): Card => {
   const v = f.verdict
   const lines: Part[][] = []
   if (v.kind === 'room') {
@@ -193,7 +219,7 @@ export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: O
       const doing = f.phase.step === 'logout' ? 'signing claude.ai out in the browser' : 'opening the sign in page'
       lines.push([{ text: `Switching to ${name}: ${doing}… ${secs}s`, color: AMBER }])
     } else if (f.phase.kind === 'failed') {
-      lines.push([{ text: "claude.ai didn't confirm the sign out. Nothing else was changed.", color: RED }, GAP, { button: 'retry', label: 'Try again' }, SPACE, { button: 'dismiss', label: 'Dismiss' }])
+      lines.push([{ text: STOPPED[f.phase.cause ?? 'not-confirmed'], color: RED }, GAP, { button: 'retry', label: 'Try again' }, SPACE, { button: 'dismiss', label: 'Dismiss' }])
     } else {
       lines.push([{ text: `This account is low. ${name} has room`, color: AMBER }, GAP, { button: 'switch', label: 'Switch' }, SPACE, { button: 'dismiss', label: 'Dismiss' }])
     }
@@ -208,8 +234,12 @@ export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: O
     if (v.unread.length) info.push(`${listed(v.unread.map(nameOf))} ${v.unread.length === 1 ? 'has' : 'have'} no reading yet and may have room`)
     if (info.length) lines.push([{ text: info.join(SEP) }])
   }
-  // An unreadable other Mac is said, never dropped (the spec, L215). Its wording and place were not
-  // part of a design round: see docs/mods-design.md.
-  if (v.kind !== 'none') for (const u of f.unavailable) lines.push([{ text: `${u.mac}'s readings are unavailable: ${u.why}` }])
+  // Readings GitHub could not give, and this Mac's own that could not be saved, are said, never
+  // dropped (the spec, L215). Their wording and place were not part of a design round: see
+  // docs/mods-design.md.
+  if (v.kind !== 'none') {
+    for (const u of f.unavailable) lines.push([{ text: u.mac === null ? `The other Macs' readings are unavailable: ${u.why}` : `${u.mac}'s readings are unavailable: ${u.why}` }])
+    if (f.unsaved) lines.push([{ text: `${f.unsaved.mac}'s readings could not be saved to GitHub: ${f.unsaved.why}` }])
+  }
   return { lines, frame: { kind: 'box' } }
 }
