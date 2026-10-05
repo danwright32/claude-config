@@ -371,6 +371,33 @@ got="$(ps_repo_dir "git -C target push" "$RD" 2>/dev/null)"
 [ "$got" = "$RD/target" ] && check "#532 a relative git -C resolves against the session directory" ok \
   || check "#532 a relative git -C resolves against the session directory" "got [$got]"
 
+# A QUOTED -C path, and one holding spaces, is read the way the shell reads it (claude-config#589).
+# On 2026-09-29 an Ovation subagent pushed with `git -C "<worktree path>" push`; the pattern took the
+# opening quote as part of the path, nothing resolved, and every global push gate stood down.
+SP="$RD/with space/wt"
+mkdir -p "$RD/with space"
+git init -q "$SP" 2>/dev/null
+for c in "git -C \"$SP\" push" \
+         "git -C '$SP' push origin HEAD" \
+         "rtk git -C \"$SP\" push" \
+         "git -c core.quotepath=false -C \"$SP\" push" \
+         "GIT_TRACE=0 git -C \"$SP\" push -u origin feat"; do
+  got="$(ps_repo_dir "$c" "$S" 2>"$RD/quoted.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = "$SP" ] && check "#589 a quoted -C path with a space resolves: $c" ok \
+    || check "#589 a quoted -C path with a space resolves: $c" "rc=$rc got [$got] said [$(cat "$RD/quoted.err")]"
+done
+got="$(ps_repo_dir "git -C \"$RD/target\" push" "$S" 2>/dev/null)"
+[ "$got" = "$RD/target" ] && check "#589 a quoted -C path without a space resolves" ok \
+  || check "#589 a quoted -C path without a space resolves" "got [$got]"
+# A -C that is only MENTIONED (in an echo, or after the subcommand) is not where the push runs.
+got="$(ps_repo_dir "echo \"git -C $RD/no-such-dir push\" && git push" "$RD/target" 2>/dev/null)"
+[ "$got" = "$RD/target" ] && check "#589 a -C inside a quoted argument is not read as the push's directory" ok \
+  || check "#589 a -C inside a quoted argument is not read as the push's directory" "got [$got]"
+refuses "git -C \"$RD/no such dir\" push" \
+  "#589 a quoted -C naming a missing directory refuses"
+refuses "git -C \"\$WT\" push" \
+  "#589 a quoted -C naming a variable refuses rather than judging the session repo"
+
 # Finding the repo is only half of it: the same subshell has to be seen as a push at all, or every
 # gate exits before it asks which repo. Its segment ends `git push)`, whose subcommand read as
 # `push)`, so the push was invisible, which is indistinguishable from a push judged clean (L98).
