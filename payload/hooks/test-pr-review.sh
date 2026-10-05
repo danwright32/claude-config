@@ -243,6 +243,8 @@ done
 out="$(PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
 check_eq "with no shasum the merge is still refused" "1" "$rc"
 check "and the refusal names the missing tool" "shasum" "$out"
+out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"
+check_not "a presented key is not blamed when no key can be checked at all" "not this review's key" "$out"
 check_not "and does not send it to re-run the review" "pr-review.sh restart --dir" "$out"
 chmod a-w "$AI_REVIEW_STATE_DIR"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?

@@ -274,7 +274,8 @@ do_check() {
       else
         echo "    ($(ar_review_key_failure "$keyrc" "$final" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir $top --sha ${full_sha:-$sha}"))"
       fi
-      [ -n "${PR_REVIEW_READ:-}" ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
+      # Only when keys can be checked at all: with a tool missing, the presented key was never judged.
+      [ -n "${PR_REVIEW_READ:-}" ] && [ "$keyrc" -eq 0 ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
       ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
       return 1
       ;;
