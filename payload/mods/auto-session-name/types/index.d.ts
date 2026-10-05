@@ -19,6 +19,8 @@ export type AutoSessionNameRecord = {
   /**
    * Set once the 10 minutes have passed. From then on the end of each main turn (an idle point) may
    * name it: the first exchange when nothing was asked by then, and the one retry after a failure.
+   * An idle point also reads the 10 minutes from `startedAt`, so a failed write of this flag never
+   * leaves the session waiting for a mark that does not come again (#701).
    */
   isDue: boolean
   /** The newest session name Claude Code reported (`session_title`), empty when none. */
@@ -30,6 +32,12 @@ export type AutoSessionNameRecord = {
    * that message shows it already took (the fallback route).
    */
   pendingTitle: string | null
+  /**
+   * The name Haiku made for this session, kept once made so an attempt that takes over from one a
+   * reload cut off (while /rename waited) uses it rather than asking Haiku again: at most one Haiku
+   * call per session (#701). Absent on a record written before it was added, which reads as none.
+   */
+  madeName?: string | null
   /**
    * The attempt that holds the work, so a second caller stands down: its own id, and when it claimed
    * it (a claim older than a few minutes belongs to an attempt a reload cut off, and is taken over).
