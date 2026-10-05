@@ -45,6 +45,28 @@ export const othersEditing = <R extends Rec>(open: R[], selfId: string | null, p
 // Whether a path is the folder itself or anything under it.
 export const insideRoot = (path: string, root: string): boolean => root === '/' || path === root || path.startsWith(root + '/')
 
+// Scratch (#674, #700): the temporary folders, the scratchpad under them, and wherever TMPDIR points.
+// A write there is never recorded as a session's edit unless it lies inside the session's own root.
+const SCRATCH = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
+export const isScratch = (path: string, tmpdir: string | undefined): boolean => {
+  const t = tmpdir?.replace(/\/+$/, '')
+  return [...SCRATCH, ...(t && t.startsWith('/') ? [t] : [])].some(r => insideRoot(path, r))
+}
+
+// The git working tree a path sits in (#700): the nearest folder at or above it holding a .git
+// entry, a folder or the file a linked worktree or submodule has. Asked of the disk through
+// `hasGit`, never of git, nearest first, and bounded so no path costs more than WALK_LIMIT looks.
+const WALK_LIMIT = 64
+export const workingTree = async (path: string, hasGit: (dir: string) => Promise<boolean>): Promise<string | undefined> => {
+  let dir = path
+  for (let looked = 0; looked < WALK_LIMIT; looked++) {
+    if (await hasGit(dir)) return dir
+    if (dir === '/') return undefined
+    dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
+  }
+  return undefined
+}
+
 // The files other open sessions edited inside a folder an rm -r takes away (#674), each once, in
 // the order first found, so each can be judged by othersEditing like a single write.
 export const editedUnder = <R extends Rec>(open: R[], selfId: string | null, folder: string): string[] => {
@@ -244,6 +266,8 @@ export const shellWrites = (cmds: string[][], cwd: string, home: string | undefi
     out.push({ path, ...(sources ? { sources } : {}), ...extra })
   }
   let dir: string | undefined = cwd
+  // The folder outside each subshell still open: a cd inside one ends with it (#700).
+  const outside: (string | undefined)[] = []
   for (const words of cmds) {
     // Redirects first, and taken out of the words, so what is left is the command and its operands.
     const args: string[] = []
@@ -260,6 +284,14 @@ export const shellWrites = (cmds: string[][], cwd: string, home: string | undefi
     const rest = args.slice(1)
     const abs = (w: string) => absolutePath(w, dir, home)
     switch (name) {
+      // mod-kit's reader gives a subshell's parentheses as commands of their own (#700). A closing
+      // one with no opening (a case pattern's) leaves the folder as it is.
+      case '(':
+        outside.push(dir)
+        break
+      case ')':
+        if (outside.length) dir = outside.pop()
+        break
       case 'cd': {
         // cd - goes back to a folder this cannot know, so relative paths after it are not named.
         const target = rest.find(a => !a.startsWith('-') || a === '-') ?? '~'

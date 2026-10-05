@@ -74,15 +74,19 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 type Judge = string | 'no-answer'
 // Each send's outcome in turn: delivered, refused with this reason, or a throw.
 type Send = true | { refused: string } | 'throws'
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request' }
+// How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
+// refuses it.
+type Ran = 'ok' | 'error' | { deny: string }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; tmpdir?: string }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
 // The Mac and the model beneath the guard. Everything that gets past it, every question put to the
 // judge, every message sent and every card and toast is recorded.
 const world = (on: On, o: Opts = {}) => {
-  const w = { reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[] }
+  const w = { reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[], runs: [] as string[] }
   on('process.run', ($, e) => {
+    w.runs.push(e.argv.join(' '))
     const [cmd, ...args] = e.argv
     if (cmd === '__sessions') return ok(JSON.stringify({ open: [rec('me', o.self), ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 'me' }))
     if (cmd === 'tail' && o.tail === 'fails') return { value: { exitCode: 1, stdout: '', stderr: 'Permission denied', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -111,6 +115,16 @@ const world = (on: On, o: Opts = {}) => {
     return { isDelivered: false, reason: outcome.refused } as never
   })
   on('session.cwd', () => ({ value: '/repo' }) as never)
+  // The .git entries on the disk, a folder or a linked worktree's file; anything else is no entry.
+  const gits = o.gits
+  if (gits) {
+    on('fs.stat', ($, e) => {
+      const kind = gits[(e as unknown as { path: string }).path] ?? 'other'
+      return { value: { kind, size: 0, mtimeMs: 0, isLink: false } } as never
+    })
+  }
+  const tmpdir = o.tmpdir
+  if (tmpdir) on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'TMPDIR' ? tmpdir : undefined }) as never)
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -122,7 +136,9 @@ const world = (on: On, o: Opts = {}) => {
   })
   on('clock.after', () => ({ value: undefined }) as never)
   on('tool.call', ($, e) => {
+    if (typeof o.ran === 'object') return { deny: o.ran.deny } as never
     w.reached.push(e.tool)
+    if (o.ran === 'error') return { result: 'exit status 1', text: 'exit status 1', isError: true } as never
     return { result: 'ran', text: 'ran' } as never
   })
   return w
@@ -344,6 +360,26 @@ test('a shell write to a file another open session edited is judged like an edit
   expect(w.edits).toEqual([])
 })
 
+// The decided rule (docs/mods-design.md, #654), pinned for #700: a command that ran is recorded even
+// when it failed, since it may have written before it failed; only a refusal, a later guard's
+// included, leaves the record alone.
+test('a shell write whose command failed is still noted, since it may have written first', withDeps, async ($, on) => {
+  const w = world(on, { ran: 'error' })
+  const r = await $.tool.call(bash('printf x >> notes.txt; false'))
+  expect(w.reached).toContain('Bash')
+  expect((r as { isError?: boolean }).isError).toBe(true)
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('a shell write a later guard refuses is not noted, and the refusal is passed on', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], ran: { deny: 'Blocked: no build is on.' } })
+  const r = await $.tool.call(bash('echo x >> notes.txt'))
+  // Judged and let through here, then refused beneath.
+  expect(w.toasts).toContain('Checked with the other session: safe to edit notes.txt.')
+  expect(refusal(r)).toBe('Blocked: no build is on.')
+  expect(w.edits).toEqual([])
+})
+
 test('a shell write judged Proceed goes through with the toast and is noted', withDeps, async ($, on) => {
   const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
   await $.tool.call(bash('sed -i "" s/a/b/ notes.txt'))
@@ -407,8 +443,16 @@ test('an rm of a file another open session edited is judged, and a Stop blocks i
   expect(w.prompts[0]?.prompt).toContain('remove /repo/notes.txt with the shell command: rm notes.txt')
   expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are still writing it. Leave it to the other session, or ask Dan.')
   expect(w.cards[0]?.toolUseId).toBe('rm1')
-  expect(w.sent[0]?.text).toBe('Another session wanted to edit notes.txt while you are working on it, so it was stopped. Nothing here was touched.')
+  // Dan, 2026-10-04 (#700): a removal says remove, where #674 had kept the edit words.
+  expect(w.sent[0]?.text).toBe('Another session wanted to remove notes.txt while you are working on it, so it was stopped. Nothing here was touched.')
   expect(w.edits).toEqual([])
+})
+
+test('an rm of a file another open session edited, judged Proceed, says safe to remove', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash('unlink notes.txt'))
+  expect(w.toasts).toEqual(['Checked with the other session: safe to remove notes.txt.'])
+  expect(w.reached).toContain('Bash')
 })
 
 test('an rm of a file nobody else edited goes through unjudged and is noted', withDeps, async ($, on) => {
@@ -424,7 +468,7 @@ test('an rm -r of a folder holding a file another session edited is judged on th
   await $.tool.call(bash('rm -rf src'))
   expect(w.prompts.length).toBe(1)
   expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/deep/InvoiceTable.tsx, with the shell command: rm -rf src')
-  expect(w.toasts).toContain('Checked with the other session: safe to edit InvoiceTable.tsx.')
+  expect(w.toasts).toContain('Checked with the other session: safe to remove InvoiceTable.tsx.')
   expect(w.reached).toContain('Bash')
   expect(w.edits).toEqual(['/repo/src'])
 })
@@ -435,6 +479,7 @@ test('an mv of a folder holding a file another session edited is judged on that 
   expect(w.reached).not.toContain('Bash')
   expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/a.ts, with the shell command: mv src /tmp/old-src')
   expect(refusal(r)).toContain('Another session is working on a.ts.')
+  expect(w.sent[0]?.text).toBe('Another session wanted to remove src/a.ts while you are working on it, so it was stopped. Nothing here was touched.')
 })
 
 test('a folder copied in and then removed in one command keeps the removal (lessons review of #691)', withDeps, async ($, on) => {
@@ -443,6 +488,25 @@ test('a folder copied in and then removed in one command keeps the removal (less
   await $.tool.call(bash('cp -r /tmp/sub docs; rm -r docs/sub'))
   expect(w.prompts.length).toBe(1)
   expect(w.prompts[0]?.prompt).toContain('remove /repo/docs/sub and everything in it, including /repo/docs/sub/a.ts,')
+})
+
+// #700, the comment on it: a cp into an existing folder was turned into the file inside it, and a
+// later rm -r of that same folder lost its removal, so another session's files there were never judged.
+test('a copy into a folder that is then removed in one command keeps the removal of the folder', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/docs/b.ts'] })], judge: '{"verdict":"Stop","reason":"They are editing it."}' })
+  on('fs.stat', ($, e) => ({ value: { kind: (e as unknown as { path: string }).path === '/repo/docs' ? 'dir' : 'other', size: 0, mtimeMs: 0, isLink: false } }) as never)
+  const r = await $.tool.call(bash('cp /tmp/a.ts docs; rm -r docs'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/docs and everything in it, including /repo/docs/b.ts, with the shell command:')
+  expect(refusal(r)).toContain('Another session is working on b.ts.')
+})
+
+test('a file written and then removed as a folder in one command is judged as the folder', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/d/x.ts'] })] })
+  await $.tool.call(bash('echo > d; rm -r d'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/d and everything in it, including /repo/d/x.ts,')
 })
 
 // The coordinator on #691: a folder removal is judged once, naming every affected file, with one
@@ -459,8 +523,8 @@ test('an rm -r of a folder holding several edited files is judged once, with one
   expect(w.cards.length).toBe(1)
   expect(refusal(r)).toBe('Blocked: Another session is working on 3 files in src. Both are mid change. Leave it to the other session, or ask Dan.')
   expect(w.sent.map(s => [s.to, s.text])).toEqual([
-    ['one', 'Another session wanted to edit src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.'],
-    ['two', 'Another session wanted to edit src/c.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+    ['one', 'Another session wanted to remove src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+    ['two', 'Another session wanted to remove src/c.ts while you are working on it, so it was stopped. Nothing here was touched.'],
   ])
 })
 
@@ -468,18 +532,40 @@ test('a folder removal judged Proceed is one toast however many files it holds',
   const w = world(on, { open: [rec('one', { edits: ['/repo/src/a.ts', '/repo/src/b.ts'] })] })
   await $.tool.call(bash('rm -rf src'))
   expect(w.prompts.length).toBe(1)
-  expect(w.toasts).toEqual(['Checked with the other session: safe to edit 2 files in src.'])
+  expect(w.toasts).toEqual(['Checked with the other session: safe to remove 2 files in src.'])
   expect(w.reached).toContain('Bash')
 })
 
-test('a message naming several files is told in one toast with each file name', withDeps, async ($, on) => {
+test('a removal naming several files is told in one toast with each file name, saying remove', withDeps, async ($, on) => {
   const w = world(on)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   await $.session.receive({
     origin: MEASURED,
-    text: 'Another session wanted to edit src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.',
+    text: 'Another session wanted to remove src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.',
   } as never)
-  expect(w.toasts).toEqual(['Another session wanted a.ts, b.ts; it was stopped.'])
+  expect(w.toasts).toEqual(['Another session wanted to remove a.ts, b.ts; it was stopped.'])
+})
+
+// #700: the message names a path relative to the other session's repository, or the whole path
+// when that is not known, and Dan's folders carry spaces and a curly apostrophe.
+const SPACED = '/Users/dan/Documents/Documents - Dan\u2019s MacBook Pro'
+
+test('a whole path with spaces and a curly apostrophe is named in the toast, sent and heard', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { repoRoot: null, cwd: SPACED, edits: [`${SPACED}/app.ts`] })], judge: '{"verdict":"Stop","reason":"They are mid change."}' })
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.tool.call(edit(`${SPACED}/app.ts`))
+  const text = w.sent[0]?.text as string
+  expect(text).toBe(`Another session wanted to edit ${SPACED}/app.ts while you are working on it, so it was stopped. Nothing here was touched.`)
+  await $.session.receive({ origin: MEASURED, text } as never)
+  expect(w.toasts).toEqual(['Another session wanted app.ts; it was stopped.'])
+})
+
+test('a removal of a whole path with spaces is named in the toast too', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { repoRoot: null, cwd: SPACED, edits: [`${SPACED}/app.ts`] })], judge: '{"verdict":"Worktree","reason":"They are mid change."}' })
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.tool.call(bash(`rm '${SPACED}/app.ts'`))
+  await $.session.receive({ origin: MEASURED, text: w.sent[0]?.text as string } as never)
+  expect(w.toasts).toEqual(['Another session wanted to remove app.ts; it was moved to a worktree.'])
 })
 
 test('an rm -r of a folder the judge cannot answer for is stopped (L42)', withDeps, async ($, on) => {
@@ -524,4 +610,36 @@ test('a scratch file another session recorded before this change is still judged
   await $.tool.call(bash('echo x > /tmp/shared.txt'))
   expect(w.prompts.length).toBe(1)
   expect(w.edits).toEqual([])
+})
+
+// Dan, 2026-10-04 (#700): #674 recorded only paths inside the session's own root, which also dropped
+// a file edited in another checkout, so a session working there was never judged against it.
+test('an edit to a file in another checkout is recorded, found by its .git rather than by asking git', withDeps, async ($, on) => {
+  const w = world(on, { gits: { '/other/.git': 'dir' } })
+  await $.tool.call(edit('/other/src/a.ts'))
+  expect(w.edits).toEqual(['/other/src/a.ts'])
+  expect(w.runs.filter(r => r.includes('/other'))).toEqual([])
+})
+
+test('a shell write into a linked worktree, whose .git is a file, is recorded', withDeps, async ($, on) => {
+  const w = world(on, { gits: { '/wt/feature/.git': 'file' } })
+  await $.tool.call(bash('echo x >> /wt/feature/notes.txt'))
+  expect(w.edits).toEqual(['/wt/feature/notes.txt'])
+})
+
+test('scratch is still left out, a checkout inside it included, and so is a path in no checkout', withDeps, async ($, on) => {
+  const w = world(on, {
+    gits: { '/tmp/clone/.git': 'dir', '/private/tmp/claude-501/s/scratchpad/700/.git': 'dir', '/Volumes/fast/tmp/clone/.git': 'dir' },
+    tmpdir: '/Volumes/fast/tmp/',
+  })
+  await $.tool.call(bash('echo a > /tmp/clone/x.txt; echo b > /private/tmp/claude-501/s/scratchpad/700/n.md; echo c > /Volumes/fast/tmp/clone/y.txt; echo d > /Users/dan/Desktop/n.txt; echo e >> notes.txt'))
+  expect(w.reached).toContain('Bash')
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('another session working in that checkout is judged against the file this one recorded there', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { cwd: '/other', repoRoot: '/other', edits: ['/other/src/a.ts'] })], gits: { '/other/.git': 'dir' } })
+  await $.tool.call(edit('/other/src/a.ts'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.edits).toEqual(['/other/src/a.ts'])
 })

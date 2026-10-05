@@ -74,10 +74,13 @@ its own word however it is spaced; the collision guard reads which files the wor
 (`hooks/collide.ts`, `shellWrites`): redirect targets, `tee`'s files, `sed -i` and `perl -i`'s
 files, `touch`'s files, and the destination of `cp` and `mv` (a file inside it when it is a
 folder), plus `mv`'s sources, which it takes away. Paths are made absolute against the session's
-folder, following a `cd` earlier in the same command. A file another open session edited is judged
-before the command runs; once it has run, every file it named is added to this session's edits,
-also when the command failed, since it may have written before it failed. Only a refusal leaves the
-record alone.
+folder, following a `cd` earlier in the same command. The reader gives a subshell's parentheses as
+commands of their own (#700), so in `(cd sub && printf x >> notes.txt)` the write is
+`sub/notes.txt`, and a `cd` made inside a subshell ends with it; a parenthesis inside a word (`$(`,
+`<(`) stays part of the word. A file another open session edited is judged before the command runs;
+once it has run, every file it named is added to this session's edits, also when the command
+failed, since it may have written before it failed. Only a refusal leaves the record alone, a later
+guard's refusal included (both pinned by tests since #700).
 
 What the words do not name is not guessed at, and is neither judged nor recorded: a script
 (`bash ./update.sh`, `python3 -c`, `node -e`, `make`), a path built from a variable, a glob or a
@@ -99,16 +102,35 @@ toast ("3 files in src", or the file's name when there is one), and one message 
 session naming its own files, which its toast lists by name. An `mv` source is taken away whole in
 the same way, so moving a folder is judged the same. Once it has run, the removed path (the folder,
 for `rm -r`) is added to this session's edits. An `rm` of a glob or a variable names nothing, as
-decided for #654. The card, toast and message keep the words used for any write ("wanted to edit",
-"safe to edit"), as the brief for #674 asked.
+decided for #654. A path the command names twice keeps a later removal: in `echo > d; rm -r d`, and
+in `cp a x; rm -r x` where `x` is a folder the copy lands in, the folder's removal is still judged
+(#700).
 
-Only paths inside the session's own root are recorded as its edits: its repository, or its own
-folder when it works outside one (the record's `repoRoot`, else its `cwd`). Scratch such as `/tmp`
-and the scratchpad is left out, by the edit tools and by shell commands alike, so it cannot push real
-edits out of the twenty the judge reads or raise checks between sessions that share scratch space.
-A write is still judged wherever it lands, so a scratch file an older record already holds is still
-checked. What this gives up: a file in another checkout, edited from this session, is not recorded,
-so a session working in that checkout is not judged against it.
+A removal says so (changed at Dan's request on 2026-10-04, #700; #674 had kept the edit words): the
+toast is "Checked with the other session: safe to remove app.ts." (or "safe to remove 3 files in
+src"), the message to the other session reads "Another session wanted to remove src/app.ts while
+you are working on it, ...", naming that session's own files, and its toast reads "Another session
+wanted to remove app.ts; it was stopped." An ordinary write keeps "edit", and its toast in the
+other session keeps the settled "Another session wanted app.ts; ...". The card names the file the
+same way for both ("Another session is working on app.ts."). A message between sessions carries
+text only, so the receiving side reads the files back out of it: everything between the verb and
+the fixed words "while you are working on it", which keeps a path with spaces or a curly apostrophe
+whole (the whole path is sent when the other session's repository is not known).
+
+What a session records as its edits, by the edit tools and by shell commands alike: any path inside
+its own root (its repository, or its own folder when it works outside one: the record's `repoRoot`,
+else its `cwd`), and since #700 (Dan, 2026-10-04) any path inside another git checkout, so a
+session working in that checkout is judged against it. A checkout is found on the disk, never by
+running git: the nearest folder at or above the path holding a `.git` entry (a folder, or the file
+a linked worktree has), looked at once per folder per call, at most 64 folders up, and nothing kept
+between calls, so a repository cloned during the session counts at once. Scratch is left out
+unless it lies inside the session's own root: `/tmp`, `/private/tmp` (the scratchpad lives there),
+`/var/folders` and wherever `$TMPDIR` points, a checkout cloned into scratch included, so it cannot
+push real edits out of the twenty the judge reads or raise checks between sessions that share
+scratch space. A path in no checkout at all (a file on the Desktop) is left out too. A write is
+still judged wherever it lands, so a scratch file an older record already holds is still checked.
+What this gives up: a file edited outside every checkout and outside the session's own folder is
+not recorded, so another session editing that same file is not judged against it.
 
 ## Status bar (#610), settled 2026-10-04
 

@@ -54,6 +54,18 @@ describe('commands', () => {
   test('a > inside quotes is text', () => {
     expect(commands(`echo "a>b" 'c>>d'`)).toEqual([['echo', 'a>b', 'c>>d']])
   })
+  // #700: a subshell's parentheses stayed on the words beside them, so (cd sub && printf x >>
+  // notes.txt) gave a command named "(cd" and a file named "notes.txt)". Each is now a command of
+  // its own, so what runs inside is in command position and a reader can see where it ends.
+  test("a subshell's parentheses are each a command of their own", () => {
+    expect(commands('(cd sub && printf x >> notes.txt)')).toEqual([['('], ['cd', 'sub'], ['printf', 'x', '>>', 'notes.txt'], [')']])
+    expect(commands('( cd sub; make ) > out.txt')).toEqual([['('], ['cd', 'sub'], ['make'], [')'], ['>', 'out.txt']])
+  })
+  test('a parenthesis inside a word stays part of it', () => {
+    expect(commands('cd $(git rev-parse --show-toplevel)')).toEqual([['cd', '$(git', 'rev-parse', '--show-toplevel)']])
+    expect(commands('diff <(sort a) b')).toEqual([['diff', '<(sort', 'a)', 'b']])
+    expect(commands('echo $((1+2)) "(x)"')).toEqual([['echo', '$((1+2))', '(x)']])
+  })
   test('nothing in, nothing out', () => {
     expect(commands('   ')).toEqual([])
   })
