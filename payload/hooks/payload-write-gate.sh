@@ -237,7 +237,8 @@ i = 0
 while i < len(lines):
     line = lines[i]
     shell.append(line)
-    delims = re.findall(r"<<-?\s*[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)[\"\x27]?", line)
+    # Only a heredoc opener: the <<< of a here-string names no delimiter and opens no body.
+    delims = re.findall(r"(?<!<)<<(?!<)-?\s*[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)[\"\x27]?", line)
     i += 1
     for delim in delims:
         while i < len(lines) and lines[i].strip() != delim:

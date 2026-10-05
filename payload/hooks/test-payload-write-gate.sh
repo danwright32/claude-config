@@ -228,6 +228,10 @@ refused "a redirect after a cd into payload is refused"
 runbash "cd payload/hooks; cp /tmp/x y.sh" "$FIX/dev"
 refused "a copy after a cd into a payload subdirectory is refused"
 # And the reads in those same shapes are still reads.
+# A here-string (<<<) opens no heredoc body, so the line after it is still read as shell.
+runbash "grep x <<<foo
+echo hi > $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "a write on the line after a here-string is still refused"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"

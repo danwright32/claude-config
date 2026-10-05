@@ -174,7 +174,9 @@ launches(){ # launches <event> <name> <N> -> processes started by one settled ru
   run_hook "$1" "$2"          # settles anything a first prompt seeds
   : > "$SHIM_LOG"
   run_hook "$1" "$2"
-  grep -c . "$SHIM_LOG" 2>/dev/null || echo 0
+  local n
+  n="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
+  echo "${n:-0}"
 }
 
 SMALL=2
@@ -210,7 +212,8 @@ EOF
 # The control: the shims see a hook start anything at all, or every equal pair above is two zeros.
 fresh control; populate rule-files-changed.sh 3
 : > "$SHIM_LOG"; run_hook UserPromptSubmit rule-files-changed.sh
-[ "$(grep -c . "$SHIM_LOG" 2>/dev/null || echo 0)" -gt 0 ] && check "the control: the shims count what a hook starts" ok \
+_ctl="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
+[ "${_ctl:-0}" -gt 0 ] && check "the control: the shims count what a hook starts" ok \
   || check "the control: the shims count what a hook starts" "they counted nothing, so every equal pair proves nothing"
 [ "$measured" -gt 0 ] && check "at least one hook was measured rather than exempted" ok \
   || check "at least one hook was measured rather than exempted" "none was"
