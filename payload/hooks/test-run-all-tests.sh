@@ -102,7 +102,7 @@ out_two="$(bash "$RUNNER" "$A" "$B" 2>&1)"; code_two=$?
 [ "$code_two" -eq 0 ] \
   && check "two directories of passing suites pass" ok \
   || check "two directories of passing suites pass" "exit=$code_two out=$out_two"
-printf '%s' "$out_two" | grep -q 'test-alpha.sh' && printf '%s' "$out_two" | grep -q 'test-beta.sh' \
+grep -q 'test-alpha.sh' <<< "$out_two" && grep -q 'test-beta.sh' <<< "$out_two" \
   && check "and every suite in both is named in the report" ok \
   || check "and every suite in both is named in the report" "out=$out_two"
 
@@ -372,7 +372,7 @@ out_disc="$(HOOK_TESTS_ROOT="$REPO" bash "$RUNNER" 2>&1)"; code_disc=$?
 grep -q 'test-faraway.sh' <<< "$out_disc" \
   && check "a suite three directories away from the runner is run" ok \
   || check "a suite three directories away from the runner is run" "out=$out_disc"
-printf '%s' "$out_disc" | grep -q 'test-middle.sh' && printf '%s' "$out_disc" | grep -q 'test-near.sh' \
+grep -q 'test-middle.sh' <<< "$out_disc" && grep -q 'test-near.sh' <<< "$out_disc" \
   && check "and so is every other one in the repo" ok \
   || check "and so is every other one in the repo" "out=$out_disc"
 grep -q 'helper.sh' <<< "$out_disc" \
@@ -381,7 +381,7 @@ grep -q 'helper.sh' <<< "$out_disc" \
 
 # The count is said out loud, both halves. A run that read four directories and one that read one
 # are different facts, and neither can be told from the other by "everything passed" (L11).
-printf '%s' "$out_disc" | grep -qE '3 (suite|director)' \
+grep -qE '3 (suite|director)' <<< "$out_disc" \
   && check "it says how much it read" ok \
   || check "it says how much it read" "out=$out_disc"
 
@@ -880,7 +880,7 @@ out_dk="$(HOOK_TESTS_JOBS=2 bash "$RUNNER" "$DK" 2>&1)"; code_dk=$?
   && check "#150 a suite that vanished still fails the run" ok \
   || check "#150 a suite that vanished still fails the run" "exit=$code_dk out=$out_dk"
 vanish_line="$(printf '%s\n' "$out_dk" | grep -E '^ +(ok|FAIL) +test-vanish\.sh ' | tail -1)"
-printf '%s' "$vanish_line" | grep -qE '\(0s\)' \
+grep -qE '\(0s\)' <<< "$vanish_line" \
   && check "#150 and it is not reported as having taken no time" "its line reads: $vanish_line" \
   || check "#150 and it is not reported as having taken no time" ok
 grep -qi 'not measured' <<< "$vanish_line" \
