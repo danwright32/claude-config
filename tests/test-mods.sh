@@ -328,6 +328,17 @@ mkmodsrc "$M9P" named-literal-type-screened "function answer(\$, e): { result: s
   return { result: 'Saved.' }
 }
 export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }"
+# #739: an arrow whose body is an expression is read to the end of its statement with every bracket
+# in it whole: a parenthesised body last in its file, one going on past its bracket, and a call
+# spread over lines. Each answers without asking, so each is named, never as a hook not found.
+mkmodsrc "$M9P" named-expression-last "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => ({ result: 'Saved.' })"
+mkmodsrc "$M9P" named-expression-goes-on "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => (await check(e)) ?? { result: 'Saved.' }"
+mkmodsrc "$M9P" named-call-across-lines "export const register = on => { on('tool.call', { tool: 'mcp__x__save' }, answer) }
+const answer = async (\$, e) => done({
+  result: 'Saved.',
+})"
 out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod with an answering hook that never asks the screen fails, beside one that does" ok \
   || check "a mod with an answering hook that never asks the screen fails, beside one that does" "exit=$code out=$out"
@@ -338,6 +349,10 @@ for m in screen-in-a-comment named-unscreened; do
   printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.screen(e)' && check "and names $m" ok || check "and names $m" "$out"
 done
 case "$out" in *both-screened*|*named-screened*|*named-typed-screened*|*named-literal-type-screened*) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" "$out" ;; *) check "a mod whose every answering hook asks, a named one with a typed return included, is not named" ok ;; esac
+for m in named-expression-last named-expression-goes-on named-call-across-lines; do
+  printf '%s\n' "$out" | grep -q "$m answers a tool call itself in its tool.call hook at /hooks/register.ts:1 but never asks" \
+    && check "and reads $m's expression body whole, naming it" ok || check "and reads $m's expression body whole, naming it" "$out"
+done
 # #732 (lessons review of #731): a walk for a checkout is caught however its .git entry is spelled,
 # joined, bare or inside a longer path, and a name that merely starts with .git is not one.
 M9G="$TMPROOT/m9g"

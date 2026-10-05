@@ -376,6 +376,11 @@ def _definition(code, name):
             angles, after_type_mark = 0, False
             i += 2
             continue
+        if arrow and not c.isspace() and c != "{":
+            # An expression body, read whole to the end of its statement, a bracketed one included
+            # however it ends, the file's end among them (#739).
+            end = _statement_end(code, i)
+            return None if end is None else code[m.start() : end]
         if c == "<":
             angles += 1
         elif c == ">":
@@ -402,12 +407,26 @@ def _definition(code, name):
             after_type_mark = c in ":|&"
         if not declared and re.match(r"function\b", code[i : i + 9]) and not re.match(r"[\w$]", code[i - 1 : i]):
             declared = True
-        if arrow and not c.isspace():
-            # An expression body runs to the end of its statement.
-            stop = re.search(r"[;\n]", code[i:])
-            return code[m.start() : i + (stop.start() if stop else n - i)]
         i += 1
     return None
+
+
+def _statement_end(code, i):
+    """In code, where the expression starting at i ends: at a ; or a line break outside its brackets,
+    at a bracket closing one it stands inside, or at the end of the file. Each bracket in it is read
+    whole, so a call spread over lines is one expression; None when one never closes."""
+    n = len(code)
+    while i < n:
+        c = code[i]
+        if c in "([{":
+            i = closing(code, i)
+            if i is None:
+                return None
+            continue
+        if c in ";\n)]}":
+            return i
+        i += 1
+    return n
 
 
 ANSWERS = re.compile(r"\{\s*result\s*:|^\s*result\s*:", re.M)

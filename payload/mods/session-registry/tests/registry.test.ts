@@ -239,6 +239,58 @@ test('after a /clear the list names the new conversation as this session at once
   expect(l.closed.map(s => s.sessionId)).toEqual(['s1'])
 })
 
+// #739: after a /clear the write path asks for the session's id, and a lookup that fails must not
+// fail the write for the collision guard, the goal tracker and the job watcher.
+test('after a /clear, an id that cannot be read leaves the write on the record it has, said once in the debug log (#739)', withConsumer, async ($, on) => {
+  let id: () => string = () => 's1'
+  const w = world(on, { id: () => id() })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  id = () => {
+    throw new Error('no id to give')
+  }
+  await call($, 'edit /repo/a.ts')
+  await call($, 'extra job-1')
+  expect(w.own('s1')).toMatchObject({ edits: ['/repo/a.ts'], extra: { jobs: ['job-1'] } })
+  // Two writes, one line: the engine hands the reason on as its own (no implementation once the
+  // hook beneath throws), so the line is found by what the registry says.
+  expect(w.logs.filter(l => l.includes("could not read this session's id"))).toHaveLength(1)
+  // Once the id can be read, the next write makes the new conversation's record.
+  id = () => 's2'
+  await call($, 'edit /repo/b.ts')
+  expect(w.own('s2')).toMatchObject({ sessionId: 's2', closedAt: null, edits: ['/repo/b.ts'] })
+  expect(w.own('s1').edits).toEqual(['/repo/a.ts'])
+})
+
+test('a /clear that keeps the same id stops asking for it after one look (#739)', withConsumer, async ($, on) => {
+  let asks = 0
+  world(on, {
+    id: () => {
+      asks++
+      return 's1'
+    },
+  })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  const before = asks
+  await call($, 'edit /repo/a.ts')
+  await call($, 'extra job-1')
+  await call($, 'list')
+  expect(asks - before).toBe(1)
+})
+
+test('after a /clear, a read before the id changes does not stop the announced start making the new record (#739)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  // A pane drawn while the /clear is still under way looks once and finds the old id.
+  await call($, 'list')
+  id = 's2'
+  await ($ as unknown as Classic).classic.SessionStart({ source: 'clear' } as never)
+  expect(w.own('s2')).toMatchObject({ sessionId: 's2', closedAt: null })
+})
+
 test('after a /clear, an edit queued before the switch lands on the old record, never the new (lessons review)', withConsumer, async ($, on) => {
   let id = 's1'
   const w = world(on, { id: () => id })

@@ -47,7 +47,15 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 // conversation out of /goals and let the goal tracker and the job watcher write into the record
 // session.end had just closed. A write queued before the session ended stays on the old record. The
 // beat still makes it for an id that changed with no session.end seen.
+//
+// One look that reads the id settles it, changed or not, so a session end that keeps its id (a
+// resume of this same session) does not have every later write ask again (#739). A look can come
+// while the /clear is still under way and find the old id, so the announced start always looks
+// for itself. A look that cannot read the id leaves the write on the record it has and is tried
+// again by the next one, never failing the write for the mods calling it.
 let expectNew = false
+// Whether a failed id lookup has been said in the debug log since the last one that worked.
+let toldNoId = false
 // Made inside engine.create with the built $: true when it made the record for a new session id.
 let roll: ((always: boolean) => Promise<boolean>) | undefined
 const save = (change: (r: SessionsRecord) => void): Promise<void> =>
@@ -58,9 +66,10 @@ const save = (change: (r: SessionsRecord) => void): Promise<void> =>
     await persist()
   })
 // The new conversation's record written as soon as its id is seen, with nothing else to write.
-const catchUp = (): Promise<void> =>
+// `always` looks whether or not a session end is still waiting on its new id (the announced start).
+const catchUp = (always: boolean): Promise<void> =>
   enqueue(async () => {
-    if (rec && home && persist && (await roll?.(false))) await persist()
+    if (rec && home && persist && (await roll?.(always))) await persist()
   })
 
 // A new record. The engine refuses the built $ as an argument, so each caller asks git and the clock
@@ -159,13 +168,23 @@ export const register: Register = on => {
       const mv = await built.process.run(['mv', '-f', tmp, `${dir}/${rec.sessionId}.json`])
       if (mv.exitCode !== 0) built.ui.log(`session-registry: could not save this session's record: ${mv.stderr.trim()}`, { to: 'debug' })
     }
-    // Runs inside the queue. `always` is the beat's, which looks whether or not a session end was
-    // seen; any other caller looks only after a /clear or a resume (above).
+    // Runs inside the queue. `always` is the beat's and the announced start's, which look whether or
+    // not a session end was seen; any other caller looks only after a /clear or a resume (above).
     roll = async always => {
       if (!rec || (!always && !expectNew)) return false
-      const id = await built.session.id()
-      if (id === rec.sessionId) return false
+      let id: string
+      try {
+        id = await built.session.id()
+      } catch (err) {
+        if (!toldNoId) {
+          toldNoId = true
+          built.ui.log(`session-registry: could not read this session's id (${err instanceof Error ? err.message : String(err)}), so its writes stay on the record of ${rec.sessionId} until it can.`, { to: 'debug' })
+        }
+        return false
+      }
+      toldNoId = false
       expectNew = false
+      if (id === rec.sessionId) return false
       const cwd = rec.cwd
       rec = blank(id, cwd, await built.clock.now(), rootOf(await built.process.run(['git', '-C', cwd, ...topLevel]).catch(() => undefined)))
       return true
@@ -200,7 +219,7 @@ export const register: Register = on => {
     const sessions: Sessions = {
       list: async (): Promise<SessionsList> => {
         // After a /clear, this session is the new conversation from the first read (#735).
-        if (expectNew) await catchUp()
+        if (expectNew) await catchUp(false)
         const h = home ?? (await built.env.get('HOME'))
         const out: SessionsList = { open: [], closed: [], unreadable: [], selfId: rec?.sessionId ?? null }
         if (!h) {
@@ -274,9 +293,10 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The new conversation a /clear started, announced: its record is made now (#735).
+  // The new conversation a /clear started, announced: its record is made now (#735), looked for
+  // even when a read during the /clear already found the old id (#739).
   on('classic.SessionStart', async ($, e, next) => {
-    await catchUp()
+    await catchUp(true)
     return next(e)
   })
 }
