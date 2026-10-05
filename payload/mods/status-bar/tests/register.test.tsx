@@ -61,30 +61,47 @@ const DIR = '/Users/x/.claude/state/status-bar'
 
 // This Mac beneath the status bar: files in memory, git and gh answering as each test sets them,
 // the clock, the session, and Claude Code's own band beneath mod-kit's.
+type Run = { exitCode: number; stdout: string; stderr: string }
 type World = {
   remotes: string
   unpushed: string
+  // git's answers when a test needs them to fail: an exit and its words, or 'throws' for a git
+  // that never answered (timed out, could not start).
+  remote: Run | 'throws' | null
+  revList: Run | 'throws' | null
   gh: { exitCode: number; stdout: string; stderr: string }
   usage: number | undefined
   compact: () => unknown
+  // A disk that will not take the facts file, or its folder: the reason, or empty when it will.
+  writeFails: string
+  mkdirFails: string
 }
 const world = (on: On, init: Partial<World> = {}) => {
   const w: World = {
     remotes: 'origin\n',
     unpushed: '0\n',
+    remote: null,
+    revList: null,
     gh: { exitCode: 1, stdout: '', stderr: 'no pull requests found for branch "x"' },
     usage: undefined,
     compact: () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] }),
+    writeFails: '',
+    mkdirFails: '',
     ...init,
   }
   const files: Record<string, string> = {}
   const toasts: string[] = []
   const logs: string[] = []
+  const debug: string[] = []
   const compacts: number[] = []
   const runs: string[][] = []
   mock.env(on, { HOME: '/Users/x' })
   const clock = mock.clock(on, { now: T0 })
   on('fs.write', ($, e) => {
+    // Refused with the disk's reason, which is how a failed write reaches the mod.
+    if (w.writeFails) return { deny: w.writeFails } as never
+    // A folder that could not be made has nothing to write into.
+    if (w.mkdirFails) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     files[e.path] = e.text
     return { value: undefined }
   })
@@ -92,7 +109,11 @@ const world = (on: On, init: Partial<World> = {}) => {
     runs.push([...e.argv])
     const [cmd, ...rest] = e.argv
     const r = (exitCode: number, stdout = '', stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
-    if (cmd === 'mkdir') return r(0)
+    const answer = (got: Run | 'throws') => {
+      if (got === 'throws') throw new Error('git did not answer within 10 seconds')
+      return r(got.exitCode, got.stdout, got.stderr)
+    }
+    if (cmd === 'mkdir') return w.mkdirFails ? r(1, '', w.mkdirFails) : r(0)
     if (cmd === 'mv') {
       const [a, b] = rest.filter(x => !x.startsWith('-'))
       files[b as string] = files[a as string] as string
@@ -103,10 +124,14 @@ const world = (on: On, init: Partial<World> = {}) => {
       for (const f of rest.filter(x => !x.startsWith('-'))) delete files[f]
       return r(0)
     }
-    if (cmd === 'git' && rest.includes('remote')) return r(0, w.remotes)
-    if (cmd === 'git' && rest.includes('rev-list')) return r(0, w.unpushed)
+    if (cmd === 'git' && rest.includes('remote')) return w.remote ? answer(w.remote) : r(0, w.remotes)
+    if (cmd === 'git' && rest.includes('rev-list')) return w.revList ? answer(w.revList) : r(0, w.unpushed)
     if (cmd === 'gh') return r(w.gh.exitCode, w.gh.stdout, w.gh.stderr)
     return r(1, '', 'unexpected')
+  })
+  // Claude Code sending a model request: it answers at once with nothing.
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
   })
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.root', () => ({ value: '/repo' }) as never)
@@ -124,14 +149,15 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: undefined } as never
   })
   on('ui.log', ($, e) => {
-    logs.push(String((e as { text?: string }).text))
+    const l = e as { text?: string; to?: string }
+    ;(l.to === 'debug' ? debug : logs).push(String(l.text))
     return { value: undefined } as never
   })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, files, toasts, logs, compacts, runs, clock }
+  return { w, files, toasts, logs, debug, compacts, runs, clock }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }) => {
@@ -140,6 +166,15 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
 }
 const turn = ($: { turn: { complete: (e: never) => Promise<unknown> } }) =>
   $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)
+// One model request of a turn, main's unless a subagent's id is given, read to its end.
+const step = async ($: unknown, clock: { settle: () => Promise<void> }, agentId?: string) => {
+  const s = ($ as { turn: { step: (e: never) => AsyncIterable<unknown> } }).turn.step({ turnId: 't', index: 0, model: 'opus', messageCount: 2, ...(agentId ? { agentId } : {}) } as never)
+  for await (const _chunk of s) {
+    // Each chunk is the response arriving; nothing to read here.
+  }
+  await clock.settle()
+}
+const cacheIn = (files: Record<string, string>) => (JSON.parse(files[`${DIR}/s1.json`] as string) as { cacheExpiresAt: number | null }).cacheExpiresAt
 const measure = ($: { session: { measure: (e: never) => Promise<unknown> } }, percent: number) =>
   $.session.measure({ context: { window: 200_000, percent }, rateLimits: [], changed: ['context'] } as never)
 
@@ -246,18 +281,59 @@ test('the amber line and the Compact row show together, amber line on top', with
   await ui.unmount()
 })
 
-test('a turn starts the hour of cache: the status line file says when it goes cold', withKit, async ($, on) => {
+test('a request starts the hour of cache: the status line file says when it goes cold', withKit, async ($, on) => {
   const { files, clock } = world(on)
   await start($, clock)
   expect(JSON.parse(files[`${DIR}/s1.json`] as string)).toEqual({ v: 1, sessionId: 's1', cacheExpiresAt: null })
-  await turn($)
+  await step($, clock)
   expect(JSON.parse(files[`${DIR}/s1.json`] as string)).toEqual({ v: 1, sessionId: 's1', cacheExpiresAt: T0 + HOUR })
+})
+
+// #697: the spec's "1 hour prompt cache measured from the last request". Every request of a turn
+// keeps the cache warm, so each one restarts the hour; a subagent's requests carry its own
+// conversation, not this one, and the turn's end makes no request of its own.
+test('each main request restarts the hour; a subagent request and the turn ending do not move it', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(30 * MIN)
+  await step($, clock)
+  expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
+  await clock.advance(10 * MIN)
+  await step($, clock, 'sub-1')
+  expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
+  await turn($)
+  await clock.settle()
+  expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
+})
+
+test('while a turn runs no cache toast or cache Compact row, however long since its last request; idle, both come on time', withKit, async ($, on) => {
+  const { toasts, clock, w } = world(on)
+  w.usage = 30
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  // A first turn, then ten minutes later a second whose first request is followed by a tool that
+  // runs for 56 minutes before the next one: the cache is within 5 minutes of its hour meanwhile.
+  await step($, clock)
+  await turn($)
+  await clock.advance(10 * MIN)
+  await step($, clock)
+  await clock.advance(56 * MIN)
+  expect(toasts).toEqual([])
+  expect(await shown(ui as never)).toBe('engine band')
+  await step($, clock)
+  await turn($)
+  await clock.advance(55 * MIN)
+  expect(toasts).toEqual(['The prompt cache goes cold in 5 minutes.'])
+  expect(await shown(ui as never)).toBe('ctx 30% ')
+  await ui.unmount()
 })
 
 test('5 minutes before the cache goes cold: one toast and the Compact row, gone once it is cold', withKit, async ($, on) => {
   const { toasts, clock, w } = world(on)
   w.usage = 30
   await start($, clock)
+  await step($, clock)
   await turn($)
   await clock.advance(54 * MIN)
   expect(toasts).toEqual([])
@@ -381,11 +457,142 @@ test('no job watcher loaded is no job item, and no error', withKit, async ($, on
 })
 
 test('a job watcher that fails to answer is named once in the debug log, and the rest still shows', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
-  const { clock, logs } = world(on, { unpushed: '1\n' })
+  const { clock, debug } = world(on, { unpushed: '1\n' })
   await start($, clock)
   await clock.advance(MIN)
   const ui = await $.ui.mount(band)
   expect(await shown(ui as never)).toBe('1 unpushed commit')
-  expect(logs.filter(l => /jobs could not be read.*registry unreadable/.test(l))).toHaveLength(1)
+  expect(debug.filter(l => /jobs could not be read.*registry unreadable/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+// #697: pressing Compact replaces the conversation, so the hour of cache it was counting down
+// belongs to a conversation that is gone: the clock starts again from nothing, as after a /clear,
+// and a Compact row that showed for the cache goes with it.
+test('a Compact that runs resets the cache clock: the row it showed for goes, and the status line shows no cache', withKit, async ($, on) => {
+  const { files, clock, w, toasts } = world(on)
+  w.usage = 30
+  await start($, clock)
+  await step($, clock)
+  await turn($)
+  await clock.advance(56 * MIN)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('ctx 30% ')
+  await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('engine band')
+  expect(cacheIn(files)).toBeNull()
+  // The next request starts a fresh hour.
+  await step($, clock)
+  expect(cacheIn(files)).toBe(T0 + 56 * MIN + HOUR)
+  expect(toasts).toEqual(['The prompt cache goes cold in 5 minutes.'])
+  await ui.unmount()
+})
+
+const compactEvent = (trigger: string, extra: Record<string, unknown> = {}) =>
+  ({ trigger, messages: [{ role: 'user', text: 'keep going', toolUses: [] }], ...extra }) as never
+
+test('a compaction from anywhere else resets it too; one that is skipped, a subagent one or a precompute does not', withKit, async ($, on) => {
+  const { files, clock, w } = world(on)
+  await start($, clock)
+  await step($, clock)
+  // A subagent compacting its own transcript, and the engine working one out ahead of time, leave
+  // this conversation as it is.
+  await $.session.compact(compactEvent('auto', { agentId: 'sub-1' }))
+  await $.session.compact(compactEvent('precompute'))
+  await clock.settle()
+  expect(cacheIn(files)).toBe(T0 + HOUR)
+  w.compact = () => ({ skip: 'Not enough messages to compact.' })
+  await $.session.compact(compactEvent('manual'))
+  await clock.settle()
+  expect(cacheIn(files)).toBe(T0 + HOUR)
+  w.compact = () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] })
+  await $.session.compact(compactEvent('manual'))
+  await clock.settle()
+  expect(cacheIn(files)).toBeNull()
+})
+
+// #697: an unpushed count that cannot be read is never a zero (L215). The commits keep their place
+// with the age of the last reading, as a PR whose refresh failed does, and the failure is said once
+// in the debug log. A folder that is no repository, or one with no commits yet, has nothing to push.
+test('an unpushed count git cannot give keeps the last reading with its age, said once in the debug log', withKit, async ($, on) => {
+  const { clock, w, debug, logs } = world(on, { unpushed: '2\n' })
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('2 unpushed commits')
+  w.revList = { exitCode: 128, stdout: '', stderr: 'fatal: unable to read refs' }
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('2 unpushed commits, as of 1m ago')
+  w.revList = 'throws'
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('2 unpushed commits, as of 2m ago')
+  w.remote = 'throws'
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('2 unpushed commits, as of 3m ago')
+  expect(debug.filter(l => /could not read the unpushed commits/.test(l))).toHaveLength(1)
+  expect(debug.find(l => /could not read the unpushed commits/.test(l))).toContain('unable to read refs')
+  expect(logs).toEqual([])
+  // Readable again: the age goes, and a later failure is said again.
+  w.revList = null
+  w.remote = null
+  w.unpushed = '1\n'
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('1 unpushed commit')
+  await ui.unmount()
+})
+
+test('an unpushed count never read at all shows no item, and is said in the debug log', withKit, async ($, on) => {
+  const { clock, debug } = world(on, { revList: { exitCode: 1, stdout: '', stderr: 'fatal: bad object HEAD' } })
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('engine band')
+  expect(debug.filter(l => /could not read the unpushed commits.*bad object HEAD/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a folder that is no repository, or a repository with no commits yet, has nothing to push and is no failure', withKit, async ($, on) => {
+  const { clock, w, debug } = world(on, {
+    unpushed: '3\n',
+    remote: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' },
+  })
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('engine band')
+  w.remote = null
+  w.revList = { exitCode: 128, stdout: '', stderr: "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree." }
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('engine band')
+  expect(debug.filter(l => /unpushed/.test(l))).toEqual([])
+  await ui.unmount()
+})
+
+// #697: the facts file is the status line's only source for the cache. One that cannot be written
+// (a full or unwritable disk) is said once, in the guards' note style, and nothing else stops: the
+// refresh is still armed at session start, the band still updates and a turn still ends.
+test('a facts file that cannot be written is said once, and the band and turns go on', withKit, async ($, on) => {
+  const { clock, w, logs } = world(on, { writeFails: 'ENOSPC: no space left on device', unpushed: '0\n' })
+  await start($, clock)
+  expect(logs.filter(l => /Status bar couldn't save the cache time/.test(l))).toHaveLength(1)
+  expect(logs[0]).toContain('no space left on device')
+  // The one minute refresh was armed: a commit made since shows at the next tick.
+  w.unpushed = '1\n'
+  await clock.advance(MIN)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('1 unpushed commit')
+  await step($, clock)
+  const ended = (await turn($)) as { text?: string }
+  expect(ended.text).toBe('done')
+  expect(logs.filter(l => /Status bar couldn't save the cache time/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a facts folder that cannot be made is said, and the rest still runs', withKit, async ($, on) => {
+  const { clock, w, logs, files } = world(on, { mkdirFails: 'mkdir: /Users/x/.claude/state: Permission denied', unpushed: '2\n' })
+  await start($, clock)
+  expect(logs.filter(l => /Status bar couldn't save the cache time.*Permission denied/.test(l))).toHaveLength(1)
+  expect(Object.keys(files)).toEqual([])
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('2 unpushed commits')
+  w.mkdirFails = ''
   await ui.unmount()
 })

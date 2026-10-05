@@ -102,6 +102,32 @@ PLAIN="$TMPROOT/plain-folder"; mkdir -p "$PLAIN"
 runit "$(input s1 "$PLAIN")"
 case "$out" in "plain-folder | "*) check "not a repository: the folder itself" ok ;; *) check "not a repository: the folder itself" "$out" ;; esac
 
+# 9. The Supabase project (#697): kept by #610's spec ("Kept: repo, Supabase project") and never
+#    dropped, so where a project has one it sits beside the repository, labelled as the old status
+#    line labelled it. Read as the old line read it: SUPABASE_PROJECT_NAME, else the subdomain of
+#    SUPABASE_URL, from the first .env found in the folder or the three above it. Nothing else in
+#    the .env is ever read, and a project with none shows none (case 1's exact line).
+printf 'OTHER=1\nSUPABASE_URL=https://abcdefghijklmnop.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=never-shown\n' > "$REPO/.env"
+runit "$(input s1)"
+[ "$out" = "claude-config | SB abcdefghijklmnop | 5h 68% (1h 52m) | week 91% (4d 14h) | cache 41m | Opus 5.5 (high) | Dan, Personal" ] \
+  && check "a Supabase project sits beside the repository" ok || check "a Supabase project sits beside the repository" "$out"
+case "$out" in *never-shown*) check "nothing else in the .env is shown" "$out" ;; *) check "nothing else in the .env is shown" ok ;; esac
+printf 'SUPABASE_URL="https://abcdefghijklmnop.supabase.co"\r\nSUPABASE_PROJECT_NAME="bidspoke-prod"\r\n' > "$REPO/.env"
+runit "$(input s1)"
+case "$out" in "claude-config | SB bidspoke-prod | 5h"*) check "a named project wins, quotes and Windows line ends removed" ok ;; *) check "a named project wins, quotes and Windows line ends removed" "$out" ;; esac
+rm -f "$REPO/.env"
+mkdir -p "$REPO/app/src"; printf 'SUPABASE_URL=https://parentref.supabase.co\n' > "$REPO/.env"
+runit "$(input s1 "$REPO/app/src")"
+case "$out" in *" | SB parentref | "*) check "a .env two folders up is found" ok ;; *) check "a .env two folders up is found" "$out" ;; esac
+printf 'NODE_ENV=dev\n' > "$REPO/app/.env"
+runit "$(input s1 "$REPO/app/src")"
+case "$out" in *"SB "*) check "the first .env found decides, even with no Supabase in it" "$out" ;; *) check "the first .env found decides, even with no Supabase in it" ok ;; esac
+rm -rf "$REPO/app" "$REPO/.env"
+printf 'SUPABASE_URL=http://127.0.0.1:54321\n' > "$REPO/.env"
+runit "$(input s1)"
+case "$out" in *" | SB 127.0.0.1:54321 | "*) check "a local Supabase is named by its address" ok ;; *) check "a local Supabase is named by its address" "$out" ;; esac
+rm -f "$REPO/.env"
+
 # 8. Input that is not JSON is said, not drawn as an empty line.
 runit 'nope'
 case "$out" in *"status line"*"could not read"*) check "unreadable input is named" ok ;; *) check "unreadable input is named" "exit=$code out=$out" ;; esac

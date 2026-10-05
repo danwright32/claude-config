@@ -5,13 +5,15 @@
 #   "statusLine": { "type": "command", "command": "bash ~/.claude/mods/status-bar/statusline.sh", "refreshInterval": 30 }
 #
 # The always-shown facts, settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)"),
-# in this order, all grey: project, 5 hour limit, weekly limit, cache time left, model and effort,
-# account and org. What needs a look is not here: the mod draws it in amber in the band above the
-# prompt, since a mod's own status line is drawn as a warning notice and cannot be grey.
+# in this order, all grey: project (with its Supabase project where it has one, #697), 5 hour
+# limit, weekly limit, cache time left, model and effort, account and org. What needs a look is not
+# here: the mod draws it in amber in the band above the prompt, since a mod's own status line is
+# drawn as a warning notice and cannot be grey.
 #
 # Where each fact comes from:
 #   limits, model, effort   the JSON on stdin, as Claude Code has them
 #   project                 the repository's GitHub name, else its folder, else the folder itself
+#   Supabase project        SUPABASE_PROJECT_NAME or SUPABASE_URL in the nearest .env, nothing else
 #   cache time left         the mod's facts file for this session, the one thing only the mod knows
 #   account and org         ~/.claude.json, read again on every refresh, so a login changed in one
 #                           window shows in all of them (picker, 2026-10-04)
@@ -88,6 +90,38 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   fi
 fi
 [ -n "$project" ] && parts+=("$project")
+
+# The Supabase project, beside the repository, where the project has one (#697): kept by #610's spec
+# and read as the old status line read it. SUPABASE_PROJECT_NAME, else the subdomain of SUPABASE_URL
+# (a local one by its address), from the first .env found in the folder or the three above it; the
+# first .env decides even with no Supabase in it. Only those two names are ever read from the file.
+envval(){   # $1 = file  $2 = name -> the value, quotes, spaces and a Windows line end removed
+  local v
+  v="$(grep -E "^(export[[:space:]]+)?$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r')"
+  v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+  case "$v" in \"*\") v="${v#\"}"; v="${v%\"}" ;; \'*\') v="${v#\'}"; v="${v%\'}" ;; esac
+  printf '%s' "$v" | tr -cd '[:print:]'
+}
+supabase=""
+if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+  d="$cwd"
+  for _ in 1 2 3 4; do
+    if [ -f "$d/.env" ]; then
+      sb_url="$(envval "$d/.env" SUPABASE_URL)"
+      if [ -n "$sb_url" ]; then
+        supabase="$(envval "$d/.env" SUPABASE_PROJECT_NAME)"
+        if [ -z "$supabase" ]; then
+          host="${sb_url#*://}"; host="${host%%/*}"
+          case "$host" in *.supabase.co) supabase="${host%%.*}" ;; *) supabase="$host" ;; esac
+        fi
+      fi
+      break
+    fi
+    [ "$d" = / ] && break
+    d="$(dirname "$d")"
+  done
+fi
+[ -n "$supabase" ] && parts+=("SB $supabase")
 
 limit 5h "$five_pct" "$five_reset"
 limit week "$week_pct" "$week_reset"

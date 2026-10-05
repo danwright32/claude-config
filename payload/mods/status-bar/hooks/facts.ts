@@ -46,6 +46,11 @@ export const unpushedOf = (stdout: string): number | undefined => {
 
 /** The last reading of the branch's PR, and whether the refresh since then failed. */
 export type PrReading = { number: number; checks: Checks; readAt: number; isStale: boolean }
+/**
+ * The last reading of the commits not pushed anywhere, and whether the refresh since then failed:
+ * a count that could not be read again is never a zero (L215), it is the last one, aged (#697).
+ */
+export type UnpushedReading = { count: number; readAt: number; isStale: boolean }
 /** One background job as the job watcher (#611) reports it through $.jobs. */
 export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean }
 
@@ -60,16 +65,15 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * bold item divided like the rest), then a failing or running PR, running jobs, kept jobs, unpushed
  * commits. Empty when nothing needs a look and no mode is on, so the band does not show.
  */
-export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; unpushed: number; now: number }): LookPart[] => {
+export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
   const items: string[] = []
-  if (f.pr && (f.pr.checks === 'failing' || f.pr.checks === 'running')) {
-    const age = f.pr.isStale ? `, as of ${span(f.now - f.pr.readAt)} ago` : ''
-    items.push(`PR #${f.pr.number} checks ${f.pr.checks}${age}`)
-  }
+  // A reading whose refresh since failed is kept with its age, never blanked (L682).
+  const age = (r: { readAt: number; isStale: boolean }) => (r.isStale ? `, as of ${span(f.now - r.readAt)} ago` : '')
+  if (f.pr && (f.pr.checks === 'failing' || f.pr.checks === 'running')) items.push(`PR #${f.pr.number} checks ${f.pr.checks}${age(f.pr)}`)
   const running = f.jobs.filter(j => !j.kept).length
   if (running) items.push(`${plural(running, 'job', 'jobs')} running`)
   for (const j of f.jobs.filter(j => j.kept)) items.push(`${j.label} kept ${span(j.runMs)}`)
-  if (f.unpushed > 0) items.push(plural(f.unpushed, 'unpushed commit', 'unpushed commits'))
+  if (f.unpushed && f.unpushed.count > 0) items.push(`${plural(f.unpushed.count, 'unpushed commit', 'unpushed commits')}${age(f.unpushed)}`)
   const parts: LookPart[] = []
   for (const m of f.modes) {
     if (parts.length) parts.push({ text: ' | ', dim: true })
@@ -82,10 +86,14 @@ export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | 
   return parts
 }
 
-/** Whether the Compact row shows: context above 70%, or the cache within 5 minutes of going cold. */
-export const compactDue = (f: { contextPercent: number | undefined; cacheExpiresAt: number | null; now: number }): boolean => {
+/**
+ * Whether the Compact row shows: context above 70%, or the cache within 5 minutes of going cold. Not
+ * the cache while a main turn runs (`isWorking`): each request it makes keeps the cache warm, and
+ * Dan has nothing to do about a cache Claude is about to use again (#697).
+ */
+export const compactDue = (f: { contextPercent: number | undefined; cacheExpiresAt: number | null; now: number; isWorking: boolean }): boolean => {
   if ((f.contextPercent ?? 0) > CONTEXT_LOOK) return true
-  if (f.cacheExpiresAt === null) return false
+  if (f.isWorking || f.cacheExpiresAt === null) return false
   const left = f.cacheExpiresAt - f.now
   return left > 0 && left <= CACHE_WARN_MS
 }

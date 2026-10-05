@@ -45,10 +45,11 @@ describe('unpushedOf', () => {
 
 const texts = (parts: ReturnType<typeof lookParts>) => parts.map(p => ('text' in p ? p.text : `[${p.label}]`)).join('')
 const now = 100 * HOUR
+const fresh = (count: number) => ({ count, readAt: now, isStale: false })
 
 describe('lookParts', () => {
   test('nothing needing a look and no mode: no line at all', () => {
-    expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: 0, now })).toEqual([])
+    expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: null, now })).toEqual([])
   })
   test('most urgent first: mode, PR, running jobs, kept jobs, unpushed commits', () => {
     const parts = lookParts({
@@ -58,13 +59,13 @@ describe('lookParts', () => {
         { label: 'dev server', runMs: 2 * HOUR + 14 * MIN, kept: true, stuck: false },
         { label: 'npm test', runMs: MIN, kept: false, stuck: false },
       ],
-      unpushed: 2,
+      unpushed: fresh(2),
       now,
     })
     expect(texts(parts)).toBe('NO BUILD | PR #636 checks failing | 1 job running | dev server kept 2h 14m | 2 unpushed commits')
   })
   test('the mode is bold amber, the items amber, the separators dim', () => {
-    const parts = lookParts({ modes: ['AWAY'], pr: null, jobs: [], unpushed: 1, now })
+    const parts = lookParts({ modes: ['AWAY'], pr: null, jobs: [], unpushed: fresh(1), now })
     expect(parts).toEqual([
       { text: 'AWAY', color: 'warning', bold: true },
       { text: ' | ', dim: true },
@@ -72,7 +73,7 @@ describe('lookParts', () => {
     ])
   })
   test('two modes at once (no build while away) both lead, each bold, divided like the items', () => {
-    const parts = lookParts({ modes: ['NO BUILD', 'AWAY'], pr: null, jobs: [], unpushed: 1, now })
+    const parts = lookParts({ modes: ['NO BUILD', 'AWAY'], pr: null, jobs: [], unpushed: fresh(1), now })
     expect(parts).toEqual([
       { text: 'NO BUILD', color: 'warning', bold: true },
       { text: ' | ', dim: true },
@@ -82,19 +83,19 @@ describe('lookParts', () => {
     ])
   })
   test('a mode alone still makes a line: the band shows while a mode is on', () => {
-    expect(texts(lookParts({ modes: ['WINDING DOWN'], pr: null, jobs: [], unpushed: 0, now }))).toBe('WINDING DOWN')
+    expect(texts(lookParts({ modes: ['WINDING DOWN'], pr: null, jobs: [], unpushed: null, now }))).toBe('WINDING DOWN')
   })
   test('passing checks need no look; running ones are shown', () => {
-    expect(lookParts({ modes: [], pr: { number: 9, checks: 'passing', readAt: now, isStale: false }, jobs: [], unpushed: 0, now })).toEqual([])
-    expect(texts(lookParts({ modes: [], pr: { number: 9, checks: 'running', readAt: now, isStale: false }, jobs: [], unpushed: 0, now }))).toBe('PR #9 checks running')
+    expect(lookParts({ modes: [], pr: { number: 9, checks: 'passing', readAt: now, isStale: false }, jobs: [], unpushed: null, now })).toEqual([])
+    expect(texts(lookParts({ modes: [], pr: { number: 9, checks: 'running', readAt: now, isStale: false }, jobs: [], unpushed: null, now }))).toBe('PR #9 checks running')
   })
   test('a PR whose last refresh failed shows what was last read, with its age, never blank (L682)', () => {
     const pr = { number: 636, checks: 'running' as const, readAt: now - 12 * MIN, isStale: true }
-    expect(texts(lookParts({ modes: [], pr, jobs: [], unpushed: 0, now }))).toBe('PR #636 checks running, as of 12m ago')
+    expect(texts(lookParts({ modes: [], pr, jobs: [], unpushed: null, now }))).toBe('PR #636 checks running, as of 12m ago')
   })
   test('a stale PR that last read as passing stays hidden: only an item that needed a look is kept', () => {
     const pr = { number: 7, checks: 'passing' as const, readAt: now - 3 * MIN, isStale: true }
-    expect(lookParts({ modes: [], pr, jobs: [], unpushed: 0, now })).toEqual([])
+    expect(lookParts({ modes: [], pr, jobs: [], unpushed: null, now })).toEqual([])
   })
   test('jobs counted, and every kept job named with its run time', () => {
     const jobs = [
@@ -103,21 +104,37 @@ describe('lookParts', () => {
       { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: false },
       { label: 'watcher', runMs: 3 * HOUR, kept: true, stuck: false },
     ]
-    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: 0, now }))).toBe('2 jobs running | dev server kept 30m | watcher kept 3h 0m')
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('2 jobs running | dev server kept 30m | watcher kept 3h 0m')
+  })
+  // #697: an unpushed count that could not be read again is never a zero: the commits keep their
+  // place on the line, with the age of the last reading, as a PR whose refresh failed does.
+  test('unpushed commits whose last refresh failed keep their place, with the age of the last reading', () => {
+    const unpushed = { count: 2, readAt: now - 3 * MIN, isStale: true }
+    expect(texts(lookParts({ modes: [], pr: null, jobs: [], unpushed, now }))).toBe('2 unpushed commits, as of 3m ago')
+  })
+  test('no reading of unpushed commits yet, or none to push, is no item', () => {
+    expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: null, now })).toEqual([])
+    expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: fresh(0), now })).toEqual([])
   })
 })
 
 describe('compactDue', () => {
   test('context above 70% shows the Compact row', () => {
-    expect(compactDue({ contextPercent: 71, cacheExpiresAt: null, now })).toBe(true)
-    expect(compactDue({ contextPercent: 70, cacheExpiresAt: null, now })).toBe(false)
+    expect(compactDue({ contextPercent: 71, cacheExpiresAt: null, now, isWorking: false })).toBe(true)
+    expect(compactDue({ contextPercent: 70, cacheExpiresAt: null, now, isWorking: false })).toBe(false)
   })
   test('the cache within 5 minutes of going cold shows it, and once cold it is gone', () => {
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 5 * MIN, now })).toBe(true)
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 6 * MIN, now })).toBe(false)
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now, now })).toBe(false)
+    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 5 * MIN, now, isWorking: false })).toBe(true)
+    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 6 * MIN, now, isWorking: false })).toBe(false)
+    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now, now, isWorking: false })).toBe(false)
+  })
+  // #697: while a main turn runs, every request it makes keeps the cache warm and Dan has nothing to
+  // do about it, so the cache alone brings no Compact row then. Context above 70% still does.
+  test('while a turn runs, the cache alone brings no row; context still does', () => {
+    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 5 * MIN, now, isWorking: true })).toBe(false)
+    expect(compactDue({ contextPercent: 75, cacheExpiresAt: now + 5 * MIN, now, isWorking: true })).toBe(true)
   })
   test('no context reading yet and no cache is no row', () => {
-    expect(compactDue({ contextPercent: undefined, cacheExpiresAt: null, now })).toBe(false)
+    expect(compactDue({ contextPercent: undefined, cacheExpiresAt: null, now, isWorking: false })).toBe(false)
   })
 })

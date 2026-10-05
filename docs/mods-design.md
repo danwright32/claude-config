@@ -142,6 +142,22 @@ the spec rather than chosen afresh, and open to Dan changing:
 - The Compact row reads "ctx 74%" in amber, then `[ Compact ]`, whether it showed for context or
   for the cache. A compaction that does not run says why in a toast: "Compact did not run: ...".
 - The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes."
+- The cache's hour is measured from the last main request, as the spec says, not from the end of
+  the turn (#697): each request of a turn starts it again, a subagent's does not (it carries its
+  own conversation). While a main turn runs neither the toast nor a Compact row for the cache
+  shows, since the turn's next request warms it and Dan has nothing to do; context above 70% still
+  brings the row. A compaction of the conversation (the Compact row, `/compact`, the threshold)
+  clears the clock as a `/clear` does, so the status line shows no cache until the next request.
+- The Supabase project sits beside the repository where a project has one, `SB bidspoke-prod`
+  (#697): #610's spec kept it and nothing recorded it dropped, while the rounds drew claude-config,
+  which has none. Read as the old status line read it (`SUPABASE_PROJECT_NAME`, else the subdomain
+  of `SUPABASE_URL`, from the first `.env` in the folder or the three above it), with the old
+  line's label less its colon. Built from the spec, not put to Dan in a round.
+- Unpushed commits git cannot count (an error or a timeout) keep their last reading with its age,
+  "2 unpushed commits, as of 3m ago", as a PR does, never a zero; a folder that is no repository,
+  one with no remote, or one with no commit yet has nothing to push (#697).
+- A facts file that cannot be written is said once, in the guards' note style: "Status bar couldn't
+  save the cache time for the status line, so it may show it out of date: <reason>." (#697)
 - A repository with no remote shows no unpushed commits, since there is nothing to push to.
 - A scope mode is set by another mod with `$.statusbar.setModes({ modes })`, the modes that are
   on at once (no build or winding down, and away), or an empty list to clear them; `setMode({ mode })`
