@@ -101,8 +101,14 @@ r="$(group_per_commit_on_main "$TMPROOT/shared-group.yml")"
 [ "$r" != ok ] \
   && check "#594 a group shared by every commit on main is refused, even with cancelling off" ok \
   || check "#594 a group shared by every commit on main is refused, even with cancelling off" "it passed"
+printf 'jobs:\n  suite:\n    runs-on: ubuntu-26.04\n' > "$TMPROOT/no-group.yml"
+r="$(group_per_commit_on_main "$TMPROOT/no-group.yml")"
+[ "$r" != ok ] \
+  && check "#594 a workflow with no concurrency group at all is refused too" ok \
+  || check "#594 a workflow with no concurrency group at all is refused too" "it passed"
+# Strict about the real file: a deleted group would also stop pull requests cancelling a superseded
+# run, which is the half of #594 that saves minutes, so it is refused rather than waved through.
 r="$(group_per_commit_on_main "$REAL")"
-case "$r" in ok|"no concurrency group"*) r=ok ;; esac
 [ "$r" = ok ] \
   && check "#594 on main each commit has its own group, so no pending run is displaced" ok \
   || check "#594 on main each commit has its own group, so no pending run is displaced" "$r"
