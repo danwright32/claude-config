@@ -1101,7 +1101,7 @@ Decided with Dan in design rounds on a dark terminal (the issue comment "Decided
 | Figures line | Room left, not used: "88% of 5h left, resets 6:40 PM · 70% of week left, resets Thu 9 AM · as of 2h ago" (over "5h 12%, resets ..." and "used until") | wording |
 | Dim note | None. Dan dropped it, superseding spec items 5 and 6 where they asked the card to say that use in claude.ai, the desktop app or the phone is not counted and that switching changes the account for every session on the Mac. The reading's age stays on the figures line | wording |
 | Switch in progress | The amber lead itself becomes the progress, with elapsed seconds, and the buttons go while it works: "Switching to Work: signing claude.ai out in the browser… 25s", then the sign in page step in the same form (over a step list, and a status line at the foot) | 2, wording |
-| Switch failed | The lead turns red (a logout that did not happen is genuinely wrong): "claude.ai didn't confirm the sign out. Nothing else was changed.", with `[ Try again ]` and `[ Dismiss ]`. It claims only what was checked: that the page did not confirm | wording |
+| Switch failed | The lead turns red (a logout that did not happen is genuinely wrong): "claude.ai didn't confirm the sign out. Nothing else was changed.", with `[ Try again ]` and `[ Dismiss ]`. It claims only what was checked: that the page did not confirm. Since #736 this sentence is kept for that one case, a signed out check that ran and did not print "signed out"; the other ways Switch stops say what was found instead (below, open for Dan) | wording |
 | No account has room | The same box, amber lead "This account is low. No other account has room" with `[ Dismiss ]`, and one line: "This account's 5h resets first, at 6:40 PM · Side has no reading yet and may have room" (over every account listed, and one squeezed line) | 3, wording |
 | Nickname | Claude Code's standard question dialog: chip "Nickname", "What should this account be called?", the email and org dim under it, a text field, Save and Skip (Esc skips) (over a dim line pointing at /accounts rename, and a question in the band) | nickname round |
 
@@ -1136,12 +1136,68 @@ the spec rather than chosen afresh, and open to Dan changing:
   mods tree is mirrored, and a file beside the mod folders (not in one) is not watched for hot
   reload and is named by no mod list. The repository is public, so the file is keyed by a hash of
   the account and org ids and holds no email; the nickname itself is published.
+- Two Macs can answer the nickname question for one account before a sync (found in the live check
+  on 2026-10-05, #747: one skipped, the other named it, and the sync applied the skip and set the
+  name aside as a `.conflict-<Mac>` copy). The file's version 2 gives every entry the time it was
+  recorded, `{"name": "Work", "at": 1759671234567}`, one account per line in key order, and copies
+  are merged entry by entry: a name beats a skip whatever their times, and of two names the later
+  stands (an entry the first build wrote, with no time, counts as older; an exact tie goes to the
+  greater name, so both Macs settle alike). **A skip recorded after a name means nothing**: a skip
+  only records that the question was answered, so it never takes a name away, whichever Mac
+  recorded it or when; the way to change a name is `/accounts rename`, and there is no way to
+  clear one back to the email and org. Recording an answer merges rather than replaces, and a
+  rename is stamped later than the name it replaces even when the other Mac's clock ran ahead.
+  Version 1 files still read as written and are rewritten, as version 2, only when the nicknames in
+  them change. At each session start, and on every write, any copy the sync set aside beside the
+  file is merged back; once the file reads back holding the merge, the copy moves into this Mac's
+  `~/.claude/state/account-room/` (kept, never deleted) and the transcript says so once. A copy
+  that cannot be read is named and left where it is. The sync itself is not taught to merge this
+  file (#747 asked whether it should): it stays blind to what a payload file means, and this mod is
+  the one reader that knows the rule. The status line reads both versions.
+- Readings move between the Macs through a private GitHub repository (#750, decided with Dan on
+  2026-10-05 after the live check found iCloud Drive's upload backlog leaving figures late however
+  rarely a file was written; not a gist, which anyone with its link can read). It is named by the
+  `readingsRepo` setting, `danwright32/account-room-readings` by default, and each Mac writes only
+  `readings/<LocalHostName>.json`, in the same shape the iCloud file had. iCloud Drive is no longer
+  written or read. Writes go through `gh api`'s contents PUT over the sha the file was read at, so a
+  stale write is refused rather than overwriting; a refused write reads the file again and merges,
+  up to three times, never forcing. The file is rewritten only when a figure moved as the card shows
+  it (the whole percent left, or a reset time), an account is new or changed, or its newest reading
+  is more than 10 minutes old, so the same figures measured again cost no GitHub call. The whole
+  percent, rather than the tenth the engine reports, keeps writes near one per point of use: a 5
+  hour window used from empty to full is about a hundred writes per Mac on that account, against a
+  thousand at the tenth, plus at most six an hour from the 10 minute rule, which also bounds how
+  stale the tenth can be. Each write is a commit in the repository. The other Macs' files are read at most once
+  a minute, and only while the card is up. gh must be logged in, on each Mac, to an account that can
+  see the repository.
+- A rate limit measurement hands its reading work (saving it, reading the Macs' figures, drawing the
+  card) to a timer and goes on at once, so a slow GitHub or a held lock never holds up the mods
+  beneath (#736). Readings writes take turns on their own queue, so a slow write never stops
+  Switch's elapsed seconds.
 
 Not settled by any round, built so the spec holds, and each an open question for Dan:
 
-- **Another Mac's readings unavailable.** The spec asks the card to say so; no round drew it. It is
-  a plain line at the foot of the card: "Dans-MacBook-Pro's readings are unavailable: not
-  downloaded from iCloud yet".
+- **Readings GitHub could not give.** The spec asks the card to say another Mac's readings are
+  unavailable; no round drew it. Each is a plain line at the foot of the card, in gh's own words:
+  "Dans-MacBook-Pro's readings are unavailable: not readable JSON (...)" for one Mac's file; "The
+  other Macs' readings are unavailable: gh is not logged in to GitHub (gh auth login)" when the
+  readings folder could not be listed at all (likewise "gh api failed: error connecting to
+  api.github.com ...", "gh could not be run: ...", or "danwright32/account-room-readings was not
+  found, or gh's account dwright-pennie cannot see it"); and "Daniels-MacBook-Pro-2's readings could
+  not be saved to GitHub: ..." when this Mac's own write failed, until one lands. The save failure
+  is also said once in the transcript.
+- **Why Switch stopped** (#736). Only the not confirmed sentence came from a round; the others say
+  what was measured instead of claiming a page check that never ran, each red with `[ Try again ]`
+  and `[ Dismiss ]`: "No sign out was attempted: no browser logout route is set up. Nothing was
+  changed." (no `logoutCommand` and `signedOutCheck` set); "The browser logout command failed.
+  Nothing else was changed." (it exited non zero, could not start, or ran past 60 seconds); "The
+  signed out check could not be run. Nothing else was changed." (the check could not start or ran
+  past 30 seconds); "A reload cut Switch off before the sign out was confirmed. Nothing else was
+  changed." (the mod reloaded mid sign out, so nothing checked the page afterwards). The toast
+  carries the detail, as before.
+- **The waiting question's line** falls back on "Claude Code has not placed it" when Claude Code
+  gives no reason, names an account with no email as "the Acme account" (or "this account" with no
+  org either), and is said once per account.
 - **A sign in that does not finish** (`claude auth login` exits non zero or times out after 10
   minutes): a toast, "Switch did not finish: Login cancelled", and the card comes back. On success:
   a toast, "Switched to Work.", and the card is dismissed for the session. A Switch stopped at the
