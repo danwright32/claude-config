@@ -53,6 +53,9 @@
 #     SKIP_TEST_CHECK / SKIP_STYLE_CHECK / SKIP_CLOSING_CHECK.
 #   - A checked in .no-pr-quiz at the root of the repo being merged in: that repo has opted out
 #     for good. Skipped with a one line notice, never silently (claude-config#438).
+#   - A snooze for this session (pr-merge-quiz.sh --snooze-session <id>, the command the quiz
+#     itself names): every later merge in that session is skipped with a one line notice
+#     (claude-config#623).
 #
 # Fails QUIET: any parse error exits 0 with no output, so a hiccup never produces a spurious quiz.
 
@@ -60,6 +63,33 @@ set -uo pipefail
 
 # A headless / detached run has nobody to quiz. Skip before doing any work.
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
+
+# SKIPPED FOR THE REST OF A SESSION (claude-config#623). Dan answered "skip" about 13 times across 8
+# Sonar sessions, once as "skip all quizzes for the rest of this session", and that held only while
+# Claude remembered it (L57). So the snooze is a file this hook reads, one per session id, set by the
+# command the quiz instruction names with this session's id already in it:
+#   pr-merge-quiz.sh --snooze-session <session id>
+# Kept beside the verdict counts, outside ~/.claude (anything there syncs to the other Mac, and a
+# session's snooze is this Mac's alone). It ends with the session, since no other session carries
+# that id, and each snooze written clears any older than SNOOZE_KEEP_DAYS, so the folder cannot grow
+# without end (L523: a suppression carries its expiry).
+SNOOZE_KEEP_DAYS=14
+snooze_dir() { printf '%s/snoozed' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
+# A session id is Claude Code's uuid; anything else is refused rather than made into a path.
+valid_session_id() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{7,63}$ ]]; }
+if [ "${1:-}" = "--snooze-session" ]; then
+  if ! valid_session_id "${2:-}"; then
+    echo "pr-merge-quiz: '${2:-}' is not a session id, so nothing was snoozed. Use the exact command the quiz named." >&2
+    exit 2
+  fi
+  if ! mkdir -p "$(snooze_dir)" 2>/dev/null || ! date '+%Y-%m-%dT%H:%M:%S%z' > "$(snooze_dir)/$2" 2>/dev/null; then
+    echo "pr-merge-quiz: could not write the snooze under $(snooze_dir), so merges in this session will still be quizzed." >&2
+    exit 1
+  fi
+  find "$(snooze_dir)" -type f -mtime +"$SNOOZE_KEEP_DAYS" -delete 2>/dev/null || true
+  echo "PR quiz snoozed for the rest of this session (session $2). Other sessions are still quizzed."
+  exit 0
+fi
 
 payload="$(cat)"
 
@@ -130,6 +160,18 @@ if [ -n "$quiz_repo" ] && [ -f "$quiz_repo/$QUIZ_OPT_OUT_MARKER" ]; then
   else
     printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')"
   fi
+  exit 0
+fi
+
+# This session snoozed the quiz (#623, the block at the top). Checked here, after the opt out and
+# before the label gate, for the opt out's reasons: a snoozed merge is not a quiz the label failed
+# to silence, so it is counted nowhere, and it is announced in one line straight to Dan. A payload
+# with no readable session id (no jq, or no id at all) cannot be snoozed, so the quiz fires.
+session_id=""
+command -v jq >/dev/null 2>&1 && session_id="$(printf '%s' "$payload" | jq -r '.session_id // ""' 2>/dev/null)"
+valid_session_id "$session_id" || session_id=""
+if [ -n "$session_id" ] && [ -f "$(snooze_dir)/$session_id" ]; then
+  jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
   exit 0
 fi
 
@@ -378,6 +420,18 @@ quiz_json="$(cat <<'JSON'
 {"decision":"block","reason":"A `gh pr merge` command just ran. Before you do ANYTHING else (do NOT suggest, pick, or start the next issue, and do NOT run the next-issue flow) run a short PR comprehension quiz, then continue normally.\n\nStep 1, confirm it shipped: look at the actual output of the merge command you just ran. If the merge did NOT succeed (it errored, was already merged, needed input, or was a no-op), say so in one line and proceed as normal. Do NOT quiz on a merge that did not happen.\n\nStep 2, the user-facing gate, and this is the ONLY thing that decides whether to quiz at all: read what shipped (`gh pr view <number> --json title,body,url` and `gh pr diff <number>`; if no number was given, resolve the PR for the merged branch first). Quiz ONLY if a person using this thing could notice a difference. Any of these counts: what they see (a screen, copy, a label, a price, an email, an alert), what they interact with (a flow, a control, an input, a command), what they receive and when (a notification, a schedule, the timing of something going out), what happens when something goes wrong (error handling, a retry, alerting, an error message), or a fix to a rare edge case, since that situation now behaves differently. When the repo you merged in is Dan's own tooling (a hook, a skill, a gate, a script, his Claude config), Dan IS the user: a change to how it behaves in his sessions is user-facing.\n\nSkip the quiz when what shipped is ONLY internal. These never quiz: tests, fixtures, and test infrastructure; documentation of any kind in any repo, including README, CLAUDE.md, lessons, plan docs, and code comments; refactors and internal restructuring, meaning how the program works inside; performance work, even a speedup someone would feel; build, CI, dependencies, version bumps, formatting, whitespace, and config plumbing; and groundwork that ships nothing visible yet, such as a column nothing reads or a module nothing calls. How the program works inside is never a reason to quiz.\n\nOn a skip, say so in ONE line that names what you judged and what you actually saw, for example: Skipping quiz, nothing user-facing shipped (test coverage plus a refactor of the matcher). Do not skip silently, because Dan has to be able to see the judgement and say 'quiz me anyway' when it is wrong. Then carry on as normal.\n\nA mixed change: if ANY user-facing change is in the diff then the quiz fires, however small that part is and however large the internal part. But draw every question only from the user-facing part, and never ask about the internal, test, or documentation parts even when they are most of what shipped.\n\nStep 3, quiz: otherwise write 1 to 4 questions, scaled to how much of the USER-FACING part shipped and not the size of the whole diff (a one line copy change riding along with a big refactor gets 1; a substantial user-facing feature gets 3 or 4). Every question must be about the current behavior of the system as it stands NOW that this change has shipped, asked in the present tense, in plain language. Prefer a concrete scenario whenever one fits: name a situation and ask what happens in it now (for example, 'a user with no saved payment method opens checkout, what happens?'). FORBIDDEN, with no exceptions: the old behavior or what anything used to do, before and after comparisons, what problem this solved or what bug it fixed, why the change was needed, and code trivia like file names or function names. If a question only makes sense to someone who already knows the state before the change, it is the wrong question: rewrite it as a question about how the system behaves now. Ask them ONE AT A TIME, one AskUserQuestion picker per question, each with plausible concrete options. ANTI-GAMING, this matters: vary which option is the correct one from question to question and do NOT default to putting the correct answer first (choosing the first option must never be a winning strategy). Give NO tell: do not mark any option 'Recommended', and keep all options similar in length, specificity, and plausibility so the answer is not guessable from shape. After each answer: if it is correct, just move on with a quiet check mark, no explanation. If it is wrong, state the correct current behavior briefly in plain language and in the present tense, without describing the old behavior or what the change did to it.\n\nStep 4, a wrong answer is a product signal, not just a miss: the option Dan picked is the behavior he EXPECTED, so the shipped behavior may be the thing that is wrong. Right after correcting him, ask with ONE AskUserQuestion picker whether the behavior should stay as it is or become what he expected. Give at least three options: keep it as it shipped, change it to what he picked, and log it and decide later. If he wants it changed or logged, do NOT start coding in the middle of the quiz: open a GitHub issue in the repo you just merged in, stating the expected behavior in his words and the behavior that ships today, then carry on with the remaining questions. Quiz answers are never logged anywhere; the only thing that persists is an issue he asks for. Only after every question is answered, and any issue he asked for is opened, may you go on to the next issue."}
 JSON
 )"
+
+# Skipping (#623): one skip ends the whole set (skipping question 1 of 2 left question 2 standing
+# in two Sonar sessions), and a skip for the rest of the session is the snooze command, named here
+# with this session's id so Claude never has to find it. With no id the hook cannot snooze, so the
+# sentence offering it is left out rather than naming a command that would do nothing.
+skip_note="
+
+Skipping: if Dan answers skip to any question, that skips every remaining question of this quiz, not only the one asked; say so in one line and carry on."
+if [ -n "$session_id" ]; then
+  skip_note="$skip_note If he says to skip quizzes for the rest of this session, run exactly this command, then confirm in one line: bash '$HOOK_DIR/pr-merge-quiz.sh' --snooze-session $session_id"
+fi
+notice="$notice$skip_note"
 
 # Appended through jq rather than by rebuilding the reason, because the reason is a single
 # JSON string carrying its own escapes and re-quoting it by hand is how they get lost.
