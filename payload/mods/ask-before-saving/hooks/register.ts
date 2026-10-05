@@ -297,7 +297,8 @@ export const register: Register = on => {
       if (forGood === undefined && r.deny !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
         const at = await whereOf($)
         const k = saveKey(tool, input, at.cwd, at.home)
-        let hit: AskBeforeSavingApproval | undefined
+        // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
+        let hit = undefined as AskBeforeSavingApproval | undefined
         await update($, approvalsRef, a => (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x)))
         if (hit) $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
         return r
