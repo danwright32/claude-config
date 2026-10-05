@@ -241,8 +241,9 @@ describe('writes: a path held in a variable', () => {
     // Set only for the one command it leads, or only inside quotes: no variable the shell keeps.
     expect(paths('F=~/.claude/CLAUDE.md true; echo x > "$F"')).toEqual(['(as written) $F'])
     expect(paths('echo "F=~/.claude/CLAUDE.md"; echo x > "$F"')).toEqual(['(as written) $F'])
-    // Never set at all.
-    expect(paths('echo x >> "$OUT"')).toEqual(['(as written) $OUT'])
+    // Never set at all, or a command's output, given whole as written.
+    expect(read(`printf 'x\\n' >> "$OUT"`).files).toEqual([{ word: '$OUT' }])
+    expect(read(`printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`).files).toEqual([{ word: '$(ls ~/.claude/projects/p/memory/MEMORY.md)' }])
   })
   test('a value set inside a subshell ends with it', () => {
     expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual([`${CWD}/b.md`, `${CWD}/a.md`, '(as written) $G'])

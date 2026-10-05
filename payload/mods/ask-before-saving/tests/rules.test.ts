@@ -170,6 +170,16 @@ test('a target the words cannot name is judged by the lasting memory the command
   ])
 })
 
+// The route a target the words cannot name takes asks the disk about a temporary path it mentions,
+// as every other route does, and a disk that cannot answer fails the judgement: the hook then
+// refuses the write rather than let it through.
+test('a target the words cannot name, mentioning a temporary path the disk cannot answer for, fails the judgement', async () => {
+  const failing = async () => {
+    throw new Error('EACCES: /tmp/locked')
+  }
+  await expect(lastingFiles({ files: [{ word: '$F' }], unnamed: [] }, HOME, failing, 'F=/tmp/locked/CLAUDE.md; echo x > "$F"')).rejects.toThrow('EACCES: /tmp/locked')
+})
+
 test('a target the words cannot name, in a command that mentions no lasting memory, is no save; nor is a target they name', async () => {
   const { inCheckout } = checkouts()
   const judge = (files: { word: string; path?: string }[], command: string) => lastingFiles({ files, unnamed: [] }, HOME, inCheckout, command)
