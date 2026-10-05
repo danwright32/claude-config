@@ -26,32 +26,44 @@ if [ ! -f "$SKILL" ]; then
   printf 'SUITE-RESULT passed=0 failed=1\n'
   exit 1
 fi
-# One paragraph per line, so a claim is judged inside the paragraph that makes it, never across two
-# unrelated ones (L178), and rewrapping cannot hide it (L278).
-paras="$(awk 'BEGIN { RS = ""; ORS = "\n" } { gsub(/[[:space:]]+/, " "); print }' "$SKILL")"
-has_para(){   # every argument must appear in ONE paragraph, case insensitive
-  local p
-  p="$(printf '%s\n' "$paras" | grep -i -F -- "$1")" || return 1
-  shift
-  local n
-  for n in "$@"; do p="$(printf '%s\n' "$p" | grep -i -F -- "$n")" || return 1; done
-  return 0
+# The claims are held to the "### First appearance" section of the skill, never anywhere in the
+# file, and each one as the exact sentence that makes it, case and all, inside ONE paragraph of that
+# section with its whitespace collapsed (so rewrapping cannot hide it, L278). #790 found the first
+# version matched loose words case insensitively anywhere in a paragraph, so a rewording that
+# dropped the claim, or unrelated text holding the words, passed (L178, L135). A rewording now
+# fails here and the sentence below is updated with it: the wording is the behaviour Claude follows.
+section="$(awk '/^### First appearance$/ { f = 1; next } f && /^(#|---)/ { exit } f' "$SKILL")"
+paras="$(printf '%s\n' "$section" | awk 'BEGIN { RS = ""; ORS = "\n" } { gsub(/[[:space:]]+/, " "); print }')"
+claim(){   # $1 = what it holds  $2 = the exact sentence, inside one paragraph of the section
+  if [ -z "$section" ]; then check "$1" "the skill has no '### First appearance' section"; return; fi
+  if printf '%s\n' "$paras" | grep -q -F -- "$2"; then check "$1" ok; else check "$1" "the section does not say: $2"; fi
+}
+gone(){   # $1 = what it holds  $2 = a phrase that must appear nowhere in the skill, in any case
+  if grep -q -i -F -- "$2" "$SKILL"; then check "$1" "the skill still says: $2"; else check "$1" ok; fi
 }
 
-has_para "no launch mode" && check "the no launch mode paragraph is gone" "the skill still says there is no launch mode" \
-  || check "the no launch mode paragraph is gone" ok
-has_para "ask for a starting date" && check "a first run no longer asks for a starting date" "the skill still asks for a starting date" \
-  || check "a first run no longer asks for a starting date" ok
-has_para "first appearance" "no \`lastEnd\`" "in general" && check "a repo with no lastEnd is introduced in general" ok \
-  || check "a repo with no lastEnd is introduced in general" "no paragraph names a first appearance, a repo with no lastEnd, and an introduction in general together"
-has_para "never" "one by one" && check "the introduction never lists the product's changes one by one" ok \
-  || check "the introduction never lists the product's changes one by one" "no paragraph says the first appearance never lists changes one by one"
-has_para "what it is" "who uses it" "when to open it" "what it checks" && check "the introduction covers what it is, who uses it, when to open it and what it checks" ok \
-  || check "the introduction covers what it is, who uses it, when to open it and what it checks" "no paragraph lists all four"
-has_para "\`lastEnd\`" "newest" "merged_at" "changes only" && check "the window then starts after the newest merge, so later runs report changes only" ok \
-  || check "the window then starts after the newest merge, so later runs report changes only" "no paragraph sets lastEnd from the newest merged_at at the introduction"
-has_para "sonar shouldn't announce specific updates" && check "Dan's decision is quoted with its date" "$(has_para "sonar shouldn't announce specific updates" "2026-09-28" && echo ok || echo 'quoted without its date')" \
-  || check "Dan's decision is quoted with its date" "the decision is not quoted"
+gone "the no launch mode paragraph is gone" "no launch mode"
+gone "a first run no longer asks for a starting date" "ask for a starting date"
+claim "a repo with no lastEnd is introduced in general" \
+  'A repo with no `lastEnd` at all is a product appearing for the first time, and it is introduced in general.'
+claim "the introduction never lists the product's merged PRs one by one" \
+  "the product's merged PRs are never listed one by one."
+claim "Dan's decision is quoted with its date" \
+  "Dan decided this on 2026-09-28, when the skill asked him for a starting date for Sonar: \"sonar shouldn't announce specific updates. this would be the announcement of sonar in general.\""
+claim "the introduction covers what it is, who uses it, when to open it, what it checks and how to share a result" \
+  "what it is, who uses it, when to open it, what it checks, and how to share a result"
+claim "the window then starts after the newest merge in production, so later runs report changes only" \
+  'set that repo'"'"'s `lastEnd` to the `merged_at` of its newest merged PR that reached production (section 4), so the next run reports changes only'
+
+# The checks above can fail: the same claims against a section that does not make them.
+section_real="$section"; paras_real="$paras"
+section="An unrelated paragraph mentioning lastEnd, newest, merged_at and changes only, in general, never one by one."
+paras="$section"
+before_fail=$fail
+claim "(control) a section without the claim" 'A repo with no `lastEnd` at all is a product appearing for the first time, and it is introduced in general.' >/dev/null
+if [ "$fail" -eq $((before_fail + 1)) ]; then fail=$before_fail; check "the claim check fails on loose words that make no claim" ok
+else check "the claim check fails on loose words that make no claim" "it passed text that makes no claim"; fi
+section="$section_real"; paras="$paras_real"
 
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
