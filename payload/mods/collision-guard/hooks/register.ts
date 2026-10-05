@@ -123,7 +123,13 @@ const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<Shell
     if (w.sources) isDir = (await $.fs.stat(w.path).catch(() => undefined))?.kind === 'dir'
     const { sources, ...write } = w
     const found = isDir && sources ? sources.map(s => ({ path: `${w.path}/${base(s)}` })) : [write]
-    for (const f of found) if (!out.some(o => o.path === f.path)) out.push(f)
+    // A file named twice is kept once, keeping a removal's flags whichever came first, as
+    // shellWrites does (lessons review of #691).
+    for (const f of found) {
+      const had = out.find(o => o.path === f.path)
+      if (!had) out.push(f)
+      else Object.assign(had, f.removes ? { removes: true } : {}, f.tree ? { tree: true } : {})
+    }
   }
   return out
 }

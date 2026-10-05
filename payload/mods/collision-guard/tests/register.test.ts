@@ -437,6 +437,14 @@ test('an mv of a folder holding a file another session edited is judged on that 
   expect(refusal(r)).toContain('Another session is working on a.ts.')
 })
 
+test('a folder copied in and then removed in one command keeps the removal (lessons review of #691)', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/docs/sub/a.ts'] })] })
+  on('fs.stat', ($, e) => ({ value: { kind: (e as unknown as { path: string }).path === '/repo/docs' ? 'dir' : 'other', size: 0, mtimeMs: 0, isLink: false } }) as never)
+  await $.tool.call(bash('cp -r /tmp/sub docs; rm -r docs/sub'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/docs/sub/a.ts (inside /repo/docs/sub)')
+})
+
 test('an rm -r of a folder the judge cannot answer for is stopped (L42)', withDeps, async ($, on) => {
   const w = world(on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], judge: 'no-answer' })
   const r = await $.tool.call(bash('rm -r src/'))
