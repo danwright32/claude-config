@@ -429,4 +429,18 @@ describe('after #714 merged (#724)', () => {
     expect(py("import shelve; shelve.open('cache')")).toBe('write files from python3 (shelve.open with flag c)')
     expect(py("from gzip import open; open('a.gz', 'wb')")).toBe('write files from python3 (open in mode wb)')
   })
+  test("mysql's -p takes only the password attached to it, so no letter of a password is read as -e", () => {
+    // A password ending in e took the real -e as its SQL and skipped the SQL after it.
+    expect(what(bash(['mysql', '-uroot', '-ppine', '-e', 'DROP TABLE shows']))).toBe('change data with SQL')
+    // And one holding an e read the rest of the password as SQL.
+    expect(bash(['mysql', '-uroot', '-pxeupdate', '-e', 'select 1'])).toBeUndefined()
+    expect(bash(['mysql', '-p', '-e', 'select 1'])).toBeUndefined()
+    expect(bash(['mysql', '-hdb', '-P3306', '-Dapp', '-pse', '-e', 'select 1'])).toBeUndefined()
+  })
+  test('the SQL MySQL runs on connecting is judged, and a pager it runs is a shell', () => {
+    expect(what(bash(['mysql', '--init-command=DROP TABLE shows', '-e', 'select 1']))).toBe('change data with SQL')
+    expect(what(bash(['mysql', '--init-command', 'DELETE FROM shows', '-e', 'select 1']))).toBe('change data with SQL')
+    expect(what(bash(['mysql', '--pager=sh -c x', '-e', 'select 1']))).toBe('run a shell command through mysql')
+    expect(bash(['mysql', '--init-command=SET NAMES utf8mb4', '-e', 'select 1'])).toBeUndefined()
+  })
 })
