@@ -1,7 +1,8 @@
 #!/bin/bash
 # Tests for payload/mods/status-bar/statusline.sh, the classic status line under the prompt that the
 # status bar mod feeds (#610). The always-shown facts, settled with Dan on 2026-10-04: project,
-# 5 hour limit, weekly limit, cache time left, model and effort, account and org, all grey.
+# 5 hour limit, weekly limit, cache time left, model and effort, account and org, all grey but a
+# limit share past its threshold (amber over 70% for 5h and over 85% for the week, red at 100%).
 #
 # Every input is a seam this suite sets: HOME (the login file and the mod's facts), the JSON on
 # stdin, and STATUSLINE_NOW for the clock (L524). git runs for real, in a throwaway repo.
@@ -52,9 +53,32 @@ runit "$(input s1)"
   && check "every fact in the settled order" ok || check "every fact in the settled order" "exit=$code out=$out"
 [ "$code" -eq 0 ] && check "and it exits 0" ok || check "and it exits 0" "exit=$code"
 
-# 2. The whole line is grey: one grey code at the start, a reset at the end, no other colour.
+# 2. The line is grey but for a limit share past its threshold (Dan, 2026-10-05): the week's 91%
+#    is amber, the number alone, and the line goes back to grey straight after it.
 codes="$(printf '%s' "$raw" | grep -o $'\033\\[[0-9;]*m' | sort -u | tr '\n' ' ')"
-[ "$codes" = $'\033[0m \033[90m ' ] && check "the line is all grey" ok || check "the line is all grey" "$(printf '%q' "$codes")"
+[ "$codes" = $'\033[0m \033[33m \033[90m ' ] && check "the line is grey but for amber" ok || check "the line is grey but for amber" "$(printf '%q' "$codes")"
+case "$raw" in *$'5h 68% (1h 52m) | week \033[33m91%\033[90m (4d 14h) |'*) check "only the week's share is amber, and grey resumes after it" ok ;;
+  *) check "only the week's share is amber, and grey resumes after it" "$(printf '%q' "$raw")" ;; esac
+
+# 2b. Each threshold is judged on the share as shown, rounded: over 70% (5h) and over 85% (week) is
+#     amber, 100% is red, and at the threshold itself it stays grey.
+shares(){   # $1 = 5h used  $2 = week used -> sets raw
+  raw="$(printf '{"session_id":"s1","workspace":{"current_dir":"%s"},"rate_limits":{"five_hour":{"used_percentage":%s},"seven_day":{"used_percentage":%s}}}' "$REPO" "$1" "$2" \
+    | HOME="$H" STATUSLINE_NOW="$NOW" bash "$SCRIPT" 2>&1)"
+}
+painted(){   # $1 = name  $2 = expected fragment
+  case "$raw" in *"$2"*) check "$1" ok ;; *) check "$1" "$(printf '%q' "$raw")" ;; esac
+}
+shares 70.4 85.4
+painted "5h at 70% and week at 85% stay grey" $'5h 70% | week 85% |'
+shares 71 86
+painted "5h at 71% is amber" $'5h \033[33m71%\033[90m |'
+painted "week at 86% is amber" $'week \033[33m86%\033[90m |'
+shares 99.6 100
+painted "5h at 100% (rounded) is red" $'5h \033[31m100%\033[90m |'
+painted "week at 100% is red" $'week \033[31m100%\033[90m |'
+shares 80 50
+painted "a week under its threshold stays grey beside an amber 5h" $'5h \033[33m80%\033[90m | week 50% |'
 
 # 3. The cache: cold once the hour is up, under a minute at the end, unknown with no facts file (the
 #    mod is not running, which is not the same as no cache yet), absent before the first turn.
