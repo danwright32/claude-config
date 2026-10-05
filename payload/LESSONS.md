@@ -7708,6 +7708,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   create path and fixed only that path.)
   SHORT: An existence check must treat a record marked deleted, such as Google's status cancelled or a trash label, as absent, never only a 404.
 
+- **L746. A read paged with OFFSET or a range must order by a unique key, usually the primary
+  key, because a database owes no order to a query that asks for none, so each page can come
+  back in a different order and rows are silently skipped and repeated while every page looks
+  complete.** Ordering by a non-unique column is not enough: ties reorder between pages just the
+  same. The count of rows read looks right, which is what hides it; only a count of DISTINCT keys
+  shows the loss. Put the order inside the shared paging helper as a required unique key, so no
+  caller can forget it, and guard it with a check that the key is a declared primary key or
+  unique constraint. (slate#3273, 2026-10-04: the availability busy read paged busy_blocks with
+  no order; a 43 advisor pool read 2,392 rows of which only 1,826 were distinct, the dropped
+  meetings made booked advisors read as free, and the slot cache offered a sold out Monday to
+  leads, who were refused at confirm. One compute offered every Monday time, the next, from the
+  same data, offered none. Fixed for all 72 paged reads in slate#3280.)
+  SHORT: Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and

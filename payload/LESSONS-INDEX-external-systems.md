@@ -40,3 +40,4 @@ which is NOT loaded into the session.
 - L1014. A list API filtered on two fields at once can answer from a stale index; request the broader list and apply the narrower predicate yourself.
 - L742. On a rejected token reply, refresh the token and retry that call once; evicting and failing loses every in-flight request.
 - L745. An existence check must treat a record marked deleted, such as Google's status cancelled or a trash label, as absent, never only a 404.
+- L746. Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
