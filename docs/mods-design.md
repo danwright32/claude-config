@@ -1047,7 +1047,10 @@ ones marked open are the builder's choice, waiting on Dan.
     Claude does not use in that time lapses: it is taken out and said to Dan and to Claude, and the
     call after it is asked about again. It is refused on its age where it is used too (L567), since
     a reload drops the timer that says it lapsed; the session start after a reload times each one
-    still waiting again. One the session ends before is said to Dan. A tool call running longer than
+    still waiting again. A time read back that is not a number stands for nothing (L50: it compares
+    false against every clock, so read plainly it would never lapse), and timing it is never a wait
+    `$.clock.after` refuses by throwing; a timer that cannot be set is said, and never stops Claude
+    being asked. One the session ends before is said to Dan. A tool call running longer than
     10 minutes before Claude's next step lets it lapse, which costs one more question, never a save
     unasked.
   - **Chosen: one path in every permission mode, so the mode is never read.** The issue allowed

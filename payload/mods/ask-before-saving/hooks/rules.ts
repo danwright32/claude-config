@@ -191,6 +191,20 @@ export const callShown = (tool: string, input: Record<string, unknown>): string 
  */
 export const APPROVAL_MS = 10 * 60_000
 
+/**
+ * Whether an approval still stands at `now`. Its time is read back from storage, and one that is
+ * not a number (a damaged record, one of another shape) compares false against every clock, so read
+ * plainly it would stand for ever and let its save through unasked (L50): it stands for nothing.
+ */
+export const stands = (until: unknown, now: number): boolean => typeof until === 'number' && Number.isFinite(until) && until > now
+
+/**
+ * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
+ * for one that no longer stands, never a wait that is not a non-negative number, which $.clock.after
+ * refuses by throwing (measured 2026-10-05 with `claude plugin test`: NaN, -1 and Infinity all throw).
+ */
+export const lapseWait = (until: unknown, now: number): number => (stands(until, now) ? (until as number) - now : 0)
+
 /** The three answers, with the button id their press arrives under (before the save's own id). */
 export const ANSWERS = [
   { button: 'for-good', label: 'For good' },

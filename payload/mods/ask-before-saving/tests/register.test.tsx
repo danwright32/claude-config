@@ -508,6 +508,30 @@ test('a Bash save approved in one folder is asked about again when it is sent fr
   expect(w.ran.length).toBe(1)
 })
 
+// L50, lessons review of #738: an approval read back with no time compared false against the clock,
+// so it never lapsed and its save went through unasked; and timing it asked $.clock.after for a wait
+// that is not a number, which throws.
+test('an approval whose time is not a number stands for nothing: its save is asked about, and timing it again never throws', withKit, async ($, on) => {
+  // A clock that answers no number, so the approval is kept with a time that is not one, as a
+  // damaged record, or one of another shape, reads back. Its timers are refused, as a reload drops
+  // them, so only the approval's own time can decide.
+  on('clock.now', () => ({ value: undefined }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await call($, input)
+  await answer($, 'for-good')
+  // A session start times each approval waiting again, from its time.
+  await ($ as unknown as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: CWD, surface: 'terminal', isInteractive: true } as never)
+  expect(w.toasts.join('\n')).not.toContain('could not be timed')
+  const r = await call($, input)
+  expect(refusalOf(r)).toContain('Dan is being asked')
+  expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md lapsed')
+  expect(w.ran).toEqual([])
+})
+
 // A turn marked running by a process that then stopped never sees its turn end, and a note to an
 // idle session waits for Dan's next message; a session start has no turn running.
 test('after a session start, For good asks by a prompt even when a turn was marked running before it', withKit, async ($, on) => {

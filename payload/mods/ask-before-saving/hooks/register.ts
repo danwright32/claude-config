@@ -11,6 +11,7 @@ import {
   callShown,
   cannotCheck,
   display,
+  lapseWait,
   lastingFiles,
   lastingMemory,
   madePermanent,
@@ -19,6 +20,7 @@ import {
   resolvePath,
   rowId,
   saveKey,
+  stands,
 } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
@@ -153,8 +155,8 @@ const lapse = async ($: EngineInterface) => {
   const now = await $.clock.now()
   let gone: AskBeforeSavingApproval[] = []
   await update($, approvalsRef, a => {
-    gone = (a ?? []).filter(x => x.until <= now)
-    return (a ?? []).filter(x => x.until > now)
+    gone = (a ?? []).filter(x => !stands(x.until, now))
+    return (a ?? []).filter(x => stands(x.until, now))
   })
   for (const x of gone) {
     const where = x.files.join(', ')
@@ -184,7 +186,7 @@ const takeApproval = async ($: EngineInterface, key: string) => {
     lapsed = []
     const keep: AskBeforeSavingApproval[] = []
     for (const x of a ?? []) {
-      if (x.key === key && x.until <= now) lapsed.push(x)
+      if (x.key === key && !stands(x.until, now)) lapsed.push(x)
       else if (x.key === key && !live) live = x
       else keep.push(x)
     }
@@ -339,7 +341,7 @@ export const register: Register = on => {
     const waiting = (await $.state.get(approvalsRef)).value ?? []
     if (waiting.length) {
       const now = await $.clock.now()
-      for (const x of waiting) lapseAfter($, x.until - now, x.files.join(', '))
+      for (const x of waiting) lapseAfter($, lapseWait(x.until, now), x.files.join(', '))
     }
     return r
   })
