@@ -535,6 +535,19 @@ check_not "the generated file's full text is not appended" "FULL FILE at ${GEN_S
 check "while a hand written file's still is" "FULL FILE at ${GEN_SHA:0:7}: Hand.swift" "$stdin"
 check "and the review says which files were treated as generated" "GENERATED" "$stdin"
 check "naming them" "App.pbxproj" "$(printf '%s\n' "$stdin" | grep GENERATED)"
+# A name git would C-quote (non-ASCII here) is still matched to its attributes, not lost to quoting.
+QREPO="$WORKDIR/quoted"; git init -q "$QREPO"
+QG(){ git -C "$QREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+QNAME="$(printf 'caf\303\251.gen')"
+printf '*.gen linguist-generated\n' > "$QREPO/.gitattributes"; printf 'a\n' > "$QREPO/$QNAME"
+QG add -A; QG commit -q -m base; QB="$(QG rev-parse HEAD)"
+printf 'b\n' > "$QREPO/$QNAME"; QG commit -q -am change; QH="$(QG rev-parse HEAD)"
+qgen="$(cd "$QREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_generated_paths '$QB' '$QH'")"
+check_eq "#591 a generated file with a non-ASCII name is found by its real name" "$QNAME" "$qgen"
+# A git too old for check-attr --source refuses it, and the working tree's attributes are read
+# instead: the pipe through tr must not hide that refusal and skip the fallback.
+qold="$(cd "$QREPO" && bash -c "git(){ case \" \$* \" in *' --source '*) echo 'error: unknown option source' >&2; return 129 ;; esac; command git \"\$@\"; }; . '$DIR/lib/ai-review-common.sh'; ar_generated_paths '$QB' '$QH'")"
+check_eq "#591 and on a git with no check-attr --source, the working tree's attributes still find it" "$QNAME" "$qold"
 
 echo
 echo "passed: $pass, failed: $fail"

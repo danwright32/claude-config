@@ -246,6 +246,14 @@ runbash "git checkout main" "$FIX/dev/payload"
 allowed "a git checkout of a branch from inside payload is not read as a payload write"
 runbash "git checkout main -- LESSONS.md" "$FIX/dev/payload"
 refused "but a git checkout of a payload file after -- still is"
+# git -C <repo> is this repo's own convention, so the subcommand is found past the global options
+# and the paths resolve against the -C directory.
+runbash "git -C $FIX/dev checkout -- payload/LESSONS.md" "$FIX/elsewhere"
+refused "a git -C checkout of a payload path is refused"
+runbash "git -C $FIX/dev -c core.x=y restore payload/LESSONS.md" "$FIX/elsewhere"
+refused "and so is a restore past -C and -c"
+runbash "git -C $FIX/dev checkout main" "$FIX/elsewhere"
+allowed "while a git -C branch switch names no path"
 runbash "python3 - <<'PY'
 import json
 print(json.load(open('$FIX/dev/payload/LESSONS.md')))

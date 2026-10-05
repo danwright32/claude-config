@@ -125,18 +125,23 @@ ar_redact() {   # [--stderr]
 ar_generated_paths() {   # $1 = base, $2 = head, $3.. = pathspecs (none means every file)
   local base="$1" head="$2" names attrs
   shift 2
-  names="$(git diff --name-only "$base" "$head" -- "$@" 2>/dev/null)"
+  names="$(git -c core.quotepath=false diff --name-only "$base" "$head" -- "$@" 2>/dev/null)"
   [ -n "$names" ] || return 0
   # --source needs git 2.40; an older git reads the working tree's attributes instead, which is the
   # checkout rather than the head and is said nowhere, so it is the fallback and not the rule.
-  attrs="$(printf '%s\n' "$names" | git check-attr --source "$head" --stdin linguist-generated merge 2>/dev/null)" \
-    || attrs="$(printf '%s\n' "$names" | git check-attr --stdin linguist-generated merge 2>/dev/null)"
+  # NUL separated both ways (-z), because check-attr C-quotes a non-ASCII name in its ordinary
+  # output whatever core.quotepath says, and a quoted name matches no file. Each answer is then
+  # three fields, path, attribute, value, turned into three lines for awk. pipefail inside each
+  # substitution, or the status is tr's and a git refusing --source never reaches the fallback.
+  attrs="$(set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
+    | git check-attr -z --source "$head" --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')" \
+    || attrs="$(set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
+    | git check-attr -z --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')"
   printf '%s\n' "$attrs" | awk '
+    NR % 3 == 1 { p = $0; next }
+    NR % 3 == 2 { a = $0; next }
     {
-      v = $0; sub(/.*: /, "", v)
-      rest = substr($0, 1, length($0) - length(v) - 2)
-      a = rest; sub(/.*: /, "", a)
-      p = substr(rest, 1, length(rest) - length(a) - 2)
+      v = $0
       if (a == "linguist-generated" && (v == "set" || v == "true")) gen[p] = 1
       if (a == "merge" && v !~ /^(unspecified|unset|set|text|binary|union)$/) gen[p] = 1
       if (!(p in seen)) { seen[p] = 1; order[++n] = p }
@@ -194,7 +199,7 @@ $f
     else
       left=$((left + 1)); names="$names $f"
     fi
-  done < <(git diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
+  done < <(git -c core.quotepath=false diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
            | while IFS= read -r f; do [ -n "$f" ] && printf '%s %s\n' "$(git cat-file -s "$head:$f" 2>/dev/null || echo x)" "$f"; done \
            | sort -n)
   printf '%s %s%s' "$in" "$left" "$names"

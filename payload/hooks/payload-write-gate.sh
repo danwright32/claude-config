@@ -287,9 +287,23 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
             if w.startswith("of="):
                 add(w[3:], base)
     elif head == "git":
-        sub = next((w for w in args if not w.startswith("-")), "")
+        # Past the options git itself takes to the subcommand: -C names the directory the paths resolve
+        # against, and -c, --git-dir and --work-tree take a value that is not the subcommand.
+        gbase = base
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            if args[i] == "-C" and i + 1 < len(args):
+                nb = resolve(args[i + 1], gbase)
+                if nb and not nb.startswith("$"):
+                    gbase = nb
+                i += 2
+            elif args[i] in ("-c", "--git-dir", "--work-tree", "--namespace") and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+        sub = args[i] if i < len(args) else ""
         if sub in GIT_WRITERS:
-            rest = args[args.index(sub) + 1:]
+            rest = args[i + 1:]
             # checkout and restore name a branch or commit before `--`, and only the paths after
             # it are rewritten; a bare `git checkout main` switches branches and names no path.
             if sub in ("checkout", "restore") and "--" in rest:
@@ -298,7 +312,7 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
                 rest = []
             for w in rest:
                 if not w.startswith("-"):
-                    add(w, base)
+                    add(w, gbase)
     elif head in WRITERS:
         for w in args:
             if not w.startswith("-"):
