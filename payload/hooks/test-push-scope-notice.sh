@@ -44,19 +44,28 @@ run() { # run <command> [cwd] -> the hook's stdout; stderr kept apart in $W/err
     "$1" "${2:-$W/session}" | bash "$HOOK" 2>"$W/err"
 }
 
-echo "push scope notice: the skip it exists to announce"
+echo "push scope notice: a push no gate can judge is refused (claude-config#589)"
 
-out="$(run "cd $W/no-such-dir && git push")"
-says "a push naming a missing directory tells the session" "$out" '"additionalContext"'
-says "and names the directory it could not resolve" "$out" "$W/no-such-dir"
-says "and says the push gates did not judge this push" "$out" "no push gate judged this push"
-says "and that it did not fall back to the session repository" "$out" "$W/session"
-# The shape the platform accepts, judged by the repo's own reader of it, so a payload Claude Code
-# would reject cannot pass here (claude-config#478).
-if printf '%s' "$out" | python3 "$DIR/lib/hook-output.py" --payload >/dev/null 2>&1; then check "the output is a shape Claude Code accepts" ok
-else check "the output is a shape Claude Code accepts" "$(printf '%s' "$out" | python3 "$DIR/lib/hook-output.py" --payload 2>&1)"; fi
-out="$(run "git -C $W/no-such-dir push")"
-says "a git -C naming a missing directory is announced too" "$out" '"additionalContext"'
+# It used to only TELL the session, as additionalContext, and let the push through: a gate that
+# cannot find its target and then lets the command through fails open (L42, L320). On 2026-09-29 an
+# Ovation subagent pushed with a quoted -C path and no global gate checked it. Now it refuses, with
+# the reason, so the push is spelled in a form the gates can read before it goes anywhere.
+out="$(run "cd $W/no-such-dir && git push")"; rc=$?
+err="$(cat "$W/err")"
+[ "$rc" -eq 2 ] && check "a push naming a missing directory is refused" ok || check "a push naming a missing directory is refused" "exit $rc"
+says "and names the directory it could not resolve" "$err" "$W/no-such-dir"
+says "and says the push gates could not judge this push" "$err" "no push gate could judge this push"
+says "and that it did not fall back to the session repository" "$err" "$W/session"
+says "and how to push so it can be judged" "$err" "spell it absolutely"
+out="$(run "git -C $W/no-such-dir push")"; rc=$?
+[ "$rc" -eq 2 ] && check "a git -C naming a missing directory is refused too" ok || check "a git -C naming a missing directory is refused too" "exit $rc"
+out="$(run "git -C \"\$WT\" push")"; rc=$?
+[ "$rc" -eq 2 ] && check "a git -C naming a variable is refused" ok || check "a git -C naming a variable is refused" "exit $rc"
+# The case from the report: a quoted worktree path holding a space RESOLVES, so it is not refused.
+git init -q "$W/with space" 2>/dev/null
+out="$(run "git -C \"$W/with space\" push")"; rc=$?
+[ "$rc" -eq 0 ] && check "a quoted -C path with a space is resolved, not refused" ok || check "a quoted -C path with a space is resolved, not refused" "exit $rc: $(cat "$W/err")"
+silent "and says nothing" "$out"
 
 echo "push scope notice: silent where there is nothing to announce"
 

@@ -422,13 +422,59 @@ $(git diff HEAD -- "${TEST_PATHSPEC[@]}" "${EXCLUDES[@]}" 2>/dev/null)"
 fi
 
 diff_all="$(printf '%s\n%s\n%s\n' "$diff_committed" "$diff_working" "$untracked_blob")"
-# Reserve up to half the budget for the (guaranteed) test diff, fill the rest
-# with the full diff. ${#var} is bytes under the C locale these hooks run in.
-test_diff="$(printf '%s' "$diff_tests" | head -c "$((DIFF_BUDGET / 2))")"
-remaining=$(( DIFF_BUDGET - ${#test_diff} ))
-[ "$remaining" -lt 0 ] && remaining=0
-diff="$(printf 'TEST FILE CHANGES (new OR modified existing tests in this push):\n%s\n\nFULL DIFF (may be truncated; test changes are shown above in full):\n%s\n' \
-  "$test_diff" "$(printf '%s' "$diff_all" | head -c "$remaining")")"
+
+# Everything that is NOT a test file, so the budget is not spent showing the tests twice.
+TEST_EXCLUDES=()
+for tp in ${TEST_PATHSPEC[@]+"${TEST_PATHSPEC[@]}"}; do TEST_EXCLUDES+=(":(exclude)$tp"); done
+diff_code="$diff_all"
+if [ "${#TEST_EXCLUDES[@]}" -gt 0 ]; then
+  diff_code_committed=""
+  [ -n "$mb" ] && diff_code_committed="$(git diff "$mb" HEAD -- . "${EXCLUDES[@]}" "${TEST_EXCLUDES[@]}" 2>/dev/null)"
+  diff_code_working=""
+  [ "$commit_in_chain" -eq 1 ] && diff_code_working="$(git diff HEAD -- . "${EXCLUDES[@]}" "${TEST_EXCLUDES[@]}" 2>/dev/null)"
+  diff_code="$(printf '%s\n%s\n%s\n' "$diff_code_committed" "$diff_code_working" "$untracked_blob")"
+fi
+
+# THE BUDGET, test changes first (claude-config#723). They are what this gate judges, so they get
+# what they need, and the rest of the diff gets what is left, down to half the budget: when both
+# are larger than it, each gets half. They used to be cut at half the budget whatever their size,
+# and then labelled as shown "in full", so a test past the cut was invisible to a reviewer told it
+# was looking at all of them, which called its change untested and refused the push (L11).
+# ${#var} is bytes under the C locale these hooks run in.
+t_len=${#diff_tests}; c_len=${#diff_code}
+if [ $(( t_len + c_len )) -le "$DIFF_BUDGET" ]; then
+  t_budget=$t_len
+else
+  t_budget=$(( DIFF_BUDGET - c_len ))
+  [ "$t_budget" -lt $(( DIFF_BUDGET / 2 )) ] && t_budget=$(( DIFF_BUDGET / 2 ))
+  [ "$t_budget" -gt "$t_len" ] && t_budget=$t_len
+fi
+c_budget=$(( DIFF_BUDGET - t_budget ))
+test_diff="$(printf '%s' "$diff_tests" | head -c "$t_budget")"
+code_diff="$(printf '%s' "$diff_code" | head -c "$c_budget")"
+
+# Which test files the cut reaches: the one it lands in and every one after it, read from the
+# `diff --git` headers by byte offset, so a cut is reported by NAME (L11).
+tests_cut=""
+if [ "$t_len" -gt "$t_budget" ]; then
+  tests_cut="$(printf '%s' "$diff_tests" | LC_ALL=C awk -v cut="$t_budget" '
+    /^diff --git / { if (name != "" && end > cut) print name; name = $NF; sub(/^b\//, "", name) }
+    { end += length($0) + 1 }
+    END { if (name != "" && end > cut) print name }' | sort -u | tr '\n' ' ')"
+  tests_cut="${tests_cut% }"
+  [ -n "$tests_cut" ] || tests_cut="(a test file past the cut)"
+fi
+if [ -z "$tests_cut" ]; then
+  t_label="TEST FILE CHANGES (new OR modified existing tests in this push, every one of them shown whole):"
+else
+  t_label="TEST FILE CHANGES (TRUNCATED: the first $t_budget of $t_len bytes. Cut partway or not shown at all: $tests_cut. A change whose test may be in those files cannot be called untested from this diff):"
+fi
+if [ "$c_len" -gt "$c_budget" ]; then
+  c_label="THE REST OF THE DIFF (everything that is not a test file; TRUNCATED: the first $c_budget of $c_len bytes):"
+else
+  c_label="THE REST OF THE DIFF (everything that is not a test file, shown whole):"
+fi
+diff="$(printf '%s\n%s\n\n%s\n%s\n' "$t_label" "$test_diff" "$c_label" "$code_diff")"
 [ -n "$diff_all$test_diff" ] || exit 0
 
 RUBRIC="$(cat <<'EOF'
@@ -529,6 +575,32 @@ except Exception:
 
 case "$verdict" in
   BLOCK*)
+    # A "no test" verdict over test changes the reviewer could not see all of is not a finding
+    # that tests are missing: a test past the cut reads to it exactly like no test (#723, L11). It
+    # is refused as COULD NOT JUDGE, naming what was cut, rather than waved through: a gate that
+    # could not read the push does not approve it (L42), and a smaller push is always judgeable.
+    if [ -n "$tests_cut" ]; then
+      {
+        echo "PUSH BLOCKED: the test gate could not judge this push in full."
+        echo ""
+        echo "The reviewer said these changes have no test:"
+        printf '%s\n' "$verdict" | sed '1d'
+        echo ""
+        echo "but the push's test changes are $t_len bytes and it could read only the first $t_budget,"
+        echo "so these test files were cut partway or not shown to it at all:"
+        echo "    $tests_cut"
+        echo "A test in one of them reads to the reviewer exactly like no test, so this is not a"
+        echo "finding that tests are missing. Push fewer commits at a time (one commit, or split the"
+        echo "branch) so each push's tests fit, then push again."
+        widened_note
+        echo "OVERRIDE: if you have checked that each change named above IS tested, re-run with:"
+        echo "    SKIP_TEST_CHECK=1 <your original git push command>"
+        echo "BEFORE overriding you MUST explain to the user, in plain non-technical"
+        echo "language, WHY skipping is legitimate here so they can judge whether it"
+        echo "makes sense. Never override silently."
+      } >&2
+      exit 2
+    fi
     {
       echo "PUSH BLOCKED: some changes in this push have no test covering them."
       echo ""

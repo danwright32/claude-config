@@ -132,6 +132,58 @@ o5="$(fire "$R2" "git status")"; c5=$?
   && check "a command that is not a push is ignored" ok \
   || check "a command that is not a push is ignored" "exit=$c5 out=$o5"
 
+# --- a scanner that never RAN because another suite run held its lock is not a failing scanner
+#     (claude-config#642). Twice on 2026-10-04 the gate blocked with "a scanner that reads the
+#     WHOLE repository fails" and an empty detail, when tests/test-claude-sync.sh had refused to
+#     start; alone a minute later it passed 71/0. The gate now waits for the lock, holding its
+#     place, to a named deadline (L1012), and if the lock is still held it says THAT (L11).
+#     The fixture prints the suite's own refusal line and exits 5, as the suite does. The sleep is
+#     injected, so no test waits for real (L524).
+add_locked_scanner(){   # $1 = repo  $2 = name  $3 = refusals before it runs  $4 = exit code once it runs
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+n="\$(cat "$TMPROOT/$2.tries" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$TMPROOT/$2.tries"
+if [ "\$n" -le $3 ]; then
+  echo "test suite: another run is already going: a suite run, process 4242 on here, started 30s ago. Refusing rather than queueing behind it." >&2
+  exit 5
+fi
+echo "scanner $2 ran"
+[ $4 -eq 0 ] || echo "FAIL: scanner $2 found something"
+exit $4
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+LOCKSTATE="$TMPROOT/lockstate"
+lockfire(){ SCANNERS_STATE_DIR="$LOCKSTATE" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=6 SCANNERS_LOCK_POLL_SECONDS=2 fire "$@"; }
+
+R30="$(mkrepo lockheld)"; add_scanner "$R30" alpha 0; add_locked_scanner "$R30" sigma 99 0; commit_all "$R30"
+o30="$(lockfire "$R30" "git push")"; c30=$?
+[ "$c30" -eq 2 ] && check "a scanner whose lock is held to the deadline still blocks the push" ok \
+  || check "a scanner whose lock is held to the deadline still blocks the push" "exit=$c30 out=$o30"
+grep -q 'another test run' <<< "$o30" \
+  && check "and says another test run held the lock" ok || check "and says another test run held the lock" "out=$o30"
+grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o30" \
+  && check "and never reports it as a failing scanner" "out=$o30" || check "and never reports it as a failing scanner" ok
+grep -q 'sigma' <<< "$o30" \
+  && check "and names the scanner that could not run" ok || check "and names the scanner that could not run" "out=$o30"
+grep -q '6s' <<< "$o30" \
+  && check "and names how long it waited" ok || check "and names how long it waited" "out=$o30"
+[ "$(cat "$TMPROOT/sigma.tries" 2>/dev/null)" = "4" ] \
+  && check "and it tried once, then once per poll until the deadline" ok \
+  || check "and it tried once, then once per poll until the deadline" "tries=$(cat "$TMPROOT/sigma.tries" 2>/dev/null)"
+
+R31="$(mkrepo lockfreed)"; add_scanner "$R31" alpha 0; add_locked_scanner "$R31" tau 1 0; commit_all "$R31"
+o31="$(lockfire "$R31" "git push")"; c31=$?
+[ "$c31" -eq 0 ] && check "a scanner whose lock frees inside the deadline runs and the push goes through" ok \
+  || check "a scanner whose lock frees inside the deadline runs and the push goes through" "exit=$c31 out=$o31"
+
+R32="$(mkrepo lockthenfail)"; add_locked_scanner "$R32" upsilon 1 1; commit_all "$R32"
+o32="$(lockfire "$R32" "git push")"; c32=$?
+[ "$c32" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o32" && grep -q 'upsilon found something' <<< "$o32" \
+  && check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" ok \
+  || check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" "exit=$c32 out=$o32"
+
 # --- the override, which exists for the same one time reason as every other gate here.
 o6="$(fire "$R2" "SKIP_SCANNERS_CHECK=1 git push")"; c6=$?
 [ "$c6" -eq 0 ] \

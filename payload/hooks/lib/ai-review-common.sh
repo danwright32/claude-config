@@ -77,12 +77,42 @@ sys.stdout.write("\x1f".join([s(d.get("cwd")), s(d.get("session_id")), s(r.get("
 # as the whole of it (L351). Both readers, the nudge and the merge gate, print through this one
 # function: at most as many lines of the review as its second argument allows, each cut at the
 # length its third allows, then how many were left out and the file holding all of them.
+#
+# Every line passes through ar_redact first, before it is cut to length, because a cut JWT no
+# longer looks like one (claude-config#581).
 ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars per line
-  awk -v max="$2" -v w="$3" -v path="$1" '
+  ar_redact < "$1" | awk -v max="$2" -v w="$3" -v path="$1" '
     found { n++; if (n <= max) { if (length($0) > w) $0 = substr($0, 1, w) "..."; print } ; next }
     /^$/ { found = 1 }
     END { if (n > max) printf "... and %d more line(s) not shown here; the full review is in %s\n", n - max, path }
-  ' "$1" 2>/dev/null
+  ' 2>/dev/null
+}
+
+# Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one
+# rule file, lib/review-redact.sed, which says what it drops and what it redacts. The runner
+# (lib/ai-review-run.py) sends the reviewer's stderr and any unparsed answer through this BEFORE
+# writing them, and ar_capped_body sends every display through it again, so a review file written
+# before this existed is redacted on the way out. With the rule file missing it prints NOTHING and
+# fails, never the raw text: a redactor that cannot run must withhold, not pass through (L42).
+#
+# --stderr is for the reviewer's stderr only: it also drops every line that is a settings or
+# permission rule warning. Claude Code's warning about a wildcard permission rule quotes the rule
+# verbatim, the rule is the person's own configuration and never the reason a review failed, and
+# on 2026-09-24 in Bidspoke one held a live Supabase secret key inside a curl command. It is not
+# applied to a review's findings, which may legitimately name a settings file.
+ar_redact() {   # [--stderr]
+  local rules drop='/[Pp]ermission rule|[Pp]ermissions?\.(allow|deny|ask)|settings(\.local)?\.json|[Ss]ettings warning|Bash\(/d'
+  rules="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/review-redact.sed"
+  if [ ! -r "$rules" ]; then
+    cat >/dev/null
+    printf '\n(withheld: lib/review-redact.sed is missing, so this text could not be redacted)\n'
+    return 1
+  fi
+  if [ "${1:-}" = "--stderr" ]; then
+    LC_ALL=C sed -E -e "$drop" -f "$rules"
+  else
+    LC_ALL=C sed -E -f "$rules"
+  fi
 }
 
 # Appends the full text at $3 of each file changed between $2 and $3 (added or modified, matching the
