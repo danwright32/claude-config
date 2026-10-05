@@ -139,7 +139,19 @@ if [ -n "$own_record" ]; then
   # A record only judges anything if something READS it, so the stand down needs a second tracked
   # file naming it, and says which (lessons review of PR #782). A record nothing reads is said and
   # then judged here as usual, rather than leaving the repository unjudged behind a claim (L11).
-  own_reader="$(git grep -l -F -e "$(basename "$own_record")" -- . ":(exclude)$own_record" 2>/dev/null | awk 'NR==1')"   # tracked-only: the reader has to be committed to judge every push
+  # Only something that can RUN counts as reading it: a file under a hooks directory, or a tracked
+  # executable. A README or changelog that merely names the record would otherwise switch this guard
+  # off and be reported as its reader (lessons review of PR #782, L11, L400).
+  own_reader=""
+  while IFS= read -r _cand; do
+    [ -n "$_cand" ] || continue
+    case "/$_cand" in */hooks/*|*/.githooks/*|*/.husky/*) own_reader="$_cand"; break ;; esac
+    case "$(git ls-files -s -- "$_cand" 2>/dev/null | awk 'NR==1 { print $1 }')" in   # tracked-only: the mode git committed is what runs
+      100755) own_reader="$_cand"; break ;;
+    esac
+  done <<READERS
+$(git grep -l -F -e "$(basename "$own_record")" -- . ":(exclude)$own_record" 2>/dev/null)
+READERS
   if [ -n "$own_reader" ]; then
     echo "bundle-budget: this repository commits its own bundle budget record ($own_record), read by $own_reader, so this global guard stands down here."
     exit 0
