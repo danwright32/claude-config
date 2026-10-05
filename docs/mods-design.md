@@ -683,11 +683,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   line carries Copy, with the same toasts ("Copied the link for step 1."). The Link has no text of
   its own, since on a terminal without hyperlinks a Link with text is drawn as the text then the
   address, which would show it twice. The click path and an exact location are text, one line
-  each, cut at the edge like every band line. Docked beside a fullscreen transcript, the pane asks
-  to be as wide as the card's widest line other than the link, up to 80 columns, so a click path is
-  not cut there; a width Dan drags it to wins (open: Copy link on every link rather than only a long
-  one, the 80 column cap, and whether a line should wrap instead, which the left rule's one mark per
-  line rules out today).
+  each, and wrap at the edge rather than being cut (#734), the amber rule reaching down every row
+  they take; the link and the value are still cut, since Copy link and Copy take them whole. Docked
+  beside a fullscreen transcript, the pane asks to be as wide as the card's widest line other than
+  the link, up to 80 columns, so a click path wraps less there; a width Dan drags it to wins (open:
+  Copy link on every link rather than only a long one, and the 80 column cap).
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
@@ -794,8 +794,11 @@ hotkey, its description dim and indented 3 columns under it, and `submit` last, 
 refuses a `question` row, so no mod draws a question its own way; the two hand built rows had drifted
 into two looks on one surface. A text run may carry `wrap: true`, drawn on as many lines as it needs
 rather than cut at the band's edge (a question's text and its descriptions wrap, so the brackets at
-the end of an issue review option are never cut off); a wrapping run inside a left rule is refused,
-since that rule draws one mark per line.
+the end of an issue review option are never cut off). Inside a left rule (#734), a row with no run
+that wraps keeps one rule mark per line; a row with one draws its rule as a single column laid over
+the row's whole height and clipped to it, holding a mark for every row its lines could take (one per
+character of a wrapping line, since a terminal row holds at least one), so the rule reaches down
+every wrapped row however wide the band is.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a

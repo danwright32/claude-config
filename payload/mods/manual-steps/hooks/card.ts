@@ -25,7 +25,8 @@ type Refused = { refusal: string }
 type Made = { card: StepsCard }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
-// One terminal line each: the band cuts a line at its edge and never wraps it.
+// One line each, its spacing collapsed: a value or a title is cut at the band's edge, and a click path
+// or a location wraps there (#734), as one line of text either way.
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
 
 /** The card a handover describes, or why it is refused, naming the step. */
@@ -120,7 +121,7 @@ export const finish = (card: StepsCard, n: number, verdict: StepsVerdict): Made 
 
 /** One part of a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
 export type CardPart =
-  | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
+  | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true }
   | { button: 'done' | 'copy' | 'copy-link'; label: string }
 
 /**
@@ -148,8 +149,10 @@ export const cardLines = (card: StepsCard): CardPart[][] => {
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
     if (s.url) lines.push([{ text: s.url, href: s.url, indent }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
-    else if (s.location) lines.push([{ text: s.location, indent }])
-    if (s.clicks) lines.push([{ text: s.clicks, indent }])
+    // A long location or click path wraps under its step rather than being cut at the edge (#734):
+    // mod-kit's left rule reaches down every row it takes.
+    else if (s.location) lines.push([{ text: s.location, indent, wrap: true }])
+    if (s.clicks) lines.push([{ text: s.clicks, indent, wrap: true }])
     if (s.value) lines.push([{ text: oneLine(s.value), indent }, { text: '  ' }, { button: 'copy', label: 'Copy' }])
   })
   return lines

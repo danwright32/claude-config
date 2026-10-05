@@ -45,7 +45,19 @@ const partRefusal = (p: ModKitBandPart): string | undefined => {
   return undefined
 }
 
-const wraps = (l: ModKitBandLine): boolean => Array.isArray(l) && l.some(p => (p as { wrap?: unknown }).wrap === true)
+export const wraps = (l: ModKitBandLine): boolean => Array.isArray(l) && l.some(p => (p as { wrap?: unknown }).wrap === true)
+
+/**
+ * The most terminal rows `lines` can take at any width: one for a line that never wraps, and for one
+ * that does one per character it holds, its indent and its buttons' brackets included, since a row
+ * holds at least one. What a left rule must reach down (#734); it is laid over the row's height and
+ * clipped to it, so the bound only has to be no smaller than the truth.
+ */
+export const mostRows = (lines: ModKitBandLine[]): number =>
+  lines.reduce(
+    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? p.label.length + 2 : (p.indent ?? 0) + p.text.length), 0)) : 1),
+    0,
+  )
 
 export const isSlot = (s: unknown): s is ModKitBandSlot => typeof s === 'string' && Object.prototype.hasOwnProperty.call(RANK, s)
 
@@ -70,8 +82,6 @@ const bodyRefusal = (card: ModKitPane, what: string): string | undefined => {
     if (!f || typeof f !== 'object') return `${name}: a frame must be { kind, color? }`
     if (typeof f.kind !== 'string' || !Object.prototype.hasOwnProperty.call(FRAMES, f.kind)) return `${name}: frame kind "${String(f.kind)}" is not one of ${Object.keys(FRAMES).join(', ')}`
     if (f.color !== undefined && (typeof f.color !== 'string' || !f.color)) return `${name}: a frame colour must be a theme key or a colour name`
-    // The rule is one mark per line, so a line that wrapped onto two would leave its rule short.
-    if (f.kind === 'left-rule' && card.lines.some(wraps)) return `${name}: a run cannot wrap inside a left rule, which draws one mark per line`
   }
   return undefined
 }

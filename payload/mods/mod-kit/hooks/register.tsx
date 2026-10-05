@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
 import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCall, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
-import { compose, drop, isDivider, paneRefusal, put, questionRefusal, questionRow, refusal, shownQuestion } from './band.ts'
+import { compose, drop, isDivider, mostRows, paneRefusal, put, questionRefusal, questionRow, refusal, shownQuestion, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
@@ -208,8 +208,22 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
         {lines}
       </Box>
     )
+  if (row.frame?.kind === 'left-rule' && row.lines.some(wraps))
+    // A run that wraps makes a line more than one terminal row, so the rule is one column laid over
+    // the row's whole height, its marks enough for every row the lines could take and clipped to it
+    // (#734). The lines stand clear of it as they do beside one mark per line.
+    return (
+      <Box key={key} flexDirection="column">
+        <Box key={`${key}:rule`} position="absolute" top={0} bottom={0} left={0} width={1} overflow="hidden" flexDirection="column">
+          <Text color={color}>{Array.from({ length: mostRows(row.lines) }, () => '│').join('\n')}</Text>
+        </Box>
+        <Box key={`${key}:lines`} flexDirection="column" paddingLeft={2} flexGrow={1}>
+          {lines}
+        </Box>
+      </Box>
+    )
   if (row.frame?.kind === 'left-rule')
-    // One rule mark per line, since every line is one terminal line (a run that wraps is refused here).
+    // One rule mark per line, since every line here is one terminal line.
     return (
       <Box key={key} flexDirection="row">
         <Box key={`${key}:rule`} flexDirection="column">
