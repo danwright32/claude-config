@@ -47,7 +47,21 @@ describe('program: fed on standard input', () => {
   })
   test('text kept in the words is the program: a here-string, echo or printf piped in', () => {
     expect(of(`python3 <<<"open('a','w')"`)).toEqual([{ text: "open('a','w')", stdin: true }])
-    expect(of(`printf '%s\\n' "open('a','w')" | python3`)).toEqual([undefined, { text: "%s\\n open('a','w')", stdin: true }])
+    expect(of(`printf '%s\\n' "open('a','w')" | python3`)).toEqual([undefined, { text: "open('a','w')\n", stdin: true }])
+  })
+  // Lessons review of #761: printf's arguments were joined with a space, its format and escapes
+  // never applied, so `printf 'echo hi\nrm -rf src\n' | sh` was one command and every guard missed
+  // the rm.
+  test("printf's format and escapes, and echo's escapes, are applied, so each line piped to a shell is a command", () => {
+    expect(words(`printf 'echo hi\\nrm -rf src\\n' | sh`)).toEqual([['printf', 'echo hi\\nrm -rf src\\n'], ['echo', 'hi'], ['rm', '-rf', 'src']])
+    expect(words(`printf '%s\\n' 'echo a' 'git push' | sh`).slice(1)).toEqual([['echo', 'a'], ['git', 'push']])
+    expect(words(`printf '%b' 'ls\\ngit push' | bash`).slice(1)).toEqual([['ls'], ['git', 'push']])
+    expect(words(`echo -e 'ls\\ngit push' | sh`).slice(1)).toEqual([['ls'], ['git', 'push']])
+    expect(of(`printf 'a%%b\\tc' | python3`)[1]).toEqual({ text: 'a%b\tc', stdin: true })
+  })
+  test('a printf format it cannot reproduce faithfully makes what it pipes in unreadable', () => {
+    expect(of(`printf '%d\\n' 5 | sh`)).toEqual([undefined, { unreadable: 'fed by what printf pipes into it' }])
+    expect(of(`printf '%-10s' x | python3`)).toEqual([undefined, { unreadable: 'fed by what printf pipes into it' }])
   })
   // #730: the shell's own standard input was not passed on to the commands its -c runs.
   test("a heredoc or here-string feeding a shell's -c feeds the commands it runs", () => {

@@ -450,8 +450,52 @@ const piped = (feeder: readonly string[], fed: Fed): Stdin => {
     return ownStdin(feeder, fed) ?? { unreadable: 'fed by what cat pipes into it' }
   }
   if (args.some(a => HEREDOC_WORD.test(a))) return { unreadable: 'fed by a heredoc' }
-  if (name === 'echo' || name === 'printf') return { text: args.filter(a => !/^-[neE]+$/.test(a)).join(' ') }
+  if (name === 'echo') return { text: echoText(args) }
+  if (name === 'printf') {
+    const text = printfText(operandsOf(args.filter(a => a !== '--')))
+    return text === undefined ? { unreadable: 'fed by what printf pipes into it' } : { text }
+  }
   return { unreadable: `fed by what ${name} pipes into it` }
+}
+
+// The escapes printf's format and its %b, and echo, turn into the characters they stand for
+// (lessons review of #761: they were left as written, so `printf 'a\nb' | sh` was one command). An
+// escape not listed stays as written.
+const ESCAPES = new Map([['n', '\n'], ['t', '\t'], ['r', '\r'], ['\\', '\\'], ['a', '\x07'], ['b', '\b'], ['f', '\f'], ['v', '\v'], ['e', '\x1b']])
+const unescape = (s: string) => s.replace(/\\(.)/gs, (m, c: string) => ESCAPES.get(c) ?? m)
+// echo's words after its flags, joined with a space, its escapes applied unless -E says not: sh and
+// zsh apply them whatever the flags, so the reading that sees every line is the one taken.
+const echoText = (args: readonly string[]): string => {
+  let i = 0
+  let raw = false
+  for (; i < args.length && /^-[neE]+$/.test(args[i] as string); i++) if ((args[i] as string).includes('E')) raw = true
+  const text = args.slice(i).join(' ')
+  return raw ? text : unescape(text)
+}
+// What printf prints: its format with its escapes applied, each %s a value as written, each %b a
+// value with its escapes applied, %% a %, the format used again while values remain. Any other
+// directive (%d, %-10s) is a reading this does not reproduce, so it is none (undefined).
+const printfText = (args: readonly string[]): string | undefined => {
+  const format = args[0] ?? ''
+  if (/%(?![sb%])/.test(format)) return undefined
+  const values = args.slice(1)
+  const takes = /%[sb]/.test(format)
+  let out = ''
+  let next = 0
+  do {
+    for (let i = 0; i < format.length; i++) {
+      const c = format[i] as string
+      const d = format[i + 1]
+      if (c === '%' && d !== undefined) {
+        i++
+        out += d === '%' ? '%' : d === 's' ? (values[next++] ?? '') : unescape(values[next++] ?? '')
+      } else if (c === '\\' && d !== undefined) {
+        i++
+        out += ESCAPES.get(d) ?? `\\${d}`
+      } else out += c
+    }
+  } while (takes && next < values.length)
+  return out
 }
 
 /**
