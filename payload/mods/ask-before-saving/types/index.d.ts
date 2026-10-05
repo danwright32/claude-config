@@ -9,6 +9,12 @@ export type AskBeforeSavingQuestion = {
   files: string[]
   /** What would be saved: the new lines of a Write, an Edit's new text, a Bash command as written. */
   text: string
+  /**
+   * What the save writes (rules.ts saveKey), taken where Dan is asked, so For good approves the file
+   * he was shown however the session moves before he answers. Absent on a question stored before
+   * #738's review, which For good keys where it is answered.
+   */
+  key?: string
 }
 
 /** A save Dan answered For good, waiting for Claude to send the call again (#738). */

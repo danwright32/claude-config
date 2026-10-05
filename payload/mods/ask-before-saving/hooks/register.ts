@@ -270,7 +270,7 @@ export const register: Register = on => {
       const old = (await $.fs.exists(abs)) ? await $.fs.read(abs) : undefined
       text = addedText(String(input.content ?? ''), old)
     }
-    const q: AskBeforeSavingQuestion = { id: String(raw.tool_use_id ?? '') || `save-${++saves}`, tool: tool as AskBeforeSavingQuestion['tool'], input, files, text }
+    const q: AskBeforeSavingQuestion = { id: String(raw.tool_use_id ?? '') || `save-${++saves}`, tool: tool as AskBeforeSavingQuestion['tool'], input, files, text, key }
     const pending = await update($, pendingRef, p => [...(p ?? []), q])
     if (pending.length > 1) return { deny: refused }
     try {
@@ -320,9 +320,13 @@ export const register: Register = on => {
     return r
   })
 
-  // A reload drops the module's timers, never its approvals: each one waiting is timed again.
+  // A reload drops the module's timers, never its approvals: each one waiting is timed again. And no
+  // turn is running as a session starts, whatever a process that stopped mid-turn left marked: a
+  // note would wait unread, where a prompt runs (a reload in the middle of a turn costs only that
+  // the prompt waits for the turn to end).
   on('session.start', async ($, e, next) => {
     const r = await next(e)
+    await $.state.set(turnRef, null)
     const waiting = (await $.state.get(approvalsRef)).value ?? []
     if (waiting.length) {
       const now = await $.clock.now()
@@ -389,25 +393,30 @@ const answer = async ($: EngineInterface, choice: Answer, id: string) => {
     await tell($, `Dan answered Just this session to saving this to ${where}: nothing was written. It is in your system prompt as a rule for this session only.`)
     return
   }
-  // For good (#738): approved by what it saves, for a while, and Claude asked to send the call again,
-  // given whole, since the call may not be Claude's own (the memory writer's, a subagent's) or may
-  // have been compacted away.
+  // For good (#738): approved by what it saves (the key taken where Dan was asked, so the file he was
+  // shown), for a while, and Claude asked to send the call again, given whole, since the call may not
+  // be Claude's own (the memory writer's, a subagent's) or may have been compacted away.
   const save = q
+  let approval: AskBeforeSavingApproval | undefined
   try {
-    const at = await whereOf($)
+    const key = save.key ?? (await whereOf($).then(at => saveKey(save.tool, save.input, at.cwd, at.home)))
     const now = await $.clock.now()
     const running = (await $.state.get(turnRef)).value != null
     const text =
       `Dan answered For good to saving this to ${where}. Send the same ${save.tool} call again now, unchanged, and it is saved without asking him again: ` +
       `${callShown(save.tool, save.input)}. If it is not sent within ${MINUTES} minutes, this lapses.`
-    const approval: AskBeforeSavingApproval = { id: save.id, key: saveKey(save.tool, save.input, at.cwd, at.home), files: save.files, until: now + APPROVAL_MS, told: running ? 'note' : 'prompt', text }
-    await update($, approvalsRef, a => [...(a ?? []), approval])
-    lapseAfter($, APPROVAL_MS)
-    if (running) await tell($, text)
-    else await ask($, text)
+    const made: AskBeforeSavingApproval = { id: save.id, key, files: save.files, until: now + APPROVAL_MS, told: running ? 'note' : 'prompt', text }
+    await update($, approvalsRef, a => [...(a ?? []), made])
+    approval = made
   } catch (err) {
     // Nothing recorded the approval, so nothing would let the save through: said, never lost.
     $.ui.toast(`For good on saving to ${where} could not be recorded (${message(err)}), so nothing was saved.`, { timeoutMs: 10_000 })
     await tell($, `Dan answered For good to saving this to ${where}, but it could not be recorded (${message(err)}), so nothing was saved. Ask him in your reply instead.`)
+    return
   }
+  // Recorded: from here a failure is said by what failed (the timer, the note, the prompt), never as
+  // an approval that was not recorded.
+  lapseAfter($, APPROVAL_MS)
+  if (approval.told === 'note') await tell($, approval.text)
+  else await ask($, approval.text)
 }

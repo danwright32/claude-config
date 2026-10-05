@@ -271,6 +271,8 @@ test('the key of a save is what it writes: the file and the text, never the call
   const command = `printf 'x\\n' >> ~/.claude/projects/p/memory/MEMORY.md`
   expect(key('Bash', { command, description: 'Append the rule' })).toBe(key('Bash', { command, description: 'Save it', timeout: 5000 }))
   expect(key('Bash', { command })).not.toBe(key('Bash', { command: `${command} ` }))
+  // A command's relative targets are where the session runs, so the same words elsewhere are another save.
+  expect(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, cwd, HOME)).not.toBe(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, '/Users/dan/Apps/other', HOME))
   expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).toBe(key('Write', { file_path: `${cwd}/AGENTS.md`, content: '- a\n' }))
   expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).not.toBe(key('Write', { file_path: 'AGENTS.md', content: '- b\n' }))
   expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).not.toBe(key('Write', { file_path: 'CLAUDE.md', content: '- a\n' }))

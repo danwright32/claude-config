@@ -1026,14 +1026,18 @@ ones marked open are the builder's choice, waiting on Dan.
   and that was asked about as a new save, so For good went round for ever (seen twice on
   2026-10-05). Now:
   - For good records an approval in `$.state`, so a reload keeps it, keyed by what the save writes
-    (a Write's file and content, an Edit's file and change, a Bash call's command; never the call's
-    description, which Claude words afresh, and a path by any spelling of the same file).
+    (a Write's file and content, an Edit's file and change, a Bash call's command and the folder
+    its relative targets resolve in; never the call's description, which Claude words afresh, and a
+    path by any spelling of the same file). The key is taken where Dan is asked, so it approves the
+    file he was shown: the same relative path sent again after the session has moved is another
+    file, and is asked about again.
   - Claude is asked to send the same call again, given whole, since the call may not be in front of
     it (the memory writer's, a subagent's, one a compaction took out): as a note while it works,
     which it reads at its next step, and as a prompt of its own, a turn, while it is idle, where a
     note would wait for Dan's next message. A note added while the turn's last answer was being
     written is read by nobody, so when the main loop's turn ends with the save not sent, it is asked
-    for again as a prompt, once.
+    for again as a prompt, once. A session start marks no turn running, whatever a process that
+    stopped mid-turn left behind, so a note is never sent to a session nobody is working in.
   - The call that writes the same thing takes the approval at `classic.PreToolUse` and goes on to
     the settings hooks and the permission check beneath, the classifier among them, never asked
     about again; every mod's own checks have seen it already. It is used once: the same call after

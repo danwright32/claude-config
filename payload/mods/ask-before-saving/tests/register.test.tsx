@@ -151,9 +151,11 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
   const prompts: string[] = []
   const clock = init.ownClock ? (undefined as unknown as ReturnType<typeof mock.clock>) : mock.clock(on)
   mock.env(on, { HOME, BAND_REFUSES: init.bandRefuses ? '1' : '0' })
+  // Where the session runs; a test moves it as /cd or a worktree move does.
+  const at = { cwd: CWD }
   on('session.cwd', () => {
     if (init.cwdFails) throw new Error('no session')
-    return { value: CWD } as never
+    return { value: at.cwd } as never
   })
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', async ($, e) => {
@@ -182,6 +184,7 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('session.compact', () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] }) as never)
   on('ui.toast', ($, e) => {
@@ -192,7 +195,7 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { files, ran, toasts, prompts, clock }
+  return { files, ran, toasts, prompts, clock, at }
 }
 // Everything Claude was told to do, by a note or by a prompt of its own.
 const toldOf = (w: { toasts: string[]; prompts: string[] }) => [notesOf(w), ...w.prompts].join('\n')
@@ -476,6 +479,45 @@ test('For good approves the save, not the spelling: the same file and text by an
   const r = await call($, { tool: 'Write', file_path: `${CWD}/AGENTS.md`, content: '- Use pnpm.\n' })
   expect(r.deny).toBeUndefined()
   expect(w.ran.map(x => x.input.content)).toEqual(['- Use pnpm.\n'])
+})
+
+// Lessons review of #738: For good approves the file Dan was shown. A relative path, or a Bash call's
+// relative target, sent again after the session has moved writes another file, which he never saw.
+test('For good approves the file Dan was shown: sent again after the session moves, a relative path is asked about again', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })
+  w.at.cwd = '/Users/dan/Apps/other'
+  await answer($, 'for-good')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' }))).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  const r = await call($, { tool: 'Write', file_path: `${CWD}/CLAUDE.md`, content: '- Ask before merging.\n' })
+  expect(r.deny).toBeUndefined()
+  expect(w.ran.map(x => x.input.file_path)).toEqual([`${CWD}/CLAUDE.md`])
+})
+
+test('a Bash save approved in one folder is asked about again when it is sent from another', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const command = "cat >> CLAUDE.md <<'EOF'\n- Never merge on Fridays.\nEOF"
+  await call($, { tool: 'Bash', command })
+  await answer($, 'for-good')
+  w.at.cwd = '/Users/dan/Apps/other'
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  w.at.cwd = CWD
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// A turn marked running by a process that then stopped never sees its turn end, and a note to an
+// idle session waits for Dan's next message; a session start has no turn running.
+test('after a session start, For good asks by a prompt even when a turn was marked running before it', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await startTurn($)
+  await ($ as unknown as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: CWD, surface: 'terminal', isInteractive: true } as never)
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' })
+  await answer($, 'for-good')
+  expect(w.prompts.length).toBe(1)
+  expect(notesOf(w)).not.toContain('Dan answered For good')
 })
 
 // L523, L567: an approval nobody uses must not stand open, and one past its time is refused where it
