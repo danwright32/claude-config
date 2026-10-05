@@ -18712,10 +18712,38 @@ check "#695 before the value is in settings.json, status lists the shared file a
 jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX8H/settings.json"
 out_sx8b="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
 check "#695 once the value is there, status no longer lists it" "! line_has \"\$out_sx8b\" 'settings.shared.json' 'has not applied'"
-# And a send never publishes the shared file from settings.json: it is edited in the repo only.
+# And a send never publishes the shared file from settings.json, nor mirrors it away: it is edited in
+# the repo only. Applied first, so the Mac is not behind and the send really stages and publishes
+# (review of #775: a send refused for being behind proved nothing, L159).
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 jq -c '. + {ultracode: false}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+printf '# rules, edited on this Mac\n' > "$SX8H/CLAUDE.md"
 CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
-check "#695 a send leaves the shared file as the repo holds it" "[ \"\$(jq -r '.ultracode' '$SX8C/payload/settings.shared.json')\" = true ]"
+_sx8main="$(git -C "$SX8B" show main:payload/CLAUDE.md 2>/dev/null || true)"
+check "#695 fixture: the send really published" "case \"\$_sx8main\" in *'edited on this Mac'*) true ;; *) false ;; esac"
+check "#695 a send leaves the shared file in the shared repo as the repo holds it" \
+  "[ \"\$(git -C '$SX8B' show main:payload/settings.shared.json 2>/dev/null | jq -r '.ultracode')\" = true ]"
+
+# AN ALLOWED KEY OF THE WRONG TYPE is refused by name too (review of #775): ultracode is a boolean,
+# and "yes" or null written into settings.json is a value Claude Code may read either way.
+SX9R="$WORK/sx9-repo"; sx_repo "$SX9R" '{"ultracode": "yes"}' ''
+SX9H="$WORK/sx9-home"; mkdir -p "$SX9H"; printf '%s\n' "$SX_ORIG" > "$SX9H/settings.json"; _sx9sum="$(cksum < "$SX9H/settings.json")"
+out_sx9="$(sx_pull "$SX9H" "$SX9R")"
+check "#695 an allowed key of the wrong type is refused, naming it" "line_has \"\$out_sx9\" 'settings.shared.json' 'ultracode' 'boolean'"
+check "#695 and nothing from that file is written" "[ \"\$(cksum < '$SX9H/settings.json')\" = \"\$_sx9sum\" ]"
+
+# A MAC WITH NO settings.json gets one only when a write succeeds (review of #775): a stub left by a
+# failed write is a file the Mac did not have. A failed write is forced by a jq that always fails.
+SX10H="$WORK/sx10-home"; mkdir -p "$SX10H/bin"
+printf '#!/usr/bin/env bash\ncase "$*" in *statusLine*) exit 5 ;; esac\nexec %s "$@"\n' "$(command -v jq)" > "$SX10H/bin/jq"; chmod +x "$SX10H/bin/jq"
+SX10R="$WORK/sx10-repo"; sx_repo "$SX10R" '' 1
+# Only the write's own filter mentions statusLine as an assignment target, so only that call fails.
+PATH="$SX10H/bin:$PATH" CLAUDE_HOME="$SX10H" SYNC_REPO="$SX10R" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#772 a failed write on a Mac with no settings.json leaves none behind" "[ ! -e '$SX10H/settings.json' ]"
+SX11H="$WORK/sx11-home"; mkdir -p "$SX11H"
+sx_pull "$SX11H" "$SX10R" >/dev/null
+check "#772 and a write that succeeds there creates it with the status line" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX11H/settings.json' 2>/dev/null)\" = 'bash $SX11H/mods/status-bar/statusline.sh' ]"
 
 suite_profile
 echo ""

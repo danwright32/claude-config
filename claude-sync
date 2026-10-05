@@ -3877,6 +3877,13 @@ shared_settings_wanted(){
     echo "claude-sync: refused $SHARED_SETTINGS_FILE because it carries $bad, which is not a setting the sync shares (only ${SHARED_SETTINGS_ALLOWED// /, }), so nothing from it was written into settings.json. Every other setting stays per Mac: remove $bad from the file in the repo." >&2
     printf '{}'; return 0
   fi
+  # Every shared setting today is an on/off switch, so each value must be a boolean: "yes" or null
+  # written into settings.json is a value Claude Code may read either way (review of #775).
+  bad="$(jq -r '[to_entries[] | select((.value | type) != "boolean") | .key] | join(", ")' <<< "$obj" 2>/dev/null || true)"
+  if [ -n "$bad" ]; then
+    echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad is not a boolean (true or false), so nothing from it was written into settings.json. Fix the value in the repo." >&2
+    printf '{}'; return 0
+  fi
   printf '%s' "$obj"
 }
 write_settings_extras(){
@@ -3885,12 +3892,16 @@ write_settings_extras(){
   sl_state="$(status_line_state)"
   [ "$sl_state" = absent ] && want_sl=1
   [ "$shared" = '{}' ] && [ -z "$want_sl" ] && [ "$sl_state" != unreadable ] && return 0
-  [ -f "$settings" ] || echo '{}' > "$settings"
   names="$(jq -r 'keys | join(", ")' <<< "$shared" 2>/dev/null || true)"
   tmp="$(scratch_file)"
+  # A Mac with no settings.json is written from an empty object, and the file appears only from the
+  # finished write: a stub made first would be left behind by a write that then failed (review of #775).
+  local cur="$settings" had=1
+  if [ ! -f "$settings" ]; then had=""; cur="$(scratch_file)"; printf '{}\n' > "$cur"; fi
   if ! jq --argjson s "$shared" --arg sl "$want_sl" --arg cmd "$(status_line_command)" \
        '. + $s | if $sl == "1" then .statusLine = {type: "command", command: $cmd, refreshInterval: 30} else . end' \
-       "$settings" > "$tmp" 2>/dev/null; then
+       "$cur" > "$tmp" 2>/dev/null; then
+    [ -n "$had" ] || rm -f "$cur"
     rm -f "$tmp"
     echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_ALLOWED}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
     [ -t 2 ] || notify "settings.json could not be written: status line and shared settings"
@@ -3898,12 +3909,12 @@ write_settings_extras(){
   fi
   # Decided on the VALUE: jq reformats whatever it writes, and settings.json is a WatchPath, so a
   # rewrite for formatting alone would trigger the next sync (the rule write_mod_plugin_dirs keeps).
-  if jq -en --slurpfile a "$settings" --slurpfile b "$tmp" '$a == $b' >/dev/null 2>&1; then
+  local shared_changed=""
+  if [ -n "$had" ] && jq -en --slurpfile a "$settings" --slurpfile b "$tmp" '$a == $b' >/dev/null 2>&1; then
     rm -f "$tmp"; return 0
   fi
-  local shared_changed=""
-  jq -en --slurpfile a "$settings" --argjson s "$shared" '[$s | to_entries[] | . as $e | $a[0][$e.key] == $e.value] | all' >/dev/null 2>&1 || shared_changed=1
-  keep_prior_copy "$settings"
+  jq -en --slurpfile a "$cur" --argjson s "$shared" '[$s | to_entries[] | . as $e | $a[0][$e.key] == $e.value] | all' >/dev/null 2>&1 || shared_changed=1
+  if [ -n "$had" ]; then keep_prior_copy "$settings"; else rm -f "$cur"; fi
   mv "$tmp" "$settings"
   # Two records, because they are different facts: the shared settings arrived from the repo, while
   # the status line is derived here and is no evidence that anything was received (see the stamp at
