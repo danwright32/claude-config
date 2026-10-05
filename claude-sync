@@ -3830,6 +3830,112 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
   record_applied updated "settings.json (mods named for Claude Code)"
   MODS_SETTINGS_CHANGED=1
 }
+# ---- the rest of settings.json this tool writes: the status line and the shared settings (#772, #695) ----
+# Everything in settings.json beyond the hooks block stays per Mac (model, effort, permissions), and
+# two exceptions are written here on every apply.
+#
+# THE STATUS LINE (#772). The status bar mod travels, but the statusLine setting that runs its script
+# names a path under this Mac's home folder, so it cannot travel as text. On 2026-10-05 the mod reached
+# Dans-MacBook-Pro and its status line never showed, because nothing wrote that setting there and
+# nothing said it was missing. So it is derived here from the script that actually arrived: written
+# when settings.json has no statusLine at all, left alone when it already names this Mac's copy, and
+# never overwritten when it names something else, which status reports by name instead (L5, L509).
+#
+# THE SHARED SETTINGS (#695). payload/settings.shared.json holds the settings Dan chose to have both
+# Macs share, edited in the repo and never published back from a Mac's settings.json, so there is no
+# merge to get wrong. Only keys on SHARED_SETTINGS_ALLOWED are ever written: a file holding any other
+# key is refused whole, naming it, so it cannot become a way to carry model or effort. Off is false,
+# never a deletion, so the apply never has to infer a removal.
+SHARED_SETTINGS_FILE="settings.shared.json"
+SHARED_SETTINGS_ALLOWED="ultracode"
+STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
+status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
+# -> "no-mod", "absent", "ours", "unreadable", or "other<TAB><what it runs>"
+status_line_state(){
+  local settings="$CLAUDE_HOME/settings.json" sl cmd
+  [ -f "$CLAUDE_HOME/$STATUS_LINE_SCRIPT_REL" ] || { printf 'no-mod'; return 0; }
+  [ -f "$settings" ] || { printf 'absent'; return 0; }
+  sl="$(jq -c '.statusLine // empty' "$settings" 2>/dev/null)" || { printf 'unreadable'; return 0; }
+  [ -n "$sl" ] || { printf 'absent'; return 0; }
+  cmd="$(jq -r 'if type == "object" and .type == "command" then (.command // "") else "" end' <<< "$sl" 2>/dev/null || true)"
+  # A hand written ~/ is this Mac's home, so `bash ~/.claude/...` is ours when CLAUDE_HOME is there.
+  case "$cmd" in "bash ~/"*) cmd="bash $HOME/${cmd#bash ~/}" ;; esac
+  if [ "$cmd" = "$(status_line_command)" ]; then printf 'ours'; return 0; fi
+  printf 'other\t%s' "$(jq -r 'if type == "object" then (.command // tostring) else tostring end' <<< "$sl" 2>/dev/null || printf '%s' "$sl")"
+}
+# The allowed part of the payload's shared settings as one JSON object, or "{}" with the reason on
+# stderr when the file cannot be used. Absent is "{}" and silent.
+shared_settings_wanted(){
+  local f="$PAYLOAD/$SHARED_SETTINGS_FILE" obj bad
+  [ -f "$f" ] || { printf '{}'; return 0; }
+  if ! obj="$(jq -c 'if type == "object" then . else error("not an object") end' "$f" 2>/dev/null)" || [ -z "$obj" ]; then
+    echo "claude-sync: $SHARED_SETTINGS_FILE in the payload is not a JSON object, so no shared setting (${SHARED_SETTINGS_ALLOWED// /, }) was written into settings.json. Fix it in the repo with 'jq . payload/$SHARED_SETTINGS_FILE'." >&2
+    printf '{}'; return 0
+  fi
+  bad="$(jq -r --arg ok "$SHARED_SETTINGS_ALLOWED" 'keys - ($ok | split(" ")) | join(", ")' <<< "$obj" 2>/dev/null || true)"
+  if [ -n "$bad" ]; then
+    echo "claude-sync: refused $SHARED_SETTINGS_FILE because it carries $bad, which is not a setting the sync shares (only ${SHARED_SETTINGS_ALLOWED// /, }), so nothing from it was written into settings.json. Every other setting stays per Mac: remove $bad from the file in the repo." >&2
+    printf '{}'; return 0
+  fi
+  # Every shared setting today is an on/off switch, so each value must be a boolean: "yes" or null
+  # written into settings.json is a value Claude Code may read either way (review of #775).
+  bad="$(jq -r '[to_entries[] | select((.value | type) != "boolean") | .key] | join(", ")' <<< "$obj" 2>/dev/null || true)"
+  if [ -n "$bad" ]; then
+    echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad is not a boolean (true or false), so nothing from it was written into settings.json. Fix the value in the repo." >&2
+    printf '{}'; return 0
+  fi
+  printf '%s' "$obj"
+}
+write_settings_extras(){
+  local settings="$CLAUDE_HOME/settings.json" shared sl_state want_sl="" tmp names
+  shared="$(shared_settings_wanted)"
+  sl_state="$(status_line_state)"
+  [ "$sl_state" = absent ] && want_sl=1
+  [ "$shared" = '{}' ] && [ -z "$want_sl" ] && [ "$sl_state" != unreadable ] && return 0
+  names="$(jq -r 'keys | join(", ")' <<< "$shared" 2>/dev/null || true)"
+  tmp="$(scratch_file)"
+  # A Mac with no settings.json is written from an empty object, and the file appears only from the
+  # finished write: a stub made first would be left behind by a write that then failed (review of #775).
+  local cur="$settings" had=1
+  if [ ! -f "$settings" ]; then had=""; cur="$(scratch_file)"; printf '{}\n' > "$cur"; fi
+  if ! jq --argjson s "$shared" --arg sl "$want_sl" --arg cmd "$(status_line_command)" \
+       '. + $s | if $sl == "1" then .statusLine = {type: "command", command: $cmd, refreshInterval: 30} else . end' \
+       "$cur" > "$tmp" 2>/dev/null; then
+    [ -n "$had" ] || rm -f "$cur"
+    rm -f "$tmp"
+    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_ALLOWED}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
+    # Said, not notified: an unreadable settings.json already raises the hooks block's notification on
+    # the same apply, and a second one per run for the same fault is the alert people learn to
+    # dismiss (review of #775, L36).
+    return 0
+  fi
+  # Decided on the VALUE: jq reformats whatever it writes, and settings.json is a WatchPath, so a
+  # rewrite for formatting alone would trigger the next sync (the rule write_mod_plugin_dirs keeps).
+  local shared_changed=""
+  if [ -n "$had" ] && jq -en --slurpfile a "$settings" --slurpfile b "$tmp" '$a == $b' >/dev/null 2>&1; then
+    rm -f "$tmp"; return 0
+  fi
+  jq -en --slurpfile a "$cur" --argjson s "$shared" '[$s | to_entries[] | . as $e | $a[0][$e.key] == $e.value] | all' >/dev/null 2>&1 || shared_changed=1
+  if [ -n "$had" ]; then keep_prior_copy "$settings"; else rm -f "$cur"; fi
+  mv "$tmp" "$settings"
+  # Two records, because they are different facts: the shared settings arrived from the repo, while
+  # the status line is derived here and is no evidence that anything was received (see the stamp at
+  # the end of the apply).
+  [ -n "$shared_changed" ] && record_applied updated "settings.json (shared settings: $names)"
+  [ -n "$want_sl" ] && record_applied updated "settings.json (status line: $STATUS_LINE_SCRIPT_REL)"
+  return 0
+}
+report_settings_extras(){
+  local st
+  st="$(status_line_state)"
+  case "$st" in
+    other*)
+      echo "--- settings this sync writes ---"
+      echo "  statusLine in $CLAUDE_HOME/settings.json runs ${st#*$'\t'}, not this Mac's status bar ($(status_line_command)), so the status bar mod's line does not show here. The sync never overwrites it: delete the statusLine entry and the next pull writes the status bar's." ;;
+  esac
+  return 0
+}
+
 # What Claude Code says about the mods, asked of the claude command itself, never inferred from the
 # files having arrived (L3). It measures that each mod is LISTED as an enabled plugin and passes
 # validation: it cannot see a running session, so its wording claims no more than that (L11).
@@ -4226,6 +4332,8 @@ $f
   write_mod_plugin_dirs
   check_mods_loaded
   record_mods_seen
+  # The status line and the shared settings, after the hooks block for the same reason (#772, #695).
+  write_settings_extras
   # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
   # or a renumber the index that does exist is one edit behind (#63).
@@ -4271,7 +4379,7 @@ $f
   # say "nothing has come down for a while" when something small did, which prompts a harmless
   # pull; the other way round hides the drift, which is the failure being fixed.
   if [ -n "$APPLIED_LOG" ] && [ -s "$APPLIED_LOG" ] \
-     && grep -qv 'settings\.json (hooks section)' "$APPLIED_LOG"; then
+     && awk '!/settings\.json \(hooks section\)/ && !/settings\.json \(status line/ { found = 1 } END { exit found ? 0 : 1 }' "$APPLIED_LOG"; then
     record_received
   fi
   # .last-applied stays local (it is this Mac's own bookkeeping); this is the published
@@ -5537,6 +5645,22 @@ payload_path_applied(){   # $1 = path relative to payload/
       return $?
       ;;
     settings.json) return 0 ;;   # never applied wholesale; the hooks block owns it
+    "$SHARED_SETTINGS_FILE")
+      # Merged INTO settings.json key by key, never landing under its own name, so it is applied
+      # when every allowed key it carries holds that value there (#695). A removed file has nothing
+      # left to apply: off is false, never a deletion.
+      [ -f "$PAYLOAD/$p" ] || return 0
+      command -v jq >/dev/null 2>&1 || return 0
+      # Asked through the apply's own reading, so a file the apply REFUSES (a key off the allowlist,
+      # a value that is not a boolean, not an object) has nothing to apply rather than being unapplied
+      # for ever: no pull could satisfy it, and the apply already says why (review of #775, L260).
+      local want; want="$(shared_settings_wanted 2>/dev/null)"
+      [ "$want" = '{}' ] && return 0
+      [ -f "$CLAUDE_HOME/settings.json" ] || return 1
+      jq -en --slurpfile cur "$CLAUDE_HOME/settings.json" --argjson s "$want" \
+        '[ $s | to_entries[] | . as $e | $cur[0][$e.key] == $e.value ] | all' >/dev/null 2>&1
+      return $?
+      ;;
   esac
   for s in $(skill_excludes); do
     name="${s#--exclude=}"; name="${name#/}"
@@ -6202,6 +6326,9 @@ needs_new_session(){
   while IFS=$'\t' read -r kind name; do
     [ -n "$name" ] || continue
     case "$name" in
+      # Both are read when a session starts (#772, #695), so a running one keeps what it had.
+      "settings.json (shared settings: "*) name="settings.json (${name#settings.json (shared settings: }"; name="${name%)}, shared)" ;;
+      "settings.json (status line"*) name="settings.json (statusLine)" ;;
       settings.json*)
         # An edit that leaves the same hooks registered (a matcher reworded, an
         # entry moved between events) changes nothing a running session holds, so
@@ -8746,6 +8873,7 @@ payload/$rel
     echo "$text"
   done <<< "$RECORDS"
   report_user_scope_plugins
+  report_settings_extras
   report_duplicate_plugin_skills || true
   report_duplicate_skill_jobs || true
   report_conflict_copies
