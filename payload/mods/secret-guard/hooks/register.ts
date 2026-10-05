@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import type { SecretGuard } from '../types/index.d.ts'
 import {
   SAFE_WAY,
   blockedCommand,
@@ -78,8 +79,44 @@ const loadSecrets = async ($: EngineInterface, cwd: string): Promise<string[]> =
 
 const GUARD = 'Secret guard'
 const OUTBOUND = 'Refer to it by its name, not its value.'
+const SCREEN_FAILED = 'Blocked: the secret guard could not check this for secrets, so it did not run. Try it again; if it fails the same way, tell Dan.'
+
+// The one check of a tool call, made for every call reaching this mod's tool.call hook and for one
+// another mod answers itself, through the screen below: the refusal, card and toast included, or
+// undefined when the call carries no secret.
+const refusalFor = async ($: EngineInterface, input: Record<string, unknown>): Promise<{ deny: string } | undefined> => {
+  const toolUseId = String(input.tool_use_id ?? '')
+  if (input.tool === 'Bash') {
+    const raw = String(input.command ?? '')
+    const what = blockedCommand(await $.modkit.commands({ command: raw }), raw)
+    if (what) {
+      await $.modkit.blocked({ toolUseId, guard: GUARD, reason: `This would print ${what}.`, safeWay: SAFE_WAY })
+      await $.ui.toast('Blocked a command that would print a secret.')
+      return { deny: commandRefusal(what) }
+    }
+  }
+  const path = String(input.file_path ?? input.notebook_path ?? '')
+  const intoEnvFile = WRITERS.has(String(input.tool)) && isEnvFile(path)
+  if (!intoEnvFile && strings(input).some(s => findKnownSecret(s, known))) {
+    await $.modkit.blocked({ toolUseId, guard: GUARD, reason: 'This message contains a secret.', safeWay: OUTBOUND })
+    await $.ui.toast('Blocked a message containing a secret.')
+    return { deny: `Blocked: this message contains a secret. ${OUTBOUND}` }
+  }
+  return undefined
+}
 
 export const register: Register = on => {
+  // A mod that answers a tool call itself never calls next, so this mod's tool.call hook never sees
+  // the call when that mod loads above it (#707). Such a mod asks here first, through mod-kit's
+  // screen. The answer is this mod's own hook on the noun's event below, which has the whole $
+  // (mod-kit's card among it); the method here answers only when that hook failed, and refuses (L42).
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const secretGuard: SecretGuard = { screen: async () => ({ deny: SCREEN_FAILED }) }
+    return { ...built, secretGuard }
+  })
+  on('secretGuard.screen', async ($, e) => ({ value: (await refusalFor($, e as unknown as Record<string, unknown>)) ?? null }))
+
   on('session.start', async ($, e, next) => {
     known = await loadSecrets($, e.cwd)
     return next(e)
@@ -87,29 +124,11 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
-
-    const toolUseId = String(input.tool_use_id ?? '')
-    if (e.tool === 'Bash') {
-      const raw = String(input.command ?? '')
-      const what = blockedCommand(await $.modkit.commands({ command: raw }), raw)
-      if (what) {
-        await $.modkit.blocked({ toolUseId, guard: GUARD, reason: `This would print ${what}.`, safeWay: SAFE_WAY })
-        await $.ui.toast('Blocked a command that would print a secret.')
-        return { deny: commandRefusal(what) }
-      }
-    }
-
-    const path = String(input.file_path ?? input.notebook_path ?? '')
-    const intoEnvFile = WRITERS.has(String(e.tool)) && isEnvFile(path)
-    if (!intoEnvFile && strings(input).some(s => findKnownSecret(s, known))) {
-      await $.modkit.blocked({ toolUseId, guard: GUARD, reason: 'This message contains a secret.', safeWay: OUTBOUND })
-      await $.ui.toast('Blocked a message containing a secret.')
-      return { deny: `Blocked: this message contains a secret. ${OUTBOUND}` }
-    }
-
+    const refused = await refusalFor($, input)
+    if (refused) return refused
     // A secret written into a .env file is one to guard from now on.
-    if (intoEnvFile) known = [...new Set([...known, ...secretsFromEnvText(newTextOf(input))])]
-
+    const path = String(input.file_path ?? input.notebook_path ?? '')
+    if (WRITERS.has(String(e.tool)) && isEnvFile(path)) known = [...new Set([...known, ...secretsFromEnvText(newTextOf(input))])]
     return next(e)
   })
 

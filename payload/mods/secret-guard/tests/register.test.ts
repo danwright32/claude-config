@@ -201,6 +201,68 @@ test('a secret in a tool result is scrubbed before it is kept, with a toast', wi
   expect(w.toasts).toContain("Hid 2 secrets from a command's output.")
 })
 
+// #707: a mod that answers a tool call itself never calls next, so a hook beneath it never sees the
+// call: manual steps, is it live, picker manners, handoff and the job watcher all sort above this
+// mod. The answering mod here stands in for them (a mod's tests cannot load another mod's files),
+// loaded above this one: it asks $.secretGuard.screen before it acts, and says it acted by a toast.
+const answerer: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'manual-steps',
+  tier: 'prepend',
+  register: on => {
+    on('tool.call', { tool: 'mcp__manual-steps__steps' }, async ($, e) => {
+      const refused = await $.secretGuard.screen(e as never)
+      if (refused) return refused
+      await $.ui.toast('ACTED on the steps')
+      return { result: 'Pinned.' } as never
+    })
+  },
+}
+const steps = (value: string, id = 's1') => ({ tool: 'mcp__manual-steps__steps', tool_use_id: id, heading: 'Stripe', steps: [{ title: 'Paste the key', value, checked: 'not-done' }] }) as never
+
+test('a call another mod answers itself is refused before it acts when it carries a secret, with the card and toast (#707)', { plugins: [kit, answerer] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await $.tool.call(steps(`sk_live_${KNOWN}`, 'm1'))
+  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.toasts).toEqual(['Blocked a message containing a secret.'])
+  expect(w.cards).toEqual([{ toolUseId: 'm1', guard: 'Secret guard', reason: 'This message contains a secret.', safeWay: 'Refer to it by its name, not its value.' }])
+  // The same mod's clean call goes ahead: the refusal above was the screen, not the stand-in.
+  const ok = await $.tool.call(steps('pk_test_public', 'm2'))
+  expect((ok as { result?: unknown }).result).toBe('Pinned.')
+  expect(w.toasts).toEqual(['Blocked a message containing a secret.', 'ACTED on the steps'])
+})
+
+test('a token shaped value is refused through the screen too, before the guard has read any source (#707)', { plugins: [kit, answerer] }, async ($, on) => {
+  const w = world(on)
+  const r = await $.tool.call(steps(GH_TOKEN, 'm3'))
+  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toContain('contains a secret')
+  expect(w.toasts).not.toContain('ACTED on the steps')
+  // The answering mod's hook ran rather than failing through to this mod's own tool.call hook: its
+  // clean call is answered by it.
+  expect((await $.tool.call(steps('pk_test_public', 'm4')) as { result?: unknown }).result).toBe('Pinned.')
+})
+
+// The screen's check failing part way (here mod-kit cannot draw the card) refuses the call, since a
+// screen that fails open would let the secret through to the answering mod (L42).
+const brokenKit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { blocked: async () => { throw new Error('the card could not be kept') }, commands: async () => [] } } as never
+    })
+  },
+}
+test('a screen whose check fails refuses the call rather than let it through (#707, L42)', { plugins: [brokenKit, answerer] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await $.tool.call(steps(KNOWN, 'm5'))
+  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe(
+    'Blocked: the secret guard could not check this for secrets, so it did not run. Try it again; if it fails the same way, tell Dan.',
+  )
+  expect(w.toasts).not.toContain('ACTED on the steps')
+})
+
 test('a tool result with no secret is kept as it was', withKit, async ($, on) => {
   const w = world(on)
   let stored = ''
