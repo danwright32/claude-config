@@ -376,6 +376,16 @@ quiz_is_owed() {
   return 0
 }
 
+# This session snoozed the quiz (#623). Checked after the opt out and before the label gate: a
+# snoozed merge is not a quiz the label failed to silence, so it never touches fired_since_quiet,
+# but it IS counted, under its own name, so a skip leaves a trace (#790, L357). Announced in one
+# line straight to Dan.
+if [ -n "$session_id" ] && snooze_in_force "$session_id"; then
+  qv_set snoozed +
+  jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
+  exit 0
+fi
+
 # THE LABEL GATE HAS ITS OWN DEADLINE (claude-config#568). This hook is registered with a 15 second
 # timeout, the gate's read goes through mt_pr_view, which asks gh once per logged in account, and a
 # hook the harness kills emits NOTHING, which reads exactly like a decision not to quiz (L98). On
@@ -387,16 +397,6 @@ quiz_is_owed() {
 #   - past that, the whole group is stopped, the verdict is label-timeout, and the quiz FIRES,
 #     saying the label could not be read in time. A slow gh costs a quiz that might have been
 #     silenced, never a merge that goes unquizzed without a word (L42).
-# This session snoozed the quiz (#623). Checked after the opt out and before the label gate: a
-# snoozed merge is not a quiz the label failed to silence, so it never touches fired_since_quiet,
-# but it IS counted, under its own name, so a skip leaves a trace (#790, L357). Announced in one
-# line straight to Dan.
-if [ -n "$session_id" ] && snooze_in_force "$session_id"; then
-  qv_set snoozed +
-  jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
-  exit 0
-fi
-
 QUIZ_VERDICT=""
 qv_set started +
 label_deadline="${QUIZ_LABEL_DEADLINE_SECONDS:-8}"

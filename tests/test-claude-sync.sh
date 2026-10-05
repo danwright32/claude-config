@@ -18642,6 +18642,10 @@ check "#638 and the send names it as held back" "line_has \"\$out_638t\" 'NOT pu
 # stale however old its mtime, and is replaced. The control in the same fixture (L159) is the genuine
 # edit kept above.
 printf 'other-v1\n' > "$S38HB/mods/guard/hooks/other.ts"; touch -t 202001010000 "$S38HB/mods/guard/hooks/other.ts"
+# The payload copy already holds the same bytes: release one's other.ts arrived with the first send
+# from A, at the top of this section. Asserted rather than assumed, so the touch below can only
+# change a time, never create a file (the review of f04f7c0 read it as creating one).
+check "#754 fixture: the payload copy holds the same bytes before its mtime moves" "grep -qx 'other-v1' '$S38C/payload/mods/guard/hooks/other.ts'"
 touch "$S38C/payload/mods/guard/hooks/other.ts"
 _754before="$(_suite_mtime "$S38HB/mods/guard/hooks/other.ts")"
 out_754a="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
