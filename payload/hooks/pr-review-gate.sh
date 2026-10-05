@@ -4,7 +4,8 @@
 # Claude Code PreToolUse(Bash) hook.
 #
 # Refuse a merge until the lessons review of that pull request's head has FINISHED and its findings
-# have reached the session (claude-config#560). The review itself, and every outcome it can have, is
+# have been READ by the session merging (claude-config#560, #788): the merge presents the findings'
+# read key as PR_REVIEW_READ=<key>, which only the messages carrying them hold. The review itself, and every outcome it can have, is
 # lib/pr-review.sh; this hook only decides whether a command merges and which head it merges.
 #
 # EVERY MERGE ROUTE this hook can see: `gh pr merge`, and a repo's own merge script in command

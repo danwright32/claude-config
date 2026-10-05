@@ -105,7 +105,9 @@ mkdir -p "$AR_STATE_DIR" 2>/dev/null
 name="$key-pr-${full_sha:-$sha}"
 final="$AR_STATE_DIR/$name.txt"
 pending="$final.pending"
-delivered="$final.delivered"        # shown somewhere; NOT proof the merging session saw it (#788)
+# <review>.delivered, written before #788 to mean "printed somewhere", is no longer written or read:
+# printing is not reading. It is still removed below, so a stale one never lingers.
+delivered="$final.delivered"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 repo_label="$(basename "$top")"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -248,7 +250,7 @@ do_check() {
       case "$findings" in ''|*[!0-9]*) findings="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")" ;; esac
       if [ "$findings" -eq 0 ]; then
         echo "The lessons review of $repo_label $branch at $short finished with 0 findings."
-        touch "$delivered" 2>/dev/null; return 0
+        return 0
       fi
       # READ means a merge presented the key that only the findings' own messages carry (#788),
       # never that this gate or the nudge PRINTED them: a refusal can be printed and not shown.
@@ -277,7 +279,6 @@ do_check() {
       fi
       [ -n "${PR_REVIEW_READ:-}" ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
       ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
-      touch "$delivered" 2>/dev/null
       return 1
       ;;
     empty-diff)

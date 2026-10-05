@@ -41,9 +41,9 @@
 # once NUDGE_BUDGET characters have been printed the rest wait, unshown, for the next prompt.
 #
 # The lessons review of a whole branch (lib/pr-review.sh, kind=pr) is shown here too, under its own
-# heading, and marked DELIVERED (<file>.delivered) once shown. That no longer allows the merge
-# (claude-config#788): this reaches whichever session prompts next, not necessarily the one merging,
-# so it carries the findings' read key and the merge gate waits for a merge presenting it.
+# heading. Showing it here does not allow the merge (claude-config#788): this reaches whichever
+# session prompts next, not necessarily the one merging, so it carries the findings' read key and
+# the merge gate waits for a merge presenting it.
 #
 # Nothing in either loop below may start a process per FILE: the state directory holds every
 # repository's reviews for 14 days (1,975 files on 2026-10-03), and one `basename` per file took the
@@ -222,7 +222,6 @@ for base in $todo; do
       *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
     esac
-    touch "$f.delivered" 2>/dev/null || true
     mark_shown "$base"
     continue
   fi

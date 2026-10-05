@@ -205,6 +205,9 @@ out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "a second attempt without the key is refused again, the refusal may not have been shown" "1" "$rc"
 check "carrying the findings again" "deleteEvent still swallows" "$out"
 check_eq "with the same key" "$k1" "$(key_in "$out")"
+# Printing is not reading, so nothing records "printed" as if it meant something: the old
+# <review>.delivered marker is no longer written by a refusal.
+[ ! -e "$(final_of "$HEAD_SHA").delivered" ] && ok || bad "a refusal still writes the unread .delivered marker"
 out="$(PR_REVIEW_READ=0000dead prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "a wrong key is refused" "1" "$rc"
 out="$(PR_REVIEW_READ="$k1" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
