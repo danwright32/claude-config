@@ -700,6 +700,15 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   prompt waits behind, and a subagent's turn do not count. A verdict Claude gives later still
   lands. "sent" is never kept in the store, since the turn that would answer it does not reach the
   next session (open: the end of that turn as the limit rather than a time, and the toast's words).
+- **A Done whose prompt starts no turn** (#734). A "step N done" queued behind a running turn and
+  then dropped (Esc drops the queue), or one a prompt hook refused, starts no turn, so the end of
+  its turn never comes. Once no main turn has run for two minutes with the step still sent and its
+  turn never started, Done comes back with the same toast. The two minutes count from the press, or
+  from the end of the last main turn, never while one runs, so a prompt waiting behind a long turn
+  is never taken for dropped. They outlast the settings hooks that run between one turn's end and
+  the next turn's start (the Stop hooks, 15 seconds at most, and the prompt hooks, 10, each event's
+  in parallel), so a queued prompt whose turn starts after them keeps its "sent" (open: the two
+  minutes).
 - **Copy.** Copies the open step's value on the surface pressed, with a toast saying it was copied
   or why not (open: whether a successful copy needs a toast at all).
 - **The last step.** Once every step is finished the card goes away and nothing is kept (open:
@@ -709,7 +718,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   in a worktree session come back in the main checkout and in any other worktree of it (#708); a
   card a worktree session kept under the worktree's own folder before that is found there and moved,
   its unfinished steps folded under its heading into any card already under the root, so both are
-  held for Claude to re-check and neither is lost.
+  held for Claude to re-check and neither is lost. A step held under both (its title and link) is
+  listed once, from the first fold (#734).
   A repository that cannot be read is never taken as none: the toast says the steps could not be
   saved for the next session, rather than keeping them under the worktree's folder again.
   At the next session start there they are held, not shown, and the conversation's first message

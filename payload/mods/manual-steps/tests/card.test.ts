@@ -79,6 +79,20 @@ describe('fold', () => {
     // A malformed card kept from before adds nothing.
     expect(fold(into, { heading: 'x', steps: 'no' } as never)).toEqual(into)
   })
+
+  // #734: a step held under both the repository root and a pre-#708 worktree key is the same step,
+  // listed once on the very first fold, whether the root's copy is still open or finished.
+  test('a step the card already holds is not listed again on the first fold, under its heading', () => {
+    const cname = step({ title: 'Add the CNAME', url: 'https://d.example' })
+    const into = made({ heading: 'DNS', steps: [cname, step()] })
+    const from = made({ heading: 'DNS', steps: [cname] })
+    expect(fold(into, from)).toEqual(into)
+    const finished = { ...into, steps: into.steps.map((s, i) => (i === 0 ? { ...s, finished: 'checked' as const } : s)) }
+    expect(fold(finished, from)).toEqual(finished)
+    // The same title at another link is another step, and is still added.
+    const other = made({ heading: 'DNS', steps: [step({ title: 'Add the CNAME', url: 'https://e.example' })] })
+    expect(fold(into, other).steps.map(s => s.title)).toEqual(['Add the CNAME', 'Turn on the WAF rule', 'DNS: Add the CNAME'])
+  })
 })
 
 describe('carriedNote', () => {

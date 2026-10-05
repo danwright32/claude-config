@@ -73,16 +73,28 @@ export const cardFrom = (input: unknown): Made | Refused => {
  * `into` with the unfinished steps of `from` after its own, each titled with `from`'s heading. For a
  * card kept under a worktree's own folder before #708 beside one kept under the repository root:
  * both are held for Claude to re-check, so nothing is lost and nothing shows unchecked. A step
- * already there (its title and link) is not added again, so folding twice changes nothing.
+ * already there (its title and link) is not added again, whether it is there under its own title,
+ * a step held under both keys (#734), or under the heading an earlier fold gave it, so folding
+ * twice changes nothing.
  */
 export const fold = (into: StepsCard, from: StepsCard): StepsCard => {
-  const has = new Set(into.steps.map(s => `${s.title}\n${s.url ?? s.location}`))
+  const keyOf = (title: string, s: StepsStep) => `${title}\n${s.url ?? s.location}`
+  const has = new Set(into.steps.map(s => keyOf(s.title, s)))
   const extra = (Array.isArray(from.steps) ? from.steps : [])
     .filter(s => s && typeof s.title === 'string' && !s.finished)
+    .filter(s => !has.has(keyOf(s.title, s)) && !has.has(keyOf(`${from.heading}: ${s.title}`, s)))
     .map(s => ({ ...s, title: `${from.heading}: ${s.title}` }))
-    .filter(s => !has.has(`${s.title}\n${s.url ?? s.location}`))
   return extra.length ? { ...into, steps: [...into.steps, ...extra] } : into
 }
+
+/**
+ * How long a sent step waits, with no main turn running, for the turn its "step N done" starts
+ * before Done comes back (#734). Between one turn's end and the next turn's start the settings
+ * hooks run: the Stop hooks (15 seconds at most each) and the UserPromptSubmit hooks (10 at most),
+ * each event's in parallel, so about 25 seconds at worst. Two minutes is well past that, and short
+ * enough that a dropped prompt does not leave Done gone for long.
+ */
+export const DROPPED_AFTER_MS = 2 * 60_000
 
 /** The index of the step to do next: the first not yet finished. */
 export const nextStep = (card: StepsCard): number | undefined => {
