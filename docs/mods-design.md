@@ -17,7 +17,8 @@ and settles its own surfaces in rounds of its own before it is built.
    exception to one amber line per surface is the steps card's amber left edge beside its amber
    heading, which Dan asked for. The exceptions to colour only for action are separate, each
    recorded where it applies: the running PR, running job and kept job, the scope mode label, and
-   the goals pane's state colours.
+   the goals pane's state colours, and the status line's limit shares (amber past 70% on the 5 hour
+   limit or 85% on the weekly, red at 100%, in the Status bar's Colour row).
 2. **Plain wording.** A refusal says what was blocked and the safe way, in one or two short
    sentences: "Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its
    length, or gh auth status." Settled 2026-10-03, then applied to every refusal and toast of the
