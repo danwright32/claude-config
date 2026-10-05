@@ -1132,8 +1132,13 @@ TRPY
   # drift. Only a checkout has that record; an installed copy says so rather than passing (L411).
   DESIGN_DOC="$DIR/../../../docs/mods-design.md"
   if [[ -f "$DESIGN_DOC" ]]; then
-    # The record wraps the line across two lines of text, so the file is read as one line first.
-    recorded="$(tr '\n' ' ' < "$DESIGN_DOC" | sed -E 's/ +/ /g' | grep -o 'The status line reads `[^`]*' | head -1 | sed 's/^The status line reads `//')"
+    # The record wraps the line across two lines of text, so the file is read as one line first,
+    # and the line is cut out of that by the shell rather than a pipe a short read could kill.
+    flat="$(tr '\n' ' ' < "$DESIGN_DOC" | sed -E 's/ +/ /g')"
+    case "$flat" in
+      *'The status line reads `'*) recorded="${flat#*The status line reads \`}"; recorded="${recorded%%\`*}" ;;
+      *) recorded="(no status line quoted in docs/mods-design.md)" ;;
+    esac
     check_eq "and it is the line docs/mods-design.md records" "$recorded" "$BUILT_STATUS"
   else
     unmeasured=$((unmeasured + 1))
