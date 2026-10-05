@@ -122,8 +122,8 @@ describe('refused in no build', () => {
     expect(bash(['cp', '/Users/x/app.ts', `${SCRATCH}/a.ts`])).toBeUndefined()
     expect(what(bash(['mv', '/Users/x/app.ts', `${SCRATCH}/a.ts`]))).toBe('write to app.ts')
     expect(what(bash(['rm', '-rf', 'dist']))).toBe('write to dist')
-    expect(what(bash(['python3', '-c', "open('app.ts','w').write('x')"]))).toBe('write files from python3')
-    expect(what(bash(['node', '-e', "require('fs').writeFileSync('a', 'b')"]))).toBe('write files from node')
+    expect(what(bash(['python3', '-c', "open('app.ts','w').write('x')"]))).toMatch(/^write files from python3 \(/)
+    expect(what(bash(['node', '-e', "require('fs').writeFileSync('a', 'b')"]))).toMatch(/^write files from node \(/)
   })
   test('a new worktree by tool', () => {
     expect(what(tool('EnterWorktree', { name: 'x' }))).toBe('enter a new worktree')
@@ -140,11 +140,11 @@ describe('refused in no build', () => {
     expect(bash(['python3', '-', '<<EOF'])?.hint).toMatch(/-c/)
   })
   test('a script the reader kept is judged: a here-string, echo piped in, a clustered inline flag', () => {
-    expect(what(bash(['python3', "<<<open('/repo/app.ts','w').write('x')"]))).toBe('write files from python3')
-    expect(what(bash(['echo', "require('fs').rmSync('src',{recursive:true})"], ['node']))).toBe('write files from node')
-    expect(what(bash(['python3', '-Bc', "open('app.ts','w').write('x')"]))).toBe('write files from python3')
-    expect(what(bash(['node', '-p', "require('fs').writeFileSync('a','b')"]))).toBe('write files from node')
-    expect(what(bash(['perl', '-ne', 'open(F, ">x"); unlink("a.ts")']))).toBe('write files from perl')
+    expect(what(bash(['python3', "<<<open('/repo/app.ts','w').write('x')"]))).toMatch(/^write files from python3 \(/)
+    expect(what(bash(['echo', "require('fs').rmSync('src',{recursive:true})"], ['node']))).toMatch(/^write files from node \(/)
+    expect(what(bash(['python3', '-Bc', "open('app.ts','w').write('x')"]))).toMatch(/^write files from python3 \(/)
+    expect(what(bash(['node', '-p', "require('fs').writeFileSync('a','b')"]))).toMatch(/^write files from node \(/)
+    expect(what(bash(['perl', '-ne', 'open(F, ">x"); unlink("a.ts")']))).toMatch(/^write files from perl \(/)
     expect(bash(['python3', "<<<print(1)"])).toBeUndefined()
   })
   test('curl and wget writing a file, find deleting, awk -i inplace and ruby -pi', () => {
@@ -249,12 +249,12 @@ describe('the second review of #714', () => {
     expect(q('query Q { viewer { login } } mutation M { addLabelsToLabelable(input: {}) { clientMutationId } }')).toBeUndefined()
   })
   test('every inline script is judged, not only the first', () => {
-    expect(what(bash(['perl', '-e', 'print 1', '-e', 'unlink("a.ts")']))).toBe('write files from perl')
-    expect(what(bash(['ruby', '-e', 'puts 1', '-e', 'File.write("a.rb", "x")']))).toBe('write files from ruby')
+    expect(what(bash(['perl', '-e', 'print 1', '-e', 'unlink("a.ts")']))).toMatch(/^write files from perl \(/)
+    expect(what(bash(['ruby', '-e', 'puts 1', '-e', 'File.write("a.rb", "x")']))).toMatch(/^write files from ruby \(/)
   })
   test('a command find -exec runs is read like any other: its git reading and its program', () => {
     expect(what(bash(['find', '.', '-name', '*.ts', '-exec', 'git', 'checkout', '{}', ';']))).toBe('run git checkout')
-    expect(what(bash(['find', 'src', '-exec', 'python3', '-c', "open('/repo/a.ts','w')", '{}', ';']))).toBe('write files from python3')
+    expect(what(bash(['find', 'src', '-exec', 'python3', '-c', "open('/repo/a.ts','w')", '{}', ';']))).toMatch(/^write files from python3 \(/)
     expect(bash(['find', 'src', '-exec', 'grep', '-l', 'x', '{}', '+'])).toBeUndefined()
     // A shell's program there is more commands, read by the tool call hook (the session tests).
   })
@@ -265,5 +265,90 @@ describe('the second review of #714', () => {
     expect(bash(['psql', '$DB', '-c', "SELECT 'C:\\temp' AS path"])).toBeUndefined()
     // Quotes that balance under no reading cannot be judged.
     expect(what(bash(['psql', '$DB', '-c', "SELECT 'abc"]))).toBe('run SQL that could not be read')
+  })
+})
+
+// The lessons review of #714 at fad450f: inline code was judged by a hand list of write idioms, so
+// every route not on it passed. Now each language's own options find the code, and the code is
+// judged by what it can do in that language: write a file, run a process, or build code at run
+// time, which cannot be read.
+describe('the third review of #714: inline code judged by what it can do', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test("inline flags are found by each language's own option grammar", () => {
+    // ruby -r and perl -M take a value, so the e in -rtime or -Mfeature is no -e.
+    expect(what(bash(['ruby', '-rtime', '-e', 'File.write("/repo/a.rb", "x")']))).toBe('write files from ruby (File.write)')
+    expect(what(bash(['perl', '-Mfeature=say', '-e', 'unlink "a.pl"']))).toBe('write files from perl (unlink)')
+    expect(what(bash(['node', '-pe', "require('fs').writeFileSync('a','b')"]))).toBe('write files from node (writeFileSync)')
+    expect(what(bash(['node', '--print', "require('fs').writeFileSync('a','b')"]))).toBe('write files from node (writeFileSync)')
+    expect(bash(['ruby', '-rjson', '-e', 'puts JSON.parse(STDIN.read)'])).toBeUndefined()
+    expect(bash(['perl', '-MList::Util=sum', '-ne', 'print sum(split)'])).toBeUndefined()
+  })
+  test('running a process is refused like writing a file, named by what was seen', () => {
+    expect(what(bash(['python3', '-c', "import os; os.system('git commit -am x')"]))).toBe('run a process from python3 (os.system)')
+    expect(what(bash(['python3', '-c', "import subprocess; subprocess.run(['rm', 'a'])"]))).toBe('run a process from python3 (subprocess)')
+    expect(what(bash(['python3', '-c', "import pty; pty.spawn('sh')"]))).toBe('run a process from python3 (pty)')
+    expect(what(bash(['node', '-e', "require('child_process').execSync('rm -rf src')"]))).toBe('run a process from node (child_process)')
+    expect(what(bash(['ruby', '-e', 'system("git commit -am x")']))).toBe('run a process from ruby (system)')
+    expect(what(bash(['ruby', '-e', 'puts `git status`']))).toBe('run a process from ruby (backticks)')
+    expect(what(bash(['ruby', '-e', 'IO.popen("ls")']))).toBe('run a process from ruby (IO.popen)')
+    expect(what(bash(['perl', '-e', 'my $x = qx(rm a)']))).toBe('run a process from perl (qx)')
+    expect(what(bash(['perl', '-e', 'open(my $f, "|-", "git", "commit")']))).toBe('run a process from perl (open to a pipe)')
+  })
+  test('every mode that writes or updates a file, and pathlib', () => {
+    expect(what(bash(['python3', '-c', "f = open('a.ts', 'r+'); f.write('x')"]))).toBe('write files from python3 (open in mode r+)')
+    expect(what(bash(['python3', '-c', "open('a.ts', mode='a').write('x')"]))).toBe('write files from python3 (open in mode a)')
+    expect(what(bash(['python3', '-c', "from pathlib import Path; Path('a').write_text('x')"]))).toBe('write files from python3 (write_text)')
+    expect(what(bash(['ruby', '-e', 'File.open("a", "w") { |f| f.puts 1 }']))).toBe('write files from ruby (File.open in mode w)')
+    expect(what(bash(['perl', '-e', 'open(my $f, ">>", "a.txt")']))).toBe('write files from perl (open for writing)')
+    expect(bash(['python3', '-c', "print(open('a.ts').read())"])).toBeUndefined()
+    expect(bash(['python3', '-c', "print(open('a.ts', 'rb').read())"])).toBeUndefined()
+  })
+  test('code that builds code at run time cannot be read', () => {
+    expect(what(bash(['python3', '-c', 'eval(input())']))).toBe('run code from python3 it cannot read (eval)')
+    expect(what(bash(['python3', '-c', "m = __import__(name)"]))).toBe('run code from python3 it cannot read (__import__ of a computed name)')
+    expect(what(bash(['node', '-e', "new Function(src)()"]))).toBe('run code from node it cannot read (new Function)')
+    expect(what(bash(['node', '-e', 'require(name)']))).toBe('run code from node it cannot read (require of a computed path)')
+    expect(what(bash(['ruby', '-e', 'eval(ARGV[0])']))).toBe('run code from ruby it cannot read (eval)')
+    expect(what(bash(['perl', '-e', 'eval $code']))).toBe('run code from perl it cannot read (eval of a string)')
+    // What only looks like it: re.compile, literal_eval, a regex's exec, perl's eval block.
+    expect(bash(['python3', '-c', "import re, ast; re.compile('x'); ast.literal_eval('1')"])).toBeUndefined()
+    expect(bash(['node', '-e', "console.log(/a/.exec('a'), require('path').sep)"])).toBeUndefined()
+    expect(bash(['perl', '-e', 'eval { 1 }; print $@'])).toBeUndefined()
+  })
+  test('osascript: do shell script runs a shell, and an AppleScript it cannot read is refused', () => {
+    expect(what(bash(['osascript', '-e', 'do shell script "echo x > /repo/app.ts"']))).toBe('run a process from osascript (do shell script)')
+    expect(what(bash(['osascript', '<<EOF']))).toBe('run a osascript script it cannot read (fed by a heredoc)')
+    expect(bash(['osascript', '-e', 'tell application "Finder" to get name of every window'])).toBeUndefined()
+  })
+  test('awk and sed programs: system, a pipe, a redirect, and the w and e commands', () => {
+    expect(what(bash(['awk', 'BEGIN { system("rm -rf src") }']))).toBe('run a process from awk (system)')
+    expect(what(bash(['awk', '{ print | "sh" }', 'cmds.txt']))).toBe('run a process from awk (a pipe)')
+    expect(what(bash(['awk', '{ print > "/repo/app.ts" }', 'in.txt']))).toBe('write files from awk (print to a file)')
+    expect(what(bash(['awk', '{ print $1 > $2 }', 'in.txt']))).toBe('write files from awk (print to a file)')
+    expect(what(bash(['awk', '-f', 'prog.awk', 'in.txt']))).toBe('run a awk script it cannot read (its program is in a file)')
+    expect(what(bash(['sed', '-n', 's/a/b/w /repo/out.txt', 'in.txt']))).toBe('write files from sed (the w command)')
+    expect(what(bash(['sed', 's/.*/date/e', 'in.txt']))).toBe('run a process from sed (the e command)')
+    expect(bash(['awk', '$3 > 100 { print $1 }', 'data.txt'])).toBeUndefined()
+    expect(bash(['sed', '-n', '/fix/p', 'notes.txt'])).toBeUndefined()
+  })
+  test('psql runs every -c and every -f', () => {
+    expect(what(bash(['psql', '$DB', '-c', 'select 1', '-c', 'drop table x']))).toBe('change data with SQL')
+    expect(what(bash(['psql', '$DB', '-c', 'select 1', '-f', 'fix.sql']))).toBe('run SQL that could not be read')
+    expect(what(bash(['sqlite3', 'app.db', 'select 1', 'delete from t']))).toBe('change data with SQL')
+    expect(bash(['psql', '$DB', '-c', 'select 1', '-c', 'select 2'])).toBeUndefined()
+  })
+  test('client commands that write a local file or run a shell', () => {
+    expect(what(bash(['psql', '$DB', '-c', '\\o /repo/out.txt']))).toBe('write to out.txt')
+    expect(what(bash(['psql', '$DB', '-c', "select 1 \\g '/repo/out.txt'"]))).toBe('write to out.txt')
+    expect(what(bash(['psql', '$DB', '-c', 'select 1 \\g |sh']))).toBe('run a shell command through psql')
+    expect(what(bash(['psql', '$DB', '-c', "\\copy shows to '/repo/shows.csv' csv"]))).toBe('write to shows.csv')
+    expect(what(bash(['psql', '$DB', '-c', "\\copy shows to program 'gzip > x.gz'"]))).toBe('run a shell command through psql')
+    expect(what(bash(['sqlite3', 'app.db', '.output /repo/dump.sql']))).toBe('write to dump.sql')
+    expect(what(bash(['sqlite3', 'app.db', '.once /repo/one.csv']))).toBe('write to one.csv')
+    expect(what(bash(['sqlite3', 'app.db', '.backup /repo/copy.db']))).toBe('write to copy.db')
+    expect(bash(['psql', '$DB', '-c', `\\o ${SCRATCH}/out.txt`])).toBeUndefined()
+    expect(bash(['psql', '$DB', '-c', 'select 1 \\g'])).toBeUndefined()
+    expect(bash(['psql', '$DB', '-c', '\\copy shows to stdout csv'])).toBeUndefined()
+    expect(bash(['sqlite3', 'app.db', '.dump'])).toBeUndefined()
   })
 })

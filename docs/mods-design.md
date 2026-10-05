@@ -429,6 +429,28 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   hide a write, and quotes that close under neither reading cannot be judged; and the clients' own
   commands are judged: `\copy ... from` and sqlite's `.import` change data, `\i`, `\gexec`,
   `.read` and `source` run SQL it cannot read, and `\!`, `.shell` and `.system` run a shell.
+- How inline code is judged, since the third review of #714 found a hand list of write idioms let
+  every route not on it through. Inline code is found by each language's own option grammar
+  (`hooks/program.ts`): a flag that takes a value takes the rest of its cluster or the next word, so
+  ruby's `-rtime` and perl's `-Mfeature` are no `-e`, perl's `-lane` is `-l -a -n -e`, and node's
+  `-pe` is `-p -e`; every script given is judged where the language runs every one, and a program
+  in a file (`awk -f`, `sed -f`) cannot be read. The code is then judged per language by what it can
+  do (`hooks/code.ts`), for python, node (and deno, bun), ruby, perl, AppleScript, awk and sed:
+  write or update a file (python's `open` in any of w, a, x or +, pathlib, `os` and `shutil`;
+  node's `fs` write, stream and remove calls; ruby's `File`, `IO`, `FileUtils`; perl's `open` for
+  writing, `unlink`, `rename`; AppleScript's write permission; awk's print to a file; sed's `w`),
+  run a process (python's `os.system`, `os.exec*`, `subprocess`, `pty`; node's `child_process`;
+  ruby's `system`, `exec`, `spawn`, backticks, `%x`, `IO.popen`; perl's `system`, `exec`, backticks,
+  `qx`, `open` to a pipe; AppleScript's `do shell script`; awk's `system` and pipes; sed's `e`),
+  or build code at run time (`eval`, `exec` of a string, `new Function`, `__import__` or `require`
+  of a computed name), which cannot be read. The refusal names what was seen. It reads the text,
+  not a parse, so a word that only looks like a call errs toward a refusal; code that writes
+  through a library it calls (SQL through a python driver, say) is not seen. A database client is
+  read by its own options (`hooks/sql.ts`): every `-c` psql runs, every argument sqlite runs, a
+  script file (`-f`, `-init`) as one it cannot read, and what it writes itself: psql's `-o`, `\o`,
+  `\w`, `\g` to a file, `\copy ... to <file>`, sqlite's `.output`, `.once`, `.backup` and `.save`,
+  MySQL's `tee`, each allowed to the scratchpad, and a shell when the target is `|command` or a
+  `program`.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
   issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR

@@ -39,6 +39,19 @@ describe('programsOf: the program a shell or interpreter runs that the reader di
     expect(of(['osascript', '-e', 'tell app "Finder"', '-e', 'activate', '-e', 'end tell'])).toEqual([{ text: 'tell app "Finder"\nactivate\nend tell' }])
     // python and a shell take the first as the program and the rest as its arguments.
     expect(of(['python3', '-c', 'print(1)', '-c'])).toEqual([{ text: 'print(1)' }])
+    // Each language's own option grammar (lessons review of #714 at fad450f): a flag that takes a
+    // value takes the rest of its cluster, so the e in -rtime is no -e; node's -pe is -p and -e.
+    expect(of(['ruby', '-rtime', '-e', 'puts Time.now', 'data.txt'])).toEqual([{ text: 'puts Time.now' }])
+    expect(of(['ruby', '-r', 'date', '-ne', 'print'])).toEqual([{ text: 'print' }])
+    expect(of(['perl', '-Mfeature=say', '-E', 'say 1'])).toEqual([{ text: 'say 1' }])
+    expect(of(['perl', '-I', 'lib', '-e', 'print 1'])).toEqual([{ text: 'print 1' }])
+    expect(of(['perl', '-lane', 'print $F[0]'])).toEqual([{ text: 'print $F[0]' }])
+    expect(of(['node', '-pe', '1 + 1'])).toEqual([{ text: '1 + 1' }])
+    expect(of(['node', '-r', 'ts-node/register', '-e', 'run()'])).toEqual([{ text: 'run()' }])
+    expect(of(['python3', '-W', 'ignore', '-c', 'print(1)'])).toEqual([{ text: 'print(1)' }])
+    expect(of(['python3', '-cprint(1)'])).toEqual([{ text: 'print(1)' }])
+    // A library loaded with -r is no program: the script file after it is.
+    expect(of(['ruby', '-rtime', 'tools/report.rb'])).toEqual([undefined])
   })
   test('a script file, a module, a file redirect or no program at all: nothing to judge here', () => {
     expect(of(['python3', 'tools/report.py'])).toEqual([undefined])

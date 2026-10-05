@@ -1,4 +1,6 @@
-import { interpreterOf, isShell, type Program } from './program.ts'
+import { codeVerdict } from './code.ts'
+import { isShell, languageOf, type Program } from './program.ts'
+import { clientRefusal, sqlRefusal } from './sql.ts'
 
 // No build (#616): what Claude may and may not do while it is on, as the spec agreed with Dan.
 // Allowed: reading, research, tests and checks, read only queries, scratchpad notes, and all GitHub
@@ -191,80 +193,7 @@ const DEPLOYERS: Record<string, (args: string[]) => boolean> = {
 const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
 const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
 
-// SQL with its string literals, quoted identifiers and comments blanked, so a word inside one
-// ("status = 'delete'", "-- then drop it") is never read as a statement (#702). Whether a
-// backslash escapes a quote depends on the dialect (MySQL and E'' strings: yes; a standard
-// string: no), so the text is read both ways, and a reading whose quotes never close is said to be
-// unbalanced (lessons review of #714).
-const sqlCode = (sql: string, backslash: boolean): { code: string; balanced: boolean } => {
-  let out = ''
-  let balanced = true
-  for (let i = 0; i < sql.length; i++) {
-    const c = sql[i] as string
-    const dollar = c === '$' ? /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i)) : null
-    if (c === "'" || c === '"' || c === '`') {
-      let closed = false
-      for (i++; i < sql.length; i++) {
-        if (backslash && sql[i] === '\\') i++
-        // A doubled quote inside is the quote itself.
-        else if (sql[i] === c && sql[i + 1] === c) i++
-        else if (sql[i] === c) {
-          closed = true
-          break
-        }
-      }
-      if (!closed) balanced = false
-      out += ' x '
-    } else if (dollar) {
-      const end = sql.indexOf(dollar[0], i + dollar[0].length)
-      if (end < 0) balanced = false
-      i = end < 0 ? sql.length : end + dollar[0].length - 1
-      out += ' x '
-    } else if (c === '-' && sql[i + 1] === '-') {
-      while (i < sql.length && sql[i] !== '\n') i++
-      out += ' '
-    } else if (c === '/' && sql[i + 1] === '*') {
-      const end = sql.indexOf('*/', i + 2)
-      i = end < 0 ? sql.length : end + 1
-      out += ' '
-    } else out += c
-  }
-  return { code: out, balanced }
-}
-// SQL that changes data or schema: these anywhere in a statement (a data changing CTE included),
-// and the rest only as the statement itself, so replace() or a column named cluster is a read.
-const SQL_WRITE = /\b(?:insert|update|delete|drop|alter|truncate|create|grant|revoke|comment\s+on|refresh\s+materialized|merge\s+into|replace\s+into|select\b[^;]*\binto)\b/i
-const SQL_WRITE_STATEMENT = /(?:^|;)\s*(?:replace|merge|upsert|copy|vacuum|reindex|cluster|call|do)\b/i
-// The clients' own commands, which no statement keyword shows (lessons review of #714): psql's
-// \copy <table> from (a query in brackets can only be copied to) and sqlite's .import load data;
-// \i, \gexec, sqlite's .read and MySQL's source run SQL this guard cannot read; \!, .shell and
-// .system run a shell.
-const CLIENT_LOADS = /\\copy\s+(?!\()\S+(?:\s*\([^)]*\))?\s+from\b|(?:^|\n)\s*\.(?:import|restore)\b/i
-const CLIENT_RUNS = /\\(?:i|ir|include|include_relative|gexec)\b|(?:^|\n)\s*\.read\b|(?:^|[;\n])\s*(?:source|\\\.)\s/i
-const CLIENT_SHELL = /\\!|(?:^|\n)\s*\.(?:shell|system)\b/i
-// A query that cannot be read is refused too: it may be either.
-const sqlRefusal = (sql: string | undefined): string | undefined => {
-  if (sql === undefined) return 'run SQL that could not be read'
-  const readings = [sqlCode(sql, false), sqlCode(sql, true)]
-  const codes = readings.map(r => r.code)
-  if (codes.some(c => CLIENT_SHELL.test(c))) return 'run a shell command through psql'
-  if (codes.some(c => CLIENT_LOADS.test(c) || SQL_WRITE.test(c) || SQL_WRITE_STATEMENT.test(c))) return 'change data with SQL'
-  if (codes.some(c => CLIENT_RUNS.test(c))) return 'run SQL that could not be read'
-  // Quotes that close under neither reading leave nothing that can be judged.
-  if (!readings.some(r => r.balanced)) return 'run SQL that could not be read'
-  return undefined
-}
-const valueAfter = (words: string[], flags: string[]): string | undefined => {
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i] as string
-    if (flags.includes(w)) return words[i + 1]
-    for (const f of flags) if (f.startsWith('--') && w.startsWith(`${f}=`)) return w.slice(f.length + 1)
-  }
-  return undefined
-}
 
-// Inline code that writes files, for the interpreters Claude reaches for when a write is refused.
-const INLINE_WRITE = /open\([^)]*['"][wax]\+?b?['"]|\.write_(?:text|bytes)\(|writeFile|appendFile|fs\.(?:write|rm|unlink|rename|copyFile)|File\.write|shutil\.(?:copy|move|rmtree)|os\.(?:remove|unlink|rename|replace)|unlinkSync|rmSync|renameSync|\bunlink\s*\(|open\s*\(\s*\w+\s*,\s*['"]\+?[>|]/
 
 // The files a command writes or removes by its arguments.
 const DEST_ONLY = new Set(['cp', 'ln', 'install', 'rsync', 'ditto'])
@@ -464,12 +393,17 @@ const UNREAD_HINT = 'Code passed inline (python3 -c, node -e) is read and judged
 const programRefusal = (c: Cmd): Refusal | undefined => {
   const p = c.program
   if (!p) return undefined
-  const runner = interpreterOf(c.words) ?? (isShell(c.words) ? name(c.words[0]) : undefined)
+  const lang = languageOf(c.words)
+  const runner = lang || isShell(c.words) ? name(c.words[0]) : undefined
   if (!runner) return undefined
   if ('unreadable' in p) return { what: `run a ${runner} script it cannot read (${p.unreadable})`, hint: UNREAD_HINT }
   // A shell's program is more commands, which the tool call hook reads and hands in beside it.
-  if (interpreterOf(c.words) && INLINE_WRITE.test(p.text)) return { what: `write files from ${runner}` }
-  return undefined
+  if (!lang) return undefined
+  // Judged by what the code can do in its own language (code.ts), naming what was seen.
+  const v = codeVerdict(lang, p.text)
+  if (!v) return undefined
+  if (v.does === 'unreadable') return { what: `run code from ${runner} it cannot read (${v.seen})`, hint: UNREAD_HINT }
+  return { what: `${v.does} from ${runner} (${v.seen})` }
 }
 
 const commandRefusal = (c: Cmd): Refusal | undefined => {
@@ -488,13 +422,9 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
     if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return why(`run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`)
   }
   if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return why(`run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`)
-  // Without -c, psql reads its SQL from a file or stdin (a heredoc body never reaches the reader).
-  if (cmd === 'psql') return why(sqlRefusal(valueAfter(words, ['-c', '--command'])))
-  if (cmd === 'mysql') return why(sqlRefusal(valueAfter(words, ['-e', '--execute'])))
-  if (cmd === 'sqlite3') {
-    const plainArgs = words.slice(1).filter(w => !isFlag(w) && !w.startsWith('<'))
-    return why(sqlRefusal(plainArgs[1]))
-  }
+  // A database client by every piece of SQL it runs and what it writes itself (sql.ts). Without SQL
+  // given, it reads a file or stdin (a heredoc body never reaches the reader), which cannot be read.
+  if (cmd === 'psql' || cmd === 'mysql' || cmd === 'sqlite3') return why(clientRefusal(cmd, words.slice(1), harmless))
   return programRefusal({ ...c, words }) ?? why(fileRefusal(words))
 }
 
@@ -518,7 +448,7 @@ export const noBuildRefusal = (call: { tool: string; input: Record<string, unkno
   if (tool.startsWith('mcp__') && dbWrite) return { what: dbWrite[1] as string }
   if (tool.startsWith('mcp__') && SQL_TOOL.test(tool)) {
     const sql = input.query ?? input.sql
-    const why = sqlRefusal(typeof sql === 'string' ? sql : undefined)
+    const why = sqlRefusal(typeof sql === 'string' ? sql : undefined, 'the SQL tool', harmless)
     return why ? { what: why } : undefined
   }
   if (tool !== 'Bash') return undefined
