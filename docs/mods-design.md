@@ -93,13 +93,14 @@ that comes back Proceed.
 
 An `rm` or `unlink` of a file another open session edited is judged the same way, with the same
 cards, toasts and messages; the judge is told the command removes the file. An `rm -r` (`-R`,
-`--recursive`, in any cluster such as `-rf`) of a folder is judged on every file another open
-session edited inside it, each as its own clash, so the card names the file at stake rather than the
-folder. An `mv` source is taken away whole in the same way, so moving a folder is judged on every
-file another session edited inside it. Once it has run, the removed path (the folder, for `rm -r`)
-is added to this session's edits. An `rm` of a glob or a variable names nothing, as decided for
-#654. The card, toast and message keep the words used for any write ("wanted to edit", "safe to
-edit"), as the brief for #674 asked, so the other session's toast parser reads them unchanged.
+`--recursive`, in any cluster such as `-rf`) of a folder is judged once on every file another open
+session edited inside it (the coordinator on #691): one judgment that names them all, one card or
+toast ("3 files in src", or the file's name when there is one), and one message to each other
+session naming its own files, which its toast lists by name. An `mv` source is taken away whole in
+the same way, so moving a folder is judged the same. Once it has run, the removed path (the folder,
+for `rm -r`) is added to this session's edits. An `rm` of a glob or a variable names nothing, as
+decided for #654. The card, toast and message keep the words used for any write ("wanted to edit",
+"safe to edit"), as the brief for #674 asked.
 
 Only paths inside the session's own root are recorded as its edits: its repository, or its own
 folder when it works outside one (the record's `repoRoot`, else its `cwd`). Scratch such as `/tmp`

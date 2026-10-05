@@ -33,8 +33,9 @@ type Clash = {
   action: string
   // How the card and the toasts name it: a file's name, or "this checkout".
   shortName: string
-  // How the message to the other session names it.
-  messageWhat: string
+  // How the message to the other session names it; per session when each has its own files at
+  // stake, as in a folder removal (#674).
+  messageWhat: string | ((o: Rec) => string)
   where: 'file' | 'checkout'
   root: string | null
   others: Rec[]
@@ -91,15 +92,17 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
     return undefined
   }
   const outcome = v.verdict === 'Worktree' ? 'it was moved to its own worktree to redo its change there' : 'it was stopped'
-  const message =
-    c.where === 'file'
-      ? `Another session wanted to edit ${c.messageWhat} while you are working on it, so ${outcome}. Nothing here was touched.`
-      : `Another session wanted to run ${c.messageWhat} in this checkout while you are working in it, so ${outcome}. Nothing here was touched.`
+  const message = (o: Rec) => {
+    const what = typeof c.messageWhat === 'string' ? c.messageWhat : c.messageWhat(o)
+    return c.where === 'file'
+      ? `Another session wanted to edit ${what} while you are working on it, so ${outcome}. Nothing here was touched.`
+      : `Another session wanted to run ${what} in this checkout while you are working in it, so ${outcome}. Nothing here was touched.`
+  }
   // The block stands whether or not the other session hears of it; one that cannot is said so.
   // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
   const unheard: string[] = []
   for (const o of c.others) {
-    const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: message })
+    const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: message(o) })
     if (!sent.isDelivered) unheard.push(sent.reason)
   }
   const note = !unheard.length
@@ -188,27 +191,28 @@ export const register: Register = on => {
 
       // The files the command writes (#654), judged against the other sessions' edits the same way
       // an Edit is, and noted as this session's own once it has run. An rm is judged the same way
-      // (#674), and an rm -r on every file another session edited inside the folder it takes away.
+      // (#674), and an rm -r or mv of a folder once, on every file another session edited inside it:
+      // one judgment, one card or toast, and one message to each session naming its own files.
       const written = await writtenFiles($, cmds)
       if (!written.length) return next(e)
       const list = await $.sessions.list()
       if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
       for (const w of written) {
-        for (const path of w.tree ? editedUnder(list.open, list.selfId, w.path) : [w.path]) {
-          const others = othersEditing(list.open, list.selfId, path)
-          if (!others.length) continue
-          const root = others[0]?.repoRoot ?? null
-          const what = !w.removes ? `write ${path}` : path === w.path ? `remove ${path}` : `remove ${path} (inside ${w.path})`
-          const blocked = await decide($, toolUseId, {
-            action: `${what} with the shell command: ${command}`,
-            shortName: base(path),
-            messageWhat: relTo(path, root),
-            where: 'file',
-            root,
-            others,
-          })
-          if (blocked) return blocked
-        }
+        const files = w.tree ? editedUnder(list.open, list.selfId, w.path) : [w.path]
+        const others = [...new Set(files.flatMap(p => othersEditing(list.open, list.selfId, p)))]
+        if (!others.length) continue
+        const root = others[0]?.repoRoot ?? null
+        const one = files.length === 1 ? (files[0] as string) : undefined
+        const what = !w.removes ? `write ${w.path}` : one === w.path ? `remove ${w.path}` : `remove ${w.path} and everything in it, including ${files.join(', ')},`
+        const blocked = await decide($, toolUseId, {
+          action: `${what} with the shell command: ${command}`,
+          shortName: one ? base(one) : `${files.length} files in ${base(w.path)}`,
+          messageWhat: one ? relTo(one, root) : o => files.filter(p => o.edits.includes(p)).map(p => relTo(p, root)).join(', '),
+          where: 'file',
+          root,
+          others,
+        })
+        if (blocked) return blocked
       }
       const result = await next(e)
       // A command that failed may still have written before it failed (printf >> f; false), so only
@@ -230,9 +234,10 @@ export const register: Register = on => {
     const origin = e.origin as { kind?: string; plugin?: string }
     if (origin.plugin === 'collision-guard' && e.text.startsWith('Another session wanted')) {
       const outcome = /moved to its own worktree/.test(e.text) ? 'it was moved to a worktree' : 'it was stopped'
-      const file = /wanted to edit (\S+) while/.exec(e.text)?.[1]
+      // A folder removal names several files, comma separated (#674).
+      const files = /wanted to edit (.+?) while you are working on it/.exec(e.text)?.[1]
       const action = /wanted to run (.+?) in this checkout/.exec(e.text)?.[1]
-      await $.ui.toast(`Another session wanted ${file ? base(file) : (action ?? 'your files')}; ${outcome}.`)
+      await $.ui.toast(`Another session wanted ${files ? files.split(', ').map(base).join(', ') : (action ?? 'your files')}; ${outcome}.`)
     }
     return next(e)
   })

@@ -423,7 +423,7 @@ test('an rm -r of a folder holding a file another session edited is judged on th
   const w = world(on, { open: [rec('them', { edits: ['/repo/src/deep/InvoiceTable.tsx', '/repo/README.md'] })] })
   await $.tool.call(bash('rm -rf src'))
   expect(w.prompts.length).toBe(1)
-  expect(w.prompts[0]?.prompt).toContain('remove /repo/src/deep/InvoiceTable.tsx (inside /repo/src) with the shell command: rm -rf src')
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/deep/InvoiceTable.tsx, with the shell command: rm -rf src')
   expect(w.toasts).toContain('Checked with the other session: safe to edit InvoiceTable.tsx.')
   expect(w.reached).toContain('Bash')
   expect(w.edits).toEqual(['/repo/src'])
@@ -433,7 +433,7 @@ test('an mv of a folder holding a file another session edited is judged on that 
   const w = world(on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], judge: '{"verdict":"Stop","reason":"They are editing it."}' })
   const r = await $.tool.call(bash('mv src /tmp/old-src'))
   expect(w.reached).not.toContain('Bash')
-  expect(w.prompts[0]?.prompt).toContain('remove /repo/src/a.ts (inside /repo/src) with the shell command: mv src /tmp/old-src')
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/a.ts, with the shell command: mv src /tmp/old-src')
   expect(refusal(r)).toContain('Another session is working on a.ts.')
 })
 
@@ -442,7 +442,44 @@ test('a folder copied in and then removed in one command keeps the removal (less
   on('fs.stat', ($, e) => ({ value: { kind: (e as unknown as { path: string }).path === '/repo/docs' ? 'dir' : 'other', size: 0, mtimeMs: 0, isLink: false } }) as never)
   await $.tool.call(bash('cp -r /tmp/sub docs; rm -r docs/sub'))
   expect(w.prompts.length).toBe(1)
-  expect(w.prompts[0]?.prompt).toContain('remove /repo/docs/sub/a.ts (inside /repo/docs/sub)')
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/docs/sub and everything in it, including /repo/docs/sub/a.ts,')
+})
+
+// The coordinator on #691: a folder removal is judged once, naming every affected file, with one
+// message to each other session naming its own files, never one judgment and toast per file.
+test('an rm -r of a folder holding several edited files is judged once, with one message per other session', withDeps, async ($, on) => {
+  const w = world(on, {
+    open: [rec('one', { edits: ['/repo/src/a.ts', '/repo/src/b.ts', '/repo/lib/x.ts'] }), rec('two', { edits: ['/repo/src/c.ts'] })],
+    judge: '{"verdict":"Stop","reason":"Both are mid change."}',
+  })
+  const r = await $.tool.call(bash('rm -rf src'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/a.ts, /repo/src/b.ts, /repo/src/c.ts, with the shell command: rm -rf src')
+  expect(w.cards.length).toBe(1)
+  expect(refusal(r)).toBe('Blocked: Another session is working on 3 files in src. Both are mid change. Leave it to the other session, or ask Dan.')
+  expect(w.sent.map(s => [s.to, s.text])).toEqual([
+    ['one', 'Another session wanted to edit src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+    ['two', 'Another session wanted to edit src/c.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+  ])
+})
+
+test('a folder removal judged Proceed is one toast however many files it holds', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('one', { edits: ['/repo/src/a.ts', '/repo/src/b.ts'] })] })
+  await $.tool.call(bash('rm -rf src'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.toasts).toEqual(['Checked with the other session: safe to edit 2 files in src.'])
+  expect(w.reached).toContain('Bash')
+})
+
+test('a message naming several files is told in one toast with each file name', withDeps, async ($, on) => {
+  const w = world(on)
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.session.receive({
+    origin: MEASURED,
+    text: 'Another session wanted to edit src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.',
+  } as never)
+  expect(w.toasts).toEqual(['Another session wanted a.ts, b.ts; it was stopped.'])
 })
 
 test('an rm -r of a folder the judge cannot answer for is stopped (L42)', withDeps, async ($, on) => {
