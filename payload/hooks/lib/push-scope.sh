@@ -236,11 +236,22 @@ sys.stdout.write("".join(seg + "\x1e" for seg in out))
 }
 
 ps__segment_is_push() {
-  # Tokenize crudely on whitespace: quoting only matters here for arguments we
-  # already skip, and a quoted subcommand is not a thing.
-  local seg="$1"
+  # Tokenize the way the shell does, quotes and all (claude-config#589). This used to split on
+  # whitespace on the grounds that quoting only matters for arguments it skips, and it matters for
+  # exactly those: `git -C "/a b/wt" push` became -C, "/a, b/wt", push, the skip after -C landed on
+  # b/wt" as if it were the subcommand, and the push was not seen as a push at all, so every global
+  # push gate stood down on it. The crude split is kept only for when python3 cannot read the
+  # segment (an unbalanced quote), which is the direction that still fires the gates.
+  local seg="$1" toks
   local -a tok
-  read -r -a tok <<< "$seg"
+  if toks="$(PS_SEG="$seg" python3 -c '
+import os, shlex, sys
+sys.stdout.write("\x1f".join(shlex.split(os.environ["PS_SEG"], posix=True)))
+' 2>/dev/null)" && [ -n "$toks" ]; then
+    IFS=$'\x1f' read -r -a tok <<< "$toks"
+  else
+    read -r -a tok <<< "$seg"
+  fi
   local i=0 n=${#tok[@]} t
 
   # A subshell or group opening the segment, `(git push)` or `( cd x && git push )`, is

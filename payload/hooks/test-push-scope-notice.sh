@@ -69,10 +69,18 @@ silent "and says nothing" "$out"
 
 echo "push scope notice: silent where there is nothing to announce"
 
-silent "a push the gates can resolve says nothing" "$(run "cd $W/target && git push")"
-silent "a plain push from the session repository says nothing" "$(run "git push")"
-silent "a command that is not a push says nothing" "$(run "cd $W/no-such-dir && git status")"
-silent "a push quoted inside an argument says nothing" "$(run "gh issue create --body \"cd $W/no-such-dir && git push\"")"
+# Since #589 the hook refuses with exit 2 and speaks on STDERR, so "silent" means all three: exit 0,
+# nothing on stdout, nothing on stderr. Checking stdout alone could not see a wrong refusal.
+allowed() { # allowed <description> <command>
+  local out rc
+  out="$(run "$2")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -s "$W/err" ]; then check "$1" ok
+  else check "$1" "exit $rc, stdout [${out:0:200}], stderr [$(head -c 200 "$W/err")]"; fi
+}
+allowed "a push the gates can resolve is let through, saying nothing" "cd $W/target && git push"
+allowed "a plain push from the session repository is let through, saying nothing" "git push"
+allowed "a command that is not a push is let through, saying nothing" "cd $W/no-such-dir && git status"
+allowed "a push quoted inside an argument is let through, saying nothing" "gh issue create --body \"cd $W/no-such-dir && git push\""
 
 echo "push scope notice: it is actually run"
 
