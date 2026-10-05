@@ -199,7 +199,7 @@ export type ModKitGit = { sub: string | undefined; args: string[]; dir: string |
  * folder, as only the disk can say. A `word` holding `$F` with a `path` is a variable the command
  * set, read as its value (#743).
  */
-export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true }
+export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }
 
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),

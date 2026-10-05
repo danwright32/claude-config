@@ -409,7 +409,12 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
   let vars: Vars = new Map()
   // Each word of the command being read that a variable's value replaced, as it was written.
   const asWritten = new Map<string, string>()
+  // For a command a find -exec runs, the folders find starts from: a change at one of them is one
+  // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
+  let foundRoots: readonly string[] = []
   const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true }) => {
+    // Where a find -exec's {} stood, the write reaches every file under that folder (#760).
+    const tree = foundRoots.includes(word)
     if (!word || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
     if (seen.has(key)) return
@@ -421,12 +426,10 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
       ...(sources && sources.length ? { sources } : {}),
       ...(extra?.edits ? { edits: true as const } : {}),
       ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
+      ...(tree ? { tree: true as const } : {}),
     })
   }
   const named = (w: string, edits?: true) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined)
-  // For a command a find -exec runs, the folders find starts from: a change at one of them is one
-  // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
-  let foundRoots: readonly string[] = []
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
     tree = tree || foundRoots.includes(word)
     const path = absolutePath(word, dir, home)

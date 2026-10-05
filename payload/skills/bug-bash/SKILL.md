@@ -50,7 +50,8 @@ output directory `<scratchpad>/bug-bash/<run>/explorer-<n>/`. Tell each explorer
   directory, started only through
   `require(process.env.HOME + '/.claude/skills/bug-bash/explorer-browser.js').launch({ chromium, readOnly })`
   with `chromium` from the project's own `node_modules/playwright`. In a read only run it aborts
-  every request that is not a read, so nothing is submitted to a site with real users. Never the Playwright MCP browser (one browser for the whole session; the
+  every HTTP request that is not a read and blocks service workers; WebSocket messages still pass,
+  so an explorer in a read only run submits nothing and sends nothing over a socket. Never the Playwright MCP browser (one browser for the whole session; the
   `playwright-subagent-gate` hook refuses it) and never Claude in Chrome (Dan's real browser and
   sign ins). Measured on 2026-10-05: four such browsers launched at once ran in 1.2 to 1.5 s, and a
   cookie set in one was absent from the other three.

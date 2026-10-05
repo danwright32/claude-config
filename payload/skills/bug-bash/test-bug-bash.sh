@@ -243,7 +243,8 @@ LAUNCHER="$DIR/explorer-browser.js"
 out="$(node -e '
 const { launch, isRead } = require(process.argv[1])
 const routes = []
-const fake = { launch: async () => ({ newContext: async () => ({ route: async (pat, fn) => routes.push({ pat, fn }) }) }) }
+const opts = []
+const fake = { launch: async () => ({ newContext: async o => { opts.push(o || {}); return { route: async (pat, fn) => routes.push({ pat, fn }) } } }) }
 const req = m => ({ request: () => ({ method: () => m }), continue: () => "continued", abort: () => "aborted" })
 ;(async () => {
   const ro = await launch({ chromium: fake, readOnly: true })
@@ -251,13 +252,16 @@ const req = m => ({ request: () => ({ method: () => m }), continue: () => "conti
   const verdicts = r ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].map(m => m + "=" + r.fn(req(m))) : []
   routes.length = 0
   await launch({ chromium: fake, readOnly: false })
-  console.log(JSON.stringify({ hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead) }))
+  console.log(JSON.stringify({ hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead), sw: opts.map(o => o.serviceWorkers || "allow") }))
 })().catch(e => { console.log("ERR " + e.message); process.exit(1) })
 ' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && ok || bad "the explorer launcher loads and launches with a stand in browser" "$out"
 grep -q '"verdicts":\["GET=continued","HEAD=continued","OPTIONS=continued","POST=aborted","PUT=aborted","PATCH=aborted","DELETE=aborted"\]' <<< "$out" && ok \
   || bad "read only lets reads through and aborts every request that could change something" "$out"
 grep -q '"localRoutes":0' <<< "$out" && ok || bad "a local run is not restricted" "$out"
+# A service worker's requests bypass context.route, so a read only context blocks service workers
+# (lessons review of #798).
+grep -q '"sw":\["block","allow"\]' <<< "$out" && ok || bad "a read only context blocks service workers, a local one does not" "$out"
 grep -q '"hasContext":true' <<< "$out" && ok || bad "the launcher hands back the context explorers drive" "$out"
 out="$(node -e 'require(process.argv[1]).launch({ readOnly: true }).then(() => console.log("launched"), e => { console.log(e.message); process.exit(3) })' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 3 ] && grep -qi 'playwright' <<< "$out" && ok || bad "with no Playwright handed in, the launcher refuses by name (rc $rc)" "$out"
