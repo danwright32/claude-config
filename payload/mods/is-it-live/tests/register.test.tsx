@@ -549,3 +549,50 @@ test("an issue whose author is none of Dan's accounts keeps its message", withKi
   await card($, { ...CARD, requester: { name: 'Kris', via: 'issue', issue: 88 }, message: 'It is live.' })
   expect(await shown($)).toEqual(['Message for Kris', 'It is live.'])
 })
+
+// #771: after a merge the card's facts showed up to four times. The call's own row (Claude Code's
+// echo of the tool's input) carried the whole changed text, checked and see; it is drawn naming the
+// change alone, and the card under it is the one place the facts are read.
+const toolRow = (input: unknown, tool = 'mcp__is-it-live__card') =>
+  ({ plugin: 'is-it-live', surface: 'terminal', component: 'ToolUse', props: { tool_use_id: 'c1', tool, input, isRunning: false, isErrored: false, isInterrupted: false } }) as never
+const rowInput = async ($: unknown, input: unknown, tool?: string) => {
+  const ui = (await ($ as { ui: { mount: (x: never) => Promise<unknown> } }).ui.mount(toolRow(input, tool))) as Mounted
+  const t = (await ui.findAll({ type: 'Text' })).map(x => x.text)
+  await ui.unmount()
+  return t
+}
+// Claude Code's own row beneath, drawn here as the input it was handed.
+const engineRow = (on: On) =>
+  on('ui.render', { component: 'ToolUse' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{JSON.stringify((e.props as { input?: unknown }).input)}</Text>
+  })
+
+test("the card call's row names the change alone, never the facts the card shows (#771)", withKit, async ($, on) => {
+  engineRow(on)
+  world(on)
+  expect(await rowInput($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'It is live.' })).toEqual([JSON.stringify({ repo: REPO, pr: 412 })])
+})
+
+test("another tool's row is drawn as Claude Code draws it (#771)", withKit, async ($, on) => {
+  engineRow(on)
+  world(on)
+  // An input carrying a repo and pr too, so only the tool's name keeps the row whole.
+  const other = { repo: REPO, pr: 412, changed: 'x' }
+  expect(await rowInput($, other, 'mcp__other__card')).toEqual([JSON.stringify(other)])
+})
+
+test('a card call missing its repo or pr keeps its whole row, so the refusal under it reads against what was sent (#771)', withKit, async ($, on) => {
+  engineRow(on)
+  world(on)
+  const { pr: _pr, ...noPr } = CARD
+  expect(await rowInput($, noPr)).toEqual([JSON.stringify(noPr)])
+})
+
+test('the answer tells Claude that Dan has already seen the card, so the reply does not restate it (#771)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const said = ((await card($, CARD)).context ?? []).join(' ')
+  expect(said).toContain('Dan has already seen this card')
+  expect(said).toContain('do not restate')
+})

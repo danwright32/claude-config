@@ -688,6 +688,103 @@ saw started 1 "a hook run that reached the label gate"
 forget_verdicts
 run "the same changelog/none label read in time is quiet" skip "gh pr merge 42 --squash"
 
+# ---- skipped for the rest of a session (claude-config#623) ----
+# Dan answered "skip" about 13 times across 8 Sonar sessions, once as "skip all quizzes for the
+# rest of this session", which held only while Claude remembered it. The hook now reads a snooze
+# kept per session id, set by the command its own instruction names, so a later merge in that
+# session is skipped by the hook itself, and announced in one line, never silently (L98).
+forget_verdicts
+record '[{"name":"changelog/visible"}]'
+session_line() {  # $1 = session id ; prints the hook's whole output for a visible merge
+  python3 -c '
+import json, sys
+print(json.dumps({"tool_input": {"command": "gh pr merge 42 --squash"}, "cwd": sys.argv[1], "session_id": sys.argv[2]}))
+' "$FIXTURE/repo" "$1" | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null
+}
+SID_A="3f1c2b8e-0a4d-4c55-9e21-7b6d1a2c9f00"
+SID_B="8d2e4f60-1b3c-4a7d-8e9f-0c1d2e3f4a5b"
+
+# Before any snooze the quiz fires, and its instruction names the exact command that snoozes
+# this session, with this session's id in it, and says one skip ends the whole set.
+out="$(session_line "$SID_A")"
+reason="$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)"
+if holds "$out" '"block"'; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a visible merge with no snooze does not quiz (got: ${out:0:200})"; fi
+if holds "$reason" "bash $(printf '%q' "$HOOK") --snooze-session $SID_A"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the quiz does not name the snooze command for this session"; fi
+if holds "$reason" "skips every remaining question"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the quiz does not say a skip ends the whole set"; fi
+
+# The command it names: run as the instruction gives it, it snoozes that session alone.
+snooze_out="$(bash "$HOOK" --snooze-session "$SID_A" 2>&1)"; snooze_rc=$?
+if [ "$snooze_rc" = 0 ] && holds "$snooze_out" "rest of this session"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the snooze command did not confirm (rc=$snooze_rc, got: $snooze_out)"; fi
+out="$(session_line "$SID_A")"
+msg="$(printf '%s' "$out" | jq -r '.systemMessage // ""' 2>/dev/null)"
+if holds "$out" '"block"'; then fail=$((fail+1)); echo "FAIL: a snoozed session was quizzed"; else pass=$((pass+1)); fi
+if holds "$msg" "rest of this session" && [ "$(printf '%s\n' "$msg" | wc -l | tr -d ' ')" = "1" ]; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the snoozed skip does not say so in one line (got: $out)"; fi
+# Another session is still quizzed: the snooze is this session's, not the machine's.
+out="$(session_line "$SID_B")"
+if holds "$out" '"block"'; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a snooze in one session silenced another"; fi
+# A snoozed merge is not a quiz the label gate failed to silence (#354).
+saw fired_since_quiet 2 "two quizzed merges and one snoozed merge"
+
+# An id that is not one refuses, rather than writing a path built from it.
+# The path checked is the one that id would write if it were accepted (the snooze folder plus the
+# id), and the folder's listing must not change, so the "nothing written" half can fail (#790, L159).
+snoozed_before="$(ls -A "$CLAUDE_QUIZ_VERDICT_DIR/snoozed" 2>/dev/null)"
+bad_out="$(bash "$HOOK" --snooze-session '../escaped' 2>&1)"; bad_rc=$?
+if [ "$bad_rc" != 0 ] && [ ! -e "$CLAUDE_QUIZ_VERDICT_DIR/snoozed/../escaped" ] \
+   && [ "$(ls -A "$CLAUDE_QUIZ_VERDICT_DIR/snoozed" 2>/dev/null)" = "$snoozed_before" ]; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: a malformed session id was accepted (rc=$bad_rc, got: $bad_out)"; fi
+# And with no session id in the payload the snooze cannot apply, so the quiz fires (fails open).
+run "a merge whose payload carries no session id still quizzes" fire "gh pr merge 42 --squash"
+
+# ---- the review findings on #779 (claude-config#790) ----
+# A snoozed merge is recorded, so a skip leaves a trace in the counts (L357).
+forget_verdicts
+bash "$HOOK" --snooze-session "$SID_A" >/dev/null 2>&1
+session_line "$SID_A" >/dev/null
+saw snoozed 1 "a merge in a snoozed session"
+saw fired_since_quiet 0 "a merge in a snoozed session"
+
+# A snooze older than its expiry no longer silences the quiz, whether or not any newer snooze was
+# written to sweep it (L523).
+SID_OLD="5a6b7c8d-1111-4222-8333-944455556666"
+bash "$HOOK" --snooze-session "$SID_OLD" >/dev/null 2>&1
+touch -t "$(date -v-15d +%Y%m%d%H%M 2>/dev/null || date -d '15 days ago' +%Y%m%d%H%M)" "$CLAUDE_QUIZ_VERDICT_DIR/snoozed/$SID_OLD"
+out="$(session_line "$SID_OLD")"
+if holds "$out" '"block"'; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a snooze past its expiry still silenced the quiz (got: ${out:0:200})"; fi
+# And one inside its expiry still holds, so the fire above is the age.
+touch -t "$(date -v-13d +%Y%m%d%H%M 2>/dev/null || date -d '13 days ago' +%Y%m%d%H%M)" "$CLAUDE_QUIZ_VERDICT_DIR/snoozed/$SID_OLD"
+out="$(session_line "$SID_OLD")"
+if holds "$out" '"block"'; then fail=$((fail+1)); echo "FAIL: a snooze inside its expiry did not hold"; else pass=$((pass+1)); fi
+
+# The snooze command works in a detached run too: the early exit for a run with nobody to quiz is
+# about quizzing, and must not swallow a command that was asked for by name (L98).
+SID_DET="7e8f9a0b-2222-4333-8444-a55566667777"
+det_out="$(CLAUDE_DETACHED_RUN=1 bash "$HOOK" --snooze-session "$SID_DET" 2>&1)"
+if [ -f "$CLAUDE_QUIZ_VERDICT_DIR/snoozed/$SID_DET" ] && holds "$det_out" "rest of this session"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the snooze command in a detached run wrote nothing (got: $det_out)"; fi
+
+# The command the quiz names is RUN, exactly as written, from a hooks folder whose path holds an
+# apostrophe and a space, and it must snooze the session (L406: a remedy is executed by a test).
+QDIR="$FIXTURE/Dan's hooks"
+ln -s "$DIR" "$QDIR"
+SID_Q="9c0d1e2f-3333-4444-8555-b66677778888"
+q_reason="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_input": {"command": "gh pr merge 42 --squash"}, "cwd": sys.argv[1], "session_id": sys.argv[2]}))
+' "$FIXTURE/repo" "$SID_Q" | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" bash "$QDIR/pr-merge-quiz.sh" ) 2>/dev/null | jq -r '.reason // ""')"
+q_cmd="${q_reason##*run exactly this command, then confirm in one line: }"
+if [ -n "$q_cmd" ] && [ "$q_cmd" != "$q_reason" ]; then
+  bash -c "$q_cmd" >/dev/null 2>&1
+  if [ -f "$CLAUDE_QUIZ_VERDICT_DIR/snoozed/$SID_Q" ]; then pass=$((pass+1)); else
+    fail=$((fail+1)); echo "FAIL: the named snooze command, run as written, snoozed nothing (it was: $q_cmd)"; fi
+else
+  fail=$((fail+1)); echo "FAIL: the quiz from a quoted path named no snooze command"
+fi
+
 rm -rf "$FIXTURE"
 
 echo

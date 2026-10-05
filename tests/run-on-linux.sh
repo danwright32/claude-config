@@ -38,6 +38,7 @@ WORKFLOW="$ROOT/.github/workflows/tests.yml"
 # script quietly claiming to reproduce CI.
 runner="$(sed 's/#.*//' "$WORKFLOW" 2>/dev/null | awk -F'runs-on:' '/runs-on:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')"
 case "$runner" in
+  ubuntu-26.04)               IMAGE=ubuntu:26.04 ;;
   ubuntu-latest|ubuntu-24.04) IMAGE=ubuntu:24.04 ;;
   ubuntu-22.04)               IMAGE=ubuntu:22.04 ;;
   '')

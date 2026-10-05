@@ -38,7 +38,13 @@ cat > "$FAKE" <<'STUB'
 echo "$*" >> "$STUB_LOG"
 case "$1 $2" in
   "plugin validate") case "$3" in *broken*) printf '  hooks: bad event\n\nValidation failed\n'; exit 1 ;; esac; echo 'Validation passed' ;;
-  "plugin test") case "$3" in *redtest*) printf ' 0 pass\n 1 fail\n'; exit 1 ;; esac; printf ' 1 pass\n 0 fail\n' ;;
+  "plugin test") case "$3" in
+      *redtest*) printf ' 0 pass\n 1 fail\n'; exit 1 ;;
+      # Claude Code's own answer while its cached rollout switch is saved off (2.1.289, #740).
+      *switchedoff*) printf 'hooks modules are turned off in this process: the rollout switch was saved off. Start `claude` once with network access, then run the tests again\n'; exit 1 ;;
+      # A failure with no verdict line the reason filter keeps.
+      *noverdict*) printf 'line one\nline two\nsomething odd happened\n'; exit 7 ;;
+    esac; printf ' 1 pass\n 0 fail\n' ;;
   *) exit 2 ;;
 esac
 STUB
@@ -123,6 +129,31 @@ out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M1" 2>&1)"; code=$?
 [ "$code" -eq 3 ] && check "no claude means exit 3, unmeasured" ok || check "no claude means exit 3, unmeasured" "exit=$code out=$out"
 case "$out" in *UNMEASURED*) check "and says UNMEASURED" ok ;; *) check "and says UNMEASURED" "$out" ;; esac
 
+# 6b. Claude Code answering that hooks modules are switched off is machine state the suite cannot
+#     set, so it is UNMEASURED with its own exit code and the engine's words, never a failure of
+#     every mod with an empty reason (#740, L411, L11).
+M6B="$TMPROOT/m6b"; mkmod "$M6B" switchedoff-a; printf 'x\n' > "$M6B/switchedoff-a/hooks/a.test.ts"
+mkmod "$M6B" switchedoff-b; printf 'x\n' > "$M6B/switchedoff-b/hooks/a.test.ts"
+runit "$M6B"
+[ "$code" -eq 4 ] && check "mods switched off in Claude Code means exit 4, unmeasured" ok \
+  || check "mods switched off in Claude Code means exit 4, unmeasured" "exit=$code out=$out"
+case "$out" in *"failed claude plugin test"*) check "and no mod is reported as failing" "$out" ;; *) check "and no mod is reported as failing" ok ;; esac
+printf '%s\n' "$out" | grep UNMEASURED | grep -q 'hooks modules are turned off in this process' \
+  && check "and the engine's reason is carried on the UNMEASURED line" ok || check "and the engine's reason is carried on the UNMEASURED line" "$out"
+# A definite failure beside it still outranks the unmeasured rest.
+mkmod "$M6B" broken-too
+runit "$M6B"
+[ "$code" -eq 1 ] && check "a refused mod beside switched off ones still fails the run" ok \
+  || check "a refused mod beside switched off ones still fails the run" "exit=$code out=$out"
+
+# 6c. A failure carrying no verdict line names the exit code and the last lines of output, never an
+#     empty reason (#740).
+M6C="$TMPROOT/m6c"; mkmod "$M6C" noverdict-mod; printf 'x\n' > "$M6C/noverdict-mod/hooks/a.test.ts"
+runit "$M6C"
+[ "$code" -eq 1 ] && check "a test failure with no verdict line fails the run" ok || check "a test failure with no verdict line fails the run" "exit=$code out=$out"
+line="$(printf '%s\n' "$out" | grep 'noverdict-mod failed')"
+case "$line" in *"exit 7"*"something odd happened"*) check "naming the exit code and the last output" ok ;; *) check "naming the exit code and the last output" "$out" ;; esac
+
 # 7. A mods folder that does not exist is refused, not passed as empty.
 out="$(CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused" ok || check "a missing mods folder is refused" "exit=$code out=$out"
@@ -139,6 +170,11 @@ else
   out="$(CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
   if [ "$code" -eq 3 ]; then
     echo "note: no claude command on this machine, so the real mods are reported UNMEASURED rather than passed."
+    check "the real mods could not be measured here" ok
+  elif [ "$code" -eq 4 ]; then
+    # Claude Code's cached rollout switch, which this suite cannot set (#740, L411).
+    echo "note: Claude Code has hooks modules switched off on this machine, so the real mods are UNMEASURED rather than passed:"
+    printf '%s\n' "$out" | grep UNMEASURED | sed 's/^/  /'
     check "the real mods could not be measured here" ok
   else
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
@@ -726,6 +762,47 @@ export const register = on => {
   })
 }
 TS
+# A promise made outside a noun's code (in another hook), kept in a map or a variable, and returned
+# by a noun later is that noun's wait too (#756): it is named where it is made.
+mknounmod "$M12W" made-in-hook held <<'TS'
+const held = new Map<string, Promise<string>>()
+const waiters = new Map<string, (v: string) => void>()
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    held.set('start', new Promise(resolve => waiters.set('start', resolve)))
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, held: { wait: ({ id }) => held.get(id) } }
+  })
+}
+TS
+mknounmod "$M12W" kept-in-variable ready <<'TS'
+let release: (() => void) | undefined
+let ready: Promise<void> = Promise.resolve()
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    ready = new Promise<void>(r => { release = r })
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, ready: { wait: () => ready } }
+  })
+}
+TS
+# A race bounds a wait only when the timer it races settles under 10 s (the limit measured on 2026-10-05).
+mknounmod "$M12W" raced-long slow <<'TS'
+const waiters = new Map()
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, slow: { wait: ({ id }) => Promise.race([new Promise(resolve => waiters.set(id, resolve)), sleep(15_000)]) } }
+  })
+}
+TS
 # What must pass: a wait a timer under 10 s settles, one settled at once, a comment or a string
 # naming the forbidden shape, and a wait outside every noun's code, which is not this check's to
 # judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun). The
@@ -774,10 +851,48 @@ export const register = on => {
   })
 }
 TS
+# A race against a timer made in another executor, a helper's or one written in place, bounds the
+# wait, for a promise made in place and for one made in another hook (#756). A promise another hook
+# keeps that no noun reads is not this check's to judge.
+mknounmod "$M12W" raced-short race <<'TS'
+const waiters = new Map()
+const held = new Map()
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    held.set('start', new Promise(resolve => waiters.set('start', resolve)))
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      race: {
+        wait: ({ id }) => Promise.race([new Promise(resolve => waiters.set(id, resolve)), sleep(5_000)]),
+        held: ({ id }) => Promise.race([held.get(id), new Promise(r => built.clock.after(3_000, () => r('late')))]),
+      },
+    }
+  })
+}
+TS
+mknounmod "$M12W" kept-unread calm <<'TS'
+let parked: Promise<void> = Promise.resolve()
+const waiters: (() => void)[] = []
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    parked = new Promise<void>(r => waiters.push(r))
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, calm: { now: async () => Date.now() } }
+  })
+}
+TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"13 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
-for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7; do
+case "$out" in *"18 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
     || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
@@ -787,11 +902,16 @@ printf '%s\n' "$out" | grep -F 'asks-a-person/hooks/register.ts:4' | grep -q 'wa
 printf '%s\n' "$out" | grep -F 'lost-executor/hooks/register.ts:4' | grep -q 'cannot be read' \
   && check "an executor that cannot be found is reported as unreadable, never passed" ok \
   || check "an executor that cannot be found is reported as unreadable, never passed" "$out"
-for m in bounded commented outside-any-noun; do
+for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'which a noun returns' \
+    && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
+    || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
+done
+for m in bounded commented outside-any-noun raced-short kept-unread; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor; do rm -rf "${M12W:?}/$m"; done
+for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long; do rm -rf "${M12W:?}/$m"; done
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
   || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
@@ -803,89 +923,31 @@ if [ -d "$ROOT/payload/mods" ]; then
   [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \
     || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
 fi
+# Each mod scan depends on the shared source reader only through names it documents as public, never
+# a private _helper whose signature can move under it (#756: #739 changed _definition's while #744's
+# branch was open, and the resulting TypeError surfaced only after a rebase).
+priv="$(grep -n -E 'from ts_source import .*\b_[A-Za-z]|ts_source\._[A-Za-z]' "$ROOT"/tools/*.sh "$ROOT"/tools/*.py "$ROOT"/tests/*.sh 2>/dev/null | grep -v "^$ROOT/tests/test-mods.sh:.*priv=")"
+[ -z "$priv" ] && check "no scan imports a private helper of tools/lib/ts_source.py" ok \
+  || check "no scan imports a private helper of tools/lib/ts_source.py" "$priv"
+fc="$(python3 - "$ROOT/tools/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from ts_source import code_only, function_code, function_span, kinds
+text = "// const helper = 1\nconst helper = (a: number) => { return a + 1 }\nfunction other() { return 2 }\n"
+code, k = code_only(text), kinds(text)
+span = function_span(code, "helper", k)
+print(function_code(code, "helper", k) == code[span[0]:span[1]], code[span[0]:span[1]].startswith("const helper"), function_code(code, "other", k), function_span(code, "missing", k))
+PY
+)"
+[ "$fc" = "True True function other() { return 2 } None" ] \
+  && check "ts_source's public function_code and function_span read a function's code and where it lies" ok \
+  || check "ts_source's public function_code and function_span read a function's code and where it lies" "$fc"
 # Every check this suite runs can be run directly, as its header says, so each is committed
 # executable (the lessons review of #744: the noun wait check was committed 644 beside its 755
 # siblings, which this suite's own `bash <check>` could never notice).
 for t in "$CHECK" "$SHARED" "$DEPS" "$WAITS"; do
   [ -x "$t" ] && check "${t#"$ROOT"/} is executable" ok || check "${t#"$ROOT"/} is executable" "not executable"
 done
-
-# 13. The goal tracker reads ask before saving's waiting saves, `ask-before-saving.pending`, as a list
-#     whose first entry has id: string (#706), and its own tests can only stand in for ask before
-#     saving, so its reading is checked here against the contract ask before saving declares (L52).
-#     Shown failing on a contract whose shape moved, then held on the real one. The contract is read
-#     with a block's members at its own top level and comments taken out (#735), through the one
-#     reader of source every mod scan shares. (Picker manners' open question was checked the same way
-#     until #744 removed it, and the goal tracker's reading of it with it.)
-TS_LIB="$ROOT/tools/lib"
-save_contract(){   # $1 = ask before saving's types file -> prints what does not match, exits 1 when anything does not
-  python3 - "$1" "$TS_LIB" <<'PY'
-import re, sys
-sys.path.insert(0, sys.argv[2])
-from ts_source import block_after, top_members
-try:
-    text = open(sys.argv[1]).read()
-except OSError as e:
-    print(f"cannot read {sys.argv[1]}: {e}")
-    sys.exit(1)
-wrong = []
-state = block_after(text, r"'ask-before-saving'\s*:\s*\{")
-if state is None or not re.match(r"AskBeforeSavingQuestion\[\]$", top_members(state).get("pending", "")):
-    wrong.append("PluginState 'ask-before-saving' does not declare pending: AskBeforeSavingQuestion[]")
-body = block_after(text, r"export type AskBeforeSavingQuestion\s*=\s*\{")
-if body is None:
-    wrong.append("there is no AskBeforeSavingQuestion type")
-elif top_members(body).get("id") != "string":
-    wrong.append("AskBeforeSavingQuestion has no id: string")
-print("; ".join(wrong))
-sys.exit(1 if wrong else 0)
-PY
-}
-ABS_TYPES="$ROOT/payload/mods/ask-before-saving/types/index.d.ts"
-if [ ! -f "$ABS_TYPES" ]; then
-  echo "note: ask before saving is not in payload/mods, so the goal tracker reads no waiting save of its and there is no contract to check."
-  check "ask before saving is absent, which is not a pass over its contract" ok
-else
-  M13="$TMPROOT/m13"; mkdir -p "$M13"
-  sed 's/^  id: string$/  callId: string/' "$ABS_TYPES" > "$M13/moved.d.ts"
-  grep -q '^  callId: string$' "$M13/moved.d.ts" || check "the moved fixture was made" "sed did not change the contract"
-  out="$(save_contract "$M13/moved.d.ts" 2>&1)"; code=$?
-  [ "$code" -eq 1 ] && case "$out" in *"AskBeforeSavingQuestion has no id: string"*) true ;; *) false ;; esac \
-    && check "an ask before saving contract whose question id moved fails the goal tracker's reading" ok \
-    || check "an ask before saving contract whose question id moved fails the goal tracker's reading" "exit=$code out=$out"
-  # A member with an inline object type ahead of pending does not hide it (lessons review of #709).
-  sed "s/'ask-before-saving': { pending:/'ask-before-saving': { meta: { at: number }; pending:/" "$ABS_TYPES" > "$M13/nested.d.ts"
-  grep -q 'meta: { at: number }; pending:' "$M13/nested.d.ts" || check "the nested fixture was made" "sed did not change the contract"
-  out="$(save_contract "$M13/nested.d.ts" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "an inline object type ahead of pending still finds pending" ok \
-    || check "an inline object type ahead of pending still finds pending" "exit=$code out=$out"
-  # Members separated by commas, as TypeScript allows, with a generic's comma among them, are read
-  # the same as ones on lines of their own (lessons review of #737).
-  printf '%s\n' "export type AskBeforeSavingQuestion = { id: string, input: Record<string, unknown>, files: string[] }" \
-    "declare module 'claude-code' { interface PluginState { 'ask-before-saving': { pending: AskBeforeSavingQuestion[], rules: string[] } } }" > "$M13/commas.d.ts"
-  out="$(save_contract "$M13/commas.d.ts" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "a contract whose members are separated by commas is read the same" ok \
-    || check "a contract whose members are separated by commas is read the same" "exit=$code out=$out"
-  # #735: a member counts only at the block's own top level, never nested in another member's type
-  # or standing in a comment.
-  perl -pe 's/^  id: string$/  callId: string\n  meta: {\n    id: string\n  }/' "$ABS_TYPES" > "$M13/nested-id.d.ts"
-  perl -pe 's/^  id: string$/  \/*\n  id: string\n  *\/\n  callId: string/' "$ABS_TYPES" > "$M13/commented-id.d.ts"
-  perl -pe "s/'ask-before-saving': \{ pending:/'ask-before-saving': { \/* pending: AskBeforeSavingQuestion[] *\/ waiting:/" "$ABS_TYPES" > "$M13/commented-pending.d.ts"
-  for f in nested-id commented-id commented-pending; do
-    cmp -s "$ABS_TYPES" "$M13/$f.d.ts" && check "the $f fixture was made" "perl did not change the contract"
-  done
-  for f in nested-id:'AskBeforeSavingQuestion has no id: string' commented-id:'AskBeforeSavingQuestion has no id: string' commented-pending:'does not declare pending: AskBeforeSavingQuestion[]'; do
-    out="$(save_contract "$M13/${f%%:*}.d.ts" 2>&1)"; code=$?
-    [ "$code" -eq 1 ] && case "$out" in *"${f#*:}"*) true ;; *) false ;; esac \
-      && check "an ask before saving contract with only ${f%%:*} fails the goal tracker's reading" ok \
-      || check "an ask before saving contract with only ${f%%:*} fails the goal tracker's reading" "exit=$code out=$out"
-  done
-  out="$(save_contract "$ABS_TYPES" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "ask before saving's contract declares the waiting saves as the goal tracker reads them" ok \
-    || check "ask before saving's contract declares the waiting saves as the goal tracker reads them" "exit=$code out=$out"
-  grep -q "SAVE_PENDING = { plugin: 'ask-before-saving', key: 'pending' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
-    && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no SAVE_PENDING for ask-before-saving pending in goal-tracker"
-fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

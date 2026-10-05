@@ -64,10 +64,10 @@ Read `repos.json` beside this file:
 ] }
 ```
 
-**Every repo in this file is treated identically.** There is no launch mode, no special first
-post, no per-repo behaviour of any kind. Dan writes his own introduction post when a product
-goes live; this skill only ever does the recurring update, and a product joins that rotation
-weeks later.
+**Every repo in this file is treated identically, apart from its first appearance.** There is no
+per-repo behaviour of any kind. A product's first appearance (its repo has no `lastEnd` in state)
+introduces it in general and never lists its changes one by one; every run after that is the
+recurring update, exactly as for PET. Section 2, "First appearance", says how.
 
 - A repo with **no merges in the window** is omitted from the post silently.
 - A repo that is **unreachable** is skipped with a line in the terminal. Never fail the whole
@@ -83,8 +83,8 @@ Add an entry to `repos.json`. That is the entire process.
 created and not the same day it launches. A repo absent from this file is invisible to the
 skill, which is the correct state for a product managers cannot use yet.
 
-Having no `lastEnd` makes its next run a genuine first run, so the skill asks for a starting
-date (section 2) and then behaves exactly like PET forever after.
+Having no `lastEnd` makes its next run its first appearance, which introduces the product
+(section 2) and then behaves exactly like PET forever after.
 
 Slate's repo is `Try-Pennie/slate`. Its entry, for when Dan wants it in the rotation:
 
@@ -115,8 +115,27 @@ state, not config.
   them to this run's candidate set regardless of the window.
 - **`headings`** is the previous run's section names. See section 6.
 
-**The only time it asks:** a repo with no `lastEnd` at all, its genuine first run. Then ask for
-a starting date, because nothing else can know it. Every run after that is silent.
+### First appearance
+
+A repo with no `lastEnd` at all is a product appearing for the first time, and it is introduced
+in general. Dan decided this on 2026-09-28, when the skill asked him for a starting date for
+Sonar: "sonar shouldn't announce specific updates. this would be the announcement of sonar in
+general." So no date is asked for, and the product's merged PRs are never listed one by one.
+
+The introduction is the product's own section, placed first (section 6, the launch rules): what
+it is, who uses it, when to open it, what it checks, and how to share a result, plus where it is
+bookmarked. Write it from the product as it stands in production (its README, its live pages,
+what it shows a manager), never from its PR titles. A launch also gets the second opener line.
+
+Then set that repo's `lastEnd` to the `merged_at` of its newest merged PR that reached
+production (section 4), so the next run reports changes only, from after the introduction. A
+newer merge not yet in production goes in `heldBack`, as on any run. Record what the boundary
+came from in `_seededFrom` beside it (the PR number and its `merged_at`), so a later reader can
+tell a seeded boundary from one written after a listed post. The Sonar entry written on
+2026-09-28 (on the Mac that holds that state file) is the worked example.
+
+A repo with no merged PR at all has nothing live to introduce: say so in the terminal and leave
+it without a `lastEnd` until it has one.
 
 ### The boundary is an instant, never a day
 
@@ -145,6 +164,7 @@ The cost is that the next run re-examines a handful of already-considered PRs. T
 it either lists them or holds them back again.
 
 **If nothing was listed** (a quiet period, or everything held back), leave `lastEnd` untouched.
+A first appearance lists nothing and still seeds its boundary ("First appearance" above).
 The window simply grows until there is something to report.
 
 **Write `lastEnd` only after the draft file exists.** If the run dies partway the boundary must
@@ -497,7 +517,8 @@ the backlog is not acceptable even when authorised.
 
 ## 10. Sequence
 
-1. Resolve the window (section 2). Refuse a gap.
+1. Resolve the window (section 2). Refuse a gap. A repo with no `lastEnd` is a first appearance:
+   it is introduced, and its boundary seeded, as section 2 says.
 2. For each repo: gather merged PRs (section 3), verify each reached production (section 4).
 3. Classify (section 5). Read bodies where ambiguous.
 4. Draft in the format (section 6), applying the accuracy pass (section 7).

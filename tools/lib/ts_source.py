@@ -344,7 +344,7 @@ def tool_call_hooks(text, jsx=False):
         if "=>" in span or re.search(r"\bfunction\b", span) or not handler:
             hooks.append((line, span))
             continue
-        hooks.append((line, _definition(code, handler.group(1), raw_kinds)))
+        hooks.append((line, function_code(code, handler.group(1), raw_kinds)))
     return hooks
 
 
@@ -352,9 +352,22 @@ def tool_call_hooks(text, jsx=False):
 OPERANDS = (STRING, REGEX, TEXT)
 
 
-def _definition(code, name, kind):
+def function_code(code, name, kind):
     """The code of the function named name, from its definition to the end of its body, or None.
-    kind is kinds() of the same text, which tells a blanked string from a space."""
+
+    Public: every mod scan that needs "the code of the function named X" calls this (or
+    function_span), so the signature is a stated interface (#756). code is code_only() of a source
+    text and kind is kinds() of the same text, which tells a blanked string from a space. A
+    function is a declaration (`function name(...) { ... }`) or a `const`, `let` or `var` given an
+    arrow or a function expression; the first definition in code wins."""
+    span = function_span(code, name, kind)
+    return None if span is None else code[span[0] : span[1]]
+
+
+def function_span(code, name, kind):
+    """Where the function named name lies in code: (start, end), start at its `const`, `let`, `var`
+    or `function` keyword and end just past its body, or None when it is not defined there or its
+    brackets never close. Arguments as function_code's."""
     m = re.search(r"\b(?:const|let|var)\s+" + re.escape(name) + r"\b[^=]*=(?!=)|\bfunction\s+" + re.escape(name) + r"\b", code)
     if not m:
         return None
@@ -377,7 +390,7 @@ def _definition(code, name, kind):
             # An expression body, read whole to the end of its statement, a bracketed one included
             # however it ends, the file's end among them (#739); a string is one too.
             end = _statement_end(code, i, kind)
-            return None if end is None else code[m.start() : end]
+            return None if end is None else (m.start(), end)
         if c == "<":
             angles += 1
         elif c == ">":
@@ -396,7 +409,7 @@ def _definition(code, name, kind):
             is_type = angles > 0 or after_type_mark
             # The body: after the arrow, or a function declaration's once its signature is read.
             if not is_type and (arrow or declared):
-                return code[m.start() : end]
+                return (m.start(), end)
             i = end
             after_type_mark = False
             continue
