@@ -121,6 +121,10 @@ test('a row stored under a slot the band no longer has is left out, and the rest
   const ui = await $.ui.mount(band())
   expect(await shown(ui)).toEqual(['NO BUILD', 'Steps for you'])
   await ui.unmount()
+  // And the band's next write takes it out of the stored state for good (L377).
+  await show($, row('message', 'Message for Kris'))
+  const after = (await $.tool.call({ tool: 'Bash', command: 'stored' } as never)) as { deny?: string }
+  expect(after.deny).toBe('stored steps,needs-a-look,message')
 })
 
 // #703: a run cut at the band's edge lost the end of a long option description, which in the end of
