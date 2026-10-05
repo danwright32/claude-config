@@ -156,6 +156,17 @@ fi
 login="$HOME/.claude.json"
 if [ -f "$login" ]; then
   if account="$(jq -r '.oauthAccount // empty | [(.displayName // .emailAddress // empty), (.organizationName // empty)] | map(select(. != "")) | join(", ")' "$login" 2>/dev/null)"; then
+    # A nickname given in the account room (/accounts rename) replaces the name and org (Dan, live
+    # check 2026-10-05). It is keyed as the account room keys it: the first 16 hex digits of
+    # SHA-256 over "<account id>:<org id>". No nickname, a skipped one (null) or a file that cannot
+    # be read leaves the name and org as they are.
+    ids="$(jq -r '.oauthAccount // empty | select(.accountUuid and .organizationUuid) | "\(.accountUuid):\(.organizationUuid)"' "$login" 2>/dev/null)"
+    nicks="$HOME/.claude/mods/account-room-nicknames.json"
+    if [ -n "$ids" ] && [ -f "$nicks" ] && command -v shasum >/dev/null 2>&1; then
+      key="$(printf '%s' "$ids" | shasum -a 256 | cut -c1-16)"
+      nick="$(jq -r --arg k "$key" '.names[$k] // empty | strings' "$nicks" 2>/dev/null | head -1 | tr -cd '[:print:]')"
+      [ -n "$nick" ] && account="$nick"
+    fi
     [ -n "$account" ] && parts+=("$account")
   else
     parts+=("account unknown")
