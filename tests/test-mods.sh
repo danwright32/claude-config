@@ -324,32 +324,61 @@ try:
 except OSError as e:
     print(f"cannot read {sys.argv[1]}: {e}")
     sys.exit(1)
+def block_after(pattern, top_only):
+    """The body of the brace block that pattern opens, to its own closing brace; with top_only, what
+    is nested in it blanked. None when there is no such block or it never closes."""
+    m = re.search(pattern, text)
+    if not m:
+        return None
+    depth, out = 1, []
+    for c in text[m.end():]:
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(c if depth == 1 or not top_only or c == "\n" else " ")
+    return None
 wrong = []
-if not re.search(r"'picker-manners'\s*:\s*\{[^}]*\bopen\s*:\s*PickersOpen\s*\|\s*null", text):
+state = block_after(r"'picker-manners'\s*:\s*\{", True)
+if state is None or not re.search(r"\bopen\s*:\s*PickersOpen\s*\|\s*null", state):
     wrong.append("PluginState 'picker-manners' does not declare open: PickersOpen | null")
-body = re.search(r"export type PickersOpen\s*=\s*\{(.*?)\n\}", text, re.S)
-if not body:
+body = block_after(r"export type PickersOpen\s*=\s*\{", False)
+if body is None:
     wrong.append("there is no PickersOpen type")
 else:
-    if not re.search(r"^\s*id\s*:\s*string\b", body.group(1), re.M):
+    if not re.search(r"^\s*id\s*:\s*string\b", body, re.M):
         wrong.append("PickersOpen has no id: string")
-    if not re.search(r"^\s*question\s*:\s*\{\s*question\s*:\s*string\b", body.group(1), re.M):
+    if not re.search(r"^\s*question\s*:\s*\{\s*question\s*:\s*string\b", body, re.M):
         wrong.append("PickersOpen has no question: { question: string }")
 print("; ".join(wrong))
 sys.exit(1 if wrong else 0)
 PY
 }
-M12="$TMPROOT/m12"; mkdir -p "$M12"
-sed 's/^  id: string$/  callId: string/' "$ROOT/payload/mods/picker-manners/types/index.d.ts" > "$M12/moved.d.ts"
-out="$(picker_contract "$M12/moved.d.ts" 2>&1)"; code=$?
-[ "$code" -eq 1 ] && case "$out" in *"PickersOpen has no id: string"*) true ;; *) false ;; esac \
-  && check "a picker manners contract whose open question moved fails the goal tracker's reading" ok \
-  || check "a picker manners contract whose open question moved fails the goal tracker's reading" "exit=$code out=$out"
-out="$(picker_contract "$ROOT/payload/mods/picker-manners/types/index.d.ts" 2>&1)"; code=$?
-[ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
-  || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"
-grep -q "PICKER_OPEN = { plugin: 'picker-manners', key: 'open' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
-  && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no PICKER_OPEN for picker-manners open in goal-tracker"
+PM_TYPES="$ROOT/payload/mods/picker-manners/types/index.d.ts"
+if [ ! -f "$PM_TYPES" ]; then
+  echo "note: picker manners is not in payload/mods, so the goal tracker reads no open question of its and there is no contract to check."
+  check "picker manners is absent, which is not a pass over its contract" ok
+else
+  M12="$TMPROOT/m12"; mkdir -p "$M12"
+  sed 's/^  id: string$/  callId: string/' "$PM_TYPES" > "$M12/moved.d.ts"
+  out="$(picker_contract "$M12/moved.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 1 ] && case "$out" in *"PickersOpen has no id: string"*) true ;; *) false ;; esac \
+    && check "a picker manners contract whose open question moved fails the goal tracker's reading" ok \
+    || check "a picker manners contract whose open question moved fails the goal tracker's reading" "exit=$code out=$out"
+  # A member with an inline object type ahead of open does not hide it (lessons review of #709).
+  sed "s/'picker-manners': { open:/'picker-manners': { meta: { at: number }; open:/" "$PM_TYPES" > "$M12/nested.d.ts"
+  grep -q 'meta: { at: number }; open:' "$M12/nested.d.ts" || check "the nested fixture was made" "sed did not change the contract"
+  out="$(picker_contract "$M12/nested.d.ts" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "an inline object type ahead of open still finds open" ok \
+    || check "an inline object type ahead of open still finds open" "exit=$code out=$out"
+  out="$(picker_contract "$PM_TYPES" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "picker manners' contract declares the open question as the goal tracker reads it" ok \
+    || check "picker manners' contract declares the open question as the goal tracker reads it" "exit=$code out=$out"
+  grep -q "PICKER_OPEN = { plugin: 'picker-manners', key: 'open' }" "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
+    && check "and the goal tracker watches that key" ok || check "and the goal tracker watches that key" "no PICKER_OPEN for picker-manners open in goal-tracker"
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

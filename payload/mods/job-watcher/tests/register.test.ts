@@ -901,7 +901,11 @@ test('a look that never finishes is given up after ten minutes, said once, and t
   // Only what was measured (L440): it was given up, and the next look is still to come.
   expect(noticesOf(next)).toContain('did not finish within 10 minutes and was given up; the next look starts at the next minute.')
   expect(noticesOf(next)).not.toContain('looked again')
+  // The second look hangs on its stop too; a third reaching the stop proves the second was given up
+  // (L159), so the silence after it is the notice being said once, not a give up that never came.
+  expect(w.reached.filter(r => r.tool === 'TaskStop').length).toBe(2)
   await clock.advance(11 * MIN)
+  expect(w.reached.filter(r => r.tool === 'TaskStop').length).toBe(3)
   const again = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(noticesOf(again)).not.toContain('did not finish within 10 minutes')
 })
