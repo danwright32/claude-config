@@ -93,15 +93,21 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
 # the messages that carry the findings (the merge gate's refusal and the nudge), so a merge command
 # presenting it as PR_REVIEW_READ=<key> proves those findings reached the session doing the merge.
 # Without it the gate used to judge them read because it had PRINTED them, and on #774 another hook
-# refused the same merge, only that hook's message was shown, and the retry merged unread. Written
-# with noclobber, so two first askers agree on one key; a key that cannot be made prints nothing and
-# fails, and the caller then refuses, since no merge can present a key nobody was shown (L42).
+# refused the same merge, only that hook's message was shown, and the retry merged unread. The key is
+# written whole to a private temp file and LINKED into place: a link to a name that exists fails, so
+# two first askers agree on one key, and the name never exists half written, so no asker reads an
+# empty or partial key (a noclobber write creates the name first and fills it after). A key that
+# cannot be made prints nothing and fails, and the caller then refuses, since no merge can present a
+# key nobody was shown (L42).
 ar_review_key() {   # $1 = finished review file
-  local kf="$1.readkey" k
+  local kf="$1.readkey" k tmp
   if [ ! -s "$kf" ]; then
     k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
     [ -n "$k" ] || return 1
-    ( set -o noclobber; printf '%s\n' "$k" > "$kf" ) 2>/dev/null || true
+    tmp="$kf.$$.$RANDOM"
+    printf '%s\n' "$k" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    ln "$tmp" "$kf" 2>/dev/null || true
+    rm -f "$tmp"
   fi
   k="$(tr -dc 'a-f0-9' < "$kf" 2>/dev/null)"
   [ -n "$k" ] || return 1

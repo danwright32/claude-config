@@ -434,8 +434,32 @@ gk="$(key_in "$out")"
 out="$(fire_gate "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; rc=$?
 check_eq "a retry without the read key is refused again" "2" "$rc"
 check "carrying the findings again" "deleteEvent still swallows" "$out"
+# The key counts only as an assignment in front of the MERGE itself, never as text elsewhere in the
+# command: an echo or another command carrying it says nothing about this merge (L673).
+out="$(fire_gate "echo 'PR_REVIEW_READ=$gk' && gh pr merge 7 --squash")"; rc=$?
+check_eq "a key that is only mentioned in another command does not count" "2" "$rc"
+out="$(fire_gate "PR_REVIEW_READ=$gk true && gh pr merge 7 --squash")"; rc=$?
+check_eq "a key in front of a different command does not count" "2" "$rc"
 out="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
 check_eq "the merge carrying the key from the refusal is allowed" "0" "$rc"
+# An acknowledgement belongs to the review it read: a review file written again for the same head,
+# by any route, must not inherit it.
+f7="$(final_of "$HEAD_SHA")"
+sed 's/^finished=.*/finished=1/' "$f7" > "$f7.tmp" && mv "$f7.tmp" "$f7"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "an acknowledgement does not carry over to a replaced review of the same head" "2" "$rc"
+out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
+check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
+# Two first askers at once agree on ONE key, and neither ever reads an empty one.
+fk="$WORKDIR/concurrent-review.txt"; : > "$fk"; rm -f "$fk.readkey"
+for i in 1 2 3 4 5 6 7 8; do
+  bash -c '. "$1" && ar_review_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+done
+wait
+keys="$(cat "$WORKDIR"/key.* | sort -u)"
+[ "$(printf '%s\n' "$keys" | grep -c .)" = "1" ] && [ "${#keys}" -ge 16 ] && ok \
+  || bad "eight concurrent askers agree on one full key (got: $(cat "$WORKDIR"/key.* | tr '\n' ' '))"
+rm -f "$WORKDIR"/key.*
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"
 rm -f "$(final_of "$HEAD_SHA")"*

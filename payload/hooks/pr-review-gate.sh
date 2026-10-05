@@ -78,9 +78,29 @@ args=(check --dir "$repo_dir" --sha "$head")
 # The read key the findings' refusal carries, if this merge presents it (claude-config#788). The
 # hook does not inherit the command's own assignments, so it is read from the command text and
 # handed on; anything else in the environment is cleared, so only THIS command can present one.
+#
+# Only as an assignment in front of the MERGE segment itself: text in an echo, or an assignment in
+# front of some other command, says nothing about this merge (L673). Segments are cut the way the
+# merge matcher cuts them, so the segment judged a merge here is the one mt_runs_merge judged.
 read_key=""
-read_key_re='(^|[[:space:];&|(])PR_REVIEW_READ=([a-f0-9]+)([[:space:]]|$)'
-[[ "$command" =~ $read_key_re ]] && read_key="${BASH_REMATCH[2]}"
+read_key_body="$(mt_strip_heredocs "$command")"
+read_key_body="${read_key_body//&&/$'\n'}"
+read_key_body="${read_key_body//||/$'\n'}"
+read_key_body="${read_key_body//;/$'\n'}"
+while IFS= read -r rk_seg; do
+  rk_seg="${rk_seg#"${rk_seg%%[![:space:]]*}"}"
+  rk_found=""
+  while [[ "$rk_seg" =~ ^([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]]*)[[:space:]]+(.*)$ ]]; do
+    [ "${BASH_REMATCH[1]}" = "PR_REVIEW_READ" ] && rk_found="${BASH_REMATCH[2]}"
+    rk_seg="${BASH_REMATCH[3]}"
+  done
+  if [ -n "$rk_found" ] && mt_runs_merge "$rk_seg"; then
+    case "$rk_found" in *[!a-f0-9]*) ;; *) read_key="$rk_found" ;; esac
+    break
+  fi
+done <<RKEOF
+$read_key_body
+RKEOF
 out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && { printf 'pr-review-gate: %s\n' "$out"; exit 0; }
 refuse "$out"

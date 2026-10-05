@@ -252,14 +252,18 @@ do_check() {
       fi
       # READ means a merge presented the key that only the findings' own messages carry (#788),
       # never that this gate or the nudge PRINTED them: a refusal can be printed and not shown.
-      if [ -e "$acknowledged" ]; then
+      # The acknowledgement names the review it read by its finish time, so a review file written
+      # again for this head, by any route, is unread until its own findings are acknowledged.
+      local fin
+      fin="$(meta_of "$final" finished)"
+      if [ -n "$fin" ] && [ "$(cat "$acknowledged" 2>/dev/null)" = "finished=$fin" ]; then
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a merge that presented their key."
         return 0
       fi
       local readkey
       readkey="$(ar_review_key "$final")" || readkey=""
-      if [ -n "$readkey" ] && [ "${PR_REVIEW_READ:-}" = "$readkey" ]; then
-        touch "$acknowledged" 2>/dev/null
+      if [ -n "$readkey" ] && [ -n "$fin" ] && [ "${PR_REVIEW_READ:-}" = "$readkey" ]; then
+        printf 'finished=%s\n' "$fin" > "$acknowledged" 2>/dev/null
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this merge presented their key."
         return 0
       fi
