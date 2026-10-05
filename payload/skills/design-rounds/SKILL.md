@@ -145,15 +145,14 @@ function buildScreen(variant) {
     band: [T.card(variant.card, [
       [T.amber("Work has more room"), "  ", T.button("Switch"), " ", T.button("Dismiss")],
       [T.dim("Use in claude.ai is not counted.")]
-    ])],
-    status: ["claude-config", "5h 64%", "week 91%"]
+    ])]
   });
 }
 ```
 
 | Call | Draws |
 | --- | --- |
-| `T.screen({...})` | The window. Options: `title`, `transcript`, `band`, `prompt` (typed text, or `false` for none), `footer`, `status` (segments joined by a grey dot, or `false`), `width` (820), `height` (330, a minimum, so a tall band grows the window rather than being cut off), `fontSize` (13) |
+| `T.screen({...})` | The window. Options: `title`, `transcript`, `band`, `prompt` (typed text, or `false` for none), `footer`, `status` (left out, the status line the status bar mod draws, as `docs/mods-design.md` records it; else text segments, divided by a bar, all in the line's one grey, since a coloured segment throws; or `false`), `width` (820), `height` (330, a minimum, so a tall band grows the window rather than being cut off), `fontSize` (13) |
 | A row | Text, a list of pieces, or anything below. `transcript`, `band` and a card each take a list of rows |
 | `T.amber` `T.grey` `T.red` `T.violet` `T.bold` `T.dim` `T.white` | A run of text in that style; `T.run(text, "amber", "bold")` combines them |
 | `T.button("Switch")` | `[ Switch ]`, bold white; `{disabled: true}` greys it |

@@ -914,8 +914,7 @@ function buildScreen(variant) {
       T.divider(),
       [T.red("redrun"), " ", T.violet("violetrun"), " ", T.grey("greyrun"), " ", T.run("heavyrun", "amber", "bold")]
     ],
-    prompt: "typed words",
-    status: ["claude-config", T.amber("NO BUILD"), "opus 5.5 high"]
+    prompt: "typed words"
   });
 }
 TB
@@ -1083,6 +1082,12 @@ harness = """
       status = stage.querySelector(".term-status"), said = find("Merging #653 once its checks pass.");
   lines.push("prompt " + (prompt ? prompt.textContent : "missing"));
   lines.push("status " + (status ? status.textContent : "missing"));
+  var inks = {};
+  if (status) {
+    inks[getComputedStyle(status).color] = 1;
+    status.querySelectorAll("*").forEach(function (e) { inks[getComputedStyle(e).color] = 1; });
+  }
+  lines.push("status-colours " + Object.keys(inks).sort().join(" / "));
   lines.push("order " + (top(said) < top(band) && top(band) < top(prompt) && top(prompt) < top(status)
     ? "transcript,band,prompt,status" : [top(said), top(band), top(prompt), top(status)].join(",")));
   var strip = document.querySelector(".dr-sameness");
@@ -1117,7 +1122,23 @@ TRPY
   check_eq "a boxed card has a border all round" "top=1px left=1px" "$(fact "$r" card)"
   check_eq "a divider is a rule" "1px" "$(fact "$r" divider)"
   check_eq "the prompt carries what is typed" "> typed words" "$(fact "$r" prompt)"
-  check_eq "the status line joins its segments with a grey dot" "claude-config · NO BUILD · opus 5.5 high" "$(fact "$r" status)"
+  # The status line a round draws when it names none is the built one (#699, docs/mods-design.md
+  # "Status bar (#610)"): every always-shown fact, divided by | and all in the status line's grey,
+  # as statusline.sh prints it, so a round never shows Dan a status line his terminal does not have.
+  BUILT_STATUS="claude-config | 5h 68% (1h 52m) | week 91% (4d 14h) | cache 41m | Opus 5.5 (high) | Dan, Personal"
+  check_eq "the default status line is the built one, divided by |" "$BUILT_STATUS" "$(fact "$r" status)"
+  check_eq "and all of it is the status line's one grey" "rgb(154, 154, 154)" "$(fact "$r" status-colours)"
+  # The line it copies is the one the design record quotes, read from there, so the two cannot
+  # drift. Only a checkout has that record; an installed copy says so rather than passing (L411).
+  DESIGN_DOC="$DIR/../../../docs/mods-design.md"
+  if [[ -f "$DESIGN_DOC" ]]; then
+    # The record wraps the line across two lines of text, so the file is read as one line first.
+    recorded="$(tr '\n' ' ' < "$DESIGN_DOC" | sed -E 's/ +/ /g' | grep -o 'The status line reads `[^`]*' | head -1 | sed 's/^The status line reads `//')"
+    check_eq "and it is the line docs/mods-design.md records" "$recorded" "$BUILT_STATUS"
+  else
+    unmeasured=$((unmeasured + 1))
+    echo "UNMEASURED: no docs/mods-design.md beside this skill, so the default status line was not compared with the design record"
+  fi
   check_eq "transcript, band, prompt and status stack in that order" "transcript,band,prompt,status" "$(fact "$r" order)"
   check_eq "two options differing in one field are not reported as the same" "none" "$(fact "$r" strip)"
 
@@ -1126,7 +1147,10 @@ TRPY
 
   # A typo in the builder is loud, not a quietly missing colour: an unknown style, card kind
   # or option throws, and the page's own strip quotes it (L11, fail loud).
-  for pair in 'T.run("x", "amberr")|amberr' 'T.card("boxed", [])|boxed' 'T.screen({trascript: []})|trascript'; do
+  # A coloured segment on the status line is refused too: the settled line is all grey, and a scope
+  # mode leads the band, never the status line (#699).
+  for pair in 'T.run("x", "amberr")|amberr' 'T.card("boxed", [])|boxed' 'T.screen({trascript: []})|trascript' \
+              'T.screen({status: ["claude-config", T.amber("NO BUILD")]})|all grey'; do
     bad="${pair%|*}"; named="${pair##*|}"
     printf 'function buildScreen(variant) { var T = Terminal; %s; return T.screen({}); }\n' "$bad" > "$TMP/typo-builder.js"
     spec "$TMP/typo.json" "$TERM_TWO" '{"builder":"typo-builder.js","screen":"terminal"}'
