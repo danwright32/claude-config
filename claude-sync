@@ -1290,6 +1290,10 @@ tokenize_payload(){
 # each call derives the same path and the exit trap, in the parent, removes exactly that path.
 expanded_root_name(){ printf 'claude-sync-expand.%s' "$$"; }
 cleanup_expanded(){
+  # The exit trap can fire before the scratch root is set (a refusal while the script is still being
+  # read), and an empty root would name /claude-sync-expand.<pid>, so nothing is removed then
+  # (review of #785).
+  [ -n "${SYNC_SCRATCH_ROOT:-}" ] || return 0
   rm -rf "$(scratch_home)/$(expanded_root_name)" "${SYNC_SCRATCH_ROOT%/}/$(expanded_root_name)" 2>/dev/null || true
   return 0
 }
@@ -3366,11 +3370,18 @@ tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
     # An empty listing still feeds one empty line through the here document.
     [ -n "$f" ] || continue
     rel="${f#"$dir"/}"; top="${rel%%/*}"
-    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|*/__pycache__/*|*/.claude-plugin/types/*|*.conflict-*) continue ;; esac
+    # At the top of the tree as well as below it (review of #785).
+    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|__pycache__/*|*/__pycache__/*|.claude-plugin/types/*|*/.claude-plugin/types/*|*.conflict-*) continue ;; esac
     skip=""
     for e in "$@"; do
-      n="${e#--exclude=}"; n="${n#/}"; n="${n%/}"
-      [ "$top" = "$n" ] && { skip=1; break; }
+      n="${e#--exclude=}"
+      case "$n" in
+        # Anchored, as the send writes a held back path or a platform folder: that path or below it.
+        /*) n="${n#/}"; n="${n%/}"
+            case "$rel" in "$n"|"$n"/*) skip=1; break ;; esac ;;
+        # Unanchored, as the plugin managed skills are listed: a first path component.
+        *) n="${n%/}"; [ "$top" = "$n" ] && { skip=1; break; } ;;
+      esac
     done
     [ -n "$skip" ] && continue
     return 0
@@ -3611,9 +3622,7 @@ PROT
     # --delete, it emptied that tree in the shared copy, and an empty folder is what a fresh Mac has.
     # Judged without the held back paths (they are excluded from the mirror, not content here), and
     # only where the shared copy has something to lose.
-    local sk=()
-    [ "$d" = skills ] && { local s3; for s3 in $(skill_excludes); do sk+=("$s3"); done; }
-    if ! tree_holds_files "$CLAUDE_HOME/$d" ${sk[@]+"${sk[@]}"} && tree_holds_files "$PAYLOAD/$d" && ! tree_was_held "$d"; then
+    if ! tree_holds_files "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"} && tree_holds_files "$PAYLOAD/$d" && ! tree_was_held "$d"; then
       echo "claude-sync: NOT clearing $d from the shared copy: this Mac's $CLAUDE_HOME/$d is empty and has never held files here, which is what a fresh Mac's folder looks like, not a deletion. Nothing there was changed; a pull fills this Mac's folder." >&2
       continue
     fi
@@ -9742,14 +9751,26 @@ do_watch(){
   fi
   # CLAIMED, not merely written (claude-config#604): with noclobber the write fails when another
   # watcher has written the file since the check above, so two watchers starting together cannot both
-  # proceed. The record of one that has gone is removed first, and only after it is confirmed gone.
-  if [ -e "$SYNC_WATCH_PID_FILE" ] && ! watch_already_running >/dev/null; then rm -f "$SYNC_WATCH_PID_FILE"; fi
+  # proceed. A record left by a watcher that has gone is REPLACED by a rename, never removed first: a
+  # remove followed by a claim lets a second starter remove the first one's fresh claim and claim too
+  # (review of #785). After the rename the file is read back, and a starter that finds another live
+  # watcher's pid there lost the race and stops. If two renames still interleave, both may start, and
+  # the loop's own check before every send (watch_should_stop) stands down whichever the file does
+  # not name.
   if ! ( set -C; printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" ) 2>/dev/null; then
     if live="$(watch_already_running)"; then
       die "a claude-sync watcher started at the same moment as this one (process $live) and claimed $SYNC_WATCH_PID_FILE first. Nothing was started."
     fi
-    # Unwritable rather than taken: the watcher still runs, as before, and says it is unguarded.
-    echo "claude-sync: could not write $SYNC_WATCH_PID_FILE, so a second watcher started later will not be refused. Watching anyway." >&2
+    if [ -e "$SYNC_WATCH_PID_FILE" ] && printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null \
+       && mv -f "$SYNC_WATCH_PID_FILE.$$" "$SYNC_WATCH_PID_FILE" 2>/dev/null; then
+      if live="$(watch_already_running)"; then
+        die "a claude-sync watcher started at the same moment as this one (process $live) and replaced the stale $SYNC_WATCH_PID_FILE first. Nothing was started."
+      fi
+    else
+      rm -f "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null || true
+      # Unwritable rather than taken: the watcher still runs, as before, and says it is unguarded.
+      echo "claude-sync: could not write $SYNC_WATCH_PID_FILE, so a second watcher started later will not be refused. Watching anyway." >&2
+    fi
   fi
   # Recorded HERE rather than at the top of the file, because it is a fact about this long lived
   # loop and nothing else: every other entry point is a fresh process that exits in seconds.

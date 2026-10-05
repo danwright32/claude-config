@@ -18911,6 +18911,10 @@ check "#627 fixture: the first Mac's trees reached the shared repo" \
 # A fresh Mac: the folders exist and are empty, and it has never applied or sent anything.
 E27C="$WORK/e627-B"; git clone -q "$E27B" "$E27C" 2>/dev/null
 E27HB="$WORK/e627-homeB"; mkdir -p "$E27HB/hooks" "$E27HB/agents" "$E27HB/skills"; echo '{"hooks":{}}' > "$E27HB/settings.json"; printf '# rules\n' > "$E27HB/CLAUDE.md"
+# Generated output at the TOP of a tree is not content either (review of #785): it never travels.
+mkdir -p "$E27HB/agents/.claude-plugin/types" "$E27HB/hooks/__pycache__"
+printf 'declare module "x" {}\n' > "$E27HB/agents/.claude-plugin/types/x.d.ts"
+printf 'cache\n' > "$E27HB/hooks/__pycache__/notes.txt"
 out_627="$(CLAUDE_HOME="$E27HB" SYNC_REPO="$E27C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
 dbg "#627 the fresh Mac's send: $out_627"
 check "#627 a fresh Mac's empty hooks folder does not clear hooks from the shared repo" "git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1"
@@ -18961,7 +18965,7 @@ check "#604 the loop of a watcher whose top process was killed sends nothing mor
 check "#604 and stops reading, so nothing is left running" "[ -e '$W04DONE' ]"
 # 2. REPLACED: another live watcher now holds the pid file.
 w604_fswatch; : > "$W04HITS"; rm -f "$W04GO" "$W04DONE" "$W04PID"
-printf '#!/usr/bin/env bash\nsleep 60\n' > "$W04/claude-sync"; chmod +x "$W04/claude-sync"
+printf '#!/usr/bin/env bash\nexec -a "claude-sync watch" sleep 60\n' > "$W04/claude-sync"; chmod +x "$W04/claude-sync"
 SYNC_FSWATCH="$W04/fswatch" SYNC_WATCH_SEND="printf 'x\n' >> '$W04HITS'" SYNC_WATCH_PID_FILE="$W04PID" \
   CLAUDE_HOME="$W04/home" SYNC_REPO="$WORK/watch-repo-unused" SYNC_NO_NOTIFY=1 bash "$SCRIPT" watch > "$W04/out2" 2>&1 &
 w04_root=$!
