@@ -167,8 +167,10 @@ fi
 # before the label gate, for the opt out's reasons: a snoozed merge is not a quiz the label failed
 # to silence, so it is counted nowhere, and it is announced in one line straight to Dan. A payload
 # with no readable session id (no jq, or no id at all) cannot be snoozed, so the quiz fires.
+# Without jq this skip cannot be read, and the quiz fires: a missing reader costs a quiz, never a
+# merge skipped in silence (L490).
 session_id=""
-command -v jq >/dev/null 2>&1 && session_id="$(printf '%s' "$payload" | jq -r '.session_id // ""' 2>/dev/null)"
+ps_reader_missing jq || session_id="$(printf '%s' "$payload" | jq -r '.session_id // ""' 2>/dev/null)"
 valid_session_id "$session_id" || session_id=""
 if [ -n "$session_id" ] && [ -f "$(snooze_dir)/$session_id" ]; then
   jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
