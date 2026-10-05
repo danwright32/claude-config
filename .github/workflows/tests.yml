@@ -27,9 +27,15 @@ on:
 # that failed with the one run that could have named the culprit (a sync push landing in between)
 # cancelled. The sync watcher pushes config changes one commit at a time, so on main several can be
 # queued at once, and each still gets its verdict. Not cancelling loses nothing that matters: the
-# only thing a run writes is the timings cache. tests/test-ci-workflow.sh holds this.
+# only thing a run writes is the timings cache.
+#
+# Turning cancel-in-progress off is only half of that. A concurrency group holds one running and
+# one PENDING run, and a newer run queuing into the group cancels the pending one regardless, so
+# with one group per branch the middle of three commits landing together still lost its verdict.
+# On main the group is therefore the commit itself, and elsewhere it stays the branch.
+# tests/test-ci-workflow.sh holds both halves.
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:

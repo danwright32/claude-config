@@ -83,6 +83,30 @@ grep -qE "^[[:space:]]*cancel-in-progress:[[:space:]]*\\$\\{\\{ github.ref != 'r
   && check "#594 and still cancels a superseded run on a pull request branch" ok \
   || check "#594 and still cancels a superseded run on a pull request branch" "cancel-in-progress is no longer the main excluding expression"
 
+# Turning cancel-in-progress off is NOT enough on its own. A concurrency group holds at most one
+# running and one PENDING run, and a newer run queuing into the group cancels the pending one
+# whatever cancel-in-progress says. So with one group per branch, three commits landing on main
+# together still lost the middle verdict. On main the group must be one per commit.
+group_per_commit_on_main(){ # group_per_commit_on_main <workflow>
+  local g
+  g="$(code_of "$1" | sed -n 's/^[[:space:]]*group:[[:space:]]*//p')"
+  case "$g" in
+    '') echo "no concurrency group, so nothing is ever cancelled" ;;
+    *"github.ref == 'refs/heads/main' && github.sha"*) echo ok ;;
+    *) echo "the group is '$g', which is shared by every commit on main, so a pending run there is cancelled by the next one queuing" ;;
+  esac
+}
+printf 'concurrency:\n  group: tests-${{ github.ref }}\n  cancel-in-progress: false\n' > "$TMPROOT/shared-group.yml"
+r="$(group_per_commit_on_main "$TMPROOT/shared-group.yml")"
+[ "$r" != ok ] \
+  && check "#594 a group shared by every commit on main is refused, even with cancelling off" ok \
+  || check "#594 a group shared by every commit on main is refused, even with cancelling off" "it passed"
+r="$(group_per_commit_on_main "$REAL")"
+case "$r" in ok|"no concurrency group"*) r=ok ;; esac
+[ "$r" = ok ] \
+  && check "#594 on main each commit has its own group, so no pending run is displaced" ok \
+  || check "#594 on main each commit has its own group, so no pending run is displaced" "$r"
+
 # ---------------------------------------------------------------------------
 # #597: every action is pinned to a commit, on a supported runtime.
 # ---------------------------------------------------------------------------
