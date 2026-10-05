@@ -164,16 +164,57 @@ mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c ===
 # A pane drawn its own way (the goals pane: a live list read at each draw, not a card) is not a copy.
 mkmodsrc "$M9" clean-live-pane "on('ui.render', { component: 'Pane', requestId: 'goals' }, (\$, e) => <Text dimColor>{row.sentence}</Text>)"
 mkmodsrc "$M9" clean-sender "const sent = await \$.session.send({ to: { sessionId }, text }); if (!sent.isDelivered) failed.push(sent.reason)"
+# A comment may name what mod-kit draws, in quotes too: a comment draws nothing (#698).
+mkmodsrc "$M9" clean-comment "// mod-kit alone hooks 'AbovePrompt' and draws each 'ToolResult' card
+/* the band is mod-kit's 'AbovePrompt' hook */
+ * its \"ToolResult\" row is the boxed card
+export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
 # The two mods still holding their own write reader until #712 moves them are named as exceptions,
 # on every run, rather than failing it or passing in silence (L129, L523).
 mkmodsrc "$M9" collision-guard "switch (name) { case 'tee': add(f) }"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "mod-kit itself may hold the shared parts, and a clean mod passes" ok \
   || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
-case "$out" in *"5 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"6 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *clean-comment*) check "a comment naming the band or a result row is not taken for a copy" "$out" ;; *) check "a comment naming the band or a result row is not taken for a copy" ok ;; esac
 printf '%s\n' "$out" | grep 'collision-guard' | grep -q '#712' \
   && check "a known exception to the write reader is named on every run, with the issue that ends it" ok \
   || check "a known exception to the write reader is named on every run, with the issue that ends it" "$out"
+# #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
+# rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
+# filter however it is spelled, so each form a mod could write is caught, with the remedy for it.
+M9F="$TMPROOT/m9f"
+mkmodsrc "$M9F" form-unfiltered-band "on('ui.render', (\$, e, next) => (e.component === 'AbovePrompt' ? draw(\$, e) : next(e)))"
+mkmodsrc "$M9F" form-unfiltered-card "on('ui.render', (\$, e, next) => { if (e.component !== 'ToolResult') return next(e); return draw(\$, e) })"
+mkmodsrc "$M9F" form-shorthand-band "const component = 'AbovePrompt' as const
+export const register = on => { on('ui.render', { component }, draw) }"
+mkmodsrc "$M9F" form-constant-card "const ROW = 'ToolResult'
+export const register = on => { on('ui.render', { component: ROW }, draw) }"
+mkmodsrc "$M9F" form-spaced-band "on('ui.render', { component : 'AbovePrompt' }, draw)"
+mkmodsrc "$M9F" form-quoted-key-card "on('ui.render', { 'component': 'ToolResult' }, draw)"
+mkmodsrc "$M9F" form-quoted-key-band "on('ui.render', { \"component\": \"AbovePrompt\" }, draw)"
+mkmodsrc "$M9F" form-backtick-band "on('ui.render', { component: \`AbovePrompt\` }, draw)"
+mkmodsrc "$M9F" form-next-line-card "on('ui.render', {
+  component:
+    'ToolResult',
+}, draw)"
+mkmodsrc "$M9F" form-switch-band "on('ui.render', (\$, e, next) => { switch (e.component) { case 'AbovePrompt': return draw(\$, e); default: return next(e) } })"
+mkmodsrc "$M9F" form-list-card "const MINE = ['ToolResult', 'Pane']
+export const register = on => { on('ui.render', (\$, e, next) => (MINE.includes(e.component) ? draw(\$, e) : next(e))) }"
+out="$(bash "$SHARED" "$M9F" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "every hand rolled form of a band or result row hook fails the run" ok \
+  || check "every hand rolled form of a band or result row hook fails the run" "exit=$code out=$out"
+for m in form-unfiltered-band form-shorthand-band form-spaced-band form-quoted-key-band form-backtick-band form-switch-band; do
+  printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.bandRow(' && check "and names $m, pointing it at modkit.bandRow" ok \
+    || check "and names $m, pointing it at modkit.bandRow" "$out"
+done
+for m in form-unfiltered-card form-constant-card form-quoted-key-card form-next-line-card form-list-card; do
+  printf '%s\n' "$out" | grep "$m " | grep -q 'modkit.card(' && check "and names $m, pointing it at modkit.card" ok \
+    || check "and names $m, pointing it at modkit.card" "$out"
+done
+# The line named is the one holding the component, so a value on the next line is found where it is.
+printf '%s\n' "$out" | grep -q 'form-next-line-card keeps its own card at /hooks/register.ts:3:' \
+  && check "and names the line the value stands on" ok || check "and names the line the value stands on" "$out"
 mkmodsrc "$M9" own-reader "const words = command.split(/&&|\|\||;/).map(s => s.trim())"
 mkmodsrc "$M9" own-quotes "for (const c of cmd) { if (c === '\"' || c === \"'\") quote = c }"
 mkmodsrc "$M9" own-heredoc "const m = /(?<!<)<<(?!<)-?\s*(\w+)/.exec(line)"

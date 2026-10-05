@@ -13,6 +13,11 @@
 #   git       listing git's global options to find a subcommand use $.modkit.git({ words })
 #   band      drawing the band above the prompt (AbovePrompt)   use $.modkit.bandRow({ ... })
 #             Claude Code gives the band ONE drawing, so two mods hooking it fight over it (#610).
+#             The band and a result row are each named by the component's name as a string, in
+#             any quotes: the engine takes a filter however it is spelled (a spaced or quoted key,
+#             a shorthand from a constant, the value on the next line) and an unfiltered ui.render
+#             hook that tests e.component, and every one of them names it (#698: a probe of 11
+#             hand rolled forms caught 3 when the scan matched `component: 'X'` on one line).
 #   pane      drawing a card's parts (a run's strikethrough      use $.modkit.pane({ mod, id, lines, frame }),
 #             from its data) or its left rule mark, as the      the band's row drawing in a pane, so the two
 #             band does, in a mod's own pane                    cannot drift (#690). A pane drawn its own way,
@@ -38,7 +43,8 @@
 # input and then refuses without a result (ask before saving asks from classic.PreToolUse instead).
 #
 # Only each mod's hooks/ is read: its tests may stand in for mod-kit, since a mod cannot import
-# another mod's files.
+# another mod's files. A line that is only a comment (starting //, /* or *) is code for nothing, so
+# it is never taken for a copy, whatever it names.
 #
 # Exit codes, each distinct (L11): 0 none found (the count is printed, L98), 1 a copy found, each
 # named with its file and line, 2 the mods folder does not exist.
@@ -54,9 +60,9 @@ PARTS=(
   "reader|split\(/[^/]*&&|\$.modkit.commands({ command })"
   "quotes|=== '\"' \|\| [a-z]+ === \"'\"|\$.modkit.commands({ command })"
   "heredoc|<<\(\?!<\)|\$.modkit.commands({ command })"
-  "card|component: *['\"]ToolResult['\"]|\$.modkit.card({ toolUseId, title, lines }) (a guard's refusal: \$.modkit.blocked({ ... }))"
+  "card|[\"'\`]ToolResult[\"'\`]|\$.modkit.card({ toolUseId, title, lines }) (a guard's refusal: \$.modkit.blocked({ ... }))"
   "git|'--work-tree'|\$.modkit.git({ words })"
-  "band|component: *['\"]AbovePrompt['\"]|\$.modkit.bandRow({ ... })"
+  "band|[\"'\`]AbovePrompt[\"'\`]|\$.modkit.bandRow({ ... })"
   "pane|strikethrough=\{[^}]*\.strikethrough\}|'\\\\u2502'|'│'|\$.modkit.pane({ mod, id, lines, frame }) (the band: \$.modkit.bandRow)"
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
@@ -80,7 +86,8 @@ for d in "$dir"/*/; do
   [ -d "$d/hooks" ] || continue
   for part in "${PARTS[@]}"; do
     label="${part%%|*}"; rest="${part#*|}"; pattern="${rest%|*}"; remedy="${rest##*|}"
-    hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$d/hooks" 2>/dev/null)"
+    hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$d/hooks" 2>/dev/null \
+      | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*)')"
     [ -n "$hits" ] || continue
     until_issue="$(exception "$name" "$label")"
     if [ -n "$until_issue" ]; then
