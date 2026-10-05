@@ -195,6 +195,7 @@ const isRemote = (w: string) => /^[^/]*:/.test(w) && !w.startsWith('/')
 
 // Inline code that writes files, for the interpreters Claude reaches for when a write is refused.
 const INTERPRETERS = new Set(['python', 'python3', 'node', 'ruby', 'perl', 'bun', 'deno'])
+const SHELLS = new Set(['sh', 'bash', 'zsh'])
 const INLINE_FLAGS = new Set(['-c', '-e', '-E', '--eval'])
 const INLINE_WRITE = /open\([^)]*['"][wax]\+?b?['"]|\.write_(?:text|bytes)\(|writeFile|appendFile|fs\.(?:write|rm|unlink|rename|copyFile)|File\.write|shutil\.(?:copy|move)|os\.(?:rename|replace)|renameSync|copyFileSync/
 
@@ -320,6 +321,13 @@ export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrite
       const at = g.dir === undefined ? dir : absolutePath(g.dir, dir, home)
       const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
       unnamed.push({ what: 'a patch', words: raw, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
+      continue
+    }
+    // A shell fed its script on standard input (bash <<'EOF'): the reader drops a heredoc's body, so
+    // what it writes is in no word here. bash -c reaches this reader already split into its commands.
+    if (SHELLS.has(name)) {
+      if ((heredoc || inputs.length) && !rest.some(a => !a.startsWith('-')))
+        unnamed.push({ what: `a ${name} script on standard input`, words: raw, inputs: inputs.map(p => absolutePath(p, dir, home)).filter((p): p is string => !!p) })
       continue
     }
     if (INTERPRETERS.has(name)) {

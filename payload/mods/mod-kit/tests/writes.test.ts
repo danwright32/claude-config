@@ -120,6 +120,12 @@ describe('writes: what the words do not name', () => {
   })
   test('a script fed on standard input cannot be read from its words, so it is named as such', () => {
     expect(read("python3 - <<'EOF'\nopen('CLAUDE.md','a').write('x')\nEOF").unnamed.map(u => u.what)).toEqual(['a python3 script on standard input'])
+    expect(read("bash <<'EOF'\ncat >> CLAUDE.md < rules.md\nEOF").unnamed.map(u => u.what)).toEqual(['a bash script on standard input'])
+    expect(read('sh < setup.sh').unnamed).toEqual([{ what: 'a sh script on standard input', words: ['sh', '<', 'setup.sh'], inputs: [`${CWD}/setup.sh`] }])
+  })
+  test('a shell running a script file, or with no input at all, names nothing', () => {
+    expect(read('bash ./build.sh').unnamed).toEqual([])
+    expect(read('zsh -l').unnamed).toEqual([])
   })
   test('a command that writes nothing names nothing', () => {
     expect(read('ls -la && git status')).toEqual({ files: [], unnamed: [] })

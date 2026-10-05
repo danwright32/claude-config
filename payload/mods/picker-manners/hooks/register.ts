@@ -133,9 +133,15 @@ export const register: Register = on => {
     }
     let passes = 0
     if (isClaudes && seen && passesOver(outcome)) {
-      const now = recordPass(q, await passesOf($))
-      await $.state.set(passedRef, now)
-      passes = passedOver(q, now)
+      // Never thrown: a hook that throws is skipped, and Claude Code's own picker would then ask the
+      // question Dan just passed over. Unrecorded, it may be asked again, as the debug log says.
+      try {
+        const now = recordPass(q, await passesOf($))
+        await $.state.set(passedRef, now)
+        passes = passedOver(q, now)
+      } catch (err) {
+        $.ui.log(`Picker manners could not record that Dan passed over this question, so it may be asked again: ${message(err)}`, { to: 'debug' })
+      }
     }
     return { deny: refusalFor(outcome, passes) ?? 'The question ended without an answer.' }
   })

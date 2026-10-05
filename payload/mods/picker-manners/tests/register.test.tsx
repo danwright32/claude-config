@@ -430,6 +430,24 @@ test('a press after more than a hook budget of real time still answers from the 
   await ui.unmount()
 })
 
+// A hook that throws is skipped and the chain goes on, so a pass that cannot be recorded must not
+// throw: Claude Code's own picker would then ask the question Dan just talked past.
+test('a talk past that cannot be recorded is logged, and the question still ends with its refusal, never the engine picker', withKit, async ($, on) => {
+  const w = world(on)
+  on('state.set', ($, e, next) => {
+    if ((e as { key?: string }).key === 'passed') return { deny: 'the store is gone' } as never
+    return next(e)
+  })
+  const call = ask($ as never)
+  await tick(w)
+  await type($ as never, 'one moment')
+  const r = await call
+  expect(r.deny).toBe(MESSAGE)
+  expect(w.reachedEngine).toEqual([])
+  expect(w.debug).toHaveLength(1)
+  expect(w.debug[0]).toMatch(/^Picker manners could not record that Dan passed over this question, so it may be asked again: .*the store is gone$/)
+})
+
 test('a band that cannot be cleared is logged, and the answer still reaches Claude', withKit, async ($, on) => {
   const w = world(on)
   const q = { ...QUESTION, question: 'Which one, though this band cannot be cleared?' }
