@@ -65,9 +65,10 @@ export type ModKit = {
    * and gawk editing in place (every file), dd's of=, and curl and wget's files (an output file, a
    * file saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or
    * `-P`, and curl's cookie jar, dumped headers and trace, wget's log), each relative path resolved
-   * after any cd before it. And the writes its words do not name: a patch (git apply, git am,
-   * patch), an inline script that writes (python3 -c, node -e), a script fed on standard input, a
-   * download the server names (`curl -J`, `wget --content-disposition`), a recursive wget, or one of
+   * after any cd before it, and a variable the command set before it (`F=path; ... "$F"`, `export
+   * F=path`) read as its value where the reader can be sure of it (#743). And the writes its words
+   * do not name: a patch (git apply, git am, patch), an inline script that writes (python3 -c,
+   * node -e), a script fed on standard input, a download the server names (`curl -J`, `wget --content-disposition`), a recursive wget, or one of
    * the addresses in a file (`wget -i`, the file in `inputs`). The one reader of what a command
    * writes (L613); a file only touched, removed or changed in mode is not reported.
    */
@@ -165,8 +166,10 @@ export type ModKitGit = { sub: string | undefined; args: string[]; dir: string |
 
 /**
  * One file a command writes: `word` as the command spells it, `path` the absolute path when the
- * words name one (absent for a path built from a variable other than HOME, a pattern, or a relative
- * path after a cd that cannot be followed), and a copy's `sources`.
+ * words name one (absent for a path built from a variable other than HOME the command did not set
+ * to a value the reader can be sure of, a command's output, a pattern, or a relative path after a
+ * cd that cannot be followed), and a copy's `sources`. A `word` holding `$F` with a `path` is a
+ * variable the command set, read as its value (#743).
  */
 export type ModKitWrite = { word: string; path?: string; sources?: string[] }
 

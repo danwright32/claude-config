@@ -6,7 +6,7 @@ import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
 import { workingTree } from './tree.ts'
-import { writes } from './writes.ts'
+import { commandWrites } from './writes.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -84,7 +84,7 @@ export const register: Register = (on, options) => {
         keep(input)
       },
       commands: async ({ command }) => commands(command),
-      writes: async ({ command, cwd, home }) => writes(commands(command), cwd, home),
+      writes: async ({ command, cwd, home }) => commandWrites(command, cwd, home),
       git: async ({ words }) => git(words),
       pipeline: async ({ command }) => pipeline(command),
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,

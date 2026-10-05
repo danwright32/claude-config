@@ -144,8 +144,53 @@ test("the lasting memory a command's words name: by path where it can be read, b
     },
     HOME,
     checkouts().inCheckout,
+    // A command mentioning no lasting memory, so each file is judged by its own word alone.
+    'make docs',
   )
   expect(files).toEqual(['~/Apps/slate/CLAUDE.md', '$DIR/AGENTS.md', '~/.claude/projects/p/memory/note.md', '/tmp/repo/CLAUDE.md', '/tmp/$D/AGENTS.md'])
+})
+
+// #743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` went through unasked. The reader gave the
+// target as written ($F) with no path, a word judged only by its file name, and the command's own
+// text, which names MEMORY.md, was read only for a write the words do not name at all. A target the
+// words cannot name is judged like one: by the lasting memory the command mentions anywhere.
+test('a target the words cannot name is judged by the lasting memory the command mentions, anywhere in it', async () => {
+  const { inCheckout } = checkouts()
+  const judge = (files: { word: string; path?: string }[], command: string) => lastingFiles({ files, unnamed: [] }, HOME, inCheckout, command)
+  // A variable the reader could not follow, a command's output, a pattern.
+  expect(await judge([{ word: '$F' }], `F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
+  expect(await judge([{ word: '$(ls ~/.claude/projects/p/memory/MEMORY.md)' }], `printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
+  expect(await judge([{ word: '*.md' }], 'cd ~/.claude/projects/p/memory && echo x | tee -a *.md')).toEqual(['~/.claude/projects/p/memory'])
+  // A path the reader reached through a variable and found to be no lasting memory still asks when
+  // the command mentions some: the reader cannot see what an eval, a function or a script sets.
+  expect(await judge([{ word: '$F', path: '/Users/dan/notes.txt' }], 'F=~/notes.txt; eval "F=~/.claude/CLAUDE.md"; echo x >> "$F"')).toEqual(['~/.claude/CLAUDE.md'])
+  // One it followed to lasting memory is shown by that path, and nothing else the command mentions.
+  expect(await judge([{ word: '$F', path: '/Users/dan/.claude/projects/p/memory/MEMORY.md' }], 'F=~/.claude/projects/p/memory/MEMORY.md; cat ~/.claude/CLAUDE.md >> "$F"')).toEqual([
+    '~/.claude/projects/p/memory/MEMORY.md',
+  ])
+})
+
+// The route a target the words cannot name takes asks the disk about a temporary path it mentions,
+// as every other route does, and a disk that cannot answer fails the judgement: the hook then
+// refuses the write rather than let it through.
+test('a target the words cannot name, mentioning a temporary path the disk cannot answer for, fails the judgement', async () => {
+  const failing = async () => {
+    throw new Error('EACCES: /tmp/locked')
+  }
+  await expect(lastingFiles({ files: [{ word: '$F' }], unnamed: [] }, HOME, failing, 'F=/tmp/locked/CLAUDE.md; echo x > "$F"')).rejects.toThrow('EACCES: /tmp/locked')
+})
+
+test('a target the words cannot name, in a command that mentions no lasting memory, is no save; nor is a target they name', async () => {
+  const { inCheckout } = checkouts()
+  const judge = (files: { word: string; path?: string }[], command: string) => lastingFiles({ files, unnamed: [] }, HOME, inCheckout, command)
+  // The positive first, in the same judge (L159): a mention makes it a save.
+  expect(await judge([{ word: '$OUT' }], `printf 'x\\n' >> "$OUT"; cat ~/.claude/CLAUDE.md`)).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await judge([{ word: '$OUT' }], `printf 'x\\n' >> "$OUT"`)).toEqual([])
+  expect(await judge([{ word: '$(mktemp)' }], `printf 'x\\n' > "$(mktemp)"`)).toEqual([])
+  // A path spelled out, or under home by $HOME, is judged by that path alone, whatever else the
+  // command mentions: a backup of CLAUDE.md is no save to it.
+  expect(await judge([{ word: 'notes.txt', path: '/Users/dan/Apps/slate/notes.txt' }], 'cat ~/.claude/CLAUDE.md > notes.txt')).toEqual([])
+  expect(await judge([{ word: '$HOME/notes.txt', path: '/Users/dan/notes.txt' }], 'cat ~/.claude/CLAUDE.md > $HOME/notes.txt')).toEqual([])
 })
 
 test('lasting memory a script or a patch mentions, read from its text', async () => {
@@ -161,6 +206,11 @@ test('lasting memory a script or a patch mentions, read from its text', async ()
   expect(await mentioned("python3 -c \"open('/tmp/repo/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/repo/CLAUDE.md'])
   expect(await mentioned("python3 -c \"open('/tmp/$D/AGENTS.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/$D/AGENTS.md'])
   expect(await mentioned("python3 -c \"open('/tmp/../Users/dan/.claude/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
+  // #743: a path in the memory folder ends where the shell ends a word, so the ; or ) after it is not
+  // shown as part of the file.
+  expect(await mentioned(`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`, HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
+  expect(await mentioned(`printf x >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`, HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
+  expect(await mentioned('ls ~/.claude/projects/p/memory|wc -l&&cat ~/.claude/projects/q/memory>x', HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory', '~/.claude/projects/q/memory'])
 })
 
 // Lessons review of #731: the hook's refusal read the failure's message with no guard, so a failure

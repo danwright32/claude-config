@@ -98,7 +98,10 @@ from `shellWrites` and widened to the routes ask before saving and no build had 
 file of a `sed -i`, and the writes the words do not name (a patch, an inline script, a script on
 standard input) reported as such rather than guessed at. Ask before saving reads it; the collision
 guard and no build move onto it in #712, and until then `tools/check-mod-shared-parts.sh` names
-them as known exceptions on every run.
+them as known exceptions on every run. Since #743 it reads a variable the command set before a
+write as its value (`F=path; ... "$F"`), asking the shared reader for the assignments it otherwise
+drops (`commands(cmd, { assignments: true })`, off for every other caller); what it cannot be sure
+of stays as written (Ask before saving, below).
 
 Since #698 and #726 the shared reader reads a shell's `-c` in a cluster too (`bash -lc`, `zsh -ec`,
 `sh -ce`, for sh, bash, zsh, dash and ksh: the script is the first word after the options, `-o` and
@@ -976,6 +979,33 @@ ones marked open are the builder's choice, waiting on Dan.
   a repository or worktree cloned under `/tmp` loads its `CLAUDE.md`), found by mod-kit's walk for
   a `.git` entry. A temporary path built from a variable cannot be looked for, so it counts, and a
   disk that cannot answer refuses the save.
+- **A target the words cannot name** (#743, decided at build 2026-10-05). `F=<memory
+  folder>/MEMORY.md; printf ... >> "$F"` appended to `MEMORY.md` unasked: the reader gave the
+  target as `$F` with no path, judged by its file name alone, and the command's own text, which
+  names the file, was read only for a write the words do not name at all. Now:
+  - mod-kit's write reader reads a variable the command set before the write (`F=path`, `export
+    F=path`, `declare -x F=path`, one built from another it set) as its value, a `cd` between them
+    followed, so the question names the real file. Where it cannot be sure it leaves the variable as
+    written: a value from a command's output, one a loop or `read` sets, one given two different
+    values (the reader cannot tell a `;` from an `&&`), and every value once an `eval` or `source`
+    may have changed it.
+  - A target the words still cannot name (a variable, a command's output such as `"$(ls ...)"`, a
+    pattern), and one the reader followed through a variable to a file that is no lasting memory, is
+    judged like a write the words do not name: asked about when the command mentions lasting memory
+    anywhere, the assignment `F=<path>` included, and the question shows the file it mentions.
+  - **Chosen: when the command mentions no lasting memory anywhere, the write goes through.** Asking
+    is the harmless side for one save, but this question would name no file, since there is none to
+    name, and would come on Claude's routine writes (`>> "$LOG"`, `> "$tmp"`, `tee "$out"`) many
+    times a session; a question that comes that often and names nothing gets answered For good
+    without being read (L36), which costs the real save its question. The gap it leaves is narrow:
+    each Bash call starts a fresh shell (a variable exported in one call read as unset in the next,
+    measured 2026-10-05), so a path to memory reaches a command only through a word in it, and every
+    word is now read. What stays outside is a path the command takes from a file or the environment
+    without ever spelling it (`F=$(cat where.txt)`), which no reading of its words can see.
+  - A path spelled out, or under home by `$HOME`, is judged by that path alone, so a backup of
+    `CLAUDE.md` (`cat ~/.claude/CLAUDE.md > notes.txt`) is still no save. The other way round is
+    the known over reach: `cat ~/.claude/CLAUDE.md > "$OUT"` is asked about, showing the file it
+    reads, which is the harmless side.
 - **The permanent words** (#705) count only as an instruction to Claude in Dan's own message, typed
   or from his phone: "from now on" anywhere, "always" or "never" leading the message, a sentence, a
   line or what a colon introduces (after an opening word such as "ok", "also" or "and"), or after

@@ -64,24 +64,38 @@ export const display = (abs: string, home: string): string => {
   return abs === h ? '~' : abs.startsWith(`${h}/`) ? `~${abs.slice(h.length)}` : abs
 }
 
+// A target the words alone do not name: no path, or one the reader reached through a variable the
+// command set or a command's output, never a path spelled out or under home by $HOME (#743).
+const THROUGH = /[$`]/
+const unread = (f: { word: string; path?: string }) => !f.path || THROUGH.test(f.word.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, ''))
+
 /**
  * The lasting memory among the files a command's words name (mod-kit's $.modkit.writes): judged by
  * path where the words name one, by file name where they do not (a path built from a variable),
  * which cannot be looked for on the disk, so one in a temporary folder counts too (asking is the
- * harmless side).
+ * harmless side). A target the words cannot name (a variable, a command's output, a pattern), and
+ * one the reader followed through a variable to no lasting memory, is judged like a write the words
+ * do not name at all: by the lasting memory the command mentions anywhere, an assignment such as
+ * `F=<path>` included (#743). One that mentions none goes through (docs/mods-design.md).
  */
-export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout): Promise<string[]> => {
+export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout, command: string): Promise<string[]> => {
   const out: string[] = []
+  const add = (s: string) => {
+    if (!out.includes(s)) out.push(s)
+  }
+  let mentions: string[] | undefined
   for (const f of w.files) {
     const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : NAMES.has(f.word.split('/').pop() ?? '') && f.word
-    if (hit && !out.includes(hit)) out.push(hit)
+    if (hit) add(hit)
+    else if (unread(f)) for (const m of (mentions ??= await mentioned(command, home, inCheckout))) add(m)
   }
   return out
 }
 
 // A lasting memory file named in a script's or a patch's text: a path ending in one of the names,
-// or one through a project's memory folder.
-const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'"]+\/memory(?:\/[^\s'"]*)?|(?:[~\w.\/$-]*\/)?(?:CLAUDE|AGENTS|MEMORY|LESSONS)\.md\b/g
+// or one through a project's memory folder, ending where the shell ends a word (#743: the ; after
+// `F=<memory folder>/MEMORY.md;` was shown as part of the file).
+const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'";&|()<>`]+\/memory(?:\/[^\s'";&|()<>`]*)?|(?:[~\w.\/$-]*\/)?(?:CLAUDE|AGENTS|MEMORY|LESSONS)\.md\b/g
 
 /**
  * The lasting memory a write's text mentions, for the writes whose words name no file (a patch, an

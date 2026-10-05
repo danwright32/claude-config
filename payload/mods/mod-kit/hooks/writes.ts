@@ -1,5 +1,5 @@
 import type { ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { SHELLS, git } from './commands.ts'
+import { SHELLS, commands, git } from './commands.ts'
 
 // The one reader of which files a Bash call puts content into (#705, L613), over the simple
 // commands the shared reader gives. Ask before saving kept its own copy and missed inline scripts,
@@ -20,6 +20,24 @@ const UNNAMEABLE = /[$`*?[\]{}]/
 const HOME_VAR = /^\$(?:HOME|\{HOME\})(?=\/|$)/
 
 const isDevice = (p: string) => p === '/dev' || p.startsWith('/dev/')
+
+// A variable the command set before a write is read as its value, as the shell reads it, so the
+// write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
+// with no path, and ask before saving let it through). The word is still given as written. Only a
+// value the reader can be sure of: one holding a command's output or anything else it cannot name;
+// one a loop, read, mapfile, getopts or printf -v sets, appended to or unset; one given a second,
+// different value (the reader cannot tell a ; from an && or ||, so which stands is unknown); and
+// every value once an eval or a sourced file may have changed it, is left as written. A value set
+// inside a subshell ends with it.
+const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
+const APPENDS = /^([A-Za-z_][A-Za-z0-9_]*)\+=/
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const VARIABLE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g
+const DECLARES = new Set(['export', 'declare', 'typeset', 'local', 'readonly'])
+const READS = new Set(['read', 'mapfile', 'readarray', 'getopts', 'unset'])
+const LOOPS = new Set(['for', 'select'])
+const RUNS_TEXT = new Set(['eval', 'source', '.'])
+type Vars = Map<string, string | null>
 
 /**
  * A word as an absolute path, or undefined when it cannot be named: built from a variable other
@@ -348,36 +366,64 @@ const splitInputs = (words: string[]): { rest: string[]; files: string[]; heredo
 
 /**
  * The files a Bash call puts content into, each as written and as an absolute path where its words
- * name one (home spelled out, a cd before it followed), with a copy's sources; and the writes whose
- * files its words do not name (a patch, an inline script, a script on standard input), each with
- * the files to read to find out, such as the patch.
+ * name one (home spelled out, a cd before it followed, a variable the command set read as its value),
+ * with a copy's sources; and the writes whose files its words do not name (a patch, an inline
+ * script, a script on standard input), each with the files to read to find out, such as the patch.
+ * `cmds` come from the shared reader with the assignments it otherwise drops (`commandWrites`).
  */
 export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrites => {
   const files: ModKitWrite[] = []
   const unnamed: ModKitWrites['unnamed'] = []
   const seen = new Set<string>()
   let dir: string | undefined = cwd
+  let vars: Vars = new Map()
+  // Each word of the command being read that a variable's value replaced, as it was written.
+  const asWritten = new Map<string, string>()
   const add = (word: string, path: string | undefined, sources?: string[]) => {
     if (!word || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
     if (seen.has(key)) return
     seen.add(key)
-    files.push({ word, ...(path ? { path } : {}), ...(sources && sources.length ? { sources } : {}) })
+    files.push({ word: asWritten.get(word) ?? word, ...(path ? { path } : {}), ...(sources && sources.length ? { sources } : {}) })
   }
   const named = (w: string) => add(w, absolutePath(w, dir, home))
+  const expand = (w: string) => w.replace(VARIABLE, (m, braced?: string, bare?: string) => vars.get((braced ?? bare) as string) ?? m)
+  const unknown = (name: string) => vars.set(name, null)
+  const assign = (word: string) => {
+    const m = SETS.exec(word)
+    if (!m) return
+    const name = m[1] as string
+    // Home is spelled out where a value starts with it, as the shell expands ~ in an assignment.
+    let value = expand(m[2] as string)
+    if (home) value = value.replace(HOME_VAR, home).replace(/^~(?=\/|$)/, home)
+    const known = /[$`()]/.test(value) ? null : value
+    vars.set(name, vars.has(name) && vars.get(name) !== known ? null : known)
+  }
   // The folder outside each subshell still open: the reader gives its parentheses as commands of
   // their own (#700), and a cd inside one ends with it. A closing one with no opening (a case
-  // pattern's) leaves the folder as it is.
+  // pattern's) leaves the folder as it is. The variables outside it are kept the same way.
   const outside: (string | undefined)[] = []
-  for (const raw of cmds) {
-    if (raw.length === 1 && raw[0] === '(') {
+  const varsOutside: Vars[] = []
+  for (const written of cmds) {
+    if (written.length === 1 && written[0] === '(') {
       outside.push(dir)
+      varsOutside.push(new Map(vars))
       continue
     }
-    if (raw.length === 1 && raw[0] === ')') {
+    if (written.length === 1 && written[0] === ')') {
       if (outside.length) dir = outside.pop()
+      if (varsOutside.length) vars = varsOutside.pop() as Vars
       continue
     }
+    if (written.length && written.every(w => SETS.test(w))) {
+      written.forEach(assign)
+      continue
+    }
+    asWritten.clear()
+    const raw = written.map(expand)
+    raw.forEach((w, n) => {
+      if (w !== written[n]) asWritten.set(w, written[n] as string)
+    })
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1).
     const words: string[] = []
     for (let i = 0; i < raw.length; i++) {
@@ -391,6 +437,33 @@ export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrite
     const { rest: args, files: inputs, heredoc } = splitInputs(words)
     const name = baseOf(args[0] ?? '')
     const rest = args.slice(1)
+    if (DECLARES.has(name)) {
+      // export F=path, declare -x F=path. Any option beyond export, read only and global (an array,
+      // a name reference, a case change) gives a value the reader cannot read.
+      const plain = rest.every(a => !a.startsWith('-') || /^-[xrg]+$/.test(a))
+      for (const a of rest) {
+        const m = SETS.exec(a)
+        if (m && plain) assign(a)
+        else if (m) unknown(m[1] as string)
+      }
+      continue
+    }
+    const appended = APPENDS.exec(args[0] ?? '')
+    if (appended) {
+      unknown(appended[1] as string)
+      continue
+    }
+    if (READS.has(name)) {
+      for (const a of rest) if (NAME.test(a)) unknown(a)
+      continue
+    }
+    if (LOOPS.has(name)) {
+      if (rest[0] !== undefined) unknown(rest[0])
+      continue
+    }
+    if (RUNS_TEXT.has(name)) for (const k of vars.keys()) unknown(k)
+    const v = name === 'printf' ? rest.indexOf('-v') : -1
+    if (v >= 0 && rest[v + 1] !== undefined) unknown(rest[v + 1] as string)
     if (name === 'cd' || name === 'pushd') {
       const target = rest.find(a => !a.startsWith('-') || a === '-')
       dir = target === undefined ? home || undefined : target === '-' ? undefined : absolutePath(target, dir, home)
@@ -483,3 +556,6 @@ export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrite
   }
   return { files, unnamed }
 }
+
+/** What a Bash call writes, read from its text: `$.modkit.writes`, and what its tests read. */
+export const commandWrites = (command: string, cwd: string, home: string): ModKitWrites => writes(commands(command, { assignments: true }), cwd, home)
