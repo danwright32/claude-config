@@ -1,0 +1,32 @@
+{
+  "name": "account-room",
+  "version": "0.1.0",
+  "description": "Records each Claude account's rate limit readings, and when this account runs low names the account with the most room, with a Switch button.",
+  "author": {
+    "name": "Dan Wright"
+  },
+  "types": "./types/index.d.ts",
+  "dependencies": [
+    "mod-kit"
+  ],
+  "userConfig": {
+    "readingsFolder": {
+      "type": "string",
+      "title": "Readings folder",
+      "description": "Where each Mac writes its readings file. Empty means the account-room folder in iCloud Drive.",
+      "default": ""
+    },
+    "logoutCommand": {
+      "type": "string",
+      "title": "Browser logout command",
+      "description": "Shell command that signs claude.ai out in the browser. Empty until the route is proven (#659), so Switch stops at the sign out.",
+      "default": ""
+    },
+    "signedOutCheck": {
+      "type": "string",
+      "title": "Signed out check",
+      "description": "Shell command that prints exactly 'signed out' once the browser is signed out of claude.ai.",
+      "default": ""
+    }
+  }
+}

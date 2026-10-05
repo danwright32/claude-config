@@ -741,7 +741,7 @@ that tests `e.component` (#698; a line that is only a comment is not read). The 
 result row, `ToolResult`. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
 `$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
-`compact`, `handoff`, `held`, `steps` and `message`; a `question` row takes the band alone until it
+`compact`, `room` (the account room card, #659), `handoff`, `held`, `steps` and `message`; a `question` row takes the band alone until it
 is cleared. Rows in
 one slot keep the order they were first published in, and a row published again under its id is
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
@@ -759,7 +759,8 @@ rather than drawing the band themselves.
 
 The settled extension (2026-10-04), for the cards that followed the status bar: two more slots,
 `handoff` and `held`, so the order top to bottom is needs-a-look, compact, handoff, held, steps,
-message, and a question still alone. Status stays on top and what waits on Dan sits nearest the
+message, and a question still alone. The account room (#659) then added `room` after compact, so
+the order is needs-a-look, compact, room, handoff, held, steps, message. Status stays on top and what waits on Dan sits nearest the
 prompt, as Dan chose; the handoff card appears only at session start. A row may carry a `frame`:
 `{ kind: 'box' }` draws it inside a rounded border (the held while away card), `{ kind: 'left-rule' }`
 a vertical rule down its left edge only (the steps card's amber rule), each in `color`, a theme key
@@ -1043,6 +1044,65 @@ chosen afresh, and open to Dan changing:
   why in a toast. Use or Dismiss on a handoff another session already took, or one replaced since
   the band was drawn, acts on nothing and says so; a replacement is shown instead.
 - Kept per Mac: a handoff written on one Mac is offered on that Mac only.
+
+## Account room (#659), settled 2026-10-04
+
+Decided with Dan in design rounds on a dark terminal (the issue comment "Decided with Dan
+(2026-10-04, design rounds)"). Where it differs from the issue's spec, this wins.
+
+| Surface | Decision | Round |
+| --- | --- | --- |
+| Shape | A boxed card in the band above the prompt, rounded border (over one line, and a lead line plus figures line) | 1 |
+| Lead | Amber, "This account is low. Work has room", then `[ Switch ]` and `[ Dismiss ]` (over "Work has more room" and "Switch to Work for more room") | wording |
+| Figures line | Room left, not used: "88% of 5h left, resets 6:40 PM · 70% of week left, resets Thu 9 AM · as of 2h ago" (over "5h 12%, resets ..." and "used until") | wording |
+| Dim note | None. Dan dropped it, superseding spec items 5 and 6 where they asked the card to say that use in claude.ai, the desktop app or the phone is not counted and that switching changes the account for every session on the Mac. The reading's age stays on the figures line | wording |
+| Switch in progress | The amber lead itself becomes the progress, with elapsed seconds, and the buttons go while it works: "Switching to Work: signing claude.ai out in the browser… 25s", then the sign in page step in the same form (over a step list, and a status line at the foot) | 2, wording |
+| Switch failed | The lead turns red (a logout that did not happen is genuinely wrong): "claude.ai didn't confirm the sign out. Nothing else was changed.", with `[ Try again ]` and `[ Dismiss ]`. It claims only what was checked: that the page did not confirm | wording |
+| No account has room | The same box, amber lead "This account is low. No other account has room" with `[ Dismiss ]`, and one line: "This account's 5h resets first, at 6:40 PM · Side has no reading yet and may have room" (over every account listed, and one squeezed line) | 3, wording |
+| Nickname | Claude Code's standard question dialog: chip "Nickname", "What should this account be called?", the email and org dim under it, a text field, Save and Skip (Esc skips) (over a dim line pointing at /accounts rename, and a question in the band) | nickname round |
+
+Built (#659), with what the rounds and the spec left to the build, each taken from a rendering or
+the spec rather than chosen afresh, and open to Dan changing:
+
+- The card is published to mod-kit in a slot named `room`, after `needs-a-look` and `compact` and
+  before `handoff`: it is about this account's state, so it sits with the status rows, above what
+  waits on Dan from other mods. mod-kit gained the slot in the same change (#670). An older mod-kit
+  refuses the row, and that is said once per session in a dim transcript line.
+- The sign in page step reads "Switching to Work: opening the sign in page… 3s", the round's
+  "in the same form". The seconds count from the start of the step shown, so a stalled step is the
+  one whose count keeps climbing.
+- Reset times are in the Mac's own time zone: a time alone when the reset falls today ("6:40 PM"),
+  else the weekday and time ("Thu 9 AM"), minutes left out on the hour, as every round drew them.
+  Each time uses the offset in force at that instant, so a reset after a clock change is not an
+  hour off; a time zone that cannot be read shows UTC and says so. The age is in its largest unit
+  ("2h", "14m", "<1m").
+- An account with no nickname is named by its email and org: "work@example.com (Acme)" in the card
+  and "work@example.com, Acme" under the dialog's question, as the rounds drew each.
+- The dialog is a pane the mod draws, opened as a dialog (focused, Esc closes it, toasts wait),
+  because Claude Code's own question dialog cannot carry the dim line or a field with Save. Enter
+  in the field saves; an empty name saves nothing. Skip and Esc record that the ask was answered,
+  so neither Mac asks again.
+- When the triggering limit is both (95% 5 hour and 90% weekly at once), an account must have more
+  room on both. "Most weekly room" ties are broken by the most 5 hour room, then the newest reading.
+- Nicknames are shared through the claude-sync payload, in `mods/account-room-nicknames.json`: the
+  mods tree is mirrored, and a file beside the mod folders (not in one) is not watched for hot
+  reload and is named by no mod list. The repository is public, so the file is keyed by a hash of
+  the account and org ids and holds no email; the nickname itself is published.
+
+Not settled by any round, built so the spec holds, and each an open question for Dan:
+
+- **Another Mac's readings unavailable.** The spec asks the card to say so; no round drew it. It is
+  a plain line at the foot of the card: "Dans-MacBook-Pro's readings are unavailable: not
+  downloaded from iCloud yet".
+- **A sign in that does not finish** (`claude auth login` exits non zero or times out after 10
+  minutes): a toast, "Switch did not finish: Login cancelled", and the card comes back. On success:
+  a toast, "Switched to Work.", and the card is dismissed for the session. A Switch stopped at the
+  sign out also toasts the reason ("Switch stopped: no browser logout route has been proven yet"),
+  so Try again is not the only way to find out why (L148).
+- **Dismiss** lasts for the rest of the session, as the spec says; it does not come back if the
+  account recovers and runs low again in the same session.
+- **/accounts rename** with no name renames this session's account; with a name (a nickname or an
+  email) it renames that one.
 
 ## Not design decisions
 
