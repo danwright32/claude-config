@@ -32,10 +32,11 @@ const isPane = (place: unknown): place is StepsPaneId => (PANES as readonly unkn
 // The project a card belongs to: the repository's root, the main checkout's for a worktree, so a
 // worktree session and the main checkout share one card; else the folder the session started in.
 // `legacy` is where #614 kept it, the session's own folder, so a card a worktree session kept
-// before #708 is still found.
+// before #708 is still found. A repository that cannot be read throws to the caller, which says
+// so: taken as no repository, a worktree's card would be kept under its own folder again.
 const projectKeys = async ($: EngineInterface) => {
   const folder = (await $.session.root().catch(() => undefined)) ?? (await $.session.cwd())
-  const repo = await $.session.repo().catch(() => null)
+  const repo = await $.session.repo()
   return { key: `card:${repo?.root ?? folder}`, legacy: `card:${folder}` }
 }
 

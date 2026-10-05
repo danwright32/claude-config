@@ -124,9 +124,9 @@ const ROOT = '/repo'
 // which it remembers), the prompt, the clipboard and toasts, each recorded. `wide` is a 160 column
 // terminal, else 120, a laptop. `root` is where the session runs, `repoRoot` the repository's root
 // (the main checkout's for a worktree), null outside one.
-type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; isAsking: boolean }
+type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, isAsking: false, ...init }
+  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   const opens: { id: string; columns?: number }[] = []
@@ -151,7 +151,10 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   })
   on('session.root', () => ({ value: w.root }) as never)
   on('session.cwd', () => ({ value: w.root }) as never)
-  on('session.repo', () => ({ value: w.repoRoot === null ? null : { root: w.repoRoot, remote: null, internal: false, name: null } }) as never)
+  on('session.repo', () => {
+    if (w.repoFails) throw new Error('git could not read the working copy')
+    return { value: w.repoRoot === null ? null : { root: w.repoRoot, remote: null, internal: false, name: null } } as never
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
@@ -553,6 +556,20 @@ test('a card kept by the main checkout is carried into a worktree session of the
   world(on, { root: `${ROOT}/.claude/worktrees/a1`, repoRoot: ROOT }, { [`card:${ROOT}`]: card })
   await start($)
   expect((await context($)).find(b => b.name === 'manualSteps')?.text).toMatch(/step 1: Purge the cache/)
+})
+
+// Not knowing the repository is not the same as being outside one: kept under the worktree's own
+// folder, the card would be lost to the main checkout, the defect #708 fixed.
+test('a repository that cannot be read keeps nothing under the folder, and says the steps were not saved', withKit, async ($, on) => {
+  const w = world(on, { root: `${ROOT}/.claude/worktrees/a1`, repoRoot: ROOT, repoFails: true })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
+  expect(Object.keys(w.mem)).toEqual([])
+  expect(w.toasts).toHaveLength(1)
+  // The kit skips a hook beneath that throws and answers that nothing implements the call, so the
+  // reason is the engine's, not this world's.
+  expect(w.toasts[0]).toMatch(/^The manual steps could not be saved for the next session: .+\.$/)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
 })
 
 test('outside a repository the steps are kept under the folder', withKit, async ($, on) => {

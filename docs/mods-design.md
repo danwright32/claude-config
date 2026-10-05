@@ -631,6 +631,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   the mod's store on this Mac. The root is the main checkout's for a worktree, so steps handed over
   in a worktree session come back in the main checkout and in any other worktree of it (#708); a
   card a worktree session kept under the worktree's own folder before that is found there and moved.
+  A repository that cannot be read is never taken as none: the toast says the steps could not be
+  saved for the next session, rather than keeping them under the worktree's folder again.
   At the next session start there they are held, not shown, and the conversation's first message
   tells Claude to re-check them and pin them again with the steps tool, a step found done as
   `already-done`, even when every one is: a card all already done is not pinned and the kept steps
