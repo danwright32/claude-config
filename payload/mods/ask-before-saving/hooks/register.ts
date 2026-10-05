@@ -65,8 +65,9 @@ const approved = new Set<string>()
 // A subagent's calls the tool.call hook judged and let through, by what they write: the classic hook
 // beneath, which cannot see which loop a call runs in, never asks the main session about them. A main
 // session call with the same key meanwhile is no hole: the key is everything the judgement reads, so
-// it writes no lasting memory either.
-const fromAgent = new Set<string>()
+// it writes no lasting memory either. Counted per key, so one of two identical calls finishing never
+// clears the other's mark while it is still on its way down (lessons review of #783).
+const fromAgent = new Map<string, number>()
 // The calls the classic hook let through on a For good approval, by tool_use_id, with where each
 // saves to: read back by the tool.call hook above it in the same dispatch, to say what became of it.
 const reissued = new Map<string, string>()
@@ -250,11 +251,13 @@ export const register: Register = on => {
           return { deny: agentRefusal(where) }
         }
         const key = saveKey(tool, input, at.cwd, at.home)
-        fromAgent.add(key)
+        fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
         try {
           return await next(e)
         } finally {
-          fromAgent.delete(key)
+          const left = (fromAgent.get(key) ?? 1) - 1
+          if (left > 0) fromAgent.set(key, left)
+          else fromAgent.delete(key)
         }
       }
 
@@ -327,56 +330,65 @@ export const register: Register = on => {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const ask = e as unknown as AskInput & Record<string, unknown>
     const id = saveIdOf(ask.metadata?.source)
+    // A question about no save is Claude Code's alone, its failures included (lessons review of #783:
+    // a catch over the whole hook reported them as a save whose answer could not be read).
     if (id === undefined) return next(e)
-    if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about saving to lasting memory. Put the rule and the file in your final report instead.' }
-    const q = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
-    if (!q) return { deny: `No save is waiting under ${id}: it was answered already, or the session ended. Send the save again, and you will be told how to ask.` }
-    const where = q.files.join(', ')
-    const questions = Array.isArray(ask.questions) ? ask.questions : []
-    if (questions.length !== 1 || typeof questions[0]?.question !== 'string')
-      return { deny: `Ask one question about this save, naming ${where} and stating the rule in one plain sentence.` }
-    const question = questions[0].question as string
-    const missing = q.files.filter(f => !question.includes(f))
-    if (missing.length) return { deny: `The question must name the file the rule would go to (${missing.join(', ')}) and state the rule in one plain sentence, such as "Save to ${q.files[0]} for good: <the rule>?".` }
-    // An answer only Dan's dialog may give: one the call already carries is refused, never read.
-    if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
-      return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this save.' }
+    const answered = async () => {
+      if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about saving to lasting memory. Put the rule and the file in your final report instead.' }
+      const q = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
+      if (!q) return { deny: `No save is waiting under ${id}: it was answered already, or the session ended. Send the save again, and you will be told how to ask.` }
+      const where = q.files.join(', ')
+      const questions = Array.isArray(ask.questions) ? ask.questions : []
+      if (questions.length !== 1 || typeof questions[0]?.question !== 'string')
+        return { deny: `Ask one question about this save, naming ${where} and stating the rule in one plain sentence.` }
+      const question = questions[0].question as string
+      const missing = q.files.filter(f => !question.includes(f))
+      if (missing.length) return { deny: `The question must name the file the rule would go to (${missing.join(', ')}) and state the rule in one plain sentence, such as "Save to ${q.files[0]} for good: <the rule>?".` }
+      // An answer only Dan's dialog may give: one the call already carries is refused, never read.
+      if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
+        return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this save.' }
 
-    const r = await next({ ...e, questions: [{ ...questions[0], header: HEADER, options: dialogOptions(q.files), multiSelect: false }] } as typeof e)
-    if (r.deny !== undefined || r.isError) return r
-    const out = (r.result ?? {}) as AskResult
-    const asked = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
-    const chosen = out.answers?.[asked] ?? out.answers?.[question]
-    const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
-    // The dialog resolved itself while Dan was away: no answer of his, so the save waits to be asked again.
-    if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so nothing was saved. Ask him again about saving to ${where} when he is back.`)
-    if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer about saving to ${where}, so nothing was saved. Ask him again, or leave it.`)
+      const r = await next({ ...e, questions: [{ ...questions[0], header: HEADER, options: dialogOptions(q.files), multiSelect: false }] } as typeof e)
+      if (r.deny !== undefined || r.isError) return r
+      const out = (r.result ?? {}) as AskResult
+      const asked = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
+      const chosen = out.answers?.[asked] ?? out.answers?.[question]
+      const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
+      // The dialog resolved itself while Dan was away: no answer of his, so the save waits to be asked again.
+      if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so nothing was saved. Ask him again about saving to ${where} when he is back.`)
+      if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer about saving to ${where}, so nothing was saved. Ask him again, or leave it.`)
 
-    // Answered: the waiting question is taken out, whatever the answer.
-    await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
-    if (chosen === NOT_AT_ALL) return say(`Dan answered Not at all to saving this to ${where}: nothing was saved. Do not save it.`)
-    if (chosen === THIS_SESSION) {
-      const rule = ruleOf(question, q.files)
-      await update($, rulesRef, x => [...(x ?? []), rule])
-      $.ui.invalidate('prompt.section')
-      return say(`Dan answered Just this session to saving this to ${where}: nothing was written. It is in your system prompt as a rule for this session only.`)
+      // Answered: the waiting question is taken out, whatever the answer.
+      await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+      if (chosen === NOT_AT_ALL) return say(`Dan answered Not at all to saving this to ${where}: nothing was saved. Do not save it.`)
+      if (chosen === THIS_SESSION) {
+        const rule = ruleOf(question, q.files)
+        await update($, rulesRef, x => [...(x ?? []), rule])
+        $.ui.invalidate('prompt.section')
+        return say(`Dan answered Just this session to saving this to ${where}: nothing was written. It is in your system prompt as a rule for this session only.`)
+      }
+      if (chosen !== FOR_GOOD)
+        return say(`Dan answered in his own words instead of choosing: "${chosen}". Nothing was saved. Act on what he said; sending the save again asks him again.`)
+
+      // For good (#738): approved by what it saves (the key taken where the save was refused, so the
+      // file named), for a while, and Claude told, in this result, to send the call again, given whole
+      // since a compaction may take the call out of its context.
+      const now = await $.clock.now()
+      const key = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
+      const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS }
+      await update($, approvalsRef, a => [...(a ?? []), made])
+      lapseAfter($, APPROVAL_MS, where)
+      return say(
+        `Dan answered For good to saving this to ${where}. Send the same ${q.tool} call again now, unchanged, and it is saved without asking him again: ` +
+          `${callShown(q.tool, q.input)}. If it is not sent within ${MINUTES} minutes, this lapses.`,
+      )
     }
-    if (chosen !== FOR_GOOD)
-      return say(`Dan answered in his own words instead of choosing: "${chosen}". Nothing was saved. Act on what he said; sending the save again asks him again.`)
-
-    // For good (#738): approved by what it saves (the key taken where the save was refused, so the
-    // file named), for a while, and Claude told, in this result, to send the call again, given whole
-    // since a compaction may take the call out of its context.
-    const now = await $.clock.now()
-    const key = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
-    const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS }
-    await update($, approvalsRef, a => [...(a ?? []), made])
-    lapseAfter($, APPROVAL_MS, where)
-    return say(
-      `Dan answered For good to saving this to ${where}. Send the same ${q.tool} call again now, unchanged, and it is saved without asking him again: ` +
-        `${callShown(q.tool, q.input)}. If it is not sent within ${MINUTES} minutes, this lapses.`,
-    )
-  }).catch(($, e, next) => ({ deny: `Not saved: Ask before saving could not read Dan's answer (${next.error?.message || 'it failed'}). Ask him again.` }))
+    try {
+      return await answered()
+    } catch (err) {
+      return { deny: `Not saved: Ask before saving could not read Dan's answer (${message(err)}). Ask him again.` }
+    }
+  })
 
   // A reload drops the module's timers, never its approvals: each one waiting is timed again.
   on('session.start', async ($, e, next) => {

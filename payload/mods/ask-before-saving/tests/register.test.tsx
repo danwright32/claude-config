@@ -68,6 +68,8 @@ const guard: { name: string; register: Register } = {
   register: on => {
     on('tool.call', async ($, e, next) => {
       if (JSON.stringify(e).includes('GUARD-REFUSES')) return { deny: 'Blocked: this carries a dash.' }
+      // A guard that takes its time on a call carrying the marker: a read the test's world holds.
+      if (JSON.stringify(e).includes('HOLD-AT-GUARD')) await $.fs.read('/gate/guard')
       return next(e)
     })
   },
@@ -88,14 +90,16 @@ const CWD = '/Users/dan/Apps/slate'
 // What a refusal tells Claude to do when the save waits on Dan (#777): ask him in the dialog.
 const ASKS = 'Ask him now with AskUserQuestion'
 
-type Dialog = { answer?: string; afk?: boolean }
+type Dialog = { answer?: string; afk?: boolean; fails?: boolean }
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: { source?: string } }
 // The Mac and Claude Code beneath the mod: files, the tools that write them, Claude Code's own
 // question dialog (answered as `dialog` says), the session's agents, the memory section of the
 // system prompt, prompts a plugin submits, and toasts.
 // `auto` stands for auto mode (#738): its classifier refuses a call no model request asked for, which
 // a call a plugin makes for itself is. `ownClock` leaves the clock to the test.
-const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string> } = {}) => {
+// `gate` holds the guard's first read of its gate until `opened` settles, calling `reached` as it starts.
+const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+  let gateReads = 0
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
@@ -122,6 +126,13 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
   on('agent.list', () => ({ value: (init.agents ?? []).map(id => ({ id, description: 'a task', agentType: 'general-purpose' })) }) as never)
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', async ($, e) => {
+    if (e.path === '/gate/guard') {
+      if (++gateReads === 1 && init.gate) {
+        init.gate.reached()
+        await init.gate.opened
+      }
+      return { value: '' } as never
+    }
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: t } as never
@@ -129,6 +140,7 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
   on('tool.call', ($, e, next) => {
     const { tool, tool_use_id: _id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
     if (tool === 'AskUserQuestion') {
+      if (dialog.fails) throw new Error('the dialog broke')
       const a = input as unknown as Asked
       asked.push(a)
       const q = a.questions[0]?.question ?? ''
@@ -262,6 +274,45 @@ test("a subagent's write to lasting memory is refused and never asked about: not
   // Its writes elsewhere go through untouched.
   await call($, { tool: 'Write', file_path: 'README.md', content: 'x', agentId: 'agent-a1' })
   expect(w.ran.map(x => x.input.file_path)).toEqual(['README.md'])
+})
+
+// A deadline on a wait for a condition, so one never met fails by name rather than hanging.
+const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} within ${ms} ms`)), ms)))])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+// Lessons review of #783: a subagent's judged call is marked so the classic hook beneath, which
+// cannot see the loop, does not judge it again for the main session. With one mark per key, the
+// first of two identical calls to finish cleared it while the second was still on its way down, and
+// the second was judged again there (here, after the shell profile changed under it) and refused
+// with an instruction to ask Dan: the main session question #777 removes.
+test("two identical subagent calls in flight: the first finishing never exposes the second to the main session's question", withKit, async ($, on) => {
+  let reached!: () => void
+  const arrived = new Promise<void>(r => (reached = r))
+  let open!: () => void
+  const opened = new Promise<void>(r => (open = r))
+  const w = world(on, { agents: ['agent-a1'], gate: { reached, opened } })
+  const command = 'python3 -c "print(1)" # $XGATE/CLAUDE.md HOLD-AT-GUARD'
+  // The second call, marked by ask before saving, then held by the guard beneath it.
+  const second = call($, { tool: 'Bash', command, agentId: 'agent-a1' })
+  let first: Result
+  try {
+    await within(arrived, 'the held call never reached the guard')
+    first = await call($, { tool: 'Bash', command, agentId: 'agent-a1' })
+    // Now a profile sets the variable, so judged again the held call would count as a save.
+    w.files[`${HOME}/.zshrc`] = `export XGATE=${HOME}/.claude\n`
+  } finally {
+    open()
+  }
+  expect(first.deny).toBeUndefined()
+  const held = await within(second, 'the held call never came back')
+  expect(refusalOf(held)).not.toContain(ASKS)
+  expect(held.deny).toBeUndefined()
+  expect(w.ran.length).toBe(2)
 })
 
 test('the subagent call from #777, a python heredoc building fixture homes in a test, goes straight through, from a subagent or the main session', withKit, async ($, on) => {
@@ -630,4 +681,27 @@ test('a question that is not about a save is left to Claude Code untouched', wit
   expect(r.deny).toBeUndefined()
   expect(w.asked[0].questions[0]).toEqual(q)
   expect(contextOf(r)).toBe('')
+})
+
+// Lessons review of #783: the hook's catch covered every question, so a failure of a question that
+// had nothing to do with a save came back as "Not saved: Ask before saving could not read Dan's
+// answer". It is that question's own failure, untouched.
+test("a failure of a question that is not about a save is never reported as a save's", withKit, async ($, on) => {
+  const w = world(on)
+  w.dialog.fails = true
+  const q = { question: 'Which first?', header: 'Next', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }
+  let out: string
+  try {
+    out = JSON.stringify(await call($, { tool: 'AskUserQuestion', questions: [q], metadata: { source: 'next-issue' } }))
+  } catch (err) {
+    out = String((err as Error).message ?? err)
+  }
+  // The test kit reports an engine handler that throws as its own error, whatever it said.
+  expect(out).not.toContain('Ask before saving')
+  expect(out).not.toContain('Not saved')
+  // One about a save that fails is still refused, saying so.
+  const refused = refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }))
+  const r = await askDan($, w, refused, 'For good', '~/Apps/slate/AGENTS.md')
+  expect(r.deny).toContain("Not saved: Ask before saving could not read Dan's answer")
+  expect(w.ran).toEqual([])
 })
