@@ -10,6 +10,13 @@ export type PickersOpen = {
 }
 
 /**
+ * A question of Claude's that Dan talked past or dismissed this session, as the limit on asking
+ * again compares it (#703): its text and chip lower cased with punctuation and spacing gone, its
+ * answers' labels sorted, and how many times.
+ */
+export type PickersPassed = { question: string; header: string; labels: string[]; count: number }
+
+/**
  * The picker manners mod's own wait, on $ so that a tool.call hook waiting on Dan spends no hook
  * budget: a `$` call's time is free, a plain promise's is not (measured, 2026-10-04: a plain await
  * past 10 seconds lets the engine's own picker run instead). Called by this mod alone.
@@ -25,8 +32,8 @@ declare module 'claude-code' {
   interface PluginState {
     /**
      * In $.state so a reload keeps them: the open question, whether next issue pickers are off for
-     * this session, and how many times Dan talked past each question, by its text.
+     * this session, and the questions of Claude's Dan talked past or dismissed.
      */
-    'picker-manners': { open: PickersOpen | null; quiet: boolean; talkedPast: Record<string, number> }
+    'picker-manners': { open: PickersOpen | null; quiet: boolean; passed: PickersPassed[] }
   }
 }

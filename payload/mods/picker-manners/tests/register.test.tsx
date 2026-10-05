@@ -2,61 +2,105 @@ import { expect, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 
-// mod-kit, standing in: a mod cannot import another mod's files. It keeps the rows published and
-// draws each line as a keyed Box of its parts; a question row takes the band alone, as mod-kit's
-// own composer does (proved in mod-kit's tests).
-type Part = { text?: string; color?: string; bold?: boolean; dim?: boolean; indent?: number; button?: string; label?: string; hotkey?: string; plain?: boolean }
-type Row = { mod: string; id: string; slot: string; lines: Part[][] }
+// mod-kit, standing in: a mod cannot import another mod's files. It keeps the questions published
+// and draws the first one asked, alone, as mod-kit does (one question at a time, #703): the chip
+// and question, each option as a plain numbered button, a description under it. mod-kit's own tests
+// prove the real drawing; here what matters is what picker manners asks it to draw and when.
+type Ask = { mod: string; id: string; chip: string; question: string; options: { button: string; label: string; description?: string; chosen?: boolean }[]; submit?: { button: string; label: string } }
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])
+      const ref = { plugin: 'mod-kit', key: 'band' } as never
+      const rows = async () => (((await built.state.get(ref)) as { value?: Ask[] }).value ?? [])
       const modkit = {
-        bandRow: async (row: Row) => {
-          const now = (await rows()).filter(r => !(r.mod === row.mod && r.id === row.id))
-          await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...now, row] as never)
+        question: async (q: Ask) => {
+          const all = await rows()
+          const i = all.findIndex(r => r.mod === q.mod && r.id === q.id)
+          await built.state.set(ref, (i < 0 ? [...all, q] : all.map((r, n) => (n === i ? q : r))) as never)
           // Told to the test, which waits on it rather than on a fixed time.
-          built.ui.log(`BAND ${row.slot}`, { to: 'debug' })
+          built.ui.log(`BAND question ${JSON.stringify(q)}`, { to: 'debug' })
+        },
+        shownQuestion: async () => {
+          const q = (await rows())[0]
+          return q ? { mod: q.mod, id: q.id } : null
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
-          // A row whose text asks for it stands for a band that cannot be cleared.
-          if ((await rows()).some(r => r.mod === mod && r.id === id && JSON.stringify(r.lines).includes('cannot be cleared'))) throw new Error('the band is gone')
-          await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
-          built.ui.log('BAND cleared', { to: 'debug' })
+          // A question whose text asks for it stands for a band that cannot be cleared.
+          if ((await rows()).some(r => r.mod === mod && r.id === id && r.question.includes('cannot be cleared'))) throw new Error('the band is gone')
+          await built.state.set(ref, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
+          built.ui.log(`BAND cleared ${JSON.stringify({ mod })}`, { to: 'debug' })
         },
       }
       return { ...built, modkit } as never
     })
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-      const all = ((await $.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? []
-      const rows = all.some(r => r.slot === 'question') ? all.filter(r => r.slot === 'question') : all
-      if (!rows.length) return next(e)
+      const q = (((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: Ask[] }).value ?? [])[0]
+      if (!q) return next(e)
       const { Box, Button, Text } = $.ui.resolve(e)
-      return (
-        <Box flexDirection="column">
-          {rows.flatMap(r =>
-            r.lines.map((l, n) => (
-              <Box key={`line:${r.id}:${n}`} flexDirection="row">
-                {l.map((p, i) =>
-                  p.button ? (
-                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} hotkey={p.hotkey} plain={p.plain} onPress={() => undefined} />
-                  ) : (
-                    <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim}>
-                      {`${' '.repeat(p.indent ?? 0)}${p.text}`}
-                    </Text>
-                  ),
-                )}
-              </Box>
-            )),
-          )}
-        </Box>
-      )
+      const lines = [
+        <Box key="line:head" flexDirection="row">
+          <Text dimColor>{`[${q.chip}] `}</Text>
+          <Text color="warning" bold>
+            {q.question}
+          </Text>
+        </Box>,
+      ]
+      q.options.forEach((o, i) => {
+        lines.push(
+          <Box key={`line:o${i}`} flexDirection="row">
+            {[
+              <Button key={`${q.mod}:${o.button}`} label={o.label} hotkey={String(i + 1)} plain onPress={() => undefined} />,
+              ...(o.chosen ? [<Text key="chosen" dimColor>{' chosen'}</Text>] : []),
+            ]}
+          </Box>,
+        )
+        if (o.description)
+          lines.push(
+            <Box key={`line:d${i}`} flexDirection="row">
+              <Text dimColor>{`   ${o.description}`}</Text>
+            </Box>,
+          )
+      })
+      if (q.submit)
+        lines.push(
+          <Box key="line:submit" flexDirection="row">
+            <Button key={`${q.mod}:${q.submit.button}`} label={q.submit.label} onPress={() => undefined} />
+          </Box>,
+        )
+      return <Box flexDirection="column">{lines}</Box>
     })
   },
 }
-const withKit = { plugins: [modKit] }
+
+// Another mod with a question of its own in the band (ask before saving's, which waits while
+// Claude carries on), and another that asks Dan through $.ui.ask (the keystroke guard's heads up).
+const otherAsker: { name: string; register: Register } = {
+  name: 'other-asker',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+      const command = String((e as { command?: string }).command)
+      if (command === 'save-question') {
+        await $.modkit.question({ mod: 'ask-before-saving', id: 'question:t1', chip: 'Standing rule', question: 'Save this as a standing rule?', options: [{ button: 'for-good', label: 'For good' }] } as never)
+        return { deny: 'asked' }
+      }
+      if (command === 'save-answered') {
+        await $.modkit.clearBandRow({ mod: 'ask-before-saving', id: 'question:t1' })
+        return { deny: 'cleared' }
+      }
+      if (command === 'ready') {
+        try {
+          return { deny: `asked: ${await $.ui.ask("I'm about to type into Overture. Ready?", { header: 'Taking over', options: ['Go ahead', 'Not now'] })}` }
+        } catch (err) {
+          return { deny: `rejected: ${String((err as Error).message ?? err)}` }
+        }
+      }
+      return next(e)
+    })
+  },
+}
+const withKit = { plugins: [modKit, otherAsker] }
 
 const QUESTION = {
   question: "How long should the registry keep a closed session's record?",
@@ -70,14 +114,20 @@ const QUESTION = {
   ],
 }
 
-// Claude Code beneath the mod: its own band, its own picker (which must never be reached), the
-// transcript's dim lines, toasts, and the commands registered.
-const world = (on: On) => {
+// Claude Code beneath the mod: its own band, its own picker (reached only where no band can be
+// drawn), the surfaces the session draws on, the transcript's dim lines, toasts, the memory section
+// of the system prompt, and the commands registered.
+const world = (on: On, init: { surfaces?: string[]; surfacesFail?: boolean } = {}) => {
   const logs: string[] = []
-  const shown: string[] = []
+  const pm: string[] = []
+  const asks: Ask[] = []
   const debug: string[] = []
   const toasts: string[] = []
   const reachedEngine: string[] = []
+  on('session.surfaces', () => {
+    if (init.surfacesFail) throw new Error('no surfaces here')
+    return { value: init.surfaces ?? ['terminal'] } as never
+  })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
@@ -87,12 +137,18 @@ const world = (on: On) => {
     return { result: { questions: [], answers: { engine: 'picker' } } } as never
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.section', ($, e) => ({ text: e.text }))
+  on('ui.invalidate', () => ({ value: undefined }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }) as never)
   on('ui.log', ($, e) => {
     const text = String((e as { text?: string }).text)
-    if (text.startsWith('BAND ')) shown.push(text.slice(5))
-    else if ((e as { to?: string }).to === 'debug') debug.push(text)
+    const band = /^BAND (question|cleared) (.*)$/s.exec(text)
+    if (band) {
+      const body = JSON.parse(band[2] as string) as Ask
+      if (band[1] === 'question') asks.push(body)
+      if (body.mod === 'picker-manners') pm.push(band[1] as string)
+    } else if ((e as { to?: string }).to === 'debug') debug.push(text)
     else logs.push(text)
     return { value: undefined } as never
   })
@@ -100,7 +156,7 @@ const world = (on: On) => {
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  return { logs, shown, debug, toasts, reachedEngine }
+  return { logs, asks, pm, debug, toasts, reachedEngine }
 }
 
 const band = { plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} } } as never
@@ -112,37 +168,44 @@ const lines = async (ui: Ui) => {
   const rows = (await ui.findAll({ type: 'Box' })).filter(b => String(b.key ?? b.props.key ?? '').startsWith('line:'))
   return rows.length ? rows.map(textOf) : (await ui.findAll({ type: 'Text' })).map(textOf)
 }
-type T$ = { tool: { call: (e: never) => Promise<unknown> }; ui: { mount: (t: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> }; session: { start: (e: never) => Promise<unknown> }; command: { run: (e: never) => Promise<unknown> } }
-const ask = ($: T$, q: object = QUESTION, extra: object = {}) =>
-  $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [q], ...extra } as never) as Promise<{ result?: { answers: Record<string, string> }; deny?: string; text?: string }>
-const type = ($: T$, text: string) => $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false } as never)
-// Waits on the condition, never a fixed time (L290): until the question is in the band, so the
-// call has reached its wait. Gives up after two seconds, naming what it waited for.
-const tick = async (w: { shown: string[] }) => {
+type T$ = {
+  tool: { call: (e: never) => Promise<unknown> }
+  ui: { mount: (t: never) => Promise<unknown> }
+  prompt: { submit: (e: never) => Promise<unknown>; section: (e: never) => Promise<{ text: string | null }> }
+  session: { start: (e: never) => Promise<unknown> }
+  command: { run: (e: never) => Promise<unknown> }
+}
+type Answered = { result?: { answers: Record<string, string> }; deny?: string; text?: string }
+const ask = ($: T$, q: object = QUESTION, extra: object = {}) => $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [q], ...extra } as never) as Promise<Answered>
+const bash = async ($: T$, command: string) => ((await $.tool.call({ tool: 'Bash', command } as never)) as Answered).deny
+const type = ($: T$, text: string, kind = 'composer') => $.prompt.submit({ text, origin: { kind }, wait: false } as never)
+const memory = async ($: T$) => (await $.prompt.section({ name: 'memory', text: 'core memory' } as never)).text
+// Waits on the condition, never a fixed time (L290): until picker manners' question is in the band,
+// so the call has reached its wait. Gives up after two seconds, naming what it waited for.
+const tick = async (w: { pm: string[] }) => {
   for (let n = 0; n < 200; n++) {
-    if (w.shown[w.shown.length - 1] === 'question') return
+    if (w.pm[w.pm.length - 1] === 'question') return
     await new Promise(r => setTimeout(r, 10))
   }
   throw new Error('the question never reached the band')
 }
+const MESSAGE = 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first.'
 
-test('a question is drawn in the band, never as a modal, and a press there answers it', withKit, async ($, on) => {
+test('a question is asked in the band through mod-kit, never as a modal, and a press there answers it', withKit, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
-  const ui = (await $.ui.mount(band)) as unknown as Ui
-  expect(await lines(ui)).toEqual([
-    "[Retention] How long should the registry keep a closed session's record?",
-    '1: 1 day',
-    '   Smallest folder, but a Friday session is gone by Monday.',
-    '2: 7 days',
-    '   Covers a long weekend and a week away.',
-    '3: 30 days',
-    '   Keeps a month of history for the goals pane.',
-    '4: Until I clear it',
-    '   Nothing is deleted on its own.',
+  expect(w.asks).toEqual([
+    {
+      mod: 'picker-manners',
+      id: 'question',
+      chip: 'Retention',
+      question: QUESTION.question,
+      options: QUESTION.options.map((o, i) => ({ button: `opt${i + 1}`, label: o.label, description: o.description })),
+    },
   ])
-  expect((await ui.find({ type: 'Text', text: QUESTION.question }))?.props).toMatchObject({ color: 'warning', bold: true })
+  const ui = (await $.ui.mount(band)) as unknown as Ui
+  expect((await lines(ui))[0]).toBe("[Retention] How long should the registry keep a closed session's record?")
   expect((await ui.find({ type: 'Button', key: 'picker-manners:opt2' }))?.props).toMatchObject({ hotkey: '2', plain: true })
   await ui.press({ key: 'picker-manners:opt2' })
   const r = await call
@@ -158,21 +221,62 @@ test('typing while a question is open is a message: the question is withdrawn an
   await tick(w)
   await type($ as never, 'wait, what does 7 days cover exactly?')
   const r = await call
-  expect(r.deny ?? r.text).toMatch(/^Dan did not pick an answer: he is sending a message instead/)
+  expect(r.deny ?? r.text).toBe(`${MESSAGE} If this question is still unanswered after that, ask it again once; never more than once.`)
   expect(r.result).toBeUndefined()
   expect(w.reachedEngine).toEqual([])
 })
 
-test('a question talked past is asked again once, and never a third time', withKit, async ($, on) => {
+// #703: the second talk past still said "ask it again once", and the third asking was then refused.
+test('a question talked past is asked again once: the second pass tells Claude not to ask again, and a third asking is refused', withKit, async ($, on) => {
   const w = world(on)
+  const told: string[] = []
   for (let n = 0; n < 2; n++) {
     const call = ask($ as never)
     await tick(w)
     await type($ as never, 'let me explain first')
+    const r = await call
+    told.push(String(r.deny ?? r.text))
+  }
+  expect(told[0]).toMatch(/ask it again once; never more than once\.$/)
+  expect(told[1]).toBe(`${MESSAGE} He has now talked past or dismissed this question twice, so do not ask it again: carry on from what he says.`)
+  const third = await ask($ as never)
+  expect(third.deny ?? third.text).toBe('Dan has talked past or dismissed this question twice, so it is not asked again. Carry on from what he said.')
+})
+
+// #703: the limit keyed on the exact wording, and Claude rewords a question when it asks again.
+test('the limit holds when Claude rewords the question, and a different question under the same chip is still asked', withKit, async ($, on) => {
+  const w = world(on)
+  const reworded = { ...QUESTION, question: 'How long do you want closed sessions kept?' }
+  for (const q of [QUESTION, reworded]) {
+    const call = ask($ as never, q)
+    await tick(w)
+    await type($ as never, 'hang on')
     await call
   }
-  const third = await ask($ as never)
-  expect(third.deny ?? third.text).toBe('Dan has talked past this question twice, so it is not asked again. Carry on from what he said.')
+  expect((await ask($ as never, { ...QUESTION, question: 'So, how long should closed sessions be kept for?' })).deny).toMatch(/^Dan has talked past or dismissed this question twice/)
+  const other = ask($ as never, { ...QUESTION, question: 'Where should the registry live?', options: [{ label: 'Home' }, { label: 'Scratch' }] })
+  await tick(w)
+  await type($ as never, '1. Home')
+  expect((await other).result?.answers).toEqual({ 'Where should the registry live?': 'Home' })
+})
+
+// #703: the keystroke guard asks "I'm about to type into <app>. Ready?" the same way every time, so
+// once Dan had typed over it twice every later keystroke into that app was refused unasked.
+test("another mod's question, asked through $.ui.ask, is drawn every time: the limit on asking again is for Claude's own questions", withKit, async ($, on) => {
+  const w = world(on)
+  for (let n = 0; n < 3; n++) {
+    const r = bash($ as never, 'ready')
+    await tick(w)
+    await type($ as never, 'not yet, one moment')
+    expect(await r).toMatch(/^rejected: /)
+  }
+  const r = bash($ as never, 'ready')
+  await tick(w)
+  const ui = (await $.ui.mount(band)) as unknown as Ui
+  expect((await lines(ui))[0]).toBe("[Taking over] I'm about to type into Overture. Ready?")
+  await ui.press({ key: 'picker-manners:opt1' })
+  expect(await r).toBe('asked: Go ahead')
+  await ui.unmount()
 })
 
 test('a numbered prose answer is mapped onto the question and echoed back in one line', withKit, async ($, on) => {
@@ -183,6 +287,59 @@ test('a numbered prose answer is mapped onto the question and echoed back in one
   const r = await call
   expect(r.result?.answers).toEqual({ [QUESTION.question]: '7 days' })
   expect(w.logs).toEqual(['Q1 Retention: 7 days'])
+})
+
+// #703: the band is not drawn on the phone, and only typing at the Mac counted, so a question open
+// while Dan was on Remote Control could be neither answered nor dismissed.
+test("Dan's messages from his phone count as his own: one withdraws the question, numbered prose answers it, and \"no next issue\" quiets", withKit, async ($, on) => {
+  const w = world(on)
+  let call = ask($ as never)
+  await tick(w)
+  await type($ as never, 'what does that mean?', 'bridge')
+  expect((await call).deny).toMatch(/^Dan did not pick an answer/)
+  call = ask($ as never)
+  await tick(w)
+  await type($ as never, '1. 30 days', 'bridge')
+  expect((await call).result?.answers).toEqual({ [QUESTION.question]: '30 days' })
+  await type($ as never, 'no next issue', 'bridge')
+  expect((await ask($ as never, QUESTION, { metadata: { source: 'next-issue' } })).deny).toMatch(/^Dan turned off next issue pickers/)
+})
+
+// #703: where no band is drawn (a claude -p or SDK run, Dan's phone or VS Code attached) a question
+// put in the band waited for ever. Claude Code's own dialog, drawn on every surface, asks instead,
+// and in a -p run refuses, so another mod's $.ui.ask fails closed there as it is written to.
+for (const [name, init] of [
+  ['a claude -p run, drawing nowhere', { surfaces: [] }],
+  ["Dan's phone attached", { surfaces: ['terminal', 'mobile'] }],
+  ['surfaces that cannot be read', { surfacesFail: true }],
+] as const) {
+  test(`with ${name}, the question goes to Claude Code's own dialog, never the band`, withKit, async ($, on) => {
+    const w = world(on, init)
+    const r = await ask($ as never)
+    expect(w.reachedEngine).toEqual(['AskUserQuestion'])
+    expect(r.result?.answers).toEqual({ engine: 'picker' })
+    expect(w.asks).toEqual([])
+  })
+}
+
+// #703: with one question drawn at a time, picker manners' question can wait behind another mod's.
+// Dan cannot have talked past a question he never saw, and "1. yes" typed then answers nothing here.
+test("a question waiting behind another mod's: typing withdraws it uncounted, and numbered prose is no answer to it", withKit, async ($, on) => {
+  const w = world(on)
+  expect(await bash($ as never, 'save-question')).toBe('asked')
+  const hidden = ask($ as never)
+  await tick(w)
+  await type($ as never, '1. 7 days')
+  const r = await hidden
+  expect(r.result).toBeUndefined()
+  expect(r.deny).toBe(MESSAGE)
+  expect(w.logs).toEqual([])
+  await bash($ as never, 'save-answered')
+  // In view now: the first pass that counts allows one more asking.
+  const seen = ask($ as never)
+  await tick(w)
+  await type($ as never, 'one moment')
+  expect((await seen).deny).toMatch(/ask it again once; never more than once\.$/)
 })
 
 test('more than one question in a call is refused (one question per call)', withKit, async ($, on) => {
@@ -213,6 +370,22 @@ test('"no next issue" silences next issue pickers for the session, other pickers
   expect((await again).result?.answers).toEqual({ [QUESTION.question]: '30 days' })
 })
 
+// #703: CLAUDE.md's keep the issue loop moving rule has Claude offer next issues as a picker, and an
+// offer made from that rule carries no next-issue tag for the refusal to see. Claude's system prompt
+// says pickers are off for as long as they are, so the rule is overridden for the session (spec #615
+// point 4), and says nothing once /pickers on brings them back.
+test('while next issue pickers are off, the system prompt tells Claude so, and stops once /pickers on brings them back', withKit, async ($, on) => {
+  world(on)
+  expect(await memory($ as never)).toBe('core memory')
+  await type($ as never, 'just give me the list')
+  const section = String(await memory($ as never))
+  expect(section).toMatch(/^core memory\n\n/)
+  expect(section).toContain('Dan turned off next issue pickers for this session')
+  expect(section).toContain('never as a picker')
+  await $.command.run({ command: 'pickers', args: 'on' } as never)
+  expect(await memory($ as never)).toBe('core memory')
+})
+
 test('a multi select question toggles its options and answers with Submit', withKit, async ($, on) => {
   const w = world(on)
   const call = ask($ as never, { ...QUESTION, multiSelect: true })
@@ -230,11 +403,11 @@ test('a multi select question toggles its options and answers with Submit', with
   await ui.unmount()
 })
 
-test('a prompt that is not Dan typing (a plugin or a peer) leaves the question open', withKit, async ($, on) => {
+test('a prompt that is not Dan (a plugin or a peer) leaves the question open', withKit, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
-  await $.prompt.submit({ text: 'a peer session says hello', origin: { kind: 'peer' }, wait: false } as never)
+  await type($ as never, 'a peer session says hello', 'peer')
   const ui = (await $.ui.mount(band)) as unknown as Ui
   expect((await lines(ui))[0]).toMatch(/^\[Retention\]/)
   await ui.press({ key: 'picker-manners:opt4' })
