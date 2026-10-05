@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { AskBeforeSavingQuestion } from '../types/index.d.ts'
-import { ANSWERS, type Answer, MOD, addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, rowId } from './rules.ts'
+import { ANSWERS, type Answer, type InCheckout, MOD, addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, rowId } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
 // Edit or Bash, Dan is asked in the band: For good, Just this session, or Not at all. Settled with
@@ -44,21 +44,24 @@ const message = (err: unknown) => String((err as Error)?.message ?? err)
 // Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
 // call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
 // patch, an inline script) is judged by the lasting memory its text and any patch file it reads
-// mention. A file that exists and cannot be read fails the hook, and the hook fails closed.
+// mention. A file in a temporary folder counts inside a checkout there, found by mod-kit's one
+// walk for it (#726). A file that exists and cannot be read, or a disk that cannot say whether a
+// temporary file is in a checkout, fails the hook, and the hook fails closed.
 const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string[]> => {
   const home = (await $.env.get('HOME')) ?? ''
   const cwd = await $.session.cwd()
+  const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   if (tool !== 'Bash') {
     const abs = resolvePath(String(input.file_path ?? ''), cwd, home)
-    return lastingMemory(abs, home) ? [display(abs, home)] : []
+    return (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : []
   }
   const command = String(input.command ?? '')
   const w = await $.modkit.writes({ command, cwd, home })
-  const out = lastingFiles(w, home)
+  const out = await lastingFiles(w, home, inCheckout)
   for (const u of w.unnamed) {
     const texts = [command]
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
-    for (const m of texts.flatMap(t => mentioned(t, home))) if (!out.includes(m)) out.push(m)
+    for (const t of texts) for (const m of await mentioned(t, home, inCheckout)) if (!out.includes(m)) out.push(m)
   }
   return out
 }
@@ -130,7 +133,7 @@ export const register: Register = on => {
       }
       if (r.deny !== undefined || r.isError) return r
       return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
-    }).catch(($, e) => ({ deny: cannotCheck(e.error?.message) }))
+    }).catch(($, e, next) => ({ deny: cannotCheck(next.error.message) }))
   }
 
   // Asked here, beneath every mod's tool.call hook and after the settings hooks beneath this one, so
@@ -176,7 +179,7 @@ export const register: Register = on => {
       return { deny: `Not saved: the question asking Dan whether this is a standing rule could not be shown (${message(err)}). Ask him in your reply instead.` }
     }
     return { deny: REFUSED }
-  }).catch(($, e) => ({ deny: cannotCheck(e.error?.message) }))
+  }).catch(($, e, next) => ({ deny: cannotCheck(next.error.message) }))
 
   // A press carries the answer and the save it was drawn for: "<answer>:<save id>".
   on('ui.press', { plugin: 'mod-kit' }, async ($, e, next) => {

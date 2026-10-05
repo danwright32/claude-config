@@ -29,6 +29,7 @@ const modKit: { name: string; register: Register } = {
       'git apply rules.patch': { files: [], unnamed: [{ what: 'a patch', words: [], inputs: [`${CWD}/rules.patch`] }] },
       'git apply other.patch': { files: [], unnamed: [{ what: 'a patch', words: [], inputs: [`${CWD}/other.patch`] }] },
       'cp CLAUDE.md /tmp/backup/CLAUDE.md': { files: [{ word: '/tmp/backup/CLAUDE.md', path: '/tmp/backup/CLAUDE.md' }], unnamed: [] },
+      'cp CLAUDE.md /tmp/repo/CLAUDE.md': { files: [{ word: '/tmp/repo/CLAUDE.md', path: '/tmp/repo/CLAUDE.md' }], unnamed: [] },
     }
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
@@ -36,6 +37,12 @@ const modKit: { name: string; register: Register } = {
       const rows = async () => (((await built.state.get(ref)) as { value?: Ask[] }).value ?? [])
       const modkit = {
         writes: async ({ command }: { command: string }) => WRITES[command] ?? { files: [], unnamed: [] },
+        // A checkout cloned at /tmp/repo, a folder under /tmp/locked the disk cannot read, and no
+        // other checkout in a temporary folder (#726).
+        workingTree: async ({ path }: { path: string }) => {
+          if (path.startsWith('/tmp/locked/')) throw new Error('EACCES: /tmp/locked')
+          return path.startsWith('/tmp/repo/') ? '/tmp/repo' : null
+        },
         question: async (q: Ask) => {
           // A test makes the band refuse a question through the environment, the one thing it can set here.
           if ((await built.env.get('BAND_REFUSES')) === '1' || JSON.stringify(q).includes('REFUSE-ME')) throw new Error('a question needs a mod and an id')
@@ -285,6 +292,27 @@ test('a write anywhere else, a patch that touches no lasting memory, a backup in
   const ui = await mount($)
   expect(await shown(ui)).toEqual(['engine band'])
   await ui.unmount()
+})
+
+// #726: everything under a temporary folder was exempt, but a session started in a repository
+// cloned there loads its CLAUDE.md and AGENTS.md, so a save to one went through unasked.
+test('a save into a checkout in a temporary folder is held and asked about, by Write and by Bash', withKit, async ($, on) => {
+  const w = world(on)
+  const written = await call($, { tool: 'Write', file_path: '/tmp/repo/AGENTS.md', content: '- use pnpm\n' })
+  expect(refusalOf(written)).toContain('Dan is being asked')
+  const copied = await call($, { tool: 'Bash', command: 'cp CLAUDE.md /tmp/repo/CLAUDE.md' })
+  expect(refusalOf(copied)).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  const ui = await mount($)
+  expect(await shown(ui)).toContain('/tmp/repo/AGENTS.md')
+  await ui.unmount()
+})
+
+test('a save to a temporary folder the disk cannot read is refused, never let through', withKit, async ($, on) => {
+  const w = world(on)
+  const r = await call($, { tool: 'Write', file_path: '/tmp/locked/CLAUDE.md', content: '- rule\n' })
+  expect(w.ran).toEqual([])
+  expect(refusalOf(r)).toContain('could not check whether this writes lasting memory (EACCES: /tmp/locked)')
 })
 
 // #705: Dan was asked about a save before any guard had judged it, then the save was refused when

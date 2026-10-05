@@ -23,11 +23,14 @@ export type Writes = { files: { word: string; path?: string }[]; unnamed: { what
 const NAMES = new Set(['MEMORY.md', 'CLAUDE.md', 'AGENTS.md', 'LESSONS.md'])
 
 // A file in a temporary folder (a backup copy, a test fixture in the session's scratchpad) is loaded
-// into no session, so it is no lasting memory whatever it is called.
+// into no session, so it is no lasting memory whatever it is called, unless it is in a checkout
+// there: a session started in a repository or worktree cloned under /tmp loads its CLAUDE.md or
+// AGENTS.md (#726). Whether it is, `inCheckout` asks the disk ($.modkit.workingTree), only for a
+// temporary file that would otherwise count; a disk that cannot answer fails the judgement.
 const TEMP = /^(?:\/private)?\/(?:tmp|var\/folders)(?:\/|$)/
+export type InCheckout = (abs: string) => Promise<boolean>
 
-export const lastingMemory = (abs: string, home: string): boolean => {
-  if (TEMP.test(abs)) return false
+const lastingByName = (abs: string, home: string): boolean => {
   const name = abs.split('/').pop() ?? ''
   if (NAMES.has(name)) return true
   const projects = `${home.replace(/\/$/, '')}/.claude/projects/`
@@ -36,6 +39,9 @@ export const lastingMemory = (abs: string, home: string): boolean => {
   const rest = abs.slice(projects.length).split('/')
   return rest.length >= 2 && rest[1] === 'memory'
 }
+
+export const lastingMemory = async (abs: string, home: string, inCheckout: InCheckout): Promise<boolean> =>
+  lastingByName(abs, home) && (!TEMP.test(abs) || (await inCheckout(abs)))
 
 /** A path as a tool would reach it: home spelled out, relative to cwd, dot segments gone. */
 export const resolvePath = (p: string, cwd: string, home: string): string => {
@@ -60,12 +66,14 @@ export const display = (abs: string, home: string): string => {
 
 /**
  * The lasting memory among the files a command's words name (mod-kit's $.modkit.writes): judged by
- * path where the words name one, by file name where they do not (a path built from a variable).
+ * path where the words name one, by file name where they do not (a path built from a variable),
+ * which cannot be looked for on the disk, so one in a temporary folder counts too (asking is the
+ * harmless side).
  */
-export const lastingFiles = (w: Writes, home: string): string[] => {
+export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout): Promise<string[]> => {
   const out: string[] = []
   for (const f of w.files) {
-    const hit = f.path ? lastingMemory(f.path, home) && display(f.path, home) : !TEMP.test(f.word) && NAMES.has(f.word.split('/').pop() ?? '') && f.word
+    const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : NAMES.has(f.word.split('/').pop() ?? '') && f.word
     if (hit && !out.includes(hit)) out.push(hit)
   }
   return out
@@ -77,14 +85,16 @@ const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'"]+\/memory(?:\/[^\s'"]*)
 
 /**
  * The lasting memory a write's text mentions, for the writes whose words name no file (a patch, an
- * inline script): each as written, home shown as ~, a diff's a/ or b/ taken off.
+ * inline script): each as written, home shown as ~, a diff's a/ or b/ taken off, an absolute path
+ * judged where it lands. One in a temporary folder counts inside a checkout there, or when it is
+ * built from a variable and so cannot be looked for.
  */
-export const mentioned = (text: string, home: string): string[] => {
+export const mentioned = async (text: string, home: string, inCheckout: InCheckout): Promise<string[]> => {
   const out: string[] = []
   for (const m of text.match(MENTION) ?? []) {
     let p = m.replace(/^[ab]\//, '')
-    if (p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
-    if (TEMP.test(p)) continue
+    if (p.startsWith('/') || p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
+    if (TEMP.test(p) && !p.includes('$') && !(await inCheckout(p))) continue
     const shown = p.startsWith('/') ? display(p, home) : p
     if (!out.includes(shown)) out.push(shown)
   }
