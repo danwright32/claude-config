@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, shortCommand, shortLine, startedJob } from '../hooks/jobs.ts'
+import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -10,6 +10,25 @@ describe('a background job, from what starting it said', () => {
   })
   test('a result that did not start one is not a job', () => {
     expect(startedJob('ok')).toBeUndefined()
+  })
+  // #706: a foreground command Claude Code moves to the background at its timeout is a job too. The
+  // text is this build's own, seen in a session on 2026-10-04.
+  test('a command moved to the background at its timeout is read the same way', () => {
+    const text =
+      'Command did not complete within its 120s timeout and was moved to the background (ID: b8wxdk1kr). Output is being written to: /private/tmp/x/tasks/b8wxdk1kr.output. You will be notified when it completes. To check interim output, use Read on that file path.'
+    expect(startedJob(text)).toEqual({ id: 'b8wxdk1kr', outputPath: '/private/tmp/x/tasks/b8wxdk1kr.output' })
+  })
+})
+
+// #706: Claude Code's notice that a background job ended names it by id (seen in a session,
+// 2026-10-04), so the watcher can stop naming it at once rather than at its next look.
+describe('a task notification', () => {
+  test('names the jobs it reports on', () => {
+    const text = '<task-notification>\n<task-id>boljn4dt6</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/private/tmp/x/tasks/boljn4dt6.output</output-file>\n<status>completed</status>\n<summary>Background command "x" completed (exit code 0)</summary>\n</task-notification>'
+    expect(notifiedTasks(text)).toEqual(['boljn4dt6'])
+  })
+  test('anything else names none', () => {
+    expect(notifiedTasks('the task-id was boljn4dt6')).toEqual([])
   })
 })
 
@@ -33,7 +52,30 @@ describe('is it stuck', () => {
     expect(assess({ tail: lines(30, 'zsh: no matches found: http://x?y'), size: 9000, lastGrowth: 11 * MIN }, 11 * MIN)).toEqual({
       state: 'repeating',
       line: 'zsh: no matches found: http://x?y',
+      lines: ['zsh: no matches found: http://x?y'],
     })
+  })
+  // #706: a poll loop printing its error and then a retry line on every pass never repeats one line,
+  // and is as stuck as one that does.
+  const cycle = (n: number, ...pass: string[]) => Array.from({ length: n }, () => pass.join('\n')).join('\n') + '\n'
+  const REFUSED = 'curl: (7) Failed to connect to localhost port 3000: Connection refused'
+  test('an error and a retry line taking turns is stuck repeating, named by its error line', () => {
+    expect(assess({ tail: cycle(15, REFUSED, 'retrying in 3s'), size: 9000, lastGrowth: 11 * MIN }, 11 * MIN)).toEqual({
+      state: 'repeating',
+      line: REFUSED,
+      lines: [REFUSED, 'retrying in 3s'],
+    })
+  })
+  test('a pass of up to four lines over and over is stuck repeating, named by its last line when none is an error', () => {
+    expect(assess({ tail: cycle(8, 'checking', 'still pending', 'waiting 30s'), size: 900, lastGrowth: 0 }, 1 * MIN)).toEqual({
+      state: 'repeating',
+      line: 'waiting 30s',
+      lines: ['checking', 'still pending', 'waiting 30s'],
+    })
+  })
+  test('lines that change on each pass are running, not repeating', () => {
+    const counting = Array.from({ length: 30 }, (_, i) => `attempt ${i}\nretrying in 3s`).join('\n') + '\n'
+    expect(assess({ tail: counting, size: 900, lastGrowth: 0 }, 1 * MIN).state).toBe('running')
   })
   test('a few repeats are not yet stuck', () => {
     expect(assess({ tail: lines(3, 'waiting'), size: 30, lastGrowth: 10 * MIN }, 10 * MIN).state).toBe('running')

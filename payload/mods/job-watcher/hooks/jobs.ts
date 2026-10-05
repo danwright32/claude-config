@@ -1,8 +1,14 @@
 // The background job watcher's rules, apart from the hooks (claude-config#611).
 
-const STARTED = /background with ID: (\S+?)\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
-// The same line this many times running, at the end of the output, is a job repeating an error.
+// A job started in the background ("running in background with ID: X.") and a foreground command
+// Claude Code moved to the background at its timeout ("moved to the background (ID: X).", seen in a
+// session on 2026-10-04) both name the job and its output file (#706).
+const STARTED = /background(?: with ID: | \(ID: )([^\s)]+?)\)?\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
+// The same lines this many times running, at the end of the output, are a job repeating itself.
 const REPEAT_MIN = 20
+// A pass of up to this many lines, repeated: a loop printing its error and then "retrying" on every
+// pass never repeats one line, and is as stuck as one that does (#706).
+const CYCLE_MAX = 4
 // No new output for this long is a job gone silent (the spec's ten minutes).
 const SILENT_MS = 10 * 60_000
 
@@ -10,6 +16,10 @@ export const startedJob = (resultText: string): { id: string; outputPath: string
   const m = STARTED.exec(resultText)
   return m ? { id: m[1] as string, outputPath: m[2] as string } : undefined
 }
+
+// The jobs a notice from Claude Code reports on, by id: "<task-id>X</task-id>" (seen in a session on
+// 2026-10-04). Only ever a prompt to look again; the watcher drops a job on its own evidence.
+export const notifiedTasks = (text: string): string[] => [...text.matchAll(/<task-id>([^<\s]+)<\/task-id>/g)].map(m => m[1] as string)
 
 // A line that reports a failure. A waiting loop is stopped by itself only when the line it keeps
 // repeating is one of these (decided with Dan, 2026-10-04): a loop repeating "waiting" may just be
@@ -33,17 +43,30 @@ export type Sample = {
   /** Kept by Claude with a reason and marked as quiet by design: never silent. */
   quietByDesign?: boolean
 }
-export type Assessment = { state: 'running' } | { state: 'repeating'; line: string } | { state: 'silent'; forMs: number }
+/**
+ * repeating: `lines` is the pass it keeps printing, in the order it last ran; `line` names it, its
+ * first error line when it has one (what decides a poll loop's stop), else its last line.
+ */
+export type Assessment = { state: 'running' } | { state: 'repeating'; line: string; lines: string[] } | { state: 'silent'; forMs: number }
+
+// The shortest pass the end of the output is made of, over its last REPEAT_MIN lines; none when no
+// pass of up to CYCLE_MAX lines fits.
+const repeatedPass = (lines: string[]): string[] | undefined => {
+  if (lines.length < REPEAT_MIN) return undefined
+  const end = lines.slice(-REPEAT_MIN)
+  for (let n = 1; n <= CYCLE_MAX; n++) if (end.every((l, i) => i < n || l === end[i - n])) return end.slice(-n)
+  return undefined
+}
 
 export const assess = (s: Sample, now: number): Assessment => {
-  const lines = s.tail.split('\n').map(l => l.trim()).filter(Boolean)
-  const last = lines[lines.length - 1]
-  if (last !== undefined && lines.length >= REPEAT_MIN && lines.slice(-REPEAT_MIN).every(l => l === last)) {
-    return { state: 'repeating', line: last }
-  }
+  const pass = repeatedPass(s.tail.split('\n').map(l => l.trim()).filter(Boolean))
+  if (pass) return { state: 'repeating', line: pass.find(isErrorLine) ?? (pass[pass.length - 1] as string), lines: pass }
   if (!s.quietByDesign && now - s.lastGrowth > SILENT_MS) return { state: 'silent', forMs: now - s.lastGrowth }
   return { state: 'running' }
 }
+
+// What a repeating job keeps printing, as a notice quotes it: one line, or a pass's lines in turn.
+export const repeated = (a: { lines: string[] }): string => a.lines.map(shortLine).join('" then "')
 
 // Leftover jobs from closed sessions (Dan, 2026-10-04): a model judges each, and Dan sees one dim
 // line naming what was stopped and what was left.
