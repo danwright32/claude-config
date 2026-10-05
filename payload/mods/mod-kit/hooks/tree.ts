@@ -2,7 +2,8 @@
 // nearest folder at or above it holding a .git entry, a folder or the file a linked worktree or
 // submodule has. Asked of the disk through `hasGit`, never of git, nearest first, and bounded so
 // no path costs more than WALK_LIMIT looks. A look the disk cannot answer is thrown, never taken
-// for "no checkout", since a reader deciding what a write may do must not decide on a guess.
+// for "no checkout", since a reader deciding what a write may do must not decide on a guess; so is
+// a walk that runs out of looks before the root (lessons review of #731), which has not looked.
 
 const WALK_LIMIT = 64
 
@@ -14,5 +15,5 @@ export const workingTree = async (path: string, hasGit: (dir: string) => Promise
     if (dir === '/') return undefined
     dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
   }
-  return undefined
+  throw new Error(`could not tell whether ${path} is in a checkout: it is more than ${WALK_LIMIT} folders deep`)
 }

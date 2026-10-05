@@ -27,11 +27,15 @@ describe('workingTree', () => {
   test('the root itself can be the checkout', async () => {
     expect(await workingTree('/x', disk(['/']).hasGit)).toBe('/')
   })
-  test('a walk is bounded, so no path costs more than 64 looks', async () => {
+  // Lessons review of #731: running out of looks answered "no checkout", so a save into a checkout
+  // nested deeper than that under /tmp went through unasked. A walk that cannot finish is refused.
+  test('a walk is bounded at 64 looks, and one that runs out before the root is refused, never answered no', async () => {
     const d = disk([])
     const deep = `/${Array.from({ length: 100 }, (_, i) => `d${i}`).join('/')}`
-    expect(await workingTree(deep, d.hasGit)).toBeUndefined()
+    await expect(workingTree(deep, d.hasGit)).rejects.toThrow(`could not tell whether ${deep} is in a checkout: it is more than 64 folders deep`)
     expect(d.looked).toHaveLength(64)
+    const exact = `/${Array.from({ length: 63 }, (_, i) => `d${i}`).join('/')}`
+    expect(await workingTree(exact, disk([]).hasGit)).toBeUndefined()
   })
   test('a path that is not absolute is refused by name, never walked from somewhere else', async () => {
     await expect(workingTree('repo/CLAUDE.md', disk([]).hasGit)).rejects.toThrow('a working tree is found from an absolute path, not repo/CLAUDE.md')

@@ -92,8 +92,9 @@ export type ModKit = {
   /**
    * The git working tree an absolute path sits in: the nearest folder at or above it holding a
    * `.git` entry (a folder, or the file a linked worktree has), found on the disk, never by running
-   * git, at most 64 folders up; null when there is none. Rejects a path that is not absolute, and a
-   * look the disk cannot answer, rather than answering null. The one reading every mod uses (L613).
+   * git, at most 64 folders up; null when there is none. Rejects a path that is not absolute, a
+   * look the disk cannot answer, and a path deeper than the 64 looks reach, rather than answering
+   * null. The one reading every mod uses (L613).
    */
   workingTree: (input: { path: string }) => Promise<string | null>
   /**
