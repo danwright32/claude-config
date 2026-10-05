@@ -149,7 +149,9 @@ for w in 'GH_TOKEN=$(gh auth token -u danwright32) gh pr merge 7 --squash' \
          "NOTE='a b c' gh pr merge 7" \
          'A=1 GH_TOKEN=$(gh auth token -u x) B="c d" gh pr merge 7' \
          'MSG="a \" b" gh pr merge 7' \
-         'A=a\ b gh pr merge 7'; do
+         'A=a\ b gh pr merge 7' \
+         'GH_TOKEN=`gh auth token -u x` gh pr merge 7' \
+         'X=${Y:-a b} gh pr merge 7'; do
   if mt_runs_merge "$w"; then pass; else fail "a merge after an assignment holding a space was not read as a merge: $w"; fi
 done
 mt_split_assignments 'PR_REVIEW_READ="ab12" GH_TOKEN=$(gh auth token -u x) gh pr merge 7'

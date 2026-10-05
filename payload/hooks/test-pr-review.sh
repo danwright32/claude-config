@@ -204,7 +204,11 @@ k1="$(key_in "$out")"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "a second attempt without the key is refused again, the refusal may not have been shown" "1" "$rc"
 check "carrying the findings again" "deleteEvent still swallows" "$out"
-check_eq "with the same key" "$k1" "$(key_in "$out")"
+# Each showing issues a FRESH key, and only a hash of each is stored (lessons review of #795): a
+# plain key on disk could be read by a session that never saw the findings.
+k2="$(key_in "$out")"
+[ -n "$k2" ] && [ "$k2" != "$k1" ] && ok || bad "a second showing issues a fresh key (first $k1, second $k2)"
+if grep -rqF "$k1" "$AI_REVIEW_STATE_DIR" 2>/dev/null; then bad "a plain read key is stored on disk"; else ok; fi
 # Printing is not reading, so nothing records "printed" as if it meant something: the old
 # <review>.delivered marker is no longer written by a refusal.
 [ ! -e "$(final_of "$HEAD_SHA").delivered" ] && ok || bad "a refusal still writes the unread .delivered marker"
@@ -474,21 +478,20 @@ out2="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
 check_eq "and the earlier review's key does not read the replaced one" "2" "$rc"
 out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
 check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
-# Two first askers at once agree on ONE key, and neither ever reads an empty one.
+# Eight issuers at once each get a whole key that reads the review, none lost to another's write.
 fk="$WORKDIR/concurrent-review.txt"; printf 'status=ok\nfinished=42\n\n' > "$fk"; rm -f "$fk".readkey*
 for i in 1 2 3 4 5 6 7 8; do
-  bash -c '. "$1" && ar_review_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+  bash -c '. "$1" && ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
 done
 wait
-# Each asker's answer is read on its own (the key is printed with no newline, so joining the files
-# would make eight different keys one line), and each must be the same full 16 character key.
-first_key="$(cat "$WORKDIR/key.1")"; agree=1
+all_valid=1
 for i in 1 2 3 4 5 6 7 8; do
   k="$(cat "$WORKDIR/key.$i")"
-  { [ "$k" = "$first_key" ] && [ "${#k}" -eq 16 ]; } || agree=0
+  { [ "${#k}" -eq 16 ] && bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$k"; } || all_valid=0
 done
-[ "$agree" -eq 1 ] && ok \
-  || bad "eight concurrent askers agree on one full key (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
+[ "$all_valid" -eq 1 ] && ok \
+  || bad "eight concurrent issuers each get a key that reads the review (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
+bash -c '. "$1" && ar_review_key_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
 rm -f "$WORKDIR"/key.*
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"

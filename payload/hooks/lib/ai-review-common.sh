@@ -88,36 +88,40 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
   ' 2>/dev/null
 }
 
-# The READ KEY of one pull request review's findings (claude-config#788): a random value kept
-# beside the review (named below), created on first ask, printed on stdout. It appears only in
-# the messages that carry the findings (the merge gate's refusal and the nudge), so a merge command
-# presenting it as PR_REVIEW_READ=<key> proves those findings reached the session doing the merge.
-# Without it the gate used to judge them read because it had PRINTED them, and on #774 another hook
-# refused the same merge, only that hook's message was shown, and the retry merged unread. The key is
-# written whole to a private temp file and LINKED into place: a link to a name that exists fails, so
-# two first askers agree on one key, and the name never exists half written, so no asker reads an
-# empty or partial key (a noclobber write creates the name first and fills it after). A key that
-# cannot be made prints nothing and fails, and the caller then refuses, since no merge can present a
-# key nobody was shown (L42).
-#
-# Kept in <file>.readkey-<finished stamp>, so a review written again for the same head (a new
-# finished= stamp) gets a NEW key, and the earlier review's key cannot read the new findings.
-ar_review_key() {   # $1 = finished review file
-  local fin kf k tmp
+# The READ KEYS of one pull request review's findings (claude-config#788). Every message that
+# shows the findings (the merge gate's refusal, the nudge) ISSUES a fresh random key and prints it,
+# and only its sha256 is kept, one per line, in <file>.readkeys-<finished stamp>. A merge presenting
+# PR_REVIEW_READ=<key> then proves the findings reached the session doing the merge, because the
+# plain key exists nowhere but in a message that carried them: a session that never saw them cannot
+# read it off the disk (lessons review of #795). Before this the gate judged findings read because
+# it had PRINTED them, and on #774 another hook refused the same merge, only that hook's message
+# was shown, and the retry merged unread. The stamp in the name means a review written again for
+# the same head starts with no valid key. A line under PIPE_BUF is appended atomically, so
+# concurrent issuers never lose each other's key. A key that cannot be issued prints nothing and
+# fails, and the caller refuses, since no merge can present a key nobody was shown (L42).
+ar__review_keys_file() {   # $1 = finished review file -> the hash file for its current stamp
+  local fin
   fin="$(awk 'index($0, "finished=") == 1 { print substr($0, 10); exit } /^$/ { exit }' "$1" 2>/dev/null)"
   case "$fin" in ''|*[!0-9]*) return 1 ;; esac
-  kf="$1.readkey-$fin"
-  if [ ! -s "$kf" ]; then
-    k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
-    [ -n "$k" ] || return 1
-    tmp="$kf.$$.$RANDOM"
-    printf '%s\n' "$k" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
-    ln "$tmp" "$kf" 2>/dev/null || true
-    rm -f "$tmp"
-  fi
-  k="$(tr -dc 'a-f0-9' < "$kf" 2>/dev/null)"
-  [ -n "$k" ] || return 1
+  printf '%s' "$1.readkeys-$fin"
+}
+ar__key_hash() { printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{ print $1 }'; }
+ar_review_issue_key() {   # $1 = finished review file -> prints a fresh key
+  local kf k h
+  kf="$(ar__review_keys_file "$1")" || return 1
+  k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ "${#k}" -eq 16 ] || return 1
+  h="$(ar__key_hash "$k")"
+  [ -n "$h" ] || return 1
+  printf '%s\n' "$h" >> "$kf" 2>/dev/null || return 1
   printf '%s' "$k"
+}
+ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 when it was issued
+  local kf h
+  case "$2" in ''|*[!a-f0-9]*) return 1 ;; esac
+  kf="$(ar__review_keys_file "$1")" || return 1
+  h="$(ar__key_hash "$2")"
+  [ -n "$h" ] && grep -qxF "$h" "$kf" 2>/dev/null
 }
 
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one

@@ -258,8 +258,11 @@ mt_split_assignments() {  # $1 = one segment
       else
         case "$c" in
           \"|\') q="$c"; [ "$depth" -gt 0 ] && val="$val$c" ;;
-          \() depth=$((depth + 1)); val="$val$c" ;;
-          \)) [ "$depth" -gt 0 ] && depth=$((depth - 1)); val="$val$c" ;;
+          # A backtick substitution runs to its closing backtick, kept whole like a quote.
+          \`) q="$c"; val="$val$c" ;;
+          # $( ... ) and ${ ... } are one word to their closing bracket, spaces included.
+          \(|\{) depth=$((depth + 1)); val="$val$c" ;;
+          \)|\}) [ "$depth" -gt 0 ] && depth=$((depth - 1)); val="$val$c" ;;
           ' '|$'\t') [ "$depth" -eq 0 ] && break; val="$val$c" ;;
           *) val="$val$c" ;;
         esac

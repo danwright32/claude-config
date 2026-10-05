@@ -151,7 +151,7 @@ do_start() {
   fi
   # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
   # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
-  rm -f "$delivered" "$acknowledged" "$final.readkey"* 2>/dev/null
+  rm -f "$delivered" "$acknowledged" "$final.readkey"* "$final.readkeys"* 2>/dev/null
   if [ -z "$full_sha" ]; then
     record could-not-run "The commit $sha is not in this checkout and could not be fetched from origin, so there is nothing to review."
     echo "The lessons review could not run: $sha is not in this checkout."; return 0
@@ -262,14 +262,14 @@ do_check() {
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a merge that presented their key."
         return 0
       fi
-      local readkey
-      readkey="$(ar_review_key "$final")" || readkey=""
-      if [ -n "$readkey" ] && [ -n "$fin" ] && [ "${PR_REVIEW_READ:-}" = "$readkey" ]; then
+      if [ -n "$fin" ] && ar_review_key_valid "$final" "${PR_REVIEW_READ:-}"; then
         printf 'finished=%s\n' "$fin" > "$acknowledged" 2>/dev/null
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this merge presented their key."
         return 0
       fi
       local noun="findings"; [ "$findings" -eq 1 ] && noun="finding"
+      local readkey
+      readkey="$(ar_review_issue_key "$final")" || readkey=""
       echo "Refusing to merge until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun. Here they are. Check each against the code, fix what is real or say why it is not, then merge with their read key in front of the merge command:"
       if [ -n "$readkey" ]; then
         echo "    PR_REVIEW_READ=$readkey <the merge command>"
@@ -305,6 +305,6 @@ do_check() {
 case "$verb" in
   start) do_start ;;
   check) do_check; exit $? ;;
-  restart) rm -f "$final" "$pending" "$delivered" "$acknowledged" "$final.readkey"*; do_start ;;
+  restart) rm -f "$final" "$pending" "$delivered" "$acknowledged" "$final.readkey"* "$final.readkeys"*; do_start ;;
 esac
 exit 0
