@@ -39,9 +39,11 @@ const modKit: { name: string; register: Register } = {
         question: async (q: Ask) => {
           // A test makes the band refuse a question through the environment, the one thing it can set here.
           if ((await built.env.get('BAND_REFUSES')) === '1' || JSON.stringify(q).includes('REFUSE-ME')) throw new Error('a question needs a mod and an id')
-          // One that refuses only after a moment, so another save can be queued behind it meanwhile.
+          // One that refuses only once the test has queued another save behind it (#726: a fixed
+          // wait let a loaded machine queue it after the refusal, and the test passed without the
+          // queue). The gate is a read the test's world holds until then.
           if (JSON.stringify(q).includes('REFUSE-SLOWLY')) {
-            await new Promise(r => setTimeout(r, 100))
+            await built.fs.read('/gate/refuse-slowly')
             throw new Error('the band is busy')
           }
           const all = await rows()
@@ -118,7 +120,10 @@ const CWD = '/Users/dan/Apps/slate'
 
 // The Mac and Claude Code beneath the mod: files, the tools that write them, the notes Claude reads,
 // the memory section of the system prompt, toasts and the band.
-const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; bandRefuses?: boolean; cwdFails?: boolean } = {}) => {
+// A gate the band stand-in waits on before it refuses: `reached` is called as it starts waiting,
+// and it refuses once `opened` settles.
+type Gate = { reached: () => void; opened: Promise<void> }
+const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; bandRefuses?: boolean; cwdFails?: boolean; gate?: Gate } = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const toasts: string[] = []
@@ -128,7 +133,12 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     return { value: CWD } as never
   })
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
-  on('fs.read', ($, e) => {
+  on('fs.read', async ($, e) => {
+    if (init.gate && e.path === '/gate/refuse-slowly') {
+      init.gate.reached()
+      await init.gate.opened
+      return { value: '' } as never
+    }
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: t } as never
@@ -437,14 +447,43 @@ test("a question the band cannot take away still carries Dan's answer through, a
 
 // Review of #718: a save queued behind one whose question then failed to show was never asked,
 // since only the save at the front is shown and nothing showed the next one.
+// A deadline for a wait on a condition, so a condition never met fails by name rather than hanging:
+// under the test runner's own 5 second limit, which would otherwise fire first and name nothing.
+const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} within ${ms} ms`)), ms)))])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 test('a save queued behind one whose question could not be shown is asked in its place', withKit, async ($, on) => {
-  const w = world(on)
-  const [first, second] = await Promise.all([
-    call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- REFUSE-SLOWLY rule\n' }),
-    call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' }),
-  ])
-  expect(refusalOf(first)).toContain('could not be shown')
-  expect(refusalOf(second)).toContain('Dan is being asked')
+  let reached!: () => void
+  const asking = new Promise<void>(r => (reached = r))
+  let open!: () => void
+  const opened = new Promise<void>(r => (open = r))
+  // The condition the stand-in waits on: ask before saving has written a queue of two.
+  let queued!: (files: unknown[]) => void
+  const queuedBehind = new Promise<unknown[]>(r => (queued = r))
+  on('state.set', async ($, e, next) => {
+    const r = await next(e)
+    const write = e as unknown as { plugin?: string; key?: string; value?: { input?: { file_path?: unknown } }[] }
+    if (write.plugin === 'ask-before-saving' && write.key === 'pending' && write.value?.length === 2) queued(write.value.map(p => p.input?.file_path))
+    return r
+  })
+  const w = world(on, { gate: { reached, opened } })
+  const first = call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- REFUSE-SLOWLY rule\n' })
+  let second: Promise<Result>
+  try {
+    // The first save's question is being drawn, so it leads the queue; the second then waits behind it.
+    await within(asking, 'the first save never reached the band')
+    second = call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' })
+    expect(await within(queuedBehind, 'the second save was never queued behind the first')).toEqual(['CLAUDE.md', 'AGENTS.md'])
+  } finally {
+    open()
+  }
+  expect(refusalOf(await within(first, 'the first save never came back'))).toContain('could not be shown (the band is busy)')
+  expect(refusalOf(await within(second, 'the second save never came back'))).toContain('Dan is being asked')
   const ui = await mount($)
   expect(await shown(ui)).toContain('- second')
   await ui.unmount()
