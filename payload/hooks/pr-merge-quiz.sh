@@ -61,9 +61,6 @@
 
 set -uo pipefail
 
-# A headless / detached run has nobody to quiz. Skip before doing any work.
-[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
-
 # SKIPPED FOR THE REST OF A SESSION (claude-config#623). Dan answered "skip" about 13 times across 8
 # Sonar sessions, once as "skip all quizzes for the rest of this session", and that held only while
 # Claude remembered it (L57). So the snooze is a file this hook reads, one per session id, set by the
@@ -71,8 +68,13 @@ set -uo pipefail
 #   pr-merge-quiz.sh --snooze-session <session id>
 # Kept beside the verdict counts, outside ~/.claude (anything there syncs to the other Mac, and a
 # session's snooze is this Mac's alone). It ends with the session, since no other session carries
-# that id, and each snooze written clears any older than SNOOZE_KEEP_DAYS, so the folder cannot grow
-# without end (L523: a suppression carries its expiry).
+# that id, and it EXPIRES after SNOOZE_KEEP_DAYS whatever happens, because the read below refuses an
+# older one (L523: a suppression carries its expiry; #790 found the expiry had only been the sweep,
+# which runs only when another snooze is written). Each snooze written also clears the expired ones,
+# so the folder cannot grow without end.
+#
+# Handled ABOVE the detached run exit: that exit is about having nobody to quiz, and a command
+# asked for by name must never exit 0 having done nothing and said nothing (#790, L98).
 SNOOZE_KEEP_DAYS=14
 snooze_dir() { printf '%s/snoozed' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
 # A session id is Claude Code's uuid; anything else is refused rather than made into a path.
@@ -90,6 +92,16 @@ if [ "${1:-}" = "--snooze-session" ]; then
   echo "PR quiz snoozed for the rest of this session (session $2). Other sessions are still quizzed."
   exit 0
 fi
+# A snooze in force: written for this session and not yet past its expiry.
+snooze_in_force() {  # $1 = session id
+  local f
+  f="$(snooze_dir)/$1"
+  [ -f "$f" ] || return 1
+  [ -n "$(find "$f" -type f -mtime -"$SNOOZE_KEEP_DAYS" -print 2>/dev/null)" ]
+}
+
+# A headless / detached run has nobody to quiz. Skip before doing any work.
+[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 
 payload="$(cat)"
 
@@ -163,19 +175,12 @@ if [ -n "$quiz_repo" ] && [ -f "$quiz_repo/$QUIZ_OPT_OUT_MARKER" ]; then
   exit 0
 fi
 
-# This session snoozed the quiz (#623, the block at the top). Checked here, after the opt out and
-# before the label gate, for the opt out's reasons: a snoozed merge is not a quiz the label failed
-# to silence, so it is counted nowhere, and it is announced in one line straight to Dan. A payload
-# with no readable session id (no jq, or no id at all) cannot be snoozed, so the quiz fires.
-# Without jq this skip cannot be read, and the quiz fires: a missing reader costs a quiz, never a
-# merge skipped in silence (L490).
+# This session's id, for the snooze (#623, the block at the top), which is checked just before the
+# label gate below. A payload with no readable session id (no jq, or no id at all) cannot be
+# snoozed, so the quiz fires: a missing reader costs a quiz, never a merge skipped in silence (L490).
 session_id=""
 ps_reader_missing jq || session_id="$(printf '%s' "$payload" | jq -r '.session_id // ""' 2>/dev/null)"
 valid_session_id "$session_id" || session_id=""
-if [ -n "$session_id" ] && [ -f "$(snooze_dir)/$session_id" ]; then
-  jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
-  exit 0
-fi
 
 # WHAT THE GATE DECIDED, kept so a gate that never fires is visible (claude-config#354).
 #
@@ -230,7 +235,7 @@ qv_set() {  # $1 = key, $2 = value (absolute), or $1 = key with $2 = + to increm
 # The counts, most frequent first, as one readable phrase. This IS the diagnosis: no-label
 # says the repo does not use the convention, no-answer says gh is not answering at all.
 qv_breakdown() {
-  awk '$1 !~ /^(fired_since_quiet|warned|started)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
+  awk '$1 !~ /^(fired_since_quiet|warned|started|snoozed)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
     | sort -rn \
     | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
 }
@@ -371,6 +376,16 @@ quiz_is_owed() {
   return 0
 }
 
+# This session snoozed the quiz (#623). Checked after the opt out and before the label gate: a
+# snoozed merge is not a quiz the label failed to silence, so it never touches fired_since_quiet,
+# but it IS counted, under its own name, so a skip leaves a trace (#790, L357). Announced in one
+# line straight to Dan.
+if [ -n "$session_id" ] && snooze_in_force "$session_id"; then
+  qv_set snoozed +
+  jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
+  exit 0
+fi
+
 # THE LABEL GATE HAS ITS OWN DEADLINE (claude-config#568). This hook is registered with a 15 second
 # timeout, the gate's read goes through mt_pr_view, which asks gh once per logged in account, and a
 # hook the harness kills emits NOTHING, which reads exactly like a decision not to quiz (L98). On
@@ -431,7 +446,9 @@ skip_note="
 
 Skipping: if Dan answers skip to any question, that skips every remaining question of this quiz, not only the one asked; say so in one line and carry on."
 if [ -n "$session_id" ]; then
-  skip_note="$skip_note If he says to skip quizzes for the rest of this session, run exactly this command, then confirm in one line: bash '$HOOK_DIR/pr-merge-quiz.sh' --snooze-session $session_id"
+  # Quoted with printf %q, never by hand: a folder path holding an apostrophe broke the
+  # single quoted form (#790), and this is the command Claude is told to run exactly.
+  skip_note="$skip_note If he says to skip quizzes for the rest of this session, run exactly this command, then confirm in one line: bash $(printf '%q' "$HOOK_DIR/pr-merge-quiz.sh") --snooze-session $session_id"
 fi
 notice="$notice$skip_note"
 

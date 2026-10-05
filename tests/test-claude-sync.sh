@@ -18634,6 +18634,33 @@ _638main="$(git -C "$S38B" show main:payload/CLAUDE.md 2>/dev/null || true)"
 check "#638 a stale top level rule file is not published" "case \"\$_638main\" in *'from the merge'*) true ;; *) false ;; esac"
 check "#638 and the send names it as held back" "line_has \"\$out_638t\" 'NOT publishing' 'CLAUDE.md' 'earlier'"
 
+# AN UNCHANGED FILE UNDER AN APPLY THAT NO LONGER COPIES TIMES (#754, review finding 7 in #790).
+# Since #754 the apply leaves a file whose bytes already match alone, mtime included, so a git
+# rebase or checkout in the clone can leave the payload's copy NEWER than an identical one here.
+# local_copy_is_past_release must still decide both ways correctly: an identical copy is no local
+# edit and no stale copy, and once the repo moves past it, an untouched copy of the old release is
+# stale however old its mtime, and is replaced. The control in the same fixture (L159) is the genuine
+# edit kept above.
+printf 'other-v1\n' > "$S38HB/mods/guard/hooks/other.ts"; touch -t 202001010000 "$S38HB/mods/guard/hooks/other.ts"
+# The payload copy already holds the same bytes: release one's other.ts arrived with the first send
+# from A, at the top of this section. Asserted rather than assumed, so the touch below can only
+# change a time, never create a file (the review of f04f7c0 read it as creating one).
+check "#754 fixture: the payload copy holds the same bytes before its mtime moves" "grep -qx 'other-v1' '$S38C/payload/mods/guard/hooks/other.ts'"
+touch "$S38C/payload/mods/guard/hooks/other.ts"
+_754before="$(_suite_mtime "$S38HB/mods/guard/hooks/other.ts")"
+out_754a="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#754 an identical file whose payload copy git rewrote is left alone, mtime included" \
+  "grep -qx 'other-v1' '$S38HB/mods/guard/hooks/other.ts' && [ \"\$(_suite_mtime '$S38HB/mods/guard/hooks/other.ts')\" = '$_754before' ]"
+check "#754 and is not called a local edit" "! line_has \"\$out_754a\" 'would have reverted' 'mods/guard/hooks/other.ts'"
+git -C "$S38D" pull -q origin main 2>/dev/null
+printf 'other-v2\n' > "$S38D/payload/mods/guard/hooks/other.ts"
+git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -am 'merge a change to other.ts' 2>/dev/null
+git -C "$S38D" push -q origin main 2>/dev/null
+out_754b="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#754 once the repo moves on, the untouched copy of the old release is replaced" "grep -qx 'other-v2' '$S38HB/mods/guard/hooks/other.ts'"
+check "#754 and named as updated, not a local edit" \
+  "line_has \"\$out_754b\" 'updated' 'mods/guard/hooks/other.ts' && ! line_has \"\$out_754b\" 'would have reverted' 'mods/guard/hooks/other.ts'"
+
 # A SKILL THAT CANNOT LOAD HERE is not named with the pull remedy (review of c9a97de): a pull leaves
 # such an entry alone, so "run claude-sync pull" would be advice that cannot work (L11).
 mkskill "$S38HA/skills/s638/SKILL.md" 'a skill for the #638 checks'
