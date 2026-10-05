@@ -442,6 +442,18 @@ test('/live after a rename lists a PR kept under both names once, as its newest 
   expect(await live($)).toBe('- Live: Newer (#300)')
 })
 
+test('/live after a rename keeps the unsent message an older card under the other name owes, and Mark sent finds it (#720)', withKit, async ($, on) => {
+  const old = { repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
+  const now = { repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state: 'live', at: T0 - 1000 }
+  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old], 'cards:danwright32/slate': [now] } })
+  expect(await live($)).toBe('- Live: Newer (#300)\n\nNot sent yet:\n- Message for Kris (#300): About 300.')
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.'])
+  // The pinned row is the older card's own, so Mark sent finds that card and takes the row away.
+  await press($, 'is-it-live:sent-danwright32-old-slate-300')
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual([])
+  expect(await live($)).toBe('- Live: Newer (#300)')
+})
+
 test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
   const w = world(on, { remote: 'git@github.com:danwright32/old-slate.git' })
   await card($, CARD)
