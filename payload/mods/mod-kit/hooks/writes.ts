@@ -1,5 +1,5 @@
 import type { ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git } from './commands.ts'
+import { SHELLS, git } from './commands.ts'
 
 // The one reader of which files a Bash call puts content into (#705, L613), over the simple
 // commands the shared reader gives. Ask before saving kept its own copy and missed inline scripts,
@@ -7,7 +7,8 @@ import { git } from './commands.ts'
 // cd; the collision guard's copy (#654) already followed a cd and a copy into a folder, and its
 // path, sed and perl readings are carried over here as they were reviewed there. No build's copy
 // (#616) listed the copying commands, dd and inline scripts; curl and wget's output files, gawk's
-// and ruby's in place editing were missing from all three (#702). The collision guard and no build
+// and ruby's in place editing were missing from all three (#702), and a file curl or wget saves
+// under the address's own name from every reader (#726). The collision guard and no build
 // move onto this reader in #712.
 //
 // What it does not report: a file only created empty or stamped (touch), removed (rm, a mv's
@@ -168,21 +169,140 @@ const awkInPlace = (args: string[]): string[] => {
   return scripted ? ops : ops.slice(1)
 }
 
-// The value of a short option written alone (-o out), at the end of a cluster (-sSo out) or with
-// its value attached (-oout), or of its long form (--output out, --output=out).
-const optionValue = (args: string[], letter: string, long: string): string | undefined => {
+// What curl and wget save (#726): the files their options name, and a file saved under the
+// address's own name, which a download into lasting memory by its remote name used to slip past.
+// Each is read option by option in the order given: a short option alone (-o out), in a cluster
+// (-sSLO, -sSo out) or with its value attached (-oout, -qO-), a long one with its value next or
+// after = (--output out, --output=out); every other word is an address.
+type Download = { files: string[]; unnamed: { what: string; inputs: string[] }[] }
+type Grammar = { short: string; long: ReadonlySet<string> }
+const options = (args: string[], g: Grammar, opt: (name: string, value: string | undefined) => void, address: (a: string) => void) => {
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string
-    if (a === '--') return undefined
-    if (a === long) return args[i + 1]
-    if (a.startsWith(`${long}=`)) return a.slice(long.length + 1)
-    if (a.startsWith('-') && !a.startsWith('--')) {
-      const j = a.indexOf(letter, 1)
-      if (j < 0) continue
-      return j === a.length - 1 ? args[i + 1] : a.slice(j + 1)
+    if (a === '--') {
+      args.slice(i + 1).forEach(address)
+      return
     }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=')
+      const name = eq > 0 ? a.slice(0, eq) : a
+      opt(name, eq > 0 ? a.slice(eq + 1) : g.long.has(name) ? (args[++i] ?? '') : undefined)
+    } else if (a.startsWith('-') && a !== '-') {
+      for (let j = 1; j < a.length; j++) {
+        const l = a[j] as string
+        if (!g.short.includes(l)) {
+          opt(l, undefined)
+          continue
+        }
+        opt(l, j < a.length - 1 ? a.slice(j + 1) : (args[++i] ?? ''))
+        break
+      }
+    } else address(a)
   }
-  return undefined
+}
+
+// An address's path and query, its scheme, host and fragment taken off.
+const addressParts = (url: string): { path: string; query: string } => {
+  const whole = url.split('#')[0] as string
+  const q = whole.indexOf('?')
+  const rest = (q < 0 ? whole : whole.slice(0, q)).replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, '')
+  const slash = rest.indexOf('/')
+  return { path: slash < 0 ? '' : rest.slice(slash), query: q < 0 ? '' : whole.slice(q) }
+}
+const lastPart = (path: string) => path.slice(path.lastIndexOf('/') + 1)
+const under = (dir: string | undefined, file: string) => (dir && !/^[/~$]/.test(file) ? `${dir.replace(/\/+$/, '')}/${file}` : file)
+
+// curl's options that take a value (curl 8.7.1's --help all), so a value is never taken for an
+// address. Each -o or -O is for the next address in turn; one left over goes to standard output
+// unless --remote-name-all. A remote name is the address's last part, query and fragment off (as
+// curl 8.7 saves it, measured 2026-10-04); an address with none saves nothing.
+const CURL: Grammar = {
+  short: 'EKCbcdDFPHhmoUQreXYytzTuAwx',
+  long: new Set(['--cert', '--config', '--continue-at', '--cookie', '--cookie-jar', '--data', '--dump-header', '--form', '--ftp-port', '--header', '--help', '--max-time', '--output', '--proxy-user', '--quote', '--range', '--referer', '--request', '--speed-limit', '--speed-time', '--telnet-option', '--time-cond', '--upload-file', '--user', '--user-agent', '--write-out', '--proxy', '--preproxy', '--abstract-unix-socket', '--alt-svc', '--aws-sigv4', '--cacert', '--capath', '--cert-type', '--ciphers', '--connect-timeout', '--connect-to', '--create-file-mode', '--crlfile', '--curves', '--data-ascii', '--data-binary', '--data-raw', '--data-urlencode', '--delegation', '--dns-interface', '--dns-ipv4-addr', '--dns-ipv6-addr', '--dns-servers', '--doh-url', '--egd-file', '--engine', '--etag-compare', '--etag-save', '--expect100-timeout', '--form-string', '--ftp-account', '--ftp-alternative-to-user', '--ftp-method', '--ftp-ssl-ccc-mode', '--happy-eyeballs-timeout-ms', '--haproxy-clientip', '--hostpubmd5', '--hostpubsha256', '--hsts', '--interface', '--ipfs-gateway', '--json', '--keepalive-time', '--key', '--key-type', '--krb', '--libcurl', '--limit-rate', '--local-port', '--login-options', '--mail-auth', '--mail-from', '--mail-rcpt', '--max-filesize', '--max-redirs', '--netrc-file', '--noproxy', '--oauth2-bearer', '--output-dir', '--parallel-max', '--pass', '--pinnedpubkey', '--proto', '--proto-default', '--proto-redir', '--proxy-cacert', '--proxy-capath', '--proxy-cert', '--proxy-cert-type', '--proxy-ciphers', '--proxy-crlfile', '--proxy-header', '--proxy-key', '--proxy-key-type', '--proxy-pass', '--proxy-pinnedpubkey', '--proxy-service-name', '--proxy-tls13-ciphers', '--proxy-tlsauthtype', '--proxy-tlspassword', '--proxy-tlsuser', '--pubkey', '--random-file', '--rate', '--request-target', '--resolve', '--retry', '--retry-delay', '--retry-max-time', '--sasl-authzid', '--service-name', '--socks4', '--socks4a', '--socks5', '--socks5-gssapi-service', '--socks5-hostname', '--stderr', '--tftp-blksize', '--tls-max', '--tls13-ciphers', '--tlsauthtype', '--tlspassword', '--tlsuser', '--trace', '--trace-ascii', '--trace-config', '--unix-socket', '--url', '--url-query', '--variable']),
+}
+// The files curl writes beside its output, each named by its value ('-' is standard output).
+const CURL_FILES = new Set(['c', '--cookie-jar', 'D', '--dump-header', '--trace', '--trace-ascii', '--etag-save', '--stderr', '--libcurl'])
+const curlDownload = (args: string[]): Download => {
+  const outputs: (string | null)[] = []
+  const urls: string[] = []
+  const files: string[] = []
+  let all = false
+  let serverNames = false
+  let dir: string | undefined
+  options(
+    args,
+    CURL,
+    (name, value) => {
+      if (name === 'O' || name === '--remote-name') outputs.push(null)
+      else if (name === 'o' || name === '--output') outputs.push(value ?? '')
+      else if (name === '--remote-name-all') all = true
+      else if (name === 'J' || name === '--remote-header-name') serverNames = true
+      else if (name === '--output-dir') dir = value
+      else if (name === '--url' && value) urls.push(value)
+      else if (CURL_FILES.has(name) && value && value !== '-') files.push(value)
+    },
+    a => urls.push(a),
+  )
+  let remote = false
+  urls.forEach((url, n) => {
+    const out = n < outputs.length ? outputs[n] : all ? null : undefined
+    if (out === undefined) return
+    if (out !== null) {
+      if (out && out !== '-') files.push(under(dir, out))
+      return
+    }
+    remote = true
+    const name = lastPart(addressParts(url).path)
+    if (name) files.push(under(dir, name))
+  })
+  return { files, unnamed: serverNames && remote ? [{ what: 'a curl download the server names', inputs: [] }] : [] }
+}
+
+// wget's options that take a value (GNU wget 1.21's --help). A plain wget saves each address under
+// its last part with its query (GNU wget keeps it), index.html for a folder, into the current
+// folder or -P's. -O puts everything in its one file. Recursive and mirrored downloads, names the
+// server gives and addresses read from a file are writes the words do not name.
+const WGET: Grammar = {
+  short: 'oaiBetOTwQPlARDIXU',
+  long: new Set(['--output-file', '--append-output', '--execute', '--config', '--input-file', '--base', '--bind-address', '--bind-dns-address', '--dns-servers', '--tries', '--output-document', '--backups', '--timeout', '--dns-timeout', '--connect-timeout', '--read-timeout', '--wait', '--waitretry', '--quota', '--limit-rate', '--prefer-family', '--user', '--password', '--local-encoding', '--remote-encoding', '--directory-prefix', '--cut-dirs', '--default-page', '--http-user', '--http-password', '--header', '--compression', '--max-redirect', '--proxy-user', '--proxy-password', '--referer', '--save-cookies', '--load-cookies', '--post-data', '--post-file', '--method', '--body-data', '--body-file', '--user-agent', '--secure-protocol', '--certificate', '--certificate-type', '--private-key', '--private-key-type', '--ca-certificate', '--ca-directory', '--crl-file', '--pinnedpubkey', '--random-file', '--egd-file', '--ciphers', '--hsts-file', '--warc-file', '--warc-header', '--warc-max-size', '--warc-tempdir', '--ftp-user', '--ftp-password', '--level', '--accept', '--reject', '--accept-regex', '--reject-regex', '--regex-type', '--domains', '--exclude-domains', '--follow-tags', '--ignore-tags', '--include-directories', '--exclude-directories', '--restrict-file-names', '--progress', '--report-speed', '--use-askpass']),
+}
+const WGET_FILES = new Set(['o', '--output-file', 'a', '--append-output', '--save-cookies'])
+const WGET_MANY = new Set(['r', '--recursive', 'm', '--mirror', 'p', '--page-requisites', 'x', '--force-directories'])
+const wgetDownload = (args: string[]): Download => {
+  const urls: string[] = []
+  const files: string[] = []
+  const lists: string[] = []
+  let document: string | undefined
+  let prefix: string | undefined
+  let many = false
+  let serverNames = false
+  // wget's -nd, -nH, -np, -nc and -nv are two letters each, never a cluster.
+  options(
+    args.filter(a => !/^-n[A-Za-z]+$/.test(a)),
+    WGET,
+    (name, value) => {
+      if (name === 'O' || name === '--output-document') document = value
+      else if (name === 'P' || name === '--directory-prefix') prefix = value
+      else if (name === 'i' || name === '--input-file') lists.push(value ?? '')
+      else if (name === '--content-disposition') serverNames = true
+      else if (WGET_MANY.has(name)) many = true
+      else if (WGET_FILES.has(name) && value && value !== '-') files.push(value)
+    },
+    a => urls.push(a),
+  )
+  const unnamed: Download['unnamed'] = []
+  if (lists.length) unnamed.push({ what: 'a wget download of the addresses in a file', inputs: lists.filter(l => l && l !== '-') })
+  if (document !== undefined) {
+    if (document && document !== '-') files.push(document)
+  } else if (many) unnamed.push({ what: 'a wget download of many files', inputs: [] })
+  else {
+    for (const url of urls) {
+      const { path, query } = addressParts(url)
+      files.push(under(prefix, `${lastPart(path) || 'index.html'}${query}`))
+    }
+    if (serverNames && urls.length) unnamed.push({ what: 'a wget download the server names', inputs: [] })
+  }
+  return { files, unnamed }
 }
 
 // The options that take a value, per command whose destination is its last operand, so a value is
@@ -201,24 +321,26 @@ const isRemote = (w: string) => /^[^/]*:/.test(w) && !w.startsWith('/')
 
 // Inline code that writes files, for the interpreters Claude reaches for when a write is refused.
 const INTERPRETERS = new Set(['python', 'python3', 'node', 'ruby', 'perl', 'bun', 'deno'])
-const SHELLS = new Set(['sh', 'bash', 'zsh'])
 const INLINE_FLAGS = new Set(['-c', '-e', '-E', '--eval'])
 const INLINE_WRITE = /open\([^)]*['"][wax]\+?b?['"]|\.write_(?:text|bytes)\(|writeFile|appendFile|fs\.(?:write|rm|unlink|rename|copyFile)|File\.write|shutil\.(?:copy|move)|os\.(?:rename|replace)|renameSync|copyFileSync/
 
-// Input words: `<` and the file after it, `<file`, a heredoc's `<<EOF`, a here-string's `<<<` and
-// its text. Taken out of a command's words, so its operands are what is left.
+// Input words: `<` and the file after it, `<file`, a heredoc's `<<EOF` (or `<<` and its delimiter
+// as the next word, #698), a here-string's `<<<` and its text, each with any descriptor number
+// before it. Taken out of a command's words, so its operands are what is left.
 const splitInputs = (words: string[]): { rest: string[]; files: string[]; heredoc: boolean } => {
   const rest: string[] = []
   const files: string[] = []
   let heredoc = false
   for (let i = 0; i < words.length; i++) {
     const w = words[i] as string
-    if (w === '<<<') i++
-    else if (w.startsWith('<<<')) continue
-    else if (w.startsWith('<<')) heredoc = true
-    else if (w === '<') {
+    if (/^\d*<<<$/.test(w)) i++
+    else if (/^\d*<<</.test(w)) continue
+    else if (/^\d*<</.test(w)) {
+      heredoc = true
+      if (/^\d*<<-?$/.test(w)) i++
+    } else if (/^\d*<$/.test(w)) {
       if (words[i + 1] !== undefined) files.push(words[++i] as string)
-    } else if (w.startsWith('<')) files.push(w.slice(1))
+    } else if (/^\d*</.test(w)) files.push(w.replace(/^\d*</, ''))
     else rest.push(w)
   }
   return { rest, files, heredoc }
@@ -296,8 +418,9 @@ export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrite
       continue
     }
     if (name === 'curl' || name === 'wget') {
-      const out = name === 'curl' ? optionValue(rest, 'o', '--output') : optionValue(rest, 'O', '--output-document')
-      if (out !== undefined && out !== '-') named(out)
+      const got = name === 'curl' ? curlDownload(rest) : wgetDownload(rest)
+      for (const f of got.files) named(f)
+      for (const u of got.unnamed) unnamed.push({ what: u.what, words: raw, inputs: u.inputs.map(p => absolutePath(p, dir, home)).filter((p): p is string => !!p) })
       continue
     }
     const valued = VALUED[name]
@@ -342,7 +465,8 @@ export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrite
       continue
     }
     // A shell fed its script on standard input (bash <<'EOF'): the reader drops a heredoc's body, so
-    // what it writes is in no word here. bash -c reaches this reader already split into its commands.
+    // what it writes is in no word here. A shell's -c (bash -c, bash -lc) reaches this reader already
+    // split into its commands.
     if (SHELLS.has(name)) {
       if ((heredoc || inputs.length) && !rest.some(a => !a.startsWith('-')))
         unnamed.push({ what: `a ${name} script on standard input`, words: raw, inputs: inputs.map(p => absolutePath(p, dir, home)).filter((p): p is string => !!p) })
