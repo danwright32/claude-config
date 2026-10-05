@@ -105,6 +105,10 @@ printf '{"v":1,"names":{"58f60981898d32e8":"  \\t "}}\n' > "$NICK"; runit "$(inp
 case "$out" in *"| Dan, Pennie") check "a nickname of only spaces keeps the name and org, never a blank" ok ;; *) check "a nickname of only spaces keeps the name and org, never a blank" "$out" ;; esac
 printf '{"v":1,"names":{"58f60981898d32e8":"  Work  "}}\n' > "$NICK"; runit "$(input s1)"
 case "$out" in *"| Opus 5.5 (high) | Work") check "a nickname is trimmed" ok ;; *) check "a nickname is trimmed" "$out" ;; esac
+printf '{"v":1,"names":{"58f60981898d32e8":"\\u0001 \\u0001"}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Dan, Pennie") check "spaces between control bytes keep the name and org" ok ;; *) check "spaces between control bytes keep the name and org" "$out" ;; esac
+printf '{"v":1,"names":{"58f60981898d32e8":"Work \\u0001"}}\n' > "$NICK"; runit "$(input s1)"
+case "$out" in *"| Opus 5.5 (high) | Work") check "a control byte after a space is trimmed with it" ok ;; *) check "a control byte after a space is trimmed with it" "$out" ;; esac
 printf '{"v":1,"names":{"58f60981898d32e8":"Caf\u00e9 \u5bb6"}}\n' > "$NICK"
 raw="$(printf '%s' "$(input s1)" | HOME="$H" STATUSLINE_NOW="$NOW" LC_ALL=C LANG=C bash "$SCRIPT" 2>&1)"
 out="$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')"

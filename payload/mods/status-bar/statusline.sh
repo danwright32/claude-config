@@ -168,9 +168,9 @@ if [ -f "$login" ]; then
       key="$(printf '%s' "$ids" | shasum -a 256 | cut -c1-16)"
       # Control bytes only are removed, which reads the same in every locale; a printable class
       # would drop every byte of "Café" under the C locale a status line may run in.
-      # Tabs and newlines become spaces before control bytes go, then the ends are trimmed, so a
-      # nickname of only spaces leaves the name and org rather than a blank segment.
-      nick="$(jq -r --arg k "$key" '.names[$k] // empty | strings | gsub("[\t\n\r]"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "")' "$nicks" 2>/dev/null | head -1 | LC_ALL=C tr -d '\000-\037\177')"
+      # Tabs and newlines become spaces and every other control byte goes, then the ends are trimmed,
+      # so a nickname of only spaces leaves the name and org rather than a blank segment.
+      nick="$(jq -r --arg k "$key" '.names[$k] // empty | strings | gsub("[\t\n\r]"; " ") | gsub("[\u0000-\u001f\u007f]"; "") | sub("^\\s+"; "") | sub("\\s+$"; "")' "$nicks" 2>/dev/null | head -1 | LC_ALL=C tr -d '\000-\037\177')"
       [ -n "$nick" ] && account="$nick"
     fi
     [ -n "$account" ] && parts+=("$account")
