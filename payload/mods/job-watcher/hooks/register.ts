@@ -12,8 +12,9 @@ import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerd
 // Claude Code process has gone are judged at session start without asking Dan (see leftovers below).
 
 // kept: Claude kept the job on purpose, with a reason (Dan, 2026-10-04). The status bar (#610) shows
-// a kept job in amber in the band above the prompt as "<name> kept <run time>", the run time from
-// startedAt. quiet: kept as quiet by design, so it is never reported for going silent.
+// a kept job in amber in the band above the prompt by its name, its state and its run time, "dev
+// server running 2h 14m" (#784), the run time from startedAt. quiet: kept as quiet by design, so it
+// is never reported for going silent.
 type Kept = { name: string; reason: string; quiet: boolean; at: number }
 // owner: the background agent whose loop started the job, by its id and its task's description; none
 // for this session's own conversation (#784). The process runs every loop's tool calls through one

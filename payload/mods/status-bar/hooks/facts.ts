@@ -1,8 +1,9 @@
 import type { StatusBarMode } from '../types/index.d.ts'
 
 // The status bar's judgments, pure so each is tested on its own (#610, docs/mods-design.md
-// "Status bar (#610)"). The wording follows the design rounds' renderings: "PR #636 checks
-// failing", "1 job running", "dev server kept 2h 14m", "2 unpushed commits", "ctx 74%".
+// "Status bar (#610)"). The wording follows the design rounds' renderings, the jobs' as #784
+// reworded them: "PR #636 checks failing", "1 job running", "dev server running 2h 14m",
+// "2 unpushed commits", "ctx 74%".
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -64,12 +65,6 @@ export type LookPart = { text: string; color?: string; bold?: boolean; dim?: boo
 const AMBER = 'warning'
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
-/**
- * The amber needs-a-look line, most urgent first so a narrow window cuts off what can wait longest:
- * the scope modes in bold (no build or winding down, and away, can be on at once, each its own
- * bold item divided like the rest), then a failing or running PR, stuck jobs, running jobs, kept jobs, unpushed
- * commits. Empty when nothing needs a look and no mode is on, so the band does not show.
- */
 // How a job's state reads (#784, Dan, 2026-10-05: "kept" and "stuck" were internal words, and
 // "stuck" was wrong for a run still queued). A stalled job says who acts on it, so Dan can see it is
 // not his to do: Claude for this conversation's own, the agent for an agent's.
@@ -89,6 +84,14 @@ const jobPhrases = (jobs: readonly Job[], actor: string): string[] => {
   return out
 }
 
+/**
+ * The amber needs-a-look line, most urgent first so a narrow window cuts off what can wait longest:
+ * the scope modes in bold (no build or winding down, and away, can be on at once, each its own
+ * bold item divided like the rest), then a failing or running PR, background agents gone quiet,
+ * this conversation's jobs (not progressing, then waiting, then running), each background agent's
+ * jobs under its task's name, and unpushed commits. Empty when nothing needs a look and no mode is
+ * on, so the band does not show.
+ */
 export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; agents?: readonly QuietAgent[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
   const items: string[] = []
   // A reading whose refresh since failed is kept with its age, never blanked (L682).
