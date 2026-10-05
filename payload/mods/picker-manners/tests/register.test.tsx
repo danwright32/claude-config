@@ -32,6 +32,9 @@ const modKit: { name: string; register: Register } = {
           await built.state.set(ref, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
           built.ui.log(`BAND cleared ${JSON.stringify({ mod })}`, { to: 'debug' })
         },
+        // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
+        // token; mod-kit's own tests prove the real one asks the secret guard.
+        screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
       }
       return { ...built, modkit } as never
     })
@@ -213,6 +216,17 @@ test('a question is asked in the band through mod-kit, never as a modal, and a p
   expect(w.reachedEngine).toEqual([])
   expect(await lines(ui)).toEqual(['engine band'])
   await ui.unmount()
+})
+
+// #707: this mod answers every AskUserQuestion itself, so the secret guard beneath it never sees the
+// question; it asks mod-kit's screen first. A question carrying a token is refused before it is
+// drawn in the band or kept as the open question.
+test('a question a guard refuses is refused before it is drawn in the band (#707)', withKit, async ($, on) => {
+  const w = world(on)
+  const r = await ask($ as never, { ...QUESTION, options: [...QUESTION.options, { label: 'Use SCREEN-REFUSES', description: 'the key' }] })
+  expect(r.deny ?? r.text).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.asks).toEqual([])
+  expect(w.reachedEngine).toEqual([])
 })
 
 test('typing while a question is open is a message: the question is withdrawn and Claude told to answer it first', withKit, async ($, on) => {

@@ -585,6 +585,10 @@ export const register: Register = on => {
     const toolUseId = String(input.tool_use_id ?? '')
 
     if (tool === 'mcp__scope-modes__switch_to_build') {
+      // Answered here and never passed down, so the guards beneath (the secret guard) are asked
+      // through mod-kit's screen before the change is shown to Dan in the question (#707).
+      const refused = await $.modkit.screen(e)
+      if (refused) return refused
       if ((await scopeOf($)) !== 'NO BUILD') return { result: 'No build is not on.', text: 'No build is not on.' }
       const change = String(input.change ?? '').trim().replace(/[.?]+$/, '') || 'make a change'
       let answer: string

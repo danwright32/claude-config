@@ -34,6 +34,9 @@ const modKit: { name: string; register: Register } = {
         clearPane: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set(paneRef as never, (await heldPanes()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
+        // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
+        // token; mod-kit's own tests prove the real one asks the secret guard.
+        screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
       }
       return { ...built, modkit } as never
     })
@@ -262,6 +265,25 @@ test('the tools and /steps exist only where a person is at the prompt', withKit,
   await start($)
   expect(w.tools.sort()).toEqual(['steps', 'steps_done'])
   expect(w.commands).toEqual(['steps'])
+})
+
+// #707: this mod answers its tools itself, so the secret guard beneath it never sees them; it asks
+// mod-kit's screen first. A step whose value carries a token is refused before anything is pinned,
+// drawn with Copy or kept for the next session, and so is a verdict carrying one.
+test('steps a guard refuses are refused before anything is pinned, shown or kept (#707)', withKit, async ($, on) => {
+  const w = world(on, { wide: true })
+  await start($)
+  const out = await hand($, [step({ value: 'sk_live_SCREEN-REFUSES' })])
+  expect(out).toBe('refused: Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(await band($)).toBeUndefined()
+  expect(await paneShown($)).toBeUndefined()
+  expect(w.opened).toEqual([])
+  expect(stored(w.mem)).toBeUndefined()
+  // A clean card pins as ever; a verdict on it carrying a token is refused and changes nothing.
+  expect(await hand($, [step()])).toMatch(/^Pinned/)
+  const v = await call($, VERDICT, { step: 1, checked: 'per-you', note: 'SCREEN-REFUSES' })
+  expect(v).toBe('refused: Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(stored(w.mem)?.steps[0]?.finished).toBeUndefined()
 })
 
 test('a step with no link or exact location is refused, and nothing is pinned', withKit, async ($, on) => {

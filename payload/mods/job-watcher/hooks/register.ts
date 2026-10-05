@@ -673,7 +673,11 @@ export const register: Register = on => {
   })
 
   // Claude keeps a job from inside a turn. A refusal names what is wrong and the jobs it could mean.
+  // Answered here and never passed down, so the guards beneath (the secret guard) are asked through
+  // mod-kit's screen before the name and reason are kept and shown on the status bar (#707).
   on('tool.call', { tool: KEEP_CALL }, async ($, e) => {
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
     const input = e as unknown as Record<string, unknown>
     const id = String(input.task_id ?? '').trim()
     const name = String(input.name ?? '').trim()

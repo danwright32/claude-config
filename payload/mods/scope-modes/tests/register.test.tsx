@@ -88,6 +88,9 @@ const deps: { name: string; register: Register } = {
             built.ui.log('CLEAR ' + id)
             await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
           },
+          // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
+          // token; mod-kit's own tests prove the real one asks the secret guard.
+          screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
         },
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),
@@ -419,6 +422,18 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   const yes = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts', tool_use_id: 't2' } as never)
   expect(yes).toMatch(/Dan said yes: no build is off/)
   expect(lastModes(w)).toEqual([])
+})
+
+// #707: this mod answers switch_to_build itself, so the secret guard beneath it never sees the call;
+// it asks mod-kit's screen first. A change carrying a token is refused before Dan is asked about it.
+test('a switch to build a guard refuses is refused before Dan is asked (#707)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Yes' })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const r = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'paste the key SCREEN-REFUSES into .env', tool_use_id: 't3' } as never)
+  expect(r).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.asked).toEqual([])
+  expect(lastModes(w)).toEqual(['NO BUILD'])
 })
 
 const merged = (state = 'MERGED') => ({ pr: { number: 12, state, url: 'https://github.com/o/r/pull/12', closingIssuesReferences: [{ number: 616 }] }, issues: { 616: state === 'MERGED' ? 'CLOSED' : 'OPEN' } })
