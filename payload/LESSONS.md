@@ -9640,6 +9640,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   crashed on every launch until the observer was delivered on the main queue.)
   SHORT: Work moved off main posts its notifications off main too; make every observer of what it writes main queue delivered or thread safe.
 
+- **L744. When a failed request queues a cleanup that deletes something it created in another system
+  under an id derived from the request, the cleanup must first check that no live record now holds
+  that id, because a retry of the same request reuses the id and the cleanup would delete the retry's
+  live copy.** A derived id is what makes the external write idempotent, so the retry correctly adopts
+  the first attempt's object instead of making a second; the compensation was written for a world where
+  the failed attempt owned that object alone. Judge ownership when the cleanup runs, against the store
+  the retry writes to, not when it was queued. (slate#3215, 2026-10-04: a booking ran out of its confirm
+  budget at the insert after writing the agent's Google event under an id derived from the request; the
+  lead retried 6 seconds later and was booked with that same event id. The deletion enqueue happened to
+  fail on the same exhausted budget; had it succeeded, the deletion lane would have removed the confirmed
+  booking's calendar event.)
+  SHORT: A cleanup deleting an external object under a request-derived id must check no live record holds that id: a retry adopts the same object.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
