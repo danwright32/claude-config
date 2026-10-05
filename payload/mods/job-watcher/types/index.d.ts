@@ -15,6 +15,8 @@ export type JobsEntry = {
   state: 'running' | 'waiting' | 'stalled'
   /** The background agent whose job it is, by its task's description; null for this conversation's own. */
   owner: string | null
+  /** That agent's id, so two agents given the same description stay apart; null for this conversation's own. */
+  ownerId: string | null
 }
 
 /** A background agent listed as running whose tool calls have stopped for twenty minutes (#759). */

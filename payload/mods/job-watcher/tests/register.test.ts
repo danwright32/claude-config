@@ -1357,7 +1357,7 @@ test('a poll loop kept while the look that would stop it is under way is not sto
 
 // The job list the status bar (#610) reads, the one source for its running and kept jobs: a short
 // name, how long it has run, whether Claude kept it, and whether the watcher measured it as stuck.
-type Listed = { label: string; runMs: number; kept: boolean; stuck: boolean; state: string; owner: string | null }[]
+type Listed = { label: string; runMs: number; kept: boolean; stuck: boolean; state: string; owner: string | null; ownerId: string | null }[]
 const jobsOf = async ($: { tool: { call: (e: never) => Promise<unknown> } }): Promise<Listed> => {
   const r = (await $.tool.call({ tool: '__jobs' } as never)) as { result?: string; deny?: string }
   if (r.deny !== undefined) throw new Error(r.deny)
@@ -1375,13 +1375,13 @@ test('the job list names each running job with its run time, kept and stuck', wi
   await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is using it', quiet: true }))
   await clock.advance(9 * MIN)
   expect(await jobsOf($)).toEqual([
-    { label: 'dev server', runMs: 11 * MIN, kept: true, stuck: false, state: 'running', owner: null },
-    { label: shortCommand(LONG), runMs: 9 * MIN, kept: false, stuck: false, state: 'running', owner: null },
+    { label: 'dev server', runMs: 11 * MIN, kept: true, stuck: false, state: 'running', owner: null, ownerId: null },
+    { label: shortCommand(LONG), runMs: 9 * MIN, kept: false, stuck: false, state: 'running', owner: null, ownerId: null },
   ])
   await clock.advance(3 * MIN)
   const later = await jobsOf($)
   // LONG is a poll loop gone quiet: waiting on what it polls, not stuck (#784).
-  expect(later[1]).toEqual({ label: shortCommand(LONG), runMs: 12 * MIN, kept: false, stuck: false, state: 'waiting', owner: null })
+  expect(later[1]).toEqual({ label: shortCommand(LONG), runMs: 12 * MIN, kept: false, stuck: false, state: 'waiting', owner: null, ownerId: null })
   expect(later[0]?.stuck).toBe(false)
 })
 
@@ -1764,7 +1764,7 @@ test("a job a background agent started is recorded and listed as that agent's (#
   await start($)
   await $.tool.call(asAgent({ tool: 'Bash', command: 'npm run dev', run_in_background: true }))
   expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: 'npm run dev', outputPath: OUT, pgid: 501, startedAt: 0, owner: { id: 'a1', name: 'fix CI' } }])
-  expect(await jobsOf($)).toEqual([{ label: 'npm run dev', runMs: 0, kept: false, stuck: false, state: 'running', owner: 'fix CI' }])
+  expect(await jobsOf($)).toEqual([{ label: 'npm run dev', runMs: 0, kept: false, stuck: false, state: 'running', owner: 'fix CI', ownerId: 'a1' }])
 })
 
 test("an agent's unkept job is reminded on that agent's results, never on this session's (#784)", withDeps, async ($, on) => {

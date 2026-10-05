@@ -298,7 +298,6 @@ export const register: Register = on => {
         if (!(await recorded(path))) continue
         try {
           await $.sessions.noteEdit({ path })
-          toldUnnoted = false
         } catch (err) {
           unnoted ??= `The collision guard could not record that this session edited ${path}: ${err instanceof Error ? err.message : String(err)}. Other sessions will not be warned before they change it.`
         }
@@ -306,7 +305,13 @@ export const register: Register = on => {
     } catch (err) {
       unnoted ??= `The collision guard could not record this session's edits: ${err instanceof Error ? err.message : String(err)}. Other sessions will not be warned before they change them.`
     }
-    if (unnoted === undefined || toldUnnoted || result.isError) return result
+    // Rearmed only by a call whose every note landed: one that lands beside one that fails is the
+    // same trouble, and said once (lessons review of PR 794).
+    if (unnoted === undefined) {
+      toldUnnoted = false
+      return result
+    }
+    if (toldUnnoted || result.isError) return result
     toldUnnoted = true
     return { ...result, context: [...(result.context ?? []), unnoted] }
   })

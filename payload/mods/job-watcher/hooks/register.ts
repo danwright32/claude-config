@@ -812,6 +812,7 @@ export const register: Register = on => {
           stuck: state === 'stalled',
           state,
           owner: j.owner?.name ?? null,
+          ownerId: j.owner?.id ?? null,
         }
       })
     }

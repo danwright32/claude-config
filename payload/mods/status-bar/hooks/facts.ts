@@ -56,7 +56,7 @@ export type UnpushedReading = { count: number; readAt: number; isStale: boolean 
  * One background job as the job watcher (#611) reports it through $.jobs. state and owner came with
  * #784; a watcher older than that sends neither, and its stuck flag stands for stalled.
  */
-export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean; state?: 'running' | 'waiting' | 'stalled'; owner?: string | null }
+export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean; state?: 'running' | 'waiting' | 'stalled'; owner?: string | null; ownerId?: string | null }
 /** A background agent listed as running whose tool calls stopped twenty minutes ago or more (#759). */
 export type QuietAgent = { name: string; quietMs: number }
 
@@ -102,8 +102,17 @@ export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | 
   // This conversation's own jobs, a stalled one ahead of those running fine (#706), then each
   // background agent's as one item under its task's name (#784).
   items.push(...jobPhrases(f.jobs.filter(j => !j.owner), 'Claude'))
-  const owners = [...new Set(f.jobs.map(j => j.owner).filter((o): o is string => !!o))]
-  for (const o of owners) items.push(`agent ${o}: ${jobPhrases(f.jobs.filter(j => j.owner === o), 'the agent').join(', ')}`)
+  // Grouped by the agent's id, never its description: two agents given the same task stay apart,
+  // each then named with the start of its id (lessons review of PR 794).
+  const keyOf = (j: Job) => j.ownerId ?? j.owner ?? ''
+  const agentJobs = f.jobs.filter(j => !!j.owner)
+  const keys = [...new Set(agentJobs.map(keyOf))]
+  const nameOf = (k: string) => agentJobs.find(j => keyOf(j) === k)?.owner ?? ''
+  for (const k of keys) {
+    const name = nameOf(k)
+    const shared = keys.filter(o => nameOf(o) === name).length > 1
+    items.push(`agent ${name}${shared ? ` (${k.slice(0, 6)})` : ''}: ${jobPhrases(agentJobs.filter(j => keyOf(j) === k), 'the agent').join(', ')}`)
+  }
   if (f.unpushed && f.unpushed.count > 0) items.push(`${plural(f.unpushed.count, 'unpushed commit', 'unpushed commits')}${age(f.unpushed)}`)
   const parts: LookPart[] = []
   for (const m of f.modes) {

@@ -143,6 +143,15 @@ describe('lookParts', () => {
       'dev server running 5m | agent fix CI: suite summary wait not progressing 1h 4m, left to the agent, PR 776 rerun wait waiting 12m, 1 job running',
     )
   })
+  test('two agents with the same task description stay two items, told apart by their ids (lessons review of PR 794)', () => {
+    const jobs = [
+      { label: 'npm test', runMs: MIN, kept: false, stuck: true, state: 'stalled' as const, owner: 'fix CI', ownerId: 'a1b2c3d4e5' },
+      { label: 'npm test', runMs: MIN, kept: false, stuck: false, state: 'running' as const, owner: 'fix CI', ownerId: 'f6a7b8c9d0' },
+    ]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe(
+      'agent fix CI (a1b2c3): 1 job not progressing, left to the agent | agent fix CI (f6a7b8): 1 job running',
+    )
+  })
   // #759: a background agent listed as running whose tool calls have stopped is named on the bar.
   test('a quiet background agent is named with how long it has been quiet, ahead of the jobs', () => {
     const jobs = [{ label: 'a', runMs: MIN, kept: false, stuck: false, state: 'running' as const }]
