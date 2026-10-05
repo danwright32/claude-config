@@ -884,6 +884,35 @@ judged by value in `payload_path_applied`, since the file never lands under its 
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
 
+## An absence is a deletion only where something was there before (#627, #781)
+
+The mirror cannot tell "this Mac deleted it" from "this Mac never had it" by looking at the folder,
+and guessing wrong in either direction loses a decision. Both cases are now answered from a record
+of what this Mac held, never from the folder alone.
+
+An EMPTY TREE (#627) clears the shared copy only when this Mac held files in that tree at its last
+send or apply (`.trees-seen`, the same rule `.mods-seen` already applied to mods). A fresh Mac's
+empty folders used to wipe that tree from the repo until the other Mac sent it back.
+
+A MISSING FILE (#781) is a deletion made here when the commit this Mac last applied held it and the
+shared repo has not changed it since. The apply holds it back like a local edit, so a pull before
+the next send does not restore it, and that send carries the deletion. A file the other Mac has
+changed in the meantime is restored, newer, because a deletion against an edit is the one case
+where restoring is what loses nothing (L5). No manifest was added: `.last-applied` already names
+the commit, and git already holds its tree.
+
+## One watcher, and a leftover loop stops itself (#604)
+
+`do_watch` refused a second watcher from #251, and status still found five watcher processes on
+2026-10-03. The loop runs in a subshell forked around fswatch, and ending the watcher's top process
+ends only that process: the loop lives on, reparented, and goes on sending on every edit beside the
+watcher that replaced it. So the loop now asks before every send whether the top process is still
+alive (`kill -0 $$`, since `$$` in the subshell is still its id) and whether the pid file still names
+it, and stops with a logged line when either answer is no. The pid file is claimed with noclobber,
+so two watchers starting together cannot both run. Status judges watchers by roots only: every send
+is several nested command substitutions carrying the watcher's own command line, so one healthy
+watcher mid send reads three or four deep, which was the "nested up to 4 deep" of that report.
+
 ## The hooks block is merged in BOTH directions, against the same base
 
 `settings.json` is not mirrored like the rest of the config. Its `hooks` block is extracted into

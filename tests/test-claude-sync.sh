@@ -2600,6 +2600,9 @@ export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # which is the guard working correctly against a fixture that lied about being one machine.
 export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
 export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The sync log a held back hooks block is appended to (claude-config#592), whose default is the
+# log the scheduled and watch jobs write to in the home folder.
+export SYNC_LOG_FILE="$WORK/sync-log-guard"
 # The GitHub CLI. Its default is whatever `gh` the operator has, authenticated as them, and the
 # #221 section exports a repo slug for the whole run, so from that point on ANY fixture that asks
 # for a CI verdict reaches real GitHub about a repository that is not this one. It was reached the
@@ -3392,7 +3395,9 @@ CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull >/dev/null 2>&1
 check "baseline pull delivered the hook"     "[ -f '$WRBH/hooks/keep.sh' ]"
 # Now the exact failure mode: the repo has nothing new, but a file IS missing
 # locally, so this pull really does write one. It must say so, not "up to date".
-rm -f "$WRBH/hooks/keep.sh"
+# Missing as on a Mac with no record of applying it: a file this Mac's last apply DID hold is a
+# deletion made here, which a pull now leaves alone for the next send to carry (claude-config#781).
+rm -f "$WRBH/hooks/keep.sh" "$WRBR/.last-applied"
 out_wr="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
 check "a pull that writes a file names it"        "grep -q 'added  *hooks/keep\.sh' <<< \"\$out_wr\""
 check "it does NOT claim to be up to date"        "! grep -qi 'up to date' <<< \"\$out_wr\""
@@ -18471,9 +18476,14 @@ MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFA
 mkdir -p "$MDHB/hooks"; printf 'echo kept\n' > "$MDHB/hooks/b-only.sh"
 MDCC="$WORK/mods-C"; git clone -q "$MDB" "$MDCC" 2>/dev/null
 MDHC="$WORK/mods-homeC"; mkdir -p "$MDHC/mods" "$MDHC/hooks"; echo '{"hooks":{}}' > "$MDHC/settings.json"; printf '# rules\n' > "$MDHC/CLAUDE.md"
+# The shared mods tree before this send. A placeholder an earlier emptying committed can already be
+# in it, beside beta-mod, so what is asked is that THIS send changed nothing there (#627: an empty
+# folder that never held mods leaves the shared tree exactly as it was).
+_mdc_mods0="$(git -C "$MDCC" rev-parse HEAD:payload/mods 2>/dev/null || true)"
 CLAUDE_HOME="$MDHC" SYNC_REPO="$MDCC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#606 a fresh Mac's empty hooks folder publishes no placeholder" "[ ! -e '$MDCC/payload/hooks/.gitkeep' ]"
-check "#606 nor does its empty mods folder" "[ ! -e '$MDCC/payload/mods/.gitkeep' ]"
+check "#606 nor does its empty mods folder change the shared mods" \
+  "[ -n '$_mdc_mods0' ] && [ \"\$(git -C '$MDCC' rev-parse HEAD:payload/mods 2>/dev/null)\" = '$_mdc_mods0' ]"
 MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 and the other Mac keeps its mod after that send" "[ -f '$MDHB/mods/beta-mod/.claude-plugin/plugin.json' ]"
 check "#606 and keeps its own hooks" "[ -f '$MDHB/hooks/b-only.sh' ]"
@@ -18515,8 +18525,10 @@ CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bas
 MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 MD2CC="$WORK/mods2-C"; git clone -q "$MD2B" "$MD2CC" 2>/dev/null
 MD2HC="$WORK/mods2-homeC"; mkdir -p "$MD2HC/mods"; echo '{"hooks":{}}' > "$MD2HC/settings.json"; printf '# rules\n' > "$MD2HC/CLAUDE.md"
+_md2c_mods0="$(git -C "$MD2CC" rev-parse HEAD:payload/mods 2>/dev/null || true)"
 CLAUDE_HOME="$MD2HC" SYNC_REPO="$MD2CC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
-check "#606 a Mac that never had mods publishes no mods placeholder" "[ ! -e '$MD2CC/payload/mods/.gitkeep' ]"
+check "#606 a Mac that never had mods publishes no mods placeholder, and changes nothing in the shared mods" \
+  "[ -n '$_md2c_mods0' ] && [ \"\$(git -C '$MD2CC' rev-parse HEAD:payload/mods 2>/dev/null)\" = '$_md2c_mods0' ]"
 MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 so the other Mac keeps its mod" "[ -f '$MD2HB/mods/eps-mod/.claude-plugin/plugin.json' ]"
 
@@ -18833,6 +18845,187 @@ SX11H="$WORK/sx11-home"; mkdir -p "$SX11H"
 sx_pull "$SX11H" "$SX10R" >/dev/null
 check "#772 and a write that succeeds there creates it with the status line" \
   "[ \"\$(jq -r '.statusLine.command' '$SX11H/settings.json' 2>/dev/null)\" = 'bash $SX11H/mods/status-bar/statusline.sh' ]"
+
+section "== an apply leaves no expanded copy of the payload behind (#641) =="
+# apply_source_dir set EXPANDED_ROOT inside a command substitution at every call site, so the parent
+# never saw it and cleanup_expanded removed nothing: every apply left a claude-sync-expand copy of the
+# tokenized trees in the scratch home, 12 of them found on 2026-10-04. A scratch root of its own, so
+# a sibling shard's run cannot put one there while this looks (L134).
+E41R="$WORK/e641-repo"; git init -q "$E41R"; mkdir -p "$E41R/payload/hooks" "$E41R/payload/agents"
+printf '#!/usr/bin/env bash\n# runs __CLAUDE_HOME__/hooks/x.sh\n' > "$E41R/payload/hooks/tok.sh"
+printf 'an agent that reads __CLAUDE_HOME__/agents/notes.md\n' > "$E41R/payload/agents/tok.md"
+E41H="$WORK/e641-home"; mkdir -p "$E41H"; echo '{"hooks":{}}' > "$E41H/settings.json"
+E41S="$WORK/e641-scratch"; mkdir -p "$E41S"
+e641_pull(){ SYNC_SCRATCH_ROOT="$E41S" CLAUDE_HOME="$E41H" SYNC_REPO="$E41R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true; }
+e641_pull >/dev/null
+# The positive control: the expanded copy really was made and used, or a count of zero proves nothing.
+check "#641 fixture: the apply put this Mac's home path into the tokenized files" \
+  "grep -qF '$E41H/hooks/x.sh' '$E41H/hooks/tok.sh' && grep -qF '$E41H/agents/notes.md' '$E41H/agents/tok.md'"
+check "#641 an apply leaves no claude-sync-expand copy behind" \
+  "[ \"\$(find '$E41S' -name 'claude-sync-expand.*' 2>/dev/null | wc -l | tr -d ' ')\" = 0 ]"
+e641_pull >/dev/null
+check "#641 nor does a second apply with nothing new" \
+  "[ \"\$(find '$E41S' -name 'claude-sync-expand.*' 2>/dev/null | wc -l | tr -d ' ')\" = 0 ]"
+
+section "== a held back hooks block is written to the sync log, naming the hook (#592) =="
+# 2026-10-02: Dans-MacBook-Pro showed "held back the hooks block: a hook is registered for tools its
+# header does not declare" and the sync log held no matching line, so by the time anyone looked the
+# transient fault could not be attributed to any hook. The verdict now goes to the log with a time,
+# whichever entry point ran the send.
+unset SYNC_NO_GIT
+L92B="$WORK/l592-bare.git"; git init -q --bare "$L92B"
+L92R="$WORK/l592-repo"; git clone -q "$L92B" "$L92R" 2>/dev/null
+L92H="$WORK/l592-home"; mkdir -p "$L92H/hooks"
+printf '#!/usr/bin/env bash\n#\n# fencegate.sh\n# Claude Code PreToolUse(Edit|Write) hook: a fixture.\n' > "$L92H/hooks/fencegate.sh"
+l592_settings(){ jq -n --arg m "$1" --arg c "$L92H/hooks/fencegate.sh" '{hooks: {PreToolUse: [{matcher: $m, hooks: [{type: "command", command: $c}]}]}}' > "$L92H/settings.json"; }
+L92LOG="$WORK/l592.log"; : > "$L92LOG"
+l592_push(){ SYNC_LOG_FILE="$L92LOG" CLAUDE_HOME="$L92H" SYNC_REPO="$L92R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1 || true; }
+# Control first (L159): a sound block writes nothing to the log.
+l592_settings 'Edit|Write'
+l592_push >/dev/null
+check "#592 a hooks block that is published writes no held back line to the log" "! grep -q 'hooks block' '$L92LOG'"
+l592_settings 'Bash'
+out_l592="$(l592_push)"
+check "#592 fixture: the send held the block back" "line_has \"\$out_l592\" 'hooks block' 'NOT published'"
+dbg "#592 log after the held back send: $(cat "$L92LOG")"
+_l592log="$(cat "$L92LOG" 2>/dev/null || true)"
+check "#592 the held back block is written to the sync log, naming the hook and the tool" \
+  "line_has \"\$_l592log\" 'hooks block' 'fencegate.sh' 'Bash'"
+check "#592 with a time on the line" "line_has \"\$_l592log\" '^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]' 'hooks block'"
+
+section "== an empty folder on a Mac that never held files there clears nothing from the shared copy (#627) =="
+# Found 2026-10-03 testing #606: a Mac whose hooks, agents, commands, audits or mods folder exists
+# but is empty mirrored that empty folder over the shared copy with --delete, and the tree was gone
+# from the repo until another Mac sent it back. An empty folder is what a fresh Mac has, not a
+# deletion: it clears the shared copy only where this Mac held files in that tree before (L5).
+unset SYNC_NO_GIT
+E27B="$WORK/e627-bare.git"; git init -q --bare -b main "$E27B"
+E27A="$WORK/e627-A"; git clone -q "$E27B" "$E27A" 2>/dev/null
+E27HA="$WORK/e627-homeA"; mkdir -p "$E27HA/hooks" "$E27HA/agents"; echo '{"hooks":{}}' > "$E27HA/settings.json"; printf '# rules\n' > "$E27HA/CLAUDE.md"
+printf '#!/usr/bin/env bash\necho a\n' > "$E27HA/hooks/a.sh"
+printf 'an agent\n' > "$E27HA/agents/x.md"
+mkskill "$E27HA/skills/s627/SKILL.md" 'a skill for #627'
+CLAUDE_HOME="$E27HA" SYNC_REPO="$E27A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#627 fixture: the first Mac's trees reached the shared repo" \
+  "git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1 && git -C '$E27B' show main:payload/agents/x.md >/dev/null 2>&1 && git -C '$E27B' show main:payload/skills/s627/SKILL.md >/dev/null 2>&1"
+# A fresh Mac: the folders exist and are empty, and it has never applied or sent anything.
+E27C="$WORK/e627-B"; git clone -q "$E27B" "$E27C" 2>/dev/null
+E27HB="$WORK/e627-homeB"; mkdir -p "$E27HB/hooks" "$E27HB/agents" "$E27HB/skills"; echo '{"hooks":{}}' > "$E27HB/settings.json"; printf '# rules\n' > "$E27HB/CLAUDE.md"
+out_627="$(CLAUDE_HOME="$E27HB" SYNC_REPO="$E27C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#627 the fresh Mac's send: $out_627"
+check "#627 a fresh Mac's empty hooks folder does not clear hooks from the shared repo" "git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1"
+check "#627 nor its empty agents folder the agents" "git -C '$E27B' show main:payload/agents/x.md >/dev/null 2>&1"
+check "#627 nor its empty skills folder the skills" "git -C '$E27B' show main:payload/skills/s627/SKILL.md >/dev/null 2>&1"
+check "#627 and the send says why it left the tree alone" "line_has \"\$out_627\" 'hooks' 'empty' 'never held'"
+# The control (L159): the Mac that DID hold hooks deletes its last one, and that deletion travels.
+rm -f "$E27HA/hooks/a.sh"
+CLAUDE_HOME="$E27HA" SYNC_REPO="$E27A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#627 a Mac that held hooks and deleted the last one still clears them from the shared repo" \
+  "! git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1"
+check "#627 while its other trees stay where they were" "git -C '$E27B' show main:payload/agents/x.md >/dev/null 2>&1"
+
+section "== a watcher stops when it has been replaced or orphaned, and a tick is one watcher (#604) =="
+# 2026-10-03: status reported 5 claude-sync watch processes, nested up to 4 deep, one of them a root
+# running for almost 5 days, where one watcher is expected. The refusal in do_watch (#251) stops a
+# second watcher STARTING, but not the loop half of an old one carrying on: killing a watcher's top
+# process ends only that process, and the loop subshell it forked around fswatch lives on,
+# reparented, reacting to every edit. And a tick is itself nested subshells that all carry the
+# watcher's command line, so a healthy watcher in the middle of a send reads 3 or 4 deep.
+W04="$WORK/w604"; mkdir -p "$W04/home/hooks"
+W04HITS="$W04/hits"; W04GO="$W04/go"; W04DONE="$W04/fswatch-ended"; W04PID="$W04/watch.pid"
+# A fake fswatch: one event, then waits (bounded) for the test, then one more event, then keeps
+# writing until the loop has stopped reading, which is how the test knows the loop ended.
+w604_fswatch(){ cat > "$W04/fswatch" <<FSEOF
+#!/usr/bin/env bash
+trap '' PIPE
+echo one
+n=0; while [ ! -e "$W04GO" ] && [ \$n -lt 400 ]; do sleep 0.05; n=\$((n+1)); done
+echo two
+# Spaced wider than the loop's one second drain, or a loop still reading would keep draining these
+# for ever and never reach the send that shows it carried on.
+n=0; while [ \$n -lt 12 ]; do sleep 1.5; echo more 2>/dev/null || { echo ended > "$W04DONE"; exit 0; }; n=\$((n+1)); done
+FSEOF
+chmod +x "$W04/fswatch"; }
+w604_wait(){ local n=0; while ! eval "$1" && [ $n -lt 400 ]; do sleep 0.05; n=$((n+1)); done; }
+# 1. ORPHANED: the top process is killed outright, and the loop carries on.
+w604_fswatch; : > "$W04HITS"; rm -f "$W04GO" "$W04DONE" "$W04PID"
+SYNC_FSWATCH="$W04/fswatch" SYNC_WATCH_SEND="printf 'x\n' >> '$W04HITS'" SYNC_WATCH_PID_FILE="$W04PID" \
+  CLAUDE_HOME="$W04/home" SYNC_REPO="$WORK/watch-repo-unused" SYNC_NO_NOTIFY=1 bash "$SCRIPT" watch > "$W04/out1" 2>&1 &
+w04_root=$!
+w604_wait "[ -s '$W04HITS' ]"
+check "#604 fixture: the watcher made its first send" "[ \"\$(grep -c . '$W04HITS')\" = 1 ]"
+kill -9 "$w04_root" 2>/dev/null || true; wait "$w04_root" 2>/dev/null || true
+touch "$W04GO"
+w604_wait "[ -e '$W04DONE' ]"
+check "#604 the loop of a watcher whose top process was killed sends nothing more" "[ \"\$(grep -c . '$W04HITS')\" = 1 ]"
+check "#604 and stops reading, so nothing is left running" "[ -e '$W04DONE' ]"
+# 2. REPLACED: another live watcher now holds the pid file.
+w604_fswatch; : > "$W04HITS"; rm -f "$W04GO" "$W04DONE" "$W04PID"
+printf '#!/usr/bin/env bash\nsleep 60\n' > "$W04/claude-sync"; chmod +x "$W04/claude-sync"
+SYNC_FSWATCH="$W04/fswatch" SYNC_WATCH_SEND="printf 'x\n' >> '$W04HITS'" SYNC_WATCH_PID_FILE="$W04PID" \
+  CLAUDE_HOME="$W04/home" SYNC_REPO="$WORK/watch-repo-unused" SYNC_NO_NOTIFY=1 bash "$SCRIPT" watch > "$W04/out2" 2>&1 &
+w04_root=$!
+w604_wait "[ -s '$W04HITS' ]"
+bash "$W04/claude-sync" watch >/dev/null 2>&1 &
+w04_other=$!
+printf '%s\n' "$w04_other" > "$W04PID"
+touch "$W04GO"
+w604_wait "[ -e '$W04DONE' ]"
+wait "$w04_root" 2>/dev/null || true
+check "#604 a watcher whose pid file now names another live watcher sends nothing more" "[ \"\$(grep -c . '$W04HITS')\" = 1 ]"
+check "#604 and says it stepped down, naming the one that replaced it" "grep -q \"stepped down.*$w04_other\" '$W04/out2'"
+check "#604 and leaves the other watcher's pid file alone" "[ \"\$(head -1 '$W04PID')\" = '$w04_other' ]"
+kill -9 "$w04_other" 2>/dev/null || true; wait "$w04_other" 2>/dev/null || true
+# 3. A TICK IS ONE WATCHER: the loop and the tick's own nested subshells all carry the command line.
+W04PSH="$W04/ps-home"; mkdir -p "$W04PSH"; W04PSR="$W04/ps-repo"; mkdir -p "$W04PSR/payload"
+cat > "$W04/ps-tick" <<'PSEOF'
+  501     1 03:11:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  502   501 03:11:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  503   502 00:00:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  504   503 00:00:01 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  505   504 00:00:01 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+PSEOF
+_w04_tick="$(SYNC_PS_FIXTURE="$W04/ps-tick" CLAUDE_HOME="$W04PSH" SYNC_REPO="$W04PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#604 one watcher in the middle of a send is not reported as several" "! grep -q 'watcher processes the tool left running' <<< \"\$_w04_tick\""
+# Control: an orphaned loop is a second root, and is still reported.
+printf '  601     1 4-22:01:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch\n' >> "$W04/ps-tick"
+_w04_two="$(SYNC_PS_FIXTURE="$W04/ps-tick" CLAUDE_HOME="$W04PSH" SYNC_REPO="$W04PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#604 while a second root beside it still is" "grep -q 'watcher processes the tool left running' <<< \"\$_w04_two\""
+
+section "== a file deleted here is not put back by a pull before the next send (#781) =="
+# The mirror image of #627, found by the agent working on it on 2026-10-05: the apply protected
+# local edits only for files that still exist here, so a file deleted on this Mac was copied back
+# from the shared copy by a pull that ran before the next send, and the deletion silently did not
+# stick. A file the shared copy held at this Mac's last apply, unchanged since, and gone from here
+# now, is a deletion made here (L5, L625).
+unset SYNC_NO_GIT
+D81B="$WORK/d781-bare.git"; git init -q --bare -b main "$D81B"
+D81A="$WORK/d781-A"; git clone -q "$D81B" "$D81A" 2>/dev/null
+D81H="$WORK/d781-home"; mkdir -p "$D81H/hooks"; echo '{"hooks":{}}' > "$D81H/settings.json"; printf '# rules\n' > "$D81H/CLAUDE.md"
+printf '#!/usr/bin/env bash\necho a\n' > "$D81H/hooks/a.sh"
+printf '#!/usr/bin/env bash\necho b\n' > "$D81H/hooks/b.sh"
+printf '#!/usr/bin/env bash\necho c\n' > "$D81H/hooks/c.sh"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#781 fixture: the three hooks are in the shared repo and applied here" \
+  "git -C '$D81B' show main:payload/hooks/b.sh >/dev/null 2>&1 && [ -s '$D81A/.last-applied' ]"
+# The other Mac changes c.sh and adds d.sh, from a checkout that is not a sync clone.
+D81D="$WORK/d781-dev"; git clone -q "$D81B" "$D81D" 2>/dev/null
+printf '#!/usr/bin/env bash\necho c changed\n' > "$D81D/payload/hooks/c.sh"
+printf '#!/usr/bin/env bash\necho d\n' > "$D81D/payload/hooks/d.sh"
+git -C "$D81D" add payload && git -C "$D81D" -c user.name=t -c user.email=t@e commit -q -m 'the other Mac' 2>/dev/null && git -C "$D81D" push -q origin main 2>/dev/null
+# This Mac deletes b.sh and c.sh, then pulls before it sends.
+rm -f "$D81H/hooks/b.sh" "$D81H/hooks/c.sh"
+out_781="$(CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#781 the pull after a deletion: $out_781"
+check "#781 a pull does not put back a file deleted here" "[ ! -e '$D81H/hooks/b.sh' ]"
+check "#781 and says it left the deletion alone" "line_has \"\$out_781\" 'left' 'hooks/b.sh'"
+check "#781 a file the other Mac added still arrives" "[ -f '$D81H/hooks/d.sh' ]"
+# A deletion here and an edit there is not a deletion to carry: the newer version is restored,
+# which loses nothing (L5).
+check "#781 a file deleted here that the other Mac has since changed is restored, newer version" "grep -q 'c changed' '$D81H/hooks/c.sh'"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#781 and the next send carries the deletion to the shared repo" "! git -C '$D81B' show main:payload/hooks/b.sh >/dev/null 2>&1"
+check "#781 while the other hooks stay" "git -C '$D81B' show main:payload/hooks/a.sh >/dev/null 2>&1 && git -C '$D81B' show main:payload/hooks/d.sh >/dev/null 2>&1"
 
 suite_profile
 echo ""

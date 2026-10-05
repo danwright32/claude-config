@@ -260,6 +260,11 @@ notify(){
   local n="${SYNC_NOTIFIER:-terminal-notifier}"
   command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 || true
 }
+# The log the scheduled and watch jobs write to (their launch agents point stdout and stderr here).
+# A line appended directly, with its own time, for an event that must leave a record whichever entry
+# point ran it, because the watcher keeps a send's stderr to itself (claude-config#592).
+SYNC_LOG_FILE="${SYNC_LOG_FILE:-$HOME/.claude-sync.log}"
+sync_log_line(){ printf '%s claude-sync: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$SYNC_LOG_FILE" 2>/dev/null || true; return 0; }
 # On failure, notify ONLY when run non-interactively (the background auto-sync job),
 # so the silent log-only failure becomes visible; interactive users see stderr.
 die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
@@ -1277,16 +1282,24 @@ tokenize_payload(){
 #
 # When no file in the tree carries the token, the payload directory itself is returned and nothing
 # is copied, so the ordinary case costs one grep.
-EXPANDED_ROOT=""
-cleanup_expanded(){ if [ -n "$EXPANDED_ROOT" ]; then rm -rf "$EXPANDED_ROOT"; EXPANDED_ROOT=""; fi; return 0; }
+#
+# ONE directory per run, named after the run's own process id (claude-config#641). Every caller reads
+# this function through a command substitution, which is a subshell, so a directory it made and
+# recorded in a variable was invisible to the parent: the cleanup on exit removed nothing and every
+# apply left a copy behind (12 found on 2026-10-04). $$ is the same in every subshell of a run, so
+# each call derives the same path and the exit trap, in the parent, removes exactly that path.
+expanded_root_name(){ printf 'claude-sync-expand.%s' "$$"; }
+cleanup_expanded(){
+  rm -rf "$(scratch_home)/$(expanded_root_name)" "${SYNC_SCRATCH_ROOT%/}/$(expanded_root_name)" 2>/dev/null || true
+  return 0
+}
 apply_source_dir(){   # $1 = a mirrored tree name -> prints the directory to copy from
   local src="$PAYLOAD/$1" dst hit rel tmp
   if ! grep -rIq --exclude-dir=.git -F -- "$TOKEN" "$src" 2>/dev/null; then
     printf '%s' "$src"; return 0
   fi
-  [ -n "$EXPANDED_ROOT" ] || EXPANDED_ROOT="$(scratch_dir)"
-  dst="$EXPANDED_ROOT/$1"
-  mkdir -p "$dst"
+  dst="$(scratch_home_ready)/$(expanded_root_name)/$1"
+  mkdir -p "$dst" 2>/dev/null || { printf '%s' "$src"; return 0; }
   rsync -a --delete "${COMMON_EXCLUDES[@]}" "$src/" "$dst/" 2>/dev/null || { printf '%s' "$src"; return 0; }
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
@@ -3336,6 +3349,52 @@ record_mods_seen(){
   done
   printf '%s' "$names" > "$MODS_SEEN_FILE" 2>/dev/null || true
 }
+# TREES_SEEN_FILE: the mirrored trees (hooks, agents, commands, audits, mods, skills) this Mac held
+# files in at the end of its last send or apply, per Mac and gitignored (claude-config#627). The
+# same question MODS_SEEN_FILE answers for mods, asked of every tree: a fresh Mac's folder, or one
+# Claude Code just made, is empty too, and mirroring it with --delete cleared that whole tree from
+# the shared copy until another Mac sent it back. So an empty folder is read as a deletion only where
+# this Mac held files in that tree before (L5).
+TREES_SEEN_FILE="$SYNC_REPO/.trees-seen"
+# Does this tree hold a file a send would carry? Placeholders, OS litter, bytecode and the engine's
+# generated plugin types are not content. $2.. are the --exclude= values the send uses for the tree
+# (the plugin managed skills), matched against each file's first path component.
+tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
+  local dir="$1" f rel top e n skip; shift
+  [ -d "$dir" ] || return 1
+  while IFS= read -r f; do
+    # An empty listing still feeds one empty line through the here document.
+    [ -n "$f" ] || continue
+    rel="${f#"$dir"/}"; top="${rel%%/*}"
+    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|*/__pycache__/*|*/.claude-plugin/types/*|*.conflict-*) continue ;; esac
+    skip=""
+    for e in "$@"; do
+      n="${e#--exclude=}"; n="${n#/}"; n="${n%/}"
+      [ "$top" = "$n" ] && { skip=1; break; }
+    done
+    [ -n "$skip" ] && continue
+    return 0
+  done <<FILES
+$(find "$dir" -type f 2>/dev/null)
+FILES
+  return 1
+}
+tree_was_held(){   # $1 = a tree name
+  grep -qxF "$1" "$TREES_SEEN_FILE" 2>/dev/null && return 0
+  [ "$1" = mods ] && mods_were_here && return 0
+  return 1
+}
+record_trees_seen(){
+  local d ex s out=""
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    ex=()
+    [ "$d" = skills ] && for s in $(skill_excludes); do ex+=("$s"); done
+    tree_holds_files "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"} && out="$out$d
+"
+  done
+  printf '%s' "$out" > "$TREES_SEEN_FILE" 2>/dev/null || true
+  return 0
+}
 last_applied_hook_block(){   # -> the hooks object of the last applied payload, or {}
   local last basefrag
   have_git || { printf '{}'; return 0; }
@@ -3548,6 +3607,16 @@ SWPROT
     done <<PROT
 $protected
 PROT
+    # AN EMPTY FOLDER THIS MAC NEVER HELD FILES IN CLEARS NOTHING (claude-config#627). Mirrored with
+    # --delete, it emptied that tree in the shared copy, and an empty folder is what a fresh Mac has.
+    # Judged without the held back paths (they are excluded from the mirror, not content here), and
+    # only where the shared copy has something to lose.
+    local sk=()
+    [ "$d" = skills ] && { local s3; for s3 in $(skill_excludes); do sk+=("$s3"); done; }
+    if ! tree_holds_files "$CLAUDE_HOME/$d" ${sk[@]+"${sk[@]}"} && tree_holds_files "$PAYLOAD/$d" && ! tree_was_held "$d"; then
+      echo "claude-sync: NOT clearing $d from the shared copy: this Mac's $CLAUDE_HOME/$d is empty and has never held files here, which is what a fresh Mac's folder looks like, not a deletion. Nothing there was changed; a pull fills this Mac's folder." >&2
+      continue
+    fi
     mkdir -p "$PAYLOAD/$d"
     rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
     # git cannot record an empty directory, so when this Mac deletes its last mod the tree vanishes
@@ -3565,6 +3634,8 @@ PROT
     fi
     [ "$d" = mods ] && record_mods_seen
   done
+  # After every tree has been judged, so this send's own decisions read the record the last run left.
+  record_trees_seen
   # hooks block of settings.json, with this Mac's home path tokenized, MERGED against what the
   # payload already holds rather than replacing it (claude-config#300). See merge_hook_blocks.
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
@@ -3587,6 +3658,11 @@ PROT
         # Held back, like the merge failure below: only this block waits, and everything else in
         # the send still travels (claude-config#413).
         echo "claude-sync: the hooks block was NOT published and the repo keeps the copy it had, because $_sh_verdict" >&2
+        # AND IN THE SYNC LOG, with a time (claude-config#592). The watcher keeps a send's stderr to
+        # itself and logs a one line summary, so on 2026-10-02 a notification arrived with no line in
+        # the log behind it, and the hook it named could no longer be attributed once the fault had
+        # gone. The verdict names the hook and the tools, whichever entry point ran this send.
+        sync_log_line "the hooks block was NOT published, because $_sh_verdict"
         case "$_sh_verdict" in
           "it could not be checked"*) notify "held back the hooks block: it could not be checked" ;;
           *) notify "held back the hooks block: a hook is registered for tools its header does not declare" ;;
@@ -4334,6 +4410,7 @@ $f
   record_mods_seen
   # The status line and the shared settings, after the hooks block for the same reason (#772, #695).
   write_settings_extras
+  record_trees_seen
   # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
   # or a renumber the index that does exist is one edit behind (#63).
@@ -4660,10 +4737,23 @@ $(unapplied_paths)
       [ -n "$path" ] || continue
       case "$path" in */|.|./) continue ;; esac
       case "$change" in '*deleting'|'>'*|'c'*|'h'*) ;; *) continue ;; esac
-      [ -f "$CLAUDE_HOME/$d/$path" ] || continue
       case "$unapplied" in *"
 $d/$path
 "*) continue ;; esac
+      if [ ! -e "$CLAUDE_HOME/$d/$path" ]; then
+        # A DELETION MADE HERE (claude-config#781). The shared copy held this file at this Mac's last
+        # apply and has not changed it since (the unapplied check above), and it is gone from here:
+        # the apply would copy it back and the deletion would silently not stick. Held back like an
+        # edit, so the next send carries it. A file the last apply never held is new from the other
+        # Mac and arrives as usual; one the other Mac has changed since is restored, newer, which
+        # loses nothing (L5). The placeholder the mods mirror keeps is not a file anybody deletes.
+        case "$change" in '>'*) ;; *) continue ;; esac
+        case "$path" in .gitkeep|*/.gitkeep) continue ;; esac
+        git -C "$SYNC_REPO" cat-file -e "$last:payload/$d/$path" 2>/dev/null || continue
+        printf '%s\n' "$d/$path"
+        continue
+      fi
+      [ -f "$CLAUDE_HOME/$d/$path" ] || continue
       # A version the repo has since replaced is stale, not ahead, so the apply replaces it
       # (claude-config#638).
       local_copy_is_past_release "$d/$path" && continue
@@ -9464,7 +9554,12 @@ report_stray_processes(){
   # One watcher, which is two processes: the launcher and the subshell it forks around fswatch.
   # Measured on this Mac 2026-08-17 (pid 13658 with its child 13702), not assumed, because the
   # first version of this rule allowed no nesting at all and reported every healthy machine.
-  report_process_family "claude-sync watch" "watcher processes" 1 1 \
+  # DEPTH IS NOT A SIGNAL FOR THE WATCHER (claude-config#604). Every send it makes runs inside nested
+  # command substitutions (the tick, the lock, the send's own reads), and each is a subshell carrying
+  # the same command line, so one healthy watcher mid-send reads 3 or 4 deep: that is the "nested up
+  # to 4 deep" of 2026-10-03. A second watcher always shows as a second ROOT, including the loop of a
+  # killed one, which is reparented away from it. So only roots are judged here.
+  report_process_family "claude-sync watch" "watcher processes" 1 64 \
     "One watcher is expected, running as two processes. Several started independently means an earlier one was never stopped, and they all react to the same edit."
   # One run, permitted to have spawned one child, which is what the suite's own depth limit allows
   # (SUITE_MAX_DEPTH defaults to 1 in tests/test-claude-sync.sh). Deeper than that is the runaway
@@ -9594,6 +9689,27 @@ watch_already_running(){   # -> prints the live watcher's pid, or nothing
   return 1
 }
 
+# WHETHER THIS LOOP SHOULD GO ON AT ALL (claude-config#604). The refusal above stops a second watcher
+# STARTING, and status still found 5 watcher processes on 2026-10-03, one a root nearly 5 days old.
+# The loop runs in a subshell forked around fswatch, and ending the watcher's top process (a daemon
+# restart, a kill) ends only that process: the loop lives on, reparented, and goes on sending on every
+# edit beside the watcher that replaced it. So the loop asks before every send. $$ in the subshell is
+# still the top process's id, so `kill -0 $$` failing means it has gone, and the pid file naming
+# another live watcher means this one was replaced. Either way it says so, with a time, and stops;
+# fswatch then ends on its next write.
+watch_should_stop(){
+  local other
+  if ! kill -0 "$$" 2>/dev/null; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: stopped, the watcher that started this loop (process $$) has gone, and a loop left behind would go on sending on every edit."
+    return 0
+  fi
+  if other="$(watch_already_running)"; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: stepped down, $SYNC_WATCH_PID_FILE now names another live watcher (process $other), and two watchers would both react to every edit."
+    return 0
+  fi
+  return 1
+}
+
 # THE COPY OF claude-sync THIS PROCESS IS RUNNING (claude-config#420).
 #
 # do_watch runs watch_tick as a FUNCTION inside one long lived bash process, so every send the
@@ -9624,7 +9740,17 @@ do_watch(){
   if live="$(watch_already_running)"; then
     die "a claude-sync watcher is already running on this Mac (process $live), and several watchers all react to the same edit. Nothing was started. End that one first if you meant to replace it: kill $live"
   fi
-  printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" 2>/dev/null || true
+  # CLAIMED, not merely written (claude-config#604): with noclobber the write fails when another
+  # watcher has written the file since the check above, so two watchers starting together cannot both
+  # proceed. The record of one that has gone is removed first, and only after it is confirmed gone.
+  if [ -e "$SYNC_WATCH_PID_FILE" ] && ! watch_already_running >/dev/null; then rm -f "$SYNC_WATCH_PID_FILE"; fi
+  if ! ( set -C; printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" ) 2>/dev/null; then
+    if live="$(watch_already_running)"; then
+      die "a claude-sync watcher started at the same moment as this one (process $live) and claimed $SYNC_WATCH_PID_FILE first. Nothing was started."
+    fi
+    # Unwritable rather than taken: the watcher still runs, as before, and says it is unguarded.
+    echo "claude-sync: could not write $SYNC_WATCH_PID_FILE, so a second watcher started later will not be refused. Watching anyway." >&2
+  fi
   # Recorded HERE rather than at the top of the file, because it is a fact about this long lived
   # loop and nothing else: every other entry point is a fresh process that exits in seconds.
   WATCH_LOADED_DIGEST="$(script_digest || true)"
@@ -9653,9 +9779,11 @@ do_watch(){
   # Started at the clock, so the first sweep happens one interval in rather than on the first edit
   # of the day: a daemon restarted often would otherwise sweep on every restart.
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
+    watch_should_stop && break
     again=1
     while [ "$again" -eq 1 ]; do
       again=0
+      watch_should_stop && break 2
       # `if var=$(cmd)` (not a bare assignment) is the one form `set -e` does not
       # abort on when cmd fails -- a bare `out="$(do_send)"; rc=$?` would exit
       # the whole watch loop on failure before the check below ever ran.
