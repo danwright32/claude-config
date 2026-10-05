@@ -9,8 +9,6 @@ export type AccountRoomSession = {
   home: string
   /** This Mac's name for its readings file (LocalHostName), or null when it could not be read. */
   mac: string | null
-  /** The private GitHub repository, as owner/name, whose readings folder holds every Mac's file (#750). */
-  repo: string
 }
 
 /** One limit as read: how much is used (0 to 100) and when it resets, in ms; null when not said. */

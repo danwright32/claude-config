@@ -70,6 +70,9 @@ let readCache: { at: number; repo: string; value: Readings } | undefined
 const READ_FRESH_MS = 60_000
 // How many times a write GitHub refuses as stale is read again and tried.
 const WRITE_TRIES = 3
+// The readings repository, owner/name, from the readingsRepo setting (its manifest default names
+// danwright32/account-room-readings), so it can move without a code change (#750).
+let readingsRepo = ''
 
 const nicknamesPath = (home: string) => `${home}/.claude/mods/account-room-nicknames.json`
 const lockDir = (home: string) => `${home}/.claude/state/account-room`
@@ -291,13 +294,13 @@ const putFile = async ($: EngineInterface, repo: string, path: string, text: str
 /** Every Mac's readings merged, and those GitHub could not give, with why. */
 type Readings = { accounts: Map<string, Account>; unavailable: Unavailable[] }
 
-const fetchReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<Readings> => {
-  if (!isRepoName(s.repo)) return { accounts: new Map(), unavailable: [{ mac: null, why: notRepoName(s.repo) }] }
+const fetchReadings = async ($: EngineInterface): Promise<Readings> => {
+  if (!isRepoName(readingsRepo)) return { accounts: new Map(), unavailable: [{ mac: null, why: notRepoName(readingsRepo) }] }
   // A folder GitHub cannot list is said for every other Mac on the card, never read as no readings
   // (L215). This Mac's own file is read too: it holds the other accounts used here.
-  const listed = await listReadings($, s.repo)
+  const listed = await listReadings($, readingsRepo)
   if (!listed.ok) return { accounts: new Map(), unavailable: [{ mac: null, why: listed.why }] }
-  const read = await Promise.all(macFiles(listed.value).map(async m => ({ m, f: await readFile($, s.repo, `readings/${m.file}`) })))
+  const read = await Promise.all(macFiles(listed.value).map(async m => ({ m, f: await readFile($, readingsRepo, `readings/${m.file}`) })))
   const files: MacFile[] = []
   const unavailable: Unavailable[] = []
   for (const { m, f } of read) {
@@ -308,12 +311,16 @@ const fetchReadings = async ($: EngineInterface, s: AccountRoomSession): Promise
   return { accounts: merge(files), unavailable }
 }
 
-/** Every Mac's readings, read from GitHub at most once a minute (READ_FRESH_MS). */
-const loadReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<Readings> => {
+/**
+ * Every Mac's readings, a good read kept for a minute (READ_FRESH_MS). A read with anything GitHub
+ * could not give is never kept, so the card stops saying so at the first read after it is fixed
+ * (review of #757).
+ */
+const loadReadings = async ($: EngineInterface): Promise<Readings> => {
   const now = await $.clock.now()
-  if (readCache && readCache.repo === s.repo && now - readCache.at < READ_FRESH_MS) return readCache.value
-  const value = await fetchReadings($, s)
-  readCache = { at: now, repo: s.repo, value }
+  if (readCache && readCache.repo === readingsRepo && now - readCache.at < READ_FRESH_MS) return readCache.value
+  const value = await fetchReadings($)
+  readCache = value.unavailable.length ? undefined : { at: now, repo: readingsRepo, value }
   return value
 }
 
@@ -334,32 +341,36 @@ const record = ($: EngineInterface, s: AccountRoomSession, reading: Reading | un
     const mac = s.mac
     const fail = (why: string) => {
       unsaved = { mac, why }
-      once($, 'record-failed', `Account room: readings could not be saved to GitHub (${s.repo}): ${why}`)
+      once($, 'record-failed', `Account room: readings could not be saved to GitHub (${readingsRepo}): ${why}`)
     }
-    if (!isRepoName(s.repo)) return fail(notRepoName(s.repo))
+    if (!isRepoName(readingsRepo)) return fail(notRepoName(readingsRepo))
     const path = `readings/${mac}.json`
     let refused = ''
     for (let i = 0; i < WRITE_TRIES; i++) {
-      let held = ownFile && ownFile.repo === s.repo && ownFile.mac === mac ? ownFile : undefined
+      let held = ownFile && ownFile.repo === readingsRepo && ownFile.mac === mac ? ownFile : undefined
       if (!held) {
-        const got = await readFile($, s.repo, path)
+        const got = await readFile($, readingsRepo, path)
         if (!got.ok) return fail(got.why)
         const parsed = got.value === undefined ? undefined : parseMacFile(got.value.text)
         // Never rewritten from one sighting: that would erase every other account's readings it
         // holds (L105). It is left for repair, and the card names it as unavailable.
         if (typeof parsed === 'string') return fail(`this Mac's readings file on GitHub could not be read (${parsed}), so nothing is written over it until it is repaired or removed`)
-        held = ownFile = { repo: s.repo, mac, file: parsed, sha: got.value?.sha }
+        held = ownFile = { repo: readingsRepo, mac, file: parsed, sha: got.value?.sha }
       }
       const now = await $.clock.now()
       const next = withSighting(held.file, mac, s, reading, now)
-      if (!isWorthWriting(held.file, next, now)) return
-      const put = await putFile($, s.repo, path, serialize(next), held.sha, `Readings from ${mac}`)
-      if (put.ok) {
-        ownFile = put.value === undefined ? undefined : { repo: s.repo, mac, file: next, sha: put.value }
-        // A write landed: the card stops saying otherwise, and the next failure is news again.
+      // GitHub holds what was last read or written there, so with nothing new to send nothing is
+      // unsaved either: the card stops saying a save failed.
+      const saved = () => {
         unsaved = undefined
         noted.delete('record-failed')
-        return
+      }
+      if (!isWorthWriting(held.file, next, now)) return saved()
+      const put = await putFile($, readingsRepo, path, serialize(next), held.sha, `Readings from ${mac}`)
+      if (put.ok) {
+        ownFile = put.value === undefined ? undefined : { repo: readingsRepo, mac, file: next, sha: put.value }
+        // A write landed: the card stops saying otherwise, and the next failure is news again.
+        return saved()
       }
       ownFile = undefined
       if (put.status !== 409 && put.status !== 422) return fail(put.why)
@@ -416,7 +427,7 @@ const recompute = ($: EngineInterface) =>
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
     const names = typeof nick === 'string' ? {} : nick.names
     const nameFor = (id: string) => (Object.prototype.hasOwnProperty.call(names, id) ? (names[id]?.name ?? null) : null)
-    const { accounts, unavailable } = await loadReadings($, s)
+    const { accounts, unavailable } = await loadReadings($)
     const here: Account = { id: s.id, email: s.email, org: s.org, nickname: nameFor(s.id), ...(live ? { reading: live } : {}) }
     const others = [...accounts.values()].filter(a => a.id !== s.id).map(a => ({ ...a, nickname: nameFor(a.id) }))
     const v = verdict(here, others, now)
@@ -650,6 +661,9 @@ const takeIn = async ($: EngineInterface, windows: Parameters<typeof fromRateLim
 
 export const register: Register = (on, options) => {
   const opts = (options ?? {}) as Options
+  // Read from the setting each time the module loads, never from a session stored by an earlier
+  // build, whose shape need not carry it (review of #757, L1013).
+  readingsRepo = str(opts.readingsRepo)
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
@@ -680,8 +694,6 @@ export const register: Register = (on, options) => {
       isInteractive: e.isInteractive,
       home,
       mac,
-      // The manifest's default names the repository; a setting can move it without a code change.
-      repo: str(opts.readingsRepo),
     }
     await $.state.set(sessionRef, s)
     if (e.isInteractive) {
@@ -770,7 +782,7 @@ export const register: Register = (on, options) => {
       await ask($, { id: s.id, email: s.email, org: s.org, current: current(s.id) })
       return { text: '' }
     }
-    const { accounts } = await loadReadings($, s)
+    const { accounts } = await loadReadings($)
     if (!accounts.has(s.id)) accounts.set(s.id, { id: s.id, email: s.email, org: s.org })
     const lower = q.toLowerCase()
     const hits = [...accounts.values()].filter(a => (current(a.id) ?? '').toLowerCase() === lower || a.email.toLowerCase() === lower)

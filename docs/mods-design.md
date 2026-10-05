@@ -1167,9 +1167,11 @@ the spec rather than chosen afresh, and open to Dan changing:
   percent, rather than the tenth the engine reports, keeps writes near one per point of use: a 5
   hour window used from empty to full is about a hundred writes per Mac on that account, against a
   thousand at the tenth, plus at most six an hour from the 10 minute rule, which also bounds how
-  stale the tenth can be. Each write is a commit in the repository. The other Macs' files are read at most once
-  a minute, and only while the card is up. gh must be logged in, on each Mac, to an account that can
-  see the repository.
+  stale the tenth can be. Each write is a commit in the repository. The other Macs' files are read
+  only while the card is up, and a good read is kept for a minute; a read with anything GitHub
+  could not give is not kept, so the card stops saying so at the first read after it is fixed. The
+  repository is read from the setting each time the mod loads, never from the session's stored
+  state. gh must be logged in, on each Mac, to an account that can see the repository.
 - A rate limit measurement hands its reading work (saving it, reading the Macs' figures, drawing the
   card) to a timer and goes on at once, so a slow GitHub or a held lock never holds up the mods
   beneath (#736). Readings writes take turns on their own queue, so a slow write never stops

@@ -135,6 +135,8 @@ type World = {
   liveReadFails: boolean
   /** The phase a reload left stored, answered to the next read of it. */
   phaseAfterReload?: unknown
+  /** The session as an earlier build stored it, answered to every read of it from then on. */
+  sessionStored?: unknown
 }
 const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 
@@ -187,6 +189,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const at = e as unknown as { plugin?: string; key?: string }
     // The session's state answers nothing usable for the live reading.
     if (w.liveReadFails && at.plugin === 'account-room' && at.key === 'live') return { value: undefined } as never
+    if (w.sessionStored && at.plugin === 'account-room' && at.key === 'session') return { value: { value: w.sessionStored, version: 1 } } as never
     // What a reload of the mod leaves: the next read of the stored phase answers this, though
     // nothing in the module instance now loaded is running a Switch.
     if (w.phaseAfterReload && at.plugin === 'account-room' && at.key === 'phase') {
@@ -598,7 +601,7 @@ test('Switch with a logout route: elapsed seconds tick, then the sign in page op
 test("Switch's elapsed seconds keep counting while a reading waits on a slow GitHub (#750)", { ...withKit, ...ROUTE }, async ($, on) => {
   let release: () => void = () => undefined
   const logoutGate = new Promise<void>(r => (release = r))
-  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, logoutGate })
+  const { clock, w, runs } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, logoutGate })
   await start($, clock)
   const ui = await mountBand($ as never)
   await measure($, clock, limits(97, 50))
@@ -609,8 +612,10 @@ test("Switch's elapsed seconds keep counting while a reading waits on a slow Git
   await clock.advance(3_000)
   expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 3s/)
   release()
-  w.ghDelayMs = 0
   await clock.advance(30_000)
+  // The sign in step ran, and the slow write landed after it, with the newer figure.
+  expect(runs.find(r => r[0] === 'claude')).toEqual(['claude', 'auth', 'login', '--email=work@example.com'])
+  expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-home', 'org-1')].reading.five.used).toBe(98)
   await ui.unmount()
 })
 
@@ -1058,6 +1063,50 @@ test("another Mac's readings come from the repository, and an org beyond ASCII s
   await measure($, clock, limits(97, 50))
   expect(await shown(ui)).toMatch(/^This account is low\. work@example\.com \(Café 家\) has room/)
   expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-home', 'org-1')].org).toBe('Café 家')
+  await ui.unmount()
+})
+
+test('a GitHub failure is not kept: once gh works again, the next measurement reads the other Macs (#750, review of #757)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, ghLoggedOut: true })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(96, 50))
+  expect(await shown(ui)).toContain('gh is not logged in to GitHub')
+  // Dan logs gh in; well inside the minute a good read is kept, the next measurement asks again.
+  w.ghLoggedOut = false
+  await measure($, clock, limits(97, 50))
+  expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+  expect(await shown(ui)).not.toContain('gh is not logged in')
+  await ui.unmount()
+})
+
+test('a save failure leaves the card once GitHub holds this Mac figures again, even with nothing new to write (#750)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(96, 50))
+  w.ghRefuse = 99
+  await measure($, clock, limits(97, 50))
+  expect(await shown(ui)).toContain('could not be saved to GitHub')
+  // GitHub takes writes again, and the figure is back to what it already holds: nothing to send,
+  // and nothing unsaved either.
+  w.ghRefuse = 0
+  await measure($, clock, limits(96, 50))
+  expect(await shown(ui)).not.toContain('could not be saved to GitHub')
+  await ui.unmount()
+})
+
+test('a session stored by the build before #750, with an iCloud folder and no repository, still reads and writes the repository (review of #757, L1013)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  // What a hot reload can leave in the session's state: the earlier build's shape.
+  const home = await accountKey('acct-home', 'org-1')
+  w.sessionStored = { id: home, email: 'home@example.com', org: 'Acme', isInteractive: true, home: HOME, mac: 'Daniels-MacBook-Pro-2', folder: `${HOME}/Library/Mobile Documents/com~apple~CloudDocs/account-room` }
+  await measure($, clock, limits(97, 50))
+  expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+  expect(await shown(ui)).not.toContain('readingsRepo')
+  expect(JSON.parse(w.files[OWN] as string).accounts[home].reading.five.used).toBe(97)
   await ui.unmount()
 })
 
