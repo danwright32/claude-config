@@ -92,6 +92,14 @@ outside Claude Code always had. A quoted lone `>` is read as a redirect (the rea
 before anything reads its words), so `grep '>' notes.txt` names notes.txt; the cost is a judgment
 that comes back Proceed.
 
+mod-kit now carries one reader of which files a command writes, `$.modkit.writes` (#705), built
+from `shellWrites` and widened to the routes ask before saving and no build had each missed: `ln`,
+`install`, `rsync`, `ditto`, `dd`, `curl -o`, `wget -O`, `ruby` and `gawk` editing in place, every
+file of a `sed -i`, and the writes the words do not name (a patch, an inline script, a script on
+standard input) reported as such rather than guessed at. Ask before saving reads it; the collision
+guard and no build move onto it in #712, and until then `tools/check-mod-shared-parts.sh` names
+them as known exceptions on every run.
+
 ### rm, and scratch kept out of the record (#674), decided 2026-10-04
 
 An `rm` or `unlink` of a file another open session edited is judged the same way, with the same
@@ -643,6 +651,21 @@ lines of a card. A part may carry `indent`, the blank columns drawn before it (o
 first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
 
+One question at a time, and one look for every question (#703, #705, after the milestone audit).
+Two mods can each have a question open at once: ask before saving leaves its question in the band
+while Claude carries on, and a picker can then land beside it. Drawn together, both numbered from 1,
+a key meant for the picker could press For good. So the band draws the first question asked, alone,
+and the next once it is cleared; `$.modkit.shownQuestion()` names the one in view. A question is
+asked with `$.modkit.question({ mod, id, chip, question, body, options, submit })`, which builds it
+the settled way: `[chip]` grey and the question amber on one line, the asker's `body` lines (ask
+before saving's rule and file), each option as Claude Code's plain button `1: label`, its number its
+hotkey, its description dim and indented 3 columns under it, and `submit` last, bracketed. `bandRow`
+refuses a `question` row, so no mod draws a question its own way; the two hand built rows had drifted
+into two looks on one surface. A text run may carry `wrap: true`, drawn on as many lines as it needs
+rather than cut at the band's edge (a question's text and its descriptions wrap, so the brackets at
+the end of an issue review option are never cut off); a wrapping run inside a left rule is refused,
+since that rule draws one mark per line.
+
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
 band row's lines and frame with no slot, since a pane holds one card. mod-kit draws it with the very
@@ -734,11 +757,35 @@ ones marked open are the builder's choice, waiting on Dan.
   hands back no body, so the command, which carries the text, is shown whole).
 - **Just this session** rides the system prompt's memory section, assembled afresh for every
   request, so a compaction keeps it; it is dropped at session end and on /clear.
-- **A second save** waits behind the first and is asked once the first is answered.
+- **A second save** waits behind the first and is asked once the first is answered. Each save asks
+  under its own id and its buttons carry that id, so a press answers only the save it was drawn
+  for: a second tap after the first was answered cannot land on the save asked next (#705).
+- **Asked beneath every guard** (#705). The question is asked from `classic.PreToolUse`, which the
+  engine raises beneath every mod's `tool.call` hook, so a save the style check, the secret guard or
+  no build refuses is refused before Dan is asked, whatever order the mods load in, and he is never
+  asked to approve a save that cannot land. The skip for Dan's own permanent words stays a
+  `tool.call` hook, the one place the saved result can be read, and passes the save down through
+  every other guard all the same.
+- **Every shell route** (#705): a Bash call is read by mod-kit's one reader of what a command writes
+  (`$.modkit.writes`), which follows a `cd` before a relative path and resolves a copy into a folder.
+  A write its words do not name (a patch, an inline script, a script on standard input) is judged by
+  the lasting memory its text, and any patch file it reads, mentions. A copy into the memory folder
+  itself counts; a file in a temporary folder (`/tmp`, `/var/folders`, the session scratchpad) loads
+  into no session, so it never does.
+- **The permanent words** (#705) count only as an instruction from Dan's own message, typed or from
+  his phone: "from now on" anywhere, "always" or "never" leading a sentence or clause or after please
+  or should, "remember" as a request. Read anywhere, "never mind the screenshots" and "it always
+  fails" skipped the question (#705). Words limiting it to the moment ("for now", "today", "this
+  time", "this session") win, since saving without asking is the harm and asking is not.
+- **Claude Code's auto-memory writer goes through tool calls** (the spec's check at build, #705).
+  In 2.1.289 the post turn extractor runs as a forked query (`querySource: "extract_memories"`)
+  whose saves are Write and Edit tool uses, and the engine's declaration names its memory fork among
+  the loops whose calls raise `tool.call`. So its saves are asked about like any other.
+- The look is mod-kit's question (`$.modkit.question`, above), shared with picker manners; the
+  rule's text wraps at the band's edge rather than at a fixed width.
 - Open: the chip "Standing rule", the question "Save this as a standing rule?", the line under each
   answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
-  saved"), a grey rule on both sides of the rule's text, and wrapping it at 76 columns because the
-  band cuts a line at its edge.
+  saved"), and a grey rule on both sides of the rule's text.
 
 ## Picker manners (#615), built 2026-10-04
 
@@ -754,17 +801,37 @@ and open to Dan changing:
   accent colour (mod-kit's `plain`, #667): the nearest the terminal draws to the rounds' "1. 7 days".
 - One question per call (CLAUDE.md) is enforced: a call with more is refused, by name, to Claude.
 - Typed text withdraws the question, and Claude reads: "Dan did not pick an answer: he is sending a
-  message instead, which follows. Answer his message first. If this question is still unanswered
-  after that, ask it again once; never more than once." The mod counts talk pasts per question text
-  and refuses a third asking.
+  message instead, which follows. Answer his message first." After the first pass it adds "If this
+  question is still unanswered after that, ask it again once; never more than once."; after the
+  second, "He has now talked past or dismissed this question twice, so do not ask it again: carry
+  on from what he says." (#703: the second pass still said ask again, and that asking was refused.)
+  A third asking is refused.
+- What counts toward that limit (#703, after the milestone audit). A dismissal counts as well as a
+  talk past (spec point 3). Only Claude's own questions count: another mod's question asked through
+  `$.ui.ask` (the keystroke guard's heads up, Switch to build) reads the same every time, and was
+  refused for good after two talk pasts. The same question is the same text however it is spaced or
+  punctuated, or the same chip over the same answers however it is put, since Claude rewords a
+  question when it asks again. A question waiting behind another mod's in the band, which Dan never
+  saw, is withdrawn by his message but not counted.
+- Dan's messages from his phone through Remote Control count as his own, as in every other mod: the
+  band is not drawn on the phone, so a message there is the only way he can answer or dismiss.
+- Where no band is drawn at all, Claude Code's own question dialog asks instead, since it is drawn on
+  every surface: a `claude -p` or SDK run (where it refuses, so another mod's `$.ui.ask` fails closed
+  as written), Dan's phone or VS Code attached, or surfaces that cannot be read. Open: whether a
+  phone merely attached while Dan is at the Mac should keep the band.
+- The wait for Dan's answer has no deadline: it is a person's answer, not machine work (L737), and
+  the prompt stays free throughout, so nothing hangs behind it; the turn interrupted withdraws it.
 - Numbered prose maps onto the open question only when the whole message is numbered from 1, with
-  no more answers than open questions; anything else is a message. Its echo is one dim transcript
-  line per question.
+  no more answers than open questions, and only onto the question in view (with another mod's
+  question drawn, "1. yes" is meant for that one); anything else is a message. Its echo is one dim
+  transcript line per question.
 - A multi select question marks a chosen option with a dim "chosen" after it, and Submit with
   nothing chosen says "Nothing is chosen yet." in a toast.
 - Next issue offers are known by `metadata.source: "next-issue"`, which the `/next-issue` skill now
   passes. Turning them off says so once in a dim line: "Next issue pickers are off for this
-  session; /pickers on brings them back."
+  session; /pickers on brings them back." While they are off, Claude's system prompt says so too, so
+  an offer made from CLAUDE.md's issue loop rule, which carries no tag, is a plain list as well
+  (spec point 4: this overrides the loop rule for that session only, #703).
 - An interrupted turn withdraws the question from the band.
 
 ## Handoff (#613), built 2026-10-04

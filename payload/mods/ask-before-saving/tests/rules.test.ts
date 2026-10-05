@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { addedText, bashTargets, display, lastingMemory, madePermanent, questionRow, resolvePath, wrap } from '../hooks/rules.ts'
+import { addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -9,6 +9,8 @@ test('every lasting memory file counts, and nothing beside it does', () => {
   const yes = [
     '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory/no-merge-quizzes.md',
     '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md',
+    // #705: a copy into the memory folder names the folder itself.
+    '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory',
     '/Users/dan/Apps/slate/MEMORY.md',
     '/Users/dan/.claude/CLAUDE.md',
     '/Users/dan/.claude/LESSONS.md',
@@ -20,14 +22,19 @@ test('every lasting memory file counts, and nothing beside it does', () => {
     '/Users/dan/Apps/slate/README.md',
     '/Users/dan/.claude/LESSONS-INDEX-data-safety.md',
     '/Users/dan/.claude/projects/-Users-dan-Apps-slate/abc.jsonl',
+    '/Users/dan/.claude/projects/-Users-dan-Apps-slate',
     '/Users/dan/Apps/slate/src/memory/cache.ts',
     '/Users/dan/Apps/slate/NOTCLAUDE.md',
+    // A copy in a temporary folder (a backup, a test fixture in the scratchpad) loads into nothing.
+    '/tmp/backup/CLAUDE.md',
+    '/private/tmp/claude-501/p/s/scratchpad/CLAUDE.md',
+    '/var/folders/kd/T/x/AGENTS.md',
   ]
   for (const p of yes) expect(`${p} ${lastingMemory(p, HOME)}`).toBe(`${p} true`)
   for (const p of no) expect(`${p} ${lastingMemory(p, HOME)}`).toBe(`${p} false`)
 })
 
-test('a path is read the way the shell and the tools read it: home, relative and dot segments', () => {
+test('a path is read the way the tools read it: home, relative and dot segments', () => {
   expect(resolvePath('~/.claude/CLAUDE.md', '/Users/dan/Apps/slate', HOME)).toBe('/Users/dan/.claude/CLAUDE.md')
   expect(resolvePath('CLAUDE.md', '/Users/dan/Apps/slate', HOME)).toBe('/Users/dan/Apps/slate/CLAUDE.md')
   expect(resolvePath('./docs/../AGENTS.md', '/Users/dan/Apps/slate', HOME)).toBe('/Users/dan/Apps/slate/AGENTS.md')
@@ -36,23 +43,66 @@ test('a path is read the way the shell and the tools read it: home, relative and
   expect(display('/opt/x/CLAUDE.md', HOME)).toBe('/opt/x/CLAUDE.md')
 })
 
-test("Dan's words make a rule permanent only with the phrases the spec names, as whole words", () => {
-  for (const s of ['From now on, ask before merging', 'always use pnpm here', 'never push on Fridays', 'remember that the deploy is manual'])
+test("Dan's words make a rule permanent only when they give one: the spec's phrases as an instruction", () => {
+  for (const s of [
+    'From now on, ask before merging',
+    'always use pnpm here',
+    'never push on Fridays',
+    'remember that the deploy is manual',
+    'Never merge on Fridays.',
+    'ok, always run the linter first',
+    'please remember to ask before deploying',
+    'you should never push to main',
+    'Thanks. And remember: the staging deploy is manual.',
+  ])
     expect(`${s}: ${madePermanent(s)}`).toBe(`${s}: true`)
-  for (const s of ['just for now, skip the tests', 'no, do not note anything', 'it was remembered wrongly', 'alwaysOn flag', undefined])
+  for (const s of [
+    'just for now, skip the tests',
+    'no, do not note anything',
+    'it was remembered wrongly',
+    'alwaysOn flag',
+    undefined,
+    // #705: the words anywhere in a sentence skipped the question.
+    'never mind the screenshots for today',
+    'the deploy always fails on Fridays, skip it for now',
+    'it always fails on the first run',
+    'I never said that',
+    'do you remember where that file went?',
+    // Review of #718: "remember" leading a message is no request by itself.
+    'Remember when we shipped the band last week?',
+    'remember the deploy failed yesterday?',
+    'do you remember that file?',
+    // Words limiting it to today or this session win over the permanent ones: asking is the harmless side.
+    'From now on skip the screenshots, at least for today',
+    'always use the staging key this session',
+  ])
     expect(`${s}: ${madePermanent(s)}`).toBe(`${s}: false`)
 })
 
-test('a Bash write is found by every route that names its target: redirects, tee, cp, mv, sed -i', () => {
-  const t = (cmds: string[][]) => bashTargets(cmds)
-  expect(t([['cat', '>>', 'CLAUDE.md', '<<EOF']])).toEqual(['CLAUDE.md'])
-  expect(t([['cat', '>~/.claude/CLAUDE.md']])).toEqual(['~/.claude/CLAUDE.md'])
-  expect(t([['echo', 'x', '1>>', 'a.md'], ['printf', 'y', '&>', 'b.md'], ['echo', 'z', '>|', 'c.md']])).toEqual(['a.md', 'b.md', 'c.md'])
-  expect(t([['echo', 'x'], ['tee', '-a', 'MEMORY.md', 'other.md']])).toEqual(['MEMORY.md', 'other.md'])
-  expect(t([['cp', '-f', '/tmp/new.md', 'AGENTS.md'], ['mv', 'a', 'b', 'dir']])).toEqual(['AGENTS.md', 'dir'])
-  expect(t([['sed', '-i', '', 's/a/b/', 'CLAUDE.md'], ['perl', '-pi', '-e', 's/a/b/', 'LESSONS.md']])).toEqual(['CLAUDE.md', 'LESSONS.md'])
-  // Reading is not writing, and a redirect into /dev/null or a descriptor writes no file.
-  expect(t([['cat', 'CLAUDE.md'], ['grep', 'x', 'CLAUDE.md', '2>/dev/null'], ['ls', '2>&1'], ['sed', 's/a/b/', 'CLAUDE.md']])).toEqual([])
+test("the lasting memory a command's words name: by path where it can be read, by name where it cannot", () => {
+  const files = lastingFiles(
+    {
+      files: [
+        { word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' },
+        { word: 'README.md', path: '/Users/dan/Apps/slate/README.md' },
+        { word: '$DIR/AGENTS.md' },
+        { word: '$DIR/notes.md' },
+        { word: 'note.md', path: '/Users/dan/.claude/projects/p/memory/note.md' },
+      ],
+      unnamed: [],
+    },
+    HOME,
+  )
+  expect(files).toEqual(['~/Apps/slate/CLAUDE.md', '$DIR/AGENTS.md', '~/.claude/projects/p/memory/note.md'])
+})
+
+test('lasting memory a script or a patch mentions, read from its text', () => {
+  expect(mentioned(`python3 -c "open('/Users/dan/.claude/CLAUDE.md','a').write('x')"`, HOME)).toEqual(['~/.claude/CLAUDE.md'])
+  expect(mentioned('--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule', HOME)).toEqual(['AGENTS.md'])
+  expect(mentioned("node -e \"fs.writeFileSync(require('os').homedir() + '/.claude/projects/p/memory/x.md', 'y')\"", HOME)).toEqual(['/.claude/projects/p/memory/x.md'])
+  expect(mentioned('cat > ~/.claude/projects/p/memory/a.md', HOME)).toEqual(['~/.claude/projects/p/memory/a.md'])
+  expect(mentioned("python3 -c \"open('README.md','w').write('x')\"", HOME)).toEqual([])
+  expect(mentioned('cp CLAUDE.md /tmp/backup/CLAUDE.md', HOME)).toEqual(['CLAUDE.md'])
 })
 
 test('the text shown is what would be saved: the new lines of a rewrite, the whole of a new file', () => {
@@ -62,34 +112,33 @@ test('the text shown is what would be saved: the new lines of a rewrite, the who
   expect(addedText('# Memory\n', '# Memory\n- a\n')).toBe('# Memory')
 })
 
-test('long text is wrapped on word boundaries, so the band never cuts a rule off at its edge', () => {
-  expect(wrap('one two three four', 9)).toEqual(['one two', 'three', 'four'])
-  expect(wrap('a\n\nb', 9)).toEqual(['a', '', 'b'])
-  expect(wrap('abcdefghijkl', 5)).toEqual(['abcde', 'fghij', 'kl'])
+// The look is mod-kit's ($.modkit.question, one look for every question in the band, #705); this
+// is what ask before saving hands it: the rule's exact text and its file between grey rules, then
+// the three answers with what each does under it.
+test('the question: the chip and question, the rule and its file set off by grey rules, then the three answers', () => {
+  const q = questionOf({ id: 't1', text: 'Ask before saving a standing rule.\n- and this', files: ['~/.claude/CLAUDE.md'] })
+  expect(q.mod).toBe('ask-before-saving')
+  expect(q.chip).toBe('Standing rule')
+  expect(q.question).toBe('Save this as a standing rule?')
+  expect(q.body).toEqual([
+    { divider: true },
+    [{ text: 'Ask before saving a standing rule.', wrap: true }],
+    [{ text: '- and this', wrap: true }],
+    [{ text: '~/.claude/CLAUDE.md', dim: true }],
+    { divider: true },
+  ])
+  expect(q.options.map(o => [o.label, o.description])).toEqual([
+    ['For good', 'Saved to ~/.claude/CLAUDE.md'],
+    ['Just this session', 'Kept until this session ends; nothing is written'],
+    ['Not at all', 'Nothing is saved'],
+  ])
 })
 
-test('the question: chip and question on one amber line, the rule and its file set off by grey rules, then the three answers', () => {
-  const row = questionRow({ id: 't1', text: 'Ask before saving a standing rule.', files: ['~/.claude/CLAUDE.md'] })
-  expect(row.mod).toBe('ask-before-saving')
-  expect(row.slot).toBe('question')
-  const lines = row.lines
-  const texts = (l: unknown) => (Array.isArray(l) ? l.map(p => (p as { text?: string; label?: string }).text ?? `[${(p as { label?: string }).label}]`).join('') : '---')
-  expect(lines.map(texts)).toEqual([
-    'Standing rule  Save this as a standing rule?',
-    '---',
-    'Ask before saving a standing rule.',
-    '~/.claude/CLAUDE.md',
-    '---',
-    '[For good]',
-    'Saved to ~/.claude/CLAUDE.md',
-    '[Just this session]',
-    'Kept until this session ends; nothing is written',
-    '[Not at all]',
-    'Nothing is saved',
-  ])
-  // One amber line per surface: the lead line, and nothing else.
-  const amber = lines.filter(l => Array.isArray(l) && l.some(p => (p as { color?: string }).color === 'warning'))
-  expect(amber.length).toBe(1)
-  const buttons = lines.flatMap(l => (Array.isArray(l) ? l : [])).filter(p => 'button' in p) as { button: string; hotkey?: string }[]
-  expect(buttons.map(b => `${b.button}:${b.hotkey}`)).toEqual(['for-good:1', 'this-session:2', 'not-at-all:3'])
+// L243: a press must answer the save it was drawn for, so a second press after the first was
+// answered cannot land on the next save in line. The row and its buttons carry the save's identity.
+test('each save asks under its own id, and its buttons carry that id, so a press answers only the save it was drawn for', () => {
+  const a = questionOf({ id: 'toolu_a', text: 'x', files: ['CLAUDE.md'] })
+  const b = questionOf({ id: 'toolu_b', text: 'y', files: ['AGENTS.md'] })
+  expect(a.id).not.toBe(b.id)
+  expect(a.options.map(o => o.button)).toEqual(['for-good:toolu_a', 'this-session:toolu_a', 'not-at-all:toolu_a'])
 })

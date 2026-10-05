@@ -1,10 +1,11 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
 import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
-import { compose, drop, isDivider, paneRefusal, put, refusal } from './band.ts'
+import { compose, drop, isDivider, paneRefusal, put, questionRefusal, questionRow, refusal, shownQuestion } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git } from './commands.ts'
 import { sendTwice } from './send.ts'
+import { writes } from './writes.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -71,11 +72,22 @@ export const register: Register = (on, options) => {
         keep(input)
       },
       commands: async ({ command }) => commands(command),
+      writes: async ({ command, cwd, home }) => writes(commands(command), cwd, home),
       git: async ({ words }) => git(words),
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)
         await change(rows => put(rows, row))
+      },
+      question: async q => {
+        const why = questionRefusal(q)
+        if (why) throw new Error(why)
+        const row = questionRow(q)
+        await change(rows => put(rows, row))
+      },
+      shownQuestion: async () => {
+        const q = shownQuestion((await built.state.get(band)).value ?? [])
+        return q ? { mod: q.mod, id: q.id } : null
       },
       clearBandRow: async ({ mod, id }) => {
         await change(rows => drop(rows, mod, id))
@@ -128,7 +140,7 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
         // The press reaches the publisher through its ui.press hook on this key; nothing to do here.
         <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} plain={p.plain} onPress={() => undefined} />
       ) : (
-        <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap="truncate-end">
+        <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap={p.wrap ? 'wrap' : 'truncate-end'}>
           {p.text}
         </Text>
       )
@@ -161,7 +173,7 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
       </Box>
     )
   if (row.frame?.kind === 'left-rule')
-    // One rule mark per line, since every line is one terminal line (text is cut, never wrapped).
+    // One rule mark per line, since every line is one terminal line (a run that wraps is refused here).
     return (
       <Box key={key} flexDirection="row">
         <Box key={`${key}:rule`} flexDirection="column">

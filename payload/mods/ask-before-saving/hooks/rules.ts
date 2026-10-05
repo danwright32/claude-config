@@ -3,29 +3,41 @@
 
 export const MOD = 'ask-before-saving'
 
-// The band row, as mod-kit's contract spells it (types/index.d.ts there): plain data, since only
-// plain data crosses between mods.
-type Text = { text: string; color?: string; bold?: boolean; dim?: boolean; indent?: number }
-type Button = { button: string; label: string; hotkey?: string }
-type Line = (Text | Button)[] | { divider: true }
-export type QuestionRow = { mod: string; id: string; slot: 'question'; lines: Line[] }
+// The question and what a command writes, as mod-kit's contract spells them (types/index.d.ts
+// there): plain data, since only plain data crosses between mods.
+type Text = { text: string; color?: string; bold?: boolean; dim?: boolean; indent?: number; wrap?: true }
+type Line = Text[] | { divider: true }
+export type Question = {
+  mod: string
+  id: string
+  chip: string
+  question: string
+  body: Line[]
+  options: { button: string; label: string; description: string }[]
+}
+export type Writes = { files: { word: string; path?: string }[]; unnamed: { what: string; words: string[]; inputs: string[] }[] }
 
 // The lasting memory the spec names: the memory folder, MEMORY.md, ~/.claude/CLAUDE.md, LESSONS.md,
 // and a project's CLAUDE.md or AGENTS.md. By file name for the last four, so a project or the config
 // repository's own payload copy is caught wherever it lives.
 const NAMES = new Set(['MEMORY.md', 'CLAUDE.md', 'AGENTS.md', 'LESSONS.md'])
 
+// A file in a temporary folder (a backup copy, a test fixture in the session's scratchpad) is loaded
+// into no session, so it is no lasting memory whatever it is called.
+const TEMP = /^(?:\/private)?\/(?:tmp|var\/folders)(?:\/|$)/
+
 export const lastingMemory = (abs: string, home: string): boolean => {
+  if (TEMP.test(abs)) return false
   const name = abs.split('/').pop() ?? ''
   if (NAMES.has(name)) return true
   const projects = `${home.replace(/\/$/, '')}/.claude/projects/`
   if (!abs.startsWith(projects)) return false
-  // <home>/.claude/projects/<project>/memory/<anything>
+  // <home>/.claude/projects/<project>/memory, or anything in it: a copy into the folder names it.
   const rest = abs.slice(projects.length).split('/')
-  return rest.length >= 3 && rest[1] === 'memory'
+  return rest.length >= 2 && rest[1] === 'memory'
 }
 
-/** A path as the shell or a tool would reach it: home spelled out, relative to cwd, dot segments gone. */
+/** A path as a tool would reach it: home spelled out, relative to cwd, dot segments gone. */
 export const resolvePath = (p: string, cwd: string, home: string): string => {
   let s = p
   if (s === '~' || s.startsWith('~/')) s = home + s.slice(1)
@@ -46,41 +58,53 @@ export const display = (abs: string, home: string): string => {
   return abs === h ? '~' : abs.startsWith(`${h}/`) ? `~${abs.slice(h.length)}` : abs
 }
 
-// The words the spec says make a rule permanent in Dan's own message, as whole words.
-const PERMANENT = /\b(from now on|always|never|remember)\b/i
-export const madePermanent = (prompt: string | null | undefined): boolean => typeof prompt === 'string' && PERMANENT.test(prompt)
-
-// A redirect writes its target: >, >>, >|, with a descriptor (1>, 2>>) or &> before it, the target
-// attached or as the next word. A descriptor target (&1) or /dev/null writes no file.
-const REDIRECT = /^(?:\d*|&)(>>|>\||>)(.*)$/
-const notAFile = (t: string) => t === '' || t.startsWith('&') || t === '/dev/null'
-
 /**
- * The files a Bash call would write, from the simple commands mod-kit's reader gives (each its words
- * with quotes removed): redirects, tee, cp and mv's destination, and sed or perl editing in place.
+ * The lasting memory among the files a command's words name (mod-kit's $.modkit.writes): judged by
+ * path where the words name one, by file name where they do not (a path built from a variable).
  */
-export const bashTargets = (cmds: string[][]): string[] => {
+export const lastingFiles = (w: Writes, home: string): string[] => {
   const out: string[] = []
-  for (const words of cmds) {
-    for (let i = 0; i < words.length; i++) {
-      const m = REDIRECT.exec(words[i] as string)
-      if (!m) continue
-      const t = m[2] !== '' ? (m[2] as string) : (words[++i] ?? '')
-      if (!notAFile(t)) out.push(t)
-    }
-    const name = (words[0] ?? '').split('/').pop()
-    const args = words.slice(1).filter(w => !REDIRECT.test(w))
-    if (name === 'tee') out.push(...args.filter(w => !w.startsWith('-')))
-    if (name === 'cp' || name === 'mv') {
-      const plain = args.filter(w => !w.startsWith('-'))
-      if (plain.length >= 2) out.push(plain[plain.length - 1] as string)
-    }
-    // In place: sed -i (with or without a suffix), perl -i or -pi. The last word is the file edited.
-    const inPlace = name === 'sed' ? args.some(w => /^-i/.test(w) || w === '--in-place') : name === 'perl' ? args.some(w => /^-[a-z]*i/.test(w)) : false
-    if (inPlace && args.length) out.push(args[args.length - 1] as string)
+  for (const f of w.files) {
+    const hit = f.path ? lastingMemory(f.path, home) && display(f.path, home) : !TEMP.test(f.word) && NAMES.has(f.word.split('/').pop() ?? '') && f.word
+    if (hit && !out.includes(hit)) out.push(hit)
   }
   return out
 }
+
+// A lasting memory file named in a script's or a patch's text: a path ending in one of the names,
+// or one through a project's memory folder.
+const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'"]+\/memory(?:\/[^\s'"]*)?|(?:[~\w.\/$-]*\/)?(?:CLAUDE|AGENTS|MEMORY|LESSONS)\.md\b/g
+
+/**
+ * The lasting memory a write's text mentions, for the writes whose words name no file (a patch, an
+ * inline script): each as written, home shown as ~, a diff's a/ or b/ taken off.
+ */
+export const mentioned = (text: string, home: string): string[] => {
+  const out: string[] = []
+  for (const m of text.match(MENTION) ?? []) {
+    let p = m.replace(/^[ab]\//, '')
+    if (p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
+    if (TEMP.test(p)) continue
+    const shown = p.startsWith('/') ? display(p, home) : p
+    if (!out.includes(shown)) out.push(shown)
+  }
+  return out
+}
+
+// The spec's words that make a rule permanent in Dan's own message, as an instruction: "from now
+// on" anywhere, "always" or "never" leading a sentence or clause or after please or should, and
+// "remember" as a request, leading one and followed by that, to, this, a colon or a comma
+// ("please remember to", "Remember: ..."). Read anywhere, "never mind the screenshots" and "it
+// always fails" skipped the question (#705), and "Remember when we shipped it?" did too.
+const FROM_NOW_ON = /\bfrom now on\b/i
+const LEAD = String.raw`(?:^|[.!?;:,\n]\s*|\b(?:please|and|but|so|also|you should|you must|should|must)\s+)`
+const ALWAYS_NEVER = new RegExp(`${LEAD}(?:always|never)\\b(?!\\s+mind\\b)`, 'i')
+const REMEMBER = new RegExp(`${LEAD}remember(?:\\s+(?:that|to|this)\\b|\\s*[:,])`, 'i')
+// Words that limit it to the moment, which win: saving without asking is the harm, asking is not.
+const JUST_NOW = /\b(?:for now|for today|today|tonight|this time|just this once|this session|for this session|right now)\b/i
+
+export const madePermanent = (prompt: string | null | undefined): boolean =>
+  typeof prompt === 'string' && !JUST_NOW.test(prompt) && (FROM_NOW_ON.test(prompt) || ALWAYS_NEVER.test(prompt) || REMEMBER.test(prompt))
 
 /**
  * The text a Write would save: the whole of a new file, or the lines a rewrite adds. A rewrite that
@@ -94,50 +118,24 @@ export const addedText = (content: string, old: string | undefined): string => {
   return added.length ? added.join('\n') : trim(content)
 }
 
-/** Lines of at most `width` characters, broken between words; a word longer than a line is cut. */
-export const wrap = (text: string, width: number): string[] => {
-  const out: string[] = []
-  for (const para of text.split('\n')) {
-    let line = ''
-    for (let word of para.split(/\s+/).filter(Boolean)) {
-      while (word.length > width) {
-        if (line) out.push(line)
-        line = ''
-        out.push(word.slice(0, width))
-        word = word.slice(width)
-      }
-      if (!word) continue
-      if (!line) line = word
-      else if (line.length + 1 + word.length <= width) line += ` ${word}`
-      else {
-        out.push(line)
-        line = word
-      }
-    }
-    out.push(line)
-  }
-  return out
-}
-
-// The band truncates a line at its edge, so the rule is wrapped before it is published, since a row
-// is published before any band width is known. 76 columns is a choice, not a measurement: a band
-// narrower than that still cuts the line (mod-kit has no wrapping text run yet).
-export const WIDTH = 76
-
-/** The three answers, with the button id their press arrives under. */
+/** The three answers, with the button id their press arrives under (before the save's own id). */
 export const ANSWERS = [
-  { button: 'for-good', label: 'For good', hotkey: '1' },
-  { button: 'this-session', label: 'Just this session', hotkey: '2' },
-  { button: 'not-at-all', label: 'Not at all', hotkey: '3' },
+  { button: 'for-good', label: 'For good' },
+  { button: 'this-session', label: 'Just this session' },
+  { button: 'not-at-all', label: 'Not at all' },
 ] as const
 export type Answer = (typeof ANSWERS)[number]['button']
 
+/** The band row a save's question is drawn as, under its own id. */
+export const rowId = (id: string) => `question:${id}`
+
 /**
- * The question in the band (docs/mods-design.md, Ask before saving): the chip and the question on
- * one amber line, then the rule's exact text and the file it would go to, set off by grey rules,
- * then each answer on its own line with what it does indented under it (picker manners' layout).
+ * The question in the band (docs/mods-design.md, Ask before saving), as mod-kit's question builder
+ * takes it: the chip and the question, then the rule's exact text, wrapping at the band's edge, and
+ * the file it would go to, set off by grey rules, then each answer with what it does under it. The
+ * row and each button carry the save's id, so a press answers only the save it was drawn for (L243).
  */
-export const questionRow = (q: { id: string; text: string; files: string[] }): QuestionRow => {
+export const questionOf = (q: { id: string; text: string; files: string[] }): Question => {
   const where = q.files.join(', ')
   const does: Record<Answer, string> = {
     'for-good': `Saved to ${where}`,
@@ -146,18 +144,10 @@ export const questionRow = (q: { id: string; text: string; files: string[] }): Q
   }
   return {
     mod: MOD,
-    id: 'question',
-    slot: 'question',
-    lines: [
-      [
-        { text: 'Standing rule', color: 'warning', bold: true },
-        { text: '  Save this as a standing rule?', color: 'warning' },
-      ],
-      { divider: true },
-      ...wrap(q.text, WIDTH).map(l => [{ text: l }]),
-      [{ text: where, dim: true }],
-      { divider: true },
-      ...ANSWERS.flatMap(a => [[{ button: a.button, label: a.label, hotkey: a.hotkey }], [{ text: does[a.button], dim: true, indent: 4 }]]),
-    ],
+    id: rowId(q.id),
+    chip: 'Standing rule',
+    question: 'Save this as a standing rule?',
+    body: [{ divider: true }, ...q.text.split('\n').map((l): Line => [{ text: l, wrap: true }]), [{ text: where, dim: true }], { divider: true }],
+    options: ANSWERS.map(a => ({ button: `${a.button}:${q.id}`, label: a.label, description: does[a.button] })),
   }
 }

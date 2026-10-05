@@ -1,5 +1,6 @@
-// Picker manners' pure parts (#615): the question as the band draws it (docs/mods-design.md,
-// "Picker manners (#615)"), what is refused before it is asked, and numbered prose read as answers.
+// Picker manners' pure parts (#615): the question handed to mod-kit's band (docs/mods-design.md,
+// "Picker manners (#615)"), what is refused before it is asked, the limit on asking again, and
+// numbered prose read as answers.
 
 /** One AskUserQuestion question, as the tool's input carries it. */
 export type Question = {
@@ -9,33 +10,66 @@ export type Question = {
   options: { label: string; description?: string }[]
 }
 
-/** A band row's parts, as mod-kit's contract spells them. */
-export type Part = { text: string; color?: string; bold?: boolean; dim?: boolean; indent?: number } | { button: string; label: string; hotkey?: string; plain?: true }
+/** What picker manners asks mod-kit to draw, as mod-kit's contract spells it ($.modkit.question). */
+export type Ask = {
+  mod: string
+  id: string
+  chip: string
+  question: string
+  options: { button: string; label: string; description?: string; chosen?: boolean }[]
+  submit?: { button: string; label: string }
+}
 
 /**
- * The question in the band (design rounds, 2026-10-04): the chip in grey and the question in amber,
- * as it waits on Dan, on one line; then each option on its own line in Claude Code's plain button
- * style, "1: 7 days" (the rounds drew "1. 7 days"), its description indented on the line under it. A multi select question marks what is chosen and ends with Submit.
+ * The question as mod-kit draws it in the band (design rounds, 2026-10-04): Claude's chip and
+ * question, then each option under its own button, opt1 to optN, which mod-kit numbers 1 to N. A
+ * multi select question marks what is chosen and ends with Submit. The look itself is mod-kit's, the
+ * one every question in the band shares (#703).
  */
-export const bandLines = (q: Question, chosen: readonly string[]): Part[][] => {
-  const lines: Part[][] = [[{ text: `[${q.header}] `, dim: true }, { text: q.question, color: 'warning', bold: true }]]
-  q.options.forEach((o, i) => {
-    const n = String(i + 1)
-    const line: Part[] = [{ button: `opt${n}`, label: o.label, hotkey: n, plain: true }]
-    if (q.multiSelect && chosen.includes(o.label)) line.push({ text: ' chosen', dim: true })
-    lines.push(line)
-    if (o.description) lines.push([{ text: o.description, dim: true, indent: 3 }])
-  })
-  if (q.multiSelect) lines.push([{ button: 'submit', label: 'Submit' }])
-  return lines
-}
+export const askOf = (q: Question, chosen: readonly string[]): Ask => ({
+  mod: 'picker-manners',
+  id: 'question',
+  chip: q.header,
+  question: q.question,
+  options: q.options.map((o, i) => ({
+    button: `opt${i + 1}`,
+    label: o.label,
+    ...(o.description ? { description: o.description } : {}),
+    ...(q.multiSelect && chosen.includes(o.label) ? { chosen: true } : {}),
+  })),
+  ...(q.multiSelect ? { submit: { button: 'submit', label: 'Submit' } } : {}),
+})
 
 /** Why a question is not asked, or undefined when it is. Read by Claude as the call's refusal. */
 export const refusal = (questions: readonly Question[], ctx: { quiet: boolean; source: string | undefined; talkedPast: number }): string | undefined => {
   if (questions.length !== 1) return 'Ask one question per call: Dan answers pickers one at a time.'
   if (ctx.quiet && ctx.source === 'next-issue') return 'Dan turned off next issue pickers for this session (/pickers on brings them back). Give the suggestions as a plain list instead.'
-  if (ctx.talkedPast >= 2) return 'Dan has talked past this question twice, so it is not asked again. Carry on from what he said.'
+  if (ctx.talkedPast >= 2) return 'Dan has talked past or dismissed this question twice, so it is not asked again. Carry on from what he said.'
   return undefined
+}
+
+/**
+ * A question Dan talked past or dismissed, as the limit on asking again remembers it: its text and
+ * chip as compared (lower case, punctuation and spacing gone) and its answers' labels, sorted.
+ */
+export type Passed = { question: string; header: string; labels: string[]; count: number }
+
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+const labelsOf = (q: Question) => q.options.map(o => norm(o.label)).sort()
+
+// Claude rewords a question when it asks it again (#703), so the same question is the same text
+// however it is written, or the same chip over the same answers however the question is put.
+const sameQuestion = (q: Question, p: Passed): boolean =>
+  norm(q.question) === p.question || (norm(q.header) === p.header && JSON.stringify(labelsOf(q)) === JSON.stringify(p.labels))
+
+/** How many times Dan has talked past or dismissed this question this session. */
+export const passedOver = (q: Question, passed: readonly Passed[]): number => passed.find(p => sameQuestion(q, p))?.count ?? 0
+
+/** The passes with one more for this question. */
+export const recordPass = (q: Question, passed: readonly Passed[]): Passed[] => {
+  const i = passed.findIndex(p => sameQuestion(q, p))
+  if (i < 0) return [...passed, { question: norm(q.question), header: norm(q.header), labels: labelsOf(q), count: 1 }]
+  return passed.map((p, n) => (n === i ? { ...p, count: p.count + 1 } : p))
 }
 
 /**
@@ -67,12 +101,25 @@ export const asksQuiet = (text: string): boolean => /\bno next issue\b|\bjust gi
 /** How an open question ended, as the hook hears it (the contract's PickersOutcome). */
 export type Outcome = { kind: 'answer'; answer: string } | { kind: 'prose'; answers: string[] } | { kind: 'message' } | { kind: 'withdrawn' }
 
-/** What Claude reads when the question ended without an answer, or undefined when it was answered. */
-export const refusalFor = (o: Outcome): string | undefined => {
-  if (o.kind === 'withdrawn') return 'The question was withdrawn: the turn was interrupted.'
-  if (o.kind === 'message')
-    return 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first. If this question is still unanswered after that, ask it again once; never more than once.'
-  return undefined
+/** Whether an outcome passes over the question (spec #615 point 3: a dismissal or a talk past). */
+export const passesOver = (o: Outcome): boolean => o.kind === 'message' || o.kind === 'withdrawn'
+
+/**
+ * What Claude reads when the question ended without an answer, or undefined when it was answered.
+ * `passes` is how many times Dan has now passed over it, 0 when this one was not counted (a question
+ * he never saw, or one another mod asked), so Claude is told to ask again only while it still may.
+ */
+export const refusalFor = (o: Outcome, passes: number): string | undefined => {
+  const lead =
+    o.kind === 'withdrawn'
+      ? 'The question was withdrawn: the turn was interrupted.'
+      : o.kind === 'message'
+        ? 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first.'
+        : undefined
+  if (lead === undefined) return undefined
+  if (passes >= 2) return `${lead} He has now talked past or dismissed this question twice, so do not ask it again: carry on from what he says.`
+  if (passes === 1 && o.kind === 'message') return `${lead} If this question is still unanswered after that, ask it again once; never more than once.`
+  return lead
 }
 
 /** Runs `withdraw` once when the call's signal aborts (an interrupted turn), or at once if it already has. */
@@ -84,3 +131,11 @@ export const onAbort = (signal: AbortSignal | undefined, withdraw: () => void): 
   }
   signal.addEventListener('abort', withdraw, { once: true })
 }
+
+/**
+ * Whether every surface the session draws on has the band, which Claude Code raises on the terminal
+ * and the desktop alone: false with nothing drawing (a claude -p or SDK run), with Dan's phone or
+ * VS Code attached, or when the surfaces could not be read (null).
+ */
+export const bandEverywhere = (surfaces: readonly string[] | null): boolean =>
+  surfaces !== null && surfaces.length > 0 && surfaces.every(s => s === 'terminal' || s === 'desktop')
