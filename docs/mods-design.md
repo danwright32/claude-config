@@ -574,9 +574,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   refused them as scripts it could not read. Only the reader can see which separator stood outside
   the quotes, so mod-kit's `$.modkit.pipeline({ command })` gives the same commands as
   `$.modkit.commands`, each with `pipedFrom`, the words of the command a `|` feeds it from; every
-  command in a piped subshell, or in a shell's `-c` or `-lc`, reads what feeds that subshell or
-  shell. The reader also looks past each word that only runs the command after it by that word's
-  own options, so `timeout 5`, `nice -n 10`, `stdbuf -oL`, `env -u HOME`, `sudo -u dan` and
+  command in a piped subshell, an `if`, `while`, `until`, `for` or `{ }` group, or a shell's `-c` or
+  `-lc`, reads what feeds it, and a group's output piped on cannot be read. The reader also looks
+  past the reserved words that lead a command (`then git commit` reached every guard as a command
+  named then), and past each word that only runs the command after it by that word's own options, so `timeout 5`, `nice -n 10`, `stdbuf -oL`, `env -u HOME`, `sudo -u dan` and
   `xargs -I {}` no longer hide the interpreter, git or file command behind them from any guard;
   `command -v` runs nothing and is the command itself. Inline code is read in its language's one
   spelling of a capability before it is judged: python's `__import__('os')`, `import_module`,

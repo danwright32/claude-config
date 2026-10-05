@@ -97,6 +97,17 @@ describe('commands', () => {
     expect(commands('xargs -I{} -n1 python3 -c x')).toEqual([['python3', '-c', 'x']])
     expect(commands('xargs -i git add')).toEqual([['git', 'add']])
   })
+  // Lessons review of #724: a reserved word in command position was read as the command, so
+  // `then git commit` and `do python3 -c` reached every guard as commands named then and do.
+  test('looks past the reserved words that lead a command inside if, while, until, for and { }', () => {
+    expect(commands('if true; then git commit -am x; fi')).toEqual([['true'], ['git', 'commit', '-am', 'x'], ['fi']])
+    expect(commands(`for f in a b; do python3 -c 'x'; done`)).toEqual([['for', 'f', 'in', 'a', 'b'], ['python3', '-c', 'x'], ['done']])
+    expect(commands('while read l; do sh; done')).toEqual([['read', 'l'], ['sh'], ['done']])
+    expect(commands('if a; then b; elif c; then d; else e; fi')).toEqual([['a'], ['b'], ['c'], ['d'], ['e'], ['fi']])
+    expect(commands('! git diff --quiet')).toEqual([['git', 'diff', '--quiet']])
+    expect(commands('{ cd a; make; } > log')).toEqual([['cd', 'a'], ['make'], ['}', '>', 'log']])
+    expect(commands('if true\nthen\n  git push\nfi')).toEqual([['true'], ['git', 'push'], ['fi']])
+  })
   test('a runner with nothing to run is the command itself, and so is command -v, which runs nothing', () => {
     expect(commands('sudo -u dan')).toEqual([['sudo', '-u', 'dan']])
     expect(commands('timeout 5')).toEqual([['timeout', '5']])
@@ -140,6 +151,14 @@ describe('pipeline', () => {
     expect(fed('(cd a; echo x) | python3')).toEqual([['(', undefined], ['cd', undefined], ['echo', undefined], [')', undefined], ['python3', ')']])
     expect(fed(`echo x | bash -c 'cd a && python3'`)).toEqual([['echo', undefined], ['cd', 'echo'], ['python3', 'echo']])
     expect(fed(`bash -c 'curl x | sh'`)).toEqual([['curl', undefined], ['sh', 'curl']])
+  })
+  // Lessons review of #724: a ; inside a piped while or { } group reset the feed to nothing.
+  test('every command in a piped while, until, for, if or { } group reads what feeds the group, and its output feeds as its closing word', () => {
+    expect(fed('curl x | while read l; do sh; done')).toEqual([['curl', undefined], ['read', 'curl'], ['sh', 'curl'], ['done', undefined]])
+    expect(fed('curl x | { read a; sh; }')).toEqual([['curl', undefined], ['read', 'curl'], ['sh', 'curl'], ['}', undefined]])
+    expect(fed('curl x | if true; then sh; fi; python3')).toEqual([['curl', undefined], ['true', 'curl'], ['sh', 'curl'], ['fi', undefined], ['python3', undefined]])
+    expect(fed('{ echo a; echo b; } | sh')).toEqual([['echo', undefined], ['echo', undefined], ['}', undefined], ['sh', '}']])
+    expect(fed('while read l; do python3; done')).toEqual([['read', undefined], ['python3', undefined], ['done', undefined]])
   })
 })
 

@@ -82,8 +82,10 @@ describe('programsOf: the program a shell or interpreter runs that the reader di
     expect(of(['ls'], '|', ['bash'])).toEqual([undefined, { unreadable: 'fed by what ls pipes into it' }])
     expect(of(['cd', 'repo'], ['curl', 'x'], '|', ['bash'])).toEqual([undefined, undefined, { unreadable: 'fed by what curl pipes into it' }])
   })
-  test("a subshell's output piped in cannot be read either, and is named as a subshell", () => {
-    expect(programsOf([{ words: ['bash'], pipedFrom: [')'] }])).toEqual([{ unreadable: 'fed by what a subshell pipes into it' }])
+  test("a subshell's or a group's output piped in cannot be read either, and is named as a group of commands", () => {
+    for (const closer of [')', '}', 'done', 'fi']) {
+      expect(programsOf([{ words: ['bash'], pipedFrom: [closer] }])).toEqual([{ unreadable: 'fed by what a group of commands pipes into it' }])
+    }
   })
 })
 

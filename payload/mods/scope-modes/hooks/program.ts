@@ -77,8 +77,8 @@ export type Read = { words: readonly string[]; pipedFrom?: readonly string[] }
 /** What a pipe feeds a command's standard input from `feeder`, or undefined when no pipe does. */
 const piped = (feeder: readonly string[] | undefined): Program | undefined => {
   if (!feeder?.length) return undefined
-  // A subshell's output, which the reader hands over as its closing parenthesis.
-  if (feeder[0] === ')') return { unreadable: 'fed by what a subshell pipes into it' }
+  // A subshell's or a group's output, which the reader hands over as its closing word.
+  if ([')', '}', 'done', 'fi'].includes(feeder[0] as string)) return { unreadable: 'fed by what a group of commands pipes into it' }
   const name = base(feeder[0] as string)
   const args = feeder.slice(1)
   if (args.some(isHeredoc)) return { unreadable: 'fed by a heredoc' }

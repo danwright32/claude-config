@@ -50,8 +50,9 @@ export type ModKit = {
   card: (input: ModKitCard) => Promise<void>
   /**
    * The simple commands a Bash call would run, each as its words with quotes removed: heredoc
-   * bodies dropped, assignments and sudo, env, timeout, nice, xargs and the like looked past by each
-   * one's own options, a shell's -c read as
+   * bodies dropped, assignments, the reserved words leading a command (then, do, else, `{`, `!`) and
+   * sudo, env, timeout, nice, xargs and the like looked past, each runner by its own options, a
+   * shell's -c read as
    * the commands it runs, a subshell's parentheses each a command of their own (`['(']`, `[')']`),
    * while one inside a word (`$(`, `<(`) stays part of it. The one reader every mod uses (L613).
    */
@@ -72,8 +73,9 @@ export type ModKit = {
   /**
    * The same commands as `commands`, each with `pipedFrom`, the words of the command whose output
    * a `|` (or `|&`) feeds into it, absent when nothing does. `;`, `&&`, `||`, `&` and a new line
-   * link no two commands, and every command in a subshell or a shell's -c reads what feeds the
-   * subshell or shell; a piped subshell's output arrives as `[')']`. Only the reader can see which
+   * link no two commands, and every command in a subshell, an if, while, until, for or `{ }` group,
+   * or a shell's -c reads what feeds it; a piped group's output arrives as its closing word (`)`,
+   * `}`, `done`, `fi`). Only the reader can see which
    * separator stood outside the quotes, so no mod works it out from the list (#724).
    */
   pipeline: (input: { command: string }) => Promise<ModKitCommand[]>

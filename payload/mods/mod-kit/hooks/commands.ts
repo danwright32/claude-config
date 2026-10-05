@@ -6,6 +6,12 @@
 
 const SHELLS = new Set(['sh', 'bash', 'zsh'])
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+// The reserved words that lead a command inside a compound one, looked past so the command is in
+// command position (lessons review of #724: `then git commit` was a command named then); and the
+// words that open and close a group whose body shares one standard input, as a subshell's does.
+const LEADS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{'])
+const OPENS = new Set(['if', 'while', 'until', 'for', 'select', '{'])
+const CLOSES = new Set(['fi', 'done', '}'])
 
 // The words that only run the command after them (sudo cat .env is cat .env), each read by its own
 // options, so a value is never taken for the command (#724: nice -n 10 gave a command named 10, and
@@ -89,9 +95,10 @@ const dropHeredocs = (cmd: string): string => {
 // Words, split on separators outside quotes. A quoted script spanning lines stays one word. Each
 // command carries `from`, the place in the list of the command whose output a | feeds it (#724).
 // Standard input is nothing at the top (a Bash call has none to give), the command before after a
-// | or |&, and inside a subshell whatever feeds the subshell, for every command in it, since each
-// shares it; ;, &&, ||, & and a new line link no two commands, and a new line right after a |
-// carries the pipe on.
+// | or |&, and inside a subshell or an if, while, until, for or { } group whatever feeds the group,
+// for every command in it, since each shares it; ;, &&, ||, & and a new line link no two commands,
+// and a new line right after a | carries the pipe on. A group's closing word (`)`, `fi`, `done`,
+// `}`) is fed nothing, and what follows a | after it is fed the group's output as that word.
 type Split = { words: string[]; from?: number }
 const split = (cmd: string): Split[] => {
   const cmds: Split[] = []
@@ -110,16 +117,24 @@ const split = (cmd: string): Split[] => {
     word = ''
     inWord = false
   }
-  const endCmd = (): boolean => {
-    endWord()
-    const ended = words.length > 0
-    if (ended) push(words)
-    words = []
-    return ended
-  }
   // After a list separator a command reads what its subshell reads.
   const listed = () => {
     from = subshells[subshells.length - 1]
+  }
+  const endCmd = (): boolean => {
+    endWord()
+    const ended = words.length > 0
+    const first = words[0] as string
+    if (ended && CLOSES.has(first)) {
+      subshells.pop()
+      listed()
+      cmds.push({ words })
+    } else if (ended) {
+      push(words)
+      if (OPENS.has(first)) subshells.push(from)
+    }
+    words = []
+    return ended
   }
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
@@ -196,13 +211,13 @@ const split = (cmd: string): Split[] => {
   return cmds
 }
 
-// Past assignments and the words that only run the next command. A runner with no command after it
-// (a bare env) is the command itself.
+// Past assignments, the reserved words that lead a command, and the words that only run the next
+// command. A runner with no command after it (a bare env) is the command itself.
 const strip = (words: string[]): string[] => {
   let i = 0
   for (;;) {
     const w = words[i] ?? ''
-    if (ASSIGNMENT.test(w)) {
+    if (ASSIGNMENT.test(w) || LEADS.has(w)) {
       i++
       continue
     }
