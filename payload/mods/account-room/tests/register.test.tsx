@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { accountKey } from '../hooks/store.ts'
+import { accountKey, parseNicknames } from '../hooks/store.ts'
 
 // The account room in a session (#659): what it records, what the band shows, Switch, Dismiss, the
 // nickname ask and /accounts rename. The look and words are the design rounds of 2026-10-04
@@ -613,8 +613,9 @@ test('the first session on an account the mod has not seen asks once for a nickn
   expect((await ui.find({ type: 'Text', text: 'work@example.com, Acme' }))?.props).toMatchObject({ dimColor: true })
   await ui.input({ key: 'nickname', text: 'Work', kind: 'change' })
   await ui.press({ key: 'save' })
-  const names = JSON.parse(w.files[NICKNAMES] as string) as { names: Record<string, string | null> }
-  expect(names.names[await accountKey('acct-work', 'org-1')]).toBe('Work')
+  const names = JSON.parse(w.files[NICKNAMES] as string) as { v: number; names: Record<string, { name: string | null; at: number }> }
+  expect(names.v).toBe(2)
+  expect(names.names[await accountKey('acct-work', 'org-1')]).toEqual({ name: 'Work', at: T0 })
   // Only the hashed key is written to the shared (public) payload, never the email.
   expect(w.files[NICKNAMES]).not.toContain('work@example.com')
   expect(closed).toEqual([PANE])
@@ -643,7 +644,7 @@ test('Enter in the field saves too; an empty name saves nothing and the dialog s
   expect(w.files[NICKNAMES]).toBeUndefined()
   expect(closed).toEqual([])
   await ui.input({ key: 'nickname', text: ' Work ', kind: 'submit' })
-  expect(JSON.parse(w.files[NICKNAMES] as string).names[await accountKey('acct-work', 'org-1')]).toBe('Work')
+  expect(JSON.parse(w.files[NICKNAMES] as string).names[await accountKey('acct-work', 'org-1')].name).toBe('Work')
   await ui.unmount()
 })
 
@@ -652,8 +653,60 @@ test('Skip records that the ask was answered, so it is not asked again', withKit
   await start($, clock)
   const ui = (await $.ui.mount(pane)) as Ui
   await ui.press({ key: 'skip' })
-  expect(JSON.parse(w.files[NICKNAMES] as string).names).toEqual({ [await accountKey('acct-work', 'org-1')]: null })
+  expect(JSON.parse(w.files[NICKNAMES] as string).names).toEqual({ [await accountKey('acct-work', 'org-1')]: { name: null, at: T0 } })
   await ui.unmount()
+})
+
+const COPY = `${NICKNAMES}.conflict-Daniels-MacBook-Pro-2`
+const STATE = `${HOME}/.claude/state/account-room`
+// Read through the mod's own parser, which reads both versions of the file.
+const nameIn = async (text: string | undefined, acct: string) => {
+  const f = parseNicknames(text as string)
+  if (typeof f === 'string') throw new Error(f)
+  return f.names[await accountKey(acct, 'org-1')]?.name
+}
+
+test('a skip on one Mac never replaces a name given on the other: the copy the sync set aside is merged back (#747)', withKit, async ($, on) => {
+  // What the live check of 2026-10-05 left: the sync applied the other Mac's skip and set this Mac's
+  // name aside beside it as a conflict copy, both in the first build's format.
+  const { w, clock, opened, transcript } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': null }), [COPY]: await named({ 'acct-work': 'dwright (team)' }) } })
+  await start($, clock)
+  expect(await nameIn(w.files[NICKNAMES], 'acct-work')).toBe('dwright (team)')
+  expect(opened).toEqual([])
+  // The copy leaves the mirrored mods tree, kept whole in this Mac's own state folder (L5).
+  expect(w.files[COPY]).toBeUndefined()
+  const kept = Object.keys(w.files).filter(f => f.startsWith(`${STATE}/`) && f.includes('account-room-nicknames.json.conflict-Daniels-MacBook-Pro-2'))
+  expect(kept).toHaveLength(1)
+  expect(w.files[kept[0] as string]).toBe(await named({ 'acct-work': 'dwright (team)' }))
+  expect(transcript.filter(t => /^Account room: merged the nicknames claude-sync set aside/.test(t))).toHaveLength(1)
+})
+
+test('the other way round: the name the sync applied stands, and the skip it set aside changes nothing (#747)', withKit, async ($, on) => {
+  const work = await accountKey('acct-work', 'org-1')
+  const main = `{\n  "v": 2,\n  "names": {\n    "${work}": {"name":"dwright (team)","at":${T0 - HOUR}}\n  }\n}\n`
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: main, [COPY]: JSON.stringify({ v: 2, names: { [work]: { name: null, at: T0 } } }) } })
+  await start($, clock)
+  expect(w.files[NICKNAMES]).toBe(main)
+  expect(w.files[COPY]).toBeUndefined()
+})
+
+test('a Skip pressed after a name arrived from the other Mac keeps the name (#747)', withKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
+  await start($, clock)
+  const ui = (await $.ui.mount(pane)) as unknown as Ui
+  // The sync delivers the other Mac's name while the question is open here.
+  w.files[NICKNAMES] = await named({ 'acct-work': 'dwright (team)' })
+  await ui.press({ key: 'skip' })
+  expect(await nameIn(w.files[NICKNAMES], 'acct-work')).toBe('dwright (team)')
+  await ui.unmount()
+})
+
+test('a conflict copy that cannot be read is named and left where it is, and nothing is merged from it (#747)', withKit, async ($, on) => {
+  const { w, clock, transcript } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': null }), [COPY]: '{"v":1,"na' } })
+  await start($, clock)
+  expect(w.files[COPY]).toBe('{"v":1,"na')
+  expect(w.files[NICKNAMES]).toBe(await named({ 'acct-work': null }))
+  expect(transcript.filter(t => /account-room-nicknames\.json\.conflict-Daniels-MacBook-Pro-2 could not be read: not readable JSON/.test(t))).toHaveLength(1)
 })
 
 test('an account already named, or already skipped, is not asked about; a session with no screen never asks', withKit, async ($, on) => {
@@ -680,15 +733,15 @@ test('/accounts rename opens the dialog for this account, or for the one named, 
   expect(await shown(ui)).toContain('home@example.com, Acme')
   await ui.input({ key: 'nickname', text: 'Personal', kind: 'submit' })
   await ui.unmount()
-  expect(JSON.parse(w.files[NICKNAMES] as string).names[await accountKey('acct-home', 'org-1')]).toBe('Personal')
+  expect(JSON.parse(w.files[NICKNAMES] as string).names[await accountKey('acct-home', 'org-1')].name).toBe('Personal')
   await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename work' } as never)
   ui = (await $.ui.mount(pane)) as Ui
   expect(await shown(ui)).toContain('work@example.com, Acme')
   await ui.input({ key: 'nickname', text: 'Job', kind: 'submit' })
   await ui.unmount()
   const names = JSON.parse(w.files[NICKNAMES] as string).names
-  expect(names[await accountKey('acct-work', 'org-1')]).toBe('Job')
-  expect(names[await accountKey('acct-home', 'org-1')]).toBe('Personal')
+  expect(names[await accountKey('acct-work', 'org-1')].name).toBe('Job')
+  expect(names[await accountKey('acct-home', 'org-1')].name).toBe('Personal')
   // A name that matches no account says so, and opens nothing.
   const out = await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename nobody' } as never)
   expect(out.text).toBe('No account is called "nobody". Name one by its nickname or email.')

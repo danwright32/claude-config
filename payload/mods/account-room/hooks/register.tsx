@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession, AccountRoomStop } from '../types/index.d.ts'
 import { card, fromRateLimits, nameOf, triggered, verdict } from './room.ts'
 import type { Account, Offset, Reading, Unavailable, Verdict } from './room.ts'
-import { accountKey, macsIn, combine, merge, parseMacFile, parseNicknames, serialize, withSighting } from './store.ts'
+import { accountKey, macsIn, combine, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from './store.ts'
 import type { MacFile, Nicknames } from './store.ts'
 
 // The account room (#659). Behaviour agreed with Dan on 2026-10-04 (the issue); the look and every
@@ -130,23 +130,95 @@ const locked = async <T,>($: EngineInterface, home: string, work: () => Promise<
   throw new Error(`another session has held ${lock} for over 5 seconds`)
 }
 
-/** The nicknames, or why they cannot be read. A missing file is no names yet. */
-const loadNicknames = async ($: EngineInterface, home: string): Promise<Nicknames | string> => {
+/** The shared file alone, or why it cannot be read. A missing file is no names yet. */
+const loadNicknameFile = async ($: EngineInterface, home: string): Promise<Nicknames | string> => {
   try {
     const text = await readText($, nicknamesPath(home))
-    return text === undefined ? { v: 1, names: {} } : parseNicknames(text)
+    return text === undefined ? { names: {} } : parseNicknames(text)
   } catch (err) {
     return message(err)
   }
 }
 
-/** One name written into the shared file. A file that cannot be read is never overwritten (L105). */
-const writeNickname = async ($: EngineInterface, home: string, id: string, name: string | null) =>
+// When both Macs change the nicknames before a sync, claude-sync applies the other Mac's file and
+// sets this Mac's aside beside it as `account-room-nicknames.json.conflict-<Mac>` (it never carries
+// such a copy to the other Mac). The answers in it are still Dan's, so the mod merges them back by
+// its own rule, a name over a skip and the later of two names (#747). The sync itself stays blind to
+// what the file means; this mod is the one reader that knows.
+const COPY_PREFIX = 'account-room-nicknames.json.conflict-'
+
+/** The conflict copies beside the file, each read, or why it could not be. */
+const conflictCopies = async ($: EngineInterface, home: string): Promise<{ name: string; file: Nicknames | string }[]> => {
+  const dir = `${home}/.claude/mods`
+  let names: string[]
+  try {
+    // No folder yet is no copies. One that is there and cannot be listed is said, and any copies
+    // in it stay where they are until it can be (L215).
+    if (!(await $.fs.exists(dir))) return []
+    names = (await $.fs.list(dir)).map(e => e.name).filter(n => n.startsWith(COPY_PREFIX))
+  } catch (err) {
+    once($, 'copies-unlisted', `Account room: ${dir} could not be listed, so a nickname conflict copy in it is not merged: ${message(err)}`)
+    return []
+  }
+  const out: { name: string; file: Nicknames | string }[] = []
+  for (const name of names) {
+    const file = await readText($, `${dir}/${name}`).then(t => (t === undefined ? 'gone from the folder' : parseNicknames(t)), err => message(err))
+    // A copy that cannot be read is left where it is and named, never merged or moved (L105).
+    if (typeof file === 'string') once($, `copy-unreadable:${name}`, `Account room: the nickname conflict copy ${name} could not be read: ${file}. It is left where it is.`)
+    out.push({ name, file })
+  }
+  return out
+}
+
+/** The nicknames as both Macs gave them: the file merged with any conflict copy beside it. */
+const loadNicknames = async ($: EngineInterface, home: string): Promise<Nicknames | string> => {
+  const main = await loadNicknameFile($, home)
+  if (typeof main === 'string') return main
+  const copies = (await conflictCopies($, home)).flatMap(c => (typeof c.file === 'string' ? [] : [c.file]))
+  return copies.length ? mergeNicknames([main, ...copies]) : main
+}
+
+/**
+ * The shared file brought up to date under the lock: every readable conflict copy merged in, then
+ * one answer recorded when given, merged rather than replacing (#747). Written only when the
+ * nicknames it holds change, so a file the first build wrote stays as it is until there is
+ * something new to say. A file that cannot be read is never overwritten (L105). Once the file is
+ * read back holding the merge, each copy merged into it leaves the mirrored mods tree for this
+ * Mac's state folder, kept whole rather than deleted (L5).
+ */
+const updateNicknames = async ($: EngineInterface, home: string, answer?: { id: string; name: string | null }) =>
   locked($, home, async () => {
-    const cur = await loadNicknames($, home)
-    if (typeof cur === 'string') throw new Error(`the nicknames file could not be read: ${cur}`)
-    await writeWhole($, home, nicknamesPath(home), `${JSON.stringify({ v: 1, names: { ...cur.names, [id]: name } }, null, 2)}\n`)
+    const main = await loadNicknameFile($, home)
+    if (typeof main === 'string') throw new Error(`the nicknames file could not be read: ${main}`)
+    const copies = (await conflictCopies($, home)).filter((c): c is { name: string; file: Nicknames } => typeof c.file !== 'string')
+    let next = mergeNicknames([main, ...copies.map(c => c.file)])
+    if (answer) next = withName(next, answer.id, answer.name, await $.clock.now())
+    const text = serializeNicknames(next)
+    if (text !== serializeNicknames(main)) await writeWhole($, home, nicknamesPath(home), text)
+    if (!copies.length) return
+    const back = await loadNicknameFile($, home)
+    if (typeof back === 'string' || serializeNicknames(back) !== text) throw new Error('the nicknames file did not read back as written, so the conflict copies were left where they are')
+    await $.process.run(['mkdir', '-p', lockDir(home)])
+    const at = await $.clock.now()
+    for (const c of copies) {
+      const to = `${lockDir(home)}/${c.name}.merged-${at}`
+      const mv = await $.process.run(['mv', '-n', `${home}/.claude/mods/${c.name}`, to])
+      if (mv.exitCode !== 0) {
+        once($, `copy-unmoved:${c.name}`, `Account room: ${c.name} is merged into the nicknames, but could not be moved out of the mods folder: ${mv.stderr.trim() || `mv exited ${mv.exitCode}`}`)
+        continue
+      }
+      once($, `copy-merged:${c.name}`, `Account room: merged the nicknames claude-sync set aside as ${c.name} back into the shared file (a name beats a skip; the later of two names wins). The copy is kept as ${to}.`)
+    }
   })
+
+/** One answer written into the shared file. */
+const writeNickname = async ($: EngineInterface, home: string, id: string, name: string | null) => updateNicknames($, home, { id, name })
+
+/** At session start: any conflict copy the sync left beside the file merged back into it (#747). */
+const settleNicknames = async ($: EngineInterface, home: string) => {
+  if (!(await conflictCopies($, home)).some(c => typeof c.file !== 'string')) return
+  await updateNicknames($, home).catch(err => once($, 'nicknames-settle', `Account room: the nickname conflict copies could not be merged back: ${message(err)}`))
+}
 
 /** Every Mac's readings merged, and the other Macs whose file could not be read. */
 const loadReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<{ accounts: Map<string, Account>; unavailable: Unavailable[] }> => {
@@ -266,7 +338,7 @@ const recompute = ($: EngineInterface) =>
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
     const names = typeof nick === 'string' ? {} : nick.names
-    const nameFor = (id: string) => (Object.prototype.hasOwnProperty.call(names, id) ? (names[id] ?? null) : null)
+    const nameFor = (id: string) => (Object.prototype.hasOwnProperty.call(names, id) ? (names[id]?.name ?? null) : null)
     const { accounts, unavailable } = await loadReadings($, s)
     const here: Account = { id: s.id, email: s.email, org: s.org, nickname: nameFor(s.id), ...(live ? { reading: live } : {}) }
     const others = [...accounts.values()].filter(a => a.id !== s.id).map(a => ({ ...a, nickname: nameFor(a.id) }))
@@ -478,6 +550,7 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
   const already = (await $.state.get(liveRef)).value ?? undefined
   if (reading) await $.state.set(liveRef, combine(reading, already) as Reading)
   await record($, s, reading)
+  await settleNicknames($, s.home)
   if (s.isInteractive) {
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
@@ -613,7 +686,7 @@ export const register: Register = (on, options) => {
     if (!s) return { text: 'This session has no Claude account, so there is nothing to rename.' }
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') return { text: `The nicknames could not be read, so none can be changed: ${nick}` }
-    const current = (id: string) => (Object.prototype.hasOwnProperty.call(nick.names, id) ? (nick.names[id] ?? null) : null)
+    const current = (id: string) => (Object.prototype.hasOwnProperty.call(nick.names, id) ? (nick.names[id]?.name ?? null) : null)
     const q = rest.join(' ').trim()
     if (!q) {
       await ask($, { id: s.id, email: s.email, org: s.org, current: current(s.id) })

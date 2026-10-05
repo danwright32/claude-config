@@ -8,6 +8,8 @@ import type { Account, Limit, Reading } from './room.ts'
 //
 // Nicknames: one file in the claude-sync payload, so both Macs share them. The repository is
 // public, so accounts are keyed by a hash of the account and org ids and no email is written there.
+// Two Macs can answer for one account before a sync, so each entry carries when it was recorded and
+// copies are merged entry by entry (a name over a skip, the later of two names), never replaced (#747).
 
 /**
  * One Mac's readings file. `kept` holds entries this build cannot read (a newer version's, say):
@@ -16,8 +18,13 @@ import type { Account, Limit, Reading } from './room.ts'
 export type MacFile = { v: 1; mac: string; accounts: Record<string, MacEntry>; kept?: Record<string, unknown> }
 /** An account as one Mac last saw it: who it is (for the card) and its newest reading there. */
 export type MacEntry = { email: string; org: string; seenAt: number; reading?: Reading }
-/** The nicknames file: a name, or null where the ask was skipped so it is not asked again. */
-export type Nicknames = { v: 1; names: Record<string, string | null> }
+/**
+ * One account's nickname: a name, or null where the ask was skipped so it is not asked again, and
+ * when it was recorded (ms). An entry written by the first build (file version 1) has no time.
+ */
+export type NickEntry = { name: string | null; at?: number }
+/** The nicknames, whichever version of the file they were read from. */
+export type Nicknames = { names: Record<string, NickEntry> }
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 
@@ -74,14 +81,84 @@ export const parseMacFile = (text: string): MacFile | string => {
   return { v: 1, mac: o.mac, accounts, ...(Object.keys(kept).length ? { kept } : {}) }
 }
 
-/** The nicknames file, or why it cannot be read. */
+/**
+ * The nicknames file, or why it cannot be read. Each version is read by the rules it was written
+ * under (L1010, L1013): version 1 holds a name or null per account; version 2 (#747) an entry with
+ * the name and the time it was recorded. A later version is named, never read as no nicknames, so
+ * nothing is written over it (L105).
+ */
 export const parseNicknames = (text: string): Nicknames | string => {
   const j = json(text)
   if (typeof j === 'string' && j.startsWith('not readable JSON')) return j
-  const o = j as Partial<Nicknames>
-  if (!o || typeof o !== 'object' || o.v !== 1 || !o.names || typeof o.names !== 'object' || Array.isArray(o.names)) return 'not a nicknames file'
-  for (const [id, n] of Object.entries(o.names)) if (n !== null && typeof n !== 'string') return `the entry for ${id} is not a name`
-  return { v: 1, names: { ...o.names } }
+  const o = j as { v?: unknown; names?: unknown }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || !o.names || typeof o.names !== 'object' || Array.isArray(o.names)) return 'not a nicknames file'
+  if (o.v !== 1 && o.v !== 2) return o.v === undefined ? 'not a nicknames file' : `written by version ${String(o.v)} of the mod, which this one cannot read`
+  const names: Record<string, NickEntry> = {}
+  for (const [id, raw] of Object.entries(o.names as Record<string, unknown>)) {
+    if (o.v === 1) {
+      if (raw !== null && typeof raw !== 'string') return `the entry for ${id} is not a name`
+      names[id] = { name: raw }
+      continue
+    }
+    const e = raw as { name?: unknown; at?: unknown }
+    const nameOk = !!e && typeof e === 'object' && (e.name === null || typeof e.name === 'string')
+    const atOk = !!e && (e.at === undefined || (typeof e.at === 'number' && Number.isFinite(e.at)))
+    if (!nameOk || !atOk) return `the entry for ${id} is not a name`
+    names[id] = { name: e.name as string | null, ...(e.at === undefined ? {} : { at: e.at as number }) }
+  }
+  return { names }
+}
+
+/**
+ * Which of two answers for one account stands (#747). A name beats a skip whatever their times: a
+ * skip only means "do not ask again", so it never takes a name away, whichever Mac recorded it or
+ * when. Of two names, or two skips, the later stands, an entry with no time (the first build's)
+ * counting as older than any with one. An exact tie goes to the greater name, so every Mac settles
+ * on the same entry whichever file it read first.
+ */
+const settle = (a: NickEntry, b: NickEntry): NickEntry => {
+  if ((a.name === null) !== (b.name === null)) return a.name !== null ? a : b
+  const ta = a.at ?? -Infinity
+  const tb = b.at ?? -Infinity
+  if (ta !== tb) return ta > tb ? a : b
+  return (a.name ?? '') >= (b.name ?? '') ? a : b
+}
+
+/** Every account across several copies of the nicknames, each settled entry by entry. */
+export const mergeNicknames = (files: readonly Nicknames[]): Nicknames => {
+  const names: Record<string, NickEntry> = {}
+  for (const f of files) {
+    for (const [id, e] of Object.entries(f.names)) names[id] = own(names, id) ? settle(names[id] as NickEntry, e) : e
+  }
+  return { names }
+}
+
+/**
+ * One answer recorded, merged rather than replacing (#747): a skip over a name changes nothing, and
+ * a rename is stamped later than the name it replaces even when the other Mac's clock ran ahead, so
+ * a rename made here is the answer that stands. A name over a skip takes this Mac's time as it is:
+ * a skip's time never decides between names, so it is not carried into one.
+ */
+export const withName = (f: Nicknames, id: string, name: string | null, now: number): Nicknames => {
+  const was = own(f.names, id) ? f.names[id] : undefined
+  const rename = name !== null && was !== undefined && was.name !== null && was.at !== undefined
+  const mine: NickEntry = { name, at: rename ? Math.max(now, (was.at as number) + 1) : now }
+  return { names: { ...f.names, [id]: was ? settle(was, mine) : mine } }
+}
+
+/**
+ * The file's text, version 2: one account per line, in key order, so the same nicknames are the
+ * same bytes on both Macs and two Macs answering different accounts touch different lines. It holds
+ * only the hashed keys and the names; the repository is public, so no email is ever written here.
+ */
+export const serializeNicknames = (f: Nicknames): string => {
+  const ids = Object.keys(f.names).sort()
+  if (!ids.length) return '{\n  "v": 2,\n  "names": {}\n}\n'
+  const line = (id: string) => {
+    const e = f.names[id] as NickEntry
+    return `    ${JSON.stringify(id)}: ${JSON.stringify({ name: e.name, ...(e.at === undefined ? {} : { at: e.at }) })}`
+  }
+  return `{\n  "v": 2,\n  "names": {\n${ids.map(line).join(',\n')}\n  }\n}\n`
 }
 
 /**

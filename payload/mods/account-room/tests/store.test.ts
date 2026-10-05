@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { accountKey, combine, macsIn, merge, parseMacFile, parseNicknames, serialize, withSighting } from '../hooks/store.ts'
+import { accountKey, combine, macsIn, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from '../hooks/store.ts'
 import type { MacFile } from '../hooks/store.ts'
 
 // The two files the account room keeps (#659): one readings file per Mac in iCloud Drive, each Mac
@@ -102,8 +102,63 @@ test("the folder listing names each Mac's file, and one iCloud has not downloade
   expect(macsIn(['.Daniels-MacBook-Pro-2.json.icloud'], 'Daniels-MacBook-Pro-2')).toEqual([])
 })
 
-test('nicknames: a name, or null for an account whose ask was skipped; anything else is refused', () => {
-  expect(parseNicknames('{"v":1,"names":{"a":"Work","b":null}}')).toEqual({ v: 1, names: { a: 'Work', b: null } })
+// The nicknames file exactly as the first build wrote it (#659, version 1, a name or null per key and
+// no time), kept as written so every later reader is held to it (L1010, L1013).
+const NICKNAMES_V1 = '{\n  "v": 1,\n  "names": {\n    "f16e53befe6fbe12": null,\n    "0a1b2c3d4e5f6071": "Work"\n  }\n}\n'
+
+test('nicknames written by the first build, with no times, still read: a name, or null where the ask was skipped (L1010, L1013)', () => {
+  expect(parseNicknames(NICKNAMES_V1)).toEqual({ names: { f16e53befe6fbe12: { name: null }, '0a1b2c3d4e5f6071': { name: 'Work' } } })
   expect(parseNicknames('{"v":1,"names":{"a":7}}')).toMatch(/not a name/)
   expect(parseNicknames('nope')).toMatch(/^not readable JSON/)
+})
+
+test('nicknames version 2: each entry carries when it was recorded; anything else is refused with why', () => {
+  expect(parseNicknames('{"v":2,"names":{"a":{"name":"Work","at":5},"b":{"name":null,"at":3}}}')).toEqual({ names: { a: { name: 'Work', at: 5 }, b: { name: null, at: 3 } } })
+  expect(parseNicknames('{"v":2,"names":{"a":"Work"}}')).toMatch(/the entry for a is not a name/)
+  expect(parseNicknames('{"v":2,"names":{"a":{"name":"Work","at":"noon"}}}')).toMatch(/the entry for a is not a name/)
+  // A later version is named, never read as no nicknames, so nothing is written over it (L105).
+  expect(parseNicknames('{"v":3,"names":{}}')).toMatch(/written by version 3/)
+  expect(parseNicknames('{"names":{}}')).toMatch(/not a nicknames file/)
+})
+
+test('two Macs answering one account: a name beats a skip whichever came later, in either order (#747)', () => {
+  const name = { name: 'dwright (team)', at: 100 }
+  const skipLater = { name: null, at: 200 }
+  const a = { names: { k: name } }
+  const b = { names: { k: skipLater } }
+  expect(mergeNicknames([a, b]).names.k).toEqual(name)
+  expect(mergeNicknames([b, a]).names.k).toEqual(name)
+  // A name the first build wrote, with no time, still beats a skip recorded later.
+  expect(mergeNicknames([{ names: { k: { name: 'Work' } } }, b]).names.k).toEqual({ name: 'Work' })
+})
+
+test('two names for one account: the later stands, in either order; one with no time counts as older (#747)', () => {
+  const early = { names: { k: { name: 'Home', at: 100 } } }
+  const late = { names: { k: { name: 'Personal', at: 200 } } }
+  expect(mergeNicknames([early, late]).names.k).toEqual({ name: 'Personal', at: 200 })
+  expect(mergeNicknames([late, early]).names.k).toEqual({ name: 'Personal', at: 200 })
+  expect(mergeNicknames([late, { names: { k: { name: 'Zed' } } }]).names.k).toEqual({ name: 'Personal', at: 200 })
+  // An exact tie settles the same way on every Mac, whichever file it read first.
+  const tieA = { names: { k: { name: 'Alpha', at: 300 } } }
+  const tieB = { names: { k: { name: 'Beta', at: 300 } } }
+  expect(mergeNicknames([tieA, tieB])).toEqual(mergeNicknames([tieB, tieA]))
+  // Accounts only one side knows are kept from both.
+  expect(Object.keys(mergeNicknames([{ names: { x: { name: 'X', at: 1 } } }, { names: { y: { name: null, at: 1 } } }]).names).sort()).toEqual(['x', 'y'])
+})
+
+test('recording an answer: a skip never replaces a name, a name replaces a skip, and a rename stands even over a clock that ran ahead (#747)', () => {
+  const named = { names: { k: { name: 'Work', at: 500 } } }
+  expect(withName(named, 'k', null, 900).names.k).toEqual({ name: 'Work', at: 500 })
+  expect(withName({ names: { k: { name: null, at: 900 } } }, 'k', 'Work', 100).names.k).toEqual({ name: 'Work', at: 100 })
+  // The other Mac stamped "Work" ahead of this Mac's clock: the rename is still the later answer.
+  expect(withName(named, 'k', 'Job', 400).names.k).toEqual({ name: 'Job', at: 501 })
+  expect(withName({ names: {} }, 'n', 'New', 7).names.n).toEqual({ name: 'New', at: 7 })
+})
+
+test('the nicknames file is written as version 2, one account per line in key order, and reads back the same', () => {
+  const f = { names: { b: { name: null, at: 3 }, a: { name: 'Work', at: 5 }, c: { name: 'Old' } } }
+  const text = serializeNicknames(f)
+  expect(text).toBe('{\n  "v": 2,\n  "names": {\n    "a": {"name":"Work","at":5},\n    "b": {"name":null,"at":3},\n    "c": {"name":"Old"}\n  }\n}\n')
+  expect(parseNicknames(text)).toEqual(f)
+  expect(serializeNicknames({ names: {} })).toBe('{\n  "v": 2,\n  "names": {}\n}\n')
 })
