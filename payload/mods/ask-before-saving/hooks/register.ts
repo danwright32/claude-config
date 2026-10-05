@@ -177,6 +177,12 @@ const lapse = async ($: EngineInterface) => {
   })
   for (const x of gone) {
     const where = x.files.join(', ')
+    // One Claude sent that another guard refused was not unused (#764, L11): it says why it was not saved.
+    if (x.refused !== undefined) {
+      $.ui.toast(`The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not sent again in time.`, { timeoutMs: 10_000 })
+      await tell($, `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes: the save you sent was refused before it was saved (${x.refused}), so nothing was saved, and sending it again asks him again.`)
+      continue
+    }
     $.ui.toast(lapsedFor(where), { timeoutMs: 10_000 })
     await tell($, `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes unused: it no longer lets that save through, and sending it again asks him again.`)
   }
@@ -284,6 +290,17 @@ export const register: Register = on => {
         if (key !== undefined) approved.delete(key)
         forGood = reissued.get(id)
         reissued.delete(id)
+      }
+      // A save Dan answered For good, sent again, refused by another guard before the classic hook
+      // could take its approval (#764): Dan is told now that it did not go through, and the approval,
+      // which still stands for a later send, records why, so its lapse never calls it unused.
+      if (forGood === undefined && r.deny !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
+        const at = await whereOf($)
+        const k = saveKey(tool, input, at.cwd, at.home)
+        let hit: AskBeforeSavingApproval | undefined
+        await update($, approvalsRef, a => (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x)))
+        if (hit) $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
+        return r
       }
       if (forGood !== undefined) {
         const why = r.deny ?? (r.isError ? (r.text ?? 'the tool reported an error') : undefined)

@@ -407,23 +407,27 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
   const seen = new Set<string>()
   let dir: string | undefined = cwd
   let vars: Vars = new Map()
-  // Each word of the command being read that a variable's value replaced, as it was written.
+  // Each word of the command being read that a variable's value replaced, as it was written. Matched
+  // by string, so a literal word equal to a variable's value in the same command is given as the
+  // variable: the side that makes a reader ask rather than pass, the path the same either way. A
+  // redirect's target, the commonest write, is read by its own place instead (#752).
   const asWritten = new Map<string, string>()
-  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true }) => {
+  // `shown`, where the caller knows it, is the word as the command spells it.
+  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true }, shown?: string) => {
     if (!word || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
     if (seen.has(key)) return
     seen.add(key)
     const sources = extra?.sources
     files.push({
-      word: asWritten.get(word) ?? word,
+      word: shown ?? asWritten.get(word) ?? word,
       ...(path ? { path } : {}),
       ...(sources && sources.length ? { sources } : {}),
       ...(extra?.edits ? { edits: true as const } : {}),
       ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
     })
   }
-  const named = (w: string, edits?: true) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined)
+  const named = (w: string, edits?: true, shown?: string) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined, shown)
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
     const path = absolutePath(word, dir, home)
     if (!word || isDevice(path ?? word)) return
@@ -483,10 +487,10 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
       const w = raw[i] as string
       if (WRITE_REDIRECT.test(w)) {
         const target = raw[++i]
-        if (target !== undefined) named(target)
+        if (target !== undefined) named(target, undefined, written[i])
       } else if (/^\d*>&$/.test(w)) {
         const target = raw[++i]
-        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) named(target)
+        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) named(target, undefined, written[i])
       } else if (/^\d*>&[0-9-]*$/.test(w)) continue
       else words.push(w)
     }
@@ -548,7 +552,7 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
       for (const f of got.files) named(f)
       for (const u of got.unnamed) {
         const into = u.into === undefined ? undefined : abs(u.into)
-        unnamed.push({ what: u.what, words: raw, inputs: absAll(u.inputs), ...(into ? { into } : {}) })
+        unnamed.push({ what: u.what, words: written, inputs: absAll(u.inputs), ...(into ? { into } : {}) })
       }
     } else if (VALUED[name]) {
       const { ops, opts } = operands(rest, VALUED[name] as ReadonlySet<string>)
@@ -569,7 +573,9 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
       }
       if (copied && into !== undefined) {
         const intoPath = abs(into)
-        for (const s of sources) add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]) })
+        // The word keeps the folder as written, so one reached through a variable still says so (#752).
+        const folder = (asWritten.get(into) ?? into).replace(/\/+$/, '')
+        for (const s of sources) add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]) }, `${folder}/${baseOf(s)}`)
       }
       // mv takes each source away whole: a folder with everything under it, as rm -r does (the
       // collision guard's reading, lessons review of #691).
@@ -606,7 +612,7 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
       // patch [file to patch [patch file]]: the first operand is written, as named.
       if (ops[0] !== undefined) named(ops[0])
       const patches = [opts.get('-i'), opts.get('--input'), ops[1], ...inputs].filter((p): p is string => typeof p === 'string' && p !== '')
-      unnamed.push({ what: 'a patch', words: raw, inputs: absAll(patches) })
+      unnamed.push({ what: 'a patch', words: written, inputs: absAll(patches) })
     } else {
       const g = git(args)
       if (g && (g.sub === 'apply' || g.sub === 'am')) {
@@ -614,7 +620,7 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
         if (!g.args.some(a => ['--check', '--stat', '--numstat', '--summary'].includes(a))) {
           const at = g.dir === undefined ? dir : absolutePath(g.dir, dir, home)
           const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
-          unnamed.push({ what: 'a patch', words: raw, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
+          unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
         }
       }
     }
@@ -627,11 +633,11 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
     const onStdin = `a ${name} script on standard input`
     if (c.script && !c.script.stdin) {
       // A script file named as an operand, or a program file (awk -f), is not guessed at.
-    } else if (p && 'unreadable' in p) unnamed.push({ what: onStdin, words: raw, inputs: [] })
-    else if (c.verdict) unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: raw, inputs: [] })
-    else if (c.script?.stdin) unnamed.push({ what: onStdin, words: raw, inputs: absAll(c.script.files), script: true })
+    } else if (p && 'unreadable' in p) unnamed.push({ what: onStdin, words: written, inputs: [] })
+    else if (c.verdict) unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [] })
+    else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
     // A command given its operands by xargs changes files no word names (#730).
-    if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: raw, inputs: [] })
+    if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: written, inputs: [] })
   }
   return { files, changes, unnamed }
 }
