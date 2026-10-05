@@ -9,11 +9,26 @@ import type { ModKitBandRow, ModKitBandSlot } from '../types/index.d.ts'
 const publisher: { name: string; register: Register } = {
   name: 'publisher',
   register: on => {
+    let staleRow: unknown
+    on('state.set', async ($, e, next) => {
+      const w = e as unknown as { plugin?: string; key?: string; value?: unknown[] }
+      if (staleRow === undefined || w.plugin !== 'mod-kit' || w.key !== 'band') return next(e)
+      const value = [staleRow, ...(w.value ?? [])]
+      staleRow = undefined
+      return next({ ...e, value } as never)
+    })
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
       const [verb, ...rest] = String((e as { command?: string }).command).split(' ')
       try {
         if (verb === 'show') await $.modkit.bandRow(JSON.parse(rest.join(' ')) as ModKitBandRow)
         if (verb === 'clear') await $.modkit.clearBandRow({ mod: rest[0] as string, id: rest[1] as string })
+        // A row left in the band's stored state from before its slot went (#796), as a reload finds
+        // it: only mod-kit writes its state, so the row rides mod-kit's next write of the band.
+        if (verb === 'stale') staleRow = JSON.parse(rest.join(' '))
+        if (verb === 'stored') {
+          const now = (((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: { slot?: string }[] }).value ?? []).map(r => r.slot)
+          return { deny: `stored ${now.join(',')}` }
+        }
       } catch (err) {
         return { deny: `refused: ${String((err as Error).message ?? err)}` }
       }
@@ -88,6 +103,23 @@ test('a row in a question slot is refused: the band draws no question', withPubl
   expect(await show($, row('question' as ModKitBandSlot, 'Which one?'))).toMatch(/refused: .*slot "question" is not one of/)
   const ui = await $.ui.mount(band())
   expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  await ui.unmount()
+})
+
+// Lessons review of #796: the rows live in $.state, so a question row saved before the slot went
+// survives a reload. It has no place in the order, and sorted on it the band's order was undefined
+// and the stale question, which nothing can answer any more, was drawn.
+test('a row stored under a slot the band no longer has is left out, and the rest keep their order', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, row('steps', 'Steps for you'))
+  const stale = { mod: 'ask-before-saving', id: 'question:t1', slot: 'question', lines: [[{ text: 'Save this as a standing rule?' }]] }
+  await $.tool.call({ tool: 'Bash', command: `stale ${JSON.stringify(stale)}` } as never)
+  await show($, row('needs-a-look', 'NO BUILD'))
+  // The positive control: the stale row really is in the band's stored state, beside the others.
+  const stored = (await $.tool.call({ tool: 'Bash', command: 'stored' } as never)) as { deny?: string }
+  expect(stored.deny).toBe('stored question,steps,needs-a-look')
+  const ui = await $.ui.mount(band())
+  expect(await shown(ui)).toEqual(['NO BUILD', 'Steps for you'])
   await ui.unmount()
 })
 

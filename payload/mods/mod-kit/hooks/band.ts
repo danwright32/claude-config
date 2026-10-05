@@ -117,6 +117,8 @@ export const drop = <R extends ModKitPane>(rows: readonly R[], mod: string, id: 
 
 /** What the band draws, top to bottom: by slot, publishing order within one. */
 export const compose = (rows: readonly ModKitBandRow[]): ModKitBandRow[] => {
+  // A row stored under a slot the band no longer has (a question row kept in $.state from before
+  // #796) has no place in the order and nothing left to answer it, so it is not drawn.
   // Array sort is stable, so rows in one slot keep the order they were first published in.
-  return [...rows].sort((a, b) => RANK[a.slot] - RANK[b.slot])
+  return rows.filter(r => isSlot(r.slot)).sort((a, b) => RANK[a.slot] - RANK[b.slot])
 }

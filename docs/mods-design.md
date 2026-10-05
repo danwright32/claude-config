@@ -492,7 +492,7 @@ Each in a rendered design round unless marked picker.
 
 | Mod | Surface | Decision |
 | --- | --- | --- |
-| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744, and ask before saving in #777; mod-kit's question builder went with it in #777 |
+| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744, and ask before saving in #777; mod-kit's question builder went in #796 |
 | Ask before saving (#618) | The question | Superseded by #777: Claude asks in Claude Code's own dialog, naming the file and stating the rule in plain words. Was: the rule's exact text and the file it would go to between the question and the three answers, set off by a grey rule |
 | Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
 | Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
