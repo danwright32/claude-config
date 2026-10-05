@@ -624,10 +624,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   open a page or a tab (Playwright's `browser_navigate` and a new tab, Chrome's `navigate` and
   `tabs_create`), and the Artifact tool's open action; publishing a page goes ahead. A held tool
   call's row replays that call, its input given to Claude. The keystroke guard's own actions are
-  not held by this mod: that mod's hook runs before this one (mod folders load in name order) and
-  asks its heads up in the band, which the phone cannot show. The remedy belongs in that mod,
-  calling `$.scopeModes.hold` before it asks, as manual steps does; it was recorded as a finding
-  from #702. A row reads as what it would do ("Open report.html in Google
+  held too (#707): it asks its heads up only beneath every mod's `tool.call` hook, so this mod's own
+  hold comes first, and while away it hands the action to `$.scopeModes.hold` itself rather than
+  ask in the band, which the phone cannot show. `hold` answers with the card and refusal this mod
+  words for its own held calls, so the two read the same. A row reads as what it would do ("Open report.html in Google
   Chrome", "Type into Overture"), its button "Open" or "Do it". Pressing one takes the row away and
   asks Claude to do that one thing, so it still passes every guard (the keystroke guard's heads up
   included). The same thing held twice is one row. A /clear ends the session and every mode with it.
@@ -794,6 +794,61 @@ crosses between mods. Claude's own SendMessage is left as it is. `tools/check-mo
 fails any other mod that keeps its own retry: a loop that stops once a send is delivered, or the
 "no reason given" fallback.
 
+### Which guard decides first (#707), built 2026-10-04
+
+Not put to Dan; each is the plainest reading of the issue, and each is open to his changing it.
+
+- **What decides the order.** Hooks on one event nest by tier, then by load order, outermost
+  first. Measured in a live headless session on 2026-10-04 (Claude Code 2.1.289, two probe
+  plugins): the load order is the order the plugin folders are listed in, which for the mods is
+  `CLAUDE_CODE_PLUGIN_DIRS` as the sync writes it, alphabetical by folder; swapping the two folders
+  swapped the nesting, and a `dependencies` entry did not move either. The tiers above and beneath
+  a person's own (`prepend`, `append`) are an organisation's managed plugins, so a mod has no way
+  to choose its place, and a guard's place among the others is its folder name. Under
+  `disableAllHooks` no person's mod loads at all.
+- **So the order is never relied on.** A guard that only refuses (no build, winding down, the
+  secret guard, the style check, the keystroke guard's checks of the app in front) decides in its
+  `tool.call` hook, as before. A guard that asks Dan, judges with a model, tells another session or
+  toasts a verdict decides from `classic.PreToolUse` instead, which the engine raises inside
+  `tool.call` beneath every plugin's `tool.call` hook (measured in the same session, and how
+  `claude plugin test` raises it), and only after calling `next`, which there runs the settings
+  hooks (the payload write gate, the push gates) and never the tool. So every refusal, a mod's or
+  a settings hook's, comes before Sonnet is asked, another session is told, a toast says safe or
+  Dan is asked, whatever the folders are called. The collision guard, the keystroke guard's heads
+  up and ask before saving's question all decide there; the collision guard notes a call as this
+  session's edit only when it judged and let that call through. Renaming folders to force an order
+  was not done: it holds only while every name sorts the right way.
+- **What still comes after.** Claude Code's own permission step decides after `classic.PreToolUse`:
+  a permission rule, the auto mode classifier, or Dan's answer to a permission prompt. A call it
+  refuses may already have been judged and toasted safe, or had its heads up asked. The engine
+  offers no hook later than `tool.check`, which runs before the mode settles an ask, so this is
+  left as it is.
+- **Two asking guards on one call.** A Bash call that both types into an app and writes a file
+  another session edits is held by both the keystroke guard and the collision guard; whichever
+  loads beneath asks first, and the other may then refuse. Rare enough to leave.
+- **A mod that answers a call itself** (manual steps, is it live, picker manners, handoff, the job
+  watcher's keep, scope modes' switch to build) never calls `next`, so no guard beneath it sees the
+  call. Each asks `$.modkit.screen(e)` first and answers with its refusal. mod-kit asks the secret
+  guard's `$.secretGuard.screen`, which makes the same check its `tool.call` hook makes, card and
+  toast included, from a hook on its own noun's event, where every mod's noun is reachable whatever
+  the load order; a noun's own method sees only the mods loaded beneath it. With the secret guard
+  not loaded nothing refuses; a screen that cannot ask refuses the call with a card (L42), and so
+  does the secret guard's own when its check fails. Only the secret guard is asked: no build and
+  the style check refuse what a call would change or write, which an answered call does not.
+  `tools/check-mod-shared-parts.sh` fails a mod that answers a call with a result and never asks.
+- **While Dan is away** the keystroke guard holds its action through `$.scopeModes.hold` before
+  any check of the app in front, since he cannot bring it forward from his phone. An away check
+  that fails refuses the action rather than ask a question nobody may see.
+- **How it is tested.** A mod's tests can load only that mod for real. An inline stand-in cannot
+  carry another mod's module (the engine requires a helper taking `$` to be declared at the top of
+  a module file), and one plugin holding two real guards is refused for registering `tool.call`
+  twice without a matcher (both measured 2026-10-04). So each guard is tested for real with a
+  stand-in refuser loaded both above it (`prepend`) and beneath it (`append`), and with a settings
+  hook's refusal; each answering mod with a stand-in screen; mod-kit's screen with a stand-in
+  secret guard; and the secret guard's screen with a stand-in answering mod above it.
+- **Left as it is.** The goal tracker marks and notifies a question before picker manners and the
+  secret guard decide; it is not a guard and was not moved here.
+
 ## Is it live (#617), built 2026-10-04
 
 How the settled card behaves, decided at build where the spec and the rounds were silent. The
@@ -866,7 +921,8 @@ ones marked open are the builder's choice, waiting on Dan.
 - **Asked beneath every guard** (#705). The question is asked from `classic.PreToolUse`, which the
   engine raises beneath every mod's `tool.call` hook, so a save the style check, the secret guard or
   no build refuses is refused before Dan is asked, whatever order the mods load in, and he is never
-  asked to approve a save that cannot land. The skip for Dan's own permanent words stays a
+  asked to approve a save that cannot land. Since #707 it asks only after the settings hooks beneath
+  it have decided too, so a save the payload write gate refuses is never asked about either. The skip for Dan's own permanent words stays a
   `tool.call` hook, the one place the saved result can be read, and passes the save down through
   every other guard all the same.
 - **Every shell route** (#705): a Bash call is read by mod-kit's one reader of what a command writes
