@@ -9506,8 +9506,9 @@ check "#337 and the refusal says it can no longer claim to reproduce CI" \
 # the list of what the suite actually shells out to, so it is read from there rather than kept by
 # hand beside it: a dependency added to CI would otherwise be absent from the container, and the
 # suite would fail there for a reason that has nothing to do with the code (L96, L41).
-_lin_probed="$( { sed -n 's/^ *\([a-z][a-z0-9_-]*\) --version.*/\1/p' "$_WF"
-                  sed -n 's/.*command -v \([a-z][a-z0-9_-]*\).*/\1/p' "$_WF"; } | sort -u | grep -v '^$' )"
+# Through the runner's own plan, the one place that list is derived, which
+# tests/test-ci-environment-tools.sh also reads (claude-config#624, L41).
+_lin_probed="$(SYNC_LINUX_PRINT_PLAN=1 bash "$_LIN" 2>/dev/null | sed -n 's/^probed: //p' | tr ' ' '\n' | grep -v '^$' )"
 # Counted and rendered BEFORE the check rather than inside it. A `printf ... | grep` written into a
 # check, title included, is the shape the #55 scan bans, and it is right to: a pair of greps over
 # one captured value can be answered by two unrelated parts of it.

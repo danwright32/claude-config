@@ -319,6 +319,23 @@ if holds "$out" "--match-head-commit $HEAD_SHA"; then
 else pass; fi
 rm -rf "$dir"
 
+# 3b. The same fixture with the up to date rule stood down (#770). Since #768 that rule runs first
+#     and refuses a missing head commit itself, so case 3 above no longer reaches the pin rule's
+#     own refusal. Without this case that refusal could be deleted with the suite still green
+#     (L151). Assert a phrase only the pin rule's refusal carries.
+dir=$(make_repo without-tool "$GREEN_NO_HEAD")
+out=$(run_hook "$dir" "ALLOW_BEHIND_MERGE=1 gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "with the up to date rule stood down, a green rollup with no head commit was merged unpinned: $out"
+fi
+if says "$out" "cannot be pinned to the commit those checks were actually run for"; then pass; else
+  fail "the pin rule's own no head refusal was not the one reached: $out"
+fi
+if holds "$out" "ALLOW_UNPINNED_MERGE=1"; then pass; else
+  fail "the pin rule's no head refusal does not name its own override: $out"
+fi
+rm -rf "$dir"
+
 # 4. The visible override, under the name already used for exactly this: merging without a commit
 #    pin. A second name for one idea is two vocabularies for one rule.
 dir=$(make_repo without-tool "$GREEN")
