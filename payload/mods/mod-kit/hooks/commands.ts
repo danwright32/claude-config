@@ -2,17 +2,21 @@
 // run, as its words with quotes removed, judged in command position (L673). Lessons review findings
 // on the guards built it up: a heredoc body is text, a here-string is not a heredoc, a heredoc that
 // never ends is judged after all, the words that only run the next command are looked past, and
-// only a | feeds one command what another prints (#724).
+// only a | feeds one command what another prints (#724). Since #712 it also reads what each shell
+// or interpreter runs as its program (program.ts) and judges inline code (code.ts), so a shell fed
+// its script on standard input is read as the commands it runs, as a shell's -c always was.
+import { codeVerdict, type CodeVerdict } from './code.ts'
+import { SHELLS, execsOf, kindOf, languageOf, readProgram, type Lang, type Program, type Script, type Stdin } from './program.ts'
 
-/** The shells whose -c script is read as the commands it runs; the write reader shares the list. */
-export const SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
+export { SHELLS }
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 // The reserved words that lead a command inside a compound one, looked past so the command is in
 // command position (lessons review of #724: `then git commit` was a command named then); and the
-// words that open and close a group whose body shares one standard input, as a subshell's does.
+// words that open and close a group whose body shares one standard input, as a subshell's does. A
+// case's clauses share it too, its `case ... in` opening the group and `esac` closing it (#730).
 const LEADS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{'])
 const OPENS = new Set(['if', 'while', 'until', 'for', 'select', '{'])
-const CLOSES = new Set(['fi', 'done', '}'])
+const CLOSES = new Set(['fi', 'done', '}', 'esac'])
 
 // The words that only run the command after them (sudo cat .env is cat .env), each read by its own
 // options, so a value is never taken for the command (#724: nice -n 10 gave a command named 10, and
@@ -116,9 +120,14 @@ const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[] } => {
 // | or |&, and inside a subshell or an if, while, until, for or { } group whatever feeds the group,
 // for every command in it, since each shares it; ;, &&, ||, & and a new line link no two commands,
 // and a new line right after a | carries the pipe on. A group's closing word (`)`, `fi`, `done`,
-// `}`) is fed nothing, and what follows a | after it is fed the group's output as that word.
+// `}`, `esac`) is fed nothing, and what follows a | after it is fed the group's output as that word.
 // Each word's place in the text is kept in `starts`, so a heredoc's << word can be matched to the
 // body dropped from under it (#698).
+//
+// A case (#730): `case WORD in` is a command of its own that opens a group its clauses share; each
+// clause's pattern, up to its `)`, is no command (a `|` in it separates alternatives, never pipes),
+// the commands after it run until `;;`, `;&` or `;;&`, and `esac` closes the group. Read as a
+// subshell's close, a pattern's `)` took away the feed of the loop around it.
 type Split = { words: string[]; starts: number[]; from?: number }
 const split = (cmd: string): Split[] => {
   const cmds: Split[] = []
@@ -133,6 +142,9 @@ const split = (cmd: string): Split[] => {
   // What feeds the command being read, and what feeds each subshell open around it.
   let from: number | undefined
   const subshells: (number | undefined)[] = []
+  // Each case open around the text being read: in a clause's pattern, or its commands.
+  const cases: ('pattern' | 'body')[] = []
+  const inPattern = () => cases[cases.length - 1] === 'pattern'
   const push = (w: string[], s: number[]) => cmds.push(from === undefined ? { words: w, starts: s } : { words: w, starts: s, from })
   const begin = (i: number) => {
     if (inWord) return
@@ -156,6 +168,7 @@ const split = (cmd: string): Split[] => {
     const ended = words.length > 0
     const first = words[0] as string
     if (ended && CLOSES.has(first)) {
+      if (first === 'esac') cases.pop()
       subshells.pop()
       listed()
       cmds.push({ words, starts })
@@ -172,6 +185,22 @@ const split = (cmd: string): Split[] => {
     starts = []
     return ended
   }
+  // `case WORD in`, past the words that lead a command, ends a case's header: a command of its own,
+  // then the group its clauses share, read from its first pattern.
+  const caseIn = (): boolean => {
+    const k = words.length
+    if (k < 3 || words[k - 1] !== 'in' || words[k - 3] !== 'case' || !words.slice(0, k - 3).every(w => LEADS.has(w))) return false
+    endCmd()
+    subshells.push(from)
+    cases.push('pattern')
+    return true
+  }
+  const closeCase = (at: number) => {
+    cases.pop()
+    subshells.pop()
+    listed()
+    cmds.push({ words: ['esac'], starts: [at] })
+  }
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
     if (quote) {
@@ -179,6 +208,30 @@ const split = (cmd: string): Split[] => {
       else if (c === '\\' && quote === '"' && i + 1 < cmd.length) word += cmd[++i]
       else word += c
       continue
+    }
+    // A clause's pattern is no command: its words are dropped at the ) that ends it, and an esac
+    // where a pattern would start closes the case, the character after it read as usual. A quote or
+    // a backslash in a pattern is read as anywhere else.
+    if (inPattern() && c !== '"' && c !== "'" && c !== '\\') {
+      const separator = /[\s;&|()]/.test(c)
+      if (!(separator && inWord && word === 'esac' && words.length === 0)) {
+        if (c === ')') {
+          word = ''
+          inWord = false
+          words = []
+          starts = []
+          cases[cases.length - 1] = 'body'
+        } else if (separator) endWord()
+        else {
+          begin(i)
+          word += c
+        }
+        continue
+      }
+      const at = start
+      word = ''
+      inWord = false
+      closeCase(at)
     }
     if (c === '"' || c === "'") {
       quote = c
@@ -238,108 +291,266 @@ const split = (cmd: string): Split[] => {
     } else if (c === ';' || c === '&') {
       endCmd()
       listed()
+      // ;; ;& and ;;& end a case clause: what follows is the next pattern.
+      if (c === ';' && cases[cases.length - 1] === 'body' && (cmd[i + 1] === ';' || cmd[i + 1] === '&')) {
+        i++
+        if (cmd[i] === ';' && cmd[i + 1] === '&') i++
+        cases[cases.length - 1] = 'pattern'
+      }
     } else if (c === '\n') {
-      if (endCmd()) listed()
-    } else if (c === ' ' || c === '\t') endWord()
-    else {
+      endWord()
+      if (!caseIn() && endCmd()) listed()
+    } else if (c === ' ' || c === '\t') {
+      endWord()
+      caseIn()
+    } else if (c === '<' && inWord && wordParens === 0 && !/^\d*<*$/.test(word)) {
+      // An input redirect begins a word of its own however it is spaced (#730), as an output one
+      // does (#654): cat<<EOF, python3 -<<EOF and cmd<file name the command, and the heredoc its
+      // body. A descriptor number before it stays with it, and one inside a $( ) word stays there.
+      endWord()
+      begin(i)
+      word += c
+    } else {
       begin(i)
       word += c
     }
+  }
+  if (inPattern() && inWord && word === 'esac' && words.length === 0) {
+    const at = start
+    word = ''
+    inWord = false
+    closeCase(at)
   }
   endCmd()
   return cmds
 }
 
-// Where the command begins: past assignments, the reserved words that lead a command, and the
-// words that only run the next command. A runner with no command after it (a bare env) is the
-// command itself.
-const begins = (words: string[]): number => {
-  let i = 0
-  for (;;) {
-    const w = words[i] ?? ''
-    if (ASSIGNMENT.test(w) || LEADS.has(w)) {
-      i++
+// env -S (or --split-string) gives env a command line it splits into words itself (#730): the
+// string, and the place after it, or undefined when env has none.
+const envSplit = (words: readonly string[], at: number): { value: string; next: number } | undefined => {
+  for (let i = at + 1; i < words.length; i++) {
+    const a = words[i] as string
+    if (a === '--' || (!a.startsWith('-') && a !== '-')) return undefined
+    if (a.startsWith('--split-string=')) return { value: a.slice('--split-string='.length), next: i + 1 }
+    if (a === '--split-string') return { value: words[i + 1] ?? '', next: i + 2 }
+    if (a.startsWith('--')) {
+      if (a === '--chdir' || a === '--unset') i++
       continue
     }
-    const runner = RUNNERS.get(w.split('/').pop() ?? '')
-    const next = runner && runs(words, i, runner)
-    if (next === undefined) break
-    i = next
-  }
-  return i
-}
-
-// A shell's script given by -c, alone or in a cluster (bash -lc, zsh -ec, sh -ce, #698): the first
-// word after its options, wherever the c stands, each o or O taking the next word as its value
-// (bash -eo pipefail -c), as --rcfile and --init-file do; after -- or a lone -, the next word.
-// Undefined without -c, or with nothing after it. A -c after a script file is that script's own.
-const SHELL_LONG_VALUED = new Set(['--rcfile', '--init-file'])
-const shellScript = (words: readonly string[]): string | undefined => {
-  let c = false
-  for (let i = 1; i < words.length; i++) {
-    const w = words[i] as string
-    if (w === '--' || w === '-') return c ? words[i + 1] : undefined
-    if (w.startsWith('--')) {
-      if (SHELL_LONG_VALUED.has(w)) i++
-      continue
+    for (let j = 1; j < a.length; j++) {
+      const letter = a[j] as string
+      if (letter === 'S') return a.slice(j + 1) ? { value: a.slice(j + 1), next: i + 1 } : { value: words[i + 1] ?? '', next: i + 2 }
+      if ('CPu'.includes(letter)) {
+        if (j === a.length - 1) i++
+        break
+      }
     }
-    if (/^[-+][A-Za-z]+$/.test(w)) {
-      if (w[0] === '-' && w.includes('c')) c = true
-      i += (w.slice(1).match(/[oO]/g) ?? []).length
-      continue
-    }
-    return c ? w : undefined
   }
   return undefined
 }
 
+// Where the command begins: past assignments, the reserved words that lead a command, and the
+// words that only run the next command. A runner with no command after it (a bare env) is the
+// command itself. env -S's string is split into the words it runs, which carry no place in the
+// text; and a command xargs runs is marked, since xargs gives it operands from its own input.
+type Begun = { words: string[]; starts: number[]; xargs: boolean }
+const begins = (words: string[], starts: number[]): Begun => {
+  let w = words
+  let s = starts
+  let xargs = false
+  let i = 0
+  for (;;) {
+    const word = w[i] ?? ''
+    if (ASSIGNMENT.test(word) || LEADS.has(word)) {
+      i++
+      continue
+    }
+    const name = word.split('/').pop() ?? ''
+    const runner = RUNNERS.get(name)
+    if (!runner) break
+    const env = name === 'env' ? envSplit(w, i) : undefined
+    if (env) {
+      const inner = split(env.value).flatMap(x => x.words)
+      w = [...inner, ...w.slice(env.next)]
+      s = [...inner.map(() => -1), ...s.slice(env.next)]
+      i = 0
+      continue
+    }
+    const next = runs(w, i, runner)
+    if (next === undefined) break
+    if (name === 'xargs') xargs = true
+    i = next
+  }
+  return { words: w.slice(i), starts: s.slice(i), xargs }
+}
+
 const HEREDOC_WORD = /^(\d*)<<(?!<)/
+const OUTPUT_WORD = /^(?:\d*|&)>>?\|?&?(.*)$/
+const INPUT_WORD = /^(\d*)(<<<|<<-?|<)(.*)$/
+const base = (p: string) => p.split('/').pop() ?? p
+const CLOSERS = new Set([')', ...CLOSES])
+
+type Fed = { word: number; body: string }[]
+
+// What a command's own redirects put on its standard input, the last one winning as in the shell:
+// a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
+// file. Another descriptor's (3<file) is not standard input.
+const ownStdin = (words: readonly string[], fed: Fed): Stdin | undefined => {
+  let s: Stdin | undefined
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] as string
+    const m = INPUT_WORD.exec(w)
+    if (!m || w.startsWith('<(')) continue
+    const at = i
+    const mine = m[1] === '' || m[1] === '0'
+    const op = m[2] as string
+    const rest = m[3] as string
+    if (op === '<<<') {
+      const text = rest || (words[++i] ?? '')
+      if (mine) s = { text }
+    } else if (op.startsWith('<<')) {
+      if (!rest) i++
+      const body = fed.find(f => f.word === at)?.body
+      if (mine) s = body !== undefined ? { text: body } : { unreadable: 'fed by a heredoc' }
+    } else {
+      const file = rest || (words[++i] ?? '')
+      if (mine && file && !file.startsWith('&')) s = { files: [file] }
+    }
+  }
+  return s
+}
+
+// A command's words past its options and redirects: what cat reads.
+const operandsOf = (args: readonly string[]): string[] => {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    const o = OUTPUT_WORD.exec(a)
+    const n = a.startsWith('<(') ? null : INPUT_WORD.exec(a)
+    if (o || n) {
+      if (!(o ? o[1] : n?.[3])) i++
+      continue
+    }
+    if (a.startsWith('-') && a !== '-') continue
+    out.push(a)
+  }
+  return out
+}
+
+// What a command puts on the standard input of the one a | feeds: cat of files feeds those files,
+// and cat of a heredoc its body (#730: `cat script.scpt | osascript` was read as feeding nothing);
+// echo and printf their words; a group's output, or anything else, what cannot be read.
+const piped = (feeder: readonly string[], fed: Fed): Stdin => {
+  if (CLOSERS.has(feeder[0] as string)) return { unreadable: 'fed by what a group of commands pipes into it' }
+  const name = base(feeder[0] as string)
+  const args = feeder.slice(1)
+  if (name === 'cat') {
+    const files = operandsOf(args)
+    if (files.length) return { files }
+    return ownStdin(feeder, fed) ?? { unreadable: 'fed by what cat pipes into it' }
+  }
+  if (args.some(a => HEREDOC_WORD.test(a))) return { unreadable: 'fed by a heredoc' }
+  if (name === 'echo' || name === 'printf') return { text: args.filter(a => !/^-[neE]+$/.test(a)).join(' ') }
+  return { unreadable: `fed by what ${name} pipes into it` }
+}
 
 /**
  * One simple command: its words, the words of the command whose output a | feeds into it, and the
- * body of each heredoc that feeds it (#698), `word` being the place of its << word in `words`.
+ * body of each heredoc that feeds it (#698), `word` being the place of its << word in `words`. For
+ * a shell or an interpreter, what it runs (#712): the language of its inline code, its program (its
+ * text, `stdin` when that came on standard input, or why it cannot be read), the script file it
+ * runs instead, and what the program can do. `xargs` marks a command xargs runs, giving it
+ * operands from its own input that no word names.
  */
-export type Command = { words: string[]; pipedFrom?: string[]; heredocs?: { word: number; body: string }[] }
+export type Command = {
+  words: string[]
+  pipedFrom?: string[]
+  heredocs?: Fed
+  xargs?: true
+  language?: Lang
+  program?: Program
+  script?: Script
+  verdict?: CodeVerdict
+}
+
+// What feeds the commands of one read: the command a | feeds them from, what is on their standard
+// input, and whether xargs runs them, each given to every command no | of its own feeds.
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean }
+
+// One command, with what it runs. A shell whose script can be read is read as the commands it runs
+// (a -c always was; since #712 a heredoc, a here-string, or what echo, printf or cat pipes in too),
+// each reading what feeds the shell (#730: a heredoc or here-string feeding a -c), unless the shell
+// reads its script there, when what they read is the rest of that script. What a find -exec runs
+// is read after it, as a command of its own.
+const emit = (words: string[], fed: Fed, feed: Feed, out: Command[], opts: ReadOptions) => {
+  const stdin = ownStdin(words, fed) ?? feed.stdin
+  const kind = kindOf(words[0])
+  const { program, script } = kind ? readProgram(words, stdin) : {}
+  if (kind === 'shell' && program && 'text' in program) {
+    const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
+    out.push(...pipeline(program.text, opts, feed.xargs ? { ...inner, xargs: true } : inner))
+    return
+  }
+  // The language is said only where there is a program or script in it to read.
+  const language = program || script ? languageOf(kind) : undefined
+  const verdict = language && program && 'text' in program ? codeVerdict(language, program.text) : undefined
+  out.push({
+    words,
+    ...(feed.pipedFrom ? { pipedFrom: feed.pipedFrom } : {}),
+    ...(fed.length ? { heredocs: fed } : {}),
+    ...(feed.xargs ? { xargs: true as const } : {}),
+    ...(language ? { language } : {}),
+    ...(program ? { program } : {}),
+    ...(script ? { script } : {}),
+    ...(verdict ? { verdict } : {}),
+  })
+  for (const inner of execsOf(words)) {
+    const b = begins(inner, inner.map(() => -1))
+    if (b.words.length) emit(b.words, [], b.xargs ? { xargs: true } : {}, out, opts)
+  }
+}
 
 /**
- * Each simple command a Bash call would run, with what a pipe feeds it and the body of each heredoc
- * that feeds it, if anything. A heredoc inside a word ("$(cat <<'EOF' ... )") feeds no command
- * here, and one that never ends has no body: its lines are read as commands.
+ * Each simple command a Bash call would run, with what a pipe feeds it, the body of each heredoc
+ * that feeds it, and what it runs, if anything. A heredoc inside a word ("$(cat <<'EOF' ... )")
+ * feeds no command here, and one that never ends has no body: its lines are read as commands.
+ * `opts` asks for more than the commands that run (ReadOptions); `outer` is what feeds the commands
+ * of a shell's script, read as the commands it runs.
  */
-export const pipeline = (cmd: string, opts: ReadOptions = {}): Command[] => {
+export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}): Command[] => {
   const out: Command[] = []
   const { text, heredocs } = dropHeredocs(cmd)
   const bodyAt = new Map(heredocs.map(h => [h.at, h.body]))
   const read = split(text)
-  const begun = read.map(r => begins(r.words))
-  const stripped = read.map((r, k) => r.words.slice(begun[k]))
+  const begun = read.map(r => begins(r.words, r.starts))
+  const fedOf = (b: Begun): Fed => {
+    const fed: Fed = []
+    b.words.forEach((w, n) => {
+      const m = HEREDOC_WORD.exec(w)
+      const at = b.starts[n] ?? -1
+      const body = m && at >= 0 ? bodyAt.get(at + (m[1] as string).length) : undefined
+      if (body !== undefined) fed.push({ word: n, body })
+    })
+    return fed
+  }
   read.forEach((r, k) => {
-    const words = stripped[k] as string[]
-    if (words.length === 0) {
+    const b = begun[k] as Begun
+    if (b.words.length === 0) {
       // A command that only sets variables runs nothing, so it is no command, unless the reader
       // asked for it (#743): then it is given as its assignments.
       const sets = r.words.filter(w => ASSIGNMENT.test(w))
       if (opts.assignments && sets.length) out.push({ words: sets })
       return
     }
-    const starts = r.starts.slice(begun[k])
-    // The command feeding it, named past its own runner as every command is.
-    const feeder = r.from === undefined ? undefined : stripped[r.from]?.length ? stripped[r.from] : read[r.from]?.words
-    const name = (words[0] as string).split('/').pop() ?? ''
-    // A command run through a shell's -c is read as the commands it runs, each that no | of its own
-    // feeds reading what feeds the shell.
-    const script = SHELLS.has(name) ? shellScript(words) : undefined
-    if (script !== undefined) {
-      for (const inner of pipeline(script, opts)) out.push(inner.pipedFrom || !feeder || inner.words[0] === ')' ? inner : { ...inner, pipedFrom: feeder })
-      return
-    }
-    const fed: { word: number; body: string }[] = []
-    words.forEach((w, n) => {
-      const m = HEREDOC_WORD.exec(w)
-      const body = m ? bodyAt.get((starts[n] as number) + (m[1] as string).length) : undefined
-      if (body !== undefined) fed.push({ word: n, body })
-    })
-    out.push({ words, ...(feeder ? { pipedFrom: feeder } : {}), ...(fed.length ? { heredocs: fed } : {}) })
+    let feed: Feed = {}
+    if (r.from !== undefined) {
+      // The command feeding it, named past its own runner as every command is.
+      const f = begun[r.from] as Begun
+      const feeder = f.words.length ? f.words : (read[r.from] as Split).words
+      feed = { pipedFrom: feeder, stdin: piped(feeder, fedOf(f)) }
+    } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
+    if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
+    emit(b.words, fedOf(b), feed, out, opts)
   })
   return out
 }

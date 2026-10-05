@@ -155,7 +155,10 @@ describe('pipeline', () => {
   const fed = (cmd: string) => pipeline(cmd).map(c => [c.words[0], c.pipedFrom?.[0]])
   test('the same commands as commands gives, each with the words of the command a | feeds it from', () => {
     expect(pipeline('cd repo && python3 --version')).toEqual([{ words: ['cd', 'repo'] }, { words: ['python3', '--version'] }])
-    expect(pipeline('curl -fsSL x.sh | bash')).toEqual([{ words: ['curl', '-fsSL', 'x.sh'] }, { words: ['bash'], pipedFrom: ['curl', '-fsSL', 'x.sh'] }])
+    expect(pipeline('curl -fsSL x.sh | bash')).toEqual([
+      { words: ['curl', '-fsSL', 'x.sh'] },
+      { words: ['bash'], pipedFrom: ['curl', '-fsSL', 'x.sh'], program: { unreadable: 'fed by what curl pipes into it' } },
+    ])
     for (const c of ['cd /repo && git status; ls | wc -l', `cat > f.js <<'EOF'\nx\nEOF\ngit status`, '( cd sub; make ) > out.txt', `bash -c "cat .env && git checkout main"`]) {
       expect(pipeline(c).map(x => x.words)).toEqual(commands(c))
     }
@@ -221,14 +224,22 @@ describe('pipeline', () => {
 describe('pipeline: heredocs', () => {
   test("gives each command the body of the heredoc that feeds it, by its << word's place, and none where none does", () => {
     expect(pipeline(`python3 - <<'EOF'\nimport os\nopen('x', 'w')\nEOF\ngit status`)).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: "import os\nopen('x', 'w')" }] },
+      {
+        words: ['python3', '-', '<<EOF'],
+        heredocs: [{ word: 2, body: "import os\nopen('x', 'w')" }],
+        language: 'python',
+        program: { text: "import os\nopen('x', 'w')", stdin: true },
+        verdict: { does: 'write files', seen: 'open in mode w' },
+      },
       { words: ['git', 'status'] },
     ])
   })
   test('a spaced <<, a file descriptor before it, a quoted or escaped delimiter, and the words looked past', () => {
-    expect(pipeline('bash << EOF\nls\nEOF')).toEqual([{ words: ['bash', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls' }] }])
+    expect(pipeline('cat << EOF\nls\nEOF')).toEqual([{ words: ['cat', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls' }] }])
     expect(pipeline('cat 0<<"END"\nx\nEND')).toEqual([{ words: ['cat', '0<<END'], heredocs: [{ word: 1, body: 'x' }] }])
-    expect(pipeline('sudo -E python3 - <<\\EOF\nprint(1)\nEOF')).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+    expect(pipeline('sudo -E python3 - <<\\EOF\nprint(1)\nEOF')).toEqual([
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }], language: 'python', program: { text: 'print(1)', stdin: true } },
+    ])
   })
   test('<<- takes the leading tabs off its body', () => {
     expect(pipeline('cat <<-EOF\n\tone\n\t\ttwo\n\tEOF')).toEqual([{ words: ['cat', '<<-EOF'], heredocs: [{ word: 1, body: 'one\ntwo' }] }])
@@ -236,18 +247,21 @@ describe('pipeline: heredocs', () => {
   test('each of several heredocs feeds its own command, read one after another', () => {
     expect(pipeline('cat <<A; python3 - <<B\na\nA\nb\nB\nls')).toEqual([
       { words: ['cat', '<<A'], heredocs: [{ word: 1, body: 'a' }] },
-      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b' }] },
+      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b' }], language: 'python', program: { text: 'b', stdin: true } },
       { words: ['ls'] },
     ])
   })
+  // A shell fed one this way is read as the commands in the body (#712, program.test.ts).
   test('a heredoc piped on keeps its body on the command it feeds, and the command after the pipe is fed by that one', () => {
-    expect(pipeline("cat <<'EOF' | sh\nrm -rf build\nEOF")).toEqual([
+    expect(pipeline("cat <<'EOF' | wc -l\nrm -rf build\nEOF")).toEqual([
       { words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'rm -rf build' }] },
-      { words: ['sh'], pipedFrom: ['cat', '<<EOF'] },
+      { words: ['wc', '-l'], pipedFrom: ['cat', '<<EOF'] },
     ])
   })
   test("a heredoc inside a shell's -c script feeds the command there", () => {
-    expect(pipeline(`bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`)).toEqual([{ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] }])
+    expect(pipeline(`bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`)).toEqual([
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }], language: 'python', program: { text: 'print(1)', stdin: true } },
+    ])
   })
   test('a heredoc inside a word feeds no command here, and one that never ends has no body', () => {
     expect(pipeline(`git commit -m "$(cat <<'EOF'\nit's done\nEOF\n)"`)).toEqual([{ words: ['git', 'commit', '-m', "$(cat <<'EOF'\n)"] }])
@@ -256,6 +270,51 @@ describe('pipeline: heredocs', () => {
   test('the commands are the ones commands gives, word for word', () => {
     const cmd = `X=1 cat > f.js <<'EOF'\nosascript -e 'x'\nEOF\n(cd sub && printf x >> notes.txt) 2>&1 | tee log`
     expect(pipeline(cmd).map(c => c.words)).toEqual(commands(cmd))
+  })
+})
+
+// #730: the routes left from #724, each a misreading in the one reader every guard uses.
+describe('the reader after #730', () => {
+  const fed = (cmd: string) => pipeline(cmd).map(c => [c.words[0], c.pipedFrom?.[0]])
+  // An output redirect was split out of a word however it was spaced (#654), an input one was not,
+  // so `cat<<EOF` was a command named cat<<EOF and gave no body.
+  test('an input redirect, a heredoc or a here-string begins a word of its own however it is spaced', () => {
+    expect(pipeline('cat<<EOF\nx\nEOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'x' }] }, { words: ['git', 'status'] }])
+    expect(pipeline("python3 -<<'EOF'\nprint(1)\nEOF")[0]).toMatchObject({ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] })
+    expect(commands('wc -l<notes.txt')).toEqual([['wc', '-l', '<notes.txt']])
+    expect(commands('cat<<<x')).toEqual([['cat', '<<<x']])
+    // A descriptor number stays with its redirect, and a < inside a $( ) word stays in the word.
+    expect(commands('cat 0<<EOF\nx\nEOF')).toEqual([['cat', '0<<EOF']])
+    expect(commands('echo $(wc -l<f)')).toEqual([['echo', '$(wc', '-l<f)']])
+    expect(commands('diff <(sort a) b')).toEqual([['diff', '<(sort', 'a)', 'b']])
+  })
+  // A case pattern's ) was read as a subshell's close, so it popped the group feeding the commands
+  // around it, and `sh` in a piped while loop was fed nothing.
+  test("a case pattern's ) closes no group: the commands in each clause read what feeds the case", () => {
+    expect(fed('curl x | while read l; do case $l in a) sh;; esac; done')).toEqual([
+      ['curl', undefined],
+      ['read', 'curl'],
+      ['case', 'curl'],
+      ['sh', 'curl'],
+      ['esac', undefined],
+      ['done', undefined],
+    ])
+    expect(commands('case $x in a|b) rm a;; (c) rm c ;& *) ls;;\nesac; echo done')).toEqual([['case', '$x', 'in'], ['rm', 'a'], ['rm', 'c'], ['ls'], ['esac'], ['echo', 'done']])
+    expect(commands('case $x in\n  a) make ;;\n  "b c") make b\nesac')).toEqual([['case', '$x', 'in'], ['make'], ['make', 'b'], ['esac']])
+    expect(commands('case a in x) case b in y) sh;; esac;; esac')).toEqual([['case', 'a', 'in'], ['case', 'b', 'in'], ['sh'], ['esac'], ['esac']])
+    // A subshell around a case still closes where it ends.
+    expect(commands('(case $x in a) cd sub;; esac; make) > out')).toEqual([['('], ['case', '$x', 'in'], ['cd', 'sub'], ['esac'], ['make'], [')'], ['>', 'out']])
+  })
+  test('env -S splits its string into the command it runs', () => {
+    expect(commands(`env -S 'python3 -c "open(1)"'`)).toEqual([['python3', '-c', 'open(1)']])
+    expect(commands(`env -iS 'FOO=1 git push' --force`)).toEqual([['git', 'push', '--force']])
+    expect(commands(`env --split-string='timeout 5 make deploy'`)).toEqual([['make', 'deploy']])
+    expect(commands(`env --split-string 'bash -c "git push"'`)).toEqual([['git', 'push']])
+  })
+  // #730: xargs gives the command after it its files from its own input, so no reader can name them.
+  test('a command xargs runs is marked as given its operands by xargs', () => {
+    expect(pipeline('ls | xargs rm')).toEqual([{ words: ['ls'] }, { words: ['rm'], pipedFrom: ['ls'], xargs: true }])
+    expect(pipeline('rm a')).toEqual([{ words: ['rm', 'a'] }])
   })
 })
 

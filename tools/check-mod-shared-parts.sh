@@ -33,9 +33,21 @@
 #             up for its .git entry (.git standing as a        collision guard's, which no mod can import)
 #             whole path part: '.git', /.git, /.git/HEAD;
 #             never .gitignore or .github, #732)
+#   program-reader                                              use the language, program and verdict on each
+#             reading what a shell or interpreter runs, or     command $.modkit.pipeline({ command }) gives,
+#             judging inline code by what it can do (naming    read and judged once (#712: no build kept the
+#             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
 #
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
-# on every run, with that issue, rather than failing the run or passing in silence (L129, L523).
+# on every run, with that issue, rather than failing the run or passing in silence (L129, L523). The
+# collision guard's write reader and walk for a checkout moved onto mod-kit in #712; no build's write
+# reader, program reader and code judge (scope-modes) move in its second part.
+#
+# A mod's tests may read with mod-kit's own readers rather than a stand-in (#730: a stand-in split
+# inside quotes): a test cannot import another mod's files, so each such file is a copy under the
+# mod's tests/mod-kit, at the path it has in mod-kit. Every copy must match mod-kit's byte for byte,
+# or its tests read with a reader mod-kit no longer has (L422); one that differs, or copies nothing,
+# fails the run, naming the cp that brings it back.
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -87,14 +99,15 @@ PARTS=(
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
+  "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
 )
 
 # $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
 exception(){
   case "$1:$2" in
-    # The collision guard's shellWrites and no build's file readers predate mod-kit's (#705), and
-    # the collision guard's walk for a checkout predates mod-kit's workingTree (#726).
-    collision-guard:write-reader|scope-modes:write-reader|collision-guard:working-tree) echo '#712' ;;
+    # No build's file readers predate mod-kit's writes (#705), and its program reader and code judge
+    # are the copy mod-kit's were moved from (#712); the second part of #712 moves scope-modes onto them.
+    scope-modes:write-reader|scope-modes:program-reader) echo '#712' ;;
   esac
 }
 
@@ -121,6 +134,21 @@ for d in "$dir"/*/; do
       echo "check-mod-shared-parts: $name keeps its own $label at ${h#"$sd"}: use $remedy from mod-kit instead."
     done <<< "$hits"
   done
+  # copies (#712, #730): each file under the mod's tests/mod-kit is a copy of mod-kit's own, byte for
+  # byte, so its tests read with the reader every mod uses.
+  if [ -d "$d/tests/mod-kit" ]; then
+    copied="$(cd "$d/tests/mod-kit" && find . -type f | sed 's#^\./##' | sort)"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      if [ ! -f "$dir/mod-kit/$rel" ]; then
+        failed=1
+        echo "check-mod-shared-parts: $name's tests/mod-kit/$rel copies no file of mod-kit's, so it stands in for nothing: delete it."
+      elif ! cmp -s "$d/tests/mod-kit/$rel" "$dir/mod-kit/$rel"; then
+        failed=1
+        echo "check-mod-shared-parts: $name's tests/mod-kit/$rel differs from mod-kit's own, so its tests read with a reader mod-kit no longer has: cp \"$dir/mod-kit/$rel\" \"${d%/}/tests/mod-kit/$rel\""
+      fi
+    done <<< "$copied"
+  fi
   # screen (#707, per hook since #732): a tool.call hook answering with a result that never asks
   # mod-kit's screen in its own body.
   if ! found="$(python3 "$TS_SOURCE" unscreened "$d/hooks")"; then
