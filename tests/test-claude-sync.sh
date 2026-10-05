@@ -3458,6 +3458,31 @@ touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
 check "pull applies a same-size same-mtime edit"     "grep -q 'cccc' '$QSRC/hooks/tiny.sh'"
 
+section "== a pull leaves a file whose bytes already match untouched, timestamps included (#754) =="
+# Claude Code watches every mod folder by each file's change time (ctime), and reloads the mod when
+# one moves: probed 2026-10-05 on 2.1.289, an rsync -a of identical bytes carrying a newer mtime
+# reloaded every mod it crossed, each line reading "plugin.json changed, reloaded (modules: ...
+# unchanged)", while writes to settings.json (same bytes, an env change, a hooks change, a new mod
+# folder named) reloaded nothing. -a copies the payload's mtime onto a file whose content already
+# matches, which moves its ctime, and the summary reads that '.' line as no change at all. A git
+# rebase or checkout in the clone gives unchanged files a new mtime, so one pull reloaded all 19.
+# The check is on mtime, which is what -a would have rewritten, and in the same fixture a file whose
+# content DID change is still applied (L159: the positive fires where the negative is asserted).
+TSRC="$WORK/ts-home"; TREPO="$WORK/ts-repo"
+mkdir -p "$TSRC/hooks" "$TREPO/payload/hooks"
+echo '{"hooks":{}}' > "$TSRC/settings.json"
+printf 'same\n' > "$TSRC/hooks/same.sh"
+printf 'same\n' > "$TREPO/payload/hooks/same.sh"
+printf 'old\n' > "$TSRC/hooks/moved.sh"
+printf 'new content\n' > "$TREPO/payload/hooks/moved.sh"
+touch -t 202601010000 "$TSRC/hooks/same.sh" "$TSRC/hooks/moved.sh"
+touch -t 202601020000 "$TREPO/payload/hooks/same.sh" "$TREPO/payload/hooks/moved.sh"
+ts_before="$(_suite_mtime "$TSRC/hooks/same.sh")"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TSRC" SYNC_REPO="$TREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+check "pull still applies a file whose content changed" "grep -q 'new content' '$TSRC/hooks/moved.sh'"
+check "pull leaves the mtime of a file whose bytes already match (#754)" \
+  "[ -n '$ts_before' ] && [ \"\$(_suite_mtime '$TSRC/hooks/same.sh')\" = '$ts_before' ]"
+
 section "== a test run may not apply into the real config (#277) =="
 # The bracket in run-all-tests.sh watched the live rule files and blamed the suites for any change,
 # and it could not say WHO: the sync daemon installs config into them, and another Claude session
