@@ -57,7 +57,7 @@ type Job = {
   mtime?: number
   unreadable?: boolean
   gone?: boolean
-  stop?: 'ok' | 'refused' | 'throws'
+  stop?: 'ok' | 'refused' | 'throws' | 'hangs'
   holder?: 'held' | 'none' | 'error'
   kill?: 'ok' | 'survives' | 'fails'
   /** Its process group; 501, 502, ... by its place when not given. */
@@ -174,6 +174,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
+    // A stop Claude Code never answers.
+    if (e.tool === 'TaskStop' && j?.stop === 'hangs') return new Promise<never>(() => undefined)
     return { result: 'ran', text: 'ran' } as never
   })
   return w
@@ -877,6 +879,29 @@ test('a session start while an earlier look still runs never lets a second look 
   expect(w.stats).toBe(1)
   await clock.advance(3 * MIN)
   expect(w.stats).toBeGreaterThan(1)
+})
+
+// The lessons review of #696: with the guard no longer reset by a session start, a look that never
+// finishes would silence the watcher for good, so a look is given up after ten minutes, Claude is
+// told once, and the looks go on.
+test('a look that never finishes is given up after ten minutes, said once, and the looks go on', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const loop = 'until curl -sf http://x?y; do sleep 3; done'
+  const w = world(on, { tail: Array.from({ length: 30 }, () => 'zsh: no matches found: http://x?y').join('\n') + '\n', size: 9000, stop: 'hangs' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: loop, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.reached.filter(r => r.tool === 'TaskStop').length).toBe(1)
+  const stats = w.stats
+  await clock.advance(5 * MIN)
+  expect(w.stats).toBe(stats)
+  await clock.advance(6 * MIN)
+  expect(w.stats).toBeGreaterThan(stats)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(next)).toContain('did not finish within 10 minutes')
+  await clock.advance(11 * MIN)
+  const again = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(again)).not.toContain('did not finish within 10 minutes')
 })
 
 test('a clock that throws while a job starts never fails the Bash call that started it, and Claude is told', withDeps, async ($, on) => {
