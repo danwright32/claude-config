@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Jobs, JobsEntry } from '../types/index.d.ts'
-import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, shortCommand, shortLine, startedJob, type Outcome, type Verdict } from './jobs.ts'
+import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -8,17 +8,33 @@ import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, sh
 // loop that has only ever repeated an error is stopped by itself; and Claude is told, mid turn, about
 // any job gone stuck. Claude keeps a job on purpose, with a reason, through the keep_job tool, and a
 // kept job is published for the status bar's amber band. A running job nobody kept is named on every
-// tool result until it is stopped or kept; the turn end itself is never refused. Leftover jobs from
-// closed sessions are judged at session start without asking Dan (see leftovers below).
+// tool result until it is stopped or kept; the turn end itself is never refused. Leftover jobs whose
+// Claude Code process has gone are judged at session start without asking Dan (see leftovers below).
 
 // kept: Claude kept the job on purpose, with a reason (Dan, 2026-10-04). The status bar (#610) shows
 // a kept job in amber in the band above the prompt as "<name> kept <run time>", the run time from
 // startedAt. quiet: kept as quiet by design, so it is never reported for going silent.
 type Kept = { name: string; reason: string; quiet: boolean; at: number }
 type Job = { id: string; command: string; outputPath: string; pgid: number | null; startedAt: number; kept?: Kept }
-type Watch = { lastSize: number; lastGrowth: number; stuck: boolean; told: boolean; toldUnreadable: boolean; toldUntraced: boolean; toldLookFailed: boolean }
+// told: Claude was told about the stuck spell the job is in. A spell is over only once the job has
+// written healthy output for REARM_MS (L160), from healthySince: growth alone never ends one, since
+// a repeating loop grows as it repeats, and ending a spell on it said the same thing every minute
+// (#706).
+type Watch = {
+  lastSize: number
+  lastGrowth: number
+  stuck: boolean
+  told: boolean
+  healthySince?: number
+  toldUnreadable: boolean
+  toldUntraced: boolean
+  toldLookFailed: boolean
+}
 
+const MOD = 'job-watcher'
 const TICK_MS = 60_000
+const REARM_MS = 5 * 60_000
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const KEEP_TOOL = 'keep_job'
 const KEEP_CALL = 'mcp__job-watcher__keep_job'
 const KEEP_SPEC = {
@@ -52,6 +68,22 @@ let toldClockFailed = false
 let looking = false
 const LOOK_MAX_MS = 10 * 60_000
 let toldLookGivenUp = false
+// Which look may act (#706, the lessons review of #709). Each look has a number; one given up is no
+// longer the acting look. It still runs until whatever it waits on answers, but from then on it
+// sends no stop, says nothing and writes nothing, so it can never act beside the look after it.
+type Live = () => boolean
+let lookNo = 0
+let actingLook = 0
+// A stop the watcher sent that Claude Code has not answered, by job: no second is sent meanwhile,
+// however many looks come and go. It describes a call in flight, so a session start never clears it.
+const stopping = new Set<string>()
+// What a stop came to when the look that sent it had been given up by the time it answered: said
+// and acted on by the next look, so it is neither lost nor said twice.
+const lateStops = new Map<string, { why: string | undefined; said: string }>()
+// The calls whose result already carried the reminder about unkept jobs, by tool_use_id, so its row
+// is not reminded twice (#706); taken out as each row is appended, and capped meanwhile.
+const reminded = new Set<string>()
+const REMINDED_MAX = 200
 // One timer, started again by each session start so it looks with that session's engine interface.
 let tick: { cancel: () => void } | undefined
 const watchOf = (job: Job): Watch => {
@@ -143,6 +175,7 @@ const stop = async ($: EngineInterface, id: string): Promise<string | undefined>
 const forget = async ($: EngineInterface, id: string) => {
   jobs.delete(id)
   watch.delete(id)
+  lateStops.delete(id)
   await publishSafely($)
 }
 
@@ -151,12 +184,17 @@ const forget = async ($: EngineInterface, id: string) => {
 const lookSafely = async ($: EngineInterface) => {
   if (looking) return
   looking = true
+  const no = ++lookNo
+  actingLook = no
+  const live: Live = () => actingLook === no
   let deadline: { cancel: () => void } | undefined
   const givenUp = new Promise<'given up'>(resolve => {
     deadline = $.clock.after(LOOK_MAX_MS, () => resolve('given up'))
   })
-  const pass = lookAll($).then(() => 'finished' as const)
-  // A look given up may still settle later; whatever it then throws goes nowhere.
+  const pass = lookAll($, live).then(() => 'finished' as const)
+  // A look given up may still settle later. lookAll catches inside every job and around the clock, so
+  // nothing it does rejects (lessons review of #709: no path to a log line a test could reach); this
+  // only keeps an impossible rejection from being reported as unhandled.
   pass.catch(() => undefined)
   try {
     if ((await Promise.race([pass, givenUp])) === 'finished') toldLookGivenUp = false
@@ -166,32 +204,37 @@ const lookSafely = async ($: EngineInterface) => {
     }
   } finally {
     deadline?.cancel()
+    // From here on this look acts on nothing, finished or given up.
+    if (actingLook === no) actingLook = 0
     looking = false
   }
 }
 
-const lookAll = async ($: EngineInterface) => {
+const lookAll = async ($: EngineInterface, live: Live) => {
   let now: number
   try {
     now = await $.clock.now()
     toldClockFailed = false
   } catch (err) {
     // Said once until the clock reads again, never once a minute (lessons review of #634).
-    if (!toldClockFailed) {
+    if (live() && !toldClockFailed) {
       toldClockFailed = true
-      notices.push(`The background job watcher could not check its jobs: ${err instanceof Error ? err.message : String(err)}. Jobs may be stuck without a word from it.`)
+      notices.push(`The background job watcher could not check its jobs: ${message(err)}. Jobs may be stuck without a word from it.`)
     }
     return
   }
   for (const job of [...jobs.values()]) {
+    if (!live()) return
+    // One forgotten while an earlier job was looked at (stopped by Claude, or ended) is not looked at.
+    if (!jobs.has(job.id)) continue
     const w = watchOf(job)
     try {
-      await look($, job, w, now)
-      w.toldLookFailed = false
+      await look($, job, w, now, live)
+      if (live()) w.toldLookFailed = false
     } catch (err) {
-      if (!w.toldLookFailed) {
+      if (live() && !w.toldLookFailed) {
         w.toldLookFailed = true
-        notices.push(`The background job watcher could not check its jobs: background job ${job.id} (${shortCommand(job.command)}): ${err instanceof Error ? err.message : String(err)}. It may be stuck without a word from the watcher.`)
+        notices.push(`The background job watcher could not check its jobs: background job ${job.id} (${shortCommand(job.command)}): ${message(err)}. It may be stuck without a word from the watcher.`)
       }
     }
   }
@@ -199,8 +242,9 @@ const lookAll = async ($: EngineInterface) => {
 
 // Whether a job has ended. A traced job by its process group; an untraced one is traced again, and
 // is ended once nothing holds its output file open. Unknown is never ended: Claude is told once
-// that whether it has ended is unknown, never left silent (lessons review of #634).
-const ended = async ($: EngineInterface, job: Job, w: Watch): Promise<boolean> => {
+// that whether it has ended is unknown, never left silent (lessons review of #634). A look given up
+// meanwhile writes and says nothing (#706).
+const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live): Promise<boolean> => {
   if (job.pgid !== null) return hasEnded($, job.pgid)
   const groups = await groupsHolding($, job.outputPath)
   if (groups === 'nobody') return true
@@ -210,28 +254,49 @@ const ended = async ($: EngineInterface, job: Job, w: Watch): Promise<boolean> =
     // Only the group is written, onto the record as it is now: a keep that landed while this look
     // waited is kept (L443).
     const current = jobs.get(job.id)
-    if (current) {
+    if (current && live()) {
       jobs.set(job.id, { ...current, pgid: groups[0] })
       await publishSafely($)
     }
     return false
   }
-  if (!w.toldUntraced) {
+  if (live() && !w.toldUntraced) {
     w.toldUntraced = true
     notices.push(`Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. Stop it with TaskStop if it is no longer needed.`)
   }
   return false
 }
 
-const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
-  // A job that finished is Claude Code's to report; the watcher just stops watching it.
-  if (await ended($, job, w)) {
-    await forget($, job.id)
+const stoppedNotice = (job: Job, said: string) =>
+  `Background job ${job.id} (${shortCommand(job.command)}) was stopped: it is a poll loop that only ever repeated "${said}", so it never succeeded.`
+const notStoppedNotice = (job: Job, said: string, why: string) =>
+  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${why}. Stop it with TaskStop.`
+
+const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: Live) => {
+  // What a stop sent by a look since given up came to is said, and acted on, here (#706).
+  const late = lateStops.get(job.id)
+  if (late) {
+    lateStops.delete(job.id)
+    if (late.why === undefined) {
+      notices.push(stoppedNotice(job, late.said))
+      await forget($, job.id)
+    } else {
+      w.told = true
+      notices.push(notStoppedNotice(job, late.said, late.why))
+    }
     return
   }
+  // A job that finished is Claude Code's to report; the watcher just stops watching it.
+  if (await ended($, job, w, live)) {
+    if (live()) await forget($, job.id)
+    return
+  }
+  if (!live()) return
   const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
   const size = statOut === undefined ? NaN : Number(statOut.trim())
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
+  // A look given up while it read acts on nothing it read (#706).
+  if (!live()) return
   // The first look dates what is already there from the job's start: it grew before anyone looked.
   if (Number.isNaN(w.lastSize) && Number.isFinite(size)) w.lastSize = size
   // An output file that cannot be read says nothing about the job, so it is never judged silent:
@@ -248,29 +313,56 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
   if (size !== w.lastSize) {
     w.lastSize = size
     w.lastGrowth = now
-    w.told = false
   }
   // Read again for quiet: a keep that landed while this look waited is honoured (L443).
   const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: (jobs.get(job.id) ?? job).kept?.quiet === true }, now)
   // What the status bar's job list reads as stuck: the watcher's own measure, as it was at the last look.
   w.stuck = a.state !== 'running'
+  if (a.state === 'running') {
+    if (w.told) {
+      w.healthySince ??= now
+      if (now - w.healthySince >= REARM_MS) {
+        w.told = false
+        w.healthySince = undefined
+      }
+    }
+  } else w.healthySince = undefined
   // A job Claude kept on purpose is only ever reported, never stopped by the watcher (lessons review).
   if (a.state === 'repeating' && !job.kept && isPollLoop(job.command) && isErrorLine(a.line)) {
     // A poll loop that only ever repeated an error never succeeded, and is stopped by itself. Read
     // again just before the stop: a keep that landed while this look waited is honoured (L443).
     if (jobs.get(job.id)?.kept) return
-    const why = await stop($, job.id)
+    const said = repeated(a)
+    // Never a second stop while the first is unanswered (#706): Claude is told once instead.
+    if (stopping.has(job.id)) {
+      if (!w.told) {
+        w.told = true
+        notices.push(`Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", and the watcher's stop of it has not been answered. Stop it with TaskStop.`)
+      }
+      return
+    }
+    stopping.add(job.id)
+    let why: string | undefined
+    try {
+      why = await stop($, job.id)
+    } finally {
+      stopping.delete(job.id)
+    }
+    if (!live()) {
+      lateStops.set(job.id, { why, said })
+      return
+    }
     if (why === undefined) {
       // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
-      notices.push(`Background job ${job.id} (${shortCommand(job.command)}) was stopped: it is a poll loop that only ever repeated "${shortLine(a.line)}", so it never succeeded.`)
+      notices.push(stoppedNotice(job, said))
       await forget($, job.id)
     } else if (!w.told) {
       w.told = true
-      notices.push(`Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${shortLine(a.line)}", but it could not be stopped: ${why}. Stop it with TaskStop.`)
+      notices.push(notStoppedNotice(job, said, why))
     }
   } else if (a.state !== 'running' && !w.told) {
     w.told = true
-    const what = a.state === 'repeating' ? `keeps repeating "${shortLine(a.line)}"` : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
+    const what = a.state === 'repeating' ? `keeps repeating "${repeated(a)}"` : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
     notices.push(`Background job ${job.id} (${shortCommand(job.command)}) ${what}. Stop it with TaskStop, or keep it if that is expected.`)
   }
 }
@@ -284,6 +376,14 @@ const unkeptReminder = (): string | undefined => {
   const named = unkept.map(j => `${j.id} (${shortCommand(j.command)})`).join(', ')
   return `Still running and not kept: background ${unkept.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${unkept.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`
 }
+const noteReminded = (id: unknown) => {
+  if (typeof id !== 'string') return
+  reminded.add(id)
+  for (const old of reminded) {
+    if (reminded.size <= REMINDED_MAX) break
+    reminded.delete(old)
+  }
+}
 
 // A kept job is protected only while its session is open (Dan, 2026-10-04): once that session has
 // closed, a kept leftover is judged like any other, and its quiet flag no longer exempts it.
@@ -292,9 +392,83 @@ const unkeptReminder = (): string | undefined => {
 // and left running (judged again next session start) when neither can. A job is stopped by the
 // process group traced through its output file, never by its command text (L1011), and only while
 // that file is still held by the group the session recorded. Dan sees one dim line afterwards.
+//
+// What makes a job a leftover (#706): the Claude Code process that started it has gone, measured
+// from the job's own process group, never from what the registry says of its session. A /clear
+// closes the record while the process goes on watching its jobs, and a Mac waking from sleep leaves
+// every session unseen for a while; neither makes a running process's jobs fair game. The registry's
+// closed list only says which records to read.
 const JUDGES = ['claude-haiku-4-5-20251001', 'claude-sonnet-5-5']
 const JUDGE_MS = 30_000
 const STOP_SETTLE_MS = 2_000
+
+// Whether a running process still owns a job's process group. Claude Code starts each background
+// job as a group of its own whose leader is its child, and a process that exits leaves its children
+// to launchd, pid 1 (both measured 2026-10-04: the job's zsh had the claude process for its parent,
+// and a child left behind by its exited shell had 1). So a group in which some process has a parent
+// outside the group other than launchd belongs to a process still running. A group with nobody left
+// in it is owned by nothing; anything ps cannot say is unknown, never taken as either.
+const ownedByRunning = async ($: EngineInterface, pgid: number): Promise<boolean | 'unknown'> => {
+  let r
+  try {
+    r = await $.process.run(['ps', '-g', String(pgid), '-o', 'pid=,ppid='], { timeoutMs: 10_000 })
+  } catch {
+    return 'unknown'
+  }
+  if (r.exitCode === 1 && !r.stdout.trim() && !r.stderr.trim()) return false
+  if (r.exitCode !== 0) return 'unknown'
+  const rows = r.stdout
+    .split('\n')
+    .map(l => l.trim().split(/\s+/).map(Number))
+    .filter(x => x.length === 2 && x.every(n => Number.isInteger(n) && n > 0)) as [number, number][]
+  if (!rows.length) return 'unknown'
+  const members = new Set(rows.map(([pid]) => pid))
+  return rows.some(([, parent]) => parent !== 1 && !members.has(parent))
+}
+
+// A leftover is judged by one session at a time (#706). Two sessions starting together would both
+// judge it and both act, and the second could tell Dan a job "could not be stopped" that the first
+// had just stopped. A session claims a leftover by making a folder named for it, which only one can
+// make (mkdir is atomic), and removes it once the job is judged. A claim older than CLAIM_MS was left
+// by a session that died while judging (a judgment takes about two minutes at most: two model calls
+// of thirty seconds and a few commands of ten), and is moved aside before it is taken, which only one
+// session can do. The folders live in this Mac's own state folder, which is never synced.
+const CLAIM_MS = 10 * 60_000
+// What a job id must look like to name a folder; anything else read from a record is never a path.
+const CLAIM_ID = /^[A-Za-z0-9_-]{1,64}$/
+const claimsOf = (home: string) => `${home}/.claude/state/${MOD}/claims`
+type Claim = { path: string } | 'taken' | 'unknown'
+const claim = async ($: EngineInterface, dir: string | undefined, job: Leftover, now: number): Promise<Claim> => {
+  if (dir === undefined || job.pgid === null || !CLAIM_ID.test(job.id)) return 'unknown'
+  const path = `${dir}/${job.id}-${job.pgid}`
+  const make = async (): Promise<'made' | 'exists' | 'unknown'> => {
+    try {
+      const r = await $.process.run(['mkdir', path], { timeoutMs: 10_000 })
+      if (r.exitCode === 0) return 'made'
+      return /File exists/i.test(r.stderr) ? 'exists' : 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  }
+  const first = await make()
+  if (first === 'made') return { path }
+  if (first === 'unknown') return 'unknown'
+  const at = Number((await run($, ['stat', '-f', '%m', path]))?.trim())
+  // Gone between the two: the session that held it has just judged it.
+  if (!Number.isFinite(at)) return 'taken'
+  if (now - at * 1000 <= CLAIM_MS) return 'taken'
+  const aside = `${path}.stale-${now}`
+  const moved = await $.process.run(['mv', path, aside], { timeoutMs: 10_000 }).catch(() => undefined)
+  // Another session moved it first, and takes it over.
+  if (moved?.exitCode !== 0) return 'taken'
+  await $.process.run(['rm', '-rf', aside], { timeoutMs: 10_000 }).catch(() => undefined)
+  return (await make()) === 'made' ? { path } : 'taken'
+}
+const release = async ($: EngineInterface, path: string) => {
+  const r = await $.process.run(['rm', '-rf', path], { timeoutMs: 10_000 }).catch((err: unknown) => ({ exitCode: -1, stderr: message(err) }))
+  // One left behind goes stale and is taken over after CLAIM_MS: said in the debug log only.
+  if (r.exitCode !== 0) $.ui.log(`job-watcher: could not let go of the leftover claim ${path}: ${r.stderr.trim()}`, { to: 'debug' })
+}
 
 type Leftover = Job & { session: string }
 const isJob = (x: unknown): x is Job => {
@@ -335,18 +509,47 @@ const promptFor = (job: Job, runMs: number, tail: string, state: string) =>
     'stop is true or false; name is a few words naming the job, like dev server or curl loop repeating connection refused; reason is one short sentence.',
   ].join('\n')
 
-// One leftover, judged and acted on; undefined when it has ended or is not the job it was.
-const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise<Outcome | undefined> => {
+// One leftover, judged and acted on; undefined when it has ended, is not the job it was, still
+// belongs to a running Claude Code process, or another session is judging it.
+const judgeOne = async ($: EngineInterface, job: Leftover, now: number, claims: string | undefined): Promise<Outcome | undefined> => {
   const short = shortCommand(job.command)
+  const unjudged: Outcome = { kind: 'unjudged', name: short, session: job.session }
   const groups = await groupsHolding($, job.outputPath)
   if (groups === 'nobody') return undefined
   // A job its session never traced to a group is reported, never stopped: whatever holds its file
-  // now could be anything, a reader's tail -f included (lessons review of #634, L1011).
-  if (job.pgid === null) return { kind: 'unjudged', name: short, session: job.session }
+  // now could be anything, a reader's tail -f included (lessons review of #634, L1011). Every group
+  // holding it owned by a running process makes it that process's, and no leftover (#706).
+  if (job.pgid === null) {
+    if (Array.isArray(groups) && (await Promise.all(groups.map(g => ownedByRunning($, g)))).every(o => o === true)) return undefined
+    return unjudged
+  }
   const group = job.pgid
-  if (groups === 'unknown') return (await hasEnded($, group)) ? undefined : { kind: 'unjudged', name: short, session: job.session }
+  if (groups === 'unknown') {
+    if (await hasEnded($, group)) return undefined
+    return (await ownedByRunning($, group)) === true ? undefined : unjudged
+  }
   // Its own group no longer holds the file: the job has ended, whatever else reads the file.
   if (!groups.includes(group)) return undefined
+  const owner = await ownedByRunning($, group)
+  if (owner === true) return undefined
+  if (owner === 'unknown') return unjudged
+  const held = await claim($, claims, job, now)
+  if (held === 'taken') return undefined
+  if (held === 'unknown') return unjudged
+  try {
+    return await judgeClaimed($, job, group, now)
+  } finally {
+    await release($, held.path)
+  }
+}
+
+const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, now: number): Promise<Outcome | undefined> => {
+  const short = shortCommand(job.command)
+  // Looked at again now the claim is held (lessons review of #721): another session may have judged
+  // and stopped it, and let go of its claim, between this one's first look and its claim.
+  const held = await groupsHolding($, job.outputPath)
+  if (held === 'nobody' || (Array.isArray(held) && !held.includes(group))) return undefined
+  if ((await ownedByRunning($, group)) === true) return undefined
   const stat = (await run($, ['stat', '-f', '%z %m', job.outputPath]))?.trim().split(/\s+/).map(Number)
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
   const size = stat?.[0]
@@ -360,7 +563,8 @@ const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise
   } else {
     const a = assess({ tail, size, lastGrowth: mtime * 1000 }, now)
     stuck = a.state !== 'running'
-    state = a.state === 'repeating' ? `it keeps repeating the same line, "${a.line}"` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
+    const repeats = a.state === 'repeating' ? (a.lines.length === 1 ? `the same line, "${a.line}"` : `the same ${a.lines.length} lines in turn, "${a.lines.join('" then "')}"`) : ''
+    state = a.state === 'repeating' ? `it keeps repeating ${repeats}` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
   }
   const v = await judge($, promptFor(job, now - job.startedAt, tail ?? '(could not be read)', state))
   if (!v) return { kind: 'unjudged', name: short, session: job.session }
@@ -395,17 +599,30 @@ const judgeLeftovers = async ($: EngineInterface) => {
     return
   }
   const now = await $.clock.now()
+  // One job listed by two records (the record a /clear closed and the next one, both written by the
+  // one process) is one leftover, judged once (#706): known by its output file, which names it.
+  const seen = new Set<string>()
   const leftovers: Leftover[] = list.closed
     .filter(r => r.sessionId !== list.selfId)
     .flatMap(r => {
       const recorded = (r.extra as { jobs?: unknown }).jobs
       return Array.isArray(recorded) ? recorded.filter(isJob).map(j => ({ ...j, session: r.sessionId })) : []
     })
+    .filter(j => !seen.has(j.outputPath) && seen.add(j.outputPath) !== undefined)
   const outcomes: Outcome[] = []
+  let claims: string | undefined
+  if (leftovers.length) {
+    // No folder for the claims leaves every leftover unjudged, said, never judged unclaimed.
+    const home = await $.env.get('HOME').catch(() => undefined)
+    const dir = home ? claimsOf(home) : undefined
+    const made = dir ? await $.process.run(['mkdir', '-p', dir], { timeoutMs: 10_000 }).catch(() => undefined) : undefined
+    if (made?.exitCode === 0) claims = dir
+    else $.ui.log(`job-watcher: no folder for leftover claims (${dir ?? 'HOME is not set'}): ${made?.stderr.trim() ?? 'mkdir did not run'}`, { to: 'debug' })
+  }
   // Each leftover in its own failure boundary (L73): one that throws is left running and said.
   for (const job of leftovers) {
     try {
-      const o = await judgeOne($, job, now)
+      const o = await judgeOne($, job, now, claims)
       if (o) outcomes.push(o)
     } catch {
       outcomes.push({ kind: 'unjudged', name: shortCommand(job.command), session: job.session })
@@ -437,6 +654,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     jobs.clear()
     watch.clear()
+    lateStops.clear()
+    reminded.clear()
     notices.length = 0
     toldUnpublished = false
     toldClockFailed = false
@@ -472,17 +691,24 @@ export const register: Register = on => {
     await publishSafely($)
     const said = notices.splice(0)
     const reminder = unkeptReminder()
-    if (reminder) said.push(reminder)
+    if (reminder) {
+      said.push(reminder)
+      noteReminded(input.tool_use_id)
+    }
     const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
     return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar as kept, with its run time.${quietly}`, ...(said.length ? { context: said } : {}) }
   })
 
   on('tool.call', async ($, e, next) => {
     if (e.tool === KEEP_CALL) return next(e)
+    // The watcher's own stop never reaches this hook (an engine call skips the calling plugin's own
+    // hooks; the test of it passes with or without a guard here), so its look alone acts on it.
     const input = e as unknown as Record<string, unknown>
     const result = await next(e)
-    if (e.tool === 'Bash' && input.run_in_background && !result.deny && !result.isError) {
-      const started = startedJob(String(result.text ?? ''))
+    // Any Bash result saying a job started: one run in the background, or a foreground command
+    // Claude Code moved there at its timeout (#706). A refusal started nothing.
+    if (e.tool === 'Bash' && result.deny === undefined) {
+      const started = startedJob(String(result.text ?? ''), { inBackground: input.run_in_background === true })
       // Recording has its own failure boundary: the job has started whatever happens here, so a
       // throw is said to Claude and never fails the call that started it (lessons review of #634).
       if (started) {
@@ -500,12 +726,56 @@ export const register: Register = on => {
         }
       }
     }
+    // A job Claude stopped is dropped at once, so neither this result nor the next names it as
+    // running (#706): Claude Code's own stop is by the job's traced handle, as the watcher's is (L1011).
+    if (e.tool === 'TaskStop' && result.deny === undefined && !result.isError) {
+      const id = String(input.task_id ?? input.shell_id ?? '')
+      if (jobs.has(id)) await forget($, id)
+    }
     // What Claude should know about its jobs rides on the next tool result it reads; the reminder
-    // about unkept jobs rides on every one, a failed result included. A refusal carries none.
+    // about unkept jobs rides on every one, a failed result included. A refusal can carry no
+    // context, so its reminder goes into its row as it is appended (below).
     if (result.deny !== undefined) return result
     const said = result.isError ? [] : notices.splice(0)
     const reminder = unkeptReminder()
-    if (reminder) said.push(reminder)
+    if (reminder) {
+      said.push(reminder)
+      noteReminded(input.tool_use_id)
+    }
     return said.length ? { ...result, context: [...(result.context ?? []), ...said] } : result
+  })
+
+  // Claude Code's notice that a job ended names it (#706): it is dropped then, on the watcher's own
+  // evidence that its group has ended, rather than at the next minute's look. One whose shell ended
+  // while what it started runs on is still running, and stays.
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    if (e.origin.kind !== 'task-notification') return result
+    for (const id of notifiedTasks(e.text)) {
+      const job = jobs.get(id)
+      if (!job) continue
+      try {
+        if (await ended($, job, watchOf(job), () => true)) await forget($, id)
+      } catch (err) {
+        $.ui.log(`job-watcher: could not check background job ${id} after Claude Code reported it: ${message(err)}`, { to: 'debug' })
+      }
+    }
+    return result
+  })
+
+  // Every tool result's row is read by Claude, a refused one too (#706: the settled decision is a
+  // reminder on every tool result). A refusal carries no context, and one made by a mod outside the
+  // watcher never reaches its tool.call hook at all, so a row whose call was not reminded gets the
+  // reminder as a text block after its results: the model reads it, the transcript keeps it, and
+  // Dan's screen draws the row as it was.
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    const ids = e.message.content.flatMap(b => {
+      const r = b as { type?: string; tool_use_id?: unknown }
+      return r.type === 'tool_result' && typeof r.tool_use_id === 'string' ? [r.tool_use_id] : []
+    })
+    const unreminded = ids.filter(id => !reminded.delete(id))
+    const reminder = unreminded.length ? unkeptReminder() : undefined
+    if (!reminder) return next(e)
+    return next({ ...e, message: { ...e.message, content: [...e.message.content, { type: 'text', text: reminder }] } })
   })
 }

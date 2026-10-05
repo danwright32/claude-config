@@ -228,6 +228,48 @@ classic status line command passes colour through, and the band above the prompt
   included, naming the last failure; the next success clears it. A subagent's calls and to-do list
   are not the session's (picker).
 
+Built in #706 from the milestone audit and the lessons reviews of #709, not put to Dan, each the
+plainest reading of the decisions above:
+
+- **What makes a job a leftover.** A job is judged at a session start only once the Claude Code
+  process that started it has gone, measured from the job's own process group: a group in which
+  some process has a parent outside the group other than launchd belongs to a running process
+  (measured 2026-10-04: a background job's shell has the `claude` process for its parent, and a
+  process left behind by its exited parent has launchd, pid 1). What the registry says of the
+  session only decides which records are read, never that a job is fair game. So a /clear, which
+  closes the record while the process goes on watching its jobs, and a Mac waking from sleep, which
+  leaves every session unseen for a while, never expose a running session's jobs; a crashed or
+  closed session's jobs are judged as before. A group whose ownership `ps` cannot read is left
+  running and named as not judged. A job listed by two records (the one a /clear closed and the
+  next) is judged once.
+- **One session judges a leftover.** A session claims a leftover by making a folder for it under
+  `~/.claude/state/job-watcher/claims` (only one session can make it) and removes it once the job
+  is judged; a second session starting meanwhile leaves that job alone and says nothing of it. A
+  claim older than ten minutes was left by a session that died while judging and is taken over.
+- **A look given up acts on nothing.** A look still running after ten minutes is given up (#694);
+  from then on it sends no stop, says nothing and writes nothing, so it never acts beside the next
+  look. No second stop is sent for a job whose first is still unanswered: Claude is told once that
+  the stop has not been answered. What a stop answered after its look was given up is said, and
+  acted on, by the next look, once.
+- **Repeating.** A loop is repeating when the end of its output is one pass of up to four lines over
+  and over, not only one line: a poll loop printing its error and then "retrying" on each pass is
+  stopped as one repeating its error is, when the pass holds an error line. Claude is told about a
+  stuck job once a spell: new output no longer ends a spell, since a repeating loop grows as it
+  repeats; five minutes of healthy output does.
+- **Gone at once.** A job Claude stops with TaskStop is dropped from the reminder and the job list at
+  once, and so is one Claude Code reports as ended (its task notification), on the watcher's own
+  evidence that its group has ended.
+- **Every result reminds.** A refused tool result carries no context, and one refused by a mod
+  outside the watcher never reaches it, so the reminder about unkept jobs goes into such a result's
+  row as the conversation keeps it: Claude reads it there, and Dan's screen draws the row as it was.
+- **Which jobs.** A foreground command Claude Code moves to the background at its timeout is
+  recorded like one started in the background, read only from a result that opens with Claude
+  Code's own words for it, so a command whose output merely quotes a start (a cat of a test file)
+  records nothing; a background start is read only from a call that asked for one. A Monitor task
+  is not recorded: Claude Code stops each one at
+  its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
+  run on unseen.
+
 ## Goals pane (#612), settled 2026-10-04
 
 | Surface | Decision |

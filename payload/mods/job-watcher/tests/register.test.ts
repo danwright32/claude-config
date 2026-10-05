@@ -57,14 +57,21 @@ type Job = {
   mtime?: number
   unreadable?: boolean
   gone?: boolean
-  stop?: 'ok' | 'refused' | 'throws' | 'hangs'
+  stop?: 'ok' | 'refused' | 'throws' | 'hangs' | 'held'
   holder?: 'held' | 'none' | 'error'
+  /**
+   * The parent of its group's leader: the Claude Code process that started it while that runs, or
+   * launchd (1, the default here) once it has exited. 'error' when ps cannot say.
+   */
+  owner?: number | 'error'
   kill?: 'ok' | 'survives' | 'fails'
   /** Its process group; 501, 502, ... by its place when not given. */
   pgid?: number
   failExtraOf?: string
   /** Another process (a tail -f, say) holding its output file too, listed by lsof first. */
   alsoHeldBy?: number
+  /** Stopped by another session the moment this one claims it, after this one's own checks. */
+  goneOnClaim?: boolean
   /** Commands that answer late: the command name and how long, on the mocked clock. */
   slow?: { cmd: string; ms: number }
 }
@@ -74,11 +81,16 @@ type World = {
   failExtra?: boolean
   sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws'
   verdict?: (model: string, prompt: string) => string | 'none' | 'throws'
-  /** The test's mocked clock, for commands that answer late. */
-  clock?: { sleep: (ms: number) => Promise<void> }
+  /** The test's mocked clock, for commands that answer late and for dating the claims made. */
+  clock?: { sleep: (ms: number) => Promise<void>; now?: () => number }
   /** Told of each registry write of the jobs, with the value written. */
   onExtra?: (value: string) => void
+  /** Leftover claims already on disk, by folder name, with when each was made (seconds). */
+  claims?: Record<string, number>
+  /** The claims cannot be made: 'folder', the claims folder itself; 'claim', each claim in it. */
+  claimsFail?: 'folder' | 'claim'
 }
+const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   const list = Array.isArray(jobOrJobs) ? jobOrJobs : [jobOrJobs]
   const w = {
@@ -93,7 +105,20 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     stats: 0,
     /** Each lsof of an output file. */
     lsofs: 0,
+    /** The leftover claims on disk, by folder name, with when each was made (seconds). */
+    claims: new Map<string, number>(Object.entries(o.claims ?? {})),
+    /** Every claim ever made, by folder name. */
+    claimed: [] as string[],
+    /** Each row appended to the conversation, as it reached the bottom. */
+    appended: [] as { content: unknown[] }[],
+    /** Answers the stops held open ('held'), in order, as Claude Code would: ok, or a refusal. */
+    answerStops: (_how: 'ok' | 'refused') => undefined as void,
   }
+  const heldStops: ((how: 'ok' | 'refused') => void)[] = []
+  w.answerStops = how => {
+    for (const answer of heldStops.splice(0)) answer(how)
+  }
+  mock.env(on, { HOME: '/Users/dan' })
   let started = 0
   const byPath = (p: string | undefined) => list.findIndex((_, i) => outOf(`job${i + 1}`) === p)
   const groupOf = (i: number) => list[i]?.pgid ?? 501 + i
@@ -119,6 +144,42 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       if (!j || j.holder === 'none' || j.gone) return res(1, '')
       if (j.holder === 'error') return res(1, '', 'lsof: status error on file: Operation not permitted')
       return ok(`${j.alsoHeldBy !== undefined ? `${j.alsoHeldBy}\n` : ''}${groupOf(i)}\n`)
+    }
+    // The leftover claims: one folder each, made by mkdir alone when it is not there yet.
+    const claimName = (p: string | undefined) => (p?.startsWith(`${CLAIMS}/`) ? p.slice(CLAIMS.length + 1) : undefined)
+    if (cmd === 'mkdir' && args[0] === '-p') return o.claimsFail === 'folder' ? res(1, '', `mkdir: ${CLAIMS}: Permission denied`) : ok('')
+    if (cmd === 'mkdir') {
+      const name = claimName(args[args.length - 1])
+      if (name === undefined) return res(1, '', 'unexpected')
+      if (o.claimsFail === 'claim') return res(1, '', `mkdir: ${CLAIMS}/${name}: Permission denied`)
+      if (w.claims.has(name)) return res(1, '', `mkdir: ${CLAIMS}/${name}: File exists`)
+      w.claims.set(name, Math.floor((o.clock?.now?.() ?? 0) / 1000))
+      w.claimed.push(name)
+      for (const j of list) if (j.goneOnClaim) j.gone = true
+      return ok('')
+    }
+    if (cmd === 'stat' && claimName(args[args.length - 1]) !== undefined) {
+      const at = w.claims.get(claimName(args[args.length - 1]) as string)
+      return at === undefined ? res(1, '', 'stat: No such file or directory') : ok(`${at}\n`)
+    }
+    if (cmd === 'mv') {
+      const from = claimName(args[args.length - 2])
+      if (from === undefined || !w.claims.has(from)) return res(1, '', 'mv: No such file or directory')
+      w.claims.delete(from)
+      return ok('')
+    }
+    if (cmd === 'rm') {
+      const name = claimName(args[args.length - 1])
+      if (name !== undefined) w.claims.delete(name)
+      return ok('')
+    }
+    // Who owns a group: each member and its parent. The leader's parent is the job's owner.
+    if (cmd === 'ps' && args.includes('pid=,ppid=')) {
+      const i = byGroup(Number(args[args.indexOf('-g') + 1]))
+      const j = list[i]
+      if (!j || j.gone) return res(1, '')
+      if (j.owner === 'error') return res(1, '', 'ps: Operation not permitted')
+      return ok(`${groupOf(i)} ${j.owner ?? 1}\n${groupOf(i) + 1000} ${groupOf(i)}\n`)
     }
     if (cmd === 'ps' && args.includes('pgid=')) return ok(`${args[args.length - 1]}\n`)
     if (cmd === 'ps' && args.includes('-g')) {
@@ -162,6 +223,13 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  // The rows the conversation keeps, as the plugins above handed them down. Nothing in the test
+  // kit stores a row (2.1.289), so the call itself then fails; `appendRow` below catches that.
+  on('session.append', ($, e, next) => {
+    w.appended.push(e.message as { content: unknown[] })
+    return next(e)
+  })
   on('tool.call', ($, e) => {
     const input = e as unknown as Record<string, unknown>
     w.reached.push({ tool: e.tool, input })
@@ -170,12 +238,33 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       const text = startedText(`job${started}`)
       return { result: text, text } as never
     }
+    // A foreground command whose own output quotes both start texts: a cat of a test file.
+    if (e.tool === 'Bash' && String(input.command).startsWith('cat ')) {
+      const text = `line 1\n${startedText('job7')}\nCommand did not complete within its 120s timeout and was moved to the background (ID: job8). Output is being written to: ${outOf('job8')}.\n`
+      return { result: text, text } as never
+    }
+    // A foreground command still running at its timeout, which Claude Code moves to the background.
+    if (e.tool === 'Bash' && String(input.command).startsWith('slow ')) {
+      started += 1
+      const id = `job${started}`
+      const text = `Command did not complete within its 120s timeout and was moved to the background (ID: ${id}). Output is being written to: ${outOf(id)}. You will be notified when it completes. To check interim output, use Read on that file path.`
+      return { result: text, text } as never
+    }
     if (e.tool === 'Bash' && input.command === 'false') return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
     // A stop Claude Code never answers.
     if (e.tool === 'TaskStop' && j?.stop === 'hangs') return new Promise<never>(() => undefined)
+    // A stop Claude Code answers only when the test says, as one answered late.
+    if (e.tool === 'TaskStop' && j?.stop === 'held') {
+      return new Promise(resolve => {
+        heldStops.push(how => {
+          if (how === 'ok') j.gone = true
+          resolve((how === 'ok' ? { result: 'stopped', text: 'stopped' } : { deny: `no task ${String(input.task_id)} is running` }) as never)
+        })
+      })
+    }
     return { result: 'ran', text: 'ran' } as never
   })
   return w
@@ -886,28 +975,80 @@ test('a session start while an earlier look still runs never lets a second look 
 // told once, and the looks go on.
 test('a look that never finishes is given up after ten minutes, said once, and the looks go on', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
-  const loop = 'until curl -sf http://x?y; do sleep 3; done'
-  const w = world(on, { tail: Array.from({ length: 30 }, () => 'zsh: no matches found: http://x?y').join('\n') + '\n', size: 9000, stop: 'hangs' })
+  // Every look waits 25 minutes on the output file's size, so each is given up before it finishes.
+  const w = world(on, { tail: 'listening on 3000\n', size: 18, slow: { cmd: 'stat', ms: 25 * MIN } }, { clock })
   await start($)
-  await $.tool.call({ tool: 'Bash', command: loop, run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
   await clock.advance(MIN + 1)
-  expect(w.reached.filter(r => r.tool === 'TaskStop').length).toBe(1)
-  const stats = w.stats
+  expect(w.stats).toBe(1)
   await clock.advance(5 * MIN)
-  expect(w.stats).toBe(stats)
+  expect(w.stats).toBe(1)
   await clock.advance(6 * MIN)
-  expect(w.stats).toBeGreaterThan(stats)
+  expect(w.stats).toBe(2)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   // Only what was measured (L440): it was given up, and the next look is still to come.
   expect(noticesOf(next)).toContain('did not finish within 10 minutes and was given up; the next look starts at the next minute.')
   expect(noticesOf(next)).not.toContain('looked again')
-  // The second look hangs on its stop too; a third reaching the stop proves the second was given up
-  // (L159), so the silence after it is the notice being said once, not a give up that never came.
-  expect(w.reached.filter(r => r.tool === 'TaskStop').length).toBe(2)
+  // The second look is given up too and a third starts (L159: the give up came), and nothing is
+  // said again until a look finishes.
   await clock.advance(11 * MIN)
-  expect(w.reached.filter(r => r.tool === 'TaskStop').length).toBe(3)
+  expect(w.stats).toBe(3)
   const again = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(noticesOf(again)).not.toContain('did not finish within 10 minutes')
+})
+
+// #706, the lessons review of #709 (rated major): a look given up keeps running until what it waits
+// on answers, so from then on it acts on nothing: no stop, no notice, no registry write. No second
+// stop is sent for a job whose first is still unanswered, and what that stop came to is said by the
+// next look, once.
+const stopsOf = (w: { reached: { tool: string }[] }) => w.reached.filter(r => r.tool === 'TaskStop').length
+test('a look given up never acts, and no second stop is sent while the first is unanswered', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'held' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(stopsOf(w)).toBe(1)
+  // Given up at eleven minutes; the looks at twelve and thirteen find the stop still unanswered.
+  await clock.advance(12 * MIN)
+  expect(stopsOf(w)).toBe(1)
+  const waiting = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(waiting)).toContain('was given up')
+  expect(noticesOf(waiting)).toContain("the watcher's stop of it has not been answered")
+  expect(noticesOf(waiting)).not.toContain('was stopped')
+  // The stop is answered now. The look that sent it was given up, so it says and writes nothing.
+  const writes = w.extra.length
+  w.answerStops('ok')
+  await clock.settle()
+  expect(w.extra.length).toBe(writes)
+  const quiet = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(quiet)).toBe('')
+  // The next look says it, once, and forgets the job.
+  await clock.advance(MIN)
+  const said = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(said).split('was stopped').length - 1).toBe(1)
+  expect(contextOf(said)).not.toContain(REMINDER)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+})
+
+test('a late refusal of a given up look is said by the next look, once', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'held' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(11 * MIN + 1)
+  await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  w.answerStops('refused')
+  await clock.settle()
+  const quiet = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(quiet)).not.toContain('could not be stopped')
+  await clock.advance(MIN)
+  const said = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(said).split('could not be stopped').length - 1).toBe(1)
+  expect(noticesOf(said)).toContain('no task job1 is running')
+  // Answered, a later look may stop it again.
+  await clock.advance(MIN)
+  expect(stopsOf(w)).toBe(2)
 })
 
 test('a clock that throws while a job starts never fails the Bash call that started it, and Claude is told', withDeps, async ($, on) => {
@@ -935,6 +1076,10 @@ test('a job is traced only to a group that alone holds its output file, never to
   await clock.advance(MIN + 1)
   expect((w.extra[w.extra.length - 1] as { pgid: unknown }[])[0]?.pgid).toBe(null)
 })
+
+// The tests that are the clock themselves hold every clock.after wait: an answered one is the time
+// come, and a look whose ten minute deadline came at once would be given up before it acted (#706).
+const neverDue = () => new Promise<never>(() => undefined)
 
 test('a clock that cannot be read is said to Claude once, not every minute', withDeps, async ($, on) => {
   // The test is the clock here. Each answer to the watcher's clock.every is one minute passing, given
@@ -964,7 +1109,7 @@ test('a clock that cannot be read is said to Claude once, not every minute', wit
     if (!minutes.length) await new Promise<void>(r => (asked = r))
     minutes.shift()?.()
   }
-  on('clock.after', () => ({ value: undefined }) as never)
+  on('clock.after', () => neverDue() as never)
   world(on, { tail: 'building\n', size: 9 })
   await start($)
   await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
@@ -1000,7 +1145,7 @@ test('a keep whose clock read waits while the job is traced keeps the traced gro
     })
     return { value: undefined } as never
   })
-  on('clock.after', () => ({ value: undefined }) as never)
+  on('clock.after', () => neverDue() as never)
   let traced: (() => void) | undefined
   const tracedWritten = new Promise<void>(r => (traced = r))
   const job: Job = { tail: 'building\n', size: 9, holder: 'error' }
@@ -1141,4 +1286,359 @@ test('a job that ends leaves the job list', withDeps, async ($, on) => {
   job.gone = true
   await clock.advance(MIN + 1)
   expect(await jobsOf($)).toEqual([])
+})
+
+// #706: a job Claude stops itself, or one Claude Code reports as ended, is no longer named as
+// running, on that result or any after it, rather than until the next minute's look.
+test('a job Claude stops with TaskStop is dropped at once: neither that result nor the next names it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const stopped = await $.tool.call({ tool: 'TaskStop', task_id: 'job1' } as never)
+  expect(contextOf(stopped)).not.toContain(REMINDER)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+})
+
+// The watcher's own stop goes through the tool chain too: what it owes Claude about another job, said
+// earlier in the same look, must not ride away on a result Claude never reads.
+test("the watcher's own stop of one job never carries off what it said about another", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const loop: Job = { tail: 'starting\n', size: 9 }
+  world(on, [{ tail: 'listening on 3000\n', size: 18 }, loop])
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(10 * MIN)
+  loop.tail = REPEATING
+  loop.size = 9000
+  await clock.advance(MIN + 1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(next)).toContain('job1 (npm run dev) has had no new output')
+  expect(noticesOf(next)).toContain('job2')
+  expect(noticesOf(next)).toContain('was stopped')
+})
+
+test('a stop Claude Code refuses leaves the job named as running', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18, stop: 'refused' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call({ tool: 'TaskStop', task_id: 'job1' } as never)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain(`${REMINDER} background job job1`)
+})
+
+const notice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>`
+const notify = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, id: string) => $.prompt.submit({ text: notice(id), origin: { kind: 'task-notification' }, wait: false } as never)
+
+test('a job Claude Code reports as ended is no longer named, without waiting for the next look', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'done\n', size: 5 }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.gone = true
+  await notify($, 'job1')
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+})
+
+test('a report of a job whose process group still runs keeps it named (what it started outlived it)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'serving\n', size: 8 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev &', run_in_background: true } as never)
+  await notify($, 'job1')
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain(`${REMINDER} background job job1`)
+})
+
+// #706: the 2026-09-22 loop printed one line; a loop printing its error and then a retry line on
+// every pass repeats as surely, and is stopped the same way.
+const RETRYING = Array.from({ length: 15 }, () => 'curl: (7) Failed to connect to localhost port 3000: Connection refused\nretrying in 3s').join('\n') + '\n'
+test('a poll loop printing its error and a retry line in turn is stopped by itself, and Claude is told', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: RETRYING, size: 9000 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'until curl -sS http://localhost:3000; do echo retrying in 3s; sleep 3; done', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(stopsOf(w)).toBe(1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(next)).toContain('was stopped')
+  expect(noticesOf(next)).toContain('Connection refused')
+  expect(noticesOf(next)).toContain('retrying in 3s')
+})
+
+// #706: a repeating job that keeps writing is said once a spell, not every minute; a spell is over
+// only after five minutes of healthy output (L160), and a new one is said again.
+test('a repeating job that keeps writing is said once, and again only after it has run healthy for a while', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const waiting = Array.from({ length: 30 }, () => 'waiting for deploy').join('\n') + '\n'
+  const job: Job = { tail: waiting, size: 600 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'until gh run view 9 --exit-status; do echo waiting for deploy; sleep 3; done', run_in_background: true } as never)
+  let told = 0
+  const minute = async () => {
+    job.size += 60
+    await clock.advance(MIN)
+    const r = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+    told += noticesOf(r).split('keeps repeating').length - 1
+  }
+  for (let i = 0; i < 4; i++) await minute()
+  expect(told).toBe(1)
+  // Healthy for two minutes, then repeating again: the same spell, not said again.
+  job.tail = 'built 1\nbuilt 2\n'
+  await minute()
+  await minute()
+  job.tail = waiting
+  await minute()
+  expect(told).toBe(1)
+  // Healthy for six minutes, then repeating again: a new spell, said again.
+  job.tail = 'built 1\nbuilt 2\n'
+  for (let i = 0; i < 6; i++) await minute()
+  job.tail = waiting
+  await minute()
+  expect(told).toBe(2)
+})
+
+// #706: the reminder rides every tool result Claude reads, a refused one too. A refusal carries no
+// context, and one made by a mod outside the watcher never reaches its tool.call hook at all, so the
+// reminder goes into the result's row as the conversation keeps it, which the model reads.
+const appendRow = async ($: { session: { append: (e: never) => Promise<unknown> } }, ids: string[], isError = true) => {
+  try {
+    await $.session.append({
+      door: 'tool-result',
+      origin: { kind: 'tool', tool: 'Write' },
+      uuid: `row-${ids.join('-')}`,
+      message: { type: 'user', role: 'user', content: ids.map(id => ({ type: 'tool_result', tool_use_id: id, content: 'refused', is_error: isError })) },
+    } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+}
+const rowText = (w: { appended: { content: unknown[] }[] }) =>
+  (w.appended[w.appended.length - 1]?.content ?? [])
+    .filter(b => (b as { type?: string }).type === 'text')
+    .map(b => (b as { text: string }).text)
+    .join('\n')
+
+test('a tool result refused outside the watcher names the unkept job in its row', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await appendRow($, ['t-refused'])
+  expect(rowText(w)).toContain(`${REMINDER} background job job1 (npm run dev)`)
+})
+
+test('a refusal the watcher saw, and a keep_job refusal, are reminded in their rows', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0, stop: 'refused' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const refused = (await $.tool.call({ tool: 'TaskStop', task_id: 'job1', tool_use_id: 't-stop' } as never)) as { deny?: string }
+  expect(refused.deny).toBeDefined()
+  await appendRow($, ['t-stop'])
+  expect(rowText(w)).toContain(REMINDER)
+  const kept = (await $.tool.call(keep({ task_id: 'job9', name: 'x', reason: 'y', tool_use_id: 't-keep' }))) as { deny?: string }
+  expect(kept.deny).toBeDefined()
+  await appendRow($, ['t-keep'])
+  expect(rowText(w)).toContain(REMINDER)
+})
+
+test('a result that already carried the reminder is not reminded again in its row, and none is added with no job running', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  await appendRow($, ['t-before'], false)
+  expect(rowText(w)).toBe('')
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const r = await $.tool.call({ tool: 'Bash', command: 'git status', tool_use_id: 't-ok' } as never)
+  expect(contextOf(r)).toContain(REMINDER)
+  await appendRow($, ['t-ok'], false)
+  expect(rowText(w)).toBe('')
+})
+
+// #706: a foreground command Claude Code moves to the background at its timeout is a job like any.
+test('a command moved to the background at its timeout is recorded and named like any job', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'running tests\n', size: 14 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'slow npm test' } as never)
+  expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: 'slow npm test', outputPath: OUT, pgid: 501, startedAt: 0 }])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain(`${REMINDER} background job job1 (slow npm test)`)
+})
+
+// #706: a leftover is a job whose Claude Code process has gone, measured from the job's own process
+// group (its leader's parent is launchd once that process exits), never from what the registry says
+// of its session. A /clear closes the record while the process goes on, and a Mac waking from sleep
+// leaves every session unseen for a while: neither makes a running process's jobs fair game.
+test('a job of a closed record whose Claude Code process still runs is never judged or mentioned', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, owner: 82846 }, {
+    sessions: { closed: [closedRec('cleared', [leftover(1, CURL, keptRec('health poll', false))])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('a session that only went quiet, its process still running, has its jobs left alone', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const asleep = { ...closedRec('asleep', [leftover(1, 'npm run dev')]), closedAt: null, lastSeen: 0 }
+  const w = world(on, { tail: 'listening on 3000\n', size: 18, mtime: 0, owner: 82846 }, {
+    sessions: { closed: [asleep] },
+    verdict: () => STOP('dev server'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('a leftover whose owner cannot be read is left running, not judged, and said', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, owner: 'error' }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['1 leftover job not judged, left running (until curl -sf http://localhost:3000/...).'])
+})
+
+// #706: two sessions starting together judge one leftover once. A session claims a leftover by
+// making a folder for it, which only one can make; the other leaves it, unmentioned.
+test('a leftover another session is judging is left to it, and not mentioned', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+    claims: { 'old1-501': (60 * MIN - MIN) / 1000 },
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('a leftover is claimed while it is judged and the claim is let go after, so a later start judges it again', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => KEEP_IT('curl loop'),
+    clock,
+  })
+  await start($)
+  await judged(clock)
+  expect(w.claimed).toEqual(['old1-501'])
+  expect([...w.claims.keys()]).toEqual([])
+  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (curl loop).'])
+})
+
+test('a claim left by a session that died while judging is taken over after ten minutes', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+    claims: { 'old1-501': (60 * MIN - 11 * MIN) / 1000 },
+    clock,
+  })
+  await start($)
+  await judged(clock)
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop).'])
+})
+
+test('a claim that cannot be made leaves the leftover running, not judged, and said', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+    claimsFail: 'claim',
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['1 leftover job not judged, left running (until curl -sf http://localhost:3000/...).'])
+})
+
+test('a claims folder that cannot be made leaves every leftover running, not judged, and said', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, [{ tail: REFUSED, size: 9000 }, { tail: 'listening on 3000\n', size: 18, mtime: 0 }], {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL), leftover(2, 'npm run dev')])] },
+    verdict: () => STOP('curl loop'),
+    claimsFail: 'folder',
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['2 leftover jobs not judged, left running (until curl -sf http://localhost:3000/..., npm run dev).'])
+})
+
+test('an untraced leftover held only by a running Claude Code process is that process job, not mentioned', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, owner: 82846 }, {
+    sessions: { closed: [closedRec('cleared', [leftover(1, CURL, { pgid: null })])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+// The lessons review of #721: a session that read the job alive just before another stopped it and
+// let go of its claim must look again once it holds the claim, or it judges a job already ended.
+test('a leftover another session stopped between this one looking and claiming is not judged', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, goneOnClaim: true }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.claimed).toEqual(['old1-501'])
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+// The lessons review of #721 (major): with no run_in_background needed for a job moved there at its
+// timeout, a foreground command whose output merely quotes a start must not be recorded.
+test('a foreground command whose output quotes a job starting records nothing', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  const r = await $.tool.call({ tool: 'Bash', command: 'cat tests/register.test.ts' } as never)
+  expect(w.extra).toEqual([])
+  expect(contextOf(r)).not.toContain(REMINDER)
+})
+
+test('a job listed by two closed records is judged once', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('before-clear', [leftover(1, CURL)]), closedRec('after-clear', [leftover(1, CURL)])] },
+    verdict: () => KEEP_IT('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.length).toBe(1)
+  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (curl loop).'])
 })
