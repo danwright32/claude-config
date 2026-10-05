@@ -7692,6 +7692,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   lead succeeded on a fresh token.)
   SHORT: On a rejected token reply, refresh the token and retry that call once; evicting and failing loses every in-flight request.
 
+- **L745. An existence check against an external API must treat the record's own deleted
+  state as absent, not only a 404, because many platforms keep a deleted record readable and
+  mark it instead, so a check that asks only whether the read succeeded reads a deleted thing as
+  present.** Google Calendar answers a read of a deleted event with 200 and `status: "cancelled"`;
+  a Gmail message sits readable in Trash; Stripe returns a deleted object with `deleted: true`.
+  The failure is quiet in both directions it touches: a monitor meant to alert only on what still
+  exists cries wolf about what is gone, and a write meant to skip a gone record edits it instead.
+  Decide gone in ONE reader every caller shares, and test it with a deleted record and a live
+  control. (slate#3281, 2026-10-05: proving the reroute live, two test calls were cancelled, the
+  cancel's `gcal_delete` step was done, and a read straight after returned `found: true,
+  status: "cancelled"` with `eventExists` true. Slate's creation orphan check alerts only when an
+  orphan's event "still exists", and two invite readers documented "null when the event is gone"
+  returned the deleted event's description. slate#3217 had already met the same tombstone on the
+  create path and fixed only that path.)
+  SHORT: An existence check must treat a record marked deleted, such as Google's status cancelled or a trash label, as absent, never only a 404.
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
