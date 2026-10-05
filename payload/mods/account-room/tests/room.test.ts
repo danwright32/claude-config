@@ -166,7 +166,7 @@ test('a sign out that is not confirmed turns the lead red, claiming only that, w
 
 test('a Switch stopped for another reason says what was measured, never that claude.ai was asked (#736, L11, L440)', () => {
   const v = verdict(account('here', 'This', reading(10, 95)), [account('work', 'Work', reading(12, 30))], NOW)
-  const lead = (cause: 'no-route' | 'logout-failed' | 'check-not-run' | 'interrupted') => {
+  const lead = (cause: 'no-route' | 'logout-failed' | 'check-not-run' | 'check-unanswered' | 'interrupted') => {
     const c = card({ verdict: v, phase: { kind: 'failed', cause }, now: NOW, offset: ET, unavailable: [] })
     expect((c.lines[0] as { color?: string }[])[0]).toMatchObject({ color: 'error' })
     return text(c.lines as Line[])[0]
@@ -174,6 +174,8 @@ test('a Switch stopped for another reason says what was measured, never that cla
   expect(lead('no-route')).toBe('No sign out was attempted: no browser logout route is set up. Nothing was changed.  [ Try again ] [ Dismiss ]')
   expect(lead('logout-failed')).toBe('The browser logout command failed. Nothing else was changed.  [ Try again ] [ Dismiss ]')
   expect(lead('check-not-run')).toBe('The signed out check could not be run. Nothing else was changed.  [ Try again ] [ Dismiss ]')
+  // The check ran and could not read the browser (exit 2), so no answer was read at all (#773).
+  expect(lead('check-unanswered')).toBe('The signed out check could not read the browser, so whether it signed out is unknown. Nothing else was changed.  [ Try again ] [ Dismiss ]')
   expect(lead('interrupted')).toBe('A reload cut Switch off before the sign out was confirmed. Nothing else was changed.  [ Try again ] [ Dismiss ]')
 })
 

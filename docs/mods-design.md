@@ -1345,9 +1345,25 @@ Not settled by any round, built so the spec holds, and each an open question for
   changed." (no `logoutCommand` and `signedOutCheck` set); "The browser logout command failed.
   Nothing else was changed." (it exited non zero, could not start, or ran past 60 seconds); "The
   signed out check could not be run. Nothing else was changed." (the check could not start or ran
-  past 60 seconds); "A reload cut Switch off before the sign out was confirmed. Nothing else was
+  past 60 seconds); "The signed out check could not read the browser, so whether it signed out is
+  unknown. Nothing else was changed." (the check ran and exited 2, its "could not tell", as
+  `bin/chrome-signed-out.sh` does when Chrome's last used profile or its cookies cannot be read, so
+  no answer was read, #773); "A reload cut Switch off before the sign out was confirmed. Nothing else was
   changed." (the mod reloaded mid sign out, so nothing checked the page afterwards). The toast
   carries the detail, as before.
+- **A nickname typed as an email address** is refused (#758): the nicknames file is in the public
+  claude-config repository, so a name holding something shaped like `name@domain.tld` would publish
+  it. The dialog stays open and a toast says why: "The nickname could not be saved: it looks like an
+  email address, and the nicknames file is published in a public repository. Use a name instead."
+- **The nickname dialog on the mobile app**, which draws no text field yet, shows the question and
+  "Type the name in the terminal or the desktop app." with Skip alone (#758).
+- **/accounts rename with a name, while some Macs could not be read** (#758): no match is not "No
+  account is called ...". It says which read failed: "No account that could be read is called
+  "work". The other Macs' accounts could not be listed: gh api failed: ..." (or "Dans-MacBook-Pro's
+  accounts could not be read: ..." for one Mac's file).
+- **The card's first appearance** never waits on this Mac's write to GitHub (#758): the write runs on
+  its own queue beside the redraw, and the card is drawn again when it lands, so a save that failed
+  shows then. Reading every Mac's file still comes first, since the card is drawn from it.
 - **The waiting question's line** falls back on "Claude Code has not placed it" when Claude Code
   gives no reason, names an account with no email as "the Acme account" (or "this account" with no
   org either), and is said once per account.

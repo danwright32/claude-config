@@ -5,7 +5,7 @@ import { answerOf, contentsPath, entriesOf, fileOf, isRepoName, notRepoName, put
 import type { Answer, RepoFile } from './github.ts'
 import { card, fromRateLimits, nameOf, triggered, verdict } from './room.ts'
 import type { Account, Offset, Reading, Unavailable, Unsaved, Verdict } from './room.ts'
-import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from './store.ts'
+import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, nicknameRefusal, parseMacFile, parseNicknames, serialize, serializeNicknames, withAccount, withName, withSighting } from './store.ts'
 import type { MacFile, Nicknames } from './store.ts'
 
 // The account room (#659). Behaviour agreed with Dan on 2026-10-04 (the issue); the look and every
@@ -242,7 +242,12 @@ const updateNicknames = async ($: EngineInterface, home: string, answer?: { id: 
   })
 
 /** One answer written into the shared file. */
-const writeNickname = async ($: EngineInterface, home: string, id: string, name: string | null) => updateNicknames($, home, { id, name })
+const writeNickname = async ($: EngineInterface, home: string, id: string, name: string | null) => {
+  // Refused here, where every save passes, before the lock is taken (#758).
+  const refused = name === null ? undefined : nicknameRefusal(name)
+  if (refused) throw new Error(refused)
+  return updateNicknames($, home, { id, name })
+}
 
 /** At session start: any conflict copy the sync left beside the file merged back into it (#747). */
 const settleNicknames = async ($: EngineInterface, home: string) => {
@@ -406,7 +411,8 @@ const clearRow = async ($: EngineInterface) => {
  * Macs' readings, which can wait on GitHub, are read before the pass joins the queue the progress
  * ticks take turns on, so a slow read never stops Switch's elapsed seconds (second review of #757).
  * A pass whose account turned low while it was reading has nothing read to draw from, and leaves
- * the card to the pass that follows the reading that made it low.
+ * the card to the pass that follows the reading that made it low. That pass starts as soon as the
+ * reading is taken in, never after its write to GitHub (drawBeside, #758), so it costs no wait.
  */
 const recompute = async ($: EngineInterface) => {
   const first = (await $.state.get(sessionRef)).value
@@ -488,12 +494,14 @@ const stopTicker = () => {
 // loads claude.ai's logout page in Chrome's last used profile, and bin/chrome-signed-out.sh looks
 // for claude.ai's session cookie there. With either setting emptied, Switch stops at this step.
 // `logoutCommand` signs the browser out, and `signedOutCheck` must then print
-// exactly `signed out` and exit 0. A logout command that fails stops Switch; one that succeeds is
+// exactly `signed out` and exit 0, or exit 2 when it cannot tell. A logout command that fails stops Switch; one that succeeds is
 // still not taken as a sign out until the check confirms the signed out state (L156, L184).
 
 const LOGOUT_TIMEOUT_MS = 60_000
 // A minute, because Chrome writes a cookie's removal to disk late: 31 seconds in the 2026-10-05 proof.
 const CHECK_TIMEOUT_MS = 60_000
+// The signed out check's exit code for "could not tell", as the manifest's signedOutCheck states.
+const CHECK_COULD_NOT_TELL = 2
 
 type SignOutRoute = { logoutCommand: string; signedOutCheck: string }
 // The cause is what the card says and the why is the toast's detail, so each stop names what was
@@ -518,6 +526,9 @@ const signOut = async ($: EngineInterface, route: SignOutRoute): Promise<SignOut
     return { isConfirmed: false, cause: 'check-not-run', why: `the signed out check could not be run: ${message(err)}` }
   }
   if (check.exitCode === 0 && check.stdout.trim() === 'signed out') return { isConfirmed: true }
+  // Exit 2 is the check's own "could not tell" (bin/chrome-signed-out.sh: Chrome's profile or its
+  // cookies could not be read), so no answer was read and none is claimed (#773, L11).
+  if (check.exitCode === CHECK_COULD_NOT_TELL) return { isConfirmed: false, cause: 'check-unanswered', why: `the signed out check could not read the browser: ${short(check.stdout) || 'no output'}` }
   return { isConfirmed: false, cause: 'not-confirmed', why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
 }
 
@@ -656,14 +667,15 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
       await $.state.set(liveRef, combine(start, already) as Reading)
     })
   }
-  await record($, s, reading)
+  // Started here and awaited once the card is drawn, so the start never waits on GitHub (#758).
+  const write = started(record($, s, reading))
   await settleNicknames($, s.home)
   if (s.isInteractive) {
     const nick = await loadNicknames($, s.home)
     if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
     else if (!Object.prototype.hasOwnProperty.call(nick.names, s.id)) await ask($, { id: s.id, email: s.email, org: s.org, current: null })
   }
-  await recompute($)
+  await drawBeside($, write)
 }
 
 /** One measurement's windows taken in: this session's live reading, this Mac's file, the card. */
@@ -676,8 +688,30 @@ const takeIn = async ($: EngineInterface, windows: Parameters<typeof fromRateLim
   await serialLive(async () => {
     await $.state.set(liveRef, combine((await $.state.get(liveRef)).value ?? undefined, reading) as Reading)
   })
-  await record($, s, reading)
+  await drawBeside($, started(record($, s, reading)))
+}
+
+/**
+ * The card drawn while this Mac's write to GitHub runs on its own queue, and drawn again once the
+ * write lands, so a slow or hung GitHub never holds back the card's first appearance; what the write
+ * did (a save that failed, or one that cleared an earlier failure) shows on the redraw (#758). Every
+ * reading that changes the live figures comes through here, so a pass that found the account turned
+ * low while it read leaves the card to this one, which starts at once rather than after the write.
+ */
+const drawBeside = async ($: EngineInterface, write: Promise<void>) => {
   await recompute($)
+  try {
+    await write
+  } finally {
+    // Drawn again however the write ended; a write that threw is still said by the caller (L73).
+    await recompute($)
+  }
+}
+
+/** A write started now and awaited later, marked as handled meanwhile so a failure waits to be said. */
+const started = (write: Promise<void>) => {
+  write.catch(() => undefined)
+  return write
 }
 
 export const register: Register = (on, options) => {
@@ -761,7 +795,12 @@ export const register: Register = (on, options) => {
     const a = await read($, askingRef)
     if (!a) return next(e)
     const typed = (await read($, typedRef)) ?? ''
-    const { Box, Button, Input, Text } = $.ui.resolve(e) as unknown as Record<string, (p: Record<string, unknown>) => unknown>
+    const els = $.ui.resolve(e)
+    const { Box, Button, Text } = els
+    // The mobile app draws no text field yet, so there the name cannot be typed: the dialog says
+    // where it can be, and Skip still answers (#758, typed strictly rather than cast).
+    // Decided by the surface named, as Claude Code's own table is (its types: "all but mobile Input").
+    const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : undefined
     const who = a.org ? `${a.email}, ${a.org}` : a.email
     // The settled dialog (nickname round): chip, question, the email and org dim under it, a text
     // field, Save and Skip, and the keys in dim text. Esc closes it, which is a skip.
@@ -773,13 +812,17 @@ export const register: Register = (on, options) => {
           <Text bold>What should this account be called?</Text>
         </Box>
         <Text dimColor>{who}</Text>
-        <Input key="nickname" value={typed} autoFocus submitLabel="save" onInput={(v: string) => void $.state.set(typedRef, v)} onSubmit={(v: string) => void finishAsk($, v, true)} />
+        {Input ? (
+          <Input key="nickname" value={typed} autoFocus submitLabel="save" onInput={(v: string) => void $.state.set(typedRef, v)} onSubmit={(v: string) => void finishAsk($, v, true)} />
+        ) : (
+          <Text key="no-field">Type the name in the terminal or the desktop app.</Text>
+        )}
         <Box flexDirection="row">
-          <Button key="save" label="Save" onPress={async () => finishAsk($, (await $.state.get(typedRef)).value ?? '', true)} />
-          <Text> </Text>
+          {Input ? <Button key="save" label="Save" onPress={async () => finishAsk($, (await $.state.get(typedRef)).value ?? '', true)} /> : null}
+          {Input ? <Text> </Text> : null}
           <Button key="skip" label="Skip" onPress={() => void finishAsk($, null, true)} />
         </Box>
-        <Text dimColor>Enter to save · Esc to skip</Text>
+        {Input ? <Text dimColor>Enter to save · Esc to skip</Text> : null}
       </Box>
     ) as never
   })
@@ -803,10 +846,16 @@ export const register: Register = (on, options) => {
       await ask($, { id: s.id, email: s.email, org: s.org, current: current(s.id) })
       return { text: '' }
     }
-    const { accounts } = await loadReadings($)
-    if (!accounts.has(s.id)) accounts.set(s.id, { id: s.id, email: s.email, org: s.org })
+    const read = await loadReadings($)
+    // A copy: the Map read may be the minute's kept read, which the card shares (#758).
+    const accounts = withAccount(read.accounts, { id: s.id, email: s.email, org: s.org })
     const lower = q.toLowerCase()
     const hits = [...accounts.values()].filter(a => (current(a.id) ?? '').toLowerCase() === lower || a.email.toLowerCase() === lower)
+    // With some Macs unread, no match is not no such account: the read that failed is named (#758, L11).
+    if (hits.length === 0 && read.unavailable.length) {
+      const why = read.unavailable.map(u => (u.mac === null ? `The other Macs' accounts could not be listed: ${u.why}` : `${u.mac}'s accounts could not be read: ${u.why}`)).join('; ')
+      return { text: `No account that could be read is called "${q}". ${why}` }
+    }
     if (hits.length === 0) return { text: `No account is called "${q}". Name one by its nickname or email.` }
     if (hits.length > 1) return { text: `More than one account is called "${q}". Name it by its email.` }
     const t = hits[0] as Account

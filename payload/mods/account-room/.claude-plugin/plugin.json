@@ -25,7 +25,7 @@
     "signedOutCheck": {
       "type": "string",
       "title": "Signed out check",
-      "description": "Shell command that prints exactly 'signed out' once the browser is signed out of claude.ai. The default, proven on 2026-10-05 (#659), looks for claude.ai's session cookie in Google Chrome's last used profile.",
+      "description": "Shell command that prints exactly 'signed out' and exits 0 once the browser is signed out of claude.ai, and exits 2 when it cannot tell (the browser could not be read). The default, proven on 2026-10-05 (#659), looks for claude.ai's session cookie in Google Chrome's last used profile.",
       "default": "/bin/sh \"$HOME/.claude/mods/account-room/bin/chrome-signed-out.sh\""
     }
   }

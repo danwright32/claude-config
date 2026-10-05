@@ -199,6 +199,7 @@ export const STOPPED: Record<AccountRoomStop, string> = {
   'no-route': 'No sign out was attempted: no browser logout route is set up. Nothing was changed.',
   'logout-failed': 'The browser logout command failed. Nothing else was changed.',
   'check-not-run': 'The signed out check could not be run. Nothing else was changed.',
+  'check-unanswered': 'The signed out check could not read the browser, so whether it signed out is unknown. Nothing else was changed.',
   'not-confirmed': "claude.ai didn't confirm the sign out. Nothing else was changed.",
   interrupted: 'A reload cut Switch off before the sign out was confirmed. Nothing else was changed.',
 }

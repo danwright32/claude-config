@@ -1072,6 +1072,12 @@ and the engine's words, when `claude` answers that hooks modules are turned off 
 (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
 set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
 exit code and the last lines of output instead of an empty reason.
+It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, wherever Claude
+Code has laid its types under the mod's `.claude-plugin/types/` (it does once it has loaded the mod)
+and a TypeScript compiler is found (`TSC_BIN`, else `tsc` on the path). Errors fail the run with the
+mod named and counted; where either is missing, the mod's line says its types were not checked and
+why, which is not a failure. Neither Mac nor CI has `tsc` installed today, so this check runs only
+where somebody points `TSC_BIN` at one.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
