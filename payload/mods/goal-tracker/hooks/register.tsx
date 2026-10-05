@@ -90,15 +90,14 @@ const waitingOnYou = ($: EngineInterface, text: string) => notifySoon($, async (
 const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() => progress?.lastActivityAt ?? 0)
 
 // What the session waits on Dan for, each kept apart so that one ending never erases another
-// (#694): the open question, a save waiting in the band for his answer (#706), and the open
-// permission prompt with the calls it may belong to. The pane shows the one asked latest.
+// (#694): the open question (ask before saving's included, asked in the same dialog since #777) and
+// the open permission prompt with the calls it may belong to. The pane shows the one asked latest.
 type Waiting = NonNullable<Progress['waiting']>
 let question: { id: string; mark: Waiting } | undefined
-let saving: { id: string; mark: Waiting } | undefined
 let permission: { calls: Set<string>; mark: Waiting } | undefined
 const waitingNow = (): Waiting | undefined => {
   let latest: Waiting | undefined
-  for (const m of [question?.mark, saving?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
+  for (const m of [question?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
   return latest
 }
 const withWaiting = (p: Progress): Progress => {
@@ -177,21 +176,6 @@ const questionOpened = async ($: EngineInterface, id: string, text: string, now:
   if (unsent) dropUnsent(unsent.id)
   // Sent only if that question is still the open one: one ended meanwhile never reached Dan.
   unsent = { id, send, timer: $.clock.after(QUESTION_SHOWN_MS, () => (question?.id === id ? sendUnsent(id) : dropUnsent(id))) }
-}
-
-// A save to lasting memory waiting in the band for Dan's answer (ask before saving, #618) is the
-// session waiting on him, as a question is (#706): its write of the questions it holds
-// (`ask-before-saving.pending`, the first one shown) reaches every plugin's state.set hook. Marked
-// and notified once per question, in the band's own words, and cleared when none is left.
-const SAVE_PENDING = { plugin: 'ask-before-saving', key: 'pending' } as const
-const SAVE_QUESTION = 'Save this as a standing rule?'
-let toldUnreadableSave = false
-// Another plugin's value is read, never trusted: the first question's id, none left, or unreadable.
-const firstSaveOf = (value: unknown): { id: string } | null | undefined => {
-  if (!Array.isArray(value)) return undefined
-  if (!value.length) return null
-  const first = value[0] as { id?: unknown } | null
-  return first && typeof first === 'object' && typeof first.id === 'string' ? { id: first.id } : undefined
 }
 
 // The /goals pane (claude-config#612, docs/mods-design.md "Goals pane", settled 2026-10-04): every
@@ -335,11 +319,9 @@ const beginAgain = async ($: EngineInterface) => {
   toldNoNotify = false
   project = undefined
   question = undefined
-  saving = undefined
   permission = undefined
   if (unsent) dropUnsent(unsent.id)
   countedCalls.clear()
-  toldUnreadableSave = false
 }
 
 export const register: Register = on => {
@@ -478,39 +460,6 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A save waiting in the band for Dan's answer (above), read from ask before saving's writes.
-  on('state.set', SAVE_PENDING, async ($, e, next) => {
-    const r = await next(e)
-    if ((r as { value?: { isSet?: boolean } }).value?.isSet !== true) return r
-    const first = firstSaveOf(e.value)
-    if (first === null) {
-      if (saving) {
-        saving = undefined
-        if (progress) {
-          progress = withWaiting(progress)
-          await publish($, await nowOr($))
-        }
-      }
-    } else if (first) {
-      if (saving?.id !== first.id) {
-        const now = await nowOr($)
-        saving = { id: first.id, mark: { question: SAVE_QUESTION, since: now, kind: 'question' } }
-        if (progress) {
-          progress = withWaiting(progress)
-          await publish($, now)
-        }
-        waitingOnYou($, SAVE_QUESTION)
-      }
-    } else {
-      $.ui.log("goal-tracker: ask before saving's waiting question could not be read, so it is not marked or notified.", { to: 'debug' })
-      if (!toldUnreadableSave) {
-        toldUnreadableSave = true
-        $.ui.log('The goal tracker could not read the save question ask before saving holds, so a save waiting on you is not marked or notified.')
-      }
-    }
-    return r
-  })
-
   // Each tool result's row, counted toward failed unless this module's tool.call hook already
   // counted its call (above). A subagent's rows are its own, as its calls are.
   on('session.append', { door: 'tool-result' }, async ($, e, next) => {
@@ -528,8 +477,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // "What's next?" only while nothing is being asked: an open question, a save waiting in the band or
-  // a permission sent its own.
+  // "What's next?" only while nothing is being asked: an open question (ask before saving's included)
+  // or a permission sent its own.
   on('classic.Notification', async ($, e, next) => {
     if (e.notification_type === 'idle_prompt' && !waitingNow()) notifySoon($, async () => 'Claude Code', "What's next?")
     return next(e)
