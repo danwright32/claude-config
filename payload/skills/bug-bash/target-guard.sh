@@ -85,7 +85,8 @@ if [ -z "$dev_reason" ]; then
   # 200 with its own index page for any path, this one included.
   is_vite_client() { # the body is script, not a page, and names vite
     local body
-    body="$(curl -s --max-time 10 "$1" 2>/dev/null | head -c 4096)"
+    body="$(curl -s --max-time 10 "$1" 2>/dev/null)"
+    body="${body:0:4096}"
     [ -n "$body" ] || return 1
     grep -qi '<html\|<!doctype' <<< "$body" && return 1
     grep -qi 'vite' <<< "$body"

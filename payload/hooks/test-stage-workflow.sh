@@ -88,7 +88,7 @@ refuses "the config home reached through a symlink is still refused" "config" "$
 for pair in "production-ready:production-audit.workflow.js" "plan-council:panel.workflow.js"; do
   skill="${pair%%:*}"; wf="${pair#*:}"
   md="$SKILLS/$skill/SKILL.md"
-  if grep -Eq 'scriptPath: *"(__CLAUDE_HOME__|~|\$HOME|/Users/)' "$md"; then
+  if grep -Eq 'scriptPath: *"(__CLAUDE|~|\$HOME|/Users/)' "$md"; then
     bad "$skill/SKILL.md no longer hands Workflow a scriptPath inside the config home" "$(grep -n 'scriptPath' "$md")"
   else ok; fi
   if grep -q "stage-workflow.sh.*skills/$skill/$wf" "$md"; then ok
