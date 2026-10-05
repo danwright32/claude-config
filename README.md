@@ -348,7 +348,7 @@ does not catch.
 | `check-public-assets.sh` | An asset under `public/`, `static/` or `assets/` that this push added or orphaned and nothing references; a raster image added or changed over 250 KB. Names browsers fetch by convention are exempt; `.claude/hygiene-allow.txt` in the project holds the rest, one path and a reason per line. | `SKIP_ASSET_CHECK=1` |
 | `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
 | `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
-| `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
+| `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. The record follows every total that passes, so it never drifts behind main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
 | `ai-review-on-push.sh` | Nothing. It is advisory: after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
 
 What each one measured, and what it does not catch, is in the hook's own header. Two worth knowing
@@ -813,7 +813,23 @@ guarding it are watched failing.
 
 Every push also runs each section the push CHANGED on its own
 (`tests/audit-changed-sections.sh`), which is the only run in which a missing prerequisite shows up.
-A push that does not touch the suite costs nothing there.
+A push that does not touch the suite costs nothing there. Before a session's push the hook
+`linux-sections-before-push.sh` runs those sections on Linux in a container (`tests/run-on-linux.sh`)
+when Docker is running, and reads the suite's own counts so that a failing prelude under a passing
+section is reported as the prelude, with the way to tell a broken base from this change (#625).
+
+In this repository that same hook refuses a session's push straight to `main`
+(`ALLOW_DIRECT_MAIN_PUSH=1` for one push, explained first): a change goes up as a branch and a pull
+request, whose CI runs every suite on Linux. The pre push Linux run cannot stand in for that. On
+2026-10-05 its record on Daniels-MacBook-Pro-2 read 0 judged of the 15 pushes it had a section to
+check, because Docker's daemon was not running, and it only ever covers sections of the sync suite
+(#596). The automatic `sync from <host>` commits are pushed by claude-sync, not by a session, so
+the refusal never sees them.
+
+CI's environment step is the list the container is built from, and
+`tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
+invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
+more) that the step does not name (#624).
 
 The older knob still exists for when you want everything up to a point rather than one section:
 

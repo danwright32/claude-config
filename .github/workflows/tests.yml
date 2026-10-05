@@ -159,6 +159,10 @@ jobs:
           # needs python3 too. Named here because this step is the list run-on-linux.sh builds its
           # container from: unnamed, the container had none and failed four checks CI passed.
           python3 --version
+          # require-changelog-tag.sh and pr-merge-quiz.sh run `node -e`, and test-changelog-tag.sh
+          # runs node directly. Named for the same reason as python3, and held to it by
+          # tests/test-ci-environment-tools.sh, which fails on an invoked interpreter not named here.
+          node --version
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
           # How many cores this runner actually has (claude-config#210). The HOOK_TESTS_BUDGET
