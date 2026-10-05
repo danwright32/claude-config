@@ -468,7 +468,7 @@ fi
 REAL_STATE="$HOME/.claude/state/scanners-passed"
 _leaked=""
 for _fx in "$TMPROOT"/*/; do
-  [ -d "$_fx/.git" ] || continue
+  [ -e "$_fx/.git" ] || continue
   _fx_key="$(printf '%s' "$(cd "$_fx" && pwd -P)" | shasum -a 256 | awk '{print $1}')"
   [ -e "$REAL_STATE/$_fx_key.txt" ] && { _leaked="$_leaked $(basename "$_fx")"; rm -f "$REAL_STATE/$_fx_key.txt"; }
 done
