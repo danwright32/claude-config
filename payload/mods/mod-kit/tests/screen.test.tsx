@@ -80,6 +80,29 @@ test('a TypeError from inside a loaded secret guard refuses the call too (#707 r
   expect(w.toasts).toEqual([])
 })
 
+// A mod may hand the screen a call with no id (it builds the call itself): a failure still refuses,
+// and no card is kept under an empty id for some other row to be drawn as (#707 review).
+const idless: { name: string; register: Register } = {
+  name: 'handoff',
+  register: on => {
+    on('tool.call', { tool: 'Save' }, async ($, e) => {
+      const { tool_use_id: _id, ...call } = e as unknown as Record<string, unknown>
+      const refused = await $.modkit.screen(call as never)
+      return refused ?? ({ result: 'Saved.' } as never)
+    })
+  },
+}
+test('a failed screen of a call with no id refuses it and keeps no card under an empty id (#707 review)', { plugins: [idless, secretGuard] }, async ($, on) => {
+  world(on)
+  const r = await $.tool.call({ tool: 'Save', tool_use_id: 'v1', value: 'BREAK' } as never)
+  expect(textOf(r)).toMatch(/^Blocked: the secret guard could not be asked about this/)
+  for (const id of ['', 'v1']) {
+    const ui = await $.ui.mount(row(id))
+    expect(await ui.find({ text: 'Blocked by Secret guard' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
 test('a secret guard that fails to answer refuses the call, with the grey card (#707, L42)', { plugins: [answerer, secretGuard] }, async ($, on) => {
   const w = world(on)
   const r = await $.tool.call(pin('BREAK', 's4'))

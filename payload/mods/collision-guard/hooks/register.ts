@@ -266,10 +266,9 @@ export const register: Register = on => {
     const input = e as unknown as Record<string, unknown>
     const c = await check($, input)
     if (c && 'deny' in c) return { deny: c.deny }
-    // The engine gives every call an id of its own, one raised without any included (measured
-    // 2026-10-04), so a plan is never keyed by an empty one that two calls could share.
-    const id = String(input.tool_use_id ?? '')
-    if (c && id) toNote.set(id, c)
+    // Keyed by the call's id, which the engine gives every call, one raised without any included
+    // (measured 2026-10-04, and tested), so two calls never share a plan.
+    if (c) toNote.set(String(input.tool_use_id), c)
     return decided
   })
 
