@@ -85,6 +85,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
   on('session.id', () => ({ value: (opts.id ?? (() => 's1'))() }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
+  on('classic.SessionStart', () => ({}) as never)
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.log', ($, e) => {
     logs.push(e.text)
@@ -196,6 +197,46 @@ test('after a /clear the process carries on under its new id, with a record of i
   expect(w.own('s1').closedAt).toBe(100 * MIN)
   expect(w.own('s2').closedAt).toBe(null)
   expect(w.own('s2').sessionId).toBe('s2')
+})
+
+// #735: the new conversation's record is made when its id is first seen, never at the next beat, so
+// for that minute /goals does not miss it and the goal tracker and job watcher do not write into
+// the record session.end just closed. No clock moves in these three.
+type Classic = { classic: { SessionStart: (e: never) => Promise<unknown> } }
+test('after a /clear the new conversation has its record as its session start is announced, before any beat (#735)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  id = 's2'
+  await ($ as unknown as Classic).classic.SessionStart({ source: 'clear' } as never)
+  expect(w.own('s1').closedAt).toBe(100 * MIN)
+  expect(w.own('s2')).toMatchObject({ sessionId: 's2', closedAt: null, cwd: '/repo/app', edits: [], extra: {} })
+})
+
+test('after a /clear a write from the new conversation lands on its own record at once, never on the closed one (#735)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await call($, 'extra job-1')
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  id = 's2'
+  await call($, 'extra job-2')
+  await call($, 'edit /repo/b.ts')
+  expect(w.own('s1')).toMatchObject({ closedAt: 100 * MIN, extra: { jobs: ['job-1'] }, edits: [] })
+  expect(w.own('s2')).toMatchObject({ closedAt: null, extra: { jobs: ['job-2'] }, edits: ['/repo/b.ts'] })
+})
+
+test('after a /clear the list names the new conversation as this session at once (#735)', withConsumer, async ($, on) => {
+  let id = 's1'
+  world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  id = 's2'
+  const l = JSON.parse(await call($, 'list')) as { open: { sessionId: string }[]; closed: { sessionId: string }[]; selfId: string }
+  expect(l.selfId).toBe('s2')
+  expect(l.open.map(s => s.sessionId)).toEqual(['s2'])
+  expect(l.closed.map(s => s.sessionId)).toEqual(['s1'])
 })
 
 test('after a /clear, an edit queued before the switch lands on the old record, never the new (lessons review)', withConsumer, async ($, on) => {

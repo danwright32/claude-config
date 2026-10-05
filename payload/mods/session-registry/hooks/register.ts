@@ -34,45 +34,64 @@ const folderOf = (cwd: string) => cwd.replace(/[^A-Za-z0-9-]/g, '-')
 // two hooks updating the record at once cannot interleave and lose either change (assume it runs
 // twice).
 let persist: (() => Promise<void>) | undefined
-const save = (change: (r: SessionsRecord) => void): Promise<void> => {
-  const next = chain.then(async () => {
-    if (!rec || !home || !persist) return
-    change(rec)
-    await persist()
-  })
+const enqueue = (work: () => Promise<void>): Promise<void> => {
+  const next = chain.then(work)
   chain = next.catch(() => undefined)
   return next
 }
 
-const fresh = async ($: EngineInterface, sessionId: string, cwd: string): Promise<SessionsRecord> => {
-  const now = await $.clock.now()
-  let repoRoot: string | null = null
-  try {
-    const r = await $.process.run(['git', '-C', cwd, 'rev-parse', '--show-toplevel'])
-    repoRoot = r.exitCode === 0 && r.stdout.trim() ? r.stdout.trim() : null
-  } catch {
-    repoRoot = null
-  }
-  return { v: 1, sessionId, cwd, repoRoot, startedAt: now, lastSeen: now, closedAt: null, transcriptPath: null, edits: [], extra: {} }
-}
+// After a /clear or a resume (session.end with that reason) the process goes on under a new session
+// id and no session.start fires (#735). From then on the next thing to touch the record makes the
+// new conversation's own, inside the queue: the classic SessionStart that announces it, a write, or
+// a read of the list. Never left to the next beat, which for up to a minute kept the new
+// conversation out of /goals and let the goal tracker and the job watcher write into the record
+// session.end had just closed. A write queued before the session ended stays on the old record. The
+// beat still makes it for an id that changed with no session.end seen.
+let expectNew = false
+// Made inside engine.create with the built $: true when it made the record for a new session id.
+let roll: ((always: boolean) => Promise<boolean>) | undefined
+const save = (change: (r: SessionsRecord) => void): Promise<void> =>
+  enqueue(async () => {
+    if (!rec || !home || !persist) return
+    await roll?.(false)
+    change(rec)
+    await persist()
+  })
+// The new conversation's record written as soon as its id is seen, with nothing else to write.
+const catchUp = (): Promise<void> =>
+  enqueue(async () => {
+    if (rec && home && persist && (await roll?.(false))) await persist()
+  })
+
+// A new record. The engine refuses the built $ as an argument, so each caller asks git and the clock
+// with its own $ and hands the answers here.
+const topLevel = ['rev-parse', '--show-toplevel']
+const rootOf = (r: { exitCode: number; stdout: string } | undefined): string | null => (r?.exitCode === 0 && r.stdout.trim() ? r.stdout.trim() : null)
+const blank = (sessionId: string, cwd: string, now: number, repoRoot: string | null): SessionsRecord => ({
+  v: 1,
+  sessionId,
+  cwd,
+  repoRoot,
+  startedAt: now,
+  lastSeen: now,
+  closedAt: null,
+  transcriptPath: null,
+  edits: [],
+  extra: {},
+})
+const fresh = async ($: EngineInterface, sessionId: string, cwd: string): Promise<SessionsRecord> =>
+  blank(sessionId, cwd, await $.clock.now(), rootOf(await $.process.run(['git', '-C', cwd, ...topLevel]).catch(() => undefined)))
 
 // A beat: the session's id can change under a running process (a /clear), and then this process
-// carries on as a new session with a record of its own.
+// carries on as a new session with a record of its own. The new record replaces the old inside the
+// queue, so a save still waiting there cannot write the old record after it (lessons review of #632).
 const beat = async ($: EngineInterface) => {
   if (!rec) return
-  const id = await $.session.id()
   const now = await $.clock.now()
-  if (id !== rec.sessionId) {
-    // The new record replaces the old inside the queue, so a save still waiting there cannot write
-    // the old record after it (lessons review of #632).
-    const next = await fresh($, id, rec.cwd)
-    await save(() => {
-      rec = next
-    })
-    return
-  }
-  await save(r => {
-    r.lastSeen = now
+  await enqueue(async () => {
+    if (!rec || !home || !persist) return
+    if (!(await roll?.(true))) rec.lastSeen = now
+    await persist()
   })
 }
 
@@ -140,6 +159,17 @@ export const register: Register = on => {
       const mv = await built.process.run(['mv', '-f', tmp, `${dir}/${rec.sessionId}.json`])
       if (mv.exitCode !== 0) built.ui.log(`session-registry: could not save this session's record: ${mv.stderr.trim()}`, { to: 'debug' })
     }
+    // Runs inside the queue. `always` is the beat's, which looks whether or not a session end was
+    // seen; any other caller looks only after a /clear or a resume (above).
+    roll = async always => {
+      if (!rec || (!always && !expectNew)) return false
+      const id = await built.session.id()
+      if (id === rec.sessionId) return false
+      expectNew = false
+      const cwd = rec.cwd
+      rec = blank(id, cwd, await built.clock.now(), rootOf(await built.process.run(['git', '-C', cwd, ...topLevel]).catch(() => undefined)))
+      return true
+    }
     // Where a session's transcript is, only if that file is really there: in the folder for the
     // directory it started in, else wherever a file named by its id is. Never a guessed path, so a
     // reader can say the transcript was not found rather than fail to read one that never existed.
@@ -169,6 +199,8 @@ export const register: Register = on => {
     }
     const sessions: Sessions = {
       list: async (): Promise<SessionsList> => {
+        // After a /clear, this session is the new conversation from the first read (#735).
+        if (expectNew) await catchUp()
         const h = home ?? (await built.env.get('HOME'))
         const out: SessionsList = { open: [], closed: [], unreadable: [], selfId: rec?.sessionId ?? null }
         if (!h) {
@@ -217,6 +249,7 @@ export const register: Register = on => {
       await $.process.run(['mkdir', '-p', dirOf(home)])
       await prune($, home, await $.clock.now())
       rec = await fresh($, await $.session.id(), e.cwd)
+      expectNew = false
       await save(() => undefined)
       if (!beating) {
         beating = true
@@ -230,11 +263,20 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     const now = await $.clock.now()
-    if (rec && rec.sessionId === e.sessionId) {
-      await save(r => {
-        r.closedAt = now
-      })
-    }
+    // Closed without looking for a new id, since this is the old conversation's last write; only
+    // after it may the next one make the new conversation's record (#735).
+    await enqueue(async () => {
+      if (!rec || !persist || rec.sessionId !== e.sessionId) return
+      rec.closedAt = now
+      await persist()
+    })
+    if (e.reason === 'clear' || e.reason === 'resume') expectNew = true
+    return next(e)
+  })
+
+  // The new conversation a /clear started, announced: its record is made now (#735).
+  on('classic.SessionStart', async ($, e, next) => {
+    await catchUp()
     return next(e)
   })
 }
