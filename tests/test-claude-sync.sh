@@ -18600,6 +18600,123 @@ out_638u="$(SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIF
 check "#638 a stale file in a skill that cannot load is not offered the pull remedy" \
   "! line_has \"\$out_638u\" 'earlier version' 'skills/s638'"
 
+section "== the status line and the shared settings are written into each Mac's settings.json (#772, #695) =="
+# 2026-10-05: the status bar mod reached Dans-MacBook-Pro and its status line never showed, because
+# the statusLine setting naming its script lives in each Mac's own settings.json, which the sync did
+# not write, and nothing said it was missing (#772). And Dan chose to have ONE other setting,
+# ultracode, carried between the Macs from an allowlisted payload file, without reopening the rule
+# that the rest of settings.json stays per Mac (#695).
+sx_repo(){   # $1 = a fresh repo dir  $2 = shared settings JSON, or empty for none  $3 = 1 to carry the status bar mod
+  git init -q "$1"; mkdir -p "$1/payload"
+  [ -n "$2" ] && printf '%s\n' "$2" > "$1/payload/settings.shared.json"
+  if [ "${3:-}" = 1 ]; then
+    mkdir -p "$1/payload/mods/status-bar"
+    printf '#!/usr/bin/env bash\necho status\n' > "$1/payload/mods/status-bar/statusline.sh"
+  fi
+  return 0
+}
+sx_pull(){   # $1 = home  $2 = repo -> output
+  CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true
+}
+SX_ORIG='{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"bash x.sh"}]}]},"model":"opus","effortLevel":"high","permissions":{"allow":["Bash(ls)"]}}'
+
+# A FRESH MAC: no statusLine and no ultracode.
+SX1R="$WORK/sx1-repo"; sx_repo "$SX1R" '{"ultracode": true}' 1
+SX1H="$WORK/sx1-home"; mkdir -p "$SX1H"; printf '%s\n' "$SX_ORIG" > "$SX1H/settings.json"
+out_sx1="$(sx_pull "$SX1H" "$SX1R")"
+dbg "#772 first pull on a fresh Mac: $out_sx1"
+check "#772 fixture: the status bar script arrived" "[ -f '$SX1H/mods/status-bar/statusline.sh' ]"
+check "#772 a pull writes statusLine naming this Mac's own copy of the script" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX1H/settings.json')\" = 'bash $SX1H/mods/status-bar/statusline.sh' ]"
+check "#772 as a command status line" "[ \"\$(jq -r '.statusLine.type' '$SX1H/settings.json')\" = command ]"
+check "#695 a pull sets ultracode from the shared settings file" "[ \"\$(jq -r '.ultracode' '$SX1H/settings.json')\" = true ]"
+check "#772 #695 every other setting is exactly as it was" \
+  "[ \"\$(jq -cS 'del(.statusLine, .ultracode)' '$SX1H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "#772 #695 and the pull names what it wrote" "line_has \"\$out_sx1\" 'settings.json' 'status line' && line_has \"\$out_sx1\" 'settings.json' 'ultracode'"
+# A second pull with nothing new leaves the file and its mtime alone: settings.json is a WatchPath,
+# and a needless rewrite would trigger the next sync. The mtime is SET into the past rather than
+# waited on, so a rewrite in the same second cannot hide (L290).
+touch -t 202001010000 "$SX1H/settings.json"; _sx1sum="$(cksum < "$SX1H/settings.json")"
+out_sx1b="$(sx_pull "$SX1H" "$SX1R")"
+check "#772 #695 a second pull with nothing new leaves settings.json byte for byte" "[ \"\$(cksum < '$SX1H/settings.json')\" = \"\$_sx1sum\" ]"
+check "#772 #695 and leaves its mtime untouched" "[ \"\$(_suite_mtime '$SX1H/settings.json')\" -lt 1600000000 ]"
+check "#772 #695 and claims to have written nothing there" "! line_has \"\$out_sx1b\" 'settings.json' 'status line' && ! line_has \"\$out_sx1b\" 'settings.json' 'ultracode'"
+
+# ONE ALREADY SET CORRECTLY, with a refresh interval of its own: kept exactly as it is.
+SX2H="$WORK/sx2-home"; mkdir -p "$SX2H"
+jq -c --arg c "bash $SX2H/mods/status-bar/statusline.sh" '. + {statusLine: {type: "command", command: $c, refreshInterval: 10}, ultracode: true}' <<< "$SX_ORIG" > "$SX2H/settings.json"
+_sx2sum="$(cksum < "$SX2H/settings.json")"
+sx_pull "$SX2H" "$SX1R" >/dev/null
+check "#772 a status line already naming this Mac's script is left byte for byte" "[ \"\$(cksum < '$SX2H/settings.json')\" = \"\$_sx2sum\" ]"
+
+# ONE SET TO SOMETHING ELSE: never overwritten, and named by status.
+SX3H="$WORK/sx3-home"; mkdir -p "$SX3H"
+jq -c '. + {statusLine: {type: "command", command: "bash /elsewhere/my-line.sh"}}' <<< "$SX_ORIG" > "$SX3H/settings.json"
+sx_pull "$SX3H" "$SX1R" >/dev/null
+check "#772 a status line pointing somewhere else is not overwritten" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX3H/settings.json')\" = 'bash /elsewhere/my-line.sh' ]"
+check "#772 #695 while the shared setting still lands beside it" "[ \"\$(jq -r '.ultracode' '$SX3H/settings.json')\" = true ]"
+out_sx3s="$(CLAUDE_HOME="$SX3H" SYNC_REPO="$SX1R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#772 status with a status line elsewhere: $out_sx3s"
+check "#772 status names a status line set to another command" \
+  "line_has \"\$out_sx3s\" 'statusLine' '/elsewhere/my-line.sh' && line_has \"\$out_sx3s\" 'statusLine' 'mods/status-bar/statusline.sh'"
+# Control (L159): the Mac set correctly gets no such line.
+out_sx2s="$(CLAUDE_HOME="$SX2H" SYNC_REPO="$SX1R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#772 and says nothing about a status line that is already right" "! grep -q 'statusLine' <<< \"\$out_sx2s\""
+
+# A MAC WITHOUT THE STATUS BAR MOD gets no status line at all, and a missing shared file sets nothing.
+SX4R="$WORK/sx4-repo"; sx_repo "$SX4R" '' ''
+SX4H="$WORK/sx4-home"; mkdir -p "$SX4H"; printf '%s\n' "$SX_ORIG" > "$SX4H/settings.json"; _sx4sum="$(cksum < "$SX4H/settings.json")"
+sx_pull "$SX4H" "$SX4R" >/dev/null
+check "#772 #695 a Mac with neither the mod nor a shared file keeps settings.json byte for byte" "[ \"\$(cksum < '$SX4H/settings.json')\" = \"\$_sx4sum\" ]"
+
+# A KEY OUTSIDE THE ALLOWLIST is refused by name and nothing from the file is written, so the file
+# cannot become a back door for model or effort.
+SX5R="$WORK/sx5-repo"; sx_repo "$SX5R" '{"ultracode": true, "model": "haiku"}' ''
+SX5H="$WORK/sx5-home"; mkdir -p "$SX5H"; printf '%s\n' "$SX_ORIG" > "$SX5H/settings.json"; _sx5sum="$(cksum < "$SX5H/settings.json")"
+out_sx5="$(sx_pull "$SX5H" "$SX5R")"
+dbg "#695 a shared file carrying a key outside the allowlist: $out_sx5"
+check "#695 a key outside the allowlist is refused, naming it" "line_has \"\$out_sx5\" 'settings.shared.json' 'model'"
+check "#695 and nothing from that file is written" "[ \"\$(cksum < '$SX5H/settings.json')\" = \"\$_sx5sum\" ]"
+
+# OFF IS false, never a deletion: a shared false turns a local true off.
+SX6R="$WORK/sx6-repo"; sx_repo "$SX6R" '{"ultracode": false}' ''
+SX6H="$WORK/sx6-home"; mkdir -p "$SX6H"; jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX6H/settings.json"
+sx_pull "$SX6H" "$SX6R" >/dev/null
+check "#695 a shared false turns ultracode off" "[ \"\$(jq -r '.ultracode' '$SX6H/settings.json')\" = false ]"
+
+# AN UNREADABLE settings.json fails loud and is left exactly as it was.
+SX7H="$WORK/sx7-home"; mkdir -p "$SX7H"; printf '{ not json\n' > "$SX7H/settings.json"; _sx7sum="$(cksum < "$SX7H/settings.json")"
+out_sx7="$(sx_pull "$SX7H" "$SX1R")"
+check "#695 #772 an unreadable settings.json is left exactly as it was" "[ \"\$(cksum < '$SX7H/settings.json')\" = \"\$_sx7sum\" ]"
+check "#695 #772 and the pull says the settings could not be written" "line_has \"\$out_sx7\" 'settings.json' 'ultracode' 'could not'"
+
+# APPLIED IS JUDGED BY THE VALUE, not by a file of that name: settings.shared.json never lands under
+# its own name, so a byte comparison would call it unapplied for ever (the comment above
+# payload_path_applied). Seen through status, which lists what this clone holds and has not applied.
+SX8B="$WORK/sx8-bare.git"; git init -q --bare -b main "$SX8B"
+SX8D="$WORK/sx8-dev"; git clone -q "$SX8B" "$SX8D" 2>/dev/null; mkdir -p "$SX8D/payload"; printf '# rules\n' > "$SX8D/payload/CLAUDE.md"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m base 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+SX8C="$WORK/sx8-clone"; git clone -q "$SX8B" "$SX8C" 2>/dev/null
+SX8H="$WORK/sx8-home"; mkdir -p "$SX8H"; printf '%s\n' "$SX_ORIG" > "$SX8H/settings.json"
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf '{"ultracode": true}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'share ultracode' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+# The clone moves to the new commit WITHOUT an apply, which is the state status reports on.
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#695 fixture: the clone holds the shared file and the Mac has not applied it" \
+  "[ -f '$SX8C/payload/settings.shared.json' ] && [ \"\$(jq -r '.ultracode' '$SX8H/settings.json')\" = null ]"
+out_sx8a="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 before the value is in settings.json, status lists the shared file as not applied" \
+  "line_has \"\$out_sx8a\" 'settings.shared.json' 'has not applied'"
+jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8b="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 once the value is there, status no longer lists it" "! line_has \"\$out_sx8b\" 'settings.shared.json' 'has not applied'"
+# And a send never publishes the shared file from settings.json: it is edited in the repo only.
+jq -c '. + {ultracode: false}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#695 a send leaves the shared file as the repo holds it" "[ \"\$(jq -r '.ultracode' '$SX8C/payload/settings.shared.json')\" = true ]"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
