@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
 import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCall, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
-import { compose, drop, isDivider, mostRows, paneRefusal, put, questionRefusal, questionRow, refusal, wraps } from './band.ts'
+import { compose, drop, isDivider, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
@@ -91,12 +91,6 @@ export const register: Register = (on, options) => {
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)
-        await change(rows => put(rows, row))
-      },
-      question: async q => {
-        const why = questionRefusal(q)
-        if (why) throw new Error(why)
-        const row = questionRow(q)
         await change(rows => put(rows, row))
       },
       clearBandRow: async ({ mod, id }) => {

@@ -1,11 +1,11 @@
-import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane, ModKitQuestion } from '../types/index.d.ts'
+import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane } from '../types/index.d.ts'
 
 // The band above the prompt, composed once for every mod (docs/mods-design.md, "The band, shared
 // by every mod", settled with Dan 2026-10-04). Status rows on top, then the account room card (#659)
 // about this account's limits, what waits on Dan nearest the
 // prompt (the handoff card, which appears only at session start, the held while away card, the
-// steps card, a message to send), and an open question alone so a number key can only mean its
-// answer: one question at a time, since two mods can each have one open (#703).
+// steps card, a message to send). No question is drawn in the band: since #744 and #777 every
+// question is Claude Code's own dialog.
 //
 // A Record over the slot type, so a slot added to the contract without a place here fails to type
 // check rather than sorting as undefined (L113).
@@ -17,7 +17,6 @@ const RANK: Record<ModKitBandSlot, number> = {
   held: 4,
   steps: 5,
   message: 6,
-  question: 7,
 }
 
 // Also a Record over the type, so a frame kind added to the contract without being drawn fails to type check.
@@ -91,62 +90,7 @@ export const refusal = (row: ModKitBandRow): string | undefined => {
   const who = ownerRefusal(row, 'band row')
   if (who) return who
   if (!isSlot(row.slot)) return `a band row's slot "${String(row.slot)}" is not one of ${Object.keys(RANK).join(', ')}`
-  // Built only by questionRow, so no mod draws a question its own way (#703, #705: two hand built
-  // question rows had drifted into two looks on one surface).
-  if (row.slot === 'question') return `band row ${row.mod}/${row.id}: a question is asked with $.modkit.question, so every question in the band reads the same`
   return bodyRefusal(row, 'band row')
-}
-
-// Hotkeys are the digits 1 to 9, one per option.
-const MAX_OPTIONS = 9
-
-/** Why a question cannot be asked, or undefined when it can. */
-export const questionRefusal = (q: ModKitQuestion): string | undefined => {
-  const who = ownerRefusal(q as unknown as ModKitPane, 'question')
-  if (who) return who
-  const name = `question ${q.mod}/${q.id}`
-  if (typeof q.chip !== 'string' || !q.chip.trim()) return `${name}: a question needs a chip, the short label drawn before it`
-  if (typeof q.question !== 'string' || !q.question.trim()) return `${name}: a question needs its text`
-  if (!Array.isArray(q.options) || q.options.length === 0) return `${name}: a question needs at least one option`
-  if (q.options.length > MAX_OPTIONS) return `${name}: a question takes at most ${MAX_OPTIONS} options, one per number key, not ${q.options.length}`
-  const buttons = new Set<string>()
-  const claim = (button: unknown): string | undefined => {
-    if (typeof button !== 'string' || !button) return `${name}: every option and Submit needs a button id`
-    if (buttons.has(button)) return `${name}: button "${button}" twice, so a press could not tell which was meant`
-    buttons.add(button)
-    return undefined
-  }
-  for (const o of q.options) {
-    if (!o || typeof o.label !== 'string' || !o.label.trim()) return `${name}: every option needs a label`
-    const twice = claim(o.button)
-    if (twice) return twice
-    if (o.description !== undefined && typeof o.description !== 'string') return `${name}: an option's description must be text`
-  }
-  if (q.submit !== undefined) {
-    if (!q.submit || typeof q.submit.label !== 'string' || !q.submit.label.trim()) return `${name}: Submit needs a label`
-    const twice = claim(q.submit.button)
-    if (twice) return twice
-  }
-  if (q.body !== undefined && !Array.isArray(q.body)) return `${name}: body must be a list of lines`
-  return bodyRefusal({ mod: q.mod, id: q.id, lines: questionRow(q).lines }, 'question')
-}
-
-/**
- * The question as the band draws it (docs/mods-design.md, "Picker manners (#615)" and "Ask before
- * saving (#618)"): the chip in grey and the question in amber, as it waits on Dan, on one line; the
- * asker's own lines; each option as Claude Code's plain button, "1: 7 days", with its description
- * indented 3 columns, under the label rather than the number; Submit last, bracketed.
- */
-export const questionRow = (q: ModKitQuestion): ModKitBandRow => {
-  const lines: ModKitBandLine[] = [[{ text: `[${q.chip}] `, dim: true }, { text: q.question, color: 'warning', bold: true, wrap: true }], ...(q.body ?? [])]
-  q.options.forEach((o, i) => {
-    const line: ModKitBandPart[] = [{ button: o.button, label: o.label, hotkey: String(i + 1), plain: true }]
-    if (o.chosen) line.push({ text: ' chosen', dim: true })
-    lines.push(line)
-    if (o.description) lines.push([{ text: o.description, dim: true, indent: 3, wrap: true }])
-  })
-  if (q.submit) lines.push([{ button: q.submit.button, label: q.submit.label }])
-  return { mod: q.mod, id: q.id, slot: 'question', lines }
 }
 
 /**
@@ -171,13 +115,8 @@ export const put = <R extends ModKitPane>(rows: readonly R[], row: R): R[] => {
 
 export const drop = <R extends ModKitPane>(rows: readonly R[], mod: string, id: string): R[] => rows.filter(r => !(r.mod === mod && r.id === id))
 
-/** The question the band draws: the first asked of those open (rows keep the order first published in). */
-const shownQuestion = (rows: readonly ModKitBandRow[]): ModKitBandRow | undefined => rows.find(r => r.slot === 'question')
-
-/** What the band draws, top to bottom: by slot, publishing order within one; one question, alone. */
+/** What the band draws, top to bottom: by slot, publishing order within one. */
 export const compose = (rows: readonly ModKitBandRow[]): ModKitBandRow[] => {
-  const question = shownQuestion(rows)
-  if (question) return [question]
   // Array sort is stable, so rows in one slot keep the order they were first published in.
   return [...rows].sort((a, b) => RANK[a.slot] - RANK[b.slot])
 }

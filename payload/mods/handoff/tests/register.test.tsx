@@ -15,7 +15,7 @@ const modKit: { name: string; register: Register } = {
       const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])
       const modkit = {
         bandRow: async (row: Row) => {
-          if (!['needs-a-look', 'compact', 'handoff', 'held', 'steps', 'message', 'question'].includes(row.slot)) throw new Error(`no slot ${row.slot}`)
+          if (!['needs-a-look', 'compact', 'handoff', 'held', 'steps', 'message'].includes(row.slot)) throw new Error(`no slot ${row.slot}`)
           const now = (await rows()).filter(r => !(r.mod === row.mod && r.id === row.id))
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...now, row] as never)
         },

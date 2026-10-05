@@ -20,7 +20,7 @@ const modKit: { name: string; register: Register } = {
       const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])
       const modkit = {
         bandRow: async (row: Row) => {
-          if (!['needs-a-look', 'compact', 'room', 'handoff', 'held', 'steps', 'message', 'question'].includes(row.slot)) throw new Error(`a band row's slot "${row.slot}" is not one of them`)
+          if (!['needs-a-look', 'compact', 'room', 'handoff', 'held', 'steps', 'message'].includes(row.slot)) throw new Error(`a band row's slot "${row.slot}" is not one of them`)
           const now = (await rows()).filter(r => !(r.mod === row.mod && r.id === row.id))
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...now, row] as never)
         },
@@ -66,7 +66,7 @@ const modKitToday: { name: string; register: Register } = {
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      const slots = ['needs-a-look', 'compact', 'handoff', 'held', 'steps', 'message', 'question']
+      const slots = ['needs-a-look', 'compact', 'handoff', 'held', 'steps', 'message']
       const modkit = {
         bandRow: async (row: { slot: string }) => {
           if (!slots.includes(row.slot)) throw new Error(`a band row's slot "${row.slot}" is not one of ${slots.join(', ')}`)
