@@ -41,6 +41,14 @@ const deps: { name: string; register: Register } = {
         return { deny: err instanceof Error ? err.message : String(err) } as never
       }
     })
+    // The status bar's read of the background agents gone quiet (#759).
+    on('tool.call', { tool: '__agents' as never }, async $ => {
+      try {
+        return { result: JSON.stringify(await $.jobs.agents()) } as never
+      } catch (err) {
+        return { deny: err instanceof Error ? err.message : String(err) } as never
+      }
+    })
   },
 }
 const withDeps = { plugins: [deps] }
@@ -79,12 +87,19 @@ type Job = {
   goneOnClaim?: boolean
   /** Commands that answer late: the command name and how long, on the mocked clock. */
   slow?: { cmd: string; ms: number }
+  /** Its output file is no longer there (#784: an entry left after its process went). */
+  missing?: boolean
 }
+/** One agent of the session as $.agent.list() names it (#759). */
+type Agent = { id: string; description: string; type: string; status: string }
 // The rest of the world: failExtra makes every registry write fail; sessions is what the registry
 // lists; verdict answers each model call ('none' for no answer, 'throws' to reject the call).
 type World = {
   failExtra?: boolean
-  sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws'
+  /** 'throws once': the first ask fails (the registry mid reload, #753) and every later one answers. */
+  sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws' | { throwsOnce: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } }
+  /** The session's agents, as $.agent.list() answers; the test may change them as it goes. */
+  agents?: Agent[] | 'throws'
   verdict?: (model: string, prompt: string) => string | 'none' | 'throws'
   /** The test's mocked clock, for commands that answer late and for dating the claims made. */
   clock?: { sleep: (ms: number) => Promise<void>; now?: () => number }
@@ -110,6 +125,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     stats: 0,
     /** Each lsof of an output file. */
     lsofs: 0,
+    /** Each time the session list was asked for. */
+    sessionAsks: 0,
     /** The leftover claims on disk, by folder name, with when each was made (seconds). */
     claims: new Map<string, number>(Object.entries(o.claims ?? {})),
     /** Every claim ever made, by folder name. */
@@ -135,8 +152,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     const late = list.find(j => j.slow?.cmd === cmd && (list.length === 1 || args.includes(outOf(`job${list.indexOf(j) + 1}`))))
     if (late?.slow && o.clock) await o.clock.sleep(late.slow.ms)
     if (cmd === '__sessions') {
+      w.sessionAsks += 1
       if (o.sessions === 'throws') return res(1, '', 'the sessions folder could not be read')
-      return ok(JSON.stringify({ open: o.sessions?.open ?? [], closed: o.sessions?.closed ?? [], unreadable: o.sessions?.unreadable ?? [], selfId: 'me' }))
+      if (o.sessions && 'throwsOnce' in o.sessions && w.sessionAsks === 1) return res(1, '', 'no implementation for sessions.list')
+      const s = o.sessions && 'throwsOnce' in o.sessions ? o.sessions.throwsOnce : o.sessions
+      return ok(JSON.stringify({ open: s?.open ?? [], closed: s?.closed ?? [], unreadable: s?.unreadable ?? [], selfId: 'me' }))
     }
     if (cmd === '__extra') {
       if (args[0] === 'jobs') o.onExtra?.(args[1] ?? '')
@@ -146,6 +166,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (cmd === 'lsof') {
       const i = byPath(args[args.length - 1])
       const j = list[i]
+      if (j?.missing) return res(1, '', `lsof: status error on ${args[args.length - 1]}: No such file or directory`)
       if (!j || j.holder === 'none' || j.gone) return res(1, '')
       if (j.holder === 'error') return res(1, '', 'lsof: status error on file: Operation not permitted')
       return ok(`${j.alsoHeldBy !== undefined ? `${j.alsoHeldBy}\n` : ''}${groupOf(i)}\n`)
@@ -200,6 +221,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return ok('')
     }
     const j = list[byPath(args[args.length - 1])]
+    if ((cmd === 'stat' || cmd === 'tail') && j?.missing) return res(1, '', `${cmd}: ${args[args.length - 1]}: No such file or directory`)
     if ((cmd === 'stat' || cmd === 'tail') && (!j || j.unreadable)) return res(1, '', `${cmd}: Permission denied`)
     if (cmd === 'stat' && j) return ok(args.includes('%z %m') ? `${j.size} ${j.mtime ?? 0}\n` : `${j.size}\n`)
     if (cmd === 'tail' && j) return ok(j.tail)
@@ -216,6 +238,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   on('tool.register', ($, e) => {
     w.tools.push(e)
     return { value: undefined } as never
+  })
+  on('agent.list', () => {
+    if (o.agents === 'throws') throw new Error('the agent list is not ready')
+    return { value: (o.agents ?? []).map(a => ({ ...a })) } as never
   })
   on('ui.log', ($, e) => {
     // Only what reaches the transcript is what Dan sees; the debug log is not.
@@ -256,6 +282,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return { result: text, text } as never
     }
     if (e.tool === 'Bash' && input.command === 'false') return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
+    // A commit reading a message from a stdin nobody writes: it never returns (#759).
+    if (e.tool === 'Bash' && String(input.command).startsWith('git commit')) return new Promise<never>(() => undefined)
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
@@ -780,12 +808,50 @@ test('an output file now held by a different process group is never stopped (L10
   expect(w.asked).toEqual([])
 })
 
-test('a registry that cannot be listed is said in one dim line, never taken as no leftovers', withDeps, async ($, on) => {
+// #753: a session list that could not be asked (the registry mid reload) is not records that cannot
+// be read (L11): it is said as what it is, and asked again once, a little later.
+test('a session list that cannot be asked is said as such, never as unreadable records, and asked again once', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 60 * MIN })
   const w = world(on, { tail: '', size: 0 }, { sessions: 'throws' })
   await start($)
   await judged(clock)
-  expect(w.logs).toEqual(['Session records unreadable; leftover jobs not checked.'])
+  expect(w.logs).toEqual(['The session list could not be asked; leftover jobs not checked yet, looking again in a minute.'])
+  expect(w.sessionAsks).toBe(1)
+  await clock.advance(MIN)
+  expect(w.sessionAsks).toBe(2)
+  expect(w.logs[1]).toBe('The session list could not be asked again; leftover jobs from closed sessions were not checked this session.')
+  // Once only: no third ask.
+  await clock.advance(10 * MIN)
+  expect(w.sessionAsks).toBe(2)
+  expect(w.logs.length).toBe(2)
+})
+
+test('a session list that answers on the second ask has its leftovers judged then (#753)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { throwsOnce: { closed: [closedRec('old', [leftover(1, CURL)])] } },
+    verdict: () => STOP('curl loop'),
+    clock,
+  })
+  await start($)
+  await judged(clock)
+  expect(w.kills).toEqual([])
+  await clock.advance(MIN)
+  await judged(clock)
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.logs).toEqual(['The session list could not be asked; leftover jobs not checked yet, looking again in a minute.', 'Stopped 1 leftover job from a closed session (curl loop).'])
+})
+
+test('a session record that cannot be read is named, and the leftovers of the readable ones are still judged (#753)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])], unreadable: ['abc.json'] },
+    verdict: () => STOP('curl loop'),
+    clock,
+  })
+  await start($)
+  await judged(clock)
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop); session record abc.json could not be read, so its leftover jobs were not checked.'])
 })
 
 test('a leftover whose output file cannot be read is described to the judge as unreadable, never as still writing', withDeps, async ($, on) => {
@@ -1289,7 +1355,7 @@ test('a poll loop kept while the look that would stop it is under way is not sto
 
 // The job list the status bar (#610) reads, the one source for its running and kept jobs: a short
 // name, how long it has run, whether Claude kept it, and whether the watcher measured it as stuck.
-type Listed = { label: string; runMs: number; kept: boolean; stuck: boolean }[]
+type Listed = { label: string; runMs: number; kept: boolean; stuck: boolean; state: string; owner: string | null }[]
 const jobsOf = async ($: { tool: { call: (e: never) => Promise<unknown> } }): Promise<Listed> => {
   const r = (await $.tool.call({ tool: '__jobs' } as never)) as { result?: string; deny?: string }
   if (r.deny !== undefined) throw new Error(r.deny)
@@ -1307,12 +1373,13 @@ test('the job list names each running job with its run time, kept and stuck', wi
   await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is using it', quiet: true }))
   await clock.advance(9 * MIN)
   expect(await jobsOf($)).toEqual([
-    { label: 'dev server', runMs: 11 * MIN, kept: true, stuck: false },
-    { label: shortCommand(LONG), runMs: 9 * MIN, kept: false, stuck: false },
+    { label: 'dev server', runMs: 11 * MIN, kept: true, stuck: false, state: 'running', owner: null },
+    { label: shortCommand(LONG), runMs: 9 * MIN, kept: false, stuck: false, state: 'running', owner: null },
   ])
   await clock.advance(3 * MIN)
   const later = await jobsOf($)
-  expect(later[1]).toEqual({ label: shortCommand(LONG), runMs: 12 * MIN, kept: false, stuck: true })
+  // LONG is a poll loop gone quiet: waiting on what it polls, not stuck (#784).
+  expect(later[1]).toEqual({ label: shortCommand(LONG), runMs: 12 * MIN, kept: false, stuck: false, state: 'waiting', owner: null })
   expect(later[0]?.stuck).toBe(false)
 })
 
@@ -1681,4 +1748,159 @@ test('a job listed by two closed records is judged once', withDeps, async ($, on
   await judged(clock)
   expect(w.asked.length).toBe(1)
   expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (curl loop).'])
+})
+
+// #784 (Dan, 2026-10-05: "I dont really know how to read this"): the line must say whose job it is,
+// what it waits on, and whether anything is wrong. A job a background agent started is that agent's:
+// recorded with it, listed under its task's name, and reminded and reported to that agent alone.
+const AGENT: Agent = { id: 'a1', description: 'fix CI', type: 'general-purpose', status: 'running' }
+const asAgent = (input: Record<string, unknown>, agentId = 'a1') => ({ ...input, agentId }) as never
+
+test("a job a background agent started is recorded and listed as that agent's (#784)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 }, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'npm run dev', run_in_background: true }))
+  expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: 'npm run dev', outputPath: OUT, pgid: 501, startedAt: 0, owner: { id: 'a1', name: 'fix CI' } }])
+  expect(await jobsOf($)).toEqual([{ label: 'npm run dev', runMs: 0, kept: false, stuck: false, state: 'running', owner: 'fix CI' }])
+})
+
+test("an agent's unkept job is reminded on that agent's results, never on this session's (#784)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 }, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'npm run dev', run_in_background: true }))
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).not.toContain(REMINDER)
+  const theirs = await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  expect(contextOf(theirs)).toContain(`${REMINDER} background job job1 (npm run dev)`)
+})
+
+test("an agent's unkept job left running after the agent ended is reminded to this session, naming the agent (#784)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  world(on, { tail: 'listening on 3000\n', size: 18 }, { agents })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'npm run dev', run_in_background: true }))
+  ;(agents[0] as Agent).status = 'completed'
+  await clock.advance(MIN + 1)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).toContain(`${REMINDER} background job job1 (npm run dev, left by agent fix CI)`)
+})
+
+test("a stalled agent's job is said to that agent, not to this session (#784)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 }, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'npm run dev', run_in_background: true }))
+  await clock.advance(11 * MIN)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(mine)).toBe('')
+  const theirs = await $.tool.call(asAgent({ tool: 'Bash', command: 'ls' }))
+  expect(noticesOf(theirs)).toMatch(/job1 \(npm run dev\) has had no new output for 11 minutes/)
+})
+
+// A poll loop that has gone quiet is waiting on what it polls (a queued CI run): not stuck (L11).
+test('a quiet poll loop is listed as waiting and said as waiting, a quiet job of any other kind as stalled (#784)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, [{ tail: 'queued\n', size: 7 }, { tail: 'listening on 3000\n', size: 18 }])
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'until gh pr checks 776 --required; do sleep 30; done', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(11 * MIN)
+  // Read before the list: the list's own call carries the notices too.
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain(`job1 (${shortCommand('until gh pr checks 776 --required; do sleep 30; done')}) is still waiting: a poll loop with no new output for 11 minutes`)
+  expect(said).toContain('job2 (npm run dev) has had no new output for 11 minutes')
+  const listed = await jobsOf($)
+  expect(listed.map(j => [j.state, j.stuck])).toEqual([['waiting', false], ['stalled', true]])
+})
+
+test('a repeating poll loop whose line is not an error is waiting too, never stalled (#784)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const waiting = Array.from({ length: 30 }, () => 'checks pending').join('\n') + '\n'
+  world(on, { tail: waiting, size: 900 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'until gh pr checks 776; do echo checks pending; sleep 30; done', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect((await jobsOf($)).map(j => j.state)).toEqual(['waiting'])
+})
+
+// A job whose process has gone and whose output file is gone too is no job: dropped, never shown as
+// stuck for an hour (the suite summary wait of 2026-10-05).
+test('an untraced job whose output file is gone is dropped, not reported (#784)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'x\n', size: 2, holder: 'error' }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'bash suite.sh', run_in_background: true } as never)
+  expect((await jobsOf($)).length).toBe(1)
+  job.missing = true
+  await clock.advance(MIN + 1)
+  expect(await jobsOf($)).toEqual([])
+  const r = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(r)).toBe('')
+})
+
+// #759: a background agent listed as running whose tool calls have stopped is flagged to this
+// session once, past twenty minutes, with how long and the last tool call it started.
+test('a running background agent quiet for twenty minutes is said to this session once, with its last tool call (#759)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  await clock.advance(19 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+  await clock.advance(2 * MIN)
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said).toContain('Background agent "fix CI" (a1) has been quiet for 20 minutes')
+  expect(said).toContain('the last one it started, Bash (git status), finished')
+  // Not to the agent, and only once.
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+  await clock.advance(5 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+  expect(JSON.parse(String(((await $.tool.call({ tool: '__agents' } as never)) as { result?: string }).result))).toEqual([{ name: 'fix CI', quietMs: 26 * MIN }])
+})
+
+test('an agent whose last tool call never returned is said to be waiting on it (#759)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  // A call that never returns (the world's git commit): the commit waiting on a heredoc of 2026-10-05.
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said).toContain('Bash (git commit -q -F /dev/stdin), started 20 minutes ago and has not finished')
+})
+
+test('an agent that moves again is no longer quiet, and is said again only after a new quiet spell (#759)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  await clock.advance(21 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('quiet for 20 minutes')
+  await $.tool.call(asAgent({ tool: 'Read', file_path: '/x' }))
+  await clock.advance(MIN)
+  expect(JSON.parse(String(((await $.tool.call({ tool: '__agents' } as never)) as { result?: string }).result))).toEqual([])
+  await clock.advance(21 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('the last one it started, Read, finished')
+})
+
+test('an agent that is not running (finished, or waiting on a person) is never said to be quiet (#759)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [{ ...AGENT, status: 'completed' }, { ...AGENT, id: 'a2', status: 'waiting' }] })
+  await start($)
+  await clock.advance(30 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+})
+
+test('an agent list that cannot be read is said to this session once, never taken as no agents (#759)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: 'throws' })
+  await start($)
+  await clock.advance(MIN + 1)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('could not list the background agents')
+  await clock.advance(MIN + 1)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
 })

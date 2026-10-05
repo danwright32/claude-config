@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { StatusBar, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
 import { CACHE_WARN_MS, checksOf, compactDue, lookParts, unpushedOf } from './facts.ts'
-import type { Job, PrReading, RollupEntry, UnpushedReading } from './facts.ts'
+import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 
 // The status bar (#610), settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)").
 //
@@ -27,7 +27,7 @@ const modesRef = { plugin: 'status-bar', key: 'modes' } as const
 const cacheRef = { plugin: 'status-bar', key: 'cacheExpiresAt' } as const
 
 /** The job watcher's noun (#611) as its contract will be; it may not be loaded at all. */
-type Jobs = { list: () => Promise<Job[]> }
+type Jobs = { list: () => Promise<Job[]>; agents?: () => Promise<QuietAgent[]> }
 
 let home: string | undefined
 let startCwd = ''
@@ -40,6 +40,8 @@ let unpushed: UnpushedReading | null = null
 let unpushedNoted = false
 let jobs: Job[] = []
 let jobsNoted = false
+let agents: QuietAgent[] = []
+let agentsNoted = false
 let context: number | undefined
 let toastedFor: number | null = null
 let shownLook = ''
@@ -59,6 +61,10 @@ const serial = <T>(work: () => Promise<T>): Promise<T> => {
   return next
 }
 
+const isQuietAgent = (a: unknown): a is QuietAgent => {
+  const o = a as QuietAgent
+  return !!o && typeof o.name === 'string' && typeof o.quietMs === 'number'
+}
 const isJob = (j: unknown): j is Job => {
   const o = j as Job
   return !!o && typeof o.label === 'string' && typeof o.runMs === 'number' && typeof o.kept === 'boolean'
@@ -162,17 +168,35 @@ const readPr = async ($: EngineInterface, root: string) => {
 // The job watcher may not be loaded: that is no job item, never an error. One that is loaded and
 // fails to answer is named once in the debug log.
 const readJobs = async ($: EngineInterface) => {
+  // The noun is called in place each time, as the engine requires, never held in a variable.
   try {
     const list = await ($ as unknown as { jobs: Jobs }).jobs.list()
     jobs = Array.isArray(list) ? list.filter(isJob) : []
     jobsNoted = false
   } catch (err) {
     jobs = []
+    agents = []
     const msg = String((err as Error)?.message ?? err)
     const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(msg)
     if (!isAbsent && !jobsNoted) {
       jobsNoted = true
       $.ui.log(`status-bar: the job watcher's jobs could not be read, so no job shows: ${msg}`, { to: 'debug' })
+    }
+    return
+  }
+  // The quiet agents (#759), in a failure boundary of their own so the jobs still show (L73): a
+  // watcher from before them has no agents to ask, which is none.
+  try {
+    const quiet = await ($ as unknown as { jobs: Required<Jobs> }).jobs.agents()
+    agents = Array.isArray(quiet) ? quiet.filter(isQuietAgent) : []
+    agentsNoted = false
+  } catch (err) {
+    agents = []
+    const msg = String((err as Error)?.message ?? err)
+    const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(msg)
+    if (!isAbsent && !agentsNoted) {
+      agentsNoted = true
+      $.ui.log(`status-bar: the job watcher's quiet agents could not be read, so none shows: ${msg}`, { to: 'debug' })
     }
   }
 }
@@ -196,7 +220,7 @@ const publish = () =>
     if (!io) return
     const now = await io.now()
     const cache = await io.cache()
-    const look = lookParts({ modes: await io.modes(), pr, jobs, unpushed, now })
+    const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now })
     const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now, isWorking: turnRunning })
     const compact = due
       ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact' }]

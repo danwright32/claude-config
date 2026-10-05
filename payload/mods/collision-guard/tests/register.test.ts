@@ -56,7 +56,11 @@ const deps: { name: string; register: Register } = {
         },
         sessions: {
           list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),
-          noteEdit: async ({ path }: { path: string }) => built.ui.log('EDIT ' + path),
+          // A path naming 'unwritable' is one whose note the registry cannot write (#751).
+          noteEdit: async ({ path }: { path: string }) => {
+            if (path.includes('unwritable')) throw new Error("this session's record could not be written")
+            await built.ui.log('EDIT ' + path)
+          },
           setExtra: async () => undefined,
         },
       }
@@ -292,6 +296,23 @@ test('an edit nobody else is making goes through and is noted for the others', w
   expect(w.reached).toContain('Edit')
   expect(w.prompts.length).toBe(0)
   expect(w.edits).toEqual(['/repo/src/a.ts'])
+})
+
+test('a note the registry cannot write never fails the call that already ran, and is said once (#751)', withDeps, async ($, on) => {
+  const w = world(on)
+  const first = (await $.tool.call(edit('/repo/src/unwritable.ts', 'c1'))) as { isError?: boolean; text?: string; context?: string[] }
+  expect(w.reached).toContain('Edit')
+  expect(first.isError).not.toBe(true)
+  expect(first.text).toBe('ran')
+  expect((first.context ?? []).join(' ')).toContain("could not record that this session edited /repo/src/unwritable.ts: this session's record could not be written")
+  // Said once until a note lands, never on every call.
+  const second = (await $.tool.call(edit('/repo/src/unwritable.ts', 'c2'))) as { context?: string[] }
+  expect((second.context ?? []).join(' ')).not.toContain('could not record')
+  // One that lands rearms it.
+  await $.tool.call(edit('/repo/src/fine.ts', 'c3'))
+  expect(w.edits).toEqual(['/repo/src/fine.ts'])
+  const again = (await $.tool.call(edit('/repo/src/unwritable.ts', 'c4'))) as { context?: string[] }
+  expect((again.context ?? []).join(' ')).toContain('could not record')
 })
 
 test('an edit another open session made first is judged, and a Proceed goes through with a toast', withDeps, async ($, on) => {

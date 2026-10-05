@@ -51,8 +51,13 @@ export type PrReading = { number: number; checks: Checks; readAt: number; isStal
  * a count that could not be read again is never a zero (L215), it is the last one, aged (#697).
  */
 export type UnpushedReading = { count: number; readAt: number; isStale: boolean }
-/** One background job as the job watcher (#611) reports it through $.jobs. */
-export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean }
+/**
+ * One background job as the job watcher (#611) reports it through $.jobs. state and owner came with
+ * #784; a watcher older than that sends neither, and its stuck flag stands for stalled.
+ */
+export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean; state?: 'running' | 'waiting' | 'stalled'; owner?: string | null }
+/** A background agent listed as running whose tool calls stopped twenty minutes ago or more (#759). */
+export type QuietAgent = { name: string; quietMs: number }
 
 export type LookPart = { text: string; color?: string; bold?: boolean; dim?: boolean }
 
@@ -65,17 +70,37 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * bold item divided like the rest), then a failing or running PR, stuck jobs, running jobs, kept jobs, unpushed
  * commits. Empty when nothing needs a look and no mode is on, so the band does not show.
  */
-export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
+// How a job's state reads (#784, Dan, 2026-10-05: "kept" and "stuck" were internal words, and
+// "stuck" was wrong for a run still queued). A stalled job says who acts on it, so Dan can see it is
+// not his to do: Claude for this conversation's own, the agent for an agent's.
+const stateOf = (j: Job): 'running' | 'waiting' | 'stalled' => j.state ?? (j.stuck ? 'stalled' : 'running')
+const STATE_WORDS = { running: 'running', waiting: 'waiting', stalled: 'not progressing' } as const
+const STATE_ORDER = ['stalled', 'waiting', 'running'] as const
+// One owner's jobs as phrases, the stalled first: in each state its unkept jobs counted, then its
+// kept ones each by the name Claude gave it, with its run time.
+const jobPhrases = (jobs: readonly Job[], actor: string): string[] => {
+  const out: string[] = []
+  for (const s of STATE_ORDER) {
+    const who = s === 'stalled' ? `, left to ${actor}` : ''
+    const n = jobs.filter(j => !j.kept && stateOf(j) === s).length
+    if (n) out.push(`${plural(n, 'job', 'jobs')} ${STATE_WORDS[s]}${who}`)
+    for (const j of jobs.filter(j => j.kept && stateOf(j) === s)) out.push(`${j.label} ${STATE_WORDS[s]} ${span(j.runMs)}${who}`)
+  }
+  return out
+}
+
+export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; agents?: readonly QuietAgent[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
   const items: string[] = []
   // A reading whose refresh since failed is kept with its age, never blanked (L682).
   const age = (r: { readAt: number; isStale: boolean }) => (r.isStale ? `, as of ${span(f.now - r.readAt)} ago` : '')
   if (f.pr && (f.pr.checks === 'failing' || f.pr.checks === 'running')) items.push(`PR #${f.pr.number} checks ${f.pr.checks}${age(f.pr)}`)
-  // A job the watcher measured as stuck is marked so, ahead of the ones running fine (#706).
-  const stuck = f.jobs.filter(j => !j.kept && j.stuck).length
-  if (stuck) items.push(`${plural(stuck, 'job', 'jobs')} stuck`)
-  const running = f.jobs.filter(j => !j.kept && !j.stuck).length
-  if (running) items.push(`${plural(running, 'job', 'jobs')} running`)
-  for (const j of f.jobs.filter(j => j.kept)) items.push(`${j.label} kept ${span(j.runMs)}${j.stuck ? ', stuck' : ''}`)
+  // A background agent gone quiet comes first among the work in flight: it may be hung (#759).
+  for (const a of f.agents ?? []) items.push(`agent ${a.name} quiet ${span(a.quietMs)}, left to Claude`)
+  // This conversation's own jobs, a stalled one ahead of those running fine (#706), then each
+  // background agent's as one item under its task's name (#784).
+  items.push(...jobPhrases(f.jobs.filter(j => !j.owner), 'Claude'))
+  const owners = [...new Set(f.jobs.map(j => j.owner).filter((o): o is string => !!o))]
+  for (const o of owners) items.push(`agent ${o}: ${jobPhrases(f.jobs.filter(j => j.owner === o), 'the agent').join(', ')}`)
   if (f.unpushed && f.unpushed.count > 0) items.push(`${plural(f.unpushed.count, 'unpushed commit', 'unpushed commits')}${age(f.unpushed)}`)
   const parts: LookPart[] = []
   for (const m of f.modes) {

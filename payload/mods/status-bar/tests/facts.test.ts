@@ -62,7 +62,7 @@ describe('lookParts', () => {
       unpushed: fresh(2),
       now,
     })
-    expect(texts(parts)).toBe('NO BUILD | PR #636 checks failing | 1 job running | dev server kept 2h 14m | 2 unpushed commits')
+    expect(texts(parts)).toBe('NO BUILD | PR #636 checks failing | 1 job running | dev server running 2h 14m | 2 unpushed commits')
   })
   test('the mode is bold amber, the items amber, the separators dim', () => {
     const parts = lookParts({ modes: ['AWAY'], pr: null, jobs: [], unpushed: fresh(1), now })
@@ -104,19 +104,50 @@ describe('lookParts', () => {
       { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: false },
       { label: 'watcher', runMs: 3 * HOUR, kept: true, stuck: false },
     ]
-    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('2 jobs running | dev server kept 30m | watcher kept 3h 0m')
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('2 jobs running | dev server running 30m | watcher running 3h 0m')
   })
-  // #706 (spec item 2 of #611): a job the watcher measured as stuck, repeating itself or silent ten
-  // minutes, is marked stuck on the bar, ahead of the running ones; a kept one says so after its name.
-  // Otherwise a job gone stuck while no turn runs shows nowhere at all.
-  test('a stuck job is marked stuck on the bar, a running one first and a kept one by name', () => {
+  // #706 (spec item 2 of #611), reworded by #784 (Dan, 2026-10-05: "I dont really know how to read
+  // this"): a job the watcher measured as stalled says so in plain words and says who acts on it, so
+  // Dan can see nothing is his to do; it comes ahead of the ones running fine.
+  test('a stalled job says it is not progressing and that it is left to Claude, ahead of the running ones', () => {
     const jobs = [
       { label: 'a', runMs: MIN, kept: false, stuck: false },
-      { label: 'b', runMs: MIN, kept: false, stuck: true },
-      { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: true },
+      { label: 'b', runMs: MIN, kept: false, stuck: true, state: 'stalled' as const },
+      { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: true, state: 'stalled' as const },
     ]
-    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job stuck | 1 job running | dev server kept 30m, stuck')
-    expect(texts(lookParts({ modes: [], pr: null, jobs: [jobs[1] as (typeof jobs)[number]], unpushed: null, now }))).toBe('1 job stuck')
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job not progressing, left to Claude | dev server not progressing 30m, left to Claude | 1 job running')
+    expect(texts(lookParts({ modes: [], pr: null, jobs: [jobs[1] as (typeof jobs)[number]], unpushed: null, now }))).toBe('1 job not progressing, left to Claude')
+  })
+  test('a job from a watcher that reports no state reads its stuck flag, so a bar newer than its watcher still says it (#784)', () => {
+    const jobs = [{ label: 'b', runMs: MIN, kept: false, stuck: true }]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job not progressing, left to Claude')
+  })
+  // #784: a poll loop waiting on something outside (a queued CI run) is waiting, never stuck.
+  test('a waiting job says waiting, never stuck', () => {
+    const jobs = [
+      { label: 'x', runMs: MIN, kept: false, stuck: false, state: 'waiting' as const },
+      { label: 'PR 776 rerun wait', runMs: 12 * MIN, kept: true, stuck: false, state: 'waiting' as const },
+    ]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job waiting | PR 776 rerun wait waiting 12m')
+  })
+  // #784: whose job it is. A background agent's jobs are one item under its task's name, so the line
+  // never reads as though the conversation in front of Dan is hung, and say the agent acts on them.
+  test("a background agent's jobs are one item under its name, saying it is the agent's to act on", () => {
+    const jobs = [
+      { label: 'dev server', runMs: 5 * MIN, kept: true, stuck: false, state: 'running' as const },
+      { label: 'suite summary wait', runMs: 64 * MIN, kept: true, stuck: true, state: 'stalled' as const, owner: 'fix CI' },
+      { label: 'PR 776 rerun wait', runMs: 12 * MIN, kept: true, stuck: false, state: 'waiting' as const, owner: 'fix CI' },
+      { label: 'npm test', runMs: MIN, kept: false, stuck: false, state: 'running' as const, owner: 'fix CI' },
+    ]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe(
+      'dev server running 5m | agent fix CI: suite summary wait not progressing 1h 4m, left to the agent, PR 776 rerun wait waiting 12m, 1 job running',
+    )
+  })
+  // #759: a background agent listed as running whose tool calls have stopped is named on the bar.
+  test('a quiet background agent is named with how long it has been quiet, ahead of the jobs', () => {
+    const jobs = [{ label: 'a', runMs: MIN, kept: false, stuck: false, state: 'running' as const }]
+    const agents = [{ name: 'fix CI', quietMs: 34 * MIN }]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, agents, unpushed: null, now }))).toBe('agent fix CI quiet 34m, left to Claude | 1 job running')
   })
   // #697: an unpushed count that could not be read again is never a zero: the commits keep their
   // place on the line, with the age of the last reading, as a PR whose refresh failed does.
