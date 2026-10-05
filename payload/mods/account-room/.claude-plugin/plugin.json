@@ -10,11 +10,11 @@
     "mod-kit"
   ],
   "userConfig": {
-    "readingsFolder": {
+    "readingsRepo": {
       "type": "string",
-      "title": "Readings folder",
-      "description": "Where each Mac writes its readings file. Empty means the account-room folder in iCloud Drive.",
-      "default": ""
+      "title": "Readings repository",
+      "description": "The private GitHub repository, as owner/name, where each Mac writes its readings file (readings/<Mac>.json) through gh.",
+      "default": "danwright32/account-room-readings"
     },
     "logoutCommand": {
       "type": "string",

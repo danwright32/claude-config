@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
-import { accountKey, combine, macsIn, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from '../hooks/store.ts'
+import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from '../hooks/store.ts'
 import type { MacFile } from '../hooks/store.ts'
 
-// The two files the account room keeps (#659): one readings file per Mac in iCloud Drive, each Mac
-// writing only its own so iCloud never makes conflict copies (L83), and the nicknames file in the
-// claude-sync payload. Pure, so the merging and the refusals are tested on their own.
+// The two files the account room keeps (#659): one readings file per Mac in a private GitHub
+// repository (#750), each Mac writing only its own (L83), and the nicknames file in the claude-sync
+// payload. Pure, so the merging and the refusals are tested on their own.
 
 const H = 3_600_000
 const T = 1_000 * H
@@ -95,11 +95,43 @@ test('a readings file that does not parse is refused with why, never read as no 
   expect(typeof p === 'object' && Object.keys(p.accounts)).toEqual(['b'])
 })
 
-test("the folder listing names each Mac's file, and one iCloud has not downloaded as unavailable", () => {
-  expect(macsIn(['Daniels-MacBook-Pro-2.json', 'Dans-MacBook-Pro.json', '.DS_Store', 'notes.txt'], 'Daniels-MacBook-Pro-2')).toEqual([{ mac: 'Dans-MacBook-Pro', file: 'Dans-MacBook-Pro.json' }])
-  expect(macsIn(['.Dans-MacBook-Pro.json.icloud'], 'Daniels-MacBook-Pro-2')).toEqual([{ mac: 'Dans-MacBook-Pro', notDownloaded: true }])
-  // Our own file, even as a placeholder, is never another Mac.
-  expect(macsIn(['.Daniels-MacBook-Pro-2.json.icloud'], 'Daniels-MacBook-Pro-2')).toEqual([])
+test("the repository's readings folder names each Mac's file; anything else in it is not a Mac", () => {
+  expect(macFiles([
+    { name: 'Daniels-MacBook-Pro-2.json', type: 'file' },
+    { name: 'Dans-MacBook-Pro.json', type: 'file' },
+    { name: 'README.md', type: 'file' },
+    { name: '.hidden.json', type: 'file' },
+    { name: 'old.json', type: 'dir' },
+  ])).toEqual([
+    { mac: 'Daniels-MacBook-Pro-2', file: 'Daniels-MacBook-Pro-2.json' },
+    { mac: 'Dans-MacBook-Pro', file: 'Dans-MacBook-Pro.json' },
+  ])
+})
+
+test("this Mac's file is rewritten only when a figure the card shows moved, an account is new or changed, or its newest reading is over 10 minutes old (#750)", () => {
+  const MIN = 60_000
+  const who = { id: 'a', email: 'a@x.com', org: 'Acme' }
+  const r = (five: number, at: number, fiveReset = T + 3 * H) => ({ takenAt: at, five: { used: five, resetsAt: fiveReset }, week: { used: 30, resetsAt: T + 50 * H } })
+  const cur = withSighting(undefined, 'm', who, r(40, T), T)
+  const after = (reading: ReturnType<typeof r> | undefined, now: number, w = who) => isWorthWriting(cur, withSighting(cur, 'm', w, reading, now), now)
+  // No file yet: the first sighting is written.
+  expect(isWorthWriting(undefined, cur, T)).toBe(true)
+  // The same figures a minute later: nothing to send.
+  expect(after(r(40, T + MIN), T + MIN)).toBe(false)
+  // A move the card cannot show (60% left either way) waits for the next one it can.
+  expect(after(r(40.4, T + MIN), T + MIN)).toBe(false)
+  expect(after(r(41, T + MIN), T + MIN)).toBe(true)
+  // A reset time that moved is a figure that moved.
+  expect(after(r(40, T + MIN, T + 4 * H), T + MIN)).toBe(true)
+  // A quiet stretch: at ten minutes nothing yet, past ten the newest reading is sent so the other
+  // Mac can tell this one is alive.
+  expect(after(r(40, T + 10 * MIN), T + 10 * MIN)).toBe(false)
+  expect(after(r(40, T + 10 * MIN + 1), T + 10 * MIN + 1)).toBe(true)
+  // A sighting with no reading refreshes no reading, however long it has been.
+  expect(after(undefined, T + 3 * H)).toBe(false)
+  // Who the account is changed, or an account this file has not held: written.
+  expect(after(undefined, T + MIN, { ...who, email: 'b@x.com' })).toBe(true)
+  expect(after(undefined, T + MIN, { id: 'z', email: 'z@x.com', org: 'Acme' })).toBe(true)
 })
 
 // The nicknames file exactly as the first build wrote it (#659, version 1, a name or null per key and

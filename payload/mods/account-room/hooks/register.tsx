@@ -1,16 +1,19 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession, AccountRoomStop } from '../types/index.d.ts'
+import { answerOf, contentsPath, entriesOf, fileOf, isRepoName, notRepoName, putBody, shaAfterPut, unseenWhy } from './github.ts'
+import type { Answer, RepoFile } from './github.ts'
 import { card, fromRateLimits, nameOf, triggered, verdict } from './room.ts'
-import type { Account, Offset, Reading, Unavailable, Verdict } from './room.ts'
-import { accountKey, macsIn, combine, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from './store.ts'
+import type { Account, Offset, Reading, Unavailable, Unsaved, Verdict } from './room.ts'
+import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from './store.ts'
 import type { MacFile, Nicknames } from './store.ts'
 
 // The account room (#659). Behaviour agreed with Dan on 2026-10-04 (the issue); the look and every
 // sentence settled in design rounds the same day (docs/mods-design.md "Account room (#659)").
 //
 // - Every rate limit reading this session receives is recorded under the account and org the
-//   session started on (L175), in this Mac's readings file in iCloud Drive.
+//   session started on (L175), in this Mac's readings file in the private readings repository on
+//   GitHub (#750), rewritten only when a figure moved or its newest reading is over 10 minutes old.
 // - When this account reaches 95% on the 5 hour limit or 90% weekly, a boxed card in the band names
 //   the account with the most room, from every Mac's readings, with Switch and Dismiss.
 // - Switch signs claude.ai out in the browser (signOut below, route still to be proven), then
@@ -35,22 +38,41 @@ const dismissedRef = { plugin: 'account-room', key: 'isDismissed' } as const
 const askingRef = { plugin: 'account-room', key: 'asking' } as const
 const typedRef = { plugin: 'account-room', key: 'typed' } as const
 
-let chain: Promise<unknown> = Promise.resolve()
-const serial = <T,>(work: () => Promise<T>): Promise<T> => {
-  const next = chain.then(work)
-  chain = next.catch(() => undefined)
-  return next
+/** Work run one piece at a time, in the order it was handed over. */
+const queue = () => {
+  let chain: Promise<unknown> = Promise.resolve()
+  return <T,>(work: () => Promise<T>): Promise<T> => {
+    const next = chain.then(work)
+    chain = next.catch(() => undefined)
+    return next
+  }
 }
+// What the card shows, and its progress ticks, take turns on one queue. This Mac's readings
+// writes take turns on their own: a write waiting on GitHub must not stop Switch's elapsed
+// seconds counting, which is how a stalled step is told from a live one (#750).
+const serial = queue()
+const serialWrites = queue()
 // Things said once per session, so a fault that repeats on every reading is not a note per reading.
 const noted = new Set<string>()
 // Whether this module instance is running a Switch: after a reload a "working" phase has no runner.
 let switching = false
 let ticker: { cancel: () => void } | undefined
 let lastBest: Account | undefined
+// This Mac's readings file as this session last read or wrote it, with its sha: what the next
+// reading is judged against and written over, so the same figures again cost no GitHub call. Any
+// write GitHub refuses drops it, and the next one reads the file afresh (L443).
+let ownFile: { repo: string; mac: string; file: MacFile | undefined; sha: string | undefined } | undefined
+// Why this Mac's readings are not reaching GitHub, from a failed write until one lands (the card).
+let unsaved: Unsaved | undefined
+// Every Mac's readings as last read from GitHub, kept a minute, so a card shown through a busy
+// stretch, and a press on it, does not wait on GitHub each time (#750).
+let readCache: { at: number; repo: string; value: Readings } | undefined
+const READ_FRESH_MS = 60_000
+// How many times a write GitHub refuses as stale is read again and tried.
+const WRITE_TRIES = 3
 
 const nicknamesPath = (home: string) => `${home}/.claude/mods/account-room-nicknames.json`
 const lockDir = (home: string) => `${home}/.claude/state/account-room`
-const iCloud = (home: string) => `${home}/Library/Mobile Documents/com~apple~CloudDocs/account-room`
 const message = (err: unknown) => String((err as Error)?.message ?? err)
 
 const once = ($: EngineInterface, key: string, text: string, debug = false) => {
@@ -68,11 +90,11 @@ const readText = async ($: EngineInterface, path: string): Promise<string | unde
 /**
  * Written whole and moved into place, so no reader on either Mac sees half a file. The temp file is
  * in this Mac's own state folder, never beside the target: the nicknames sit in the mirrored mods
- * tree and the readings in iCloud Drive, and either would carry a stray temp file to the other Mac.
+ * tree, which would carry a stray temp file to the other Mac.
  */
 const writeWhole = async ($: EngineInterface, home: string, path: string, text: string) => {
   await $.process.run(['mkdir', '-p', lockDir(home)])
-  // The target's folder too: on a Mac where no reading was ever saved it does not exist yet.
+  // The target's folder too: on a Mac where nothing was ever saved it does not exist yet.
   const mk = await $.process.run(['mkdir', '-p', path.slice(0, path.lastIndexOf('/'))])
   if (mk.exitCode !== 0) throw new Error(mk.stderr.trim() || `mkdir exited ${mk.exitCode}`)
   const tmp = `${lockDir(home)}/${crypto.randomUUID()}.tmp`
@@ -85,8 +107,10 @@ const writeWhole = async ($: EngineInterface, home: string, path: string, text: 
 }
 
 /**
- * Two sessions on this Mac write the same files, so each read, change and write holds a lock
- * (assume it runs twice). A lock left by a session that died is taken over after 30 seconds.
+ * Two sessions on this Mac write the same nicknames file, so each read, change and write holds a
+ * lock (assume it runs twice). A lock left by a session that died is taken over after 30 seconds.
+ * The readings file takes no lock: it lives on GitHub, whose sha check refuses a stale write, and
+ * a lock held across the network would hold up every other session for as long as GitHub took.
  */
 const locked = async <T,>($: EngineInterface, home: string, work: () => Promise<T>): Promise<T> => {
   await $.process.run(['mkdir', '-p', lockDir(home)])
@@ -220,75 +244,128 @@ const settleNicknames = async ($: EngineInterface, home: string) => {
   await updateNicknames($, home).catch(err => once($, 'nicknames-settle', `Account room: the nickname conflict copies could not be merged back: ${message(err)}`))
 }
 
-/** Every Mac's readings merged, and the other Macs whose file could not be read. */
-const loadReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<{ accounts: Map<string, Account>; unavailable: Unavailable[] }> => {
+// The readings repository through `gh api` (#750): requests and answers are built and read in
+// github.ts; the calls are here because $ cannot be passed across an import.
+const GH_TIMEOUT_MS = 20_000
+
+const ghApi = async ($: EngineInterface, args: string[], stdin?: string): Promise<Answer<unknown>> => {
+  try {
+    return answerOf(await $.process.run(['gh', 'api', ...args], { timeoutMs: GH_TIMEOUT_MS, ...(stdin === undefined ? {} : { stdin }) }))
+  } catch (err) {
+    return answerOf({ thrown: message(err) })
+  }
+}
+
+/** Why a 404 came back for the repository, naming the account gh used. */
+const unseen = async ($: EngineInterface, repo: string) => unseenWhy(repo, await ghApi($, ['user']))
+
+/** Every entry in the readings folder: none when the repository holds no readings yet. */
+const listReadings = async ($: EngineInterface, repo: string): Promise<Answer<{ name: string; type: string }[]>> => {
+  const r = await ghApi($, [contentsPath(repo, 'readings')])
+  if (r.ok) return entriesOf(r.value)
+  if (r.status !== 404) return r
+  // No readings folder yet, and no repository this account can see, are both 404: the repository
+  // itself tells them apart, so an empty one is never reported as a fault, nor a fault as empty (L215).
+  const there = await ghApi($, [`repos/${repo}`])
+  if (there.ok) return { ok: true, value: [] }
+  return there.status === 404 ? { ok: false, status: 404, why: await unseen($, repo) } : there
+}
+
+/** One file's text and sha; undefined when GitHub has no such file (404). */
+const readFile = async ($: EngineInterface, repo: string, path: string): Promise<Answer<RepoFile | undefined>> => {
+  const r = await ghApi($, [contentsPath(repo, path)])
+  if (!r.ok) return r.status === 404 ? { ok: true, value: undefined } : r
+  return fileOf(r.value, path)
+}
+
+/**
+ * A file written whole over the sha it was read at (none for a new file), so a write made since is
+ * refused (409, or 422 for a file that appeared) rather than overwritten. The file's new sha.
+ */
+const putFile = async ($: EngineInterface, repo: string, path: string, text: string, sha: string | undefined, commit: string): Promise<Answer<string | undefined>> => {
+  const r = await ghApi($, ['-X', 'PUT', contentsPath(repo, path), '--input', '-'], putBody(text, sha, commit))
+  if (r.ok) return { ok: true, value: shaAfterPut(r.value) }
+  return r.status === 404 ? { ok: false, status: 404, why: await unseen($, repo) } : r
+}
+
+/** Every Mac's readings merged, and those GitHub could not give, with why. */
+type Readings = { accounts: Map<string, Account>; unavailable: Unavailable[] }
+
+const fetchReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<Readings> => {
+  if (!isRepoName(s.repo)) return { accounts: new Map(), unavailable: [{ mac: null, why: notRepoName(s.repo) }] }
+  // A folder GitHub cannot list is said for every other Mac on the card, never read as no readings
+  // (L215). This Mac's own file is read too: it holds the other accounts used here.
+  const listed = await listReadings($, s.repo)
+  if (!listed.ok) return { accounts: new Map(), unavailable: [{ mac: null, why: listed.why }] }
+  const read = await Promise.all(macFiles(listed.value).map(async m => ({ m, f: await readFile($, s.repo, `readings/${m.file}`) })))
   const files: MacFile[] = []
   const unavailable: Unavailable[] = []
-  let names: string[] = []
-  // Asking whether the folder is there can fail as well as listing it, so both are inside the one
-  // boundary: an unanswerable folder is named on the card, never a recompute that throws (L215).
-  try {
-    if (await $.fs.exists(s.folder)) names = (await $.fs.list(s.folder)).map(e => e.name)
-  } catch (err) {
-    unavailable.push({ mac: 'iCloud Drive', why: `the readings folder could not be read: ${message(err)}` })
-  }
-  if (s.mac && names.includes(`.${s.mac}.json.icloud`)) unavailable.push({ mac: s.mac, why: 'not downloaded from iCloud yet' })
-  else if (s.mac && names.includes(`${s.mac}.json`)) {
-    const own = await readText($, `${s.folder}/${s.mac}.json`).then(t => (t === undefined ? 'gone from the folder' : parseMacFile(t)), err => message(err))
-    // This Mac's own file holds other accounts' readings too, so one that cannot be read is named.
-    if (typeof own === 'object') files.push(own)
-    else unavailable.push({ mac: s.mac, why: own })
-  }
-  for (const m of macsIn(names, s.mac ?? '')) {
-    if ('notDownloaded' in m) {
-      unavailable.push({ mac: m.mac, why: 'not downloaded from iCloud yet' })
-      continue
-    }
-    const f = await readText($, `${s.folder}/${m.file}`).then(t => (t === undefined ? 'gone from the folder' : parseMacFile(t)), err => message(err))
-    if (typeof f === 'string') unavailable.push({ mac: m.mac, why: f })
-    else files.push(f)
+  for (const { m, f } of read) {
+    const parsed = !f.ok ? f.why : f.value === undefined ? 'gone from the repository' : parseMacFile(f.value.text)
+    if (typeof parsed === 'string') unavailable.push({ mac: m.mac, why: parsed })
+    else files.push(parsed)
   }
   return { accounts: merge(files), unavailable }
 }
 
-/** One sighting of this session's account, with its reading when there is one, in this Mac's file. */
+/** Every Mac's readings, read from GitHub at most once a minute (READ_FRESH_MS). */
+const loadReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<Readings> => {
+  const now = await $.clock.now()
+  if (readCache && readCache.repo === s.repo && now - readCache.at < READ_FRESH_MS) return readCache.value
+  const value = await fetchReadings($, s)
+  readCache = { at: now, repo: s.repo, value }
+  return value
+}
+
+/**
+ * One sighting of this session's account, with its reading when there is one, in this Mac's file
+ * on GitHub (#750). Written only when the file is worth rewriting (isWorthWriting), over the sha it
+ * was read at, so GitHub refuses a write made over a newer file; a refused write reads the file
+ * again and merges, up to WRITE_TRIES times, never forcing. A file that cannot be read is never
+ * written over (L105). Any failure is said on the card for this Mac and once per spell in the
+ * transcript, never dropped (L215).
+ */
 const record = ($: EngineInterface, s: AccountRoomSession, reading: Reading | undefined) =>
-  serial(async () => {
+  serialWrites(async () => {
     if (!s.mac) {
       once($, 'no-mac', "Account room: this Mac's name could not be read, so its readings are not saved.")
       return
     }
-    const path = `${s.folder}/${s.mac}.json`
-    // iCloud evicts a file it has synced to a placeholder beside it: the file is not missing, only
-    // not here, so writing a fresh one would replace every reading it holds (L105).
-    let evicted: boolean
-    try {
-      evicted = await $.fs.exists(`${s.folder}/.${s.mac}.json.icloud`)
-    } catch (err) {
-      // Unknown is not "no": writing on a guess could replace every reading the file holds (L215).
-      once($, 'own-evict-unknown', `Account room: could not tell whether this Mac's readings file is downloaded from iCloud, so nothing was saved: ${message(err)}`)
-      return
+    const mac = s.mac
+    const fail = (why: string) => {
+      unsaved = { mac, why }
+      once($, 'record-failed', `Account room: readings could not be saved to GitHub (${s.repo}): ${why}`)
     }
-    if (evicted) {
-      once($, 'own-evicted', `Account room: this Mac's readings file is not downloaded from iCloud yet, so no readings are saved until it is: ${path}`)
-      return
-    }
-    try {
-      await locked($, s.home, async () => {
-        const text = await readText($, path)
-        const cur = text === undefined ? undefined : parseMacFile(text)
+    if (!isRepoName(s.repo)) return fail(notRepoName(s.repo))
+    const path = `readings/${mac}.json`
+    let refused = ''
+    for (let i = 0; i < WRITE_TRIES; i++) {
+      let held = ownFile && ownFile.repo === s.repo && ownFile.mac === mac ? ownFile : undefined
+      if (!held) {
+        const got = await readFile($, s.repo, path)
+        if (!got.ok) return fail(got.why)
+        const parsed = got.value === undefined ? undefined : parseMacFile(got.value.text)
         // Never rewritten from one sighting: that would erase every other account's readings it
         // holds (L105). It is left for repair, and the card names it as unavailable.
-        if (typeof cur === 'string') {
-          once($, 'own-unreadable', `Account room: this Mac's readings file could not be read (${cur}), so no readings are saved until it is repaired or removed: ${path}`)
-          return
-        }
-        const now = await $.clock.now()
-        await writeWhole($, s.home, path, serialize(withSighting(cur, s.mac as string, s, reading, now)))
-      })
-    } catch (err) {
-      once($, 'record-failed', `Account room: readings could not be saved to ${s.folder}: ${message(err)}`)
+        if (typeof parsed === 'string') return fail(`this Mac's readings file on GitHub could not be read (${parsed}), so nothing is written over it until it is repaired or removed`)
+        held = ownFile = { repo: s.repo, mac, file: parsed, sha: got.value?.sha }
+      }
+      const now = await $.clock.now()
+      const next = withSighting(held.file, mac, s, reading, now)
+      if (!isWorthWriting(held.file, next, now)) return
+      const put = await putFile($, s.repo, path, serialize(next), held.sha, `Readings from ${mac}`)
+      if (put.ok) {
+        ownFile = put.value === undefined ? undefined : { repo: s.repo, mac, file: next, sha: put.value }
+        // A write landed: the card stops saying otherwise, and the next failure is news again.
+        unsaved = undefined
+        noted.delete('record-failed')
+        return
+      }
+      ownFile = undefined
+      if (put.status !== 409 && put.status !== 422) return fail(put.why)
+      refused = put.why
     }
+    fail(`GitHub refused the write ${WRITE_TRIES} times as stale, the last time with: ${refused}`)
   })
 
 /**
@@ -363,7 +440,7 @@ let shown: { verdict: Verdict; offset: Offset; unavailable: Unavailable[] } | un
 
 const draw = async ($: EngineInterface, phase: AccountRoomPhase, now: number) => {
   if (!shown) return
-  const c = card({ verdict: shown.verdict, phase, now, offset: shown.offset, unavailable: shown.unavailable })
+  const c = card({ verdict: shown.verdict, phase, now, offset: shown.offset, unavailable: shown.unavailable, ...(unsaved ? { unsaved } : {}) })
   try {
     // An older mod-kit without the 'room' slot refuses the row, which is said below.
     await $.modkit.bandRow({ mod: MOD, id: 'room', slot: 'room', lines: c.lines, frame: c.frame })
@@ -419,7 +496,7 @@ const signOut = async ($: EngineInterface, route: SignOutRoute): Promise<SignOut
   return { isConfirmed: false, cause: 'not-confirmed', why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
 }
 
-type Options = { logoutCommand?: unknown; signedOutCheck?: unknown; readingsFolder?: unknown }
+type Options = { logoutCommand?: unknown; signedOutCheck?: unknown; readingsRepo?: unknown }
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 
 const runSwitch = async ($: EngineInterface, best: Account, options: Options) => {
@@ -603,7 +680,8 @@ export const register: Register = (on, options) => {
       isInteractive: e.isInteractive,
       home,
       mac,
-      folder: str(opts.readingsFolder) || iCloud(home),
+      // The manifest's default names the repository; a setting can move it without a code change.
+      repo: str(opts.readingsRepo),
     }
     await $.state.set(sessionRef, s)
     if (e.isInteractive) {

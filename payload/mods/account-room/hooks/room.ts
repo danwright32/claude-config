@@ -152,8 +152,19 @@ export type Phase = AccountRoomPhase
 export type Part = { text: string; color?: string; dim?: boolean } | { button: string; label: string }
 export type Card = { lines: Part[][]; frame: { kind: 'box' } }
 
-/** Another Mac whose readings file could not be read, with why. */
-export type Unavailable = { mac: string; why: string }
+/**
+ * Readings GitHub could not give, with why: one Mac's file, or every other Mac's (mac null) when the
+ * repository's readings folder itself could not be listed.
+ */
+export type Unavailable = { mac: string | null; why: string }
+/** This Mac's own readings that could not be saved to the repository, with why. */
+export type Unsaved = { mac: string; why: string }
+
+/**
+ * What a limit's figure reads on the card: the whole percent left. One definition, so the card and
+ * the rule deciding a figure has moved enough to send to the other Macs never disagree (L16).
+ */
+export const leftOf = (used: number): number => Math.max(0, Math.min(100, Math.round(100 - used)))
 
 const AMBER = 'warning'
 const RED = 'error'
@@ -166,8 +177,7 @@ const figures = (a: Account, now: number, offset: Offset): string => {
   for (const w of ['five', 'week'] as const) {
     const l = a.reading?.[w]
     if (!l) continue
-    const used = effective(l, now) ?? 0
-    const left = Math.max(0, Math.min(100, Math.round(100 - used)))
+    const left = leftOf(effective(l, now) ?? 0)
     // A reset already passed is not the next one, which the reading cannot know.
     const reset = l.resetsAt !== null && l.resetsAt > now ? `, resets ${clockText(l.resetsAt, now, offset)}` : ''
     parts.push(`${left}% of ${LABEL[w]} left${reset}`)
@@ -199,7 +209,7 @@ export const STOPPED: Record<AccountRoomStop, string> = {
  * is the progress with elapsed seconds and the buttons go; a Switch stopped at the sign out turns it
  * red, saying why (STOPPED).
  */
-export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: Offset; unavailable: readonly Unavailable[] }): Card => {
+export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: Offset; unavailable: readonly Unavailable[]; unsaved?: Unsaved }): Card => {
   const v = f.verdict
   const lines: Part[][] = []
   if (v.kind === 'room') {
@@ -224,8 +234,12 @@ export const card = (f: { verdict: Verdict; phase: Phase; now: number; offset: O
     if (v.unread.length) info.push(`${listed(v.unread.map(nameOf))} ${v.unread.length === 1 ? 'has' : 'have'} no reading yet and may have room`)
     if (info.length) lines.push([{ text: info.join(SEP) }])
   }
-  // An unreadable other Mac is said, never dropped (the spec, L215). Its wording and place were not
-  // part of a design round: see docs/mods-design.md.
-  if (v.kind !== 'none') for (const u of f.unavailable) lines.push([{ text: `${u.mac}'s readings are unavailable: ${u.why}` }])
+  // Readings GitHub could not give, and this Mac's own that could not be saved, are said, never
+  // dropped (the spec, L215). Their wording and place were not part of a design round: see
+  // docs/mods-design.md.
+  if (v.kind !== 'none') {
+    for (const u of f.unavailable) lines.push([{ text: u.mac === null ? `The other Macs' readings are unavailable: ${u.why}` : `${u.mac}'s readings are unavailable: ${u.why}` }])
+    if (f.unsaved) lines.push([{ text: `${f.unsaved.mac}'s readings could not be saved to GitHub: ${f.unsaved.why}` }])
+  }
   return { lines, frame: { kind: 'box' } }
 }

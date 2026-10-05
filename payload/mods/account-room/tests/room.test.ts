@@ -193,6 +193,14 @@ test("another account's reset coming first is named by that account", () => {
 
 test("an unreadable other Mac's readings are named as unavailable, never dropped", () => {
   const v = verdict(account('here', 'This', reading(10, 95)), [], NOW)
-  const c = card({ verdict: v, phase: { kind: 'idle' }, now: NOW, offset: ET, unavailable: [{ mac: 'Dans-MacBook-Pro', why: 'not downloaded from iCloud yet' }] })
-  expect(text(c.lines as Line[])).toContain("Dans-MacBook-Pro's readings are unavailable: not downloaded from iCloud yet")
+  const c = card({ verdict: v, phase: { kind: 'idle' }, now: NOW, offset: ET, unavailable: [{ mac: 'Dans-MacBook-Pro', why: 'not readable JSON (Unexpected end)' }] })
+  expect(text(c.lines as Line[])).toContain("Dans-MacBook-Pro's readings are unavailable: not readable JSON (Unexpected end)")
+})
+
+test("what GitHub could not give is said on the card: every other Mac's readings when the folder could not be listed, and this Mac's own save (#750)", () => {
+  const v = verdict(account('here', 'This', reading(10, 95)), [], NOW)
+  const c = card({ verdict: v, phase: { kind: 'idle' }, now: NOW, offset: ET, unavailable: [{ mac: null, why: 'gh is not logged in to GitHub (gh auth login)' }], unsaved: { mac: 'Daniels-MacBook-Pro-2', why: 'gh is not logged in to GitHub (gh auth login)' } })
+  expect(text(c.lines as Line[]).slice(-2)).toEqual(["The other Macs' readings are unavailable: gh is not logged in to GitHub (gh auth login)", "Daniels-MacBook-Pro-2's readings could not be saved to GitHub: gh is not logged in to GitHub (gh auth login)"])
+  // Below the trigger there is no card, so none of it is drawn.
+  expect(card({ verdict: verdict(account('here', 'This', reading(10, 10)), [], NOW), phase: { kind: 'idle' }, now: NOW, offset: ET, unavailable: [], unsaved: { mac: 'm', why: 'x' } }).lines).toEqual([])
 })

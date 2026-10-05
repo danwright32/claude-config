@@ -1,10 +1,11 @@
+import { leftOf } from './room.ts'
 import type { Account, Limit, Reading } from './room.ts'
 
 // The account room's two files (#659), as pure data so the merging and refusals are tested alone.
 //
-// Readings: one file per Mac in iCloud Drive (`account-room/<Mac>.json`). Each Mac writes only its
-// own, so iCloud never makes a conflict copy (L83); each reads every Mac's and keeps the newest
-// reading per account. A file that cannot be read is named, never read as no readings (L215).
+// Readings: one file per Mac in a private GitHub repository (`readings/<Mac>.json`, #750). Each Mac
+// writes only its own, so two Macs never write one file (L83); each reads every Mac's and keeps the
+// newest reading per account. A file that cannot be read is named, never read as no readings (L215).
 //
 // Nicknames: one file in the claude-sync payload, so both Macs share them. The repository is
 // public, so accounts are keyed by a hash of the account and org ids and no email is written there.
@@ -220,18 +221,59 @@ export const merge = (files: readonly MacFile[]): Map<string, Account> => {
   return out
 }
 
-/** The other Macs' files in the folder listing: a downloaded one by name, or one iCloud has not downloaded. */
-export type OtherMac = { mac: string; file: string } | { mac: string; notDownloaded: true }
-export const macsIn = (names: readonly string[], ownMac: string): OtherMac[] => {
-  const out: OtherMac[] = []
-  for (const n of names) {
-    const placeholder = /^\.(.+)\.json\.icloud$/.exec(n)
-    if (placeholder) {
-      if (placeholder[1] !== ownMac) out.push({ mac: placeholder[1] as string, notDownloaded: true })
-      continue
+/** Each Mac's file in the repository's readings folder, by the Mac's name; nothing else there is a Mac. */
+export const macFiles = (entries: readonly { name: string; type: string }[]): { mac: string; file: string }[] =>
+  entries.flatMap(e => {
+    const m = e.type === 'file' ? /^([^.][^/]*)\.json$/.exec(e.name) : null
+    return m ? [{ mac: m[1] as string, file: e.name }] : []
+  })
+
+/** A quiet stretch longer than this rewrites the file anyway, so the other Mac can tell this one is alive (#750). */
+export const WRITE_STALE_MS = 10 * 60_000
+
+/** The newest window time in a file: when this Mac last sent a reading of any account. */
+const newestOf = (f: MacFile): number => {
+  let n = -Infinity
+  for (const e of Object.values(f.accounts)) {
+    const r = e.reading
+    for (const w of ['five', 'week'] as const) {
+      const l = r?.[w]
+      if (r && l) n = Math.max(n, l.takenAt ?? r.takenAt)
     }
-    const m = /^([^.][^/]*)\.json$/.exec(n)
-    if (m && m[1] !== ownMac) out.push({ mac: m[1] as string, file: n })
   }
-  return out
+  return n
+}
+
+/**
+ * What the other Macs act on in a file, at the precision the card shows it: each account, who it
+ * is, and for each limit the whole percent left and when it resets. Times are left out: they are
+ * judged by the quiet stretch, not as a change (L40, L405).
+ */
+const sent = (f: MacFile): string =>
+  JSON.stringify([
+    Object.keys(f.accounts)
+      .sort()
+      .map(id => {
+        const e = f.accounts[id] as MacEntry
+        const fig = (w: 'five' | 'week') => {
+          const l = e.reading?.[w]
+          return l ? [leftOf(l.used), l.resetsAt] : null
+        }
+        return [id, e.email, e.org, fig('five'), fig('week')]
+      }),
+    Object.keys(f.kept ?? {}).sort(),
+  ])
+
+/**
+ * Whether this Mac's file is worth rewriting with `next` (#750, decided 2026-10-05): when there is
+ * no file yet, when what the other Macs act on moved (a figure as the card shows it, a reset time,
+ * an account new or changed), or when the newest reading in it is more than 10 minutes old and
+ * `next` holds a newer one. Every rewrite is a write to GitHub, so the same figures measured again
+ * and again cost nothing.
+ */
+export const isWorthWriting = (cur: MacFile | undefined, next: MacFile, now: number): boolean => {
+  if (!cur) return true
+  if (sent(cur) !== sent(next)) return true
+  const was = newestOf(cur)
+  return newestOf(next) > was && now - was > WRITE_STALE_MS
 }

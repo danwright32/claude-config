@@ -50,7 +50,11 @@ const modKit: { name: string; register: Register } = {
     })
   },
 }
-const withKit = { plugins: [modKit] }
+// The readings repository the tests name. The world below answers GitHub for this one name only,
+// and a test runs with no network or process of its own, so nothing here can reach the real one (L2).
+const REPO = 'test-owner/readings'
+const REPO_OPTION = { readingsRepo: REPO }
+const withKit = { plugins: [modKit], options: REPO_OPTION }
 
 // An older mod-kit, whose slot list has no 'room' (a Mac the sync has not yet brought up to date):
 // it refuses the card, so the refusal path is exercised.
@@ -78,9 +82,11 @@ const DAY = 24 * HOUR
 const T0 = Date.UTC(2026, 9, 4, 12, 0)
 const HOME = '/Users/x'
 const LOGIN = `${HOME}/.claude.json`
-const FOLDER = `${HOME}/Library/Mobile Documents/com~apple~CloudDocs/account-room`
-const OWN = `${FOLDER}/Daniels-MacBook-Pro-2.json`
-const OTHER = `${FOLDER}/Dans-MacBook-Pro.json`
+// Files in the readings repository are kept beside the Mac's own files under this prefix, which no
+// path on disk starts with, and are served only through the GitHub fake.
+const GH = 'github:'
+const OWN = `${GH}readings/Daniels-MacBook-Pro-2.json`
+const OTHER = `${GH}readings/Dans-MacBook-Pro.json`
 const NICKNAMES = `${HOME}/.claude/mods/account-room-nicknames.json`
 const PANE = 'account-room-nickname'
 
@@ -95,8 +101,20 @@ type World = {
   authLogin: Run
   /** Holds the logout command until the test releases it, so the elapsed seconds can be watched. */
   logoutGate: Promise<void> | undefined
-  /** Writes into the readings folder fail, as on a Mac with iCloud Drive switched off. */
-  writeFails: boolean
+  /** GitHub cannot be reached: gh says it could not connect. */
+  ghDown: boolean
+  /** gh has no login on this Mac. */
+  ghLoggedOut: boolean
+  /** gh is not installed, or not on the path Claude Code runs with. */
+  ghMissing: boolean
+  /** gh's account cannot see the repository, so GitHub answers 404 for all of it. */
+  ghNoAccess: boolean
+  /** The account gh is logged in to. */
+  ghLogin: string
+  /** How many writes GitHub refuses next as stale, each as though another session had just written. */
+  ghRefuse: number
+  /** How long GitHub takes to answer, on the test clock. */
+  ghDelayMs: number
   /** A lock left behind by a session that died, last touched this long before the start. */
   staleLockMs: number
   /** Reading the session's usage fails. */
@@ -109,10 +127,6 @@ type World = {
   openWaits: boolean
   /** The reason Claude Code gives for a waiting pane. */
   openReason: string
-  /** Asking whether a path exists fails, as a disk going away would. */
-  existsFails: boolean
-  /** Asking whether the readings folder exists fails, and nothing else does. */
-  folderExistsFails: boolean
   /** `claude auth login` cannot even be started. */
   authLoginThrows: boolean
   /** The signed out check cannot even be started. */
@@ -127,7 +141,10 @@ const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, existsFails: false, folderExistsFails: false, authLoginThrows: false, checkThrows: false, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
+  // Every gh command the mod ran, and each write it asked GitHub for with the sha it gave.
+  const gh: string[][] = []
+  const puts: { path: string; sha?: string }[] = []
   const toasts: string[] = []
   const logs: string[] = []
   // The lines that reach the transcript, as against the debug log.
@@ -146,15 +163,11 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: w.files[e.path] as string }
   })
   on('fs.write', ($, e) => {
-    if (w.writeFails && e.path.startsWith(FOLDER)) throw new Error('EACCES: permission denied')
     if (w.tokenWriteFails && /write\.lock\//.test(e.path)) throw new Error('ENOSPC: no space left on device')
     w.files[e.path] = e.text
     return { value: undefined }
   })
-  on('fs.exists', ($, e) => {
-    if (w.existsFails || (w.folderExistsFails && e.path === FOLDER)) throw new Error('EIO: input/output error')
-    return { value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) } as never
-  })
+  on('fs.exists', ($, e) => ({ value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
   on('fs.list', ($, e) => {
     const names = Object.keys(w.files)
       .filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/'))
@@ -183,8 +196,67 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     return next(e)
   })
+  // GitHub's contents API as `gh api` answers it, shaped on the real answers measured against the
+  // readings repository on 2026-10-05 (L52): the body on stdout and "gh: <message> (HTTP <code>)" on
+  // stderr with exit 1 for a refusal, 422 for a write with no sha over a file that exists, 409 for a
+  // stale sha, "This repository is empty." for a repository with no commit, and exit 4 with no login.
+  let shaSeq = 0
+  const shas: Record<string, string> = {}
+  const shaOf = (p: string) => (shas[p] ??= `sha${++shaSeq}`)
+  const refused = (status: number, text: string): Run => ({ exitCode: 1, stdout: JSON.stringify({ message: text, status: String(status) }), stderr: `gh: ${text} (HTTP ${status})\n` })
+  const b64 = (s: string) => {
+    let bin = ''
+    for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b)
+    // GitHub wraps the content at 60 characters a line.
+    return `${btoa(bin).replace(/.{60}/g, '$&\n')}\n`
+  }
+  const unb64 = (s: string) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)))
+  const github = async (args: string[], stdin: string | undefined): Promise<Run> => {
+    gh.push(['gh', ...args])
+    if (w.ghMissing) throw new Error('spawn gh ENOENT')
+    if (w.ghDelayMs) await clock.sleep(w.ghDelayMs)
+    if (w.ghLoggedOut) return { exitCode: 4, stdout: '', stderr: 'To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.\n' }
+    if (w.ghDown) return { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n' }
+    if (args[0] !== 'api') return { exitCode: 1, stdout: '', stderr: 'unexpected' }
+    const method = args[1] === '-X' ? String(args[2]) : 'GET'
+    const path = String(args[1] === '-X' ? args[3] : args[1])
+    if (path === 'user') return ok(JSON.stringify({ login: w.ghLogin }))
+    const base = `repos/${REPO}`
+    if (w.ghNoAccess || (path !== base && !path.startsWith(`${base}/`))) return refused(404, 'Not Found')
+    if (path === base) return ok(JSON.stringify({ full_name: REPO, private: true }))
+    if (!path.startsWith(`${base}/contents/`)) return refused(404, 'Not Found')
+    const p = decodeURIComponent(path.slice(`${base}/contents/`.length))
+    const key = `${GH}${p}`
+    const held = Object.keys(w.files).filter(f => f.startsWith(GH))
+    if (method === 'GET') {
+      if (key in w.files) return ok(JSON.stringify({ type: 'file', name: p.split('/').pop(), path: p, encoding: 'base64', content: b64(w.files[key] as string), sha: shaOf(p) }))
+      const kids = held.filter(f => f.startsWith(`${key}/`) && !f.slice(key.length + 1).includes('/'))
+      if (kids.length) return ok(JSON.stringify(kids.map(f => ({ type: 'file', name: f.slice(key.length + 1), path: f.slice(GH.length), sha: shaOf(f.slice(GH.length)) }))))
+      return refused(404, held.length ? 'Not Found' : 'This repository is empty.')
+    }
+    if (method === 'PUT') {
+      const body = JSON.parse(stdin ?? '{}') as { content?: string; sha?: string }
+      puts.push({ path: p, ...(body.sha ? { sha: body.sha } : {}) })
+      if (w.ghRefuse > 0) {
+        w.ghRefuse--
+        // Another session wrote first: the file moves on, and this write's sha is stale.
+        if (key in w.files) shas[p] = `sha${++shaSeq}`
+        return refused(409, `${p} does not match ${body.sha ?? ''}`)
+      }
+      if (key in w.files && !body.sha) return refused(422, 'Invalid request.\n\n"sha" wasn\'t supplied.')
+      if (key in w.files && body.sha !== shaOf(p)) return refused(409, `${p} does not match ${body.sha}`)
+      w.files[key] = unb64(String(body.content))
+      shas[p] = `sha${++shaSeq}`
+      return ok(JSON.stringify({ content: { path: p, sha: shas[p] } }))
+    }
+    return { exitCode: 1, stdout: '', stderr: 'unexpected' }
+  }
   on('process.run', async ($, e) => {
     runs.push([...e.argv])
+    if (e.argv[0] === 'gh') {
+      const g = await github(e.argv.slice(1), e.init?.stdin)
+      return { value: { ...g, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === '/bin/sh' && e.argv[2] === 'LOGOUT' && w.logoutGate) await w.logoutGate
     const [cmd, ...rest] = e.argv
     const r = (x: Run) => ({ value: { ...x, isStdoutTruncated: false, isStderrTruncated: false } })
@@ -206,7 +278,6 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     if (cmd === 'mv') {
       const [a, b] = rest.filter(x => !x.startsWith('-'))
-      if (w.writeFails && String(b).startsWith(FOLDER)) return r({ exitCode: 1, stdout: '', stderr: 'Operation not permitted' })
       if (!hasDir(String(b).slice(0, String(b).lastIndexOf('/')))) return r({ exitCode: 1, stdout: '', stderr: 'No such file or directory' })
       w.files[b as string] = w.files[a as string] as string
       delete w.files[a as string]
@@ -265,7 +336,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, logs, transcript, runs, opened, closed, clock, holdLock }
+  return { w, toasts, logs, transcript, runs, opened, closed, clock, holdLock, gh, puts }
 }
 
 type Session = { session: { start: (e: never) => Promise<unknown>; measure: (e: never) => Promise<unknown> } }
@@ -373,37 +444,81 @@ test("an unreadable other Mac's file is named as unavailable, never read as no r
 })
 
 test("this Mac's own readings file that cannot be read is named, and never rewritten over the readings it holds (L105)", withKit, async ($, on) => {
-  const { w, clock, logs } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }), [OWN]: 'garbage' } })
+  const { w, clock, transcript, puts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }), [OWN]: 'garbage' } })
   await start($, clock)
   const ui = await mountBand($ as never)
   await measure($, clock, limits(96, 50))
   expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings are unavailable: not readable JSON")
   expect(w.files[OWN]).toBe('garbage')
-  expect(logs.filter(l => /readings file could not be read/.test(l))).toHaveLength(1)
+  expect(puts).toEqual([])
+  expect(transcript.filter(l => /this Mac's readings file on GitHub could not be read \(not readable JSON/.test(l))).toHaveLength(1)
   await ui.unmount()
 })
 
-test("this Mac's own file evicted by iCloud is named as not downloaded, and never replaced by a fresh one (L105)", withKit, async ($, on) => {
-  const placeholder = `${FOLDER}/.Daniels-MacBook-Pro-2.json.icloud`
-  const { w, clock, logs } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }), [placeholder]: 'bplist' } })
+test('GitHub that cannot be reached is named on the card for every other Mac, never read as no readings, and the measurement still goes on (#750, L215)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  w.ghDown = true
+  await expect($.session.measure({ context: { window: 200_000 }, rateLimits: limits(96, 50), changed: ['rateLimits'] } as never)).resolves.toBeDefined()
+  await clock.settle()
+  const card = await shown(ui)
+  expect(card).toMatch(/^This account is low\. No other account has room/)
+  expect(card).toContain("The other Macs' readings are unavailable: gh api failed: error connecting to api.github.com")
+  expect(card).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub: gh api failed: error connecting to api.github.com")
+  await ui.unmount()
+})
+
+test('gh with no login, or logged in to an account that cannot see the repository, is said on the card exactly (#750)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) }, ghLoggedOut: true })
   await start($, clock)
   const ui = await mountBand($ as never)
   await measure($, clock, limits(96, 50))
-  expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings are unavailable: not downloaded from iCloud yet")
-  expect(w.files[OWN]).toBeUndefined()
-  expect(logs.filter(l => /not downloaded from iCloud/.test(l))).toHaveLength(1)
+  expect(await shown(ui)).toContain("The other Macs' readings are unavailable: gh is not logged in to GitHub (gh auth login)")
+  expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub: gh is not logged in to GitHub (gh auth login)")
   await ui.unmount()
 })
 
-test('a disk error asking for the readings folder is named on the card, and the measurement still goes on (L215, review of #670)', withKit, async ($, on) => {
-  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+test('an account gh uses that cannot see the repository is named, with the repository, on the card (#750)', withKit, async ($, on) => {
+  const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) }, ghNoAccess: true, ghLogin: 'dwright-pennie' })
   await start($, clock)
   const ui = await mountBand($ as never)
-  // The folder question alone fails, as iCloud Drive going away would; everything else answers.
-  w.folderExistsFails = true
-  await expect($.session.measure({ context: { window: 200_000 }, rateLimits: limits(96, 50), changed: ['rateLimits'] } as never)).resolves.toBeDefined()
-  await clock.settle()
-  expect(await shown(ui)).toContain("iCloud Drive's readings are unavailable: the readings folder could not be read: ")
+  await measure($, clock, limits(96, 50))
+  expect(await shown(ui)).toContain(`The other Macs' readings are unavailable: ${REPO} was not found, or gh's account dwright-pennie cannot see it`)
+  expect(await shown(ui)).toContain(`Daniels-MacBook-Pro-2's readings could not be saved to GitHub: ${REPO} was not found, or gh's account dwright-pennie cannot see it`)
+  await ui.unmount()
+})
+
+test('gh that cannot be run at all is said on the card, never as no readings (#750)', withKit, async ($, on) => {
+  const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) }, ghMissing: true })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(96, 50))
+  // The run's own failure follows; a hook of the test that throws reaches the mod as a call nothing
+  // answered, so the exact words are the kit's.
+  expect(await shown(ui)).toMatch(/The other Macs' readings are unavailable: gh could not be run: \S/)
+  await ui.unmount()
+})
+
+test('a readings repository setting that is not owner/name is said on the card, and gh is never run with it (#750)', { plugins: [modKit], options: { readingsRepo: '../user' } }, async ($, on) => {
+  const { clock, gh } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(96, 50))
+  expect(await shown(ui)).toContain(`The other Macs' readings are unavailable: the readingsRepo setting "../user" is not a repository's owner/name`)
+  expect(await shown(ui)).toContain(`Daniels-MacBook-Pro-2's readings could not be saved to GitHub: the readingsRepo setting "../user" is not a repository's owner/name`)
+  expect(gh).toEqual([])
+  await ui.unmount()
+})
+
+test('an empty repository is no readings yet, not a fault: nothing is named unavailable, and the first write creates this Mac file (#750)', withKit, async ($, on) => {
+  const { clock, w, puts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(96, 50))
+  expect(await shown(ui)).toBe("This account is low. No other account has room  This account's 5h resets first, at 11 AM")
+  expect(puts[0]).toEqual({ path: 'readings/Daniels-MacBook-Pro-2.json' })
+  expect(JSON.parse(w.files[OWN] as string).mac).toBe('Daniels-MacBook-Pro-2')
   await ui.unmount()
 })
 
@@ -460,7 +575,7 @@ test('Switch shows its progress with elapsed seconds, and with no proven logout 
   await ui.unmount()
 })
 
-const ROUTE = { options: { logoutCommand: 'LOGOUT', signedOutCheck: 'CHECK' } }
+const ROUTE = { options: { ...REPO_OPTION, logoutCommand: 'LOGOUT', signedOutCheck: 'CHECK' } }
 
 test('Switch with a logout route: elapsed seconds tick, then the sign in page opens with the account email', { ...withKit, ...ROUTE }, async ($, on) => {
   // The logout is held until the test releases it, 25 seconds into the mocked clock.
@@ -477,6 +592,25 @@ test('Switch with a logout route: elapsed seconds tick, then the sign in page op
   release()
   await clock.settle()
   expect(runs.find(r => r[0] === 'claude')).toEqual(['claude', 'auth', 'login', '--email=work@example.com'])
+  await ui.unmount()
+})
+
+test("Switch's elapsed seconds keep counting while a reading waits on a slow GitHub (#750)", { ...withKit, ...ROUTE }, async ($, on) => {
+  let release: () => void = () => undefined
+  const logoutGate = new Promise<void>(r => (release = r))
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, logoutGate })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
+  // A new figure arrives and its write waits 30 seconds on GitHub.
+  w.ghDelayMs = 30_000
+  await measure($, clock, limits(98, 50))
+  await clock.advance(3_000)
+  expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 3s/)
+  release()
+  w.ghDelayMs = 0
+  await clock.advance(30_000)
   await ui.unmount()
 })
 
@@ -756,43 +890,54 @@ test('a nicknames file that cannot be read is named, and is never overwritten by
   expect(w.files[NICKNAMES]).toBe('{"v":1,"names":{"x":')
 })
 
+// A nickname saved in the dialog: the write that holds this Mac's lock, now that readings are
+// guarded by GitHub's own sha check rather than a lock held across the network (#750).
+const saveNickname = async ($: { ui: { mount: (t: never) => Promise<unknown> } }, text: string) => {
+  const ui = (await $.ui.mount(pane)) as unknown as Ui
+  await ui.input({ key: 'nickname', text, kind: 'submit' })
+  await ui.unmount()
+}
+
 test('a lock left by a session that died is moved aside, never deleted from under another session', withKit, async ($, on) => {
-  const { w, clock, runs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }) }, staleLockMs: 60_000 })
+  const { w, clock, runs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') }, staleLockMs: 60_000 })
   await start($, clock)
-  await measure($, clock, limits(10, 10))
+  await saveNickname($ as never, 'Work')
   const takeover = runs.find(r => r[0] === 'mv' && String(r[r.length - 2]).endsWith('write.lock'))
   expect(takeover?.[takeover.length - 1]).toMatch(/write\.lock\.stale\./)
   expect(runs.some(r => r[0] === 'rmdir' && String(r[r.length - 1]).endsWith('write.lock') && runs.indexOf(r) < runs.indexOf(takeover as string[]))).toBe(false)
-  expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-work', 'org-1')].reading.five.used).toBe(10)
+  expect(await nameIn(w.files[NICKNAMES], 'acct-work')).toBe('Work')
   // The moved aside lock still holds the dead session's token, so it is removed whole.
   expect(runs.some(r => r[0] === 'rm' && r[1] === '-rf' && r[2] === takeover?.[takeover.length - 1])).toBe(true)
 })
 
 test('a session releases only a lock it still owns: its own token is removed first, then the lock', withKit, async ($, on) => {
-  const { clock, runs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }) } })
+  const { clock, runs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
   await start($, clock)
+  await saveNickname($ as never, 'Work')
   const rm = runs.findIndex(r => r[0] === 'rm' && /write\.lock\/[0-9a-f-]+$/.test(String(r[r.length - 1])))
   const rmdir = runs.findIndex(r => r[0] === 'rmdir' && String(r[r.length - 1]).endsWith('write.lock'))
   expect(rm).toBeGreaterThan(-1)
   expect(rmdir).toBeGreaterThan(rm)
 })
 
-test('files are written whole from a temp file kept in the per Mac state folder, never in a synced or iCloud folder', withKit, async ($, on) => {
+test('the nicknames are written whole from a temp file kept in the per Mac state folder, never in the synced mods folder', withKit, async ($, on) => {
   const { clock, runs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
   await start($, clock)
-  const pane = runs.filter(r => r[0] === 'mv' && !String(r[r.length - 2]).endsWith('write.lock'))
-  expect(pane.length).toBeGreaterThan(0)
-  for (const r of pane) expect(String(r[r.length - 2]).startsWith(`${HOME}/.claude/state/account-room/`)).toBe(true)
+  await saveNickname($ as never, 'Work')
+  const moves = runs.filter(r => r[0] === 'mv' && !String(r[r.length - 2]).endsWith('write.lock'))
+  expect(moves.length).toBeGreaterThan(0)
+  for (const r of moves) expect(String(r[r.length - 2]).startsWith(`${HOME}/.claude/state/account-room/`)).toBe(true)
 })
 
 test('a lock whose token cannot be written is let go at once, not held until it goes stale', withKit, async ($, on) => {
-  const { clock, runs, logs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }) }, tokenWriteFails: true })
+  const { clock, runs, toasts } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') }, tokenWriteFails: true })
   await start($, clock)
+  await saveNickname($ as never, 'Work')
   expect(runs.some(r => r[0] === 'rmdir' && String(r[r.length - 1]).endsWith('write.lock'))).toBe(true)
-  expect(logs.some(l => /readings could not be saved/.test(l))).toBe(true)
+  expect(toasts.some(t => /^The nickname could not be saved: \S/.test(t))).toBe(true)
 })
 
-test('a card the band refuses is said once, in the transcript, not only in the debug log (L551)', { plugins: [modKitToday] }, async ($, on) => {
+test('a card the band refuses is said once, in the transcript, not only in the debug log (L551)', { plugins: [modKitToday], options: REPO_OPTION }, async ($, on) => {
   const { clock, transcript } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
   await measure($, clock, limits(96, 50))
@@ -807,22 +952,127 @@ test('a failure in the work deferred past session start is said in the transcrip
   expect(transcript.filter(l => /this session's account could not be set up: \S/.test(l))).toHaveLength(1)
 })
 
-test('when whether the file is evicted cannot be told, nothing is written over it', withKit, async ($, on) => {
-  const { w, clock, logs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }), [OWN]: JSON.stringify({ v: 1, mac: 'Daniels-MacBook-Pro-2', accounts: {} }) } })
+test("when this Mac's file cannot be read from GitHub, nothing is written over it (L105)", withKit, async ($, on) => {
+  const { w, clock, puts } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }), [OWN]: JSON.stringify({ v: 1, mac: 'Daniels-MacBook-Pro-2', accounts: {} }) } })
+  w.ghDown = true
   await start($, clock)
-  const before = w.files[OWN]
-  w.existsFails = true
   await measure($, clock, limits(10, 10))
-  expect(w.files[OWN]).toBe(before)
-  expect(logs.some(l => /could not tell whether this Mac's readings file is downloaded/.test(l))).toBe(true)
+  expect(puts).toEqual([])
+  expect(w.files[OWN]).toBe(JSON.stringify({ v: 1, mac: 'Daniels-MacBook-Pro-2', accounts: {} }))
 })
 
-test('a readings file that cannot be written is said once, not on every reading', withKit, async ($, on) => {
-  const { clock, logs } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }) }, writeFails: true })
+test('readings that cannot be saved are said once in the transcript, not on every reading', withKit, async ($, on) => {
+  const { clock, transcript } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [NICKNAMES]: await named({ 'acct-work': 'Work' }) }, ghDown: true })
   await start($, clock)
   await measure($, clock, limits(10, 10))
   await measure($, clock, limits(20, 10))
-  expect(logs.filter(l => /readings could not be saved/.test(l))).toHaveLength(1)
+  expect(transcript.filter(l => l.startsWith(`Account room: readings could not be saved to GitHub (${REPO}): gh api failed: error connecting to api.github.com`))).toHaveLength(1)
+})
+
+const owned = async (w: World) => (JSON.parse(w.files[OWN] as string) as { accounts: Record<string, { reading?: { takenAt: number; five?: { used: number; takenAt?: number } } }> }).accounts[await accountKey('acct-home', 'org-1')]
+const readingsPuts = (puts: { path: string }[]) => puts.filter(p => p.path === 'readings/Daniels-MacBook-Pro-2.json').length
+
+test("repeated identical measurements write this Mac's file once, and make no GitHub call at all after it (#750)", withKit, async ($, on) => {
+  const { clock, w, puts, gh } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  await measure($, clock, limits(40, 50))
+  const writes = readingsPuts(puts)
+  const calls = gh.length
+  expect((await owned(w))?.reading?.five?.used).toBe(40)
+  await clock.advance(MIN)
+  await measure($, clock, limits(40, 50))
+  await clock.advance(MIN)
+  await measure($, clock, limits(40, 50))
+  expect(readingsPuts(puts)).toBe(writes)
+  expect(gh.length).toBe(calls)
+})
+
+test('a figure that moved is written, and one the card cannot show yet is not (#750)', withKit, async ($, on) => {
+  const { clock, w, puts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  await measure($, clock, limits(40, 50))
+  const writes = readingsPuts(puts)
+  // 60% left either way: the card reads the same, so nothing is sent.
+  await measure($, clock, limits(40.3, 50))
+  expect(readingsPuts(puts)).toBe(writes)
+  await measure($, clock, limits(41, 50))
+  expect(readingsPuts(puts)).toBe(writes + 1)
+  expect((await owned(w))?.reading?.five?.used).toBe(41)
+  // A reset that moved is a figure that moved.
+  await measure($, clock, limits(41, 50, T0 + 5 * HOUR))
+  expect(readingsPuts(puts)).toBe(writes + 2)
+})
+
+test('a quiet stretch past 10 minutes writes the newest reading, so the other Mac can tell this one is alive (#750)', withKit, async ($, on) => {
+  const { clock, w, puts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  await measure($, clock, limits(40, 50))
+  const writes = readingsPuts(puts)
+  await clock.advance(10 * MIN)
+  await measure($, clock, limits(40, 50))
+  expect(readingsPuts(puts)).toBe(writes)
+  await clock.advance(1_000)
+  await measure($, clock, limits(40, 50))
+  expect(readingsPuts(puts)).toBe(writes + 1)
+  expect((await owned(w))?.reading?.takenAt).toBe(T0 + 10 * MIN + 1_000)
+})
+
+test('a write GitHub refuses as stale is read again and merged, and never sent without the sha (#750)', withKit, async ($, on) => {
+  const { clock, w, puts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  await measure($, clock, limits(40, 50))
+  const before = puts.length
+  w.ghRefuse = 1
+  await measure($, clock, limits(45, 50))
+  const tries = puts.slice(before)
+  expect(tries).toHaveLength(2)
+  expect(tries.every(t => typeof t.sha === 'string')).toBe(true)
+  expect(tries[0]?.sha).not.toBe(tries[1]?.sha)
+  expect((await owned(w))?.reading?.five?.used).toBe(45)
+})
+
+test('a write refused every time is said on the card for this Mac and once in the transcript (#750, L215)', withKit, async ($, on) => {
+  const { clock, w, transcript } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(40, 50))
+  w.ghRefuse = 99
+  await measure($, clock, limits(96, 50))
+  expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub: GitHub refused the write 3 times as stale")
+  expect(transcript.filter(t => /^Account room: readings could not be saved to GitHub/.test(t))).toHaveLength(1)
+  // The next write that lands takes the line off the card.
+  w.ghRefuse = 0
+  await measure($, clock, limits(97, 50))
+  expect(await shown(ui)).not.toContain('could not be saved to GitHub')
+  await ui.unmount()
+})
+
+test("another Mac's readings come from the repository, and an org beyond ASCII survives the trip both ways (#750)", withKit, async ($, on) => {
+  const work = await accountKey('acct-work', 'org-1')
+  const other = JSON.parse(await otherMac()) as { accounts: Record<string, { org: string }> }
+  ;(other.accounts[work] as { org: string }).org = 'Café 家'
+  const cafe = JSON.stringify({ oauthAccount: { accountUuid: 'acct-home', organizationUuid: 'org-1', emailAddress: 'home@example.com', organizationName: 'Café 家' } })
+  const { clock, w } = world(on, { files: { [LOGIN]: cafe, [NICKNAMES]: await named({ 'acct-home': 'Home' }), [OTHER]: JSON.stringify(other) } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  expect(await shown(ui)).toMatch(/^This account is low\. work@example\.com \(Café 家\) has room/)
+  expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-home', 'org-1')].org).toBe('Café 家')
+  await ui.unmount()
+})
+
+test('while the card shows, the other Macs are read from GitHub at most once a minute (#750)', withKit, async ($, on) => {
+  const { clock, gh } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const listings = () => gh.filter(a => a[2] === `repos/${REPO}/contents/readings`).length
+  await measure($, clock, limits(96, 50))
+  await measure($, clock, limits(97, 50))
+  await clock.advance(30_000)
+  await measure($, clock, limits(98, 50))
+  expect(listings()).toBe(1)
+  await clock.advance(31_000)
+  await measure($, clock, limits(99, 50))
+  expect(listings()).toBe(2)
 })
 
 test('with no Claude login (an API key session) the mod does nothing and says why in the debug log', withKit, async ($, on) => {
@@ -848,11 +1098,12 @@ test('a reload that cut Switch off mid sign out says so: nothing was checked (#7
   await ui.unmount()
 })
 
-test('a rate limit measurement is never held up by the reading work: a held lock delays nothing (#736)', withKit, async ($, on) => {
-  const { clock, holdLock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+test('a rate limit measurement is never held up by the reading work: a held lock or a slow GitHub delays nothing (#736)', withKit, async ($, on) => {
+  const { clock, holdLock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
-  // Another session holds the write lock and keeps it: the reading work waits up to 5 seconds on it.
+  // Another session holds the write lock and keeps it, and GitHub takes 20 seconds to answer.
   holdLock()
+  w.ghDelayMs = 20_000
   let answered = false
   void $.session.measure({ context: { window: 200_000 }, rateLimits: limits(40, 50), changed: ['rateLimits'] } as never).then(() => (answered = true))
   await clock.settle()
