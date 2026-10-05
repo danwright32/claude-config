@@ -553,7 +553,7 @@ and open to his correction.
   so an attempt that takes over from one a reload cut off uses it rather than asking again.
 - Confirmed live on 2026-10-05 (#713): the built-in `/rename` route named a real session on this
   Mac, queued by the mod and answered "Session renamed to: Mac statusline shell script
-  configuration" at 9:39 AM ET, about eight minutes into the session.
+  configuration" at 9:39:43 AM ET, ten minutes after the session started at 9:29:42, at the mark.
 - The fallback route checks before it sets: when `/rename` refuses or answers with nothing
   recognisable, Dan's next message carries the name as `sessionTitle` only if that message shows
   the session still has no name. A different name on it, or a `/rename` of Dan's first, wins.
