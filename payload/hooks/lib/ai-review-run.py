@@ -200,6 +200,23 @@ def write_finished(state_dir, name, meta, body):
             pass
 
 
+def redact(text, stderr=False):
+    """Reviewer text made safe to store and print (claude-config#581), through the ONE redactor,
+    ar_redact in ai-review-common.sh. Its stderr once carried a live secret key quoted inside a
+    permission rule warning, which the merge gate then echoed into the session. A redactor that
+    cannot run withholds the text rather than passing it through raw (L42)."""
+    common = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai-review-common.sh")
+    args = ["bash", "-c", '. "$1" && ar_redact $2', "_", common, "--stderr" if stderr else ""]
+    try:
+        r = subprocess.run(args, input=text.encode("utf-8", errors="replace"),
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return "(withheld: the redactor could not run, so this text was not stored)"
+    if r.returncode != 0:
+        return "(withheld: the redactor failed, so this text was not stored)"
+    return r.stdout.decode("utf-8", errors="replace").strip()
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     for opt in ("--state-dir", "--key", "--sha", "--repo-label", "--branch", "--repo-dir",
@@ -273,7 +290,11 @@ def main(argv):
             errtext = err.decode("utf-8", errors="replace").strip()
             if proc.returncode != 0:
                 status = "error"
-                tail = "\n".join(errtext.splitlines()[-5:]) if errtext else "(claude printed nothing on stderr)"
+                # Never the raw stderr: settings warnings dropped and credentials redacted first.
+                safe = redact(errtext, stderr=True) if errtext else ""
+                tail = ("\n".join(safe.splitlines()[-5:]) if safe else
+                        "(claude printed nothing on stderr)" if not errtext else
+                        "(nothing left to show once settings warnings were dropped)")
                 body = f"claude exited {proc.returncode} and no review was read back. Its last lines:\n{tail}"
             elif not text:
                 status = "empty"
@@ -284,7 +305,7 @@ def main(argv):
                 # one (L98, L340), so it is its own outcome, kept verbatim as the evidence.
                 status = "unparsed"
                 body = ("The reviewer answered, but not in the review's format: no finding lines and not "
-                        "\"No issues found.\", so this is not a review. What it said:\n" + text)
+                        "\"No issues found.\", so this is not a review. What it said:\n" + redact(text))
             else:
                 status = "ok"
                 text, marked = mark_false_absences(text, changed_files(a.diff_file))
