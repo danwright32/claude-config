@@ -898,7 +898,9 @@ test('a look that never finishes is given up after ten minutes, said once, and t
   await clock.advance(6 * MIN)
   expect(w.stats).toBeGreaterThan(stats)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(noticesOf(next)).toContain('did not finish within 10 minutes')
+  // Only what was measured (L440): it was given up, and the next look is still to come.
+  expect(noticesOf(next)).toContain('did not finish within 10 minutes and was given up; the next look starts at the next minute.')
+  expect(noticesOf(next)).not.toContain('looked again')
   await clock.advance(11 * MIN)
   const again = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(noticesOf(again)).not.toContain('did not finish within 10 minutes')

@@ -162,7 +162,7 @@ const lookSafely = async ($: EngineInterface) => {
     if ((await Promise.race([pass, givenUp])) === 'finished') toldLookGivenUp = false
     else if (!toldLookGivenUp) {
       toldLookGivenUp = true
-      notices.push(`The background job watcher's look at its jobs did not finish within ${LOOK_MAX_MS / 60_000} minutes, so it has looked again without it. A job may be stuck without a word from the watcher meanwhile.`)
+      notices.push(`The background job watcher's look at its jobs did not finish within ${LOOK_MAX_MS / 60_000} minutes and was given up; the next look starts at the next minute. A job may be stuck without a word from the watcher meanwhile.`)
     }
   } finally {
     deadline?.cancel()
