@@ -254,7 +254,12 @@ mt_split_assignments() {  # $1 = one segment
         val="$val${s:$((i + 1)):1}"; i=$((i + 2)); continue
       fi
       if [ -n "$q" ]; then
-        if [ "$c" = "$q" ]; then q=""; [ "$depth" -gt 0 ] && val="$val$c"; else val="$val$c"; fi
+        # A closing quote is part of the value only where the opening one was: inside $( ) or ${ },
+        # and always for a backtick, whose delimiters belong to the substitution.
+        if [ "$c" = "$q" ]; then
+          { [ "$depth" -gt 0 ] || [ "$q" = '`' ]; } && val="$val$c"
+          q=""
+        else val="$val$c"; fi
       else
         case "$c" in
           \"|\') q="$c"; [ "$depth" -gt 0 ] && val="$val$c" ;;

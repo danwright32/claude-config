@@ -157,6 +157,9 @@ done
 mt_split_assignments 'PR_REVIEW_READ="ab12" GH_TOKEN=$(gh auth token -u x) gh pr merge 7'
 eq "$MT_REST" "gh pr merge 7" "the command after assignments holding spaces"
 eq "${MT_ASSIGNS%%$'\n'*}" "PR_REVIEW_READ=ab12" "an assignment's value with its quotes removed"
+mt_split_assignments 'GH_TOKEN=`gh auth token -u x` X=${Y:-a b} gh pr merge 7'
+eq "$MT_ASSIGNS" 'GH_TOKEN=`gh auth token -u x`'$'\n''X=${Y:-a b}'$'\n' "backtick and brace values kept as the shell sees them"
+eq "$MT_REST" 'gh pr merge 7' "the merge after them"
 mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
 eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.
