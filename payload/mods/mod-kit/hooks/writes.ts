@@ -237,7 +237,19 @@ export const writes = (cmds: string[][], cwd: string, home: string): ModKitWrite
     files.push({ word, ...(path ? { path } : {}), ...(sources && sources.length ? { sources } : {}) })
   }
   const named = (w: string) => add(w, absolutePath(w, dir, home))
+  // The folder outside each subshell still open: the reader gives its parentheses as commands of
+  // their own (#700), and a cd inside one ends with it. A closing one with no opening (a case
+  // pattern's) leaves the folder as it is.
+  const outside: (string | undefined)[] = []
   for (const raw of cmds) {
+    if (raw.length === 1 && raw[0] === '(') {
+      outside.push(dir)
+      continue
+    }
+    if (raw.length === 1 && raw[0] === ')') {
+      if (outside.length) dir = outside.pop()
+      continue
+    }
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1).
     const words: string[] = []
     for (let i = 0; i < raw.length; i++) {

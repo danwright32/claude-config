@@ -37,6 +37,13 @@ describe('writes: a cd before the write', () => {
     expect(paths("cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- rule\nEOF")).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
     expect(paths('cd sub; echo x > a.txt; cd ..; echo y > b.txt')).toEqual([`${CWD}/sub/a.txt`, `${CWD}/b.txt`])
   })
+  // #700 made the reader give a subshell's parentheses as commands of their own, as the collision
+  // guard reads them: a cd made inside a subshell ends with it.
+  test("a cd inside a subshell holds only inside it, and a write after it is in the folder outside", () => {
+    expect(paths('(cd sub && printf x >> notes.txt)')).toEqual([`${CWD}/sub/notes.txt`])
+    expect(paths('(cd ~/.claude/projects/p/memory && cat > a.md); echo y > b.md')).toEqual([`${HOME}/.claude/projects/p/memory/a.md`, `${CWD}/b.md`])
+    expect(paths('( cd sub; make ) > out.txt')).toEqual([`${CWD}/out.txt`])
+  })
   test('a bare cd goes home; cd - goes somewhere this cannot know, so a relative path after it is given as written', () => {
     expect(paths('cd && echo x > a.md')).toEqual([`${HOME}/a.md`])
     expect(paths('cd - && echo x > CLAUDE.md')).toEqual(['(as written) CLAUDE.md'])
