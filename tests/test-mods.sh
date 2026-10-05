@@ -726,6 +726,47 @@ export const register = on => {
   })
 }
 TS
+# A promise made outside a noun's code (in another hook), kept in a map or a variable, and returned
+# by a noun later is that noun's wait too (#756): it is named where it is made.
+mknounmod "$M12W" made-in-hook held <<'TS'
+const held = new Map<string, Promise<string>>()
+const waiters = new Map<string, (v: string) => void>()
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    held.set('start', new Promise(resolve => waiters.set('start', resolve)))
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, held: { wait: ({ id }) => held.get(id) } }
+  })
+}
+TS
+mknounmod "$M12W" kept-in-variable ready <<'TS'
+let release: (() => void) | undefined
+let ready: Promise<void> = Promise.resolve()
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    ready = new Promise<void>(r => { release = r })
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, ready: { wait: () => ready } }
+  })
+}
+TS
+# A race bounds a wait only when the timer it races settles under 10 s.
+mknounmod "$M12W" raced-long slow <<'TS'
+const waiters = new Map()
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, slow: { wait: ({ id }) => Promise.race([new Promise(resolve => waiters.set(id, resolve)), sleep(15_000)]) } }
+  })
+}
+TS
 # What must pass: a wait a timer under 10 s settles, one settled at once, a comment or a string
 # naming the forbidden shape, and a wait outside every noun's code, which is not this check's to
 # judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun). The
@@ -774,10 +815,48 @@ export const register = on => {
   })
 }
 TS
+# A race against a timer made in another executor, a helper's or one written in place, bounds the
+# wait, for a promise made in place and for one made in another hook (#756). A promise another hook
+# keeps that no noun reads is not this check's to judge.
+mknounmod "$M12W" raced-short race <<'TS'
+const waiters = new Map()
+const held = new Map()
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    held.set('start', new Promise(resolve => waiters.set('start', resolve)))
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      race: {
+        wait: ({ id }) => Promise.race([new Promise(resolve => waiters.set(id, resolve)), sleep(5_000)]),
+        held: ({ id }) => Promise.race([held.get(id), new Promise(r => built.clock.after(3_000, () => r('late')))]),
+      },
+    }
+  })
+}
+TS
+mknounmod "$M12W" kept-unread calm <<'TS'
+let parked: Promise<void> = Promise.resolve()
+const waiters: (() => void)[] = []
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    parked = new Promise<void>(r => waiters.push(r))
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, calm: { now: async () => Date.now() } }
+  })
+}
+TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"13 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
-for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7; do
+case "$out" in *"18 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
     || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
@@ -787,11 +866,16 @@ printf '%s\n' "$out" | grep -F 'asks-a-person/hooks/register.ts:4' | grep -q 'wa
 printf '%s\n' "$out" | grep -F 'lost-executor/hooks/register.ts:4' | grep -q 'cannot be read' \
   && check "an executor that cannot be found is reported as unreadable, never passed" ok \
   || check "an executor that cannot be found is reported as unreadable, never passed" "$out"
-for m in bounded commented outside-any-noun; do
+for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'which a noun returns' \
+    && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
+    || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
+done
+for m in bounded commented outside-any-noun raced-short kept-unread; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor; do rm -rf "${M12W:?}/$m"; done
+for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long; do rm -rf "${M12W:?}/$m"; done
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
   || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
@@ -803,6 +887,25 @@ if [ -d "$ROOT/payload/mods" ]; then
   [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \
     || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
 fi
+# Each mod scan depends on the shared source reader only through names it documents as public, never
+# a private _helper whose signature can move under it (#756: #739 changed _definition's while #744's
+# branch was open, and the resulting TypeError surfaced only after a rebase).
+priv="$(grep -n -E 'from ts_source import .*\b_[A-Za-z]|ts_source\._[A-Za-z]' "$ROOT"/tools/*.sh "$ROOT"/tools/*.py "$ROOT"/tests/*.sh 2>/dev/null | grep -v "^$ROOT/tests/test-mods.sh:.*priv=")"
+[ -z "$priv" ] && check "no scan imports a private helper of tools/lib/ts_source.py" ok \
+  || check "no scan imports a private helper of tools/lib/ts_source.py" "$priv"
+fc="$(python3 - "$ROOT/tools/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from ts_source import code_only, function_code, function_span, kinds
+text = "// const helper = 1\nconst helper = (a: number) => { return a + 1 }\nfunction other() { return 2 }\n"
+code, k = code_only(text), kinds(text)
+span = function_span(code, "helper", k)
+print(function_code(code, "helper", k) == code[span[0]:span[1]], code[span[0]:span[1]].startswith("const helper"), function_code(code, "other", k), function_span(code, "missing", k))
+PY
+)"
+[ "$fc" = "True True function other() { return 2 } None" ] \
+  && check "ts_source's public function_code and function_span read a function's code and where it lies" ok \
+  || check "ts_source's public function_code and function_span read a function's code and where it lies" "$fc"
 # Every check this suite runs can be run directly, as its header says, so each is committed
 # executable (the lessons review of #744: the noun wait check was committed 644 beside its 755
 # siblings, which this suite's own `bash <check>` could never notice).
