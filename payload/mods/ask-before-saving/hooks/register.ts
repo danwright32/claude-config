@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { AskBeforeSavingQuestion } from '../types/index.d.ts'
-import { ANSWERS, type Answer, MOD, addedText, bashTargets, display, lastingMemory, madePermanent, questionRow, resolvePath } from './rules.ts'
+import { ANSWERS, type Answer, MOD, addedText, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, rowId } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
 // Edit or Bash, Dan is asked in the band: For good, Just this session, or Not at all. Settled with
@@ -12,13 +12,22 @@ import { ANSWERS, type Answer, MOD, addedText, bashTargets, display, lastingMemo
 // absent (measured 2026-10-04 with `claude plugin test`). Holding it would fail open. So the call is
 // refused, the question waits in the band with the prompt free, and For good replays the call
 // exactly as Claude sent it, through every other mod's checks again.
+//
+// The question is asked from classic.PreToolUse, which the engine raises beneath every mod's
+// tool.call hook (#705): a write the style check, the secret guard or no build refuses is refused
+// before Dan is asked about it, whatever order the mods load in, so he is never asked to approve a
+// save that cannot land. The skip for Dan's own permanent words stays a tool.call hook, the one
+// place the saved result can be read, to tell Claude to say what it saved.
 
 const pendingRef = { plugin: 'ask-before-saving', key: 'pending' } as const
 const rulesRef = { plugin: 'ask-before-saving', key: 'rules' } as const
 const promptRef = { plugin: 'ask-before-saving', key: 'lastPrompt' } as const
 
-// The one call each For good approved, by its exact arguments, so the replay passes and nothing
-// else does. In memory: a reload between the press and the replay cannot happen (one handler).
+const TOOLS = new Set(['Write', 'Edit', 'Bash'])
+
+// The calls let through without asking, by their exact arguments: one For good approved, or one Dan's
+// own words made permanent. Taken by the classic.PreToolUse hook as the call reaches it, so the call
+// passes and nothing else does. In memory: a reload between the two cannot happen (one dispatch).
 const approved = new Set<string>()
 const fingerprint = (tool: string, input: Record<string, unknown>) =>
   JSON.stringify([tool, Object.keys(input).sort().map(k => [k, input[k]])])
@@ -29,10 +38,47 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
   return input
 }
 
-const show = async ($: EngineInterface, pending: AskBeforeSavingQuestion[]) => {
-  const first = pending[0]
-  if (first) await $.modkit.bandRow(questionRow(first) as never)
-  else await $.modkit.clearBandRow({ mod: MOD, id: 'question' })
+let saves = 0
+const message = (err: unknown) => String((err as Error)?.message ?? err)
+
+// Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
+// call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
+// patch, an inline script) is judged by the lasting memory its text and any patch file it reads
+// mention. A file that exists and cannot be read fails the hook, and the hook fails closed.
+const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string[]> => {
+  const home = (await $.env.get('HOME')) ?? ''
+  const cwd = await $.session.cwd()
+  if (tool !== 'Bash') {
+    const abs = resolvePath(String(input.file_path ?? ''), cwd, home)
+    return lastingMemory(abs, home) ? [display(abs, home)] : []
+  }
+  const command = String(input.command ?? '')
+  const w = await $.modkit.writes({ command, cwd, home })
+  const out = lastingFiles(w, home)
+  for (const u of w.unnamed) {
+    const texts = [command]
+    for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
+    for (const m of texts.flatMap(t => mentioned(t, home))) if (!out.includes(m)) out.push(m)
+  }
+  return out
+}
+
+// The first save waiting is the one asked; the rest wait behind it, each asked once the one before
+// is answered. One that cannot be shown is refused rather than left unanswerable, Claude told why.
+const showFirst = async ($: EngineInterface) => {
+  for (;;) {
+    const first = ((await $.state.get(pendingRef)).value ?? [])[0]
+    if (!first) return
+    try {
+      await $.modkit.question(questionOf(first) as never)
+      return
+    } catch (err) {
+      await update($, pendingRef, p => (p ?? []).filter(x => x.id !== first.id))
+      const where = first.files.join(', ')
+      $.ui.toast(`The question about saving to ${where} could not be shown: ${message(err)}`)
+      await tell($, `The question asking Dan whether to save this to ${where} could not be shown (${message(err)}), so nothing was saved. Ask him in your reply instead.`)
+    }
+  }
 }
 
 // A note Claude reads at its next step, never shown to Dan as typed. A note that cannot be added is
@@ -43,7 +89,7 @@ const tell = async ($: EngineInterface, text: string) => {
     const r = (await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })) as { deny?: string }
     if (r && typeof r.deny === 'string') why = r.deny
   } catch (err) {
-    why = String((err as Error)?.message ?? err)
+    why = message(err)
   }
   if (why !== undefined) $.ui.toast(`Claude was not told: ${text} (${why})`, { timeoutMs: 10_000 })
 }
@@ -52,70 +98,85 @@ const REFUSED =
   'Not saved yet. Dan is being asked in the band above the prompt whether this is a standing rule: For good, Just this session, or Not at all. ' +
   'His answer reaches you as a note, and For good saves it exactly as you wrote it here. Do not write it again.'
 
+const cannotCheck = (why: string | undefined) =>
+  `Not saved: Ask before saving could not check whether this writes lasting memory (${why ?? 'it failed'}). Tell Dan what you meant to save instead.`
+
 export const register: Register = on => {
   // Dan's latest message of his own, typed or from his phone, read for the words that already make
-  // a rule permanent ("from now on", "always", "never", "remember").
+  // a rule permanent. A peer session's or a plugin's message never counts.
   on('prompt.submit', async ($, e, next) => {
     if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') await $.state.set(promptRef, e.text)
     return next(e)
   })
 
-  for (const tool of ['Write', 'Edit', 'Bash'] as const) {
+  // Dan's own words made it permanent: saved without asking, through every other mod's checks, and
+  // Claude says what it saved.
+  for (const tool of TOOLS) {
     on('tool.call', { tool }, async ($, e, next) => {
-      const raw = e as unknown as Record<string, unknown>
-      const input = argsOf(raw)
-      if (approved.delete(fingerprint(tool, input))) return next(e)
-
-      const home = (await $.env.get('HOME')) ?? ''
-      const cwd = await $.session.cwd()
-      const named =
-        tool === 'Bash' ? bashTargets(await $.modkit.commands({ command: String(input.command ?? '') })) : [String(input.file_path ?? '')]
-      const files = [...new Set(named.map(p => resolvePath(p, cwd, home)).filter(p => lastingMemory(p, home)))]
+      const input = argsOf(e as unknown as Record<string, unknown>)
+      const key = fingerprint(tool, input)
+      // A For good replay: the classic.PreToolUse hook takes its approval.
+      if (approved.has(key)) return next(e)
+      if (!madePermanent((await $.state.get(promptRef)).value)) return next(e)
+      const files = await lastingTargets($, tool, input)
       if (!files.length) return next(e)
-      const where = files.map(f => display(f, home)).join(', ')
-
-      // Dan's own words made it permanent: saved without asking, and Claude says what it saved.
-      if (madePermanent((await $.state.get(promptRef)).value)) {
-        const r = await next(e)
-        if (r.deny !== undefined || r.isError) return r
-        return { ...r, context: [...(r.context ?? []), `Saved to ${where} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
-      }
-
-      let text = String(input.command ?? '')
-      if (tool === 'Edit') text = String(input.new_string ?? '')
-      if (tool === 'Write') {
-        // No file there yet: the whole content is what would be saved. One that exists and cannot be
-        // read fails the hook, and the hook fails closed (below).
-        const first = files[0] as string
-        const old = (await $.fs.exists(first)) ? await $.fs.read(first) : undefined
-        text = addedText(String(input.content ?? ''), old)
-      }
-      const q: AskBeforeSavingQuestion = { id: String(raw.tool_use_id ?? ''), tool, input, files: files.map(f => display(f, home)), text }
+      approved.add(key)
+      let r: Awaited<ReturnType<typeof next>>
       try {
-        const pending = await update($, pendingRef, p => [...(p ?? []), q])
-        await show($, pending)
-      } catch (err) {
-        // Nobody can answer a question the band cannot show, so the save is refused, never let through.
-        // Taken back out so it can never be answered later; if even that fails, the hook throws and
-        // its catch refuses the write all the same.
-        await update($, pendingRef, p => (p ?? []).filter(x => x.id !== q.id))
-        const why = String((err as Error)?.message ?? err)
-        $.ui.toast(`The question about saving to ${where} could not be shown: ${why}`)
-        return { deny: `Not saved: the question asking Dan whether this is a standing rule could not be shown (${why}). Ask him in your reply instead.` }
+        r = await next(e)
+      } finally {
+        // Taken by the classic hook when the call reached it; dropped here when a guard refused first.
+        approved.delete(key)
       }
-      return { deny: REFUSED }
-    }).catch(($, e) => ({
-      // A hook that throws is skipped and the write runs, so anything this hook cannot finish refuses.
-      deny: `Not saved: Ask before saving could not check whether this writes lasting memory (${String(e.error?.message ?? 'it failed')}). Tell Dan what you meant to save instead.`,
-    }))
+      if (r.deny !== undefined || r.isError) return r
+      return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
+    }).catch(($, e) => ({ deny: cannotCheck(e.error?.message) }))
   }
 
-  for (const a of ANSWERS) {
-    on('ui.press', { plugin: 'mod-kit', element: `${MOD}:${a.button}` }, async ($, e) => {
-      await answer($, a.button)
-      return { element: e.element }
-    })
-  }
+  // Asked here, beneath every mod's tool.call hook, so only a write every guard lets through is asked about.
+  on('classic.PreToolUse', async ($, e, next) => {
+    const tool = String(e.tool)
+    if (!TOOLS.has(tool)) return next(e)
+    const raw = e as unknown as Record<string, unknown>
+    const input = argsOf(raw)
+    if (approved.delete(fingerprint(tool, input))) return next(e)
+    const files = await lastingTargets($, tool, input)
+    if (!files.length) return next(e)
+
+    let text = String(input.command ?? '')
+    if (tool === 'Edit') text = String(input.new_string ?? '')
+    if (tool === 'Write') {
+      // No file there yet: the whole content is what would be saved. One that exists and cannot be
+      // read fails the hook, and the hook fails closed (below).
+      const abs = resolvePath(String(input.file_path ?? ''), await $.session.cwd(), (await $.env.get('HOME')) ?? '')
+      const old = (await $.fs.exists(abs)) ? await $.fs.read(abs) : undefined
+      text = addedText(String(input.content ?? ''), old)
+    }
+    const q: AskBeforeSavingQuestion = { id: String(raw.tool_use_id ?? '') || `save-${++saves}`, tool: tool as AskBeforeSavingQuestion['tool'], input, files, text }
+    const pending = await update($, pendingRef, p => [...(p ?? []), q])
+    if (pending.length > 1) return { deny: REFUSED }
+    try {
+      await $.modkit.question(questionOf(q) as never)
+    } catch (err) {
+      // Nobody can answer a question the band cannot show, so the save is refused, never let through.
+      // Taken back out so it can never be answered later; if even that fails, the hook throws and
+      // its catch refuses the write all the same.
+      await update($, pendingRef, p => (p ?? []).filter(x => x.id !== q.id))
+      const where = files.join(', ')
+      $.ui.toast(`The question about saving to ${where} could not be shown: ${message(err)}`)
+      return { deny: `Not saved: the question asking Dan whether this is a standing rule could not be shown (${message(err)}). Ask him in your reply instead.` }
+    }
+    return { deny: REFUSED }
+  }).catch(($, e) => ({ deny: cannotCheck(e.error?.message) }))
+
+  // A press carries the answer and the save it was drawn for: "<answer>:<save id>".
+  on('ui.press', { plugin: 'mod-kit' }, async ($, e, next) => {
+    if (!e.element.startsWith(`${MOD}:`)) return next(e)
+    const [choice, ...id] = e.element.slice(MOD.length + 1).split(':')
+    const known = ANSWERS.find(a => a.button === choice)
+    if (known) await answer($, known.button, id.join(':'))
+    return { element: e.element }
+  })
 
   // The rules Dan gave for this session only ride the system prompt's memory section, which is
   // assembled afresh for every request, so a compaction of the conversation keeps them.
@@ -129,25 +190,28 @@ export const register: Register = on => {
 
   // Dropped at session end, a /clear included: nothing of this session's answers outlives it.
   on('session.end', async ($, e, next) => {
+    const shown = ((await $.state.get(pendingRef)).value ?? [])[0]
     await $.state.set(rulesRef, [])
     await $.state.set(pendingRef, [])
     await $.state.set(promptRef, null)
     $.ui.invalidate('prompt.section')
     // At session end there is nobody left to tell, and a row left behind has no question under it:
     // a press then finds nothing pending and does nothing.
-    await $.modkit.clearBandRow({ mod: MOD, id: 'question' }).catch(() => undefined)
+    if (shown) await $.modkit.clearBandRow({ mod: MOD, id: rowId(shown.id) }).catch(() => undefined)
     return next(e)
   })
 }
 
-const answer = async ($: EngineInterface, choice: Answer) => {
+const answer = async ($: EngineInterface, choice: Answer, id: string) => {
   let q: AskBeforeSavingQuestion | undefined
-  const rest = await update($, pendingRef, p => {
-    q = (p ?? [])[0]
-    return (p ?? []).slice(1)
+  await update($, pendingRef, p => {
+    q = (p ?? []).find(x => x.id === id)
+    return (p ?? []).filter(x => x.id !== id)
   })
-  await show($, rest)
+  // Already answered (a second press), or gone at session end: nothing to do.
   if (!q) return
+  await $.modkit.clearBandRow({ mod: MOD, id: rowId(q.id) })
+  await showFirst($)
   const where = q.files.join(', ')
 
   if (choice === 'not-at-all') {
@@ -174,9 +238,9 @@ const answer = async ($: EngineInterface, choice: Answer) => {
     if (r.deny !== undefined) failure = r.deny
     else if (r.isError) failure = r.text ?? 'the tool reported an error'
   } catch (err) {
-    failure = String((err as Error)?.message ?? err)
+    failure = message(err)
   } finally {
-    // Consumed by the replay when it reached this mod; dropped here when another hook refused first.
+    // Taken by the replay when it reached the classic hook; dropped here when another hook refused first.
     approved.delete(key)
   }
   if (failure !== undefined) {

@@ -20,6 +20,12 @@
 #   send      trying a refused message to another session again a plain $.session.send: mod-kit's
 #             (a loop that stops once delivered, or the        session.send hook tries every mod's refused
 #             || 'no reason given' fallback)                    send once more and tidies the reason (#688)
+#   write-reader                                                use $.modkit.writes({ command, cwd, home }),
+#             reading which files a shell command writes (a    the one reader (#705: three copies disagreed)
+#             list naming tee, which every copy has)
+#
+# A known exception is a mod still holding its own copy until a named issue moves it. It is printed
+# on every run, with that issue, rather than failing the run or passing in silence (L129, L523).
 #
 # Only each mod's hooks/ is read: its tests may stand in for mod-kit, since a mod cannot import
 # another mod's files.
@@ -43,7 +49,16 @@ PARTS=(
   "band|component: *['\"]AbovePrompt['\"]|\$.modkit.bandRow({ ... })"
   "pane|strikethrough=\{[^}]*\.strikethrough\}|'\\\\u2502'|'│'|\$.modkit.pane({ mod, id, lines, frame }) (the band: \$.modkit.bandRow)"
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
+  "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
 )
+
+# $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
+exception(){
+  case "$1:$2" in
+    # The collision guard's shellWrites and no build's file readers predate mod-kit's (#705).
+    collision-guard:write-reader|scope-modes:write-reader) echo '#712' ;;
+  esac
+}
 
 n=0
 failed=0
@@ -57,6 +72,11 @@ for d in "$dir"/*/; do
     label="${part%%|*}"; rest="${part#*|}"; pattern="${rest%|*}"; remedy="${rest##*|}"
     hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$d/hooks" 2>/dev/null)"
     [ -n "$hits" ] || continue
+    until_issue="$(exception "$name" "$label")"
+    if [ -n "$until_issue" ]; then
+      echo "check-mod-shared-parts: $name keeps its own $label, a known exception until $until_issue moves it onto $remedy."
+      continue
+    fi
     failed=1
     while IFS= read -r h; do
       echo "check-mod-shared-parts: $name keeps its own $label at ${h#"$d"}: use $remedy from mod-kit instead."

@@ -5,6 +5,7 @@ import { compose, drop, isDivider, paneRefusal, put, questionRefusal, questionRo
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git } from './commands.ts'
 import { sendTwice } from './send.ts'
+import { writes } from './writes.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -71,6 +72,7 @@ export const register: Register = (on, options) => {
         keep(input)
       },
       commands: async ({ command }) => commands(command),
+      writes: async ({ command, cwd, home }) => writes(commands(command), cwd, home),
       git: async ({ words }) => git(words),
       bandRow: async row => {
         const why = refusal(row)

@@ -55,6 +55,17 @@ export type ModKit = {
    * while one inside a word (`$(`, `<(`) stays part of it. The one reader every mod uses (L613).
    */
   commands: (input: { command: string }) => Promise<string[][]>
+  /**
+   * The files a Bash call would put content into, read from the same simple commands, with `cwd`
+   * the folder it runs in and `home` the home folder: redirects, tee, cp, mv, ln, install, rsync
+   * and ditto's destinations (a copy into a folder lands under each source's name), sed, perl, ruby
+   * and gawk editing in place (every file), dd's of=, and curl and wget's output file, each relative
+   * path resolved after any cd before
+   * it. And the writes its words do not name: a patch (git apply, git am, patch), an inline script
+   * that writes (python3 -c, node -e), a script fed on standard input. The one reader of what a
+   * command writes (L613); a file only touched, removed or changed in mode is not reported.
+   */
+  writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
   git: (input: { words: string[] }) => Promise<ModKitGit | undefined>
   /**
@@ -104,6 +115,20 @@ export type ModKit = {
 export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; frame?: ModKitBandFrame }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
+
+/**
+ * One file a command writes: `word` as the command spells it, `path` the absolute path when the
+ * words name one (absent for a path built from a variable other than HOME, a pattern, or a relative
+ * path after a cd that cannot be followed), and a copy's `sources`.
+ */
+export type ModKitWrite = { word: string; path?: string; sources?: string[] }
+
+/**
+ * What a command writes: the files its words name, and the writes they do not (`what` names it, "a
+ * patch" or "an inline python3 script"; `words` is the command; `inputs` the files to read to find
+ * out, such as the patch file, absolute).
+ */
+export type ModKitWrites = { files: ModKitWrite[]; unnamed: { what: string; words: string[]; inputs: string[] }[] }
 
 /**
  * One answer to a question in the band. `button` is its id within the mod (its press arrives as
