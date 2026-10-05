@@ -165,7 +165,7 @@ PATH_NOCLAUDE="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
 STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/claude" <<'STUB'
 #!/usr/bin/env bash
-cat >/dev/null
+if [ -n "${STUB_CLAUDE_STDIN:-}" ]; then cat > "$STUB_CLAUDE_STDIN"; else cat >/dev/null; fi
 [ -n "${STUB_CLAUDE_ARGS:-}" ] && printf '%s\n' "$@" > "$STUB_CLAUDE_ARGS"
 [ -n "${STUB_CLAUDE_OUT:-}" ] && printf '%s' "$STUB_CLAUDE_OUT"
 exit "${STUB_CLAUDE_EXIT:-0}"
@@ -323,6 +323,62 @@ W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the add() fix\"]}"}' \
   run_hook "$W" "git push"
 want_code 2 "judge BLOCK blocks"
+
+# --- claude-config#723: the reviewer sees every test change, or is told it does not ---------
+# The test changes used to be cut to half the 60 KB budget and then labelled as shown "in full".
+# On 2026-10-05 the #714 push's winding down tests sat in tests/register.test.tsx past the cut, the
+# reviewer called that change untested, and the push was refused for a test it carried.
+seed_big_tests() {   # $1 = repo  $2 = KB of test diff  ->  a source change plus tests, the last line a marker
+  local w="$1" kb="$2"
+  (
+    cd "$w" || exit 1
+    mkdir -p lib tests
+    printf 'export function windDown() { return 1; }\n' > lib/wind.js
+    python3 -c 'import sys
+kb = int(sys.argv[1])
+for i in range(kb * 1024 // 64):
+    print("test(\"case %05d\", () => { expect(pad(%05d)).toBe(%05d); });" % (i, i, i))
+print("test(\"winds down\", () => { expect(windDown()).toBe(1); }); // WINDING_DOWN_MARKER")' "$kb" > tests/register.test.js
+    git add lib/wind.js tests/register.test.js
+    git commit -qm "wind down"
+  ) >/dev/null 2>&1
+}
+JUDGE_IN="$TMPROOT/judge-stdin"
+
+# 40 KB of tests and a small source change fit the budget together: the tests are given what
+# they need first, so the test at the end is in front of the reviewer, and the label is true.
+W="$(mk_repo)"; seed_big_tests "$W" 40; rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' \
+  run_hook "$W" "git push"
+want_code 0 "#723 a push with 40 KB of tests is judged"
+if grep -q 'WINDING_DOWN_MARKER' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #723 a test past 30 KB of test changes never reached the reviewer"; fi
+if grep -q 'TRUNCATED' "$JUDGE_IN" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: #723 a push that fits was labelled truncated"
+else pass=$((pass+1)); fi
+
+# Tests larger than the whole budget: the prompt says they are cut and names the file, never
+# "in full", and a "no test" verdict is refused as COULD NOT JUDGE, naming the file, rather than
+# as a finding that tests are missing. It still refuses: a gate that cannot read the push does not
+# wave it through (L42); the remedy it names is a smaller push.
+W="$(mk_repo)"; seed_big_tests "$W" 90; rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the wind down change\"]}"}' \
+  run_hook "$W" "git push"
+want_code 2 "#723 a truncated push the reviewer calls untested is still refused"
+want_stderr "could not judge" "#723 the refusal says the gate could not judge the push in full"
+want_stderr "tests/register.test.js" "#723 and names the test file that was cut"
+want_stderr "fewer commits|smaller push|split" "#723 and says how to make it judgeable"
+if printf '%s' "$ERR" | grep -q 'have no test covering them'; then fail=$((fail+1)); echo "FAIL: #723 a truncated push was refused as missing tests: [$ERR]"
+else pass=$((pass+1)); fi
+if grep -q 'in full' "$JUDGE_IN" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: #723 the prompt claims test changes in full over a cut"
+else pass=$((pass+1)); fi
+if grep -q 'TRUNCATED' "$JUDGE_IN" 2>/dev/null && grep -q 'tests/register.test.js' "$JUDGE_IN"; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #723 the prompt does not say the test changes were cut, naming the file"; fi
+
+# And a truncated push the reviewer PASSES is allowed: the cut only ever withholds a refusal's
+# accusation, never adds one.
+W="$(mk_repo)"; seed_big_tests "$W" 90
+STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' run_hook "$W" "git push"
+want_code 0 "#723 a truncated push the reviewer passes is allowed"
 
 # --- legitimate silent allows must STAY silent ----------------------------
 # These are correct passes, not fail-opens. Making them talk would train
