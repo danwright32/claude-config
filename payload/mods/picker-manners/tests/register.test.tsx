@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
+import { recordPass } from '../hooks/pickers.ts'
 
 // mod-kit, standing in: a mod cannot import another mod's files. It keeps the questions published
 // and draws the first one asked, alone, as mod-kit does (one question at a time, #703): the chip
@@ -104,6 +105,8 @@ const otherAsker: { name: string; register: Register } = {
   },
 }
 const withKit = { plugins: [modKit, otherAsker] }
+// The band question is off by default (#744); the tests of the band itself turn it on.
+const bandOn = { ...withKit, options: { bandQuestions: true } }
 
 const QUESTION = {
   question: "How long should the registry keep a closed session's record?",
@@ -194,7 +197,50 @@ const tick = async (w: { pm: string[] }) => {
 }
 const MESSAGE = 'Dan did not pick an answer: he is sending a message instead, which follows. Answer his message first.'
 
-test('a question is asked in the band through mod-kit, never as a modal, and a press there answers it', withKit, async ($, on) => {
+// #744: in a live session the hook's wait for a press in the band ran on its 10 second budget, so
+// past it Claude Code's own dialog asked the same question again: every question was asked twice.
+// Until a wait off that budget is found, the band question is off by default and Claude Code's own
+// dialog asks, once, with nothing drawn in the band.
+test("with the band question off (the default, #744), a question reaches Claude Code's own dialog once and nothing is drawn in the band", withKit, async ($, on) => {
+  const w = world(on)
+  const r = await ask($ as never)
+  expect(r.result?.answers).toEqual({ engine: 'picker' })
+  expect(w.reachedEngine).toEqual(['AskUserQuestion'])
+  expect(w.asks).toEqual([])
+  expect(w.pm).toEqual([])
+  const ui = (await $.ui.mount(band)) as unknown as Ui
+  expect(await lines(ui)).toEqual(['engine band'])
+  await ui.unmount()
+})
+
+test("with the band question off, another mod's $.ui.ask reaches Claude Code's own dialog once too", withKit, async ($, on) => {
+  const w = world(on)
+  await bash($ as never, 'ready')
+  expect(w.reachedEngine).toEqual(['AskUserQuestion'])
+  expect(w.asks).toEqual([])
+})
+
+test('with the band question off, the refusals still come before the dialog: next issue pickers while off, and a question talked past twice', withKit, async ($, on) => {
+  const w = world(on)
+  // Two passes over QUESTION counted while the band was on, kept in the session's state. The answer
+  // is the whole read, the value and its version, as $.state.get returns it.
+  on('state.get', ($, e, next) => {
+    if ((e as { key?: string }).key === 'passed') return { value: { value: recordPass(QUESTION, recordPass(QUESTION, [])), version: 2 } } as never
+    return next(e)
+  })
+  await type($ as never, 'no next issue')
+  const offer = await ask($ as never, { ...QUESTION, question: 'Which issue next?', header: 'Next', options: [{ label: '#745' }] }, { metadata: { source: 'next-issue' } })
+  expect(offer.deny ?? offer.text).toMatch(/^Dan turned off next issue pickers for this session/)
+  const third = await ask($ as never)
+  expect(third.deny ?? third.text).toBe('Dan has talked past or dismissed this question twice, so it is not asked again. Carry on from what he said.')
+  expect(w.reachedEngine).toEqual([])
+  const review = await ask($ as never, { ...QUESTION, question: 'Which finding should the review file first?', header: 'Review', options: [{ label: 'The hook budget' }, { label: 'The band' }] }, { metadata: { source: 'issue-review' } })
+  expect(review.result?.answers).toEqual({ engine: 'picker' })
+  expect(w.reachedEngine).toEqual(['AskUserQuestion'])
+  expect(w.asks).toEqual([])
+})
+
+test('a question is asked in the band through mod-kit, never as a modal, and a press there answers it', bandOn, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
@@ -221,7 +267,7 @@ test('a question is asked in the band through mod-kit, never as a modal, and a p
 // #707: this mod answers every AskUserQuestion itself, so the secret guard beneath it never sees the
 // question; it asks mod-kit's screen first. A question carrying a token is refused before it is
 // drawn in the band or kept as the open question.
-test('a question a guard refuses is refused before it is drawn in the band (#707)', withKit, async ($, on) => {
+test('a question a guard refuses is refused before it is drawn in the band (#707)', bandOn, async ($, on) => {
   const w = world(on)
   const r = await ask($ as never, { ...QUESTION, options: [...QUESTION.options, { label: 'Use SCREEN-REFUSES', description: 'the key' }] })
   expect(r.deny ?? r.text).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
@@ -229,7 +275,7 @@ test('a question a guard refuses is refused before it is drawn in the band (#707
   expect(w.reachedEngine).toEqual([])
 })
 
-test('typing while a question is open is a message: the question is withdrawn and Claude told to answer it first', withKit, async ($, on) => {
+test('typing while a question is open is a message: the question is withdrawn and Claude told to answer it first', bandOn, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
@@ -241,7 +287,7 @@ test('typing while a question is open is a message: the question is withdrawn an
 })
 
 // #703: the second talk past still said "ask it again once", and the third asking was then refused.
-test('a question talked past is asked again once: the second pass tells Claude not to ask again, and a third asking is refused', withKit, async ($, on) => {
+test('a question talked past is asked again once: the second pass tells Claude not to ask again, and a third asking is refused', bandOn, async ($, on) => {
   const w = world(on)
   const told: string[] = []
   for (let n = 0; n < 2; n++) {
@@ -258,7 +304,7 @@ test('a question talked past is asked again once: the second pass tells Claude n
 })
 
 // #703: the limit keyed on the exact wording, and Claude rewords a question when it asks again.
-test('the limit holds when Claude rewords the question, and a different question under the same chip is still asked', withKit, async ($, on) => {
+test('the limit holds when Claude rewords the question, and a different question under the same chip is still asked', bandOn, async ($, on) => {
   const w = world(on)
   const reworded = { ...QUESTION, question: 'How long do you want closed sessions kept?' }
   for (const q of [QUESTION, reworded]) {
@@ -276,7 +322,7 @@ test('the limit holds when Claude rewords the question, and a different question
 
 // #703: the keystroke guard asks "I'm about to type into <app>. Ready?" the same way every time, so
 // once Dan had typed over it twice every later keystroke into that app was refused unasked.
-test("another mod's question, asked through $.ui.ask, is drawn every time: the limit on asking again is for Claude's own questions", withKit, async ($, on) => {
+test("another mod's question, asked through $.ui.ask, is drawn every time: the limit on asking again is for Claude's own questions", bandOn, async ($, on) => {
   const w = world(on)
   for (let n = 0; n < 3; n++) {
     const r = bash($ as never, 'ready')
@@ -293,7 +339,7 @@ test("another mod's question, asked through $.ui.ask, is drawn every time: the l
   await ui.unmount()
 })
 
-test('a numbered prose answer is mapped onto the question and echoed back in one line', withKit, async ($, on) => {
+test('a numbered prose answer is mapped onto the question and echoed back in one line', bandOn, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
@@ -305,7 +351,7 @@ test('a numbered prose answer is mapped onto the question and echoed back in one
 
 // #703: the band is not drawn on the phone, and only typing at the Mac counted, so a question open
 // while Dan was on Remote Control could be neither answered nor dismissed.
-test("Dan's messages from his phone count as his own: one withdraws the question, numbered prose answers it, and \"no next issue\" quiets", withKit, async ($, on) => {
+test("Dan's messages from his phone count as his own: one withdraws the question, numbered prose answers it, and \"no next issue\" quiets", bandOn, async ($, on) => {
   const w = world(on)
   let call = ask($ as never)
   await tick(w)
@@ -327,7 +373,7 @@ for (const [name, init] of [
   ["Dan's phone attached", { surfaces: ['terminal', 'mobile'] }],
   ['surfaces that cannot be read', { surfacesFail: true }],
 ] as const) {
-  test(`with ${name}, the question goes to Claude Code's own dialog, never the band`, withKit, async ($, on) => {
+  test(`with ${name}, the question goes to Claude Code's own dialog, never the band`, bandOn, async ($, on) => {
     const w = world(on, init)
     const r = await ask($ as never)
     expect(w.reachedEngine).toEqual(['AskUserQuestion'])
@@ -338,7 +384,7 @@ for (const [name, init] of [
 
 // #703: with one question drawn at a time, picker manners' question can wait behind another mod's.
 // Dan cannot have talked past a question he never saw, and "1. yes" typed then answers nothing here.
-test("a question waiting behind another mod's: typing withdraws it uncounted, and numbered prose is no answer to it", withKit, async ($, on) => {
+test("a question waiting behind another mod's: typing withdraws it uncounted, and numbered prose is no answer to it", bandOn, async ($, on) => {
   const w = world(on)
   expect(await bash($ as never, 'save-question')).toBe('asked')
   const hidden = ask($ as never)
@@ -362,7 +408,7 @@ test('more than one question in a call is refused (one question per call)', with
   expect(r.deny ?? r.text).toBe('Ask one question per call: Dan answers pickers one at a time.')
 })
 
-test('"no next issue" silences next issue pickers for the session, other pickers still ask, and /pickers on restores them', withKit, async ($, on) => {
+test('"no next issue" silences next issue pickers for the session, other pickers still ask, and /pickers on restores them', bandOn, async ($, on) => {
   const w = world(on)
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
   await type($ as never, 'no next issue, just stop there')
@@ -400,7 +446,7 @@ test('while next issue pickers are off, the system prompt tells Claude so, and s
   expect(await memory($ as never)).toBe('core memory')
 })
 
-test('a multi select question toggles its options and answers with Submit', withKit, async ($, on) => {
+test('a multi select question toggles its options and answers with Submit', bandOn, async ($, on) => {
   const w = world(on)
   const call = ask($ as never, { ...QUESTION, multiSelect: true })
   await tick(w)
@@ -417,7 +463,7 @@ test('a multi select question toggles its options and answers with Submit', with
   await ui.unmount()
 })
 
-test('a prompt that is not Dan (a plugin or a peer) leaves the question open', withKit, async ($, on) => {
+test('a prompt that is not Dan (a plugin or a peer) leaves the question open', bandOn, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
@@ -429,10 +475,11 @@ test('a prompt that is not Dan (a plugin or a peer) leaves the question open', w
   await ui.unmount()
 })
 
-// The build time check the spec asks for (#615): the hook waits on Dan through its own $ call, whose
-// time is free, so a press long after a hook's 10 second budget still answers, and Claude Code's own
-// picker is never reached. A plain promise awaited here was measured to overrun the budget instead.
-test('a press after more than a hook budget of real time still answers from the band', { plugins: [modKit], timeoutMs: 30_000 }, async ($, on) => {
+// The build time check the spec asked for (#615), as the test kit answers it: the kit counts the
+// hook's wait through its own $ noun as a $ call in flight, so a press after more than 10 seconds
+// still answers here. A live session does not (#744): there the same wait ran on the hook's budget
+// and Claude Code's own dialog asked again, so this passing is no evidence the band question works.
+test('a press after more than a hook budget of real time still answers from the band', { plugins: [modKit], options: { bandQuestions: true }, timeoutMs: 30_000 }, async ($, on) => {
   const w = world(on)
   const call = ask($ as never)
   await tick(w)
@@ -446,7 +493,7 @@ test('a press after more than a hook budget of real time still answers from the 
 
 // A hook that throws is skipped and the chain goes on, so a pass that cannot be recorded must not
 // throw: Claude Code's own picker would then ask the question Dan just talked past.
-test('a talk past that cannot be recorded is logged, and the question still ends with its refusal, never the engine picker', withKit, async ($, on) => {
+test('a talk past that cannot be recorded is logged, and the question still ends with its refusal, never the engine picker', bandOn, async ($, on) => {
   const w = world(on)
   on('state.set', ($, e, next) => {
     if ((e as { key?: string }).key === 'passed') return { deny: 'the store is gone' } as never
@@ -462,7 +509,7 @@ test('a talk past that cannot be recorded is logged, and the question still ends
   expect(w.debug[0]).toMatch(/^Picker manners could not record that Dan passed over this question, so it may be asked again: .*the store is gone$/)
 })
 
-test('a band that cannot be cleared is logged, and the answer still reaches Claude', withKit, async ($, on) => {
+test('a band that cannot be cleared is logged, and the answer still reaches Claude', bandOn, async ($, on) => {
   const w = world(on)
   const q = { ...QUESTION, question: 'Which one, though this band cannot be cleared?' }
   const call = ask($ as never, q)
