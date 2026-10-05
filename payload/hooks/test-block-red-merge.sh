@@ -50,6 +50,12 @@ make_repo() {  # $1 = with-tool | without-tool | with-ci | with-ci-not-on-prs ; 
   cat > "$dir/bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
+  *"/compare/"*)
+    printf '%s\n' "\$*" >> "\${GH_COMPARE_LOG:-/dev/null}"
+    if [ -n "\${GH_COMPARE_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    if [ -n "\${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "\$GH_COMPARE_JSON"
+    else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
+    ;;
   *"pr view"*) cat <<'JSON'
 $2
 JSON
@@ -70,16 +76,16 @@ run_hook() {  # $1 = repo dir, $2 = command ; prints the hook's stdout
 # The commit the rollup was read for. The gate now has to hand it to the merge, so it is a
 # fixture value rather than an incidental one (#345).
 HEAD_SHA='a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
-GREEN='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
-RED='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+GREEN='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+RED='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
 # Green, but gh did not say which commit it was green FOR. The gate cannot pin what it cannot
 # read, and it must not merge unpinned in silence either (#345).
-GREEN_NO_HEAD='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}]}'
+GREEN_NO_HEAD='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}]}'
 # A pull request with NO checks at all. GitHub answers this way for two very different reasons,
 # and the gate has to tell them apart (claude-config#131).
-NONE_CLEAN='{"number":7,"statusCheckRollup":[],"mergeable":"MERGEABLE"}'
-NONE_CONFLICTING='{"number":7,"statusCheckRollup":[],"mergeable":"CONFLICTING"}'
-NONE_UNKNOWN='{"number":7,"statusCheckRollup":[],"mergeable":"UNKNOWN"}'
+NONE_CLEAN='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[],"mergeable":"MERGEABLE"}'
+NONE_CONFLICTING='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[],"mergeable":"CONFLICTING"}'
+NONE_UNKNOWN='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[],"mergeable":"UNKNOWN"}'
 
 # Matched with the shell's own builtins, WITHOUT a pipe, deliberately. A producer piped into a
 # quiet grep is the short circuiting shape test-pipefail-shortcircuit.sh ratchets down: the reader
@@ -442,6 +448,15 @@ make_remote_repo() {  # $1 = owner/name ; $2 = which fake gh
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_CALL_LOG"
 case "$*" in
+  *"/compare/"*)
+    printf '%s\n' "$*" >> "${GH_COMPARE_LOG:-/dev/null}"
+    if [ -n "${GH_COMPARE_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    if [ -n "${GH_COMPARE_TOKEN:-}" ] && [ "${GH_TOKEN:-}" != "$GH_COMPARE_TOKEN" ]; then
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1
+    fi
+    if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
+    else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
+    ;;
   *"auth status"*)
     printf 'Logged in to github.com account danwright32 (keyring)\n'
     printf 'Logged in to github.com account nursedexapp (keyring)\n'
@@ -450,7 +465,7 @@ case "$*" in
   *"auth token -u "*) printf 'tok-other\n' ;;
   *"pr view"*)
     if [ "${GH_TOKEN:-}" = "tok-nursedexapp" ]; then
-      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7"}'
+      printf '%s\n' '{"number":7,"baseRefName":"main","statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7"}'
     fi
     ;;
 esac
@@ -462,11 +477,20 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_CALL_LOG"
 case "$*" in
+  *"/compare/"*)
+    printf '%s\n' "$*" >> "${GH_COMPARE_LOG:-/dev/null}"
+    if [ -n "${GH_COMPARE_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    if [ -n "${GH_COMPARE_TOKEN:-}" ] && [ "${GH_TOKEN:-}" != "$GH_COMPARE_TOKEN" ]; then
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1
+    fi
+    if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
+    else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
+    ;;
   *"auth status"*) printf 'Logged in to github.com account nursedexapp (keyring)\n' ;;
   *"auth token -u "*) printf 'tok-nursedexapp\n' ;;
   *"pr view"*)
     if [ "${GH_TOKEN:-}" = "tok-nursedexapp" ]; then
-      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7"}'
+      printf '%s\n' '{"number":7,"baseRefName":"main","statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7"}'
     fi
     ;;
 esac
@@ -479,10 +503,19 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_CALL_LOG"
 case "$*" in
+  *"/compare/"*)
+    printf '%s\n' "$*" >> "${GH_COMPARE_LOG:-/dev/null}"
+    if [ -n "${GH_COMPARE_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    if [ -n "${GH_COMPARE_TOKEN:-}" ] && [ "${GH_TOKEN:-}" != "$GH_COMPARE_TOKEN" ]; then
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1
+    fi
+    if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
+    else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
+    ;;
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
-    printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"url":"https://github.com/someone/else/pull/7"}'
+    printf '%s\n' '{"number":7,"baseRefName":"main","statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"url":"https://github.com/someone/else/pull/7"}'
     ;;
 esac
 SH
@@ -494,7 +527,9 @@ SH
 
 dir=$(make_remote_repo acme/widget second-account-green)
 GH_CALL_LOG="$dir/gh-calls.log"; export GH_CALL_LOG; : > "$GH_CALL_LOG"
-out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+# The up to date comparison (#766) answers only under the account that could see the pull request,
+# as the real repository would, so this case also proves that question is asked as that account.
+out=$(GH_COMPARE_TOKEN=tok-nursedexapp run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
 if denied "$out"; then
   fail "a green pull request was blocked because the ACTIVE account cannot see the repo: $out"
 else pass; fi
@@ -564,7 +599,7 @@ run_json() {  # $1 = workflow, $2 = name, $3 = status, $4 = conclusion, $5 = sta
 }
 rollup_of() {  # the runs, as arguments ; prints a rollup for PR 7 at HEAD_SHA
   local IFS=,
-  printf '{"number":7,"statusCheckRollup":[%s],"headRefOid":"%s"}' "$*" "$HEAD_SHA"
+  printf '{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[%s],"headRefOid":"%s"}' "$*" "$HEAD_SHA"
 }
 SUITE_GREEN=$(run_json CI suite COMPLETED SUCCESS "$T1")
 KW_OLD_FAIL=$(run_json "Pull request description" "Closing keywords GitHub reads" COMPLETED FAILURE "$T1")
@@ -829,6 +864,15 @@ for a in "$@"; do
 done
 [ -n "$repo" ] || repo=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#^https://github.com/##; s#[.]git$##')
 case "$*" in
+  *"/compare/"*)
+    printf '%s\n' "$*" >> "${GH_COMPARE_LOG:-/dev/null}"
+    if [ -n "${GH_COMPARE_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    if [ -n "${GH_COMPARE_TOKEN:-}" ] && [ "${GH_TOKEN:-}" != "$GH_COMPARE_TOKEN" ]; then
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1
+    fi
+    if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
+    else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
+    ;;
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
@@ -853,9 +897,9 @@ SH
 }
 pr_json() {  # $1 = owner/name, $2 = SUCCESS | FAILURE | none
   if [ "$2" = none ]; then
-    printf '{"number":7,"statusCheckRollup":[],"mergeable":"MERGEABLE","url":"https://github.com/%s/pull/7","headRefOid":"%s"}' "$1" "$HEAD_SHA"
+    printf '{"number":7,"baseRefName":"main","statusCheckRollup":[],"mergeable":"MERGEABLE","url":"https://github.com/%s/pull/7","headRefOid":"%s"}' "$1" "$HEAD_SHA"
   else
-    printf '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"%s"}],"url":"https://github.com/%s/pull/7","headRefOid":"%s"}' "$2" "$1" "$HEAD_SHA"
+    printf '{"number":7,"baseRefName":"main","statusCheckRollup":[{"name":"tests","conclusion":"%s"}],"url":"https://github.com/%s/pull/7","headRefOid":"%s"}' "$2" "$1" "$HEAD_SHA"
   fi
 }
 two_repos() {  # $1 = other/repo's verdict ; sets dir, FIXTURE and GH_CALL_LOG
@@ -1090,6 +1134,161 @@ if denied "$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_S
   fail "the control case refused a green pinned merge, so the cases above prove nothing"
 else pass; fi
 rm -rf "$dir"
+
+echo "block-red-merge: the branch holds the base branch's current tip (#766)"
+
+# On 2026-10-04 Try-Pennie/slate main went red after two pull requests that were each green: #3231
+# merged, then #3237, branched before #3231 landed, merged without ever being tested against it
+# (L85). A green rollup is earned against whatever base the branch was built on, so it says nothing
+# about the combination main will hold unless the branch already contains main's current tip.
+#
+# The fake gh answers the compare call from GH_COMPARE_JSON, logs it to GH_COMPARE_LOG, and fails it
+# under GH_COMPARE_FAIL, so each case states the answer it is about.
+UPTODATE_PR='{"number":7,"baseRefName":"trunk","statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7","mergeStateStatus":"CLEAN"}'
+BEHIND3='{"status":"diverged","ahead_by":2,"behind_by":3,"base_commit":{"sha":"ffffeeee00001111222233334444555566667777"}}'
+AHEAD='{"status":"ahead","ahead_by":2,"behind_by":0,"base_commit":{"sha":"ffffeeee00001111222233334444555566667777"}}'
+SAME='{"status":"identical","ahead_by":0,"behind_by":0}'
+PINNED="gh pr merge 7 --squash --match-head-commit $HEAD_SHA"
+GH_COMPARE_LOG=""; export GH_COMPARE_LOG
+compare_dir() {  # $1 = the pull request json ; sets dir and a fresh GH_COMPARE_LOG
+  dir=$(make_repo without-tool "$1")
+  GH_COMPARE_LOG="$dir/compare.log"; : > "$GH_COMPARE_LOG"
+}
+behind_refusal() { denied "$1" && holds "$1" "does not contain the current tip"; }
+
+# 1. Behind the base is refused, in this rule's own words, naming how far behind and the command
+#    that fixes it, and saying to wait for the new checks. A refusal that only says "behind" leaves
+#    the reader to work out the remedy, and merging straight after updating would merge checks that
+#    have not run yet (L111).
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "$PINNED")
+if behind_refusal "$out"; then pass; else fail "a pull request 3 commits behind its base was merged: $out"; fi
+if holds "$out" "3 commits behind trunk"; then pass; else fail "the refusal does not say how far behind, against which base: $out"; fi
+if holds "$out" "gh pr update-branch 7 --repo acme/widget"; then pass; else fail "the refusal does not hand over the update command: $out"; fi
+if says "$out" "wait for the new checks"; then pass; else fail "the refusal does not say to wait for the new checks: $out"; fi
+if holds "$out" "ALLOW_BEHIND_MERGE=1"; then pass; else fail "the refusal does not name its own override: $out"; fi
+rm -rf "$dir"
+
+# One commit behind reads in the singular.
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON='{"status":"behind","ahead_by":0,"behind_by":1}' run_hook "$dir" "$PINNED")
+if behind_refusal "$out" && holds "$out" "1 commit behind trunk"; then pass; else
+  fail "a pull request one commit behind was not refused in the singular: $out"
+fi
+rm -rf "$dir"
+
+# 2. Up to date passes, and the question was asked about the pull request's OWN base by name, so a
+#    repository whose base is not called main is judged against the right branch.
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON="$AHEAD" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "an up to date green pinned pull request was refused: $out"; else pass; fi
+if grep -qF "repos/acme/widget/compare/trunk...$HEAD_SHA" "$GH_COMPARE_LOG"; then pass; else
+  fail "the comparison was not asked about this repository's base and the judged head: $(cat "$GH_COMPARE_LOG")"
+fi
+rm -rf "$dir"
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON="$SAME" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "a head identical to its base tip was refused: $out"; else pass; fi
+rm -rf "$dir"
+
+# 3. A base that cannot be read refuses, in its own words, rather than reading as up to date (L42).
+#    Three ways: the comparison fails, it answers without the fields, and the pull request names no
+#    base at all.
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_FAIL=1 run_hook "$dir" "$PINNED")
+if denied "$out" && says "$out" "could not read" && holds "$out" "ALLOW_BEHIND_MERGE=1"; then pass; else
+  fail "a comparison gh could not make was not refused as unreadable: $out"
+fi
+if holds "$out" "commits behind"; then fail "an unreadable base was reported as a measured distance: $out"; else pass; fi
+rm -rf "$dir"
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON='{}' run_hook "$dir" "$PINNED")
+if denied "$out" && says "$out" "could not read"; then pass; else
+  fail "a comparison answer with no status was read as up to date: $out"
+fi
+rm -rf "$dir"
+compare_dir "$(printf '%s' "$UPTODATE_PR" | sed 's/"baseRefName":"trunk",//')"
+out=$(GH_COMPARE_JSON="$AHEAD" run_hook "$dir" "$PINNED")
+if denied "$out" && says "$out" "base branch"; then pass; else
+  fail "a pull request whose base gh did not name was merged: $out"
+fi
+rm -rf "$dir"
+
+# And a pull request whose repository nothing can name (no url from gh, no --repo, no GitHub remote)
+# refuses rather than leaving gh to fill a placeholder from whatever folder it runs in (#418).
+compare_dir "$(printf '%s' "$UPTODATE_PR" | sed 's#"url":"https://github.com/acme/widget/pull/7",##')"
+out=$(GH_COMPARE_JSON="$AHEAD" run_hook "$dir" "$PINNED")
+if denied "$out" && says "$out" "could name the repository"; then pass; else
+  fail "a pull request in a repository nothing could name was merged: $out"
+fi
+if [ -s "$GH_COMPARE_LOG" ]; then fail "the comparison was asked without a repository to name"; else pass; fi
+rm -rf "$dir"
+
+# 4. GitHub's own BEHIND is a second signal: it refuses even where the comparison read clean.
+compare_dir "$(printf '%s' "$UPTODATE_PR" | sed 's/"CLEAN"/"BEHIND"/')"
+out=$(GH_COMPARE_JSON="$AHEAD" run_hook "$dir" "$PINNED")
+if behind_refusal "$out"; then pass; else fail "GitHub reporting the branch BEHIND was ignored: $out"; fi
+rm -rf "$dir"
+# And UNKNOWN, which GitHub answers while still working mergeability out, is evidence of nothing:
+# the comparison decides.
+compare_dir "$(printf '%s' "$UPTODATE_PR" | sed 's/"CLEAN"/"UNKNOWN"/')"
+out=$(GH_COMPARE_JSON="$AHEAD" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "an UNKNOWN merge state refused a branch the comparison read as up to date: $out"; else pass; fi
+rm -rf "$dir"
+
+# 5. The override skips this rule and only this rule (L448).
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "ALLOW_BEHIND_MERGE=1 $PINNED")
+if denied "$out"; then fail "the up to date rule's own override did not let a behind merge through: $out"; else pass; fi
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "ALLOW_BEHIND_MERGE=1 gh pr merge 7 --squash")
+if denied "$out" && holds "$out" "--match-head-commit $HEAD_SHA"; then pass; else
+  fail "the up to date override also skipped the commit pin: $out"
+fi
+rm -rf "$dir"
+compare_dir "$(printf '%s' "$UPTODATE_PR" | sed 's/"SUCCESS"/"FAILURE"/')"
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "ALLOW_BEHIND_MERGE=1 $PINNED")
+if denied "$out" && holds "$out" "is not green"; then pass; else
+  fail "the up to date override let a red pull request through: $out"
+fi
+rm -rf "$dir"
+# And no other rule's override answers for this one.
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")
+if behind_refusal "$out"; then pass; else fail "the pin's override let a behind branch through: $out"; fi
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "SKIP_MERGE_TOOL=1 $PINNED")
+if behind_refusal "$out"; then pass; else fail "the merge tool override let a behind branch through: $out"; fi
+rm -rf "$dir"
+
+# 6. A repository with no checks is unaffected, as it is by the pin: there is no verdict to have
+#    been earned against an old base. And it is not even asked, so it cannot be refused for a
+#    comparison it never needed.
+compare_dir "$NONE_CLEAN"
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then fail "a repo with no checks was refused for being behind: $out"; else pass; fi
+if [ -s "$GH_COMPARE_LOG" ]; then fail "a repo with no checks was asked the up to date question"; else pass; fi
+rm -rf "$dir"
+
+# 7. A merge naming its repository with --repo from a folder that is not that repository (a worktree
+#    or /private/tmp) is compared, and told to update, in the repository it names.
+two_repos_766() {
+  dir=$(make_two_repos)
+  FIXTURE="$dir"; GH_CALL_LOG="$dir/gh-calls.log"; GH_COMPARE_LOG="$dir/compare.log"
+  export FIXTURE GH_CALL_LOG; : > "$GH_CALL_LOG"; : > "$GH_COMPARE_LOG"
+  printf '{"number":7,"baseRefName":"develop","statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"url":"https://github.com/other/repo/pull/7","headRefOid":"%s"}' "$HEAD_SHA" > "$dir/prs/other_repo"
+}
+two_repos_766
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "gh pr merge 7 --repo other/repo $PINNED")
+if behind_refusal "$out" && holds "$out" "gh pr update-branch 7 --repo other/repo" && holds "$out" "behind develop"; then pass; else
+  fail "a behind merge named by --repo was not refused about that repository: $out"
+fi
+if grep -qF "repos/other/repo/compare/develop...$HEAD_SHA" "$GH_COMPARE_LOG"; then pass; else
+  fail "the comparison was not asked of the repository the merge names: $(cat "$GH_COMPARE_LOG")"
+fi
+out=$(GH_COMPARE_JSON="$AHEAD" run_hook "$dir" "gh pr merge 7 --repo other/repo $PINNED")
+if denied "$out"; then fail "an up to date merge named by --repo was refused: $out"; else pass; fi
+rm -rf "$dir"
+unset FIXTURE GH_CALL_LOG
+GH_COMPARE_LOG=""
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

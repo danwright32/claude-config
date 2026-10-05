@@ -17,11 +17,18 @@
 # than about a commit and is read a moment before the merge (#345). GitHub
 # refuses the merge if the head has moved since.
 #
+# And the green has to have been earned against the base the merge lands on: the
+# PR head must contain the base branch's current tip (#766). Two PRs that are each
+# green can merge into a red main when the second was never tested with the first
+# (L85, Try-Pennie/slate 2026-10-04), and on a free plan GitHub offers neither a
+# required up to date branch nor a merge queue, so this gate is where it is held.
+#
 # Deliberate overrides, one per rule and all visible in the command, so none can
 # happen by accident or go unnoticed in the transcript: ALLOW_RED_MERGE=1 skips
-# the whole gate, SKIP_MERGE_TOOL=1 skips a repo's own merge script, and
-# ALLOW_UNPINNED_MERGE=1 skips the commit pin. Each answers only its own rule,
-# because one token carrying two rules silently widens every use of it (L448).
+# the whole gate, SKIP_MERGE_TOOL=1 skips a repo's own merge script,
+# ALLOW_BEHIND_MERGE=1 skips the up to date rule, and ALLOW_UNPINNED_MERGE=1
+# skips the commit pin. Each answers only its own rule, because one token carrying
+# two rules silently widens every use of it (L448).
 
 set -uo pipefail
 
@@ -232,7 +239,7 @@ pr_label="$(mt_pr_label "$pr")"
 # headRefOid comes from the SAME call as the verdict, deliberately: the commit the merge is
 # pinned to has to be the commit these checks were read for, and a second lookup could answer
 # about a head that had already moved (L70, #345).
-envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid" "$remote_slug" "$repo_flag")
+envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid,baseRefName,mergeStateStatus" "$remote_slug" "$repo_flag")
 view_account=""
 if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ]; then
   rollup=$(printf '%s' "$envelope" | jq -c '.view')
@@ -392,11 +399,88 @@ bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEU
 # Reached only on a POSITIVE green reading, deliberately: the empty-rollup paths above exit before
 # this, because the pin protects a VERDICT and there is no verdict in a repo with no CI. Requiring
 # it there would block those repos for a reason that does not apply to them (L615, L324).
+head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
+
+# UP TO DATE WITH THE BASE (#766). Green is a verdict on the head commit as it was built, which is
+# on top of whatever base the branch was cut from. If the base has moved since, the combination main
+# will hold after this merge was never tested: on 2026-10-04 Try-Pennie/slate #3237 was green, was
+# branched before #3231 landed, merged after it, and turned main red (L85). So the head must CONTAIN
+# the base branch's current tip, and with the green rollup above and the commit pin below, a merge
+# then always lands a combination that was tested.
+#
+# Asked of GitHub's compare endpoint, BASE...HEAD, rather than of a local fetch, because this gate
+# runs from worktrees, from /private/tmp and for repositories named with --repo that are not checked
+# out here at all, and the answer has to be about the repository the pull request is in. behind_by is
+# the number of commits on the base that the head does not have, so zero is up to date, whatever the
+# base branch is called: it is the pull request's own base by name, never an assumed main.
+#
+# The repository is read from the pull request's own url, which is the one gh just answered about,
+# then from what the merge or the folder named. Never from gh's {owner}/{repo} placeholder, which is
+# filled in from whatever checkout the call happens to run in (#418): with no repository to name,
+# this rule refuses rather than asking about one it cannot. Asked as the account that could see the
+# pull request, for the same reason the view was.
+#
+# GitHub's mergeStateStatus is a second signal and only ever adds a refusal: BEHIND refuses even
+# where the comparison read clean, while UNKNOWN, which GitHub answers while it is still working
+# mergeability out, is evidence of nothing and leaves the comparison to decide.
+#
+# Fails CLOSED: a comparison gh could not make, or one that came back without a readable status and
+# distance, refuses in its own words rather than reading as up to date (L42, L11).
+#
+# Reached only on a positive green reading, like the pin, so a repository with no checks is not even
+# asked: there is no verdict there to have been earned against an old base (L615).
+case "$command" in
+  *ALLOW_BEHIND_MERGE=1*) ;;
+  *)
+    slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
+      | sed -nE 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
+    [ -n "$slug" ] || slug="$remote_slug"
+    base_ref=$(printf '%s' "$rollup" | jq -r '.baseRefName // ""' 2>/dev/null)
+    merge_state=$(printf '%s' "$rollup" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
+    update_cmd="gh pr update-branch $number${slug:+ --repo $slug}"
+    behind_override="Deliberate override: ALLOW_BEHIND_MERGE=1 <the same command>, which skips this rule only: the checks must still be green and the merge must still pin its commit."
+
+    [ -z "$base_ref" ] && deny "Refusing to merge: gh did not report which base branch PR #$number merges into, so nothing here could read that branch's current tip or tell whether the head contains it. A green verdict earned against an older base says nothing about what main will hold after the merge. Check the pull request's base, then re-run. $behind_override"
+    [ -z "$head_sha" ] && deny "Refusing to merge: PR #$number reads green, but gh did not report its head commit, so nothing here could tell whether that head contains the current tip of $base_ref. Check which commit is at the head, then re-run. $behind_override"
+
+    [ -z "$slug" ] && deny "Refusing to merge: nothing here could name the repository PR #$number is in (gh reported no url for it, the merge names none with --repo, and this folder has no GitHub remote), so nothing could read the current tip of its base branch $base_ref or tell whether the head contains it. Name the repository with --repo owner/name on the merge. $behind_override"
+    compare_err=$(mktemp "${TMPDIR:-/tmp}/brm-compare.XXXXXX" 2>/dev/null) || compare_err=/dev/null
+    compare_token=""
+    if [ -n "$view_account" ]; then
+      compare_token=$(gh auth token -u "$view_account" 2>/dev/null) || compare_token=""
+    fi
+    if [ -n "$compare_token" ]; then
+      compare=$(GH_TOKEN="$compare_token" gh api "repos/$slug/compare/$base_ref...$head_sha?per_page=1" 2>"$compare_err"); compare_rc=$?
+    else
+      compare=$(gh api "repos/$slug/compare/$base_ref...$head_sha?per_page=1" 2>"$compare_err"); compare_rc=$?
+    fi
+    compare_why=$(awk 'NF { print; exit }' "$compare_err" 2>/dev/null)
+    [ "$compare_err" != /dev/null ] && rm -f "$compare_err"
+
+    compare_status=$(printf '%s' "$compare" | jq -r '.status // ""' 2>/dev/null)
+    behind_by=$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)
+    case "$behind_by" in ''|*[!0-9]*) behind_by="" ;; esac
+    case "$compare_status" in ahead|identical|behind|diverged) ;; *) behind_by="" ;; esac
+    if [ "$compare_rc" != 0 ] || [ -z "$behind_by" ]; then
+      deny "Refusing to merge: could not read whether PR #$number contains the current tip of its base branch $base_ref${slug:+ in $slug}, because GitHub's comparison of the two did not answer with a status and a distance this could read${compare_why:+ ($compare_why)}. Not knowing is not the same as being up to date: a green verdict earned against an older base says nothing about what $base_ref will hold after the merge. Re-run once GitHub answers. $behind_override"
+    fi
+
+    if [ "$behind_by" != 0 ] || [ "$merge_state" = "BEHIND" ]; then
+      if [ "$behind_by" = 0 ]; then
+        distance="GitHub reports it BEHIND $base_ref"
+      elif [ "$behind_by" = 1 ]; then
+        distance="it is 1 commit behind $base_ref"
+      else
+        distance="it is $behind_by commits behind $base_ref"
+      fi
+      deny "PR #$number is green, but its head does not contain the current tip of its base branch: $distance. Its checks were earned against an older base, so the combination $base_ref would hold after this merge has never been tested, which is how two green pull requests turn main red (L85). Run: $update_cmd , then wait for the new checks on the updated head to go green, and merge that head. $behind_override"
+    fi
+    ;;
+esac
+
 case "$command" in
   *ALLOW_UNPINNED_MERGE=1*) exit 0 ;;
 esac
-
-head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
 
 # Green, but gh did not say which commit it was green FOR. Fails closed, in its own words: telling
 # somebody to add a flag whose value nothing here can supply is a refusal that cannot be cleared
