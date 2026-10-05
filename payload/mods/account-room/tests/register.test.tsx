@@ -107,13 +107,17 @@ type World = {
   openFails: boolean
   /** Asking whether a path exists fails, as a disk going away would. */
   existsFails: boolean
+  /** Asking whether the readings folder exists fails, and nothing else does. */
+  folderExistsFails: boolean
+  /** `claude auth login` cannot even be started. */
+  authLoginThrows: boolean
 }
 const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, existsFails: false, ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, writeFails: false, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, existsFails: false, folderExistsFails: false, authLoginThrows: false, ...init }
   const toasts: string[] = []
   const logs: string[] = []
   // The lines that reach the transcript, as against the debug log.
@@ -138,7 +142,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: undefined }
   })
   on('fs.exists', ($, e) => {
-    if (w.existsFails) throw new Error('EIO: input/output error')
+    if (w.existsFails || (w.folderExistsFails && e.path === FOLDER)) throw new Error('EIO: input/output error')
     return { value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) } as never
   })
   on('fs.list', ($, e) => {
@@ -192,7 +196,10 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (cmd === 'date') return r(ok('-0400\n'))
     if (cmd === '/bin/sh' && rest[1] === 'LOGOUT') return r(w.logout)
     if (cmd === '/bin/sh' && rest[1] === 'CHECK') return r(w.check)
-    if (cmd === 'claude') return r(w.authLogin)
+    if (cmd === 'claude') {
+      if (w.authLoginThrows) throw new Error('spawn claude ENOENT')
+      return r(w.authLogin)
+    }
     return r({ exitCode: 1, stdout: '', stderr: 'unexpected' })
   })
   on('session.id', () => ({ value: 's1' }) as never)
@@ -352,6 +359,18 @@ test("this Mac's own file evicted by iCloud is named as not downloaded, and neve
   expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings are unavailable: not downloaded from iCloud yet")
   expect(w.files[OWN]).toBeUndefined()
   expect(logs.filter(l => /not downloaded from iCloud/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a disk error asking for the readings folder is named on the card, and the measurement still goes on (L215, review of #670)', withKit, async ($, on) => {
+  const { clock, w } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  // The folder question alone fails, as iCloud Drive going away would; everything else answers.
+  w.folderExistsFails = true
+  await expect($.session.measure({ context: { window: 200_000 }, rateLimits: limits(96, 50), changed: ['rateLimits'] } as never)).resolves.toBeDefined()
+  await clock.settle()
+  expect(await shown(ui)).toContain("iCloud Drive's readings are unavailable: the readings folder could not be read: ")
   await ui.unmount()
 })
 
@@ -521,8 +540,9 @@ test('a Switch that fails part way says so in a toast, never as a silent stuck c
   const ui = await mountBand($ as never)
   await measure($, clock, limits(97, 50))
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
-  // The disk goes away once the sign out is confirmed and the card is redrawn for the sign in step.
-  w.existsFails = true
+  // Once the sign out is confirmed, the sign in command cannot even be started. A disk going away
+  // here no longer stops a Switch: the card names the folder it could not read (review of #670).
+  w.authLoginThrows = true
   await clock.advance(1)
   expect(toasts.some(t => /^Switch did not finish: \S/.test(t))).toBe(true)
   await ui.unmount()

@@ -153,12 +153,12 @@ const loadReadings = async ($: EngineInterface, s: AccountRoomSession): Promise<
   const files: MacFile[] = []
   const unavailable: Unavailable[] = []
   let names: string[] = []
-  if (await $.fs.exists(s.folder)) {
-    try {
-      names = (await $.fs.list(s.folder)).map(e => e.name)
-    } catch (err) {
-      unavailable.push({ mac: 'iCloud Drive', why: `the readings folder could not be listed: ${message(err)}` })
-    }
+  // Asking whether the folder is there can fail as well as listing it, so both are inside the one
+  // boundary: an unanswerable folder is named on the card, never a recompute that throws (L215).
+  try {
+    if (await $.fs.exists(s.folder)) names = (await $.fs.list(s.folder)).map(e => e.name)
+  } catch (err) {
+    unavailable.push({ mac: 'iCloud Drive', why: `the readings folder could not be read: ${message(err)}` })
   }
   if (s.mac && names.includes(`.${s.mac}.json.icloud`)) unavailable.push({ mac: s.mac, why: 'not downloaded from iCloud yet' })
   else if (s.mac && names.includes(`${s.mac}.json`)) {
