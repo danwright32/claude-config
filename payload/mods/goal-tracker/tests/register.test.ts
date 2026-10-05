@@ -483,6 +483,66 @@ test('a question refused at once sends no notification', withDeps, async ($, on)
   expect(w.notified).toEqual([])
 })
 
+// #732: a question is marked and notified only once every refusing guard has let it through. The
+// secret guard and picker manners' screen decide in a tool.call hook beneath the tracker, and a
+// secret scan runs a process that can take seconds; a question it refuses was never in front of Dan,
+// and its text (perhaps the very secret) must not reach a notification or the shared registry. This
+// stand-in refuses after five seconds, well past the second the tracker waits before notifying.
+const SlowScreen: { name: string; tier: 'append'; register: Register } = {
+  name: 'secret-guard',
+  tier: 'append',
+  register: on => {
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      const q = ((e.questions ?? []) as unknown as { question: string }[])[0]
+      if (!q?.question.includes('sk-live')) return next(e)
+      await new Promise<void>(r => $.clock.after(5_000, () => r()))
+      return { deny: 'Blocked: the question carries a secret.' }
+    })
+  },
+}
+test('a question a slow screen beneath the tracker refuses is never marked or notified (#732)', { plugins: [deps, SlowScreen] }, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call(ask('Use the key sk-live-123?'))
+  await clock.advance(5_000)
+  const r = (await call) as { deny?: string }
+  expect(r.deny).toBe('Blocked: the question carries a secret.')
+  await clock.advance(OPEN_MS)
+  expect(w.notified).toEqual([])
+  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
+  // The same screen letting a question through leaves it marked and notified as before.
+  await asked($, clock, ask('Which date format?'))
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format?']])
+})
+
+// A settings hook decides beneath every mod at classic.PreToolUse: a question it refuses is never
+// marked either (#732).
+test('a question a settings hook refuses is never marked or notified (#732)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  on('classic.PreToolUse', ($, e) => (e.tool === 'AskUserQuestion' ? { deny: 'Blocked by a settings hook.' } : {}) as never)
+  await start($)
+  // A classic refusal resolves the call errored, its reason the text.
+  const r = (await $.tool.call(ask('Ship it?'))) as { deny?: string; text?: string }
+  expect(r.deny ?? r.text).toBe('Blocked by a settings hook.')
+  await clock.advance(OPEN_MS)
+  expect(w.notified).toEqual([])
+  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
+})
+
+// A subagent's question is its own business, as its to-do list is: never the session waiting on Dan.
+test("a subagent's question is neither marked nor notified", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Which file?') as object), agentId: 'sub1' } as never)
+  await clock.advance(OPEN_MS)
+  await call
+  expect(w.notified).toEqual([])
+  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
+})
+
 // A Bash call that Claude Code stops to ask Dan about: the prompt is raised while the call waits.
 type Raiser = { tool: { call: (e: never) => Promise<unknown> }; classic: { PermissionRequest: (e: never) => Promise<unknown> } }
 const withPermission = async ($: Raiser, w: { answer: (() => void) | undefined }) => {

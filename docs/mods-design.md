@@ -351,7 +351,9 @@ plainest reading of the decisions above:
   picker manners, or a question Claude Code shows itself) is notified one second after it was asked
   if it is still open then, or at once when picker manners' write of it comes first. So a question
   picker manners refuses at once (more than one in a call, a next issue picker while quiet, one
-  talked past) sends no notification in either order. Its pane mark is still set as it is asked.
+  talked past) sends no notification in either order. Since #732 a question Claude Code shows
+  itself is marked only from the tracker's `classic.PreToolUse` hook, once every guard and settings
+  hook has let it through, so one refused after a slow scan is never marked or notified either.
 - **Every refusal counts toward failed, whichever mod made it.** A call refused by a mod sitting
   outside the tracker (the collision guard, ask before saving, picker manners above it) never
   reaches the tracker's own hook, but its result's row does, so the rows count too; a call the hook
@@ -854,7 +856,9 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   `tools/check-mod-shared-parts.sh` fails a mod that answers a call with a result and never asks.
 - **While Dan is away** the keystroke guard holds its action through `$.scopeModes.hold` before
   any check of the app in front, since he cannot bring it forward from his phone. An away check
-  that fails refuses the action rather than ask a question nobody may see.
+  that fails refuses the action rather than ask a question nobody may see, and its toast says the
+  away check could not be read ("Couldn't tell whether you are away, so typing into Overture was
+  stopped."), never "Blocked typing into Overture", which reads as the action judged (L11, #732).
 - **How it is tested.** A mod's tests can load only that mod for real. An inline stand-in cannot
   carry another mod's module (the engine requires a helper taking `$` to be declared at the top of
   a module file), and one plugin holding two real guards is refused for registering `tool.call`
@@ -862,8 +866,11 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   stand-in refuser loaded both above it (`prepend`) and beneath it (`append`), and with a settings
   hook's refusal; each answering mod with a stand-in screen; mod-kit's screen with a stand-in
   secret guard; and the secret guard's screen with a stand-in answering mod above it.
-- **Left as it is.** The goal tracker marks and notifies a question before picker manners and the
-  secret guard decide; it is not a guard and was not moved here.
+- **The goal tracker waits for them too (#732).** It is not a guard, but its mark and notification
+  carry the question's text, so it marks a question only once the refusing guards have let it
+  through: a question picker manners shows from picker manners' write of it, made after its screen,
+  and one Claude Code shows itself from the tracker's own `classic.PreToolUse` hook, after `next`.
+  A question the secret guard refuses, however long its scan takes, is never marked or notified.
 
 ## Is it live (#617), built 2026-10-04
 

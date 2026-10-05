@@ -114,17 +114,23 @@ export const register: Register = on => {
     const typing = c.kind === 'input'
     const app = c.app ?? 'an app'
     const toolUseId = String(e.tool_use_id ?? '')
+    const action = typing ? `typing into ${app}` : `bringing ${app} to the front`
 
-    const refuse = async (r: Refusal) => {
+    // The toast says what was judged: the action by default, or whatever failed before it could be
+    // (L11, #732).
+    const refuse = async (r: Refusal, toast = `Blocked ${action}.`) => {
       await $.modkit.blocked({ toolUseId, guard: GUARD, reason: r.reason, safeWay: r.safeWay })
-      await $.ui.toast(typing ? `Blocked typing into ${app}.` : `Blocked bringing ${app} to the front.`)
+      await $.ui.toast(toast)
       return { deny: refusalText(r) }
     }
 
     // Held as scope modes words its own held actions, so the two read the same (L605).
     const away = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${e.command}`)
     if (away !== 'home') {
-      if ('failed' in away) return refuse({ reason: `Couldn't tell whether you are away (${away.failed}), so this was stopped.`, safeWay: 'Try again in a moment.' })
+      if ('failed' in away) {
+        const reason = `Couldn't tell whether you are away (${away.failed}), so this was stopped.`
+        return refuse({ reason, safeWay: 'Try again in a moment.' }, `Couldn't tell whether you are away, so ${action} was stopped.`)
+      }
       if (away.held.card) await $.modkit.blocked({ toolUseId, ...away.held.card })
       return { deny: away.held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
     }

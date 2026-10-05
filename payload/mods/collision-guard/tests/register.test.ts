@@ -717,8 +717,6 @@ test('a call a settings hook refuses is never judged, told or toasted (#707)', w
   expect(w.prompts.length).toBe(1)
 })
 
-// What a settings hook decides about a call the guard lets through is passed on as it was: an allow
-// skips Claude Code's permission prompt, and a rewrite (rtk's) is what runs.
 // The plan is handed from the classic hook to the tool.call hook by the call's id. A call raised
 // with none is given one by the engine (measured 2026-10-04), so two such calls are each noted as
 // their own (lessons review of #707).
@@ -731,6 +729,35 @@ test('two calls raised without an id are each noted, never mixed up (#707 review
   expect([...w.edits].sort()).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
 })
 
+// Both sides of that hand over read the key through one helper (#732). A call with no id cannot
+// reach the guard by any route: the engine refuses a mod that hands a call on without its id and
+// runs the call with the id it was raised under (measured here, Claude Code 2.1.289), so the plan
+// the classic hook stores is the one the tool.call hook reads back.
+const IdDropper: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'id-dropper',
+  tier: 'prepend',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      const { tool_use_id: _dropped, ...rest } = e as unknown as Record<string, unknown>
+      return next(rest as never)
+    })
+  },
+}
+test('a mod that hands a call on without its id cannot strip it, so the plan is read back under the id it was stored by (#732)', { plugins: [deps, IdDropper] }, async ($, on) => {
+  const w = world(on)
+  const seen: unknown[] = []
+  on('classic.PreToolUse', ($, e) => {
+    seen.push((e as unknown as { tool_use_id?: unknown }).tool_use_id)
+    return {}
+  })
+  const r = await $.tool.call(edit('/repo/src/a.ts', 'd1'))
+  expect(refusal(r)).toBe('ran')
+  expect(seen).toEqual(['d1'])
+  expect(w.edits).toEqual(['/repo/src/a.ts'])
+})
+
+// What a settings hook decides about a call the guard lets through is passed on as it was: an allow
+// skips Claude Code's permission prompt, and a rewrite (rtk's) is what runs.
 const Watcher: { name: string; tier: 'prepend'; register: Register } = {
   name: 'watcher',
   tier: 'prepend',
