@@ -392,6 +392,13 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
 
 - Only Dan's own prompts switch a mode (his Enter, or his phone through Remote Control); a peer
   session's message, a plugin or a notification never does, so nothing else can lift no build.
+- Only phrasings aimed at Claude switch a mode, never the words in passing (Dan's picker,
+  2026-10-04, PR #686). The milestone audit (#702) found the away, home, no coding and build
+  phrases still matched anywhere ("the user is stepping away from the form" switched every session
+  to away), so every phrase now has to start an instruction of its own: the message, a sentence,
+  a line, or a clause after a comma, semicolon or colon, led by nothing but a word like "ok",
+  "so" or "please" (and "I'm" for away and home). A phrase in a sentence ending in a question
+  mark never counts.
 - One scope mode at a time: turning on no build while winding down replaces it, and the other way.
   Away is separate and can be on with either; both show, the scope mode first.
 - The words: `/nobuild` answers "No build is on.", `/winddown` "Winding down is on.", `/build` "No
@@ -402,6 +409,18 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls
   its `switch_to_build` tool, so only Dan's press lifts no build: the dialog reads "Claude wants to
   <change>. Switch to build?" with Yes and No.
+- What no build reads (#702). A shell or interpreter's program is judged where the guard can read
+  it: inline (`python3 -c`, `node -e` or `-p`, `perl -ne`, a shell's `-lc`, whose commands are read
+  by mod-kit's reader like `bash -c`), a here-string, or text `echo` or `printf` pipes in. A program
+  fed by a heredoc, or piped in from anything else, is refused as one it cannot read, as psql fed a
+  heredoc already was: mod-kit's reader drops a heredoc's body, and this mod keeps no reader of its
+  own (L613). The refusal tells Claude that inline code is read and judged, so code that only reads
+  still runs. Also refused: `curl -o` and `-O`, `wget` writing a file, `find -delete` and `-exec`
+  on what it finds, `awk -i inplace` and `ruby -pi`. Allowed, which it refused before: a GraphQL
+  query through `gh api graphql` and a mutation that is issue, label or milestone work; SQL whose
+  strings, comments or functions (`replace()`) read like a write; and Claude's own notes outside
+  the project, its memory files and plan mode's plans under the home folder's `.claude`. A check
+  of a call that throws refuses the call, under any mode, since a skipped hook would let it run.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
   issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR
@@ -411,8 +430,27 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   finish; outside a repository too. A check that cannot read GitHub never counts as finished. It is
   checked at each turn end and each minute, and the toast reads "Wind down finished: safe to close
   this session."
+- What winding down finishes, as the milestone audit (#702) left it. Turning it on again (the
+  phrase or `/winddown`) keeps the target it has, PR included, rather than reading it afresh. While
+  the session sits on its default branch with no PR, each check reads the branch again and follows
+  the session onto one. With no PR for the session's own branch, it finishes every PR this session
+  opened: each `gh pr create` the session or any of its agents runs is noted from the link gh
+  prints, so a PR an agent opened in a worktree the session is not in is finished before "safe to
+  close"; each is read in the repository its link names, its branch the PR's own head. A note that
+  cannot be made is toasted, since winding down would not know that PR. An agent named after this
+  branch's PR, an issue that PR closes, or a PR the session opened goes ahead (the PR is looked up
+  first when it has not been yet); any other issue number is still new work.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app
-  forward, cliclick and Peekaboo. A row reads as what it would do ("Open report.html in Google
+  forward, cliclick and Peekaboo. Since the milestone audit (#702) also an AppleScript dialog
+  (`display dialog`, `display alert`, `choose file` and the like; a notification banner takes no
+  focus and goes ahead), an AppleScript fed by a heredoc, which cannot be read, browser tools that
+  open a page or a tab (Playwright's `browser_navigate` and a new tab, Chrome's `navigate` and
+  `tabs_create`), and the Artifact tool's open action; publishing a page goes ahead. A held tool
+  call's row replays that call, its input given to Claude. The keystroke guard's own actions are
+  not held by this mod: that mod's hook runs before this one (mod folders load in name order) and
+  asks its heads up in the band, which the phone cannot show. The remedy belongs in that mod,
+  calling `$.scopeModes.hold` before it asks, as manual steps does; it was recorded as a finding
+  from #702. A row reads as what it would do ("Open report.html in Google
   Chrome", "Type into Overture"), its button "Open" or "Do it". Pressing one takes the row away and
   asks Claude to do that one thing, so it still passes every guard (the keystroke guard's heads up
   included). The same thing held twice is one row. A /clear ends the session and every mode with it.

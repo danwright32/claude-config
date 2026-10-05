@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { ScopeModes, ScopeModesHeld, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
+import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
 import { isShell, programsOf } from './program.ts'
@@ -30,6 +30,7 @@ const heldRef = { plugin: 'scope-modes', key: 'held' } as const
 const heldSeqRef = { plugin: 'scope-modes', key: 'heldSeq' } as const
 const targetRef = { plugin: 'scope-modes', key: 'target' } as const
 const justHomeRef = { plugin: 'scope-modes', key: 'justHome' } as const
+const openedRef = { plugin: 'scope-modes', key: 'opened' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
@@ -135,7 +136,7 @@ const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
   return { root: repo.root, branch, isDefault, issues: issuesOfBranch(branch), pr: null }
 }
 
-type PrJson = { number?: number; state?: string; url?: string; closingIssuesReferences?: { number?: number }[] }
+type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; closingIssuesReferences?: { number?: number }[] }
 
 type IsItLiveNoun = { verdict: (q: { repo: string; pr: number }) => Promise<{ state: DeployState } | null> }
 
@@ -158,56 +159,83 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
   }
 }
 
-const readWind = async ($: EngineInterface, t: ScopeModesTarget): Promise<Reading> => {
+// The PR a reading found, and the issues it closes, which the caller keeps for later checks.
+type Found = { number: number; closes: number[] }
+const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName'
+
+// What the finish check reads for one PR: the branch's own (found by its head) or one named by
+// number, in `repo` when given (a PR this session opened, read in the repository its link names).
+// The branch cleaned is the PR's own head where the target names no branch.
+const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string): Promise<{ reading: Reading; found?: Found }> => {
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: false }
+  const where = repo ? ['--repo', repo] : []
   let prUrl: string | undefined
+  let found: Found | undefined
   const gh = async (args: string[]) => {
     const out = await $.process.run(['gh', ...args], { timeoutMs: RUN_MS, cwd: t.root }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
     return out
   }
-  if (t.branch) {
-    const found = t.pr
-      ? await gh(['pr', 'view', String(t.pr), '--json', 'number,state,url,closingIssuesReferences'])
-      : await gh(['pr', 'list', '--head', t.branch, '--state', 'all', '--limit', '1', '--json', 'number,state,url,closingIssuesReferences'])
-    if (found.exitCode !== 0) return { ...r, pr: { unreadable: found.stderr.trim() || `gh exited ${found.exitCode}` } }
+  if (t.branch || t.pr) {
+    const res = t.pr
+      ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
+      : await gh(['pr', 'list', '--head', t.branch, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
+    if (res.exitCode !== 0) return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
     let pr: PrJson | undefined
     try {
-      const j = JSON.parse(found.stdout) as PrJson | PrJson[]
+      const j = JSON.parse(res.stdout) as PrJson | PrJson[]
       pr = Array.isArray(j) ? j[0] : j
     } catch {
-      return { ...r, pr: { unreadable: 'gh answered something that is not JSON' } }
+      return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
     }
     if (pr && typeof pr.number === 'number') {
-      if (!t.pr) await $.state.set(targetRef, { ...t, pr: pr.number })
+      if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
       const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
       const issues: { number: number; state: 'OPEN' | 'CLOSED' }[] = []
       for (const ref of pr.closingIssuesReferences ?? []) {
         if (typeof ref.number !== 'number') continue
-        const v = await gh(['issue', 'view', String(ref.number), '--json', 'state'])
-        if (v.exitCode !== 0) return { ...r, pr: { unreadable: `issue #${ref.number}: ${v.stderr.trim()}` } }
+        const v = await gh(['issue', 'view', String(ref.number), ...where, '--json', 'state'])
+        if (v.exitCode !== 0) return { reading: { ...r, pr: { unreadable: `issue #${ref.number}: ${v.stderr.trim()}` } } }
         const s = (JSON.parse(v.stdout) as { state?: string }).state
         issues.push({ number: ref.number, state: s === 'CLOSED' ? 'CLOSED' : 'OPEN' })
       }
       r.pr = { number: pr.number, state, issues }
+      found = { number: pr.number, closes: issues.map(i => i.number) }
       prUrl = typeof pr.url === 'string' ? pr.url : undefined
     }
   }
   // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
   if (r.pr && !('unreadable' in r.pr) && r.pr.state === 'MERGED') {
     r.deploy = await readDeploy($, { number: r.pr.number, url: prUrl })
-    const here = await run($, ['git', '-C', t.root, 'branch', '--list', t.branch])
+    if (!r.branch) {
+      // Every branch would match an empty name, so a PR GitHub gives no branch for is said.
+      const none = { unreadable: `GitHub named no branch for PR #${r.pr.number}` }
+      return { reading: { ...r, branchHere: none, branchOnGitHub: none, worktreeOnBranch: none }, found }
+    }
+    const here = await run($, ['git', '-C', t.root, 'branch', '--list', r.branch])
     r.branchHere = here.exitCode === 0 ? here.stdout.trim() !== '' : { unreadable: here.stderr.trim() }
     // ls-remote --exit-code answers 2 when no such branch, and anything else nonzero is a failed read.
-    const remote = await run($, ['git', '-C', t.root, 'ls-remote', '--exit-code', '--heads', 'origin', t.branch])
+    const remote = await run($, ['git', '-C', t.root, 'ls-remote', '--exit-code', '--heads', 'origin', r.branch])
     r.branchOnGitHub = remote.exitCode === 0 ? true : remote.exitCode === 2 ? false : { unreadable: remote.stderr.trim() || 'could not reach origin' }
     const wt = await run($, ['git', '-C', t.root, 'worktree', 'list', '--porcelain'])
-    r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${t.branch}`) : { unreadable: wt.stderr.trim() }
+    r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${r.branch}`) : { unreadable: wt.stderr.trim() }
   }
   if (t.isDefault && r.pr === null) {
     const st = await run($, ['git', '-C', t.root, 'status', '--porcelain'])
     r.dirty = st.exitCode === 0 ? st.stdout.trim() !== '' : { unreadable: st.stderr.trim() }
   }
-  return r
+  return { reading: r, found }
+}
+
+const openedOf = async ($: EngineInterface) => (await $.state.get(openedRef)).value ?? []
+const sameList = (a: readonly number[] | undefined, b: readonly number[]) => (a ?? []).join(',') === b.join(',')
+
+// The target with the PR a reading found for its branch, kept so later checks and the agent rule
+// know it, and so turning winding down on again never loses it (#702).
+const keepFound = async ($: EngineInterface, t: ScopeModesTarget, found: Found | undefined): Promise<ScopeModesTarget> => {
+  if (!found || (t.pr === found.number && sameList(t.closes, found.closes))) return t
+  const kept = { ...t, pr: found.number, closes: found.closes }
+  await $.state.set(targetRef, kept)
+  return kept
 }
 
 // What is still to do, or null when winding down is not on.
@@ -227,7 +255,32 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
     // A check that throws must refuse the turn end: a Stop hook that fails is skipped, which would
     // let the turn end unfinished (L42).
     try {
-      return outstanding(await readWind($, t))
+      // On its default branch with no PR, the session may have moved onto a branch since winding
+      // down turned on (#702): follow it there.
+      if (t.isDefault && t.pr === null) {
+        const now = await readTarget($)
+        if (now && !('unreadable' in now) && now.branch !== t.branch) {
+          t = now
+          await $.state.set(targetRef, t)
+        }
+      }
+      const { reading, found } = await readWind($, t)
+      t = await keepFound($, t, found)
+      const left = outstanding(reading)
+      // With no PR for the session's own branch, what is left to finish is the PRs this session
+      // opened, an agent's in a worktree the session is not in included (#702).
+      if (t.isDefault && reading.pr === null) {
+        const opened = await openedOf($)
+        for (const o of opened) {
+          const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo)
+          if (one.found && !sameList(o.closes, one.found.closes)) {
+            const closes = one.found.closes
+            await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
+          }
+          left.push(...outstanding(one.reading))
+        }
+      }
+      return left
     } catch (err) {
       return [`the finish check failed (${msg(err)})`]
     }
@@ -245,10 +298,42 @@ const finish = async ($: EngineInterface) => {
 }
 
 const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
+  const was = await scopeOf($)
   await $.state.set(scopeRef, scope)
-  await $.state.set(targetRef, scope === 'WINDING DOWN' ? await readTarget($) : null)
+  // Turning winding down on again keeps what it found, its PR included (#702): reading the target
+  // afresh dropped a PR once the session had left its branch. An unreadable target is read again
+  // at the next check.
+  if (scope !== 'WINDING DOWN') await $.state.set(targetRef, null)
+  else if (was !== 'WINDING DOWN') await $.state.set(targetRef, await readTarget($))
   await showModes($)
 }
+
+// The PR a `gh pr create` opened, from the link gh prints, noted for winding down whatever mode is
+// on, from the session or any of its agents (#702). A note that cannot be made is said, since
+// winding down would then not know to finish that PR.
+const noteOpened = async ($: EngineInterface, raw: string, result: { text?: string }) => {
+  try {
+    const links = [...String(result.text ?? '').matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)]
+    const link = links[links.length - 1]
+    if (!link) return
+    const cmds = await $.modkit.commands({ command: raw })
+    if (!cmds.some(w => (w[0] ?? '').split('/').pop() === 'gh' && w[1] === 'pr' && w[2] === 'create')) return
+    const repo = link[1] as string
+    const number = Number(link[2])
+    const opened = await openedOf($)
+    if (opened.some(o => o.repo.toLowerCase() === repo.toLowerCase() && o.number === number)) return
+    await $.state.set(openedRef, [...opened, { repo, number }])
+  } catch (err) {
+    $.ui.toast(`Scope modes could not note the PR this call opened (${msg(err)}), so winding down will not know to finish it.`)
+  }
+}
+
+// The issue numbers an agent may be sent about while winding down: the branch's, its PR and the
+// issues it closes, and every PR this session opened with the issues each closes (#702).
+const ownNumbers = (t: TargetRead, opened: readonly ScopeModesOpened[]): number[] => [
+  ...(t && 'issues' in t ? [...t.issues, ...(t.pr ? [t.pr] : []), ...(t.closes ?? [])] : []),
+  ...opened.flatMap(o => [o.number, ...(o.closes ?? [])]),
+]
 
 type Told = { told: number; failed: string[]; unknown?: string }
 const tellOthers = async ($: EngineInterface, place: ScopeModesPlace): Promise<Told> => {
@@ -303,8 +388,15 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
     }
   }
   if (scope === 'WINDING DOWN') {
-    const t = (await $.state.get(targetRef)).value ?? null
-    const r = newWork({ tool, input, commands, issues: t && 'issues' in t ? t.issues : [] })
+    let t = (await $.state.get(targetRef)).value ?? null
+    const opened = await openedOf($)
+    let r = newWork({ tool, input, commands, issues: ownNumbers(t, opened) })
+    // An agent named after this branch's PR or an issue it closes is this issue's work, so a PR not
+    // looked up yet is looked up before the agent is refused (#702).
+    if (r && (tool === 'Agent' || tool === 'Task') && t && 'issues' in t && !t.isDefault && t.pr === null) {
+      t = await keepFound($, t, (await readWind($, t)).found)
+      r = newWork({ tool, input, commands, issues: ownNumbers(t, opened) })
+    }
     if (r) {
       await $.modkit.blocked({ toolUseId, guard: 'Winding down', reason: `Winding down, so this would not ${r.what}.`, safeWay: 'Claude finishes this issue and files anything else.' })
       return { deny: `Blocked: winding down, so this did not ${r.what}. Finish this issue; file anything new as an issue instead of working on it.` }
@@ -483,9 +575,19 @@ export const register: Register = on => {
       return { result: text, text }
     }
 
+    // A call that may open a PR is watched whatever mode is on, so winding down later knows what this
+    // session opened. The words are a cheap first look; the reader decides.
+    const raw = tool === 'Bash' ? String(input.command ?? '') : ''
+    const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
+    const go = async () => {
+      const r = await next(e)
+      if (mayOpen && !r.deny) await noteOpened($, raw, r)
+      return r
+    }
+
     const scope = await scopeOf($)
     const away = (await placeOf($)) === 'away'
-    if (!scope && !away) return next(e)
+    if (!scope && !away) return go()
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that
     // fails is skipped, which would run the very thing the mode is on to stop (L42).
@@ -496,7 +598,7 @@ export const register: Register = on => {
       const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(away ? ['away'] : [])].join(' and ')
       refused = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
-    return refused ?? next(e)
+    return refused ?? go()
   })
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it.
@@ -530,6 +632,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     await $.state.set(scopeRef, null)
     await $.state.set(targetRef, null)
+    await $.state.set(openedRef, [] as ScopeModesOpened[])
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)
     await $.state.set(heldRef, [] as ScopeModesHeld[])

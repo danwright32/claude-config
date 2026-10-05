@@ -147,8 +147,12 @@ const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
 type Session = { sessionId: string }
-type Gh = { pr: { number: number; state: string; url?: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
+// The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
+// unless headRefName says otherwise) and by `gh pr view` only by its own number.
+type Gh = { pr: { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
 type Opts = {
+  /** What a `gh pr create` call prints, as gh does: the new PR's link. */
+  created?: string
   /** is it live's verdict for the PR asked about: a card's state, no card, or a read that throws. */
   verdict?: { state: string; at: number } | null | { throws: string }
   open?: Session[]
@@ -205,8 +209,9 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'gh') {
       const gh = o.gh ?? { pr: null, issues: {} }
       if (gh.fails) return fail(1, gh.fails)
-      if (a[0] === 'pr' && a[1] === 'list') return ok(JSON.stringify(gh.pr ? [gh.pr] : []))
-      if (a[0] === 'pr' && a[1] === 'view') return gh.pr ? ok(JSON.stringify(gh.pr)) : fail(1, 'no pull requests found')
+      const head = gh.pr?.headRefName ?? 'scope-modes-616'
+      if (a[0] === 'pr' && a[1] === 'list') return ok(JSON.stringify(gh.pr && a[a.indexOf('--head') + 1] === head ? [{ headRefName: head, ...gh.pr }] : []))
+      if (a[0] === 'pr' && a[1] === 'view') return gh.pr && a[2] === String(gh.pr.number) ? ok(JSON.stringify({ headRefName: head, ...gh.pr })) : fail(1, 'no pull requests found')
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN' }))
     }
@@ -255,7 +260,9 @@ const world = (on: On, o: Opts = {}) => {
       w.asked.push(q)
       return { result: { questions: (e as unknown as { questions: unknown[] }).questions, answers: { [q]: o.ask ?? 'Yes' } }, text: `answered ${o.ask ?? 'Yes'}` } as never
     }
-    w.reached.push(String((e as { command?: string }).command ?? (e as { file_path?: string }).file_path ?? e.tool))
+    const command = (e as { command?: string }).command
+    w.reached.push(String(command ?? (e as { file_path?: string }).file_path ?? e.tool))
+    if (command?.includes('gh pr create') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
     return { result: 'ran', text: 'ran' } as never
   })
   on('ui.render', ($, e) => {
@@ -510,6 +517,74 @@ test("winding down allows the fix that blocks this issue's merge, and denies new
   expect(await call($ as never, bash('git checkout -b issue-700'))).toMatch(/did not start a new branch/)
   expect(await call($ as never, { tool: 'Agent', prompt: 'Build #700', description: 'x', tool_use_id: 'a1' } as never)).toMatch(/did not dispatch an agent for issue #700/)
   expect(w.cards.map(c => c.guard)).toEqual(['Winding down', 'Winding down', 'Winding down'])
+})
+
+// ---- Winding down's target, as the milestone audit found it (#702) ----
+
+test('turning winding down on again keeps the PR it already found, rather than reading the target afresh', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+  // The session is back on main now; saying the phrase again must not drop PR #12.
+  w.o.branch = 'main'
+  await say($ as never, 'ok, wind down now')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+  expect(w.toasts).toEqual([])
+})
+
+test('turned on from the default branch, winding down finishes the PRs this session opened, an agent\'s included', withDeps, async ($, on) => {
+  const pr31 = (state: string) => ({ number: 31, state, url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [{ number: 700 }] })
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31('OPEN'), issues: { 700: 'OPEN' } } })
+  await start($ as never, clock)
+  // An agent working in a worktree the session is not in opens the PR.
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
+  await command($ as never, 'winddown')
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 is not merged yet\./)
+  w.o.gh = { pr: pr31('MERGED'), issues: { 700: 'CLOSED' } }
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchHere = false
+  w.o.branchOnGitHub = false
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+  // GitHub was asked about PR #31 in the repository its link names.
+  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName')).toBe(true)
+})
+
+test('a gh pr create that printed no link notes no PR; one that cannot be read to note is said', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', created: 'Warning: 2 uncommitted changes\n' })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  w.o.created = 'https://github.com/o/r/pull/32\n'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title __reader_fails', tool_use_id: 'g2' } as never)
+  expect(w.toasts).toEqual([expect.stringMatching(/^Scope modes could not note the PR this call opened \(.*the reader broke.*\), so winding down will not know to finish it\.$/)])
+  await command($ as never, 'winddown')
+  // Neither PR was noted, so on a clean default branch there is nothing to finish.
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('on the default branch, winding down follows the session onto the branch it moves to', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.branch = 'scope-modes-616'
+  w.o.gh = merged('OPEN')
+  expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+})
+
+test("an agent sent to fix this PR's merge is allowed though its prompt names the PR or the issue it closes", withDeps, async ($, on) => {
+  const pr = { number: 665, state: 'OPEN', url: 'https://github.com/o/r/pull/665', headRefName: 'fix-ci', closingIssuesReferences: [{ number: 700 }] }
+  const { w, clock } = world(on, { branch: 'fix-ci', gh: { pr, issues: {} } })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  const agent = (prompt: string, id: string) => call($ as never, { tool: 'Agent', prompt, description: 'x', tool_use_id: id } as never)
+  expect(await agent('Watch CI on PR #665 and report why it failed', 'a1')).toBe('ran')
+  expect(await agent('Fix the failing check for issue #700', 'a2')).toBe('ran')
+  expect(await agent('Build #701', 'a3')).toMatch(/did not dispatch an agent for issue #701/)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['a3'])
 })
 
 test('the session ending turns every mode off: nothing carries into a new session', withDeps, async ($, on) => {
