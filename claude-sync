@@ -6803,8 +6803,22 @@ remote_ci_state(){   # $1 = commit sha
   command -v "$gh" >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
   slug="$(repo_slug)" || { printf 'unreadable'; return 0; }
   [ -n "${1:-}" ] || { printf 'unreadable'; return 0; }
+  # gh's complaint is kept, because ONE kind of unreadable has a cause and an end worth saying: the
+  # account's REST limit used up, usually by another session on this Mac (claude-config#593).
+  local err rc=0
+  err="$(mktemp "${TMPDIR:-/tmp}/claude-sync-ci-err.XXXXXXXX" 2>/dev/null)" || err=""
   out="$("$gh" api "repos/$slug/commits/$1/check-runs" \
-        --jq '.check_runs[] | (.conclusion // .status)' 2>/dev/null)" || { printf 'unreadable'; return 0; }
+        --jq '.check_runs[] | (.conclusion // .status)' 2>"${err:-/dev/null}")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ -n "$err" ] && grep -qiE 'rate limit|HTTP 429' "$err" 2>/dev/null; then
+      printf 'rate-limited'
+    else
+      printf 'unreadable'
+    fi
+    [ -n "$err" ] && rm -f "$err"
+    return 0
+  fi
+  [ -n "$err" ] && rm -f "$err"
   # Read in order of what stops a pull. A failure anywhere is a red commit whatever else passed; a
   # run still going means the answer is coming; only then can success mean success.
   case "
@@ -6832,6 +6846,32 @@ skipped"*|*"
 neutral"*) printf 'cancelled'; return 0 ;; esac
   printf 'none'
   return 0
+}
+
+# WHY a rate limited verdict is unreadable, and until when (claude-config#593). Asked of the
+# rate_limit endpoint, which GitHub does not count against the limit. A primary limit has a reset
+# time, said in Eastern time; a secondary limit leaves calls to spare on the primary one and has no
+# time to quote, so it is named as that rather than handed a time nobody should wait for (L11).
+ci_rate_limit_note(){   # -> one clause, or a generic one when even this cannot be read
+  local gh reading remaining reset now when
+  gh="$(sync_gh)"
+  reading="$("$gh" api rate_limit --jq '.resources.core | "\(.remaining) \(.reset)"' 2>/dev/null || true)"
+  remaining="${reading%% *}"; reset="${reading##* }"
+  case "$remaining" in ''|*[!0-9]*) remaining="" ;; esac
+  case "$reset" in ''|*[!0-9]*) reset="" ;; esac
+  if [ "$remaining" = "0" ] && [ -n "$reset" ]; then
+    now="$(date +%s)"
+    when="$(TZ=America/New_York date_from_epoch "$reset" '+%-I:%M %p ET')"
+    if [ -n "$when" ] && [ "$reset" -gt "$now" ] 2>/dev/null; then
+      printf "GitHub's API rate limit for this Mac's gh account is used up, probably by another session, until %s (in %s)" "$when" "$(duration_in_words "$(( reset - now ))")"
+      return 0
+    fi
+  fi
+  if [ -n "$remaining" ] && [ "$remaining" != "0" ]; then
+    printf "GitHub refused the read under a secondary rate limit, which it lifts after a short wait"
+    return 0
+  fi
+  printf "GitHub's API rate limit for this Mac's gh account is used up, probably by another session, and when it resets could not be read"
 }
 
 # The gate itself. Prints nothing and returns 0 when the pull may go ahead.
@@ -6974,15 +7014,23 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       # It is not cleared by expiring. Once the verdict is judged unobtainable, config keeps
       # arriving until the lookup works again; restarting the clock would deliver config in three
       # hour bursts, which is a worse thing than either state.
-      local ci_now ci_expired=0 ci_window="${SYNC_CI_UNREADABLE_AFTER:-10800}"
+      local ci_now ci_expired=0 ci_window="${SYNC_CI_UNREADABLE_AFTER:-10800}" ci_why=""
       ci_now="$(date +%s)"
+      # A rate limit is unreadable like the rest, on the same clock and under the same outcome, but
+      # it is said as itself, with when it ends (claude-config#593). "Check that gh is logged in"
+      # sends somebody to fix a login that is fine while another session holds the limit.
+      [ "$state" = "rate-limited" ] && ci_why="$(ci_rate_limit_note)"
       case "$ci_since" in
         ''|*[!0-9]*)
           # The transition into the condition. Told once, here: the watcher fires on every edit and
           # this used to raise a desktop alert on each one, which is the alert that gets ignored and
           # is why the drift in claude-config#323 went unread for two days (L36).
           ci_since="$ci_now"; ci_told=""
-          notify "not applied: could not read CI for the shared repo's head" ;;
+          if [ -n "$ci_why" ]; then
+            notify "not applied: $ci_why"
+          else
+            notify "not applied: could not read CI for the shared repo's head"
+          fi ;;
       esac
       case "$ci_told" in *[!0-9]*) ci_told="" ;; esac
       [ "$(( ci_now - ci_since ))" -ge "$ci_window" ] 2>/dev/null && ci_expired=1
@@ -6995,11 +7043,19 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       # the escape this whole arm exists for never fires (L514).
       printf '%s %s\n' "$ci_since" "$ci_told" > "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
       if [ "$ci_expired" = 1 ]; then
-        echo "claude-sync: whether the shared repo's newest commit (${sha:0:8}) passed its tests has been unreadable for $(age_in_words "$(( ci_now - ci_since ))") ($state), which is longer than the $(duration_in_words "$ci_window") this waits, so it was applied here WITHOUT a verdict. Nothing judged it but the hook suite this Mac runs after an apply. Check that gh is installed and logged in, because until it is, every commit arrives this way." >&2
+        if [ -n "$ci_why" ]; then
+          echo "claude-sync: whether the shared repo's newest commit (${sha:0:8}) passed its tests has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"), which is longer than the $(duration_in_words "$ci_window") this waits, so it was applied here WITHOUT a verdict. Nothing judged it but the hook suite this Mac runs after an apply. The cause right now: $ci_why. Until the gh account stops being drained, every commit arrives this way." >&2
+        else
+          echo "claude-sync: whether the shared repo's newest commit (${sha:0:8}) passed its tests has been unreadable for $(age_in_words "$(( ci_now - ci_since ))") ($state), which is longer than the $(duration_in_words "$ci_window") this waits, so it was applied here WITHOUT a verdict. Nothing judged it but the hook suite this Mac runs after an apply. Check that gh is installed and logged in, because until it is, every commit arrives this way." >&2
+        fi
         send_outcome ci-unreadable-expired
         return 1
       fi
-      echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
+      if [ -n "$ci_why" ]; then
+        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests: $ci_why. So it was not applied here yet. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Nothing needs fixing on this Mac; run 'claude-sync pull' yourself to apply it now." >&2
+      else
+        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
+      fi
       send_outcome ci-unreadable ;;
   esac
   return 0

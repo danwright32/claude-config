@@ -27,9 +27,16 @@
 # build against). One file per repository at
 #     $HOME/.claude/state/bundle-budget/<sha256 of the origin remote URL>.txt
 # holding the last accepted total and the date, in the shared ratchet's `<path>: <count>` shape
-# (lib/ratchet.py reads it). The first measurement records and passes, saying so. The record only
-# ever goes DOWN on its own (a smaller total replaces it) or is raised by the acceptance hatch
-# below, so growth inside the margin never ratchets the budget upward one small step at a time.
+# (lib/ratchet.py reads it). The first measurement records and passes, saying so. The record then
+# follows every total that passes, a smaller one or growth inside the margin, and growth past the
+# margin moves it only through the acceptance hatch below (claude-config#586: left behind, the
+# record drifted 11 KB behind Slate's main and a branch changing no client code read +2.7%). What
+# that gives up is judging creep made of several small steps as a whole.
+#
+# A REPOSITORY THAT COMMITS ITS OWN RECORD is not judged here at all (claude-config#586). Slate
+# keeps .githooks/bundle-budget.txt and judges growth against the copy at the merge base
+# (Try-Pennie/slate PR #2834), which is the stronger design; a global record beside it would be a
+# second, drifting answer to the same question. Any tracked file named bundle-budget.txt counts.
 # BUNDLE_BUDGET_STATE_DIR overrides the directory, which is how the test keeps its records out of
 # the real home.
 #
@@ -124,6 +131,14 @@ ps_has_override "$cmd" ACCEPT_BUNDLE_GROWTH && accept="--accept"
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
+
+# The repository judges its own bundle against a committed record, so this stands down and says
+# which record does the judging (claude-config#586).
+own_record="$(git ls-files -- '*bundle-budget.txt' 2>/dev/null | awk 'NR==1')"   # tracked-only: a committed record is the repo's own gate, an untracked one is not
+if [ -n "$own_record" ]; then
+  echo "bundle-budget: this repository commits its own bundle budget record ($own_record), which its own hook judges, so this global guard stands down here."
+  exit 0
+fi
 
 # The record is keyed by the remote, never by the path: a worktree and its checkout are one
 # repository with one bundle, and a repository that moves keeps its budget.
