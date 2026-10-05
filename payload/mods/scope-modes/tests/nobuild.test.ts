@@ -552,3 +552,38 @@ describe('the routes left from #724 (#730)', () => {
     expect(what(run("cat<<'EOF' | sh\ngit push\nEOF"))).toBe('run git push')
   })
 })
+
+// #760: the routes found after the last milestone pass (#730). Each only makes no build stricter.
+describe('no build after #760', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test('JavaScript for Automation and its Objective-C bridge are judged as AppleScript is', () => {
+    expect(what(run(`osascript -l JavaScript -e 'app = Application.currentApplication(); app.includeStandardAdditions = true; app.doShellScript("git push")'`))).toBe('run a process from osascript (doShellScript)')
+    expect(what(run(`osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSTask.launchedTaskWithLaunchPathArguments("/bin/rm", ["a"])'`))).toBe('run a process from osascript (NSTask)')
+    expect(what(run(`osascript -l JavaScript -e 'ObjC.import("stdlib"); $.system("git push")'`))).toBe('run a process from osascript ($.system)')
+    expect(what(run(`osascript -l JavaScript -e 'Application("Terminal").doScript("make deploy")'`))).toBe('run a process from osascript (doScript)')
+    expect(what(run(`osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSFileManager.defaultManager.removeItemAtPathError("/repo/a.ts", null)'`))).toBe('write files from osascript (NSFileManager)')
+    expect(what(run(`osascript -l JavaScript -e '$("x").writeToFileAtomicallyEncodingError("/repo/a.ts", true, 4, null)'`))).toBe('write files from osascript (writeToFileAtomicallyEncodingError)')
+    expect(what(run(`osascript -l JavaScript -e 'app.openForAccess(Path("/repo/a.ts"), { writePermission: true })'`))).toBe('write files from osascript (openForAccess with writePermission)')
+    expect(what(run(`osascript -l JavaScript -e 'Application("Finder").delete(Path("/repo/a.ts"))'`))).toBe('write files from osascript (Finder delete)')
+    expect(what(run(`osascript -l JavaScript -e 'eval(code)'`))).toBe('run code from osascript it cannot read (eval)')
+    expect(what(run(`osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSAppleScript.alloc.initWithSource(s)'`))).toBe('run code from osascript it cannot read (NSAppleScript)')
+    // What only reads still runs.
+    expect(run(`osascript -l JavaScript -e 'Application("Mail").name()'`)).toBeUndefined()
+    expect(run(`osascript -l JavaScript -e 'Application("System Events").processes.whose({frontmost: true})[0].name()'`)).toBeUndefined()
+  })
+  test("a shell's own output redirect writes its file when its script is read as commands", () => {
+    expect(what(run(`bash -c 'make' > build.log`))).toBe('write to build.log')
+    expect(what(run(`sh -c 'ls' >> out.txt`))).toBe('write to out.txt')
+    expect(what(run(`bash <<'EOF' > out.txt\nls\nEOF`))).toBe('write to out.txt')
+    expect(what(run(`bash -c 'ls' &> all.log`))).toBe('write to all.log')
+    // Into a sink, or the scratchpad, it still changes nothing.
+    expect(run(`bash -c 'ls' > /dev/null 2>&1`)).toBeUndefined()
+    expect(run(`bash -c 'ls' 2>&1`)).toBeUndefined()
+    expect(run(`bash -c 'ls' > ${SCRATCH}/ls.txt`)).toBeUndefined()
+  })
+  test('<> opens its file for reading and writing, which creates it', () => {
+    expect(what(run('exec 3<>notes.txt'))).toBe('write to notes.txt')
+    expect(what(run('cat <>notes.txt'))).toBe('write to notes.txt')
+    expect(what(run('cmd <> notes.txt'))).toBe('write to notes.txt')
+  })
+})

@@ -311,13 +311,36 @@ const SURFACES: Record<Lang, Surface> = {
     judge: perlOpen,
     canonical: perlCanonical,
   },
+  // AppleScript, and JavaScript for Automation (osascript -l JavaScript), which reaches the same
+  // capabilities by other names and adds the Objective-C bridge (#760: doShellScript, $.NSTask and
+  // $.NSFileManager ran unjudged). Both are read whatever -l says: neither language's words for a
+  // process or a write mean anything else in the other.
   osascript: {
-    process: [{ re: /\bdo shell script\b/i, seen: 'do shell script' }],
+    process: [
+      { re: /\bdo shell script\b/i, seen: 'do shell script' },
+      { re: /\.\s*doShellScript\s*\(/, seen: 'doShellScript' },
+      { re: /\.\s*doScript\s*\(/, seen: 'doScript' },
+      { re: /\b(NSTask|NSWorkspace\b[\s\S]*?\b(?:launchApplication|openURL|openFile|openApplicationAtURL))\b/, seen: m => (m[1] as string).startsWith('NSTask') ? 'NSTask' : 'NSWorkspace launching' },
+      // The C library through the bridge: ObjC.import('stdlib') then $.system('...').
+      { re: /\$\s*\.\s*(system|popen|execv\w*|execl\w*|posix_spawn\w*|fork)\s*\(/, seen: m => `$.${m[1]}` },
+    ],
     write: [
       { re: /\bwith write permission\b/i, seen: 'open for access with write permission' },
       { re: /\btell application\s+"(?:Finder|System Events)"[\s\S]*?\b(delete|duplicate|move|make new)\b/i, seen: m => `Finder ${m[1]}` },
+      { re: /\bwritePermission\s*:\s*true\b/, seen: 'openForAccess with writePermission' },
+      { re: /\bApplication\s*\(\s*(['"])(?:Finder|System Events)\1\s*\)[\s\S]*?\.\s*(delete|duplicate|move|make)\s*\(/, seen: m => `Finder ${m[2]}` },
+      { re: /\b(NSFileManager|NSFileHandle\s*\.\s*fileHandleForWriting\w*)\b/, seen: m => (m[1] as string).startsWith('NSFileManager') ? 'NSFileManager' : 'NSFileHandle for writing' },
+      { re: /\.\s*(writeToFile\w*|writeToURL\w*)\b/, seen: m => m[1] as string },
+      { re: /\$\s*\.\s*(unlink|remove|rename|mkdir|rmdir|fopen|open|creat|truncate|chmod|symlink|link)\s*\(/, seen: m => `$.${m[1]}` },
     ],
-    dynamic: [{ re: /\b(run script|load script)\b/i, seen: m => m[1] as string }],
+    dynamic: [
+      { re: /\b(run script|load script)\b/i, seen: m => m[1] as string },
+      { re: /(?<![\w.$])eval\s*\(/, seen: 'eval' },
+      { re: /\bnew\s+Function\s*\(|(?<![\w.$])Function\s*\(/, seen: 'new Function' },
+      { re: /\.\s*(runScript|loadScript)\s*\(/, seen: m => m[1] as string },
+      { re: /\b(NSAppleScript|OSAScript)\b/, seen: m => m[1] as string },
+      { re: /\bObjC\s*\.\s*bindFunction\b|\$\s*\.\s*dl(?:open|sym)\s*\(|\bperformSelector\w*\b|\bNSSelectorFromString\b/, seen: 'a call the bridge builds at run time' },
+    ],
   },
   awk: {
     process: [

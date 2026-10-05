@@ -32,6 +32,23 @@ describe('writes: redirects and tee', () => {
   })
 })
 
+describe('writes: <> opens a file for reading and writing (#760)', () => {
+  test('which creates it, so it is written', () => {
+    expect(paths('exec 3<>notes.txt')).toEqual([`${CWD}/notes.txt`])
+    expect(paths('cat <>notes.txt')).toEqual([`${CWD}/notes.txt`])
+    expect(paths('cmd <> notes.txt')).toEqual([`${CWD}/notes.txt`])
+  })
+})
+
+describe("writes: a shell's own output redirect (#760)", () => {
+  test('is written when the shell is read as the commands its script runs', () => {
+    expect(paths(`bash -c 'make' > build.log`)).toEqual([`${CWD}/build.log`])
+    expect(paths(`bash <<'EOF' > out.txt\nls\nEOF`)).toEqual([`${CWD}/out.txt`])
+    expect(paths(`bash -c 'echo a > a.txt' 2> err.log`)).toEqual([`${CWD}/a.txt`, `${CWD}/err.log`])
+    expect(paths(`bash -c 'ls' 2>&1`)).toEqual([])
+  })
+})
+
 describe('writes: a cd before the write', () => {
   test('a relative path after a cd is resolved in the folder it changed into', () => {
     expect(paths("cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- rule\nEOF")).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
@@ -265,8 +282,12 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(changes(`find build -name '*.o' -delete`)).toEqual([`remove ${CWD}/build tree`])
     expect(changes('find -delete')).toEqual([`remove ${CWD} tree`])
     expect(paths('find src -fprint list.txt')).toEqual([`${CWD}/list.txt`])
-    // What -exec runs is read as a command of its own, the folder standing for {}.
-    expect(changes(`find src -name '*.bak' -exec rm {} \\;`)).toEqual([`remove ${CWD}/src`])
+    // What -exec runs is read as a command of its own, the folder standing for {}, and since {}
+    // stands for everything under that folder, what it changes reaches the tree (#760: it was read
+    // as removing src alone, so a guard compared it against files at src exactly).
+    expect(changes(`find src -name '*.bak' -exec rm {} \\;`)).toEqual([`remove ${CWD}/src tree`])
+    expect(changes(`find src -exec chmod 644 {} +`)).toEqual([`mode ${CWD}/src tree`])
+    expect(changes('rm src/a.bak')).toEqual([`remove ${CWD}/src/a.bak`])
   })
   test('a file edited in place is marked as edited, beside files written whole', () => {
     expect(read(`sed -i 's/a/b/' a.md; echo x > b.md`).files).toEqual([
