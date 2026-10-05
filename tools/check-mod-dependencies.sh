@@ -24,10 +24,15 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "check-mod-dependencies: python3 is not installed, so no mod's dependencies were read." >&2
   exit 3
 fi
-python3 - "${dir%/}" <<'PY'
+python3 - "${dir%/}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" <<'PY'
 import json, os, re, sys
 
 root = sys.argv[1]
+# Comments are taken out by the one reader of source every mod scan shares, which reads a regex
+# literal and JSX text as what they are (#735): this file's own stripper took a regex holding // or
+# /* for a comment, and JSX text's // or apostrophe for a comment or a quote.
+sys.path.insert(0, sys.argv[2])
+from ts_source import is_jsx, strip_comments
 failed = 0
 mods = {}
 for entry in sorted(os.listdir(root)):
@@ -45,39 +50,6 @@ for entry in sorted(os.listdir(root)):
     mods[man.get("name") or entry] = (folder, man)
 
 QUOTES = "'\"`"
-
-def strip_comments(text):
-    """The text with line and block comments blanked, outside quotes. A quote is followed only to the
-    end of its line, a template literal's excepted, so a regex literal holding a quote mark cannot
-    hide the rest of the file."""
-    out, i, n, quote = [], 0, len(text), None
-    while i < n:
-        c = text[i]
-        if quote:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if c == quote or (c == "\n" and quote != "`"):
-                quote = None
-            i += 1
-        elif c in QUOTES:
-            quote = c
-            out.append(c)
-            i += 1
-        elif text.startswith("//", i):
-            end = text.find("\n", i)
-            i = n if end < 0 else end
-        elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            stop = n if end < 0 else end
-            out.append("\n" * text.count("\n", i, stop))
-            i = n if end < 0 else end + 2
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
 
 def nouns(folder, man):
     """The nouns a mod's contract declares on $, from its interface EngineInterface block: none when
@@ -120,7 +92,7 @@ def mod_source(folder):
         for name in sorted(files):
             if name.endswith(SOURCE) and ".test." not in name and not name.endswith(".d.ts"):
                 with open(os.path.join(base, name), errors="replace") as f:
-                    texts.append(strip_comments(f.read()))
+                    texts.append(strip_comments(f.read(), is_jsx(name)))
     return texts
 
 for name, (folder, man) in mods.items():

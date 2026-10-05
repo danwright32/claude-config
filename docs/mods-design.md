@@ -863,7 +863,10 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   not loaded nothing refuses; a screen that cannot ask refuses the call with a card (L42), and so
   does the secret guard's own when its check fails. Only the secret guard is asked: no build and
   the style check refuse what a call would change or write, which an answered call does not.
-  `tools/check-mod-shared-parts.sh` fails a mod that answers a call with a result and never asks.
+  `tools/check-mod-shared-parts.sh` fails each `tool.call` hook that answers a call with a result
+  and never asks in its own body (#732): a screen in the hook beside it covers nothing, a screen
+  named only in a comment asks nothing, and a hook written as a named function is read where that
+  function is defined.
 - **While Dan is away** the keystroke guard holds its action through `$.scopeModes.hold` before
   any check of the app in front, since he cannot bring it forward from his phone. An away check
   that fails refuses the action rather than ask a question nobody may see, and its toast says the

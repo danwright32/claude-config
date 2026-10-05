@@ -30,7 +30,9 @@
 #             list naming tee, which every copy has)
 #   working-tree                                                use $.modkit.workingTree({ path }), the one
 #             finding the checkout a path sits in by walking   walk (#726: ask before saving needed the
-#             up for its .git entry (a path ending /.git)      collision guard's, which no mod can import)
+#             up for its .git entry (.git standing as a        collision guard's, which no mod can import)
+#             whole path part: '.git', /.git, /.git/HEAD;
+#             never .gitignore or .github, #732)
 #
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
 # on every run, with that issue, rather than failing the run or passing in silence (L129, L523).
@@ -40,23 +42,38 @@
 #             a result rather than calling next) keeps the      its refusal: mod-kit asks the secret guard
 #             call from every guard beneath it, the secret      wherever its folder sorts
 #             guard among them
-# What it reads is the whole hooks folder: a mod with a tool.call hook and a `result:` answer must
-# call $.modkit.screen somewhere. So it catches a new answering mod that never asks; one that asks in
-# one hook and not another is held by that mod's own tests (L135), and so is a mod that shows a call's
-# input and then refuses without a result (ask before saving asks from classic.PreToolUse instead).
+# Each tool.call hook is read on its own (#732, L135): one that answers with a `result:` must ask
+# $.modkit.screen in its own body, since a screen in the hook beside it covers nothing, and a hook
+# whose body is a named function is read where that function is defined (one that cannot be found
+# fails, never passes). A mod that shows a call's input and then refuses without a result is held by
+# its own tests (ask before saving asks from classic.PreToolUse instead).
 #
 # Only each mod's hooks/ is read: its tests may stand in for mod-kit, since a mod cannot import
-# another mod's files. A line that is only a comment (starting //, /* or *) is code for nothing, so
-# it is never taken for a copy, whatever it names.
+# another mod's files. Comments are taken out first, by tools/lib/ts_source.py, the one reader of
+# source every mod scan shares, and what is left on each line is read (#732): a comment is code for
+# nothing, so it is never taken for a copy or a screen, and code beside a comment is still read.
 #
 # Exit codes, each distinct (L11): 0 none found (the count is printed, L98), 1 a copy found, each
-# named with its file and line, 2 the mods folder does not exist.
+# named with its file and line, 2 the mods folder does not exist, 3 no python3 to read the source
+# with (L490: never a pass over nothing read).
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   echo "check-mod-shared-parts: '${dir:-<none given>}' is not a folder, so nothing was checked." >&2
   exit 2
 fi
 dir="${dir%/}"
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "check-mod-shared-parts: python3 is not installed, so no mod's source was read." >&2
+  exit 3
+fi
+TS_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ts_source.py"
+# Each mod's hooks/ with its comments blanked, line for line, so every match names the real line.
+stripped="$(mktemp -d "${TMPDIR:-/tmp}/check-mod-shared-parts.XXXXXX")" || exit 1
+trap 'rm -rf "$stripped"' EXIT
+if ! python3 "$TS_SOURCE" strip-hooks "$dir" "$stripped"; then
+  echo "check-mod-shared-parts: a mod's source above could not be read, so it was not checked."
+  exit 1
+fi
 
 # name|pattern|remedy. Patterns are extended regular expressions over each source line.
 PARTS=(
@@ -69,7 +86,7 @@ PARTS=(
   "pane|strikethrough=\{[^}]*\.strikethrough\}|'\\\\u2502'|'│'|\$.modkit.pane({ mod, id, lines, frame }) (the band: \$.modkit.bandRow)"
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
-  "working-tree|/\\.git[\"'\`]|\$.modkit.workingTree({ path })"
+  "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
 )
 
 # $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
@@ -89,10 +106,10 @@ for d in "$dir"/*/; do
   name="$(basename "$d")"
   [ "$name" = mod-kit ] && continue
   [ -d "$d/hooks" ] || continue
+  sd="$stripped/$name/"
   for part in "${PARTS[@]}"; do
     label="${part%%|*}"; rest="${part#*|}"; pattern="${rest%|*}"; remedy="${rest##*|}"
-    hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$d/hooks" 2>/dev/null \
-      | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*)')"
+    hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$sd/hooks" 2>/dev/null)"
     [ -n "$hits" ] || continue
     until_issue="$(exception "$name" "$label")"
     if [ -n "$until_issue" ]; then
@@ -101,17 +118,24 @@ for d in "$dir"/*/; do
     fi
     failed=1
     while IFS= read -r h; do
-      echo "check-mod-shared-parts: $name keeps its own $label at ${h#"$d"}: use $remedy from mod-kit instead."
+      echo "check-mod-shared-parts: $name keeps its own $label at ${h#"$sd"}: use $remedy from mod-kit instead."
     done <<< "$hits"
   done
-  # screen (#707): answering a tool call with a result, never asking mod-kit's screen.
-  src=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs')
-  if grep -rqE "${src[@]}" -- "on\(['\"]tool\.call['\"]" "$d/hooks" 2>/dev/null \
-    && grep -rqE "${src[@]}" -- '\{ *result:|^[[:space:]]*result:' "$d/hooks" 2>/dev/null \
-    && ! grep -rqF "${src[@]}" -- '$.modkit.screen(' "$d/hooks" 2>/dev/null; then
+  # screen (#707, per hook since #732): a tool.call hook answering with a result that never asks
+  # mod-kit's screen in its own body.
+  if ! found="$(python3 "$TS_SOURCE" unscreened "$d/hooks")"; then
     failed=1
-    echo "check-mod-shared-parts: $name answers a tool call itself but never asks \$.modkit.screen(e) first, so the guards beneath it (the secret guard) never see that call: ask it before acting on the call, and answer with its refusal."
+    echo "check-mod-shared-parts: $name's tool.call hooks could not be read, so whether each asks \$.modkit.screen(e) first is not known."
+    continue
   fi
+  while IFS= read -r at; do
+    [ -n "$at" ] || continue
+    failed=1
+    case "$at" in
+      '?'*) echo "check-mod-shared-parts: $name's tool.call hook at /hooks/${at#?} answers through a named function that cannot be found in its file, so whether it asks \$.modkit.screen(e) first is not known: define it in the file that registers it." ;;
+      *) echo "check-mod-shared-parts: $name answers a tool call itself in its tool.call hook at /hooks/$at but never asks \$.modkit.screen(e) first there, so the guards beneath it (the secret guard) never see that call: ask it before acting on the call, and answer with its refusal." ;;
+    esac
+  done <<< "$found"
 done
 echo "check-mod-shared-parts: $n mods checked in $dir"
 exit "$failed"
