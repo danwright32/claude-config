@@ -36,6 +36,8 @@ const split = (cmd: string): string[][] => {
   let word = ''
   let inWord = false
   let quote: '"' | "'" | undefined
+  // Parentheses opened inside a word ($(, <(, $((), whose closing ones belong to the word too.
+  let wordParens = 0
   const endWord = () => {
     if (inWord) words.push(word)
     word = ''
@@ -77,6 +79,18 @@ const split = (cmd: string): string[][] => {
     } else if (c === '\\' && i + 1 < cmd.length) {
       word += cmd[++i]
       inWord = true
+    } else if (c === '(' && inWord) {
+      wordParens++
+      word += c
+    } else if (c === ')' && wordParens > 0) {
+      wordParens--
+      word += c
+      inWord = true
+    } else if (c === '(' || c === ')') {
+      // A subshell's parenthesis is a command of its own (#700), so what runs inside it is read in
+      // command position and a reader that follows a cd can tell where the subshell ends.
+      endCmd()
+      cmds.push([c])
     } else if (c === ';' || c === '|' || c === '&' || c === '\n') endCmd()
     else if (c === ' ' || c === '\t') endWord()
     else {

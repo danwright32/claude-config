@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { editedUnder, insideRoot, latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit } from '../hooks/collide.ts'
+import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, shellWrites, wantedFiles, watchedGit, workingTree } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -139,6 +139,14 @@ describe('the files a shell command writes', () => {
     // cd - goes back to a folder nothing here knows, so a relative path after it is not named.
     expect(paths([['cd', '-'], ['echo', 'x', '>', 'rel.txt'], ['echo', 'y', '>', '/abs/a.txt']])).toEqual(['/abs/a.txt'])
   })
+  // #700: the words mod-kit's reader gives for (cd sub && printf x >> notes.txt), each parenthesis a
+  // command of its own (mod-kit's tests, "a subshell's parentheses are each a command of their own").
+  test('a cd inside a subshell moves where its writes land, and ends with the subshell', () => {
+    expect(paths([['('], ['cd', 'sub'], ['printf', 'x', '>>', 'notes.txt'], [')']])).toEqual(['/repo/sub/notes.txt'])
+    expect(paths([['('], ['cd', 'sub'], ['make'], [')'], ['>', 'out.txt'], ['echo', 'y', '>', 'after.txt']])).toEqual(['/repo/out.txt', '/repo/after.txt'])
+    // Nested, and a closing one with no opening (a case pattern's) leaves the folder as it is.
+    expect(paths([['('], ['cd', 'a'], ['('], ['cd', 'b'], [')'], ['echo', '>', 'x'], [')'], [')'], ['echo', '>', 'y']])).toEqual(['/repo/a/x', '/repo/y'])
+  })
   test('one file written twice is named once', () => {
     expect(paths([['echo', 'a', '>', 'n.txt'], ['echo', 'b', '>>', 'n.txt']])).toEqual(['/repo/n.txt'])
   })
@@ -207,5 +215,69 @@ describe('which paths are recorded as a session edit', () => {
     expect(insideRoot('/repository/a.ts', '/repo')).toBe(false)
     expect(insideRoot('/tmp/x.txt', '/repo')).toBe(false)
     expect(insideRoot('/private/tmp/claude-501/scratchpad/n.md', '/repo')).toBe(false)
+  })
+})
+
+// #700: a file edited in another checkout is recorded again, so a session working there is judged
+// against it, while scratch stays out as #674 decided.
+describe('scratch, which is never recorded outside the session root', () => {
+  test('the temporary folders, the scratchpad under them, and TMPDIR wherever it points', () => {
+    expect(isScratch('/tmp/x.txt', undefined)).toBe(true)
+    expect(isScratch('/private/tmp/claude-501/s/scratchpad/700/n.md', undefined)).toBe(true)
+    expect(isScratch('/var/folders/ab/T/x', undefined)).toBe(true)
+    expect(isScratch('/private/var/folders/ab/T/x', undefined)).toBe(true)
+    expect(isScratch('/Volumes/fast/tmp/x', '/Volumes/fast/tmp/')).toBe(true)
+  })
+  test('nothing else, a folder merely named like one included', () => {
+    expect(isScratch('/Users/dan/Apps/other/a.ts', '/var/folders/ab/T/')).toBe(false)
+    expect(isScratch('/tmpfiles/a.ts', undefined)).toBe(false)
+    expect(isScratch('/repo/tmp/a.ts', 'relative/tmp')).toBe(false)
+  })
+})
+
+// #700: a message between sessions carries text only, so the files it names are written so they
+// read back whole: each a quoted string, which a comma, a space, a quote or Dan's curly apostrophe
+// inside a name cannot break.
+describe('the files a message to another session names', () => {
+  const names = ['src/Notes, draft.md', '/Users/dan/Documents/Documents - Dan\u2019s MacBook Pro/app.ts', 'say "hi".md', 'odd while you are working on it.md']
+  const message = (verb: string, list: string) => `Another session wanted to ${verb} ${list} while you are working on it, so it was stopped. Nothing here was touched.`
+  test('are written quoted, comma separated', () => {
+    expect(quoteNames(['src/a.ts', 'src/b.ts'])).toBe('"src/a.ts", "src/b.ts"')
+  })
+  test('and read back exactly, with the verb, whatever the names hold', () => {
+    expect(wantedFiles(message('remove', quoteNames(names)))).toEqual({ verb: 'remove', names })
+    expect(wantedFiles(message('edit', quoteNames(['src/app.ts'])))).toEqual({ verb: 'edit', names: ['src/app.ts'] })
+  })
+  test('a message from a guard before #700, its names unquoted, is still read', () => {
+    expect(wantedFiles(message('edit', 'src/app.ts'))).toEqual({ verb: 'edit', names: ['src/app.ts'] })
+    expect(wantedFiles(message('edit', 'src/a.ts, src/b.ts'))).toEqual({ verb: 'edit', names: ['src/a.ts', 'src/b.ts'] })
+  })
+  test('a message naming no file is none', () => {
+    expect(wantedFiles('Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped.')).toBeUndefined()
+  })
+})
+
+describe('the git working tree a path sits in, asked of the disk', () => {
+  const disk = (gits: string[]) => {
+    const asked: string[] = []
+    return { asked, hasGit: async (dir: string) => (asked.push(dir), gits.includes(dir)) }
+  }
+  test('the nearest folder at or above the path holding a .git entry, nearest first', async () => {
+    const d = disk(['/Users/dan/Apps/other'])
+    expect(await workingTree('/Users/dan/Apps/other/src/a.ts', d.hasGit)).toBe('/Users/dan/Apps/other')
+    expect(d.asked).toEqual(['/Users/dan/Apps/other/src/a.ts', '/Users/dan/Apps/other/src', '/Users/dan/Apps/other'])
+  })
+  test('a folder that is itself a working tree, as rm -r of a checkout names it', async () => {
+    expect(await workingTree('/Users/dan/Apps/other', disk(['/Users/dan/Apps/other']).hasGit)).toBe('/Users/dan/Apps/other')
+  })
+  test('none, after asking every folder up to the root once', async () => {
+    const d = disk([])
+    expect(await workingTree('/Users/dan/Desktop/n.txt', d.hasGit)).toBeUndefined()
+    expect(d.asked).toEqual(['/Users/dan/Desktop/n.txt', '/Users/dan/Desktop', '/Users/dan', '/Users', '/'])
+  })
+  test('bounded however deep the path', async () => {
+    const d = disk([])
+    expect(await workingTree('/' + Array.from({ length: 200 }, (_, i) => `d${i}`).join('/'), d.hasGit)).toBeUndefined()
+    expect(d.asked.length).toBe(64)
   })
 })

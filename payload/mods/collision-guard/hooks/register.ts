@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { editedUnder, insideRoot, latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
+import { editedUnder, insideRoot, isScratch, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, shellWrites, wantedFiles, watchedGit, workingTree, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -36,7 +36,9 @@ type Clash = {
   // How the message to the other session names it; per session when each has its own files at
   // stake, as in a folder removal (#674).
   messageWhat: string | ((o: Rec) => string)
-  where: 'file' | 'checkout'
+  // What it does, as the toast and the message say it: edit or remove a file (a removal says so,
+  // Dan, 2026-10-04, #700), or run a checkout wide git command.
+  doing: 'edit' | 'remove' | 'run'
   root: string | null
   others: Rec[]
 }
@@ -88,15 +90,15 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
   const v = await judge($, c)
   if (!v) return refuse($, toolUseId, "Couldn't check with the other session's work, so this was stopped.", 'Try again, or ask Dan.')
   if (v.verdict === 'Proceed') {
-    await $.ui.toast(c.where === 'file' ? `Checked with the other session: safe to edit ${c.shortName}.` : `Checked with the other session: safe to run ${c.action}.`)
+    await $.ui.toast(c.doing === 'run' ? `Checked with the other session: safe to run ${c.action}.` : `Checked with the other session: safe to ${c.doing} ${c.shortName}.`)
     return undefined
   }
   const outcome = v.verdict === 'Worktree' ? 'it was moved to its own worktree to redo its change there' : 'it was stopped'
   const message = (o: Rec) => {
     const what = typeof c.messageWhat === 'string' ? c.messageWhat : c.messageWhat(o)
-    return c.where === 'file'
-      ? `Another session wanted to edit ${what} while you are working on it, so ${outcome}. Nothing here was touched.`
-      : `Another session wanted to run ${what} in this checkout while you are working in it, so ${outcome}. Nothing here was touched.`
+    return c.doing === 'run'
+      ? `Another session wanted to run ${what} in this checkout while you are working in it, so ${outcome}. Nothing here was touched.`
+      : `Another session wanted to ${c.doing} ${what} while you are working on it, so ${outcome}. Nothing here was touched.`
   }
   // The block stands whether or not the other session hears of it; one that cannot is said so.
   // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
@@ -110,7 +112,7 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
     : c.others.length === 1
       ? `The other session could not be told: ${unheard[0]}.`
       : `${unheard.length} of the other sessions could not be told: ${unheard.join('; ')}.`
-  const reason = c.where === 'file' ? `Another session is working on ${c.shortName}. ${v.reason}` : `Another session is working in this checkout. ${v.reason}`
+  const reason = c.doing === 'run' ? `Another session is working in this checkout. ${v.reason}` : `Another session is working on ${c.shortName}. ${v.reason}`
   return refuse($, toolUseId, reason, SAFE[v.verdict], note)
 }
 
@@ -125,7 +127,10 @@ const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<Shell
     let isDir = false
     if (w.sources) isDir = (await $.fs.stat(w.path).catch(() => undefined))?.kind === 'dir'
     const { sources, ...write } = w
-    const found = isDir && sources ? sources.map(s => ({ path: `${w.path}/${base(s)}` })) : [write]
+    const found: ShellWrite[] = isDir && sources ? sources.map(s => ({ path: `${w.path}/${base(s)}` })) : [write]
+    // The folder copied into is also removed later in the command (cp a x; rm -r x): the files
+    // landing inside it do not stand for that removal, so it is kept too (#700).
+    if (isDir && sources && write.removes) found.push(write)
     // A file named twice is kept once, keeping a removal's flags whichever came first, as
     // shellWrites does (lessons review of #691).
     for (const f of found) {
@@ -137,15 +142,39 @@ const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<Shell
   return out
 }
 
-// The folder a session's edits are recorded within (#674): its repository, or its own folder when
-// it works outside one. Scratch (/tmp, the scratchpad) lies outside it, and recording it would push
-// real edits out of the twenty the judge reads and raise checks between sessions sharing scratch.
-// This session's record says; before the registry has written one, git is asked, then the folder.
+// The session's own root (#674): its repository, or its own folder when it works outside one. This
+// session's record says; before the registry has written one, git is asked, then the folder.
 const recordRoot = async ($: EngineInterface, list: { open: Rec[]; selfId: string | null }): Promise<string> => {
   const me = list.open.find(r => r.sessionId === list.selfId)
   if (me) return me.repoRoot ?? me.cwd
   const cwd = await $.session.cwd()
   return (await run($, ['git', '-C', cwd, 'rev-parse', '--show-toplevel']))?.trim() || cwd
+}
+
+// Which paths this session wrote are recorded as its edits. Anything inside its own root, and
+// anything inside another git working tree (Dan, 2026-10-04, #700), so a session working in that
+// checkout is judged against it. Scratch outside its root is never recorded (#674): it would push
+// real edits out of the twenty the judge reads and raise checks between sessions sharing scratch.
+// Nor is a path in no checkout at all. The working tree is found on the disk by its .git entry
+// (collide.ts, workingTree), never by running git per path; each folder is looked at once per call,
+// and nothing is kept between calls, so a checkout cloned during the session counts at once.
+const recorder = async ($: EngineInterface, list: { open: Rec[]; selfId: string | null }) => {
+  const root = await recordRoot($, list)
+  const tmpdir = await $.env.get('TMPDIR').catch(() => undefined)
+  const looked = new Map<string, Promise<boolean>>()
+  const hasGit = (dir: string) => {
+    let found = looked.get(dir)
+    if (!found) {
+      found = $.fs
+        .stat(`${dir === '/' ? '' : dir}/.git`)
+        .then(s => s.kind === 'dir' || s.kind === 'file')
+        .catch(() => false)
+      looked.set(dir, found)
+    }
+    return found
+  }
+  return async (path: string): Promise<boolean> =>
+    insideRoot(path, root) || (!isScratch(path, tmpdir) && (await workingTree(path, hasGit)) !== undefined)
 }
 
 const unreadableRefusal =($: EngineInterface, toolUseId: string, names: string[]) =>
@@ -164,11 +193,14 @@ export const register: Register = on => {
       const others = othersEditing(list.open, list.selfId, path)
       if (others.length) {
         const root = others[0]?.repoRoot ?? null
-        const blocked = await decide($, toolUseId, { action: `edit ${path}`, shortName: base(path), messageWhat: relTo(path, root), where: 'file', root, others })
+        const blocked = await decide($, toolUseId, { action: `edit ${path}`, shortName: base(path), messageWhat: quoteNames([relTo(path, root)]), doing: 'edit', root, others })
         if (blocked) return blocked
       }
       const result = await next(e)
-      if (!result.deny && !result.isError && insideRoot(path, await recordRoot($, list))) await $.sessions.noteEdit({ path })
+      if (!result.deny && !result.isError) {
+        const recorded = await recorder($, list)
+        if (await recorded(path)) await $.sessions.noteEdit({ path })
+      }
       return result
     }
 
@@ -185,7 +217,7 @@ export const register: Register = on => {
         if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
         const others = othersInRepo(list.open, list.selfId, root)
         if (!others.length) continue
-        const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, where: 'checkout', root, others })
+        const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, doing: 'run', root, others })
         if (blocked) return blocked
       }
 
@@ -207,8 +239,8 @@ export const register: Register = on => {
         const blocked = await decide($, toolUseId, {
           action: `${what} with the shell command: ${command}`,
           shortName: one ? base(one) : `${files.length} files in ${base(w.path)}`,
-          messageWhat: one ? relTo(one, root) : o => files.filter(p => o.edits.includes(p)).map(p => relTo(p, root)).join(', '),
-          where: 'file',
+          messageWhat: one ? quoteNames([relTo(one, root)]) : o => quoteNames(files.filter(p => o.edits.includes(p)).map(p => relTo(p, root))),
+          doing: w.removes ? 'remove' : 'edit',
           root,
           others,
         })
@@ -216,10 +248,10 @@ export const register: Register = on => {
       }
       const result = await next(e)
       // A command that failed may still have written before it failed (printf >> f; false), so only
-      // a refusal leaves the record alone. Scratch outside the session's root is never recorded.
+      // a refusal leaves the record alone. Which paths are recorded: recorder, above.
       if (!result.deny) {
-        const root = await recordRoot($, list)
-        for (const w of written) if (insideRoot(w.path, root)) await $.sessions.noteEdit({ path: w.path })
+        const recorded = await recorder($, list)
+        for (const w of written) if (await recorded(w.path)) await $.sessions.noteEdit({ path: w.path })
       }
       return result
     }
@@ -234,10 +266,15 @@ export const register: Register = on => {
     const origin = e.origin as { kind?: string; plugin?: string }
     if (origin.plugin === 'collision-guard' && e.text.startsWith('Another session wanted')) {
       const outcome = /moved to its own worktree/.test(e.text) ? 'it was moved to a worktree' : 'it was stopped'
-      // A folder removal names several files, comma separated (#674).
-      const files = /wanted to edit (.+?) while you are working on it/.exec(e.text)?.[1]
+      // The message is plain text, the only thing a send carries, so the files are read back out of
+      // it as the sender quoted them (collide.ts, wantedFiles), each name whole (#700). A folder
+      // removal names several (#674), and a removal says so (#700). In the toast a name holding a
+      // comma is quoted, so the list still reads as the files it is.
+      const wanted = wantedFiles(e.text)
       const action = /wanted to run (.+?) in this checkout/.exec(e.text)?.[1]
-      await $.ui.toast(`Another session wanted ${files ? files.split(', ').map(base).join(', ') : (action ?? 'your files')}; ${outcome}.`)
+      const names = wanted?.names.map(base).map(n => (n.includes(',') ? `"${n}"` : n)).join(', ')
+      const what = wanted ? `${wanted.verb === 'remove' ? 'to remove ' : ''}${names}` : (action ?? 'your files')
+      await $.ui.toast(`Another session wanted ${what}; ${outcome}.`)
     }
     return next(e)
   })
