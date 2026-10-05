@@ -89,6 +89,27 @@ outside Claude Code always had. A quoted lone `>` is read as a redirect (the rea
 before anything reads its words), so `grep '>' notes.txt` names notes.txt; the cost is a judgment
 that comes back Proceed.
 
+### rm, and scratch kept out of the record (#674), decided 2026-10-04
+
+An `rm` or `unlink` of a file another open session edited is judged the same way, with the same
+cards, toasts and messages; the judge is told the command removes the file. An `rm -r` (`-R`,
+`--recursive`, in any cluster such as `-rf`) of a folder is judged once on every file another open
+session edited inside it (the coordinator on #691): one judgment that names them all, one card or
+toast ("3 files in src", or the file's name when there is one), and one message to each other
+session naming its own files, which its toast lists by name. An `mv` source is taken away whole in
+the same way, so moving a folder is judged the same. Once it has run, the removed path (the folder,
+for `rm -r`) is added to this session's edits. An `rm` of a glob or a variable names nothing, as
+decided for #654. The card, toast and message keep the words used for any write ("wanted to edit",
+"safe to edit"), as the brief for #674 asked.
+
+Only paths inside the session's own root are recorded as its edits: its repository, or its own
+folder when it works outside one (the record's `repoRoot`, else its `cwd`). Scratch such as `/tmp`
+and the scratchpad is left out, by the edit tools and by shell commands alike, so it cannot push real
+edits out of the twenty the judge reads or raise checks between sessions that share scratch space.
+A write is still judged wherever it lands, so a scratch file an older record already holds is still
+checked. What this gives up: a file in another checkout, edited from this session, is not recorded,
+so a session working in that checkout is not judged against it.
+
 ## Status bar (#610), settled 2026-10-04
 
 | Surface | Decision |

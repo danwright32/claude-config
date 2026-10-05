@@ -74,7 +74,7 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 type Judge = string | 'no-answer'
 // Each send's outcome in turn: delivered, refused with this reason, or a throw.
 type Send = true | { refused: string } | 'throws'
-type Opts = { open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request' }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request' }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -84,7 +84,7 @@ const world = (on: On, o: Opts = {}) => {
   const w = { reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[] }
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
-    if (cmd === '__sessions') return ok(JSON.stringify({ open: [rec('me'), ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 'me' }))
+    if (cmd === '__sessions') return ok(JSON.stringify({ open: [rec('me', o.self), ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 'me' }))
     if (cmd === 'tail' && o.tail === 'fails') return { value: { exitCode: 1, stdout: '', stderr: 'Permission denied', isStdoutTruncated: false, isStderrTruncated: false } }
     if (cmd === 'tail' && o.tail === 'no-request') return ok(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'hi' } }) + '\n')
     if (cmd === 'tail') {
@@ -397,4 +397,131 @@ test('a shell write the judge cannot answer is stopped (L42)', withDeps, async (
   const r = await $.tool.call(bash('echo x > notes.txt'))
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe("Blocked: Couldn't check with the other session's work, so this was stopped. Try again, or ask Dan.")
+})
+
+// #674: rm takes away a file another session is working on, the most destructive write there is.
+test('an rm of a file another open session edited is judged, and a Stop blocks it with the card and the message', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are still writing it."}' })
+  const r = await $.tool.call(bash('rm notes.txt', 'rm1'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/notes.txt with the shell command: rm notes.txt')
+  expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are still writing it. Leave it to the other session, or ask Dan.')
+  expect(w.cards[0]?.toolUseId).toBe('rm1')
+  expect(w.sent[0]?.text).toBe('Another session wanted to edit notes.txt while you are working on it, so it was stopped. Nothing here was touched.')
+  expect(w.edits).toEqual([])
+})
+
+test('an rm of a file nobody else edited goes through unjudged and is noted', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/other.txt'] })] })
+  await $.tool.call(bash('rm -f old.txt'))
+  expect(w.reached).toContain('Bash')
+  expect(w.prompts.length).toBe(0)
+  expect(w.edits).toEqual(['/repo/old.txt'])
+})
+
+test('an rm -r of a folder holding a file another session edited is judged on that file', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/src/deep/InvoiceTable.tsx', '/repo/README.md'] })] })
+  await $.tool.call(bash('rm -rf src'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/deep/InvoiceTable.tsx, with the shell command: rm -rf src')
+  expect(w.toasts).toContain('Checked with the other session: safe to edit InvoiceTable.tsx.')
+  expect(w.reached).toContain('Bash')
+  expect(w.edits).toEqual(['/repo/src'])
+})
+
+test('an mv of a folder holding a file another session edited is judged on that file', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], judge: '{"verdict":"Stop","reason":"They are editing it."}' })
+  const r = await $.tool.call(bash('mv src /tmp/old-src'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/a.ts, with the shell command: mv src /tmp/old-src')
+  expect(refusal(r)).toContain('Another session is working on a.ts.')
+})
+
+test('a folder copied in and then removed in one command keeps the removal (lessons review of #691)', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/docs/sub/a.ts'] })] })
+  on('fs.stat', ($, e) => ({ value: { kind: (e as unknown as { path: string }).path === '/repo/docs' ? 'dir' : 'other', size: 0, mtimeMs: 0, isLink: false } }) as never)
+  await $.tool.call(bash('cp -r /tmp/sub docs; rm -r docs/sub'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/docs/sub and everything in it, including /repo/docs/sub/a.ts,')
+})
+
+// The coordinator on #691: a folder removal is judged once, naming every affected file, with one
+// message to each other session naming its own files, never one judgment and toast per file.
+test('an rm -r of a folder holding several edited files is judged once, with one message per other session', withDeps, async ($, on) => {
+  const w = world(on, {
+    open: [rec('one', { edits: ['/repo/src/a.ts', '/repo/src/b.ts', '/repo/lib/x.ts'] }), rec('two', { edits: ['/repo/src/c.ts'] })],
+    judge: '{"verdict":"Stop","reason":"Both are mid change."}',
+  })
+  const r = await $.tool.call(bash('rm -rf src'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/a.ts, /repo/src/b.ts, /repo/src/c.ts, with the shell command: rm -rf src')
+  expect(w.cards.length).toBe(1)
+  expect(refusal(r)).toBe('Blocked: Another session is working on 3 files in src. Both are mid change. Leave it to the other session, or ask Dan.')
+  expect(w.sent.map(s => [s.to, s.text])).toEqual([
+    ['one', 'Another session wanted to edit src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+    ['two', 'Another session wanted to edit src/c.ts while you are working on it, so it was stopped. Nothing here was touched.'],
+  ])
+})
+
+test('a folder removal judged Proceed is one toast however many files it holds', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('one', { edits: ['/repo/src/a.ts', '/repo/src/b.ts'] })] })
+  await $.tool.call(bash('rm -rf src'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.toasts).toEqual(['Checked with the other session: safe to edit 2 files in src.'])
+  expect(w.reached).toContain('Bash')
+})
+
+test('a message naming several files is told in one toast with each file name', withDeps, async ($, on) => {
+  const w = world(on)
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.session.receive({
+    origin: MEASURED,
+    text: 'Another session wanted to edit src/a.ts, src/b.ts while you are working on it, so it was stopped. Nothing here was touched.',
+  } as never)
+  expect(w.toasts).toEqual(['Another session wanted a.ts, b.ts; it was stopped.'])
+})
+
+test('an rm -r of a folder the judge cannot answer for is stopped (L42)', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], judge: 'no-answer' })
+  const r = await $.tool.call(bash('rm -r src/'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe("Blocked: Couldn't check with the other session's work, so this was stopped. Try again, or ask Dan.")
+  expect(w.edits).toEqual([])
+})
+
+test('an rm -r with a record that cannot be read is stopped', withDeps, async ($, on) => {
+  const w = world(on, { unreadable: ['abc.json'] })
+  const r = await $.tool.call(bash('rm -r src'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toContain("Couldn't read another session's record (abc.json)")
+})
+
+// #674: scratch outside the repository is not a session's edit, so it cannot push real edits out of
+// the twenty the judge reads, nor raise a check between sessions sharing scratch space.
+test('a shell write to /tmp or the scratchpad runs and is not noted, while one in the repository is', withDeps, async ($, on) => {
+  const w = world(on)
+  await $.tool.call(bash('echo x > /tmp/out.txt && echo y > /private/tmp/claude-501/s/scratchpad/674/n.md && echo z >> notes.txt'))
+  expect(w.reached).toContain('Bash')
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('an Edit or Write outside the repository is not noted either', withDeps, async ($, on) => {
+  const w = world(on)
+  await $.tool.call(edit('/private/tmp/claude-501/s/scratchpad/674/pr-body.md'))
+  expect(w.reached).toContain('Edit')
+  expect(w.edits).toEqual([])
+})
+
+test('a session outside any repository takes its own folder as the root', withDeps, async ($, on) => {
+  const w = world(on, { self: { repoRoot: null, cwd: '/repo' } })
+  await $.tool.call(bash('echo x > /tmp/out.txt; echo z >> notes.txt'))
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('a scratch file another session recorded before this change is still judged, and not noted here', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/tmp/shared.txt'] })] })
+  await $.tool.call(bash('echo x > /tmp/shared.txt'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.edits).toEqual([])
 })
