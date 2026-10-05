@@ -111,13 +111,17 @@ const pin = async ($: EngineInterface, c: IsItLiveCard): Promise<string | undefi
   }
 }
 
+// #771: the card's facts showed up to four times after a merge, the last being Claude's own reply
+// restating it. Said in the tool's description and again in every answer.
+const SEEN = 'Dan has already seen this card in the chat, drawn in full: do not restate any of it in your reply, and add no sentence that repeats it.'
+
 const DESCRIPTION = [
   'Shows Dan the card for a merged pull request, once you have checked whether it is live.',
   'Call it after every merge: first while the deploy runs (deploy "deploying"), and again once you have checked it.',
   'deploy is "live" only when you confirmed the change itself is live (say how in checked); "failed" or "unreachable" when you could not confirm it (say why in checked); "none" when the project has no recorded deploy step.',
   'changed: what changed, in 2 to 3 plain sentences. see: the direct link and the exact clicks to see it.',
   'requester and message ONLY when someone other than Dan asked: an issue another person reported (via "issue" with its number), a pasted Slack thread ("slack"), or a person Dan named ("named"). The message is in Dan\'s voice, with no dashes.',
-  'The card is shown in the chat as it stands: add no sentence that repeats it.',
+  SEEN,
 ].join(' ')
 
 const SCHEMA = {
@@ -245,8 +249,19 @@ export const register: Register = on => {
     $.ui.toast(titleOf(state, title))
     return {
       result: cardText(shown),
-      context: [...notes, 'The card is shown in the chat as it stands: add no sentence that repeats it.'],
+      context: [...notes, SEEN],
     }
+  })
+
+  // #771: the call's own row is Claude Code's echo of the tool's input, which carried every fact the
+  // card under it shows (the changed text, checked, see, the message). Drawn naming the change
+  // alone, so the card is the one place they are read. A call missing either field keeps its whole
+  // row, so the refusal under it reads against what was sent (and the engine is never handed a
+  // field left undefined, which it cannot draw).
+  on('ui.render', { component: 'ToolUse', props: { tool: TOOL } }, ($, e, next) => {
+    const input = e.props.input as { repo?: unknown; pr?: unknown } | null | undefined
+    if (typeof input?.repo !== 'string' || typeof input?.pr !== 'number') return next(e)
+    return next({ ...e, props: { ...e.props, input: { repo: input.repo, pr: input.pr } } })
   })
 
   // Copy and Mark sent, on any message this mod pinned. One hook for all of them: the buttons are

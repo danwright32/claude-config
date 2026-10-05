@@ -4185,7 +4185,18 @@ MERGED
     done <<KEEP
 $keep
 KEEP
-    rsync -aic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
+    # -a without its -t (#754): with -t, a file whose bytes already match is still given the
+    # payload's mtime, which moves its ctime, and Claude Code reloads a mod whenever a file in its
+    # folder changes ctime (probed on 2.1.289: every mod an apply crossed reloaded, each reading
+    # "plugin.json changed", while record_rsync rightly read the '.' line as nothing applied). A
+    # rebase or checkout in the clone gives unchanged files new mtimes, so one pull reloaded all 19
+    # and reran each one's session.start. A file whose bytes differ is still written (-c), and takes
+    # the time of the write, which local_copy_is_past_release reads correctly: newer than the
+    # payload copy git wrote before it, older than the next version git writes. A file left alone
+    # can be OLDER than a payload copy git rewrote with the same bytes; that function returns early
+    # on identical content, and an untouched old release is still judged stale once the repo moves
+    # on (both held in the #638 section of tests/test-claude-sync.sh, #790).
+    rsync -rlpgoDic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
   # Reported from $ahead (split in two below), not $keep: a merged rule file is held back too, but it
   # already had its own clearer "these were MERGED" line and listing it again here
