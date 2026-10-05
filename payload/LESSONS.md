@@ -9683,6 +9683,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   booking's calendar event.)
   SHORT: A cleanup deleting an external object under a request-derived id must check no live record holds that id: a retry adopts the same object.
 
+- **L747. An idempotency key must identify one attempt at one operation, never inputs a person
+  can legitimately repeat (who, what, when), because every external id derived from it is reused
+  by the repeat, so a cancelled earlier attempt's leftover meets the next genuine request as a
+  duplicate or a refusal.** The key is chosen for crash safety, where reuse is the point: a retry
+  of the SAME attempt must adopt what the first one made. Built from the person and the slot
+  instead, it also matches a fresh attempt after a cancel, and the platform's tombstone of the
+  first (a cancelled calendar event, a voided invoice, a deleted message) answers for the second.
+  Bounding how many fresh ids a create will try only moves the refusal to the Nth repeat.
+  (slate#3291, 2026-10-05: a lead's booking key is bucket, start, email, phone and lead id, and
+  the calendar event id is derived from it plus the advisor, so booking and cancelling one slot
+  with one advisor three times leaves the fourth booking refused by #3217's three fresh id limit
+  on a slot that is free; the reroute live proof met it at 02:45 UTC by repeating one identity.)
+  SHORT: Scope an idempotency key to one attempt, never to inputs a person can repeat, or a cancelled earlier attempt's derived id refuses the next real one.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
