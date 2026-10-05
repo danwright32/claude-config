@@ -11,10 +11,11 @@ export type PickersOpen = {
 
 /**
  * A question of Claude's that Dan talked past or dismissed this session, as the limit on asking
- * again compares it (#703): its text and chip lower cased with punctuation and spacing gone, its
- * answers' labels sorted, and how many times.
+ * again compares it (#703, #726): its text and chip lower cased with punctuation and spacing gone
+ * (the letters of every script kept), its answers, each label with its description, sorted, and how
+ * many times. A pass recorded before #726 carries its labels alone and no `answers`.
  */
-export type PickersPassed = { question: string; header: string; labels: string[]; count: number }
+export type PickersPassed = { question: string; header: string; answers?: string[]; count: number }
 
 /**
  * The picker manners mod's own wait, on $ so that a tool.call hook waiting on Dan spends no hook

@@ -50,17 +50,32 @@ export const refusal = (questions: readonly Question[], ctx: { quiet: boolean; s
 
 /**
  * A question Dan talked past or dismissed, as the limit on asking again remembers it: its text and
- * chip as compared (lower case, punctuation and spacing gone) and its answers' labels, sorted.
+ * chip as compared (lower case, punctuation and spacing gone, letters of every script kept) and its
+ * answers, each label with its description, sorted. A pass recorded before #726 has no `answers`.
  */
-export type Passed = { question: string; header: string; labels: string[]; count: number }
+export type Passed = { question: string; header: string; answers?: string[]; count: number }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-const labelsOf = (q: Question) => q.options.map(o => norm(o.label)).sort()
+// Letters and digits of every script are kept (#726: keeping only a to z and 0 to 9 made every
+// question in another script compare as nothing, so any two were the same).
+const norm = (s: string) =>
+  s
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ')
+    .trim()
+const answersOf = (q: Question) => q.options.map(o => `${norm(o.label)}\u0000${norm(o.description ?? '')}`).sort()
+const described = (q: Question) => q.options.some(o => norm(o.description ?? '') !== '')
 
 // Claude rewords a question when it asks it again (#703), so the same question is the same text
-// however it is written, or the same chip over the same answers however the question is put.
-const sameQuestion = (q: Question, p: Passed): boolean =>
-  norm(q.question) === p.question || (norm(q.header) === p.header && JSON.stringify(labelsOf(q)) === JSON.stringify(p.labels))
+// however it is written, or the same chip over the same answers, each described the same way,
+// however the question is put. Answers that say nothing of their own (a bare Yes and No) mean
+// whatever the question asks, so two questions under one chip with those are two questions
+// (#726), and a question with no letters at all is never the same as another by its text.
+const sameQuestion = (q: Question, p: Passed): boolean => {
+  const text = norm(q.question)
+  if (text !== '' && text === p.question) return true
+  return described(q) && Array.isArray(p.answers) && norm(q.header) === p.header && JSON.stringify(answersOf(q)) === JSON.stringify(p.answers)
+}
 
 /** How many times Dan has talked past or dismissed this question this session. */
 export const passedOver = (q: Question, passed: readonly Passed[]): number => passed.find(p => sameQuestion(q, p))?.count ?? 0
@@ -68,7 +83,7 @@ export const passedOver = (q: Question, passed: readonly Passed[]): number => pa
 /** The passes with one more for this question. */
 export const recordPass = (q: Question, passed: readonly Passed[]): Passed[] => {
   const i = passed.findIndex(p => sameQuestion(q, p))
-  if (i < 0) return [...passed, { question: norm(q.question), header: norm(q.header), labels: labelsOf(q), count: 1 }]
+  if (i < 0) return [...passed, { question: norm(q.question), header: norm(q.header), answers: answersOf(q), count: 1 }]
   return passed.map((p, n) => (n === i ? { ...p, count: p.count + 1 } : p))
 }
 
