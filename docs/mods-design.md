@@ -330,8 +330,10 @@ Built in #694 from the last lessons reviews of #634, not put to Dan, each the pl
   message still clears it at the latest.
 - A question and a permission prompt open at once are kept apart: the pane shows the one asked
   latest, and each ending takes off only its own mark.
-- Picker manners answers every AskUserQuestion in its own `tool.call` hook without calling `next`.
-  Hooks on one event nest by tier (an organisation's prepended plugins, everything a person
+- Picker manners, with its band question on, answers every AskUserQuestion in its own `tool.call`
+  hook without calling `next`. (While that is off, pending #744, it passes every question it does
+  not refuse down to Claude Code's own dialog, which the tracker sees as a question Claude Code
+  shows itself, below.) Hooks on one event nest by tier (an organisation's prepended plugins, everything a person
   installs, the appended ones, the built in ones) and within a tier in load order, outermost first,
   and the plugin API gives a person's mod no way to say where it sits. So the goal tracker also
   watches picker manners' writes of the question it holds open (`picker-manners.open`), which every
@@ -993,13 +995,27 @@ ones marked open are the builder's choice, waiting on Dan.
 
 ## Picker manners (#615), built 2026-10-04
 
-The look is the rounds' (a question in the band, above). The build time check the spec asks for
-passed in the test kit: a `tool.call` hook on AskUserQuestion can answer from a band press while the
-prompt stays free, provided it waits through a `$` call of its own (`$.pickers.wait`), whose time the
-engine does not count against the hook's 10 second budget. Awaiting a plain promise instead was
-measured to overrun the budget, after which the engine's own picker answers. What the build had to
-settle beyond the rounds, taken from the spec or the rounds' renderings rather than chosen afresh,
-and open to Dan changing:
+**The band question is off, pending #744** (decided with Dan on 2026-10-05). In the live checks every
+question was asked twice: in the band, then, after about 10 seconds, by Claude Code's own dialog.
+The build time check the spec asked for had passed only in the test kit, which counts the hook's
+wait through the mod's own `$` noun (`$.pickers.wait`) as a `$` call in flight and so stops the
+hook's 10 second budget while it waits. A live session does not: past the budget the hook counts
+as absent, `next(e)` runs on its behalf, and Claude Code's own dialog asks. So, until #744 finds a
+way to wait on Dan that does not run on the hook budget (to be brought to Dan before anything
+changes), picker manners draws nothing in the band and passes every question that clears its
+refusals to Claude Code's own dialog, which asks once. The band path stays in the code behind the
+`bandQuestions` setting (the manifest's `userConfig`, off by default), so its tests keep running.
+
+What stays while it is off: one question per call is enforced, next issue pickers are refused while
+Dan has them off and his system prompt says so, and a question of Claude's talked past twice is
+refused. What does not: a question is answered in Claude Code's dialog, so the prompt is not free
+while it is open, text typed there is an answer rather than a message, and numbered prose answers
+nothing. A pass is counted only from the band, so while it is off no new pass is counted and the
+limit on asking again holds only for passes counted while it was on.
+
+The rest of this section is the band question as built, with the setting on. The look is the
+rounds' (a question in the band, above). What the build had to settle beyond the rounds, taken from
+the spec or the rounds' renderings rather than chosen afresh, and open to Dan changing:
 
 - Each option is Claude Code's own button in its plain style, "1: 7 days", the digit its hotkey in the
   accent colour (mod-kit's `plain`, #667): the nearest the terminal draws to the rounds' "1. 7 days".

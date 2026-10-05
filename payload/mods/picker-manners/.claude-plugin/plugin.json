@@ -1,8 +1,16 @@
 {
   "name": "picker-manners",
   "version": "0.1.0",
-  "description": "Draws every AskUserQuestion as a question in the band above the prompt, keeps typed text a message, re-asks a talked past question once, and keeps next issue offers quiet when Dan asks.",
+  "description": "Keeps AskUserQuestion to one question per call, refuses a question talked past twice and next issue offers while Dan has them off, and, when turned on, draws the question in the band above the prompt.",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts",
-  "dependencies": ["mod-kit"]
+  "dependencies": ["mod-kit"],
+  "userConfig": {
+    "bandQuestions": {
+      "type": "boolean",
+      "title": "Questions in the band",
+      "description": "Off until #744 finds a wait that does not run on the hook budget: on, the band's question is cut after 10 seconds and Claude Code's own dialog asks it again, so every question is asked twice. Off, Claude Code's own dialog asks once.",
+      "default": false
+    }
+  }
 }

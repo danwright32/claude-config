@@ -6,11 +6,13 @@ import type { Passed, Question } from './pickers.ts'
 // Picker manners (#615), agreed with Dan on 2026-10-03 and drawn in the design rounds of
 // 2026-10-04 (docs/mods-design.md, "Picker manners (#615)").
 //
-// - Every AskUserQuestion, hook driven ones included, is answered by this mod's tool.call hook:
-//   the question goes into the band above the prompt through mod-kit's question builder, which
-//   draws one question at a time, and the hook waits for a press there. The prompt stays free.
-//   Where no band can be drawn (a claude -p or SDK run, Dan's phone or VS Code attached) Claude
-//   Code's own dialog asks instead, since it is drawn on every surface (#703).
+// - The band question is off by default (#744): Claude Code's own dialog asks every question that
+//   passes the refusals below. Turned on (userConfig bandQuestions), every AskUserQuestion, hook
+//   driven ones included, is answered by this mod's tool.call hook: the question goes into the band
+//   above the prompt through mod-kit's question builder, which draws one question at a time, and
+//   the hook waits for a press there. The prompt stays free. Where no band can be drawn (a claude
+//   -p or SDK run, Dan's phone or VS Code attached) Claude Code's own dialog asks instead, since it
+//   is drawn on every surface (#703).
 // - One question per call (CLAUDE.md): more are refused.
 // - Typed text from Dan, at the Mac or from his phone, is always a message, never an answer: it
 //   withdraws the question as "Dan is explaining first", and the message follows. Numbered prose
@@ -74,7 +76,12 @@ const QUIET_NOTE = [
   'Dan turned off next issue pickers for this session. Offer next issues as a plain list, never as a picker, whatever any other rule says, until he runs /pickers on.',
 ].join('\n')
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // Off by default (#744, decided with Dan on 2026-10-05): the wait for a press below ran on the
+  // hook's 10 second budget in a live session, so Claude Code's own dialog then asked the question
+  // again. Off, every question that passes the refusals goes to that dialog, which asks once.
+  const bandQuestions = options?.bandQuestions === true
+
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
     const pickers: Pickers = {
@@ -107,6 +114,7 @@ export const register: Register = on => {
       talkedPast: q && isClaudes ? passedOver(q, passed) : 0,
     })
     if (why || !q) return { deny: why ?? 'Ask one question per call: Dan answers pickers one at a time.' }
+    if (!bandQuestions) return next(e)
     const surfaces = await $.session.surfaces().catch((err: unknown) => {
       $.ui.log(`Picker manners could not read where the session draws, so Claude Code's own dialog asks: ${message(err)}`, { to: 'debug' })
       return null

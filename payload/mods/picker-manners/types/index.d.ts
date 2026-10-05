@@ -18,9 +18,10 @@ export type PickersOpen = {
 export type PickersPassed = { question: string; header: string; answers?: string[]; count: number }
 
 /**
- * The picker manners mod's own wait, on $ so that a tool.call hook waiting on Dan spends no hook
- * budget: a `$` call's time is free, a plain promise's is not (measured, 2026-10-04: a plain await
- * past 10 seconds lets the engine's own picker run instead). Called by this mod alone.
+ * The picker manners mod's own wait for a press in the band, put on $ in the hope that a tool.call
+ * hook waiting on Dan through it spends no hook budget. The test kit counts it as a `$` call in
+ * flight; a live session does not (#744), so past 10 seconds Claude Code's own dialog asks the
+ * question again, which is why the band question is off by default. Called by this mod alone.
  */
 export type Pickers = {
   wait: (input: { id: string }) => Promise<PickersOutcome>
