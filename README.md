@@ -361,15 +361,19 @@ Every pull request's whole branch, merge base to head and every file type, is re
 recorded lessons before it can merge, on both Macs (claude-config#560). `ai-review-on-pr.sh` starts
 the review in the background when `gh pr create` succeeds, and again for the new head when a push
 lands on a branch whose pull request is open; `pr-review-gate.sh` refuses a merge until
-the review of that pull request's head has finished and its findings have reached the session,
-either on a later prompt through `ai-review-nudge.sh` or in the gate's own refusal, once. A head
+the review of that pull request's head has finished and its findings have been READ. Printing them
+is not reading them (claude-config#788: another hook can refuse the same merge and only its message
+is shown, and the nudge reaches whichever session prompts next), so the gate's refusal and the
+`ai-review-nudge.sh` message both carry a read key, and the merge is allowed once a merge command
+presents it as `PR_REVIEW_READ=<key> <the merge command>`; until then every attempt is refused
+with the findings again. A head
 with no review gets one started by the gate. A repo whose own script merges inside it asks the same
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does.
 
 Every outcome is named and none reads as clean by accident: finished with findings, finished clean,
 still running (with elapsed time), did not finish, failed, came back empty, answered in some other
 shape (`unparsed`), abandoned, could not run (no claude, no python3, no base), too large, and an
-empty diff. All but the clean ones, the delivered ones and the empty diff refuse, naming
+empty diff. All but the clean ones, the read ones and the empty diff refuse, naming
 `bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head>` and the one command
 override `SKIP_PR_REVIEW=1`, which is explained to Dan before it is used.
 

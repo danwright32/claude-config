@@ -88,6 +88,26 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
   ' 2>/dev/null
 }
 
+# The READ KEY of one pull request review's findings (claude-config#788): a random value kept
+# beside the review in <file>.readkey, created on first ask, printed on stdout. It appears only in
+# the messages that carry the findings (the merge gate's refusal and the nudge), so a merge command
+# presenting it as PR_REVIEW_READ=<key> proves those findings reached the session doing the merge.
+# Without it the gate used to judge them read because it had PRINTED them, and on #774 another hook
+# refused the same merge, only that hook's message was shown, and the retry merged unread. Written
+# with noclobber, so two first askers agree on one key; a key that cannot be made prints nothing and
+# fails, and the caller then refuses, since no merge can present a key nobody was shown (L42).
+ar_review_key() {   # $1 = finished review file
+  local kf="$1.readkey" k
+  if [ ! -s "$kf" ]; then
+    k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    [ -n "$k" ] || return 1
+    ( set -o noclobber; printf '%s\n' "$k" > "$kf" ) 2>/dev/null || true
+  fi
+  k="$(tr -dc 'a-f0-9' < "$kf" 2>/dev/null)"
+  [ -n "$k" ] || return 1
+  printf '%s' "$k"
+}
+
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one
 # rule file, lib/review-redact.sed, which says what it drops and what it redacts. The runner
 # (lib/ai-review-run.py) sends the reviewer's stderr and any unparsed answer through this BEFORE

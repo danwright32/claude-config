@@ -75,6 +75,12 @@ fi
 
 args=(check --dir "$repo_dir" --sha "$head")
 [ -n "$base" ] && args+=(--base-ref "origin/$base")
-out="$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
+# The read key the findings' refusal carries, if this merge presents it (claude-config#788). The
+# hook does not inherit the command's own assignments, so it is read from the command text and
+# handed on; anything else in the environment is cleared, so only THIS command can present one.
+read_key=""
+read_key_re='(^|[[:space:];&|(])PR_REVIEW_READ=([a-f0-9]+)([[:space:]]|$)'
+[[ "$command" =~ $read_key_re ]] && read_key="${BASH_REMATCH[2]}"
+out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && { printf 'pr-review-gate: %s\n' "$out"; exit 0; }
 refuse "$out"

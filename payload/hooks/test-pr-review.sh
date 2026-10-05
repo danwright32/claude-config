@@ -189,13 +189,29 @@ check_eq "and no second reviewer ran" "1" "$(calls)"
 # ===========================================================================================
 # 3. check: every outcome the merge gate can meet.
 # ===========================================================================================
-# 3a. finished with findings, not yet delivered: refused once WITH the findings, then allowed.
+# 3a. finished with findings: refused WITH the findings and a read key, until a merge presents that
+#     key (claude-config#788). It used to refuse ONCE and then allow, judging the findings read
+#     because the refusal had been printed; on #774 another hook refused the same merge, only that
+#     hook's message was shown, and the retry merged with nobody having seen them. The key is in
+#     the refusal and nowhere else the session reads, so a merge carrying it proves it was shown.
+key_in(){ [[ "$1" =~ PR_REVIEW_READ=([a-f0-9]+) ]] && printf '%s' "${BASH_REMATCH[1]}"; }
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "undelivered findings refuse the merge this once" "1" "$rc"
+check_eq "unread findings refuse the merge" "1" "$rc"
 check "the refusal carries the finding itself" "deleteEvent still swallows" "$out"
 check "and the count" "1 finding" "$out"
+k1="$(key_in "$out")"
+[ -n "$k1" ] && ok || bad "the refusal names a read key to merge with: $out"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "delivered findings no longer refuse" "0" "$rc"
+check_eq "a second attempt without the key is refused again, the refusal may not have been shown" "1" "$rc"
+check "carrying the findings again" "deleteEvent still swallows" "$out"
+check_eq "with the same key" "$k1" "$(key_in "$out")"
+out="$(PR_REVIEW_READ=0000dead prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "a wrong key is refused" "1" "$rc"
+out="$(PR_REVIEW_READ="$k1" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "the key from the refusal allows the merge" "0" "$rc"
+check "and says the findings were read" "read" "$out"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "once read, a later check of the same head allows" "0" "$rc"
 
 # 3b. finished clean: allowed at once.
 reset_state
@@ -412,8 +428,14 @@ wait_final "$HEAD_SHA" || bad "the gate's review finished"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "the first merge after it finishes is refused with the findings" "2" "$rc"
 check "carrying them" "deleteEvent still swallows" "$out"
-out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
-check_eq "the next merge is allowed" "0" "$rc"
+gk="$(key_in "$out")"
+# #788: suppose another hook refused this same attempt and only ITS message was shown. The retry,
+# without the key, must be refused again with the findings, never allowed as if they were read.
+out="$(fire_gate "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; rc=$?
+check_eq "a retry without the read key is refused again" "2" "$rc"
+check "carrying the findings again" "deleteEvent still swallows" "$out"
+out="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
+check_eq "the merge carrying the key from the refusal is allowed" "0" "$rc"
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"
 rm -f "$(final_of "$HEAD_SHA")"*
@@ -445,10 +467,17 @@ check "the nudge names it as the pull request review" "Lessons review of the who
 check "with the total count" "200 findings" "$out"
 check "and where the full list is" "$(final_of "$HEAD_SHA")" "$out"
 [ "${#out}" -lt 10000 ] && ok || bad "the nudge stays under the 10,000 char hook cap (was ${#out})"
+# The nudge reaches whichever session prompts next in this repository, which need not be the one
+# merging (on #774 the nudge marked them delivered in the coordinating session while a subagent
+# merged), so showing them there is not proof the merger read them (#788). It carries the read key,
+# so the session that saw them can merge with it.
+nk="$(key_in "$out")"
+[ -n "$nk" ] && ok || bad "the nudge names the read key"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "findings the nudge delivered do not refuse the merge again" "0" "$rc"
-out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
+check_eq "findings the nudge showed still refuse a merge without the key" "1" "$rc"
 [ "${#out}" -lt 10000 ] && ok || bad "the gate's own message stays under the cap too"
+out="$(PR_REVIEW_READ="$nk" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "and the nudge's key allows it" "0" "$rc"
 
 # 5b. The nudge's sentence fits the count: one finding is singular, and a clean review says it is
 #     clean rather than that the merge waits on findings it does not have (L21).
