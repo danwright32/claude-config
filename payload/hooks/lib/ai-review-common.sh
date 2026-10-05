@@ -106,15 +106,30 @@ ar__review_keys_file() {   # $1 = finished review file -> the hash file for its 
   printf '%s' "$1.readkeys-$fin"
 }
 ar__key_hash() { printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{ print $1 }'; }
+#
+# Exits with WHY a key could not be issued, each its own cause and remedy (L11, L111), read back
+# into words by ar_review_key_failure: 2 the review records no finish time, 3 a tool it needs
+# (od, shasum, /dev/urandom) is missing, 4 nothing could be written beside the review.
 ar_review_issue_key() {   # $1 = finished review file -> prints a fresh key
   local kf k h
-  kf="$(ar__review_keys_file "$1")" || return 1
+  kf="$(ar__review_keys_file "$1")" || return 2
+  command -v od >/dev/null 2>&1 && command -v shasum >/dev/null 2>&1 && [ -r /dev/urandom ] || return 3
   k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
-  [ "${#k}" -eq 16 ] || return 1
+  [ "${#k}" -eq 16 ] || return 3
   h="$(ar__key_hash "$k")"
-  [ -n "$h" ] || return 1
-  printf '%s\n' "$h" >> "$kf" 2>/dev/null || return 1
+  [ -n "$h" ] || return 3
+  # Braced, so a refused redirection is silenced too: it fails before an inner 2> applies.
+  { printf '%s\n' "$h" >> "$kf"; } 2>/dev/null || return 4
   printf '%s' "$k"
+}
+# The sentence for an ar_review_issue_key failure: what went wrong and the remedy that fits it.
+ar_review_key_failure() {   # $1 = its exit code, $2 = the review file, $3 = the restart command
+  case "$1" in
+    2) printf 'this review file records no finish time, so it cannot be given a read key and no merge can show these were read; run it again with: %s' "$3" ;;
+    3) printf 'no read key could be issued because od, shasum or /dev/urandom is missing on this machine, so no merge can show these were read; install the missing tool (re-running the review will not help), or merge with the override after telling Dan why' ;;
+    4) printf 'no read key could be issued because it could not be written beside %s, so no merge can show these were read; make that folder writable, or merge with the override after telling Dan why' "$2" ;;
+    *) printf 'no read key could be issued (cause %s unknown), so no merge can show these were read; merge with the override after telling Dan why' "$1" ;;
+  esac
 }
 ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 when it was issued
   local kf h

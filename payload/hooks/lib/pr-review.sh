@@ -105,9 +105,6 @@ mkdir -p "$AR_STATE_DIR" 2>/dev/null
 name="$key-pr-${full_sha:-$sha}"
 final="$AR_STATE_DIR/$name.txt"
 pending="$final.pending"
-# <review>.delivered, written before #788 to mean "printed somewhere", is no longer written or read:
-# printing is not reading. It is still removed below, so a stale one never lingers.
-delivered="$final.delivered"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 repo_label="$(basename "$top")"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -151,7 +148,7 @@ do_start() {
   fi
   # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
   # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
-  rm -f "$delivered" "$acknowledged" "$final.readkey"* "$final.readkeys"* 2>/dev/null
+  rm -f "$acknowledged" "$final.readkey"* "$final.readkeys"* 2>/dev/null
   if [ -z "$full_sha" ]; then
     record could-not-run "The commit $sha is not in this checkout and could not be fetched from origin, so there is nothing to review."
     echo "The lessons review could not run: $sha is not in this checkout."; return 0
@@ -268,18 +265,14 @@ do_check() {
         return 0
       fi
       local noun="findings"; [ "$findings" -eq 1 ] && noun="finding"
-      local readkey
-      readkey="$(ar_review_issue_key "$final")" || readkey=""
+      local readkey keyrc=0
+      readkey="$(ar_review_issue_key "$final")" || keyrc=$?
       echo "Refusing to merge until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun. Here they are. Check each against the code, fix what is real or say why it is not, then merge with their read key in front of the merge command:"
-      if [ -n "$readkey" ]; then
+      if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
         echo "    PR_REVIEW_READ=$readkey <the merge command>"
         echo "The key is only in this message, so a merge carrying it proves the findings were shown. A merge without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
       else
-        if [ -z "$fin" ]; then
-          echo "    (this review file records no finish time, so it cannot be given a read key and no merge can show these were read; run it again with: bash ~/.claude/hooks/lib/pr-review.sh restart --dir $top --sha ${full_sha:-$sha})"
-        else
-          echo "    (no read key could be written beside $final, so no merge can show these were read; fix that, or merge with the override after telling Dan why)"
-        fi
+        echo "    ($(ar_review_key_failure "$keyrc" "$final" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir $top --sha ${full_sha:-$sha}"))"
       fi
       [ -n "${PR_REVIEW_READ:-}" ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
       ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
@@ -305,6 +298,6 @@ do_check() {
 case "$verb" in
   start) do_start ;;
   check) do_check; exit $? ;;
-  restart) rm -f "$final" "$pending" "$delivered" "$acknowledged" "$final.readkey"* "$final.readkeys"*; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$final.readkey"* "$final.readkeys"*; do_start ;;
 esac
 exit 0

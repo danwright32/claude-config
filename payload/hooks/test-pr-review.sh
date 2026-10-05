@@ -230,6 +230,26 @@ check_eq "a review with no finish stamp refuses" "1" "$rc"
 check "and says the review records no finish time" "no finish time" "$out"
 check_not "and does not blame the state folder" "could be made in" "$out"
 
+# 3a3. each reason a read key cannot be issued is named, with the remedy that fits it (L11, L111):
+#      a missing tool is not fixed by re-running the review, and a stamp problem is not a tool.
+reset_state
+FAKE_CLAUDE_OUT="App/Sync.swift:3: x (L1). Should be: y. [severity: minor]" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA"
+NOSHA="$WORKDIR/noshasum"; mkdir -p "$NOSHA"
+for t in awk tr od git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
+         cksum cut uname hostname mktemp ls chmod readlink nohup tail xargs find stat sleep kill ps id; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOSHA/$t"
+done
+out="$(PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
+check_eq "with no shasum the merge is still refused" "1" "$rc"
+check "and the refusal names the missing tool" "shasum" "$out"
+check_not "and does not send it to re-run the review" "pr-review.sh restart --dir" "$out"
+chmod a-w "$AI_REVIEW_STATE_DIR"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+chmod u+w "$AI_REVIEW_STATE_DIR"
+check_eq "with nowhere to write a key the merge is still refused" "1" "$rc"
+check "and the refusal says nothing could be written beside the review" "could not be written" "$out"
+
 # 3b. finished clean: allowed at once.
 reset_state
 FAKE_CLAUDE_OUT="No issues found." prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null

@@ -216,10 +216,11 @@ for base in $todo; do
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took" "${m_findings:-?}" "$noun" "$f"
           # Showing them here is not proof the MERGING session saw them (#788), so the merge gate
           # waits for this key, which only the messages carrying the findings hold.
-          if rk="$(ar_review_issue_key "$f")"; then
+          rkrc=0; rk="$(ar_review_issue_key "$f")" || rkrc=$?
+          if [ "$rkrc" -eq 0 ] && [ -n "$rk" ]; then
             printf 'Once read, merge with: PR_REVIEW_READ=%s <the merge command>\n' "$rk"
           else
-            printf 'No read key could be made for this review (its file records no finish time, or nothing could be written beside it), so no merge can show these were read. Run it again with: bash ~/.claude/hooks/lib/pr-review.sh restart --dir <the repository> --sha %s\n' "${m_sha:-<head>}"
+            printf 'No read key could be made: %s.\n' "$(ar_review_key_failure "$rkrc" "$f" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir <the repository> --sha ${m_sha:-<head>}")"
           fi
           printf '%s\n' "$body"
         fi ;;
