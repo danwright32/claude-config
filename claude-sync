@@ -6948,7 +6948,11 @@ remote_ci_state(){   # $1 = commit sha
   out="$("$gh" api "repos/$slug/commits/$1/check-runs" \
         --jq '.check_runs[] | (.conclusion // .status)' 2>"${err:-/dev/null}")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ -n "$err" ] && grep -qiE 'rate limit|HTTP 429' "$err" 2>/dev/null; then
+    # The KIND comes from gh's own words, never inferred later: GitHub's secondary limit says so in
+    # its body, and a 429 is that short lived kind too; only a primary limit has a reset to quote.
+    if [ -n "$err" ] && grep -qiE 'secondary rate limit|HTTP 429' "$err" 2>/dev/null; then
+      printf 'rate-limited-secondary'
+    elif [ -n "$err" ] && grep -qi 'rate limit' "$err" 2>/dev/null; then
       printf 'rate-limited'
     else
       printf 'unreadable'
@@ -6988,10 +6992,15 @@ neutral"*) printf 'cancelled'; return 0 ;; esac
 
 # WHY a rate limited verdict is unreadable, and until when (claude-config#593). Asked of the
 # rate_limit endpoint, which GitHub does not count against the limit. A primary limit has a reset
-# time, said in Eastern time; a secondary limit leaves calls to spare on the primary one and has no
-# time to quote, so it is named as that rather than handed a time nobody should wait for (L11).
-ci_rate_limit_note(){   # -> one clause, or a generic one when even this cannot be read
+# time, said in Eastern time. A secondary limit, which remote_ci_state recognised from gh's own
+# error text, has no time to quote, so it is named as that rather than handed a time nobody should
+# wait for (L11).
+ci_rate_limit_note(){   # $1 = rate-limited | rate-limited-secondary -> one clause
   local gh reading remaining reset now when
+  if [ "${1:-}" = "rate-limited-secondary" ]; then
+    printf "GitHub refused the read under a secondary rate limit, which it lifts after a short wait"
+    return 0
+  fi
   gh="$(sync_gh)"
   reading="$("$gh" api rate_limit --jq '.resources.core | "\(.remaining) \(.reset)"' 2>/dev/null || true)"
   remaining="${reading%% *}"; reset="${reading##* }"
@@ -7005,8 +7014,10 @@ ci_rate_limit_note(){   # -> one clause, or a generic one when even this cannot 
       return 0
     fi
   fi
+  # gh said the primary limit was used up and the endpoint now shows calls to spare: it has reset
+  # between the two reads, and the next run should get through.
   if [ -n "$remaining" ] && [ "$remaining" != "0" ]; then
-    printf "GitHub refused the read under a secondary rate limit, which it lifts after a short wait"
+    printf "GitHub's API rate limit for this Mac's gh account was used up, probably by another session, and has just reset"
     return 0
   fi
   printf "GitHub's API rate limit for this Mac's gh account is used up, probably by another session, and when it resets could not be read"
@@ -7157,7 +7168,7 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       # A rate limit is unreadable like the rest, on the same clock and under the same outcome, but
       # it is said as itself, with when it ends (claude-config#593). "Check that gh is logged in"
       # sends somebody to fix a login that is fine while another session holds the limit.
-      [ "$state" = "rate-limited" ] && ci_why="$(ci_rate_limit_note)"
+      case "$state" in rate-limited*) ci_why="$(ci_rate_limit_note "$state")" ;; esac
       case "$ci_since" in
         ''|*[!0-9]*)
           # The transition into the condition. Told once, here: the watcher fires on every edit and

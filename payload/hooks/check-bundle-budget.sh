@@ -136,8 +136,15 @@ cd "$repo_dir" 2>/dev/null || exit 0
 # which record does the judging (claude-config#586).
 own_record="$(git ls-files -- '*bundle-budget.txt' 2>/dev/null | awk 'NR==1')"   # tracked-only: a committed record is the repo's own gate, an untracked one is not
 if [ -n "$own_record" ]; then
-  echo "bundle-budget: this repository commits its own bundle budget record ($own_record), which its own hook judges, so this global guard stands down here."
-  exit 0
+  # A record only judges anything if something READS it, so the stand down needs a second tracked
+  # file naming it, and says which (lessons review of PR #782). A record nothing reads is said and
+  # then judged here as usual, rather than leaving the repository unjudged behind a claim (L11).
+  own_reader="$(git grep -l -F -e "$(basename "$own_record")" -- . ":(exclude)$own_record" 2>/dev/null | awk 'NR==1')"   # tracked-only: the reader has to be committed to judge every push
+  if [ -n "$own_reader" ]; then
+    echo "bundle-budget: this repository commits its own bundle budget record ($own_record), read by $own_reader, so this global guard stands down here."
+    exit 0
+  fi
+  echo "bundle-budget: this repository commits $own_record, but nothing in this repository reads it, so it judges nothing and this guard weighs the bundle as usual."
 fi
 
 # The record is keyed by the remote, never by the path: a worktree and its checkout are one

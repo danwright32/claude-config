@@ -358,10 +358,21 @@ printf '140000\n' > "$W/.githooks/bundle-budget.txt"
 git -C "$W" -c user.name=t -c user.email=t@t add .githooks/bundle-budget.txt >/dev/null 2>&1
 git -C "$W" -c user.name=t -c user.email=t@t commit -qm record >/dev/null 2>&1
 chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
+# A record file that NOTHING in the repository reads judges nothing, so it is not a reason to stand
+# down, and the guard must not claim a hook is doing the judging (lessons review of PR #782, L11).
+run_hook "$W" "git push"
+want_rc 2 "a committed record that nothing reads does not stand the guard down"
+want_says "nothing in this repository reads it" "and the guard says why it did not stand down"
+# Now a tracked hook that reads the record, which is the shape Slate has.
+printf '#!/usr/bin/env bash\nrecord=.githooks/bundle-budget.txt\n' > "$W/.githooks/pre-push"
+git -C "$W" -c user.name=t -c user.email=t@t add .githooks/pre-push >/dev/null 2>&1
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm hook >/dev/null 2>&1
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
 before_rec="$(record_total "$W")"
 run_hook "$W" "git push"
-want_rc 0 "a repository committing its own record is not judged here"
-want_says ".githooks/bundle-budget.txt" "and the stand down names the record that judges it instead"
+want_rc 0 "a repository committing its own record and a hook reading it is not judged here"
+want_says ".githooks/bundle-budget.txt" "and the stand down names the record"
+want_says ".githooks/pre-push" "and names the file that reads it"
 [ "$(record_total "$W")" = "$before_rec" ] && ok || bad "standing down must not touch the global record"
 
 echo

@@ -12180,7 +12180,14 @@ if [ "\${CI_STATE:-}" = "ratelimited" ]; then
   case "\$*" in
     *rate_limit*) printf '%s %s\n' "\${CI_REMAINING:-0}" "\${CI_RESET:-0}"; exit 0 ;;
   esac
-  echo "gh: API rate limit exceeded for user ID 1234. (HTTP 403)" >&2
+  # One error body per kind, in gh's own words, so the classifier is judged on what GitHub sends
+  # rather than one line of my own (L52).
+  case "\${CI_RL_KIND:-primary}" in
+    primary)   echo "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    secondary) echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    429)       echo "gh: Too many requests (HTTP 429)" >&2 ;;
+    other403)  echo "gh: Resource not accessible by integration (HTTP 403)" >&2 ;;
+  esac
   exit 1
 fi
 printf '%s\n' "\$CI_STATE"
@@ -12316,9 +12323,18 @@ check "#593 and it is still the unreadable outcome, so the watcher log and the c
 out_rl_old="$(SYNC_CI_UNREADABLE_AFTER=0 CI_RESET="$_rl_reset" ci_case ratelimited-old ratelimited)"
 check "#593 past the window a rate limited verdict is applied like any unreadable one, and still names the cause" \
   "case \"\$out_rl_old\" in *'WITHOUT a verdict'*\"\$_rl_when\"*) true ;; *) false ;; esac"
-out_rl2="$(CI_REMAINING=4000 CI_RESET="$_rl_reset" ci_case ratelimited2 ratelimited)"
-check "#593 a secondary rate limit is named, without quoting the primary reset time" \
+# The KIND is read from gh's error text, never inferred from the rate_limit endpoint: here the
+# primary limit reads as used up too, and the secondary body must still win.
+out_rl2="$(CI_RL_KIND=secondary CI_RESET="$_rl_reset" ci_case ratelimited2 ratelimited)"
+check "#593 a secondary rate limit is named from gh's own text, without quoting the primary reset time" \
   "case \"\$out_rl2\" in *'secondary rate limit'*) case \"\$out_rl2\" in *\"\$_rl_when\"*) false ;; *) true ;; esac ;; *) false ;; esac"
+out_rl3="$(CI_RL_KIND=429 CI_RESET="$_rl_reset" ci_case ratelimited3 ratelimited)"
+check "#593 an HTTP 429 is read as a rate limit, and as the short secondary kind" \
+  "case \"\$out_rl3\" in *'secondary rate limit'*) true ;; *) false ;; esac"
+# A 403 that is NOT a rate limit stays plainly unreadable, so its advice still points at gh's login.
+out_rl4="$(CI_RL_KIND=other403 CI_RESET="$_rl_reset" ci_case ratelimited4 ratelimited)"
+check "#593 a 403 that is not a rate limit is not called one" \
+  "case \"\$out_rl4\" in *'rate limit'*) false ;; *'could not read whether'*) true ;; *) false ;; esac"
 
 # AN UNREADABLE VERDICT MUST NOT BLOCK FOR EVER (claude-config#327). Failing closed is right while
 # the answer might still arrive, and wrong once it is clear no answer is coming: gh not logged in,
