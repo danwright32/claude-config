@@ -30,6 +30,13 @@ const modKit: { name: string; register: Register } = {
       'git apply other.patch': { files: [], unnamed: [{ what: 'a patch', words: [], inputs: [`${CWD}/other.patch`] }] },
       'cp CLAUDE.md /tmp/backup/CLAUDE.md': { files: [{ word: '/tmp/backup/CLAUDE.md', path: '/tmp/backup/CLAUDE.md' }], unnamed: [] },
       'cp CLAUDE.md /tmp/repo/CLAUDE.md': { files: [{ word: '/tmp/repo/CLAUDE.md', path: '/tmp/repo/CLAUDE.md' }], unnamed: [] },
+      // #743: a variable the command set is read as its value; a target the words cannot name is
+      // given as written, with no path.
+      [`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`]: { files: [{ word: '$F', path: `${MEM}/MEMORY.md` }], unnamed: [] },
+      [`export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`]: { files: [{ word: '$F', path: `${MEM}/MEMORY.md` }], unnamed: [] },
+      [`printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`]: { files: [{ word: '$(ls ~/.claude/projects/p/memory/MEMORY.md)' }], unnamed: [] },
+      [`printf 'x\\n' >> "$OUT"`]: { files: [{ word: '$OUT' }], unnamed: [] },
+      'cat ~/.claude/CLAUDE.md > notes.txt': { files: [{ word: 'notes.txt', path: `${CWD}/notes.txt` }], unnamed: [] },
     }
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
@@ -280,6 +287,31 @@ test('a write by any shell route mod-kit reads is held: a cd into the memory fol
   const ui = await mount($)
   expect(await shown(ui)).toContain('~/.claude/projects/p/memory/note.md')
   await ui.unmount()
+})
+
+// #743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` appended to MEMORY.md with no question.
+test('a save through a path the command holds in a variable is held and asked about, showing the file it goes to', withKit, async ($, on) => {
+  const w = world(on)
+  for (const command of [`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`, `export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`])
+    expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  const ui = await mount($)
+  expect(await shown(ui)).toContain('~/.claude/projects/p/memory/MEMORY.md')
+  await ui.unmount()
+})
+
+test('a save to a target the words cannot name is asked about when the command mentions lasting memory, and goes through when it mentions none', withKit, async ($, on) => {
+  const w = world(on)
+  const asked = await call($, { tool: 'Bash', command: `printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"` })
+  expect(refusalOf(asked)).toContain('Dan is being asked')
+  const ui = await mount($)
+  expect(await shown(ui)).toContain('~/.claude/projects/p/memory/MEMORY.md')
+  await ui.unmount()
+  // A target nothing in the command names, and a file spelled out beside a mention of lasting
+  // memory (a backup of it), are no save.
+  await call($, { tool: 'Bash', command: `printf 'x\\n' >> "$OUT"` })
+  await call($, { tool: 'Bash', command: 'cat ~/.claude/CLAUDE.md > notes.txt' })
+  expect(w.ran.map(r => r.input.command)).toEqual([`printf 'x\\n' >> "$OUT"`, 'cat ~/.claude/CLAUDE.md > notes.txt'])
 })
 
 test('a write anywhere else, a patch that touches no lasting memory, a backup in a temporary folder, and a Bash call that writes nothing go straight through', withKit, async ($, on) => {

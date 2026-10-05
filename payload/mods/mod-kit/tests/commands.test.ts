@@ -30,6 +30,14 @@ describe('commands', () => {
     expect(commands('X=1 sudo -E env FOO=2 cat .env')).toEqual([['cat', '.env']])
     expect(commands('exec printenv')).toEqual([['printenv']])
   })
+  // #743: a command that only sets variables runs nothing, so no guard is given it; the write reader
+  // asks for it, to read a variable the command set as its value.
+  test('a command that only sets variables is no command, unless a reader asks for its assignments', () => {
+    expect(commands(`F=~/a.md; printf x >> "$F"`)).toEqual([['printf', 'x', '>>', '$F']])
+    expect(commands(`F=~/a.md G=b; printf x >> "$F"`, { assignments: true })).toEqual([['F=~/a.md', 'G=b'], ['printf', 'x', '>>', '$F']])
+    expect(commands('X=1 cat a', { assignments: true })).toEqual([['cat', 'a']])
+    expect(commands(`bash -c 'F=a; echo x > "$F"'`, { assignments: true })).toEqual([['F=a'], ['echo', 'x', '>', '$F']])
+  })
   test('a bare env or a runner with only flags is the command itself', () => {
     expect(commands('env')).toEqual([['env']])
     expect(commands('env -0')).toEqual([['env', '-0']])

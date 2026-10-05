@@ -306,7 +306,7 @@ export type Command = { words: string[]; pipedFrom?: string[]; heredocs?: { word
  * that feeds it, if anything. A heredoc inside a word ("$(cat <<'EOF' ... )") feeds no command
  * here, and one that never ends has no body: its lines are read as commands.
  */
-export const pipeline = (cmd: string): Command[] => {
+export const pipeline = (cmd: string, opts: ReadOptions = {}): Command[] => {
   const out: Command[] = []
   const { text, heredocs } = dropHeredocs(cmd)
   const bodyAt = new Map(heredocs.map(h => [h.at, h.body]))
@@ -315,7 +315,13 @@ export const pipeline = (cmd: string): Command[] => {
   const stripped = read.map((r, k) => r.words.slice(begun[k]))
   read.forEach((r, k) => {
     const words = stripped[k] as string[]
-    if (words.length === 0) return
+    if (words.length === 0) {
+      // A command that only sets variables runs nothing, so it is no command, unless the reader
+      // asked for it (#743): then it is given as its assignments.
+      const sets = r.words.filter(w => ASSIGNMENT.test(w))
+      if (opts.assignments && sets.length) out.push({ words: sets })
+      return
+    }
     const starts = r.starts.slice(begun[k])
     // The command feeding it, named past its own runner as every command is.
     const feeder = r.from === undefined ? undefined : stripped[r.from]?.length ? stripped[r.from] : read[r.from]?.words
@@ -324,7 +330,7 @@ export const pipeline = (cmd: string): Command[] => {
     // feeds reading what feeds the shell.
     const script = SHELLS.has(name) ? shellScript(words) : undefined
     if (script !== undefined) {
-      for (const inner of pipeline(script)) out.push(inner.pipedFrom || !feeder || inner.words[0] === ')' ? inner : { ...inner, pipedFrom: feeder })
+      for (const inner of pipeline(script, opts)) out.push(inner.pipedFrom || !feeder || inner.words[0] === ')' ? inner : { ...inner, pipedFrom: feeder })
       return
     }
     const fed: { word: number; body: string }[] = []
@@ -338,8 +344,14 @@ export const pipeline = (cmd: string): Command[] => {
   return out
 }
 
+/**
+ * What a reader asks for beyond the commands that run: `assignments` gives a command that only sets
+ * variables (`F=path;`) as its assignments, for a reader that follows a variable to its value (#743).
+ */
+export type ReadOptions = { assignments?: boolean }
+
 /** Each simple command a Bash call would run, as its words. */
-export const commands = (cmd: string): string[][] => pipeline(cmd).map(c => c.words)
+export const commands = (cmd: string, opts: ReadOptions = {}): string[][] => pipeline(cmd, opts).map(c => c.words)
 
 // A git command's subcommand, after git's own global options, and the folder -C points it at. The
 // one reading of a git command every mod uses (the style check's commit, the collision guard's

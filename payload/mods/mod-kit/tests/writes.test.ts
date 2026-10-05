@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { commands } from '../hooks/commands.ts'
-import { writes } from '../hooks/writes.ts'
+import { commandWrites } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
 // cd before a relative path, each of which another mod's copy caught.
 const HOME = '/Users/dan'
 const CWD = '/Users/dan/Apps/slate'
-const read = (command: string, cwd = CWD) => writes(commands(command), cwd, HOME)
+// Through the entry point $.modkit.writes calls, so these read exactly what the mods are given.
+const read = (command: string, cwd = CWD) => commandWrites(command, cwd, HOME)
 const paths = (command: string, cwd = CWD) => read(command, cwd).files.map(f => f.path ?? `(as written) ${f.word}`)
 
 describe('writes: redirects and tee', () => {
@@ -206,5 +206,45 @@ describe('writes: what the words do not name', () => {
   })
   test('a command that writes nothing names nothing', () => {
     expect(read('ls -la && git status')).toEqual({ files: [], unnamed: [] })
+  })
+})
+
+// #743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` wrote to MEMORY.md unasked, because this
+// reader gave the target as written ($F) with no path. A variable the same command set is read as
+// its value, as the shell reads it, and the word is still given as written.
+describe('writes: a path held in a variable', () => {
+  test('a variable set earlier in the command names its file, by an assignment or by export', () => {
+    expect(read(`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`).files).toEqual([{ word: '$F', path: `${HOME}/.claude/projects/p/memory/MEMORY.md` }])
+    expect(paths(`export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`)).toEqual([`${HOME}/.claude/projects/p/memory/MEMORY.md`])
+    expect(paths('declare -x F=/opt/rules.md && cp a.md "$F"')).toEqual(['/opt/rules.md'])
+  })
+  test('a value built from home or from another variable the command set is followed', () => {
+    expect(paths('P="$HOME/.claude/projects/p" && cat x > "${P}/memory/note.md"')).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
+    expect(paths('D=~/.claude; F=$D/CLAUDE.md; tee -a "$F" < rules.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
+  })
+  test('a relative value is resolved where it is used, after any cd, and a cd into a held folder is followed', () => {
+    expect(paths('F=CLAUDE.md; cd sub && echo x >> "$F"')).toEqual([`${CWD}/sub/CLAUDE.md`])
+    expect(paths('D=~/.claude/projects/p/memory; cd "$D" && echo x > note.md')).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
+  })
+  test('a variable the reader cannot be sure of is given as written', () => {
+    // Set from a command's output, by a loop, by read, by eval, or unset.
+    expect(paths('F=$(mktemp); echo x > "$F"')).toEqual(['(as written) $F'])
+    expect(paths('for F in a.md b.md; do echo x >> "$F"; done')).toEqual(['(as written) $F'])
+    expect(paths('F=a.md; while read -r F; do echo x >> "$F"; done < list')).toEqual(['(as written) $F'])
+    expect(paths(`F=a.md; eval "F=b.md"; echo x > "$F"`)).toEqual(['(as written) $F'])
+    expect(paths('F=a.md; unset F; echo x > "$F"')).toEqual(['(as written) $F'])
+    expect(paths('F=a.md; F+=x; echo x > "$F"')).toEqual(['(as written) $F'])
+    for (const setter of ['select F in a b; do break; done', 'mapfile -t F < list', 'getopts ab F', `printf -v F '%s' b.md`, 'source env.sh', '. ./env.sh', 'declare -n F=G'])
+      expect(`${setter}: ${paths(`F=a.md; ${setter}; echo x > "$F"`)}`).toBe(`${setter}: (as written) $F`)
+    // Given two values: the reader cannot tell a ; from an && or ||, so which one stands is unknown.
+    expect(paths('F=a.md; [ -n "$X" ] && F=b.md; echo x > "$F"')).toEqual(['(as written) $F'])
+    // Set only for the one command it leads, or only inside quotes: no variable the shell keeps.
+    expect(paths('F=~/.claude/CLAUDE.md true; echo x > "$F"')).toEqual(['(as written) $F'])
+    expect(paths('echo "F=~/.claude/CLAUDE.md"; echo x > "$F"')).toEqual(['(as written) $F'])
+    // Never set at all.
+    expect(paths('echo x >> "$OUT"')).toEqual(['(as written) $OUT'])
+  })
+  test('a value set inside a subshell ends with it', () => {
+    expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual([`${CWD}/b.md`, `${CWD}/a.md`, '(as written) $G'])
   })
 })

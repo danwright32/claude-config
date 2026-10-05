@@ -44,7 +44,8 @@ const message = (err: unknown) => String((err as Error)?.message ?? err)
 // Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
 // call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
 // patch, an inline script) is judged by the lasting memory its text and any patch file it reads
-// mention. A file in a temporary folder counts inside a checkout there, found by mod-kit's one
+// mention, and so is a target they cannot name, such as a variable (#743, lastingFiles). A file
+// in a temporary folder counts inside a checkout there, found by mod-kit's one
 // walk for it (#726). A file that exists and cannot be read, or a disk that cannot say whether a
 // temporary file is in a checkout, fails the hook, and the hook fails closed.
 const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string[]> => {
@@ -57,7 +58,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   }
   const command = String(input.command ?? '')
   const w = await $.modkit.writes({ command, cwd, home })
-  const out = await lastingFiles(w, home, inCheckout)
+  const out = await lastingFiles(w, home, inCheckout, command)
   for (const u of w.unnamed) {
     const texts = [command]
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
