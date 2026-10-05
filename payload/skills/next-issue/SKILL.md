@@ -15,7 +15,11 @@ If there is an open PR for the work just finished:
    `gh pr merge <pr> --squash --delete-branch --match-head-commit $(gh pr view <pr> --json headRefOid --jq .headRefOid)`
    (match the repo's usual merge style if different). The pin is what stops a push that lands
    between the check reading and the merge being merged unjudged, and the merge gate refuses an
-   unpinned merge for that reason (claude-config#345). Then CONFIRM it, because a merge command
+   unpinned merge for that reason (claude-config#345). The gate also refuses a branch that does
+   not contain the base branch's current tip, because its green was earned against an older base
+   and two green pull requests can merge into a red main (claude-config#766). When it does, run
+   the `gh pr update-branch <pr> --repo <owner/name>` it names, wait for the new checks on the
+   updated head, and pin the merge to that new head. Then CONFIRM it, because a merge command
    that exits 0 is not a merge. Ask `gh pr view <pr> --json state --jq .state` and treat anything but `MERGED` as
    not merged: say so, do not delete a branch, do not close the issue, and do not move on to the
    next one. Measured 2026-08-13 in Overture: `gh pr merge` failed with a transient
