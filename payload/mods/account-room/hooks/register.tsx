@@ -421,7 +421,13 @@ const ask = async ($: EngineInterface, a: AccountRoomAsking) => {
   await $.state.set(askingRef, a)
   await $.state.set(typedRef, a.current ?? '')
   const opened = await $.ui.open({ id: PANE, title: 'Nickname', focus: true, closeOnEscape: true, holdToasts: true, rows: 7 })
-  if (!opened.isPlaced) $.ui.log(`account-room: the nickname dialog is waiting to be shown: ${'reason' in opened ? String(opened.reason) : 'not placed'}`, { to: 'debug' })
+  if (!opened.isPlaced) {
+    // Opened at session start, unasked, Claude Code holds the question back below 144 columns, so a
+    // narrower window shows nothing at all. The question keeps waiting, and the transcript says so
+    // with the command that asks for it, which opens at any width (live check, 2026-10-05).
+    $.ui.log(`account-room: the nickname dialog is waiting to be shown: ${'reason' in opened ? String(opened.reason) : 'not placed'}`, { to: 'debug' })
+    once($, 'nickname-waiting', `Account room: ${a.email} has no nickname yet. The question shows once this window is 144 columns wide, or run /accounts rename to answer it now.`)
+  }
 }
 
 const finishAsk = async ($: EngineInterface, name: string | null, close: boolean) => {
