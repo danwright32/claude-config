@@ -78,17 +78,55 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
   return undefined
 }
 
+/** The scope modes mod's noun (#621) as its contract has it; it may not be loaded at all. */
+type ScopeModes = {
+  hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: boolean; card?: { guard: string; reason: string; safeWay: string }; deny?: string }>
+}
+type Held = { card?: { guard: string; reason: string; safeWay: string }; deny?: string }
+
+// While Dan is away (#621) the action is held for the held card he sees on coming home, rather than
+// asked about in the band, which his phone cannot show, so the turn would wait on nobody. The
+// engine needs the noun called in place, so the scope modes mod not being loaded (which is home)
+// arrives as a TypeError naming the noun; any other failure, a TypeError from inside a loaded mod
+// included, is a refusal: whether a question can be answered at all is unknown (L42).
+const holdWhileAway = async ($: EngineInterface, label: string, prompt: string): Promise<{ held: Held } | 'home' | { failed: string }> => {
+  try {
+    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({ label, prompt })
+    return r?.isHeld === true ? { held: { card: r.card, deny: r.deny } } : 'home'
+  } catch (err) {
+    const why = String((err as Error)?.message ?? err)
+    if (err instanceof TypeError && /scopeModes/.test(why)) return 'home'
+    return { failed: why }
+  }
+}
+
 export const register: Register = on => {
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+  // Asked here, beneath every mod's tool.call hook and after the settings hooks beneath this one
+  // (#707): an action no build, winding down, the secret guard or a settings hook refuses is refused
+  // before Dan is asked, whichever order the mods load in. The engine raises classic.PreToolUse
+  // inside tool.call, beneath every plugin's tool.call hook (measured live on 2026-10-04, Claude
+  // Code 2.1.289), and next(e) here runs only the hooks beneath, never the command.
+  on('classic.PreToolUse', { tool: 'Bash' }, async ($, e, next) => {
+    const decided = await next(e)
+    if (decided.deny !== undefined) return decided
     const c = classify(await $.modkit.commands({ command: e.command }), e.command)
-    if (c.kind === 'none') return next(e)
+    if (c.kind === 'none') return decided
     const typing = c.kind === 'input'
     const app = c.app ?? 'an app'
+    const toolUseId = String(e.tool_use_id ?? '')
 
     const refuse = async (r: Refusal) => {
-      await $.modkit.blocked({ toolUseId: String(e.tool_use_id ?? ''), guard: GUARD, reason: r.reason, safeWay: r.safeWay })
+      await $.modkit.blocked({ toolUseId, guard: GUARD, reason: r.reason, safeWay: r.safeWay })
       await $.ui.toast(typing ? `Blocked typing into ${app}.` : `Blocked bringing ${app} to the front.`)
       return { deny: refusalText(r) }
+    }
+
+    // Held as scope modes words its own held actions, so the two read the same (L605).
+    const away = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${e.command}`)
+    if (away !== 'home') {
+      if ('failed' in away) return refuse({ reason: `Couldn't tell whether you are away (${away.failed}), so this was stopped.`, safeWay: 'Try again in a moment.' })
+      if (away.held.card) await $.modkit.blocked({ toolUseId, ...away.held.card })
+      return { deny: away.held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
     }
 
     if (typing) {
@@ -100,6 +138,6 @@ export const register: Register = on => {
 
     const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
-    return next(e)
+    return decided
   })
 }

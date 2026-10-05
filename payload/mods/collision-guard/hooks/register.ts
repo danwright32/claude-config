@@ -180,82 +180,115 @@ const recorder = async ($: EngineInterface, list: { open: Rec[]; selfId: string 
 const unreadableRefusal =($: EngineInterface, toolUseId: string, names: string[]) =>
   refuse($, toolUseId, `Couldn't read another session's record (${names.join(', ')}), so this was stopped.`, 'Delete the damaged file in ~/.claude/state/sessions, or ask Dan.')
 
+// What a call the guard let through notes as this session's edits once it has run: the registry as
+// it was judged against, and the paths. `strict` notes them only when the call ran without error
+// (an Edit that failed wrote nothing); a shell command that failed may have written first.
+type ToNote = { list: { open: Rec[]; selfId: string | null }; paths: string[]; strict: boolean }
+
+const watches = (tool: string) => WRITERS.has(tool) || tool === 'Bash'
+
+// Judges one call against the other sessions: the refusal, what to note once it runs, or undefined
+// when it writes nothing worth noting.
+const check = async ($: EngineInterface, input: Record<string, unknown>): Promise<{ deny: string } | ToNote | undefined> => {
+  const toolUseId = String(input.tool_use_id ?? '')
+  if (WRITERS.has(String(input.tool))) {
+    const path = String(input.file_path ?? input.notebook_path ?? '')
+    if (!path) return undefined
+    const list = await $.sessions.list()
+    if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
+    const others = othersEditing(list.open, list.selfId, path)
+    if (others.length) {
+      const root = others[0]?.repoRoot ?? null
+      const blocked = await decide($, toolUseId, { action: `edit ${path}`, shortName: base(path), messageWhat: quoteNames([relTo(path, root)]), doing: 'edit', root, others })
+      if (blocked) return blocked
+    }
+    return { list, paths: [path], strict: true }
+  }
+
+  const command = String(input.command ?? '')
+  const cmds = await $.modkit.commands({ command })
+  for (const words of cmds) {
+    const g = await $.modkit.git({ words })
+    const action = g ? watchedGit(g) : undefined
+    if (!g || !action) continue
+    const dir = g.dir ?? (await $.session.cwd())
+    const root = (await run($, ['git', '-C', dir, 'rev-parse', '--show-toplevel']))?.trim() || null
+    const list = await $.sessions.list()
+    if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
+    const others = othersInRepo(list.open, list.selfId, root)
+    if (!others.length) continue
+    const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, doing: 'run', root, others })
+    if (blocked) return blocked
+  }
+
+  // The files the command writes (#654), judged against the other sessions' edits the same way an
+  // Edit is, and noted as this session's own once it has run. An rm is judged the same way (#674),
+  // and an rm -r or mv of a folder once, on every file another session edited inside it: one
+  // judgment, one card or toast, and one message to each session naming its own files.
+  const written = await writtenFiles($, cmds)
+  if (!written.length) return undefined
+  const list = await $.sessions.list()
+  if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
+  for (const w of written) {
+    const files = w.tree ? editedUnder(list.open, list.selfId, w.path) : [w.path]
+    const others = [...new Set(files.flatMap(p => othersEditing(list.open, list.selfId, p)))]
+    if (!others.length) continue
+    const root = others[0]?.repoRoot ?? null
+    const one = files.length === 1 ? (files[0] as string) : undefined
+    const what = !w.removes ? `write ${w.path}` : one === w.path ? `remove ${w.path}` : `remove ${w.path} and everything in it, including ${files.join(', ')},`
+    const blocked = await decide($, toolUseId, {
+      action: `${what} with the shell command: ${command}`,
+      shortName: one ? base(one) : `${files.length} files in ${base(w.path)}`,
+      messageWhat: one ? quoteNames([relTo(one, root)]) : o => quoteNames(files.filter(p => o.edits.includes(p)).map(p => relTo(p, root))),
+      doing: w.removes ? 'remove' : 'edit',
+      root,
+      others,
+    })
+    if (blocked) return blocked
+  }
+  return { list, paths: written.map(w => w.path), strict: false }
+}
+
+// Handed from the classic.PreToolUse hook that let a call through to the tool.call hook around it,
+// by the call's id, so only a call this guard judged and let through is noted.
+const toNote = new Map<string, ToNote>()
+
 export const register: Register = on => {
-  on('tool.call', async ($, e, next) => {
+  // Judged here, beneath every mod's tool.call hook and after the settings hooks beneath this one
+  // (#707): a call no build, winding down, the secret guard, the style check or a settings hook
+  // refuses is refused before Sonnet is asked, another session is told or a toast says safe,
+  // whichever order the mods load in. The engine raises classic.PreToolUse inside tool.call,
+  // beneath every plugin's tool.call hook (measured in a live session on 2026-10-04, Claude Code
+  // 2.1.289), and next(e) here runs only the hooks beneath, never the tool.
+  on('classic.PreToolUse', async ($, e, next) => {
+    const decided = await next(e)
+    if (decided.deny !== undefined || !watches(String(e.tool))) return decided
     const input = e as unknown as Record<string, unknown>
-    const toolUseId = String(input.tool_use_id ?? '')
+    const c = await check($, input)
+    if (c && 'deny' in c) return { deny: c.deny }
+    // Keyed by the call's id, which the engine gives every call, one raised without any included
+    // (measured 2026-10-04, and tested), so two calls never share a plan.
+    if (c) toNote.set(String(input.tool_use_id), c)
+    return decided
+  })
 
-    if (WRITERS.has(String(e.tool))) {
-      const path = String(input.file_path ?? input.notebook_path ?? '')
-      if (!path) return next(e)
-      const list = await $.sessions.list()
-      if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
-      const others = othersEditing(list.open, list.selfId, path)
-      if (others.length) {
-        const root = others[0]?.repoRoot ?? null
-        const blocked = await decide($, toolUseId, { action: `edit ${path}`, shortName: base(path), messageWhat: quoteNames([relTo(path, root)]), doing: 'edit', root, others })
-        if (blocked) return blocked
-      }
-      const result = await next(e)
-      if (!result.deny && !result.isError) {
-        const recorded = await recorder($, list)
-        if (await recorded(path)) await $.sessions.noteEdit({ path })
-      }
-      return result
+  on('tool.call', async ($, e, next) => {
+    if (!watches(String(e.tool))) return next(e)
+    const id = String((e as unknown as { tool_use_id?: string }).tool_use_id ?? '')
+    let result: Awaited<ReturnType<typeof next>>
+    let plan: ToNote | undefined
+    try {
+      result = await next(e)
+    } finally {
+      plan = toNote.get(id)
+      toNote.delete(id)
     }
-
-    if (e.tool === 'Bash') {
-      const command = String(input.command ?? '')
-      const cmds = await $.modkit.commands({ command })
-      for (const words of cmds) {
-        const g = await $.modkit.git({ words })
-        const action = g ? watchedGit(g) : undefined
-        if (!g || !action) continue
-        const dir = g.dir ?? (await $.session.cwd())
-        const root = (await run($, ['git', '-C', dir, 'rev-parse', '--show-toplevel']))?.trim() || null
-        const list = await $.sessions.list()
-        if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
-        const others = othersInRepo(list.open, list.selfId, root)
-        if (!others.length) continue
-        const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, doing: 'run', root, others })
-        if (blocked) return blocked
-      }
-
-      // The files the command writes (#654), judged against the other sessions' edits the same way
-      // an Edit is, and noted as this session's own once it has run. An rm is judged the same way
-      // (#674), and an rm -r or mv of a folder once, on every file another session edited inside it:
-      // one judgment, one card or toast, and one message to each session naming its own files.
-      const written = await writtenFiles($, cmds)
-      if (!written.length) return next(e)
-      const list = await $.sessions.list()
-      if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
-      for (const w of written) {
-        const files = w.tree ? editedUnder(list.open, list.selfId, w.path) : [w.path]
-        const others = [...new Set(files.flatMap(p => othersEditing(list.open, list.selfId, p)))]
-        if (!others.length) continue
-        const root = others[0]?.repoRoot ?? null
-        const one = files.length === 1 ? (files[0] as string) : undefined
-        const what = !w.removes ? `write ${w.path}` : one === w.path ? `remove ${w.path}` : `remove ${w.path} and everything in it, including ${files.join(', ')},`
-        const blocked = await decide($, toolUseId, {
-          action: `${what} with the shell command: ${command}`,
-          shortName: one ? base(one) : `${files.length} files in ${base(w.path)}`,
-          messageWhat: one ? quoteNames([relTo(one, root)]) : o => quoteNames(files.filter(p => o.edits.includes(p)).map(p => relTo(p, root))),
-          doing: w.removes ? 'remove' : 'edit',
-          root,
-          others,
-        })
-        if (blocked) return blocked
-      }
-      const result = await next(e)
-      // A command that failed may still have written before it failed (printf >> f; false), so only
-      // a refusal leaves the record alone. Which paths are recorded: recorder, above.
-      if (!result.deny) {
-        const recorded = await recorder($, list)
-        for (const w of written) if (await recorded(w.path)) await $.sessions.noteEdit({ path: w.path })
-      }
-      return result
-    }
-    return next(e)
+    // A refusal leaves the record alone, whoever made it. A shell command that failed may still
+    // have written before it failed (printf >> f; false), so only an Edit's failure does too.
+    if (!plan || result.deny !== undefined || (plan.strict && result.isError)) return result
+    const recorded = await recorder($, plan.list)
+    for (const path of plan.paths) if (await recorded(path)) await $.sessions.noteEdit({ path })
+    return result
   })
 
   // The session that was working first: the message reached its conversation (the standard incoming

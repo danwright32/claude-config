@@ -1,6 +1,6 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
-import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
+import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCall, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
 import { compose, drop, isDivider, paneRefusal, put, questionRefusal, questionRow, refusal, shownQuestion } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
@@ -22,6 +22,17 @@ const keep = (card: ModKitCard) => {
   cards.set(card.toolUseId, card)
   // Bounded, so a long session cannot grow it without end; the oldest rows are long gone.
   if (cards.size > MAX) cards.delete(cards.keys().next().value as string)
+}
+
+/** The secret guard's noun as its contract has it (#707); it may not be loaded at all. */
+type SecretGuardScreen = { screen: (call: ModKitCall) => Promise<{ deny: string } | null> }
+
+// A screen that could not ask refuses the call, with the card, rather than let input it could not
+// check reach the mod answering the call (L42).
+const screenFailed = (call: ModKitCall, why: string): { deny: string } => {
+  // A call with no id is refused all the same, drawn as Claude Code's error row, as `blocked` does.
+  if (call.tool_use_id) keep(blockedCard({ toolUseId: call.tool_use_id, guard: 'Secret guard', reason: "Couldn't check this for secrets, so it was stopped.", safeWay: 'Try it again, or ask Dan.' }))
+  return { deny: `Blocked: the secret guard could not be asked about this (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.` }
 }
 
 // The band's rows, in $.state so a reload of this module keeps them (a module variable would not).
@@ -103,8 +114,26 @@ export const register: Register = (on, options) => {
       clearPane: async ({ mod, id }) => {
         await changePanes(held => drop(held, mod, id))
       },
+      // Answered by this mod's own hook on the noun's event below, which has the whole $ and so can
+      // ask the secret guard wherever its folder sorts; this answers only when that hook failed.
+      screen: async call => screenFailed(call, 'the check itself failed'),
     }
     return { ...built, modkit }
+  })
+
+  // #707: a mod answering a tool call itself asks here before it acts. The guards that refuse a call
+  // for its input are asked by name: today the secret guard alone.
+  on('modkit.screen', async ($, e) => {
+    try {
+      return { value: await ($ as unknown as { secretGuard: SecretGuardScreen }).secretGuard.screen(e) }
+    } catch (err) {
+      const why = String((err as Error)?.message ?? err)
+      // The engine needs the noun called in place, so the secret guard not being loaded arrives as a
+      // TypeError naming the noun; whatever the noun itself throws arrives wrapped as the engine's
+      // own error, and is a failure, never taken for absence.
+      if (err instanceof TypeError && /secretGuard/.test(why)) return { value: null }
+      return { value: screenFailed(e, why) }
+    }
   })
 
   on('ui.render', { component: 'ToolResult' }, ($, e, next) => {

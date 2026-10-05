@@ -1,10 +1,11 @@
 {
   "name": "secret-guard",
   "version": "0.1.0",
-  "description": "Blocks commands that print secrets, scrubs secrets from tool output, and refuses tool input that carries one.",
+  "description": "Blocks commands that print secrets, scrubs secrets from tool output, and refuses tool input that carries one, a call another mod answers itself included.",
   "author": {
     "name": "Dan Wright"
   },
+  "types": "./types/index.d.ts",
   "dependencies": [
     "mod-kit"
   ]

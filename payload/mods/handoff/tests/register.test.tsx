@@ -22,6 +22,9 @@ const modKit: { name: string; register: Register } = {
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
+        // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
+        // token; mod-kit's own tests prove the real one asks the secret guard.
+        screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
       }
       return { ...built, modkit } as never
     })
@@ -188,6 +191,18 @@ test('Claude cannot write a handoff on its own: the save is refused until Dan ru
   const r = (await $.tool.call({ tool: 'mcp__handoff__save', title: 'T', prompt: 'P' } as never)) as { deny?: string; isError?: boolean; text?: string }
   expect(r.deny ?? r.text).toBe('A handoff is written only when Dan runs /handoff.')
   expect(CURRENT in w.files).toBe(false)
+})
+
+// #707: this mod answers its save tool itself, so the secret guard beneath it never sees the call;
+// it asks mod-kit's screen first. A handoff carrying a token is refused before it is written to disk
+// or anything is read from GitHub for it.
+test('a handoff a guard refuses is refused before anything is written or read (#707)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  const r = (await $.tool.call({ tool: 'mcp__handoff__save', title: 'Keys', prompt: `${PROMPT} The key is SCREEN-REFUSES.` } as never)) as { deny?: string; text?: string }
+  expect(r.deny ?? r.text).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(Object.keys(w.files)).toEqual([])
 })
 
 test('a save with no title or no prompt is refused, naming what is missing', withKit, async ($, on) => {

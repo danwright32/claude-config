@@ -187,7 +187,11 @@ export const register: Register = on => {
     return {}
   })
 
+  // Answered here and never passed down, so the guards beneath (the secret guard) are asked through
+  // mod-kit's screen before the handoff is written to disk or offered at the next start (#707).
   on('tool.call', { tool: 'mcp__handoff__save' }, async ($, e) => {
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
     if (!(await $.state.get(armedRef)).value) return { deny: 'A handoff is written only when Dan runs /handoff.' }
     const input = e as unknown as { title?: unknown; prompt?: unknown }
     const title = typeof input.title === 'string' ? input.title.trim() : ''

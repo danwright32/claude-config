@@ -27,6 +27,16 @@
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
 # on every run, with that issue, rather than failing the run or passing in silence (L129, L523).
 #
+# And one shared part every mod must USE rather than must not copy (#707):
+#   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
+#             a result rather than calling next) keeps the      its refusal: mod-kit asks the secret guard
+#             call from every guard beneath it, the secret      wherever its folder sorts
+#             guard among them
+# What it reads is the whole hooks folder: a mod with a tool.call hook and a `result:` answer must
+# call $.modkit.screen somewhere. So it catches a new answering mod that never asks; one that asks in
+# one hook and not another is held by that mod's own tests (L135), and so is a mod that shows a call's
+# input and then refuses without a result (ask before saving asks from classic.PreToolUse instead).
+#
 # Only each mod's hooks/ is read: its tests may stand in for mod-kit, since a mod cannot import
 # another mod's files.
 #
@@ -82,6 +92,14 @@ for d in "$dir"/*/; do
       echo "check-mod-shared-parts: $name keeps its own $label at ${h#"$d"}: use $remedy from mod-kit instead."
     done <<< "$hits"
   done
+  # screen (#707): answering a tool call with a result, never asking mod-kit's screen.
+  src=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs')
+  if grep -rqE "${src[@]}" -- "on\(['\"]tool\.call['\"]" "$d/hooks" 2>/dev/null \
+    && grep -rqE "${src[@]}" -- '\{ *result:|^[[:space:]]*result:' "$d/hooks" 2>/dev/null \
+    && ! grep -rqF "${src[@]}" -- '$.modkit.screen(' "$d/hooks" 2>/dev/null; then
+    failed=1
+    echo "check-mod-shared-parts: $name answers a tool call itself but never asks \$.modkit.screen(e) first, so the guards beneath it (the secret guard) never see that call: ask it before acting on the call, and answer with its refusal."
+  fi
 done
 echo "check-mod-shared-parts: $n mods checked in $dir"
 exit "$failed"

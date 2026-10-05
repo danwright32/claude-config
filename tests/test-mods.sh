@@ -208,6 +208,24 @@ printf '%s\n' "$out" | grep 'own-pane ' | grep -q 'modkit.pane(' \
   && check "and points a mod's own pane at modkit.pane" ok || check "and points a mod's own pane at modkit.pane" "$out"
 printf '%s\n' "$out" | grep 'own-retry ' | grep -q 'session.send' \
   && check "and tells a mod with its own retry that mod-kit retries every send" ok || check "and tells a mod with its own retry that mod-kit retries every send" "$out"
+# The screen (#707): a mod that answers a tool call itself keeps the call from every guard beneath
+# it, so it must ask mod-kit's screen first. One answering with a result that never asks fails and is
+# named; one that asks passes, and so does one that only passes a result on from next.
+M9S="$TMPROOT/m9s"
+mkmodsrc "$M9S" asks-first "on('tool.call', { tool: 'mcp__x__pin' }, async (\$, e) => { const refused = await \$.modkit.screen(e); if (refused) return refused; return { result: 'Pinned.' } })"
+mkmodsrc "$M9S" passes-on "on('tool.call', async (\$, e, next) => { const r = await next(e); return { ...r, context: ['noted'] } })"
+mkmodsrc "$M9S" answers-unscreened "on('tool.call', { tool: 'mcp__x__save' }, async (\$, e) => {
+  await \$.fs.write('/tmp/x', String(e.prompt))
+  return {
+    result: 'Saved.',
+  }
+})"
+out="$(bash "$SHARED" "$M9S" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod answering a tool call without asking the screen fails the run" ok \
+  || check "a mod answering a tool call without asking the screen fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'answers-unscreened ' | grep -q 'modkit.screen(e)' \
+  && check "and is named, pointed at \$.modkit.screen" ok || check "and is named, pointed at \$.modkit.screen" "$out"
+case "$out" in *asks-first*|*passes-on*) check "a mod that asks first, or passes on next's result, is not named" "$out" ;; *) check "a mod that asks first, or passes on next's result, is not named" ok ;; esac
 out="$(bash "$SHARED" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the shared parts check too" ok \
   || check "a missing mods folder is refused by the shared parts check too" "exit=$code out=$out"

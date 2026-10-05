@@ -31,6 +31,9 @@ const modKit: { name: string; register: Register } = {
           const held = ((await built.state.get(cardsRef)) as { value?: unknown[] }).value ?? []
           await built.state.set(cardsRef, [...held, c] as never)
         },
+        // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
+        // token; mod-kit's own tests prove the real one asks the secret guard.
+        screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
       }
       return { ...built, modkit } as never
     })
@@ -186,6 +189,20 @@ test('verified live: the card leads with Live, confirms the merge with GitHub, a
   expect(w.runs[0]).toEqual(['gh', 'pr', 'view', '412', '--repo', REPO, '--json', 'state,title,url'])
   expect(w.toasts).toEqual(['Live: Filter bookings by venue'])
   expect(await shown($)).toEqual(['engine band'])
+})
+
+// #707: this mod answers its card tool itself, so the secret guard beneath it never sees the call;
+// it asks mod-kit's screen first. A card whose message carries a token is refused before GitHub is
+// asked, the card kept or toasted, or the message pinned with Copy.
+test('a card a guard refuses is refused before GitHub is asked or anything is kept, toasted or pinned (#707)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'Here is the key: SCREEN-REFUSES' })
+  expect(textOf(r)).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.runs).toEqual([])
+  expect(w.toasts).toEqual([])
+  expect(await shown($)).toEqual(['engine band'])
+  expect(await live($)).not.toContain('Filter bookings by venue')
 })
 
 // What the card's result row shows: each leaf Text's words and colour, top to bottom.

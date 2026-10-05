@@ -117,7 +117,19 @@ export type ModKit = {
   pane: (pane: ModKitPane) => Promise<void>
   /** Stops drawing this mod's pane with that id; a pane still open is then drawn by Claude Code. Clearing one not drawn is fine. */
   clearPane: (input: { mod: string; id: string }) => Promise<void>
+  /**
+   * Whether a guard refuses a tool call, asked by a mod that answers the call itself (#707). Such a
+   * hook never calls next, so the guards beneath it never see the call, and they sit beneath it
+   * whenever its folder sorts first. Ask before acting on the call's input (showing, storing or
+   * sending it), and answer with the refusal when there is one. The secret guard is asked, which
+   * draws its card and toasts as when it refuses a call itself; null when nothing refuses or the
+   * secret guard is not loaded. One that fails to answer refuses the call, with a card (L42).
+   */
+  screen: (call: ModKitCall) => Promise<{ deny: string } | null>
 }
+
+/** A tool call as a `tool.call` hook receives it: the tool, the call's id, and its arguments beside them. Plain data. */
+export type ModKitCall = { tool: string; tool_use_id?: string } & Record<string, unknown>
 
 /**
  * What a side pane shows: a band row's lines and frame, with no slot, since a pane holds one card.

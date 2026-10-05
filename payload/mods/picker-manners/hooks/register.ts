@@ -112,6 +112,10 @@ export const register: Register = on => {
       return null
     })
     if (!bandEverywhere(surfaces)) return next(e)
+    // Answered here from now on and never passed down, so the guards beneath (the secret guard) are
+    // asked through mod-kit's screen before the question is drawn or kept (#707).
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
     const id = (e as unknown as { tool_use_id?: string }).tool_use_id ?? `call-${++calls}`
     // An interrupted turn withdraws the question rather than leaving it in the band.
     onAbort(next.signal, () => settle(id, { kind: 'withdrawn' }))

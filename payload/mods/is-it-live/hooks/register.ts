@@ -160,7 +160,11 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Answered here and never passed down, so the guards beneath (the secret guard) are asked through
+  // mod-kit's screen before the card or its message is kept, toasted or pinned with Copy (#707).
   on('tool.call', { tool: TOOL }, async ($, e) => {
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
     const { tool: _t, tool_use_id: toolUseId, agentId: _a, consent: _c, ...raw } = e as unknown as Record<string, unknown>
     const input = raw as unknown as CardInput
     const why = reasonToRefuse(input)

@@ -12,6 +12,11 @@ const deps: { name: string; register: Register } = {
       const built = await next(e)
       return {
         ...built,
+        // mod-kit's screen (#707), standing in: refuses a call carrying SCREEN-REFUSES, as the secret
+        // guard refuses a token; mod-kit's own tests prove the real one asks the secret guard.
+        modkit: {
+          screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
+        },
         sessions: {
           list: async () => {
             const r = await built.process.run(['__sessions'])
@@ -544,6 +549,21 @@ test('a job kept with a reason is published as kept, with the name the band show
   expect(r.deny).toBeUndefined()
   expect(String(r.result)).toContain('Kept job1')
   expect(lastRecs(w)[0]?.kept).toEqual({ name: 'dev server', reason: 'Dan is clicking through the site', quiet: false, at: 5 * MIN })
+})
+
+// #707: this mod answers its keep tool itself, so the secret guard beneath it never sees the call;
+// it asks mod-kit's screen first. A reason carrying a token is refused before the job is kept or
+// published for the status bar.
+test('keeping a job with a reason a guard refuses is refused before anything is kept or published (#707)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const before = w.extra.length
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'serves with the key SCREEN-REFUSES' }))) as { deny?: string; text?: string }
+  expect(r.deny ?? r.text).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.extra.length).toBe(before)
+  expect((lastRecs(w) ?? [])[0]?.kept).toBeUndefined()
 })
 
 test('keeping a job that is not running is refused, naming the jobs that are', withDeps, async ($, on) => {

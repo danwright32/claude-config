@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
-import { heldCard, heldTool, needsTheMac } from './away.ts'
+import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
 import { execsOf, isShell, programsOf } from './program.ts'
 import { isDans, triggersIn, type Trigger } from './triggers.ts'
@@ -437,10 +437,9 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
     if (label) {
       const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
       await hold($, label, `Do it now. What was held: ${raw || `${tool} ${JSON.stringify(args)}`}`)
-      await $.modkit.blocked({ toolUseId, guard: 'Away', reason: `Held for when you are back: ${label}.`, safeWay: 'Claude publishes a private page for your phone instead.' })
-      return {
-        deny: `Held: Dan is away from the Mac, so "${label}" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).`,
-      }
+      const held = heldRefusal(label)
+      await $.modkit.blocked({ toolUseId, ...held.card })
+      return { deny: held.deny }
     }
   }
   return undefined
@@ -468,7 +467,7 @@ export const register: Register = on => {
           await built.state.set(heldSeqRef, seq)
           await built.state.set(heldRef, [...held, { id: String(seq), label, prompt }])
         }
-        return { isHeld: true }
+        return { isHeld: true, ...heldRefusal(label) }
       },
     }
     return { ...built, scopeModes }
@@ -586,6 +585,10 @@ export const register: Register = on => {
     const toolUseId = String(input.tool_use_id ?? '')
 
     if (tool === 'mcp__scope-modes__switch_to_build') {
+      // Answered here and never passed down, so the guards beneath (the secret guard) are asked
+      // through mod-kit's screen before the change is shown to Dan in the question (#707).
+      const refused = await $.modkit.screen(e)
+      if (refused) return refused
       if ((await scopeOf($)) !== 'NO BUILD') return { result: 'No build is not on.', text: 'No build is not on.' }
       const change = String(input.change ?? '').trim().replace(/[.?]+$/, '') || 'make a change'
       let answer: string

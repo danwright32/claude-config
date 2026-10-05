@@ -351,7 +351,11 @@ export const register: Register = on => {
     return r
   })
 
+  // Both tools are answered here and never passed down, so the guards beneath (the secret guard) are
+  // asked through mod-kit's screen before a value is drawn with Copy or kept (#707).
   on('tool.call', { tool: TOOL }, async ($, e) => {
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
     const made = cardFrom(e)
     if ('refusal' in made) return { deny: made.refusal }
     const card = made.card
@@ -377,6 +381,8 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: VERDICT_TOOL }, async ($, e) => {
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
     const input = e as unknown as { step?: unknown; checked?: unknown }
     const out = await change($, card => {
       if (!card || card.isCarried) return { card, out: { refusal: 'No steps are pinned; pin them with the steps tool first.' } }

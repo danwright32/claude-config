@@ -19,9 +19,15 @@ export type ScopeModes = {
   /**
    * Holds something that needs Dan at the Mac, for the held card when he is home again. Answers
    * whether it was held: false at home, where nothing is held and the caller goes ahead as usual.
+   * Held, it also gives the refusal worded as this mod's own held calls are, for a guard holding a
+   * tool call (the keystroke guard, #707): `card` to draw with `$.modkit.blocked` under the call's
+   * id, and `deny` for Claude to read.
    */
-  hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: boolean }>
+  hold: (input: { label: string; prompt: string }) => Promise<ScopeModesHold>
 }
+
+/** What `hold` answers: not held (at home), or held with the refusal a held tool call is answered with. */
+export type ScopeModesHold = { isHeld: false } | { isHeld: true; card: { guard: string; reason: string; safeWay: string }; deny: string }
 
 declare module 'claude-code' {
   interface EngineInterface {

@@ -88,6 +88,9 @@ const deps: { name: string; register: Register } = {
             built.ui.log('CLEAR ' + id)
             await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
           },
+          // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
+          // token; mod-kit's own tests prove the real one asks the secret guard.
+          screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
         },
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),
@@ -419,6 +422,18 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   const yes = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts', tool_use_id: 't2' } as never)
   expect(yes).toMatch(/Dan said yes: no build is off/)
   expect(lastModes(w)).toEqual([])
+})
+
+// #707: this mod answers switch_to_build itself, so the secret guard beneath it never sees the call;
+// it asks mod-kit's screen first. A change carrying a token is refused before Dan is asked about it.
+test('a switch to build a guard refuses is refused before Dan is asked (#707)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Yes' })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const r = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'paste the key SCREEN-REFUSES into .env', tool_use_id: 't3' } as never)
+  expect(r).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.asked).toEqual([])
+  expect(lastModes(w)).toEqual(['NO BUILD'])
 })
 
 const merged = (state = 'MERGED') => ({ pr: { number: 12, state, url: 'https://github.com/o/r/pull/12', closingIssuesReferences: [{ number: 616 }] }, issues: { 616: state === 'MERGED' ? 'CLOSED' : 'OPEN' } })
@@ -818,7 +833,13 @@ test('another mod holds its own item while away, and is told nothing was held at
   const holdIt = () => call($ as never, { tool: 'HoldIt', tool_use_id: 'h' } as never)
   expect(await holdIt()).toBe('{"isHeld":false}')
   await command($ as never, 'away')
-  expect(await holdIt()).toBe('{"isHeld":true}')
+  // Held, with the refusal worded as this mod's own held actions are, for a guard that holds a call
+  // (the keystroke guard, #707) to answer it with and draw the same card.
+  expect(JSON.parse(await holdIt())).toEqual({
+    isHeld: true,
+    card: { guard: 'Away', reason: 'Held for when you are back: Paste the key into Stripe.', safeWay: 'Claude publishes a private page for your phone instead.' },
+    deny: 'Held: Dan is away from the Mac, so "Paste the key into Stripe" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).',
+  })
   await command($ as never, 'home')
   expect((w.bands[w.bands.length - 1] as Row).lines[1]).toEqual([{ text: 'Paste the key into Stripe ' }, { button: 'held-1', label: 'Do it' }])
 })
