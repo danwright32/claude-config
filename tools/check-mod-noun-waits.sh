@@ -475,7 +475,8 @@ for entry, folder, man, files in mods:
                 if found:
                     todo.append((*found, m.group(1)))
 
-    # Each member of a Promise.race a noun's code writes, raced against a timer under 10 s.
+    # Each member of a Promise.race a noun's code writes, raced against a timer under 10 s (the limit
+    # measured on 2026-10-05).
     raced = []
     for f, start, end, _ in regions:
         for m in re.finditer(r"(?<![\w$.])Promise\s*\.\s*race\s*\(\s*\[", f.code[start:end]):

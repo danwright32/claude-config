@@ -792,7 +792,7 @@ export const register = on => {
   })
 }
 TS
-# A race bounds a wait only when the timer it races settles under 10 s.
+# A race bounds a wait only when the timer it races settles under 10 s (the limit measured on 2026-10-05).
 mknounmod "$M12W" raced-long slow <<'TS'
 const waiters = new Map()
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
