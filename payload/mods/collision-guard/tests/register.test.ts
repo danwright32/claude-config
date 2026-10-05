@@ -719,6 +719,18 @@ test('a call a settings hook refuses is never judged, told or toasted (#707)', w
 
 // What a settings hook decides about a call the guard lets through is passed on as it was: an allow
 // skips Claude Code's permission prompt, and a rewrite (rtk's) is what runs.
+// The plan is handed from the classic hook to the tool.call hook by the call's id. A call raised
+// with none is given one by the engine (measured 2026-10-04), so two such calls are each noted as
+// their own (lessons review of #707).
+test('two calls raised without an id are each noted, never mixed up (#707 review)', withDeps, async ($, on) => {
+  const w = world(on)
+  await Promise.all([
+    $.tool.call({ tool: 'Edit', file_path: '/repo/src/a.ts', old_string: 'a', new_string: 'b' } as never),
+    $.tool.call({ tool: 'Edit', file_path: '/repo/src/b.ts', old_string: 'a', new_string: 'b' } as never),
+  ])
+  expect([...w.edits].sort()).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
+})
+
 const Watcher: { name: string; tier: 'prepend'; register: Register } = {
   name: 'watcher',
   tier: 'prepend',

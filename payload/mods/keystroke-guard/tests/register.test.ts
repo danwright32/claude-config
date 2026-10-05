@@ -323,6 +323,27 @@ const brokenScopeModes: { name: string; register: Register } = {
     })
   },
 }
+// A TypeError from inside a loaded scope modes is a failure too, never taken for the mod being absent
+// (lessons review of #707). Measured: the engine hands the caller a noun's own throw wrapped as its
+// error, never as a TypeError, so this held before the absent check named the noun as well; it is
+// kept so neither half can be loosened alone.
+const typeErrorScopeModes: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, scopeModes: { isAway: async () => false, hold: async () => { throw new TypeError("undefined is not an object (evaluating 'held.length')") } } } as never
+    })
+  },
+}
+test('a TypeError from inside a loaded scope modes refuses the action too (#707 review)', { plugins: [kit, typeErrorScopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const r = await $.tool.call(bash(KEY, 'b2'))
+  expect(w.asked).toEqual([])
+  expect(refusal(r)).toContain("Couldn't tell whether you are away")
+})
+
 test('an away check that fails refuses the action rather than ask a question nobody may see (#707)', { plugins: [kit, brokenScopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })

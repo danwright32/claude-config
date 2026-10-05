@@ -27,6 +27,7 @@ const secretGuard: { name: string; register: Register } = {
       const screen = async (call: unknown) => {
         const text = JSON.stringify(call)
         if (text.includes('BREAK')) throw new Error('the secrets could not be read')
+        if (text.includes('TYPEERR')) throw new TypeError("undefined is not an object (evaluating 'known.some')")
         return text.includes('SECRET') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null
       }
       return { ...built, secretGuard: { screen } } as never
@@ -68,6 +69,15 @@ test('with the secret guard not loaded nothing refuses, and the answering mod go
   const w = world(on)
   expect(textOf(await $.tool.call(pin('sk_SECRET', 's3')))).toBe('Pinned.')
   expect(w.toasts).toEqual(['ACTED'])
+})
+
+// Lessons review of #707: a TypeError from inside a loaded secret guard is a failure, never taken
+// for the secret guard being absent.
+test('a TypeError from inside a loaded secret guard refuses the call too (#707 review)', { plugins: [answerer, secretGuard] }, async ($, on) => {
+  const w = world(on)
+  const r = await $.tool.call(pin('TYPEERR', 's5'))
+  expect(textOf(r)).toMatch(/^Blocked: the secret guard could not be asked about this/)
+  expect(w.toasts).toEqual([])
 })
 
 test('a secret guard that fails to answer refuses the call, with the grey card (#707, L42)', { plugins: [answerer, secretGuard] }, async ($, on) => {

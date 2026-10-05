@@ -87,15 +87,15 @@ type Held = { card?: { guard: string; reason: string; safeWay: string }; deny?: 
 // While Dan is away (#621) the action is held for the held card he sees on coming home, rather than
 // asked about in the band, which his phone cannot show, so the turn would wait on nobody. The
 // engine needs the noun called in place, so the scope modes mod not being loaded (which is home)
-// arrives as a TypeError. One that is loaded and fails to answer is a refusal: whether a question
-// can be answered at all is unknown (L42).
-const holdWhileAway = async ($: EngineInterface, label: string, prompt: string): Promise<Held | 'home' | { failed: string }> => {
+// arrives as a TypeError naming the noun; any other failure, a TypeError from inside a loaded mod
+// included, is a refusal: whether a question can be answered at all is unknown (L42).
+const holdWhileAway = async ($: EngineInterface, label: string, prompt: string): Promise<{ held: Held } | 'home' | { failed: string }> => {
   try {
     const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({ label, prompt })
-    return r?.isHeld === true ? { card: r.card, deny: r.deny } : 'home'
+    return r?.isHeld === true ? { held: { card: r.card, deny: r.deny } } : 'home'
   } catch (err) {
     const why = String((err as Error)?.message ?? err)
-    if (err instanceof TypeError && /undefined|not a function|null/.test(why)) return 'home'
+    if (err instanceof TypeError && /scopeModes/.test(why)) return 'home'
     return { failed: why }
   }
 }
@@ -122,11 +122,11 @@ export const register: Register = on => {
     }
 
     // Held as scope modes words its own held actions, so the two read the same (L605).
-    const held = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${e.command}`)
-    if (held !== 'home' && 'failed' in held) return refuse({ reason: `Couldn't tell whether you are away (${held.failed}), so this was stopped.`, safeWay: 'Try again in a moment.' })
-    if (held !== 'home') {
-      if (held.card) await $.modkit.blocked({ toolUseId, ...held.card })
-      return { deny: held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
+    const away = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${e.command}`)
+    if (away !== 'home') {
+      if ('failed' in away) return refuse({ reason: `Couldn't tell whether you are away (${away.failed}), so this was stopped.`, safeWay: 'Try again in a moment.' })
+      if (away.held.card) await $.modkit.blocked({ toolUseId, ...away.held.card })
+      return { deny: away.held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
     }
 
     if (typing) {

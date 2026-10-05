@@ -30,7 +30,8 @@ type SecretGuardScreen = { screen: (call: ModKitCall) => Promise<{ deny: string 
 // A screen that could not ask refuses the call, with the card, rather than let input it could not
 // check reach the mod answering the call (L42).
 const screenFailed = (call: ModKitCall, why: string): { deny: string } => {
-  keep(blockedCard({ toolUseId: String(call.tool_use_id ?? ''), guard: 'Secret guard', reason: "Couldn't check this for secrets, so it was stopped.", safeWay: 'Try it again, or ask Dan.' }))
+  // A call with no id is refused all the same, drawn as Claude Code's error row, as `blocked` does.
+  if (call.tool_use_id) keep(blockedCard({ toolUseId: call.tool_use_id, guard: 'Secret guard', reason: "Couldn't check this for secrets, so it was stopped.", safeWay: 'Try it again, or ask Dan.' }))
   return { deny: `Blocked: the secret guard could not be asked about this (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.` }
 }
 
@@ -128,8 +129,9 @@ export const register: Register = (on, options) => {
     } catch (err) {
       const why = String((err as Error)?.message ?? err)
       // The engine needs the noun called in place, so the secret guard not being loaded arrives as a
-      // TypeError; whatever the noun itself throws arrives wrapped as the engine's own error.
-      if (err instanceof TypeError && /undefined|not a function|null/.test(why)) return { value: null }
+      // TypeError naming the noun; whatever the noun itself throws arrives wrapped as the engine's
+      // own error, and is a failure, never taken for absence.
+      if (err instanceof TypeError && /secretGuard/.test(why)) return { value: null }
       return { value: screenFailed(e, why) }
     }
   })

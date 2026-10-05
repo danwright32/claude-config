@@ -145,6 +145,8 @@ export const register: Register = on => {
     if (!files.length) return next(e)
     // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
     // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
+    // A For good replay runs them again, once more per save: they are checks, and the one that
+    // rewrites a command (rtk) rewrites the replay as it would any call (lessons review of #707).
     const decided = await next(e)
     if (decided.deny !== undefined) return decided
 
