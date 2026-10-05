@@ -19,14 +19,14 @@
     "logoutCommand": {
       "type": "string",
       "title": "Browser logout command",
-      "description": "Shell command that signs claude.ai out in the browser. Empty until the route is proven (#659), so Switch stops at the sign out.",
-      "default": ""
+      "description": "Shell command that signs claude.ai out in the browser. The default, proven on 2026-10-05 (#659), loads claude.ai's logout page in Google Chrome's last used profile.",
+      "default": "/bin/sh \"$HOME/.claude/mods/account-room/bin/chrome-logout.sh\""
     },
     "signedOutCheck": {
       "type": "string",
       "title": "Signed out check",
-      "description": "Shell command that prints exactly 'signed out' once the browser is signed out of claude.ai.",
-      "default": ""
+      "description": "Shell command that prints exactly 'signed out' once the browser is signed out of claude.ai. The default, proven on 2026-10-05 (#659), looks for claude.ai's session cookie in Google Chrome's last used profile.",
+      "default": "/bin/sh \"$HOME/.claude/mods/account-room/bin/chrome-signed-out.sh\""
     }
   }
 }

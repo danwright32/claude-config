@@ -1303,7 +1303,7 @@ Not settled by any round, built so the spec holds, and each an open question for
   changed." (no `logoutCommand` and `signedOutCheck` set); "The browser logout command failed.
   Nothing else was changed." (it exited non zero, could not start, or ran past 60 seconds); "The
   signed out check could not be run. Nothing else was changed." (the check could not start or ran
-  past 30 seconds); "A reload cut Switch off before the sign out was confirmed. Nothing else was
+  past 60 seconds); "A reload cut Switch off before the sign out was confirmed. Nothing else was
   changed." (the mod reloaded mid sign out, so nothing checked the page afterwards). The toast
   carries the detail, as before.
 - **The waiting question's line** falls back on "Claude Code has not placed it" when Claude Code
@@ -1312,8 +1312,24 @@ Not settled by any round, built so the spec holds, and each an open question for
 - **A sign in that does not finish** (`claude auth login` exits non zero or times out after 10
   minutes): a toast, "Switch did not finish: Login cancelled", and the card comes back. On success:
   a toast, "Switched to Work.", and the card is dismissed for the session. A Switch stopped at the
-  sign out also toasts the reason ("Switch stopped: no browser logout route has been proven yet"),
-  so Try again is not the only way to find out why (L148).
+  sign out also toasts the reason ("Switch stopped: no browser logout route is set up"), so Try
+  again is not the only way to find out why (L148).
+- **The browser sign out route was proven on 2026-10-05** (#659), on Google Chrome on
+  Daniels-MacBook-Pro-2, and ships as the manifest's defaults, so both Macs get it with the mod.
+  `logoutCommand` runs `bin/chrome-logout.sh`, which loads `https://claude.ai/logout` in Chrome's
+  last used profile (read from Chrome's `Local State`), because that is the profile `claude auth
+  login` opens its sign in page in (Dan's pick over a fixed profile or every signed in profile).
+  `signedOutCheck` runs `bin/chrome-signed-out.sh`, which prints exactly "signed out" once that
+  profile's cookie file holds no claude.ai `sessionKey` cookie. It reads a copy of the file, names
+  only, never values (Dan's pick over reading the tab's address, which shows where the page landed
+  rather than that the session is gone, and over turning on Chrome's JavaScript from Apple Events,
+  which would let any local script act in every signed in page). The run: with Profile 3 signed in,
+  the check first said "still signed in to claude.ai in profile Profile 3" (exit 1); the logout
+  exited 0 at once; the check printed "signed out" (exit 0) 31 seconds after the logout, at 2:31 PM
+  ET; and Dan confirmed the tab showed the claude.ai login page. Those 31 seconds are Chrome writing
+  cookie changes to disk about every 30 seconds, so the check looks once a second for up to 50
+  tries, and the mod now allows it 60 seconds rather than 30. Chrome comes to the front when the
+  logout page opens, which is acceptable here since the sign in page follows straight after.
 - **Dismiss** lasts for the rest of the session, as the spec says; it does not come back if the
   account recovers and runs low again in the same session.
 - **/accounts rename** with no name renames this session's account; with a name (a nickname or an
