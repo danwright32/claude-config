@@ -192,6 +192,12 @@ printf 'not json' > "$TMP/broken.json"
 out="$(run_report broken)"; rc=$?
 expect "a findings file that is not JSON is refused" 2 "json" "$rc" "$out"
 
+# A read only run cannot have run a test, so nothing in it can be confirmed (lessons review of #798).
+write roconf '{"target":"https://app.example.com/","mode":"read-only","cost":{"model_calls":3},"findings":[
+  {"id":"f4","area":"A","persona":"p","title":"t","status":"confirmed","test":"x.spec.ts","failure":"boom","reason_match":"r"}]}'
+out="$(run_report roconf)"; rc=$?
+expect "a confirmed finding in a read only run is refused" 2 "f4.*read only" "$rc" "$out"
+
 # The healthy day is said, not left blank (L610).
 write empty '{"target":"http://127.0.0.1/","mode":"local","cost":{"model_calls":9},"findings":[]}'
 out="$(run_report empty)"; rc=$?

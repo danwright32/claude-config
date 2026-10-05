@@ -83,6 +83,11 @@ def validate(data):
         status = f.get("status")
         if status not in STATUSES:
             raise Refusal(f"finding {fid} has status {status!r}; it must be one of {', '.join(STATUSES)}")
+        if status == "confirmed" and data["mode"] == "read-only":
+            raise Refusal(
+                f"finding {fid} is marked confirmed in a read only run, which runs no test: "
+                "mark it unverified, and verify it against a local build"
+            )
         if status == "confirmed":
             missing = [k for k, what in (
                 ("test", "the test that reproduces it"),

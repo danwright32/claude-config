@@ -19,8 +19,11 @@ grep -q '^allowed-tools:.*Workflow' <<< "$_fm" || fail "frontmatter missing allo
 # 2. Workflow script parses and declares meta.phases
 WF="$DIR/production-audit.workflow.js"
 [ -f "$WF" ] || fail "workflow script missing"
+# Parsed as the Workflow engine runs it, an async function body, never as a file: `node --check`
+# reads its `export const meta` as an ES module, where the script's top level return is a syntax
+# error, and so failed a healthy script on CI's node (#587, PR #798).
 if command -v node >/dev/null 2>&1; then
-  node --check "$WF" || fail "workflow script does not parse"
+  node "$DIR/../../hooks/lib/workflow-syntax.js" "$WF" || fail "workflow script does not parse"
 fi
 grep -q 'phases:' "$WF" || fail "workflow meta missing phases"
 

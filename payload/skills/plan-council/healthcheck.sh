@@ -18,7 +18,9 @@ bad(){ printf '  FAIL  %s\n' "$1"; fail=1; }
 echo "== workflow engine (JS syntax) =="
 for f in "$D"/skills/plan-council/*.workflow.js; do
   [ -e "$f" ] || { bad "no *.workflow.js found"; break; }
-  if node --check "$f" 2>/dev/null; then ok "$(basename "$f")"; else bad "$(basename "$f"): syntax error"; fi
+  # Parsed as the Workflow engine runs it, an async function body; `node --check` reads the meta's
+  # export as an ES module, where the top level return is a syntax error (#587, PR #798).
+  if node "$D/hooks/lib/workflow-syntax.js" "$f" 2>/dev/null; then ok "$(basename "$f")"; else bad "$(basename "$f"): syntax error"; fi
 done
 
 echo "== skills (frontmatter) =="

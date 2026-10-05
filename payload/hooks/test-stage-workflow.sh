@@ -107,18 +107,37 @@ out="$(bash "$SKILLS/production-ready/healthcheck.sh" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && grep -q 'HEALTHCHECK OK' <<< "$out" && ok || bad "production-ready healthcheck passes on this tree" "$out"
 
 # And it is a real check: a SKILL.md that goes back to passing its installed path fails it.
-cp -R "$SKILLS/production-ready" "$TMP/pr-bad"
-sed -i.bak 's#stage-workflow\.sh#stage-nothing.sh#g' "$TMP/pr-bad/SKILL.md"
-out="$(bash "$TMP/pr-bad/healthcheck.sh" 2>&1)"; rc=$?
+# Laid out as installed, skills/ beside hooks/lib/, so every other check in it still passes.
+mkdir -p "$TMP/pr-bad/skills" "$TMP/pr-bad/hooks/lib"
+cp -R "$SKILLS/production-ready" "$TMP/pr-bad/skills/"
+cp "$HELPER" "$DIR/lib/workflow-syntax.js" "$TMP/pr-bad/hooks/lib/"
+sed -i.bak 's#stage-workflow\.sh#stage-nothing.sh#g' "$TMP/pr-bad/skills/production-ready/SKILL.md"
+out="$(bash "$TMP/pr-bad/skills/production-ready/healthcheck.sh" 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && grep -qi 'stage-workflow' <<< "$out" && ok \
   || bad "production-ready healthcheck fails a SKILL.md that does not stage its workflow" "$out"
+
+# --- 4. a workflow script is checked as the engine runs it, an async function body ---
+SYN="$DIR/lib/workflow-syntax.js"
+printf 'export const meta = { name: "x", description: "d" }\nconst r = await agent("a")\nreturn { r }\n' > "$TMP/good.workflow.js"
+printf 'export const meta = { name: "x", description: "d" }\nconst r = await agent("a"\nreturn r\n' > "$TMP/bad.workflow.js"
+out="$(node "$SYN" "$TMP/good.workflow.js" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "a script with a top level await and return parses (rc $rc)" "$out"
+# The premise: read as a module, which is what tripped CI, that same script is refused.
+out="$(node --input-type=module --check < "$TMP/good.workflow.js" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && ok || bad "the control: as an ES module the same script does not parse" "$out"
+out="$(node "$SYN" "$TMP/bad.workflow.js" 2>&1)"; rc=$?
+[ "$rc" -eq 1 ] && grep -q 'bad.workflow.js does not parse' <<< "$out" && ok || bad "a script with a syntax error is refused by name (rc $rc)" "$out"
+out="$(node "$SYN" "$TMP/missing.workflow.js" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && ok || bad "a missing script is a usage error, not a pass (rc $rc)" "$out"
+out="$(node "$SYN" "$SKILLS/production-ready/production-audit.workflow.js" "$SKILLS/plan-council/panel.workflow.js" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "both shipped workflow scripts parse as the engine runs them" "$out"
 
 # The plan-council healthcheck reads an installed tree under $HOME/.claude, so it is run against a
 # fake home holding just what its workflow section reads, and only that section is judged.
 PCH="$TMP/pchome"
 mkdir -p "$PCH/.claude/skills" "$PCH/.claude/hooks/lib"
 cp -R "$SKILLS/plan-council" "$PCH/.claude/skills/"
-cp "$HELPER" "$PCH/.claude/hooks/lib/"
+cp "$HELPER" "$DIR/lib/workflow-syntax.js" "$PCH/.claude/hooks/lib/"
 pc_section() { HOME="$PCH" bash "$PCH/.claude/skills/plan-council/healthcheck.sh" 2>&1 | sed -n '/skill -> workflow/,/^==/p'; }
 out="$(pc_section)"
 if [ "$(grep -c '^  ok' <<< "$out")" = "2" ] && ! grep -q 'FAIL' <<< "$out"; then ok
