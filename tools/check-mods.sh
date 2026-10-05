@@ -117,7 +117,10 @@ for d in "${mods[@]}"; do
   if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ]; then
     types="types not checked: Claude Code has not laid its types here"
   elif [ -n "$tsc" ]; then
-    if ! out="$("$tsc" -p "$d" --noEmit 2>&1)"; then
+    # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
+    # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
+    # own tsconfig.json (lessons review of #797).
+    if ! out="$("$tsc" -p "$d" --noEmit --allowImportingTsExtensions 2>&1)"; then
       errs="$(printf '%s\n' "$out" | grep 'error TS' || true)"
       count="$(printf '%s\n' "$errs" | grep -c 'error TS' || true)"
       echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "${errs:-$out}" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"

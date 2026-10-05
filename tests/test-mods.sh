@@ -126,6 +126,9 @@ cat > "$TSC" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$TSC_LOG"
 case "$2" in *illtyped*) printf 'hooks/register.tsx(3,1): error TS2339: no such thing\nhooks/register.tsx(9,1): error TS2604: not a component\n'; exit 2 ;; esac
+# Every mod imports its own files as ./x.ts, which the tsconfig Claude Code lays does not allow, so
+# real tsc refuses each one unless the check allows them itself (lessons review of #797).
+case " $* " in *" --allowImportingTsExtensions "*) ;; *) printf "hooks/register.tsx(1,20): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\n"; exit 2 ;; esac
 exit 0
 STUB
 chmod +x "$TSC"
