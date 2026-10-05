@@ -1,12 +1,14 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
+import { APPROVAL_MS } from '../hooks/rules.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is held until
 // Dan answers in the band, his own permanent words skip the question, and each answer does what the
 // spec says. A Write is never held open while Dan reads: a tool call hook that waits on a press is
 // cut at its 10 second budget and the write then runs (measured 2026-10-04), so the call is refused
-// at once and the mod replays it exactly on For good.
+// at once. For good approves that save and asks Claude to send the call again (#738): auto mode's
+// classifier refuses a call no model request asked for, so the mod never makes the call itself.
 
 // mod-kit, standing in: a mod cannot import another mod's files. It keeps the questions asked and
 // draws the first (text, dividers as a rule, options as buttons with their descriptions under
@@ -137,14 +139,23 @@ const CWD = '/Users/dan/Apps/slate'
 // A gate the band stand-in waits on before it refuses: `reached` is called as it starts waiting,
 // and it refuses once `opened` settles.
 type Gate = { reached: () => void; opened: Promise<void> }
-const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; bandRefuses?: boolean; cwdFails?: boolean; gate?: Gate } = {}) => {
+// `auto` stands for auto mode (#738): its classifier judges each call by the model request that
+// produced it, beneath every hook, so it refuses a call no request asked for, which a call a plugin
+// makes for itself is, with the words it gave on 2026-10-05.
+// `ownClock` leaves the clock to the test, which answers it itself.
+const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; bandRefuses?: boolean; cwdFails?: boolean; gate?: Gate; auto?: boolean; ownClock?: true } = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const toasts: string[] = []
+  // The prompts a plugin submitted, each a turn of Claude's own.
+  const prompts: string[] = []
+  const clock = init.ownClock ? (undefined as unknown as ReturnType<typeof mock.clock>) : mock.clock(on)
   mock.env(on, { HOME, BAND_REFUSES: init.bandRefuses ? '1' : '0' })
+  // Where the session runs; a test moves it as /cd or a worktree move does.
+  const at = { cwd: CWD }
   on('session.cwd', () => {
     if (init.cwdFails) throw new Error('no session')
-    return { value: CWD } as never
+    return { value: at.cwd } as never
   })
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', async ($, e) => {
@@ -157,15 +168,23 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: t } as never
   })
-  on('tool.call', ($, e) => {
+  on('tool.call', ($, e, next) => {
     const { tool, tool_use_id: _id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
+    if (init.auto && next.origin.plugin !== 'engine')
+      return { deny: `The server-side auto mode classifier gave no verdict for ${String(tool)}: the request that produced this action did not ask for one.` } as never
     ran.push({ tool: String(tool), input })
     if (init.failWrites) return { isError: true, result: 'String to replace not found in file.', text: 'String to replace not found in file.' } as never
     return { result: 'written', text: 'written' } as never
   })
   on('ui.invalidate', () => ({ value: undefined }) as never)
   on('prompt.section', ($, e) => ({ text: e.text }))
-  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('prompt.submit', ($, e) => {
+    if (e.origin.kind === 'plugin') prompts.push(e.text)
+    return { text: e.text } as never
+  })
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('session.compact', () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] }) as never)
   on('ui.toast', ($, e) => {
@@ -176,8 +195,14 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { files, ran, toasts }
+  return { files, ran, toasts, prompts, clock, at }
 }
+// Everything Claude was told to do, by a note or by a prompt of its own.
+const toldOf = (w: { toasts: string[]; prompts: string[] }) => [notesOf(w), ...w.prompts].join('\n')
+// A turn of Claude's on the main loop, running while Dan presses (#738).
+type Turns = { turn: { start: (x: never) => Promise<unknown>; complete: (x: never) => Promise<unknown> } }
+const startTurn = ($: unknown) => ($ as Turns).turn.start({ text: 'go on', turnId: 'turn-1' } as never)
+const endTurn = ($: unknown) => ($ as Turns).turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-1', reason: 'answer' } as never)
 
 type Caller = { tool: { call: (e: never) => Promise<unknown> } }
 type Result = { deny?: string; text?: string; isError?: boolean; context?: readonly string[] }
@@ -410,30 +435,211 @@ test("permanent words from a peer session's message or a plugin's prompt do not 
   expect(w.ran).toEqual([])
 })
 
-test('For good replays the exact call once, tells Claude it was saved, and takes the question away', withKit, async ($, on) => {
-  const w = world(on)
-  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
-  await call($, input)
+// #738: in auto mode For good never saved. The mod replayed the call itself, the classifier refused
+// a call no model request had asked for, Claude sent it again as told, and that was asked about as a
+// new save, so For good went round for ever. Seen twice on 2026-10-05: a Bash append to MEMORY.md
+// and a Write to a memory file.
+test("For good in auto mode saves on Claude's own call, exactly once, with no second question (#738)", withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const command = `F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`
+  expect(refusalOf(await call($, { tool: 'Bash', command, description: 'Append the rule to MEMORY.md' }))).toContain('Dan is being asked')
   await answer($, 'for-good')
-  expect(w.ran).toEqual([{ tool: 'Write', input: { file_path: 'AGENTS.md', content: '- Use pnpm.\n' } }])
-  expect(notesOf(w)).toContain('For good')
-  expect(notesOf(w)).toContain('saved to ~/Apps/slate/AGENTS.md')
-  const ui = await mount($)
+  // Nothing has run: the mod makes no call of its own, which the classifier would refuse.
+  expect(w.ran).toEqual([])
+  expect(w.toasts.join('\n')).not.toContain('Not saved')
+  // The question is gone, and Claude is asked, in a turn of its own while it is idle, to send the
+  // call again, which it is given whole.
+  let ui = await mount($)
   expect(await shown(ui)).toEqual(['engine band'])
   await ui.unmount()
-  // The approval was for that one call: the same write again asks again.
-  const r = await call($, input)
-  expect(refusalOf(r)).toContain('Dan is being asked')
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toContain('Dan answered For good to saving this to ~/.claude/projects/p/memory/MEMORY.md')
+  expect(w.prompts[0]).toContain(JSON.stringify(command))
+  // Claude sends it from a request of its own, describing it in its own words: it goes through the
+  // classifier and is saved, and nothing is asked.
+  const again = await call($, { tool: 'Bash', command, description: 'Save the rule Dan approved' })
+  expect(again.deny).toBeUndefined()
+  expect(again.isError).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  expect((again.context ?? []).join(' ')).toContain('Saved to ~/.claude/projects/p/memory/MEMORY.md, as Dan answered For good.')
+  ui = await mount($)
+  expect(await shown(ui)).toEqual(['engine band'])
+  await ui.unmount()
+  // The approval was for that one save: the same call once more is asked about again.
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain('Dan is being asked')
   expect(w.ran.length).toBe(1)
 })
 
-test('For good that fails to save says so to Dan and to Claude, never that it was saved', withKit, async ($, on) => {
-  const w = world(on, { failWrites: true })
-  await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'gone', new_string: 'gone\n- rule' })
+test('For good approves the save, not the spelling: the same file and text by another path goes through, other text does not', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' })
   await answer($, 'for-good')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use npm.\n' }))).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  const r = await call($, { tool: 'Write', file_path: `${CWD}/AGENTS.md`, content: '- Use pnpm.\n' })
+  expect(r.deny).toBeUndefined()
+  expect(w.ran.map(x => x.input.content)).toEqual(['- Use pnpm.\n'])
+})
+
+// Lessons review of #738: For good approves the file Dan was shown. A relative path, or a Bash call's
+// relative target, sent again after the session has moved writes another file, which he never saw.
+test('For good approves the file Dan was shown: sent again after the session moves, a relative path is asked about again', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })
+  w.at.cwd = '/Users/dan/Apps/other'
+  await answer($, 'for-good')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' }))).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  const r = await call($, { tool: 'Write', file_path: `${CWD}/CLAUDE.md`, content: '- Ask before merging.\n' })
+  expect(r.deny).toBeUndefined()
+  expect(w.ran.map(x => x.input.file_path)).toEqual([`${CWD}/CLAUDE.md`])
+})
+
+test('a Bash save approved in one folder is asked about again when it is sent from another', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const command = "cat >> CLAUDE.md <<'EOF'\n- Never merge on Fridays.\nEOF"
+  await call($, { tool: 'Bash', command })
+  await answer($, 'for-good')
+  w.at.cwd = '/Users/dan/Apps/other'
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+  w.at.cwd = CWD
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// L50, lessons review of #738: an approval read back with no time compared false against the clock,
+// so it never lapsed and its save went through unasked; and timing it asked $.clock.after for a wait
+// that is not a number, which throws.
+test('an approval whose time is not a number stands for nothing: its save is asked about, and timing it again never throws', withKit, async ($, on) => {
+  // A clock that answers no number, so the approval is kept with a time that is not one, as a
+  // damaged record, or one of another shape, reads back. Its timers are refused, as a reload drops
+  // them, so only the approval's own time can decide.
+  on('clock.now', () => ({ value: undefined }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await call($, input)
+  await answer($, 'for-good')
+  // A session start times each approval waiting again, from its time.
+  await ($ as unknown as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: CWD, surface: 'terminal', isInteractive: true } as never)
+  expect(w.toasts.join('\n')).not.toContain('could not be timed')
+  const r = await call($, input)
+  expect(refusalOf(r)).toContain('Dan is being asked')
+  expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md lapsed')
+  expect(w.ran).toEqual([])
+})
+
+// A turn marked running by a process that then stopped never sees its turn end, and a note to an
+// idle session waits for Dan's next message; a session start has no turn running.
+test('after a session start, For good asks by a prompt even when a turn was marked running before it', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await startTurn($)
+  await ($ as unknown as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: CWD, surface: 'terminal', isInteractive: true } as never)
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' })
+  await answer($, 'for-good')
+  expect(w.prompts.length).toBe(1)
+  expect(notesOf(w)).not.toContain('Dan answered For good')
+})
+
+// L523, L567: an approval nobody uses must not stand open, and one past its time is refused where it
+// is used, said plainly both ways.
+test('an approval Claude does not use within its time lapses: Dan and Claude are told, and the call is asked about again', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await call($, input)
+  await answer($, 'for-good')
+  await w.clock.advance(APPROVAL_MS - 1)
+  expect(w.toasts.join('\n')).not.toContain('lapsed')
+  await w.clock.advance(1)
+  expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md lapsed after 10 minutes unused')
+  expect(notesOf(w)).toContain("Dan's For good on saving this to ~/Apps/slate/AGENTS.md lapsed after 10 minutes unused")
+  const late = await call($, input)
+  expect(refusalOf(late)).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
+})
+
+test('an approval past its time is refused where it is used even when nothing announced its lapse (a reload drops the timer)', withKit, async ($, on) => {
+  // A clock whose every timer is refused, as a reload loses the mod's timers, and that moves only
+  // when the test moves it.
+  let now = 0
+  on('clock.now', () => ({ value: now }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await call($, input)
+  await answer($, 'for-good')
+  // A timer that cannot be set never stops Claude being asked (lessons review of #738).
+  expect(w.prompts.length).toBe(1)
+  now = APPROVAL_MS
+  expect(w.toasts.join('\n')).not.toContain('lapsed')
+  const late = await call($, input)
+  expect(refusalOf(late)).toContain('Dan is being asked')
+  expect(refusalOf(late)).toContain('lapsed')
+  expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md lapsed after 10 minutes unused')
+  expect(w.ran).toEqual([])
+})
+
+// A note is read at Claude's next step, so one added while it works reaches it at once; one added
+// while its last answer is being written is read by nobody, so the end of that turn asks instead.
+test('For good while Claude is working reaches it as a note, and as a prompt of its own when the turn ends without the save', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await startTurn($)
+  const input = { tool: 'Write', file_path: `${HOME}/.claude/projects/p/memory/note.md`, content: 'Skip the screenshots.\n' }
+  await call($, input)
+  await answer($, 'for-good')
+  expect(w.prompts).toEqual([])
+  expect(notesOf(w)).toContain('Dan answered For good to saving this to ~/.claude/projects/p/memory/note.md')
+  await endTurn($)
+  // The clock never moves here: a prompt that waited on a timer of the mod's would never come
+  // (lessons review of #738: a timer that failed lost the prompt). A few real ticks let the prompt,
+  // which the turn's end does not wait on, arrive; the bound fails it by name rather than hanging.
+  for (let tick = 0; tick < 50 && !w.prompts.length; tick++) await new Promise(r => setTimeout(r, 0))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toContain('Dan answered For good to saving this to ~/.claude/projects/p/memory/note.md')
+  const r = await call($, input)
+  expect(r.deny).toBeUndefined()
+  expect(w.ran.map(x => x.input.file_path)).toEqual([input.file_path])
+})
+
+test('a save Claude sends again within the turn that was told is saved once, and the end of the turn asks for nothing more', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  await startTurn($)
+  const input = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'a', new_string: 'a\n- Ask before merging.' }
+  await call($, input)
+  await answer($, 'for-good')
+  const r = await call($, input)
+  expect(r.deny).toBeUndefined()
+  await endTurn($)
+  await w.clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(w.ran.length).toBe(1)
+})
+
+test('For good whose save then fails says so to Dan, and never that it was saved', withKit, async ($, on) => {
+  const w = world(on, { failWrites: true })
+  const input = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'gone', new_string: 'gone\n- rule' }
+  await call($, input)
+  await answer($, 'for-good')
+  const r = await call($, input)
+  expect(r.isError).toBe(true)
   expect(w.toasts.join('\n')).toContain('Not saved to ~/Apps/slate/CLAUDE.md: String to replace not found in file.')
-  expect(notesOf(w)).toContain('could not be saved')
-  expect(notesOf(w)).not.toContain('For good: saved')
+  expect((r.context ?? []).join(' ')).not.toContain('Saved to')
+})
+
+test('an approval the session ends before Claude uses is dropped, and Dan is told it was never used', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await call($, input)
+  await answer($, 'for-good')
+  await ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md was never used before the session ended')
+  expect(refusalOf(await call($, input))).toContain('Dan is being asked')
+  expect(w.ran).toEqual([])
 })
 
 test('Just this session writes nothing and holds the rule in the system prompt, through a compaction, until the session ends', withKit, async ($, on) => {
@@ -474,6 +680,7 @@ test('a second save waits behind the first, and is asked once the first is answe
   expect(await shown(ui)).toContain('- second')
   await ui.unmount()
   await answer($, 'for-good')
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' })
   expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
 })
 
@@ -488,25 +695,30 @@ test('a press on a save already answered does nothing to the save asked after it
   // Two taps on the button drawn, the second landing before the first has redrawn the band.
   await Promise.all([ui.press({ key: first }), ui.press({ key: first })])
   await ui.unmount()
-  expect(w.ran.map(r => r.input.file_path)).toEqual(['CLAUDE.md'])
+  // One approval, for the save the button was drawn for: the second save is still asked, and sending
+  // it again is not let through.
+  expect(w.prompts.length).toBe(1)
   const again = await mount($)
   expect(await shown(again)).toContain('- second')
   await again.unmount()
+  expect(refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' }))).toContain('Dan is being asked')
+  await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- first\n' })
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['CLAUDE.md'])
 })
 
 // Review of #718: the answer took the save out of the queue, then a band that could not take the
 // question away threw, and the answer was lost: nothing saved, nothing said.
 test("a question the band cannot take away still carries Dan's answer through, and says why", withKit, async ($, on) => {
   const w = world(on)
-  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- CLEAR-FAILS use pnpm\n' })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- CLEAR-FAILS use pnpm\n' }
+  await call($, input)
   await answer($, 'for-good')
-  expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
-  expect(notesOf(w)).toContain('For good: saved to ~/Apps/slate/AGENTS.md')
+  expect(toldOf(w)).toContain('Dan answered For good to saving this to ~/Apps/slate/AGENTS.md')
   expect(w.toasts.join('\n')).toContain('could not be taken out of the band: the band is gone')
+  await call($, input)
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
 })
 
-// Review of #718: a save queued behind one whose question then failed to show was never asked,
-// since only the save at the front is shown and nothing showed the next one.
 // A deadline for a wait on a condition, so a condition never met fails by name rather than hanging:
 // under the test runner's own 5 second limit, which would otherwise fire first and name nothing.
 const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> => {
@@ -517,6 +729,8 @@ const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> =>
     clearTimeout(timer)
   }
 }
+// Review of #718: a save queued behind one whose question then failed to show was never asked,
+// since only the save at the front is shown and nothing showed the next one.
 test('a save queued behind one whose question could not be shown is asked in its place', withKit, async ($, on) => {
   let reached!: () => void
   const asking = new Promise<void>(r => (reached = r))
@@ -548,6 +762,7 @@ test('a save queued behind one whose question could not be shown is asked in its
   expect(await shown(ui)).toContain('- second')
   await ui.unmount()
   await answer($, 'for-good')
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' })
   expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
 })
 
@@ -572,6 +787,9 @@ test('a save whose question could not be shown is never answered later by a pres
   expect(refusalOf(refused)).toContain('could not be shown')
   await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' })
   await answer($, 'for-good')
+  expect(toldOf(w)).toContain('saving this to ~/Apps/slate/AGENTS.md')
+  expect(toldOf(w)).not.toContain('saving this to ~/Apps/slate/CLAUDE.md')
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' })
   expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
   const ui = await mount($)
   expect(await shown(ui)).toEqual(['engine band'])

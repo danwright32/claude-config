@@ -1013,13 +1013,56 @@ ones marked open are the builder's choice, waiting on Dan.
 How the settled question behaves, decided at build where the spec and the rounds were silent. The
 ones marked open are the builder's choice, waiting on Dan.
 
-- **The write is refused at once and replayed on For good, never held open.** A tool call hook that
-  waits on a band press is cut at its 10 second budget and the engine then runs the write as if the
-  hook were absent (measured with `claude plugin test` on 2026-10-04), so holding the call would
-  fail open. Claude's call is refused with a note that Dan is being asked; For good replays the
-  exact call through every other mod's checks; each answer reaches Claude as a note. A hook that
-  cannot finish refuses the write. This is also the answer to picker manners' (#615) build time
+- **The write is refused at once, never held open.** A tool call hook that waits on a band press is
+  cut at its 10 second budget and the engine then runs the write as if the hook were absent
+  (measured with `claude plugin test` on 2026-10-04), so holding the call would fail open. Claude's
+  call is refused with a note that Dan is being asked; each answer reaches Claude as a note. A hook
+  that cannot finish refuses the write. This is also the answer to picker manners' (#615) build time
   check: a tool call cannot wait for a band answer.
+- **For good asks Claude to send the call again** (#738, built 2026-10-05). Until then For good
+  replayed the call itself, and in auto mode, Dan's `defaultMode`, it never saved: the classifier
+  judges a call by the model request that produced it and refused the replay ("gave no verdict ...
+  the request that produced this action did not ask for one"), Claude sent the call again as told,
+  and that was asked about as a new save, so For good went round for ever (seen twice on
+  2026-10-05). Now:
+  - For good records an approval in `$.state`, so a reload keeps it, keyed by what the save writes
+    (a Write's file and content, an Edit's file and change, a Bash call's command and the folder
+    its relative targets resolve in; never the call's description, which Claude words afresh, and a
+    path by any spelling of the same file). The key is taken where Dan is asked, so it approves the
+    file he was shown: the same relative path sent again after the session has moved is another
+    file, and is asked about again.
+  - Claude is asked to send the same call again, given whole, since the call may not be in front of
+    it (the memory writer's, a subagent's, one a compaction took out): as a note while it works,
+    which it reads at its next step, and as a prompt of its own, a turn, while it is idle, where a
+    note would wait for Dan's next message. A note added while the turn's last answer was being
+    written is read by nobody, so when the main loop's turn ends with the save not sent, it is asked
+    for again as a prompt, once. A session start marks no turn running, whatever a process that
+    stopped mid-turn left behind, so a note is never sent to a session nobody is working in.
+  - The call that writes the same thing takes the approval at `classic.PreToolUse` and goes on to
+    the settings hooks and the permission check beneath, the classifier among them, never asked
+    about again; every mod's own checks have seen it already. It is used once: the same call after
+    it is asked about again. Its result is said: to Claude as `Saved to <file>, as Dan answered For
+    good.`, and when it fails, to Dan as a toast, since he pressed For good believing it saved.
+  - **Chosen: an approval stands 10 minutes** (L523), the issue's number, not a measurement. One
+    Claude does not use in that time lapses: it is taken out and said to Dan and to Claude, and the
+    call after it is asked about again. It is refused on its age where it is used too (L567), since
+    a reload drops the timer that says it lapsed; the session start after a reload times each one
+    still waiting again. A time read back that is not a number stands for nothing (L50: it compares
+    false against every clock, so read plainly it would never lapse), and timing it is never a wait
+    `$.clock.after` refuses by throwing; a timer that cannot be set is said, and never stops Claude
+    being asked. One the session ends before is said to Dan. A tool call running longer than
+    10 minutes before Claude's next step lets it lapse, which costs one more question, never a save
+    unasked.
+  - **Chosen: one path in every permission mode, so the mode is never read.** The issue allowed
+    keeping the replay where no classifier judges calls, chosen by the session's mode. The engine
+    gives a mod that mode only on the classic hook events (`permission_mode`), a reading as old as
+    the last such event, while Dan can change the mode between it and his press; Dan runs auto mode
+    everywhere, so the replay would run almost never and its failures would go unseen (L535); and
+    the call Claude sends again meets the same permission check the replay met, the dialog in
+    default mode included. Nothing tries one path and falls back on the other's error (L156).
+  - What only a live session shows: whether the classifier allows the call Claude sends again, which
+    it judges against the conversation as for any call (a For good cannot overrule it), and that a
+    plugin's prompt starts Claude's turn while the session is idle.
 - **What the question shows as the rule:** a new file's whole text, the lines a rewrite adds, an
   Edit's new text, and a Bash write's command as written (the command carries the text, any heredoc
   body included, so it is shown whole).
@@ -1032,7 +1075,8 @@ ones marked open are the builder's choice, waiting on Dan.
   engine raises beneath every mod's `tool.call` hook, so a save the style check, the secret guard or
   no build refuses is refused before Dan is asked, whatever order the mods load in, and he is never
   asked to approve a save that cannot land. Since #707 it asks only after the settings hooks beneath
-  it have decided too, so a save the payload write gate refuses is never asked about either. The skip for Dan's own permanent words stays a
+  it have decided too, so a save the payload write gate refuses is never asked about either. Since
+  #738 the call Claude sends again after For good is judged by every one of them again, as any call is. The skip for Dan's own permanent words stays a
   `tool.call` hook, the one place the saved result can be read, and passes the save down through
   every other guard all the same.
 - **Every shell route** (#705): a Bash call is read by mod-kit's one reader of what a command writes

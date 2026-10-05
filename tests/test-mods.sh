@@ -442,6 +442,10 @@ M9C="$TMPROOT/m9c"
 mkmodsrc "$M9C" after-block-comment "/* the band */ on('ui.render', { component: 'AbovePrompt' }, draw)"
 mkmodsrc "$M9C" star-continuation "const area = width
   * height; on('ui.render', { component: 'ToolResult' }, draw)"
+# #733: a generator method is code that starts with * too.
+mkmodsrc "$M9C" star-generator "class Rows {
+  *rows() { yield on('ui.render', { component: 'AbovePrompt' }, draw) }
+}"
 mkmodsrc "$M9C" slashes-in-a-string "const note = 'see // here'; on('ui.render', { component: 'AbovePrompt' }, draw)"
 out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "code beside a comment on its line fails the run" ok || check "code beside a comment on its line fails the run" "exit=$code out=$out"
@@ -449,6 +453,8 @@ printf '%s\n' "$out" | grep -q 'after-block-comment keeps its own band at /hooks
   && check "and code after a block comment is read" ok || check "and code after a block comment is read" "$out"
 printf '%s\n' "$out" | grep -q 'star-continuation keeps its own card at /hooks/register.ts:2:' \
   && check "and a line starting with * as a continuation is read" ok || check "and a line starting with * as a continuation is read" "$out"
+printf '%s\n' "$out" | grep -q 'star-generator keeps its own band at /hooks/register.ts:2:' \
+  && check "and a generator method's line, starting with *, is read" ok || check "and a generator method's line, starting with *, is read" "$out"
 printf '%s\n' "$out" | grep -q 'slashes-in-a-string keeps its own band' \
   && check "and a string holding // is code, not a comment" ok || check "and a string holding // is code, not a comment" "$out"
 out="$(bash "$SHARED" "$TMPROOT/not-there" 2>&1)"; code=$?

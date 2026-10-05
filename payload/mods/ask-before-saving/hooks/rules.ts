@@ -156,6 +156,55 @@ export const addedText = (content: string, old: string | undefined): string => {
 export const cannotCheck = (failure: { message?: string } | undefined): string =>
   `Not saved: Ask before saving could not check whether this writes lasting memory (${failure?.message || 'it failed'}). Tell Dan what you meant to save instead.`
 
+/**
+ * What a save writes, as the key For good approves it by (#738): a Write's file and content, an
+ * Edit's file and change, a Bash call's command and the folder its relative targets resolve in.
+ * Claude sends an approved call again from a request of its own, wording a Bash call's description
+ * afresh and perhaps giving a path whole where it gave it relative, so the key leaves out everything
+ * but what lands on the disk: the same file and text by any spelling is the save Dan approved, and
+ * any other text, or the same words reaching another file, is not.
+ */
+export const saveKey = (tool: string, input: Record<string, unknown>, cwd: string, home: string): string => {
+  if (tool === 'Bash') return JSON.stringify([tool, cwd, String(input.command ?? '')])
+  const file = resolvePath(String(input.file_path ?? ''), cwd, home)
+  if (tool === 'Edit') return JSON.stringify([tool, file, String(input.old_string ?? ''), String(input.new_string ?? ''), input.replace_all === true])
+  return JSON.stringify([tool, file, String(input.content ?? '')])
+}
+
+/**
+ * The call Claude is asked to send again, as JSON of the arguments that make the save, spelled as
+ * the call carried them: Claude may not have the call in front of it (the memory writer's or a
+ * subagent's, or one a compaction took out), so it is given whole.
+ */
+export const callShown = (tool: string, input: Record<string, unknown>): string => {
+  if (tool === 'Bash') return JSON.stringify({ command: input.command })
+  if (tool === 'Edit')
+    return JSON.stringify({ file_path: input.file_path, old_string: input.old_string, new_string: input.new_string, ...(input.replace_all === true ? { replace_all: true } : {}) })
+  return JSON.stringify({ file_path: input.file_path, content: input.content })
+}
+
+/**
+ * How long an approval stands for Claude to send the save again (#738), from Dan's press, so one
+ * nobody used does not stand open (L523). A chosen number, the issue's own, not a measurement: a
+ * tool call running longer than this before Claude's next step lets it lapse, and what that costs
+ * is one more question.
+ */
+export const APPROVAL_MS = 10 * 60_000
+
+/**
+ * Whether an approval still stands at `now`. Its time is read back from storage, and one that is
+ * not a number (a damaged record, one of another shape) compares false against every clock, so read
+ * plainly it would stand for ever and let its save through unasked (L50): it stands for nothing.
+ */
+export const stands = (until: unknown, now: number): boolean => typeof until === 'number' && Number.isFinite(until) && until > now
+
+/**
+ * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
+ * for one that no longer stands, never a wait that is not a non-negative number, which $.clock.after
+ * refuses by throwing (measured 2026-10-05 with `claude plugin test`: NaN, -1 and Infinity all throw).
+ */
+export const lapseWait = (until: unknown, now: number): number => (stands(until, now) ? (until as number) - now : 0)
+
 /** The three answers, with the button id their press arrives under (before the save's own id). */
 export const ANSWERS = [
   { button: 'for-good', label: 'For good' },

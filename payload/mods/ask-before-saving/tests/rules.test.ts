@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { addedText, cannotCheck, display, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath } from '../hooks/rules.ts'
+import { APPROVAL_MS, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, saveKey, stands } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -260,4 +260,51 @@ test('each save asks under its own id, and its buttons carry that id, so a press
   const b = questionOf({ id: 'toolu_b', text: 'y', files: ['AGENTS.md'] })
   expect(a.id).not.toBe(b.id)
   expect(a.options.map(o => o.button)).toEqual(['for-good:toolu_a', 'this-session:toolu_a', 'not-at-all:toolu_a'])
+})
+
+// #738: For good approves a save, and Claude sends the call again from a request of its own. What
+// identifies the save is what it writes, never how the call was spelled around it: Claude words a
+// Bash call's description afresh each time, and may give a path whole where it gave it relative.
+test('the key of a save is what it writes: the file and the text, never the call words around them', () => {
+  const cwd = '/Users/dan/Apps/slate'
+  const key = (tool: string, input: Record<string, unknown>) => saveKey(tool, input, cwd, HOME)
+  const command = `printf 'x\\n' >> ~/.claude/projects/p/memory/MEMORY.md`
+  expect(key('Bash', { command, description: 'Append the rule' })).toBe(key('Bash', { command, description: 'Save it', timeout: 5000 }))
+  expect(key('Bash', { command })).not.toBe(key('Bash', { command: `${command} ` }))
+  // A command's relative targets are where the session runs, so the same words elsewhere are another save.
+  expect(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, cwd, HOME)).not.toBe(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, '/Users/dan/Apps/other', HOME))
+  expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).toBe(key('Write', { file_path: `${cwd}/AGENTS.md`, content: '- a\n' }))
+  expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).not.toBe(key('Write', { file_path: 'AGENTS.md', content: '- b\n' }))
+  expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).not.toBe(key('Write', { file_path: 'CLAUDE.md', content: '- a\n' }))
+  const edit = { file_path: '~/.claude/CLAUDE.md', old_string: 'a', new_string: 'a\n- b' }
+  expect(key('Edit', edit)).toBe(key('Edit', { ...edit, file_path: `${HOME}/.claude/CLAUDE.md`, replace_all: false }))
+  expect(key('Edit', edit)).not.toBe(key('Edit', { ...edit, replace_all: true }))
+  expect(key('Edit', edit)).not.toBe(key('Edit', { ...edit, new_string: 'a\n- c' }))
+  // A Write and a Bash call that happen to carry the same text are different saves.
+  expect(key('Write', { file_path: 'x', content: 'y' })).not.toBe(key('Bash', { command: 'y' }))
+})
+
+test('the call Claude is asked to send again is shown by what it writes, as the call carries it', () => {
+  expect(JSON.parse(callShown('Bash', { command: "echo '- a' >> CLAUDE.md", description: 'Append' }))).toEqual({ command: "echo '- a' >> CLAUDE.md" })
+  expect(JSON.parse(callShown('Write', { file_path: 'AGENTS.md', content: '- a\n' }))).toEqual({ file_path: 'AGENTS.md', content: '- a\n' })
+  expect(JSON.parse(callShown('Edit', { file_path: 'CLAUDE.md', old_string: 'a', new_string: 'b', replace_all: false }))).toEqual({ file_path: 'CLAUDE.md', old_string: 'a', new_string: 'b' })
+  expect(JSON.parse(callShown('Edit', { file_path: 'CLAUDE.md', old_string: 'a', new_string: 'b', replace_all: true }))).toEqual({ file_path: 'CLAUDE.md', old_string: 'a', new_string: 'b', replace_all: true })
+})
+
+// L523: an approval lapses, and the time it stands is a chosen number the copy names.
+test('an approval stands for ten minutes', () => {
+  expect(APPROVAL_MS).toBe(10 * 60_000)
+})
+
+// L50: an approval's time comes back from storage, and one that is not a number compares false
+// against every clock, so it would stand for ever and let its save through unasked. It stands for
+// nothing instead, and its wait is none, never one $.clock.after refuses by throwing (a wait that is
+// not a non-negative number throws there, measured 2026-10-05 with `claude plugin test`).
+test('an approval stands only while its time is a number still to come, and its wait is never one a timer refuses', () => {
+  expect(stands(1000, 999)).toBe(true)
+  expect(stands(1000, 1000)).toBe(false)
+  for (const bad of [undefined, null, Number.NaN, Number.POSITIVE_INFINITY, '2000', {}]) expect(`${String(bad)}: ${stands(bad, 0)}`).toBe(`${String(bad)}: false`)
+  expect(lapseWait(1000, 400)).toBe(600)
+  expect(lapseWait(1000, 1500)).toBe(0)
+  for (const bad of [undefined, null, Number.NaN, '2000']) expect(lapseWait(bad, 0)).toBe(0)
 })
