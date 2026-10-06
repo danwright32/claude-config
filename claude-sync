@@ -9863,20 +9863,28 @@ do_watch(){
   # watcher's pid there lost the race and stops. If two renames still interleave, both may start, and
   # the loop's own check before every send (watch_should_stop) stands down whichever the file does
   # not name.
-  if ! ( set -C; printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" ) 2>/dev/null; then
+  # Twice at most: a record that VANISHES between the failed claim and the replace (its watcher exited
+  # just then) is claimed again rather than reported as unwritable (review of #785).
+  local claimed="" _try
+  for _try in 1 2; do
+    if ( set -C; printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" ) 2>/dev/null; then claimed=1; break; fi
     if live="$(watch_already_running)"; then
       die "a claude-sync watcher started at the same moment as this one (process $live) and claimed $SYNC_WATCH_PID_FILE first. Nothing was started."
     fi
-    if [ -e "$SYNC_WATCH_PID_FILE" ] && printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null \
+    [ -e "$SYNC_WATCH_PID_FILE" ] || continue
+    if printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null \
        && mv -f "$SYNC_WATCH_PID_FILE.$$" "$SYNC_WATCH_PID_FILE" 2>/dev/null; then
       if live="$(watch_already_running)"; then
         die "a claude-sync watcher started at the same moment as this one (process $live) and replaced the stale $SYNC_WATCH_PID_FILE first. Nothing was started."
       fi
-    else
-      rm -f "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null || true
-      # Unwritable rather than taken: the watcher still runs, as before, and says it is unguarded.
-      echo "claude-sync: could not write $SYNC_WATCH_PID_FILE, so a second watcher started later will not be refused. Watching anyway." >&2
+      claimed=1
     fi
+    break
+  done
+  if [ -z "$claimed" ]; then
+    rm -f "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null || true
+    # Unwritable rather than taken: the watcher still runs, as before, and says it is unguarded.
+    echo "claude-sync: could not write $SYNC_WATCH_PID_FILE, so a second watcher started later will not be refused. Watching anyway." >&2
   fi
   # Recorded HERE rather than at the top of the file, because it is a fact about this long lived
   # loop and nothing else: every other entry point is a fresh process that exits in seconds.
