@@ -60,6 +60,14 @@ class Recorder(http.server.BaseHTTPRequestHandler):
         if self.path == '/stall':
             time.sleep(60)
             return
+        # An answer cut off part way: it promises 100 bytes, sends 5 and closes.
+        if self.path == '/cut':
+            self.send_response(200)
+            self.send_header('content-length', '100')
+            self.end_headers()
+            self.wfile.write(b'start')
+            self.wfile.flush()
+            return
         # A slow answer, a byte at a time: it records when its reader went away, which is when a
         # write to the socket fails.
         if self.path == '/drip':
@@ -185,6 +193,28 @@ else
   code_of -x "$PROXY" --max-time 1 "$PLAIN/drip" >/dev/null
   for _ in $(seq 1 100); do grep -q '^DROPPED /drip' "$TMP/plain.log" && break; sleep 0.1; done
   grep -q '^DROPPED /drip' "$TMP/plain.log" && ok || bad "a request the browser abandons is dropped upstream too"
+  # A site that drops its answer part way ends the browser's request at once: curl then reports a
+  # short transfer (18), never its own deadline (28).
+  curl -s --noproxy '' -o /dev/null --max-time 5 -x "$PROXY" "$PLAIN/cut"; rc=$?
+  [ "$rc" -ne 0 ] && [ "$rc" -ne 28 ] && ok || bad "an answer the site cuts off ends the browser's request too (curl rc $rc)"
+  # A tunnel opened and then sent nothing is closed after the deadline, never held open.
+  out="$(python3 - "${PROXY#http://}" "${PLAIN#http://}" <<'PY'
+import socket, sys
+host, port = sys.argv[1].split(':')
+s = socket.create_connection((host, int(port)), timeout=5)
+s.sendall(('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (sys.argv[2], sys.argv[2])).encode())
+got = b''
+while b'\r\n\r\n' not in got:
+    got += s.recv(1024)
+try:
+    print('closed' if s.recv(1024) == b'' else 'data')
+except socket.timeout:
+    print('still open')
+PY
+)"
+  [ "$out" = closed ] && ok || bad "an idle tunnel is closed after the deadline" "$out"
+  # The run's certificates outlive any run, so https does not stop working part way through one.
+  openssl x509 -checkend $((7 * 86400)) -noout -in "$PROXY_CA" >/dev/null && ok || bad "the proxy's certificate authority is good for at least a week"
 fi
 
 # ---------------------------------------------------------------- target-guard.sh

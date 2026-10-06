@@ -39,8 +39,9 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    it, or a dev server it recognises (Next.js, Vite and what serves through it, webpack's): a first
    compile reads as a dead link. Against a deployment Dan names, only ever run it with
    `--read-only`, behind the read only proxy, which refuses every request that could change
-   something and every WebSocket, outside any browser. Start it in the background, then pass the
-   `proxy` value from `<run dir>/proxy/proxy.json`:
+   something and every WebSocket, outside the browser. Start it in the background, wait until
+   `<run dir>/proxy/proxy.json` exists and its `pid` is the process you started (it is written
+   once the proxy listens, and removed when it stops), then pass its `proxy` value:
 
        node ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy"
        bash ~/.claude/skills/bug-bash/target-guard.sh --read-only --proxy "<proxy>" "<url>"
@@ -60,8 +61,8 @@ output directory `<scratchpad>/bug-bash/<run>/explorer-<n>/`. Tell each explorer
   `require(process.env.HOME + '/.claude/skills/bug-bash/explorer-browser.js').launch({ chromium, readOnly })`
   with `chromium` from the project's own `node_modules/playwright`. In a read only run it
   refuses to start unless the read only proxy in `BUG_BASH_PROXY` answers, sends everything through
-  it, and aborts every request that is not a read before it leaves; launch no browser any other
-  way. Never the Playwright MCP browser (one browser for the whole session; the
+  it, and aborts every request that is not a read before it leaves. A browser launched any other
+  way never meets the proxy, so launch none. Never the Playwright MCP browser (one browser for the whole session; the
   `playwright-subagent-gate` hook refuses it) and never Claude in Chrome (Dan's real browser and
   sign ins). Measured on 2026-10-05: four such browsers launched at once ran in 1.2 to 1.5 s, and a
   cookie set in one was absent from the other three.

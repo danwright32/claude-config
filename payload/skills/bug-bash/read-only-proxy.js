@@ -6,8 +6,11 @@
 // A read only run looks at a deployment with real users. Blocking writes inside the browser (the
 // route explorer-browser.js sets) covers only the context it hands back: a browser an explorer
 // launches for itself, a second context, and every WebSocket message pass it by (lessons review of
-// PR #798, L27). So the rule is also enforced here, outside any browser: a local proxy every
-// explorer browser is launched through, which forwards a request only when it reads.
+// PR #798, L27). So the rule is also enforced here, outside the browser: a local proxy that
+// explorer-browser.js launches every read only browser through, which forwards a request only when
+// it reads. That covers every context and every socket of such a browser. It does not cover a
+// browser launched some other way, which never meets this proxy: only an egress rule on the machine
+// could, and the skill's own instruction is all that stands there.
 //
 // What it forwards: GET, HEAD and OPTIONS (the CORS preflight a cross origin read needs), the one
 // list explorer-browser.js reads by. What it refuses, without a byte reaching the site: every other
@@ -71,6 +74,8 @@ const removeState = () => {
 }
 // A proxy.json left by an earlier run names a process that is not this one.
 removeState()
+// Certificates outlive any run: a run that went on past them would fail every https tunnel.
+const CERT_DAYS = '30'
 const UPSTREAM_MS = Number(argOf('--upstream-timeout-ms') || 30_000)
 if (!Number.isFinite(UPSTREAM_MS) || UPSTREAM_MS <= 0) {
   console.error('read-only-proxy: --upstream-timeout-ms takes a positive number of milliseconds.')
@@ -94,7 +99,7 @@ const run = (args) =>
 
 // The run's certificate authority and the one key every host's certificate shares.
 async function makeAuthority() {
-  await run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=bug bash read only proxy', '-keyout', 'ca.key', '-out', 'ca.pem'])
+  await run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', CERT_DAYS, '-subj', '/CN=bug bash read only proxy', '-keyout', 'ca.key', '-out', 'ca.pem'])
   await run(['genrsa', '-out', 'leaf.key', '2048'])
 }
 const contexts = new Map()
@@ -108,7 +113,7 @@ function contextFor(host) {
       const san = net.isIP(host) ? `IP:${host}` : `DNS:${host}`
       fs.writeFileSync(path.join(certDir, `${base}.ext`), `subjectAltName=${san}\nextendedKeyUsage=serverAuth\n`)
       await run(['req', '-new', '-key', 'leaf.key', '-subj', `/CN=${host.slice(0, 64)}`, '-out', `${base}.csr`])
-      await run(['x509', '-req', '-in', `${base}.csr`, '-CA', 'ca.pem', '-CAkey', 'ca.key', '-set_serial', `0x${crypto.randomBytes(8).toString('hex')}`, '-days', '2', '-extfile', `${base}.ext`, '-out', `${base}.pem`])
+      await run(['x509', '-req', '-in', `${base}.csr`, '-CA', 'ca.pem', '-CAkey', 'ca.key', '-set_serial', `0x${crypto.randomBytes(8).toString('hex')}`, '-days', CERT_DAYS, '-extfile', `${base}.ext`, '-out', `${base}.pem`])
       return tls.createSecureContext({ key: fs.readFileSync(path.join(certDir, 'leaf.key')), cert: fs.readFileSync(path.join(certDir, `${base}.pem`)) })
     })()
     // A failure is not cached: the next tunnel to that host tries again.
@@ -141,6 +146,9 @@ function forward(req, res, target, reqPath) {
     const out = {}
     for (const [k, v] of Object.entries(upRes.headers)) if (!HOP.has(k.toLowerCase())) out[k] = v
     res.writeHead(upRes.statusCode || 502, out)
+    // A site that drops the answer part way ends the browser's request too, never leaves it open.
+    upRes.on('aborted', () => res.destroy())
+    upRes.on('error', () => res.destroy())
     upRes.pipe(res)
   })
   let timedOut = false
@@ -206,7 +214,10 @@ server.on('connect', (req, client, head) => {
   if (head && head.length) client.unshift(head)
   // The first byte says what the tunnel carries: 0x16 opens a TLS handshake; anything else is
   // plain HTTP (a ws:// socket or an http:// request tunnelled), judged just the same.
+  // A tunnel that is opened and then sent nothing is closed after the same deadline as an upstream.
+  client.setTimeout(UPSTREAM_MS, () => client.destroy())
   client.once('data', first => {
+    client.setTimeout(0)
     client.pause()
     client.unshift(first)
     if (first[0] !== 0x16) {

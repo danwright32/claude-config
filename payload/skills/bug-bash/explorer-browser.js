@@ -86,7 +86,8 @@ async function launch({ chromium, readOnly = false, headless = true, proxy = pro
     throw e
   }
   // The browser itself is not handed back, since close() is all an explorer needs of it. A context
-  // made beside this one has no route, but its browser still goes through the proxy.
+  // made beside this one has no route, but its browser still goes through the proxy. A browser
+// launched any other way goes through nothing, so the skill has every explorer launch here.
   return { context, close: () => browser.close() }
 }
 
