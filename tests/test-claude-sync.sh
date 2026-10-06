@@ -18948,6 +18948,14 @@ dbg "#592 log after the held back send: $(cat "$L92LOG")"
 _l592log="$(cat "$L92LOG" 2>/dev/null || true)"
 check "#592 the held back block is written to the sync log, naming the hook and the tool" \
   "line_has \"\$_l592log\" 'hooks block' 'fencegate.sh' 'Bash'"
+# The other ways the block is held back reach the log too (review of #785): an unreadable
+# settings.json is the commonest of them.
+cp "$L92H/settings.json" "$WORK/l592-settings.good"; printf '{ not json\n' > "$L92H/settings.json"
+l592_push >/dev/null
+_l592bad="$(cat "$L92LOG" 2>/dev/null || true)"
+check "#592 a hooks block held back because settings.json cannot be read is logged too" \
+  "line_has \"\$_l592bad\" '^20[0-9][0-9]-' 'hooks block' 'could not be read'"
+cp "$WORK/l592-settings.good" "$L92H/settings.json"
 check "#592 with a time on the line" "line_has \"\$_l592log\" '^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]' 'hooks block'"
 
 section "== an empty folder on a Mac that never held files there clears nothing from the shared copy (#627) =="

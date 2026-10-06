@@ -3663,6 +3663,8 @@ PROT
       # Not writing is the safe direction: a payload left as it is can still be published next
       # time, and one overwritten from an unreadable local file cannot be recovered (L5).
       echo "claude-sync: $CLAUDE_HOME/settings.json could not be read as JSON, so the hooks block was NOT published and the repo keeps the copy it had. Check it with 'jq . $CLAUDE_HOME/settings.json'." >&2
+      # Logged like every other way the block is held back (claude-config#592, review of #785).
+      sync_log_line "the hooks block was NOT published, because $CLAUDE_HOME/settings.json could not be read as JSON"
     else
       _sh_pay='{}'
       if [ -f "$PAYLOAD/settings.hooks.json" ]; then
@@ -3689,6 +3691,7 @@ PROT
         printf '%s' "$_sh_merged" | jq '{hooks: .}' | tok > "$PAYLOAD/settings.hooks.json"
       else
         echo "claude-sync: the hooks block could not be merged for publishing, so the repo keeps the copy it had and this Mac's hook changes have NOT been sent. Check $CLAUDE_HOME/settings.json and the payload's settings.hooks.json with jq." >&2
+        sync_log_line "the hooks block was NOT published, because it could not be merged with the payload's settings.hooks.json"
       fi
     fi
   fi
