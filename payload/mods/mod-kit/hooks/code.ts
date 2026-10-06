@@ -318,6 +318,8 @@ const SURFACES: Record<Lang, Surface> = {
   osascript: {
     process: [
       { re: /\bdo shell script\b/i, seen: 'do shell script' },
+      // Terminal's do script runs its text as a shell command in a new window.
+      { re: /\bdo script\b/i, seen: 'do script' },
       { re: /\.\s*doShellScript\s*\(/, seen: 'doShellScript' },
       { re: /\.\s*doScript\s*\(/, seen: 'doScript' },
       { re: /\b(NSTask|NSWorkspace\b[\s\S]*?\b(?:launchApplication|openURL|openFile|openApplicationAtURL))\b/, seen: m => (m[1] as string).startsWith('NSTask') ? 'NSTask' : 'NSWorkspace launching' },

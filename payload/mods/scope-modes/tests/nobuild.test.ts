@@ -561,6 +561,9 @@ describe('no build after #760', () => {
     expect(what(run(`osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSTask.launchedTaskWithLaunchPathArguments("/bin/rm", ["a"])'`))).toBe('run a process from osascript (NSTask)')
     expect(what(run(`osascript -l JavaScript -e 'ObjC.import("stdlib"); $.system("git push")'`))).toBe('run a process from osascript ($.system)')
     expect(what(run(`osascript -l JavaScript -e 'Application("Terminal").doScript("make deploy")'`))).toBe('run a process from osascript (doScript)')
+    // AppleScript's own spelling: Terminal's do script runs a shell command (lessons review of #798).
+    expect(what(run(`osascript -e 'tell application "Terminal" to do script "git push"'`))).toBe('run a process from osascript (do script)')
+    expect(what(run(`osascript -e 'do shell script "ls"'`))).toBe('run a process from osascript (do shell script)')
     expect(what(run(`osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSFileManager.defaultManager.removeItemAtPathError("/repo/a.ts", null)'`))).toBe('write files from osascript (NSFileManager)')
     expect(what(run(`osascript -l JavaScript -e '$("x").writeToFileAtomicallyEncodingError("/repo/a.ts", true, 4, null)'`))).toBe('write files from osascript (writeToFileAtomicallyEncodingError)')
     expect(what(run(`osascript -l JavaScript -e 'app.openForAccess(Path("/repo/a.ts"), { writePermission: true })'`))).toBe('write files from osascript (openForAccess with writePermission)')
