@@ -116,9 +116,17 @@ def main(argv):
         print(f'kit-table: {OUT} is current ({len(es)} entries)')
         return 0
     tmp = out + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(want)
-    os.replace(tmp, out)
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(want)
+        os.replace(tmp, out)
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        print(f'kit-table: cannot write {OUT}: {e}', file=sys.stderr)
+        return 2
     print(f'kit-table: wrote {OUT} ({len(es)} entries)')
     return 0
 

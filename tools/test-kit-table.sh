@@ -70,6 +70,14 @@ open(p, 'w').write(s)
 PY
 out="$(python3 "$TOOL" "$D" --check 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && grep -q 'unknown reader: paths' <<< "$out" && ok || bad "an entry for a reader the tool does not know is refused by name (rc $rc)" "$out"
+# A carried test that cannot be written is a refusal by name (exit 2), not a traceback, and leaves
+# no temporary file behind (lessons review of #818).
+D="$(mk readonly)"
+chmod 555 "$D/payload/mods/mod-kit/tests"
+out="$(python3 "$TOOL" "$D" 2>&1)"; rc=$?
+chmod 755 "$D/payload/mods/mod-kit/tests"
+[ "$rc" -eq 2 ] && grep -q 'cannot write' <<< "$out" && ! grep -q Traceback <<< "$out" && ! ls "$D/payload/mods/mod-kit/tests/"*.tmp >/dev/null 2>&1 && ok \
+  || bad "a carried test that cannot be written is refused by name and leaves nothing behind (rc $rc)" "$out"
 out="$(python3 "$TOOL" 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && grep -qi 'usage' <<< "$out" && ok || bad "no arguments prints usage (rc $rc)" "$out"
 

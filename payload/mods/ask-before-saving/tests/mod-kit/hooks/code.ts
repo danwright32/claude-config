@@ -106,11 +106,32 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // rename and replace take one name too (#760: `s.rename('total')` was refused as a move, Dan's
 // decision 2026-10-05); one that imports both, or neither, cannot be told apart and is still read
 // as moving.
-const PANDAS = /(?:^|[;\n])[ \t]*(?:import\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*pandas\b|from\s+pandas\b)/
-const PATHLIB = /\bpathlib\b|\bPath\s*\(/
+//
+// Only a receiver provably bound from pandas is exempt (lessons review of #818): pandas being
+// imported says nothing about any other object. The code arrives in its canonical spelling, so
+// every alias of pandas reads as `pandas.` and `from pandas import Series` makes `Series(` read as
+// `pandas.Series(`. A name is pandas's when it is assigned from an expression starting with
+// `pandas.` or with a name already known to be, which follows `df = pandas.read_csv(...)` then
+// `s = df['x']`; a receiver is that name, or a subscript of it.
+const pandasNames = (code: string): Set<string> => {
+  const names = new Set<string>(['pandas'])
+  const binds = [...code.matchAll(/(?:^|[;\n])[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*([A-Za-z_]\w*)/g)]
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const b of binds) {
+      if (!names.has(b[1] as string) && names.has(b[2] as string)) {
+        names.add(b[1] as string)
+        grew = true
+      }
+    }
+  }
+  return names
+}
 const pythonMoves = (code: string): CodeVerdict | undefined => {
-  if (PANDAS.test(code) && !PATHLIB.test(code)) return undefined
+  const pandas = pandasNames(code)
   for (const m of code.matchAll(/\.\s*(rename|replace)\s*\(/g)) {
+    const receiver = /([A-Za-z_]\w*)(?:\s*\[[^\]]*\])*\s*$/.exec(code.slice(0, m.index))?.[1]
+    if (receiver !== undefined && pandas.has(receiver)) continue
     const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
     if (args.length === 1 && !/^\w+\s*=|^[{[]|^lambda\b|^str\s*\./.test(args[0] as string)) return { does: 'write files', seen: m[1] as string }
   }

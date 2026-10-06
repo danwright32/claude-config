@@ -42,10 +42,18 @@ describe('codeVerdict after #730', () => {
 describe('codeVerdict after #760', () => {
   test("a pandas Series.rename with one name is no move; a pathlib rename still is", () => {
     expect(codeVerdict('python', "import pandas as pd\ns = pd.Series([1, 2])\ns = s.rename('total')")).toBeUndefined()
-    expect(codeVerdict('python', "import pandas as pd\ndf['x'].replace('a')")).toBeUndefined()
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.read_csv('a.csv')\ndf['x'].replace('a')")).toBeUndefined()
+    expect(codeVerdict('python', "from pandas import Series\ns = Series([1])\ns = s.rename('t')")).toBeUndefined()
+    // Bound through another pandas object.
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\ns = df['x']\ns.rename('t')")).toBeUndefined()
     // pandas named anywhere in an import list is still pandas.
-    expect(codeVerdict('python', "import os, pandas\ns.rename('total')")).toBeUndefined()
-    expect(codeVerdict('python', "import numpy as np, pandas as pd\ns.rename('total')")).toBeUndefined()
+    expect(codeVerdict('python', "import os, pandas\ns = pandas.Series([1])\ns.rename('total')")).toBeUndefined()
+    expect(codeVerdict('python', "import numpy as np, pandas as pd\ns = pd.Series([1])\ns.rename('total')")).toBeUndefined()
+    // Only a receiver bound from pandas is exempt: pandas being imported says nothing about any
+    // other object (lessons review of #818).
+    expect(codeVerdict('python', "import pandas\nimport py\npy.path.local('a').rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\nsftp.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "x = 'import pandas'\nf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "from pathlib import Path\nPath('a').rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pathlib\npathlib.Path('a').replace('b')")).toEqual({ does: 'write files', seen: 'replace' })
     // pandas and pathlib in one script: which receiver is which cannot be told, so it is a move.
