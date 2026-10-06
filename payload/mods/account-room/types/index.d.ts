@@ -23,9 +23,10 @@ export type AccountRoomReading = { takenAt: number; five?: AccountRoomLimit; wee
 /**
  * Why a Switch stopped before its sign in page, as measured (#736): no logout route was set up, so
  * nothing was attempted; the logout command failed or could not be run; the signed out check could
- * not be run; the check ran and did not print "signed out"; or a reload cut the run off.
+ * not be run; the check ran and could not read the browser, so it gave no answer (exit 2, #773); the
+ * check ran and did not print "signed out"; or a reload cut the run off.
  */
-export type AccountRoomStop = 'no-route' | 'logout-failed' | 'check-not-run' | 'not-confirmed' | 'interrupted'
+export type AccountRoomStop = 'no-route' | 'logout-failed' | 'check-not-run' | 'check-unanswered' | 'not-confirmed' | 'interrupted'
 
 /**
  * What Switch is doing: nothing, a step under way since a moment, or stopped at the sign out. A

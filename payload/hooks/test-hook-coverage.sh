@@ -302,6 +302,28 @@ case "$extra" in
     check "#413 a hook also run under the other tool event is reported" ok ;;
   *) check "#413 a hook also run under the other tool event is reported" "it answered: [$extra]" ;;
 esac
+# A hook may declare BOTH tool events, one header line each (claude-config#647: the payload write
+# gate refuses before a Bash call and reports after it). Wired exactly as declared it is clean, and
+# a tool outside either declaration is still EXTRA.
+printf '#!/usr/bin/env bash\n#\n# both.sh\n# Claude Code PreToolUse(Bash|Edit) hook: a fixture.\n# Claude Code PostToolUse(Bash) hook: and after.\n' > "$REG/hooks/both.sh"
+cat > "$REG/both.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/both.sh"}]},
+  {"matcher": "Edit", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/both.sh"}]}
+ ],
+ "PostToolUse": [
+  {"matcher": "Bash|Write", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/both.sh"}]}
+]}}
+JSON
+both="$(registration_faults "$REG/both.json" "$REG/hooks" 2>&1 | grep 'both\.sh' || true)"
+case "$both" in
+  *"EXTRA both.sh declares PostToolUse(Bash) and is also run for Write"*) check "#647 a hook declaring two events is held to each" ok ;;
+  *) check "#647 a hook declaring two events is held to each" "it answered: [$both]" ;;
+esac
+case "$both" in
+  *"under PostToolUse"*|*UNWIRED*|*"run for Edit"*|*"run for Bash"*) check "#647 and what it does declare under either event is not reported" "it answered: [$both]" ;;
+  *) check "#647 and what it does declare under either event is not reported" ok ;;
+esac
 case "$extra" in
   *"EXTRA pwfix.sh declares PreToolUse(mcp__pw__.*|mcp__other_pw__.*) and is also run for Edit"*)
     check "#413 a hook declaring a pattern, widened to another tool, is reported" ok ;;

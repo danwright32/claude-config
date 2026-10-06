@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, parseMacFile, parseNicknames, serialize, serializeNicknames, withName, withSighting } from '../hooks/store.ts'
+import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, nicknameRefusal, parseMacFile, parseNicknames, serialize, serializeNicknames, withAccount, withName, withSighting } from '../hooks/store.ts'
+import type { Account } from '../hooks/room.ts'
 import type { MacFile } from '../hooks/store.ts'
 
 // The two files the account room keeps (#659): one readings file per Mac in a private GitHub
@@ -193,4 +194,21 @@ test('the nicknames file is written as version 2, one account per line in key or
   expect(text).toBe('{\n  "v": 2,\n  "names": {\n    "a": {"name":"Work","at":5},\n    "b": {"name":null,"at":3},\n    "c": {"name":"Old"}\n  }\n}\n')
   expect(parseNicknames(text)).toEqual(f)
   expect(serializeNicknames({ names: {} })).toBe('{\n  "v": 2,\n  "names": {}\n}\n')
+})
+
+test('a nickname that looks like an email address is refused, since the nicknames file is public (#758)', () => {
+  for (const n of ['dan@example.com', 'Work (dan@pennie.co.uk)', ' a.b+c@d.io ']) expect(nicknameRefusal(n)).toMatch(/looks like an email address/)
+  // An at sign on its own, or a name with a dot, is a name.
+  for (const n of ['Work', 'Dan @ Acme', 'team@home', 'dwright (team)', 'v1.2']) expect(nicknameRefusal(n)).toBeUndefined()
+})
+
+test('adding an account to a set of accounts copies it, so a set read and kept elsewhere is never changed (#758)', () => {
+  const a: Account = { id: 'a', email: 'a@x.com', org: 'Acme', nickname: null }
+  const b: Account = { id: 'b', email: 'b@x.com', org: 'Acme', nickname: null }
+  const kept = new Map([['a', a]])
+  const out = withAccount(kept, b)
+  expect([...out.keys()]).toEqual(['a', 'b'])
+  expect([...kept.keys()]).toEqual(['a'])
+  // One already there is kept as it is, reading and all.
+  expect(withAccount(kept, { ...a, email: 'other@x.com' }).get('a')).toBe(a)
 })

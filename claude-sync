@@ -3939,9 +3939,11 @@ report_settings_extras(){
 # What Claude Code says about the mods, asked of the claude command itself, never inferred from the
 # files having arrived (L3). It measures that each mod is LISTED as an enabled plugin and passes
 # validation: it cannot see a running session, so its wording claims no more than that (L11).
-# run_bounded <seconds> <command...>: the command, ended by an alarm after <seconds>. The same alarm
-# the scratch sizing uses (set in a forked child immediately before it becomes the command, so it
-# holds however the caller is stopped); macOS has no `timeout`. Exits 124 when the alarm ended it.
+# run_bounded <seconds> <command...>: the command, ended by an alarm after <seconds>, set in a forked
+# child immediately before it becomes the command, so it holds however the caller is stopped; macOS
+# has no `timeout`. Exits 124 when the alarm ended it. 0 seconds means no bound (`alarm 0` sets none).
+# The ONE copy of this technique: the mods check and the scratch sizing both call it (#626), so a
+# correction to how a stopped child is read reaches every slow command the sync bounds (L30).
 run_bounded(){
   perl -e '
     my $t = shift @ARGV;
@@ -9458,15 +9460,14 @@ scratch_sizes_kb(){   # reads paths on stdin
   # read as the whole (L11). Read from how the child died rather than from xargs's status: GNU xargs
   # exits 125 for a command killed by a signal and the BSD xargs on this Mac exits 1, which is also
   # what an unreadable entry gives, so that status cannot tell the two apart.
+  #
+  # The alarm is run_bounded's (#626), reached from xargs through an exported function because xargs
+  # can only start a program, and its exit 124 is translated into the TIMEOUT line here.
+  export -f run_bounded
   { printf '%s\n' "$list" | tr '\n' '\0' \
-      | xargs -0 perl -e '
-          my $t = shift @ARGV;
-          my $pid = fork();
-          exit 127 unless defined $pid;
-          if ($pid == 0) { alarm $t if $t > 0; exec @ARGV or exit 127; }
-          waitpid($pid, 0);
-          if (($? & 127) == 14) { print "TIMEOUT\n"; exit 0; }
-          exit($? >> 8);' "$SYNC_SCRATCH_DU_TIMEOUT" du -sk 2>/dev/null || true; }
+      | xargs -0 bash -c 'rc=0; run_bounded "$0" du -sk "$@" || rc=$?
+          if [ "$rc" -eq 124 ]; then echo TIMEOUT; exit 0; fi
+          exit "$rc"' "$SYNC_SCRATCH_DU_TIMEOUT" 2>/dev/null || true; }
 }
 
 # The sum, or `?` when any `du` was stopped by its alarm, because a total missing a part is a

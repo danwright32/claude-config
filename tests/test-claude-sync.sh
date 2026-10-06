@@ -7964,6 +7964,14 @@ check "#444 reap-scratch still reclaims, and calls a cut short size a floor" \
   "grep -qF 'reclaimed 1 abandoned scratch item(s) holding at least' <<< \"\$_dub_reap\" && [ ! -e '$_DUB/root/claude-sync-suite-work.DUSLOW1' ]"
 _dub_bad="$(SYNC_SCRATCH_DU_TIMEOUT=soon SYNC_SCRATCH_ROOT="$_DUB/root" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _dub_bad_rc=$?
 check "#444 an unreadable du bound is refused" "[ '$_dub_bad_rc' -ne 0 ] && grep -q \"SYNC_SCRATCH_DU_TIMEOUT='soon'\" <<< \"\$_dub_bad\""
+# claude-config#626: the sizing above is bounded by run_bounded, the one alarm helper, rather than
+# an inline copy of the same fork and alarm that could drift from it. The checks above prove the
+# bound still holds; this one proves there is one copy of the technique doing it.
+_626_alarms="$(grep -c 'alarm \$t' "$SCRIPT")"
+check "#626 claude-sync carries the fork and alarm technique once, in run_bounded" "[ '$_626_alarms' = 1 ]"
+_626_body="$(sed -n '/^scratch_sizes_kb()/,/^}/p' "$SCRIPT")"
+case "$_626_body" in *run_bounded*) _626_calls=1 ;; *) _626_calls=0 ;; esac
+check "#626 and the scratch sizing calls run_bounded" "[ '$_626_calls' = 1 ]"
 for _dp in $(cat "$_DUB/du.pids" 2>/dev/null); do kill -9 "$_dp" 2>/dev/null; done
 
 section "== a sync works where git has no identity of its own (#52) =="

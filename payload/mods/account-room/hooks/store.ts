@@ -221,6 +221,24 @@ export const merge = (files: readonly MacFile[]): Map<string, Account> => {
   return out
 }
 
+/**
+ * The accounts with one more, as a new Map: the one given may be a read kept for a minute and
+ * shared with the card, so it is never changed in place (third lessons review of #757). An account
+ * already there keeps what it holds.
+ */
+export const withAccount = (accounts: ReadonlyMap<string, Account>, a: Account): Map<string, Account> => {
+  const out = new Map(accounts)
+  if (!out.has(a.id)) out.set(a.id, a)
+  return out
+}
+
+/**
+ * Why a nickname cannot be saved, or undefined when it can. The nicknames file is in the public
+ * claude-config repository, so a name that looks like an email address would publish it (#758).
+ */
+export const nicknameRefusal = (name: string): string | undefined =>
+  /[^\s@()<>]+@[^\s@()<>]+\.[^\s@()<>]+/.test(name) ? 'it looks like an email address, and the nicknames file is published in a public repository. Use a name instead.' : undefined
+
 /** Each Mac's file in the repository's readings folder, by the Mac's name; nothing else there is a Mac. */
 export const macFiles = (entries: readonly { name: string; type: string }[]): { mac: string; file: string }[] =>
   entries.flatMap(e => {
