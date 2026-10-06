@@ -496,6 +496,11 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom tempfile import mkstemp\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.makedirs('x')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nm = __import__('zip' + 'file')\nopen('a.md','w')\nEOF")).toEqual(none)
+    // os taken apart by a from import is os too: only its path is quiet.
+    expect(targets("python3 - <<'EOF'\nfrom os import chflags\nopen('a.md','w')\nchflags('b', 0)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom os import remove\nopen('a.md','w')\nremove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom os import *\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom os import path\nif path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
     // Only python's writes are named so far.
     expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })

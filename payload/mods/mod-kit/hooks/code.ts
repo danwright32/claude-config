@@ -526,7 +526,13 @@ const onlyQuietModules = (inline: string): boolean => {
   if (/\b(?:__import__|import_module|importlib|sys\s*\.\s*modules|getattr)\b/.test(inline)) return false
   const mods: string[] = []
   for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*import\s+([^;\n#]+)/g)) for (const part of (m[1] as string).split(',')) mods.push(part.trim().split(/\s+/)[0] as string)
-  for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*from\s+([\w.]+)\s+import\b/g)) mods.push(m[1] as string)
+  // os taken apart is os only as its path (lessons review of #846: `from os import chflags` reaches
+  // a writer no rule names).
+  for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*from\s+([\w.]+)\s+import\s*\(?\s*([^;\n#)]*)/g)) {
+    const mod = m[1] as string
+    const names = (m[2] as string).split(',').map(n => n.trim().split(/\s+/)[0])
+    mods.push(mod === 'os' && !names.every(n => n === 'path') ? 'os.*' : mod)
+  }
   for (const mod of mods) {
     if (mod === 'os') {
       // Every use of os is os.path.
