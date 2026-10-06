@@ -2800,7 +2800,12 @@ resolve_derived_conflicts(){   # -> 0 carried through, 1 not this, 2 a real less
         git -C "$SYNC_REPO" cat-file -e ":3:$p" 2>/dev/null || return 1
         if is_owner_merged_file "$rel"; then owner_paths="$owner_paths$p
 "
-        else rule_paths="$rule_paths$p
+        else
+          # A rule file needs the copy both sides parted from. Two Macs ADDING the same file have
+          # none, and a merge against an empty base is one whole file add/add hunk, which keeping
+          # both sides would write twice and call merged (review of #845).
+          git -C "$SYNC_REPO" cat-file -e ":1:$p" 2>/dev/null || return 1
+          rule_paths="$rule_paths$p
 "
         fi
         handled=$(( handled + 1 )); continue

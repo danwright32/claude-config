@@ -17113,6 +17113,26 @@ check "#845 and that abort leaves the clone where it was, not mid rebase" \
   "[ \"\$(git -C '$EMRD' rev-parse HEAD)\" = '$em_before_d' ] && [ ! -d '$EMRD/.git/rebase-merge' ]"
 check "#845 and it names neither pull nor sync as the way out" \
   "out_lacks \"\$out_emd\" \"claude-sync (pull|sync)\""
+
+# A rule file BOTH Macs created has no common base, and merging against an empty one keeps both
+# whole copies as one add/add hunk. So that conflict still aborts rather than writing it twice.
+EMRE="$WORK/entrymerge-repoE"; git clone -q "$EMB" "$EMRE" 2>/dev/null
+EMHE="$WORK/entrymerge-homeE"; mkdir -p "$EMHE"; echo '{"hooks":{}}' > "$EMHE/settings.json"
+emrun "$EMHE" "$EMRE" pull >/dev/null
+printf -- '- rule from Mac A\n@EMNEW.md\n' >> "$EMHA/CLAUDE.md"; printf '# new\n- written on Mac A\n' > "$EMHA/EMNEW.md"
+emrun "$EMHA" "$EMRA" sync >/dev/null
+cp "$EMHA/CLAUDE.md" "$EMHE/CLAUDE.md"; printf '# new\n- written on Mac E\n' > "$EMHE/EMNEW.md"
+git -C "$EMRE" remote set-url origin "$WORK/entrymerge-unreachable.git"
+emrun "$EMHE" "$EMRE" sync >/dev/null
+git -C "$EMRE" remote set-url origin "$EMB"
+em_new_a="$(git -C "$EMB" show "$em_branch:payload/EMNEW.md" 2>/dev/null || true)"
+em_new_e="$(git -C "$EMRE" show HEAD:payload/EMNEW.md 2>/dev/null || true)"
+check "#845 the fixture: both Macs really did create EMNEW.md" \
+  "grep -q 'Mac A' <<< \"\$em_new_a\" && grep -q 'Mac E' <<< \"\$em_new_e\""
+out_eme="$(emrun "$EMHE" "$EMRE" sync)"; eme_rc=$?
+dbg "#845 a rule file both Macs created said: $out_eme"
+check "#845 a rule file both Macs created is not merged into two whole copies" \
+  "[ $eme_rc -ne 0 ] && line_has \"\$out_eme\" 'reconcile by hand' 'EMNEW\.md'"
 section "== the sync path reports what arrived, the same way pull does (claude-config#283) =="
 # do_pull calls summarize_applied, which lists what landed and adds the start-a-new-session notice
 # when an arriving file cannot be seen by a running session. do_sync called neither: its only
