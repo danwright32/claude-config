@@ -20,7 +20,7 @@
 #      server's; a dev server with none of them is not caught, so the skill's own step still says
 #      to serve a production build.
 #
-# Prints one line on success, `LOCAL <url>` or `READ-ONLY <url>`, and exits 0. Every refusal goes
+# Prints one line on success, `LOCAL <url>` or `READ-ONLY <url> via <proxy>`, and exits 0. Every refusal goes
 # to stderr with its reason and a distinct exit code: 2 usage, 3 remote without read only, 4 dev
 # server, 5 nothing answering, 6 a redirect chain longer than six hops, 7 a read only run with no
 # working read only proxy.

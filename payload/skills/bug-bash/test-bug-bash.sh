@@ -134,7 +134,9 @@ python3 "$TMP/impostor.py" "$TMP/impostor.port" & BG_PIDS="$BG_PIDS $!"
 # A stale proxy.json from an earlier run in the same directory, which the proxy must not leave
 # standing for a reader to take as its own.
 mkdir -p "$TMP/proxy"
-printf '{"proxy":"http://127.0.0.1:1","pid":1}\n' > "$TMP/proxy/proxy.json"
+# Its pid is a process that has already exited, as a left over file's would be.
+DEAD_PID="$(sh -c 'echo $$')"
+printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy/proxy.json"
 # The upstream deadline is shortened so a stalled site is seen to time out within the suite.
 NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000 >"$TMP/proxy.out" 2>&1 & PROXY_PID=$!
 BG_PIDS="$BG_PIDS $PROXY_PID"
@@ -294,6 +296,8 @@ else
   # needs the read only proxy (#813).
   out="$(bash "$GUARD" --read-only --proxy "$PROXY" "$BASE/prod/" 2>&1)"; rc=$?
   expect "read only against a local build is still read only" 0 "^READ-ONLY .* via $PROXY" "$rc" "$out"
+  # The guard's header documents the line it prints, so a reader parsing by it is not misled (L32).
+  grep -q '`READ-ONLY <url> via <proxy>`' "$GUARD" && ok || bad "target-guard.sh's header names the READ-ONLY line it prints"
   out="$(BUG_BASH_PROXY= bash "$GUARD" --read-only "$BASE/prod/" 2>&1)"; rc=$?
   expect "read only against a local build with no proxy is refused" 7 "no read only proxy" "$rc" "$out"
 
@@ -512,6 +516,18 @@ grep -q '^launched=1$' <<< "$out" && ok || bad "a read only browser whose proxy 
 grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the read only proxy for a read only run"
 
 # ---------------------------------------------------------------- the proxy's address does not outlive it
+# A second proxy started on a directory a live one is using refuses, and leaves the live one's
+# proxy.json alone.
+if [ -n "${PROXY_PID:-}" ]; then
+  # Started in the background and waited on with a deadline, so a proxy that wrongly starts is
+  # stopped and reported rather than holding the suite.
+  node "$PROXY_JS" --state "$TMP/proxy" >"$TMP/second.out" 2>&1 & second=$!
+  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
+  out="$(cat "$TMP/second.out")"
+  [ "$rc" = 3 ] && grep -q "already running" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
+    || bad "a second proxy on a live proxy's directory refuses and leaves its proxy.json (rc $rc)" "$out"
+fi
 # A proxy.json left behind names a dead process as the proxy, so the proxy removes it as it stops,
 # here on a hangup, the signal a closed terminal sends.
 if [ -n "${PROXY_PID:-}" ]; then
@@ -522,7 +538,7 @@ fi
 # A proxy that cannot start (here, no openssl to make its certificates) refuses by name, and leaves
 # no stale proxy.json from an earlier run standing in its place.
 mkdir -p "$TMP/proxy2" "$TMP/no-openssl"
-printf '{"proxy":"http://127.0.0.1:1","pid":1}\n' > "$TMP/proxy2/proxy.json"
+printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy2/proxy.json"
 out="$(PATH="$TMP/no-openssl" "$(command -v node)" "$PROXY_JS" --state "$TMP/proxy2" 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && grep -q 'will not start' <<< "$out" && [ ! -e "$TMP/proxy2/proxy.json" ] && ok   || bad "a proxy that cannot start refuses by name and removes a stale proxy.json (rc $rc)" "$out"
 

@@ -72,7 +72,26 @@ const removeState = () => {
     console.error(`read-only-proxy: could not remove ${stateFile}: ${e.message}`)
   }
 }
-// A proxy.json left by an earlier run names a process that is not this one.
+// A proxy.json naming a live proxy means this directory is in use: refuse rather than take its
+// address away. One naming a process that is gone is left from an earlier run, and is removed.
+try {
+  const prior = JSON.parse(fs.readFileSync(stateFile, 'utf8')).pid
+  if (Number.isInteger(prior) && prior > 0 && prior !== process.pid) {
+    let alive = false
+    try {
+      process.kill(prior, 0)
+      alive = true
+    } catch (e) {
+      alive = e.code === 'EPERM'
+    }
+    if (alive) {
+      console.error(`read-only-proxy: a proxy is already running for ${stateDir} (pid ${prior}); stop it or use another --state directory.`)
+      process.exit(3)
+    }
+  }
+} catch {
+  // No proxy.json, or one that cannot be read: nothing live is named, so it is removed below.
+}
 removeState()
 // Certificates outlive any run: a run that went on past them would fail every https tunnel.
 const CERT_DAYS = '30'
