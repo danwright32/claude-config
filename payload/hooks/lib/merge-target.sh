@@ -232,7 +232,8 @@ MTEOF
 # sit OUTSIDE quotes and substitutions (lessons review of #795): cut inside them,
 # `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` became two halves, neither a merge, and
 # every merge gate stood down. Heredoc bodies are stripped first. Read by lib/shell-words.py, one
-# process for the whole command: the same scan in bash took 55 s on a 26 KB command. With no
+# process for the whole command: the same scan in bash took 55 s on a 26 KB command (measured
+# 2026-10-05). With no
 # python3 the plain cut at every separator is used, which can only over cut.
 MT_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
 mt_raw_segments() {  # $1 = command
