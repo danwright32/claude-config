@@ -419,9 +419,22 @@ const watcher: { name: string; register: Register } = {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const list = async () => [
-        { label: 'npm test', runMs: 60_000, kept: false, stuck: false },
-        { label: 'dev server', runMs: 2 * 3_600_000 + 14 * 60_000, kept: true, stuck: false },
+        { label: 'npm test', runMs: 60_000, kept: false, stuck: false, state: 'running', owner: null },
+        { label: 'dev server', runMs: 2 * 3_600_000 + 14 * 60_000, kept: true, stuck: false, state: 'running', owner: null },
+        { label: 'PR 776 rerun wait', runMs: 12 * 60_000, kept: true, stuck: false, state: 'waiting', owner: 'fix CI' },
       ]
+      const agents = async () => [{ name: 'fix CI', quietMs: 34 * 60_000 }]
+      return { ...built, jobs: { list, agents } } as never
+    })
+  },
+}
+// A watcher from before #784 and #759: no state, no owner, and no agents to ask.
+const olderWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const list = async () => [{ label: 'npm test', runMs: 60_000, kept: false, stuck: true }]
       return { ...built, jobs: { list } } as never
     })
   },
@@ -443,7 +456,16 @@ test('running and kept jobs from the job watcher join the line', { plugins: [mod
   const { clock } = world(on)
   await start($, clock)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('1 job running | dev server kept 2h 14m')
+  expect(await shown(ui as never)).toBe('agent fix CI quiet 34m, left to Claude | 1 job running | dev server running 2h 14m | agent fix CI: PR 776 rerun wait waiting 12m')
+  await ui.unmount()
+})
+
+test('a job watcher from before agents were watched still shows its jobs, with no error (#784)', { plugins: [modKit, olderWatcher] }, async ($, on) => {
+  const { clock, logs, debug } = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('1 job not progressing, left to Claude')
+  expect([...logs, ...debug.filter(l => /status-bar/.test(l))]).toEqual([])
   await ui.unmount()
 })
 

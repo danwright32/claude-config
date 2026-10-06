@@ -157,6 +157,14 @@ export const leftoverLine = (outcomes: Outcome[], unreadable: string[]): string 
   add('unjudged', notJudged, notJudged)
   const notStopped = (n: number, x: string) => `${jobs(n)} could not be stopped (${x})`
   add('stopFailed', notStopped, notStopped)
-  if (unreadable.length) parts.push(`${parts.length ? 's' : 'S'}ession records unreadable; leftover jobs not checked`)
-  return parts.length ? `${parts.join('; ')}.` : undefined
+  // What could not be read is named (#753, L11): a record by its file, whose jobs alone went
+  // unchecked, or the folder itself as the registry names it, which leaves every leftover unchecked.
+  const records = unreadable.filter(u => u.endsWith('.json'))
+  const other = unreadable.filter(u => !u.endsWith('.json'))
+  if (records.length === 1) parts.push(`session record ${records[0]} could not be read, so its leftover jobs were not checked`)
+  else if (records.length) parts.push(`${records.length} session records could not be read (${records.join(', ')}), so their leftover jobs were not checked`)
+  for (const u of other) parts.push(`${u} could not be read, so leftover jobs were not checked`)
+  if (!parts.length) return undefined
+  const line = parts.join('; ')
+  return `${line.charAt(0).toUpperCase()}${line.slice(1)}.`
 }

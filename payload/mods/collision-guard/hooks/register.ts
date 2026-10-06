@@ -249,6 +249,8 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
 // Handed from the classic.PreToolUse hook that let a call through to the tool.call hook around it,
 // by the call's id, so only a call this guard judged and let through is noted.
 const toNote = new Map<string, ToNote>()
+// Whether Claude was told a note could not be written, since the last one that landed (#751).
+let toldUnnoted = false
 // The one spelling of that key, for the side that stores a plan and the side that reads it back
 // (#732): two spellings would part on a call with no id and the edit would never be noted.
 const planKey = (e: unknown) => String((e as { tool_use_id?: unknown }).tool_use_id ?? '')
@@ -287,9 +289,31 @@ export const register: Register = on => {
     // A refusal leaves the record alone, whoever made it. A shell command that failed may still
     // have written before it failed (printf >> f; false), so only an Edit's failure does too.
     if (!plan || result.deny !== undefined || (plan.strict && result.isError)) return result
-    const recorded = await recorder($, plan.list)
-    for (const path of plan.paths) if (await recorded(path)) await $.sessions.noteEdit({ path })
-    return result
+    // The tool has already run, so a note that cannot be written never fails the call (#751): Claude
+    // is told once, until a note lands, as the job watcher's publishSafely does.
+    let unnoted: string | undefined
+    try {
+      const recorded = await recorder($, plan.list)
+      for (const path of plan.paths) {
+        if (!(await recorded(path))) continue
+        try {
+          await $.sessions.noteEdit({ path })
+        } catch (err) {
+          unnoted ??= `The collision guard could not record that this session edited ${path}: ${err instanceof Error ? err.message : String(err)}. Other sessions will not be warned before they change it.`
+        }
+      }
+    } catch (err) {
+      unnoted ??= `The collision guard could not record this session's edits: ${err instanceof Error ? err.message : String(err)}. Other sessions will not be warned before they change them.`
+    }
+    // Rearmed only by a call whose every note landed: one that lands beside one that fails is the
+    // same trouble, and said once (lessons review of PR 794).
+    if (unnoted === undefined) {
+      toldUnnoted = false
+      return result
+    }
+    if (toldUnnoted || result.isError) return result
+    toldUnnoted = true
+    return { ...result, context: [...(result.context ?? []), unnoted] }
   })
 
   // The session that was working first: the message reached its conversation (the standard incoming

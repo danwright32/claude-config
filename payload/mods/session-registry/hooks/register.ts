@@ -56,6 +56,13 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 // record session.end just closed, which no reader counts as open. What that costs: until the id
 // reads, other sessions do not see those writes, and if it never reads they never land, which the
 // debug log says once (lessons review of #739).
+//
+// Not yet measured (#751 item 1, L82): that Claude Code has switched the id by the time it announces
+// the start. Every announced start after a /clear or a resume says in the debug log which id it saw
+// against the id session.end closed, so a real /clear can settle it. Should the announcement come
+// first, it settles on the old id and reopens that record (as a resume would), the new
+// conversation's writes land there until the beat sees the new id, and the beat then closes the old
+// record and makes the new one: the #735 defect for that minute, never longer.
 let expectNew = false
 // Whether a failed id lookup has been said in the debug log since the last one that worked.
 let toldNoId = false
@@ -81,8 +88,12 @@ const release = (r: SessionsRecord): boolean => {
 // Made inside engine.create with the built $. Runs inside the queue, and says what it found: 'new'
 // when it made the record for a new id, 'held' when the id kept and writes held for it went on the
 // record it has, 'same' when nothing changed, 'unread' when it looked and could not read the id.
+// 'held' also covers a record reopened (#751). `announced` is set by the announced start alone, so
+// its look can say in the debug log which id it saw.
 type Rolled = 'new' | 'held' | 'same' | 'unread'
-let roll: ((always: boolean) => Promise<Rolled>) | undefined
+let roll: ((always: boolean, announced?: boolean) => Promise<Rolled>) | undefined
+// The id and the reason of the last session end that may keep or change the id, for that line.
+let ended: { id: string; reason: string } | undefined
 const save = (change?: Change): Promise<void> =>
   enqueue(async () => {
     if (!rec || !home || !persist) return
@@ -95,10 +106,10 @@ const save = (change?: Change): Promise<void> =>
   })
 // The new conversation's record written as soon as its id is seen, with nothing else to write.
 // `always` looks whether or not a session end is still waiting on its new id (the announced start).
-const catchUp = (always: boolean): Promise<void> =>
+const catchUp = (always: boolean, announced = false): Promise<void> =>
   enqueue(async () => {
     if (!rec || !home || !persist) return
-    const rolled = await roll?.(always)
+    const rolled = await roll?.(always, announced)
     if (rolled === 'new' || rolled === 'held') await persist()
   })
 
@@ -200,7 +211,7 @@ export const register: Register = on => {
     }
     // Runs inside the queue. `always` is the beat's and the announced start's, which look whether or
     // not a session end was seen; any other caller looks only after a /clear or a resume (above).
-    roll = async always => {
+    roll = async (always, announced = false) => {
       if (!rec || (!always && !expectNew)) return 'same'
       let id: string
       try {
@@ -216,11 +227,36 @@ export const register: Register = on => {
         return 'unread'
       }
       toldNoId = false
+      // What #751 item 1 needs measured on a real /clear: whether Claude Code has switched the id by
+      // the time it announces the start. Said in the debug log on every announced start after one.
+      if (announced && expectNew && ended) {
+        built.ui.log(
+          `session-registry: the announced start after a ${ended.reason} saw session id ${id}; session.end had closed ${ended.id}, so the id had ${id === ended.id ? 'not changed' : 'already switched'}.`,
+          { to: 'debug' },
+        )
+      }
       if (id === rec.sessionId) {
-        if (always) expectNew = false
-        return release(rec) ? 'held' : 'same'
+        // Only a settling look (the announced start's or the beat's) reopens a record a session end
+        // closed and whose id kept (#751): a resume of this same session goes on under it, so every
+        // reader must count it open. A read or a write during the /clear can see the old id before
+        // the switch, so its look never does.
+        let reopened = false
+        if (always && expectNew) {
+          expectNew = false
+          if (rec.closedAt !== null) {
+            rec.closedAt = null
+            reopened = true
+          }
+        }
+        return release(rec) || reopened ? 'held' : 'same'
       }
       expectNew = false
+      // The conversation under the old id is over: a record still open (reopened by a look that came
+      // before the switch, or one whose end was never seen) is closed before the new one is made.
+      if (rec.closedAt === null) {
+        rec.closedAt = await built.clock.now()
+        await persist?.()
+      }
       const cwd = rec.cwd
       rec = blank(id, cwd, await built.clock.now(), rootOf(await built.process.run(['git', '-C', cwd, ...topLevel]).catch(() => undefined)))
       release(rec)
@@ -322,14 +358,17 @@ export const register: Register = on => {
       rec.closedAt = now
       await persist()
     })
-    if (e.reason === 'clear' || e.reason === 'resume') expectNew = true
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      expectNew = true
+      ended = { id: e.sessionId, reason: e.reason }
+    }
     return next(e)
   })
 
   // The new conversation a /clear started, announced: its record is made now (#735), looked for
   // even when a read during the /clear already found the old id (#739).
   on('classic.SessionStart', async ($, e, next) => {
-    await catchUp(true)
+    await catchUp(true, true)
     return next(e)
   })
 }
