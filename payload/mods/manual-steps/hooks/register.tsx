@@ -429,7 +429,7 @@ export const register: Register = on => {
     const refused = await $.modkit.screen(e)
     if (refused) return refused
     const input = e as unknown as { step?: unknown; checked?: unknown }
-    const out = await change($, card => {
+    const out = await change<ReturnType<typeof finish>>($, card => {
       if (!card || card.isCarried) return { card, out: { refusal: 'No steps are pinned; pin them with the steps tool first.' } }
       const r = finish(card, Number(input.step), input.checked as StepsVerdict)
       return 'refusal' in r ? { card, out: r } : { card: r.card, out: r }

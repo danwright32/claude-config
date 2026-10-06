@@ -75,7 +75,8 @@ test('a send that throws is not tried again, since it may have landed, and answe
 
 test("a send no mod made, such as Claude's own SendMessage, is left as it is", async ($, on) => {
   const sends = world(on, [{ refused: 'Classifier unavailable.' }, true])
-  const sent = await $.session.send({ to: { sessionId: 's2' }, text: 'hello' })
+  // Claude's own send, as its SendMessage tool makes one: the recipient by name, from the model.
+  const sent = await $.session.send({ to: 's2', text: 'hello', origin: { kind: 'model' } })
   expect(sent).toEqual({ isDelivered: false, reason: 'Classifier unavailable.' })
   expect(sends.length).toBe(1)
   expect((sends[0]?.origin as { kind?: string } | undefined)?.kind).not.toBe('plugin')
