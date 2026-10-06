@@ -15748,6 +15748,25 @@ while IFS= read -r _wt_sc; do
 done <<WTSCOPES
 $_wt_scopes
 WTSCOPES
+# The fixture suite above only echoes the variables back, which proves the send SETS them and not
+# that this suite OBEYS them (L52, the lessons review of PR #811). So the real suite is run one
+# section alone, exactly as the send runs it, against a throwaway cache. The control first: with
+# the timing variable unset it writes timings there, so an empty directory below is a measurement.
+_wt_sec='== nothing depends on a tool only BSD has (#38) =='
+_wt_cache="$WORK/wholetree-cache"; rm -rf "$_wt_cache"
+env -u SUITE_SECTION_TIMINGS XDG_CACHE_HOME="$_wt_cache/control" SUITE_NO_LOCK=1 SECTION_ONLY="$_wt_sec" \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+_wt_ctl_n="$(find "$_wt_cache/control" -type f 2>/dev/null | grep -c . || true)"
+check "#809 the control: a section run with the timing variable unset records its timing ($_wt_ctl_n)" \
+  "[ '${_wt_ctl_n:-0}' -ge 1 ]"
+# Now as the send runs it: top level, the lock skipped, the timing record off.
+_wt_send_out="$(XDG_CACHE_HOME="$_wt_cache/send" SUITE_SECTION_TIMINGS= SUITE_NO_LOCK=1 SECTION_ONLY="$_wt_sec" \
+  SUITE_DEPTH=0 SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+_wt_send_n="$(find "$_wt_cache/send" -type f 2>/dev/null | grep -c . || true)"
+check "#809 a section run as the send runs it writes no timing record ($_wt_send_n)" \
+  "[ '${_wt_send_n:-0}' -eq 0 ]"
+check "#809 and it runs to a verdict rather than refusing over another run's lock" \
+  "case \"\$_wt_send_out\" in *'another run is already going'*) false ;; *'SUITE-RESULT passed='*) true ;; *) false ;; esac"
 check "#809 every declared scope exists under payload/" \
   "[ -z '$_wt_missing' ] || { echo '    missing:$_wt_missing' >&2; false; }"
 SYNC_NO_SEND_TESTS=1
