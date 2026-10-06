@@ -25,10 +25,12 @@
 #
 # THE OUTCOMES, each its own named state and its own words (L260: two outcomes with one
 # consequence are one outcome, so each consequence is stated):
-#   ok, N findings, not yet delivered   refused ONCE, carrying the findings (capped), then allowed.
-#                                       Delivered means they reached a session: shown by this
-#                                       check or by the nudge on a prompt (<review>.delivered).
-#   ok, N findings, delivered / 0       allowed.
+#   ok, N findings, not yet read        refused, carrying the findings (capped) and their READ KEY,
+#                                       on every attempt until a merge presents the key as
+#                                       PR_REVIEW_READ=<key> (claude-config#788). Printing them is
+#                                       not reading them: a refusal can be hidden behind another
+#                                       hook's, and the nudge reaches whichever session prompts next.
+#   ok, N findings, read / 0            allowed (<review>.acknowledged).
 #   empty-diff                          allowed: the head adds nothing to the base.
 #   running                             refused, with elapsed time against the deadline.
 #   timeout, error, empty, unparsed,    refused, with the reason, the restart command, and the one
@@ -103,7 +105,7 @@ mkdir -p "$AR_STATE_DIR" 2>/dev/null
 name="$key-pr-${full_sha:-$sha}"
 final="$AR_STATE_DIR/$name.txt"
 pending="$final.pending"
-delivered="$final.delivered"
+acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 repo_label="$(basename "$top")"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || branch="$short"
@@ -144,6 +146,9 @@ do_start() {
     echo "The lessons review of $repo_label $branch at $short has already been run, or is still running."
     return 0
   fi
+  # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
+  # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
+  rm -f "$acknowledged" "$final.readkey"* "$final.readkeys"* 2>/dev/null
   if [ -z "$full_sha" ]; then
     record could-not-run "The commit $sha is not in this checkout and could not be fetched from origin, so there is nothing to review."
     echo "The lessons review could not run: $sha is not in this checkout."; return 0
@@ -242,16 +247,39 @@ do_check() {
       case "$findings" in ''|*[!0-9]*) findings="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")" ;; esac
       if [ "$findings" -eq 0 ]; then
         echo "The lessons review of $repo_label $branch at $short finished with 0 findings."
-        touch "$delivered" 2>/dev/null; return 0
+        return 0
       fi
-      if [ -e "$delivered" ]; then
-        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already delivered to the session."
+      # READ means a merge presented the key that only the findings' own messages carry (#788),
+      # never that this gate or the nudge PRINTED them: a refusal can be printed and not shown.
+      # The acknowledgement names the review it read by its finish time, so a review file written
+      # again for this head, by any route, is unread until its own findings are acknowledged.
+      local fin
+      fin="$(meta_of "$final" finished)"
+      if [ -n "$fin" ] && [ "$(cat "$acknowledged" 2>/dev/null)" = "finished=$fin" ]; then
+        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a merge that presented their key."
+        return 0
+      fi
+      if [ -n "$fin" ] && ar_review_key_valid "$final" "${PR_REVIEW_READ:-}"; then
+        # Braced, so a refused redirection is silenced too; a failed write is said, since the next
+        # attempt will then need the key again.
+        { printf 'finished=%s\n' "$fin" > "$acknowledged"; } 2>/dev/null \
+          || echo "(The read could not be recorded beside $final, so a later merge of this head will need the key again.)"
+        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this merge presented their key."
         return 0
       fi
       local noun="findings"; [ "$findings" -eq 1 ] && noun="finding"
-      echo "Refusing to merge this once: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun, and they have not reached the session yet. Here they are. Check each against the code, fix what is real or say why it is not, then run the merge again; it will not be refused for these again."
+      local readkey keyrc=0
+      readkey="$(ar_review_issue_key "$final")" || keyrc=$?
+      echo "Refusing to merge until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun. Here they are. Check each against the code, fix what is real or say why it is not, then merge with their read key in front of the merge command:"
+      if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
+        echo "    PR_REVIEW_READ=$readkey <the merge command>"
+        echo "The key is only in this message, so a merge carrying it proves the findings were shown. A merge without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
+      else
+        echo "    ($(ar_review_key_failure "$keyrc" "$final" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir $top --sha ${full_sha:-$sha}"))"
+      fi
+      # Only when keys can be checked at all: with a tool missing, the presented key was never judged.
+      [ -n "${PR_REVIEW_READ:-}" ] && [ "$keyrc" -eq 0 ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
       ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
-      touch "$delivered" 2>/dev/null
       return 1
       ;;
     empty-diff)
@@ -274,6 +302,6 @@ do_check() {
 case "$verb" in
   start) do_start ;;
   check) do_check; exit $? ;;
-  restart) rm -f "$final" "$pending" "$delivered"; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$final.readkey"* "$final.readkeys"*; do_start ;;
 esac
 exit 0
