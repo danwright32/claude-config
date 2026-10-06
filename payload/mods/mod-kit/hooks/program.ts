@@ -194,6 +194,14 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
   return { program: { unreadable: stdin.unreadable } }
 }
 
+/** The folders a find starts from, which its -exec's {} is written as: `.` when it names none. */
+export const findRoots = (words: readonly string[]): string[] => {
+  if (base(words[0] ?? '') !== 'find') return []
+  const args = words.slice(1)
+  const firstExpr = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!')
+  const roots = firstExpr < 0 ? args : args.slice(0, firstExpr)
+  return roots.length ? roots : ['.']
+}
 /**
  * The commands a `find -exec` (or `-execdir`, `-ok`, `-okdir`) runs, up to its `;` or `+`, once for
  * each folder find starts from (`.` when it names none), that folder standing for `{}`. The reader
@@ -203,9 +211,7 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
 export const execsOf = (words: readonly string[]): string[][] => {
   if (base(words[0] ?? '') !== 'find') return []
   const args = words.slice(1)
-  const firstExpr = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!')
-  const roots = firstExpr < 0 ? args : args.slice(0, firstExpr)
-  const starts = roots.length ? roots : ['.']
+  const starts = findRoots(words)
   const out: string[][] = []
   for (let i = 0; i < args.length; i++) {
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i] as string)) continue

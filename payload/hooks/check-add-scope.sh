@@ -19,7 +19,8 @@
 # Edit or Write named, and the full text of every Bash command it ran. The second half is not
 # optional. A great deal of this repo's own editing happens through heredocs and python one liners
 # inside Bash, and a gate that could only see Edit calls would call all of that foreign and be
-# turned off within the hour.
+# turned off within the hour. A file a script wrote without its command naming it is credited by
+# time instead: changed while one of this session's own Bash calls was running (claude-config#585).
 #
 # The match is deliberately GENEROUS, on the side of allowing: a path counts as this session's if
 # the session mentioned it anywhere. Being wrong that way lets one unscoped add through; being
@@ -140,6 +141,9 @@ STATE_DIR="${CLAUDE_ADD_SCOPE_STATE_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 MENTIONS="$STATE_DIR/claude-add-scope-$key.mentions"
 OFFSET="$STATE_DIR/claude-add-scope-$key.offset"
+# When each of this session's Bash calls started and finished, as "S id epoch" and "E id epoch"
+# lines, read in the same pass as the mentions (claude-config#585).
+WINDOWS="$STATE_DIR/claude-add-scope-$key.windows"
 
 from=0
 [ -f "$OFFSET" ] && from="$(cat "$OFFSET" 2>/dev/null || echo 0)"
@@ -149,12 +153,19 @@ case "$size" in ''|*[!0-9]*) size=0 ;; esac
 # A transcript that SHRANK is a different file under the same name (a compaction, a fresh session
 # reusing the path), and reading on from the old offset would read the middle of a line. Start over
 # rather than carry a stale cache forward.
-if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; fi
+if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; : > "$WINDOWS"; fi
 
 if [ "$size" -gt "$from" ]; then
-  tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | python3 -c '
-import json, sys
+  tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | ADD_SCOPE_WINDOWS="$WINDOWS" python3 -c '
+import datetime, json, os, sys
 out = []
+windows = []
+def epoch(ts):
+    try:
+        return datetime.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc).timestamp()
+    except Exception:
+        return None
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -163,6 +174,20 @@ for line in sys.stdin:
         rec = json.loads(line)
     except Exception:
         continue
+    # The times around each Bash call, so a file its script wrote without naming can be credited.
+    t = epoch(rec.get("timestamp") or "") if isinstance(rec, dict) else None
+    # A message that is not an object (some record kinds carry a plain string) has no content, and
+    # must not abort the read, which would lose every mention in this chunk (L215).
+    msg = rec.get("message") if isinstance(rec, dict) else None
+    content = (msg.get("content") if isinstance(msg, dict) else None) or []
+    if t is not None and isinstance(content, list):
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("name") == "Bash" and c.get("id"):
+                windows.append("S %s %d" % (c["id"], int(t)))
+            elif c.get("type") == "tool_result" and c.get("tool_use_id"):
+                windows.append("E %s %d" % (c["tool_use_id"], int(t)))
     stack = [rec]
     while stack:
         node = stack.pop()
@@ -178,6 +203,9 @@ for line in sys.stdin:
             stack.extend(node)
 sys.stdout.write("\n".join(out))
 sys.stdout.write("\n" if out else "")
+if windows:
+    with open(os.environ["ADD_SCOPE_WINDOWS"], "a") as fh:
+        fh.write("\n".join(windows) + "\n")
 ' >> "$MENTIONS" 2>/dev/null || true
   printf '%s' "$size" > "$OFFSET" 2>/dev/null || true
 fi
@@ -199,6 +227,71 @@ while IFS= read -r p; do
 done <<CHANGED
 $changed
 CHANGED
+
+[ -n "$foreign" ] || exit 0
+
+# WRITTEN BY THIS SESSION'S OWN SCRIPTS (claude-config#585). A path the session never named can
+# still be its own: a python or sed script, or a generator, writes files its command line does not
+# mention, and on 2026-09-26 that had this gate call a session's own work another session's, which
+# pushes toward the override or an unscoped add. So a file whose last change (its modification or
+# its status change time) falls inside one of this session's finished Bash calls, a second either
+# side for the clock's rounding, is credited. Generous on purpose, as the rest of this match is: a
+# concurrent session writing at that same moment would be credited too, and that costs one add,
+# while the other way costs every scripted edit. Asked only of the paths still foreign, in one pass.
+if [ -s "$WINDOWS" ]; then
+  credited="$(printf '%s' "$foreign" | sed 's/^  //' | ADD_SCOPE_WINDOWS="$WINDOWS" ADD_SCOPE_REPO="$repo" python3 -c '
+import os, sys
+starts, ends = {}, {}
+for line in open(os.environ["ADD_SCOPE_WINDOWS"]):
+    parts = line.split()
+    if len(parts) != 3:
+        continue
+    kind, ident, t = parts
+    try:
+        t = int(t)
+    except ValueError:
+        continue
+    (starts if kind == "S" else ends)[ident] = t
+spans = [(starts[i] - 1, ends[i] + 1) for i in starts if i in ends and ends[i] >= starts[i]]
+repo = os.environ["ADD_SCOPE_REPO"]
+for p in sys.stdin.read().splitlines():
+    if not p:
+        continue
+    # A DELETED file has nothing left to stat, so it is judged by the directory it was removed
+    # from, whose modification time the removal sets (generous, as the rest of this is).
+    full = os.path.join(repo, p)
+    try:
+        st = os.lstat(full)
+    except OSError:
+        try:
+            st = os.lstat(os.path.dirname(full.rstrip("/")) or repo)
+        except OSError:
+            continue
+    times = (int(st.st_mtime), int(st.st_ctime))
+    if any(a <= t <= b for t in times for a, b in spans):
+        print(p)
+' 2>/dev/null || true)"
+  if [ -n "$credited" ]; then
+    still=""
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      p="${p#  }"
+      if case "
+$credited
+" in *"
+$p
+"*) true ;; *) false ;; esac; then
+        mine="${mine:+$mine }$p"
+      else
+        still="${still}  $p
+"
+      fi
+    done <<FOREIGN
+$foreign
+FOREIGN
+    foreign="$still"
+  fi
+fi
 
 [ -n "$foreign" ] || exit 0
 

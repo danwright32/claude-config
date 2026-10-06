@@ -42,10 +42,14 @@ Ask only what you genuinely cannot determine from the code yourself: don't quiz 
 Then present the full framing (roles + criteria + scope + what you learned in the interview) with **AskUserQuestion** for approval or edits. Do not skip this gate: it is what keeps the run grounded and cheap-to-correct, and it is the user's last input before the panel runs autonomously.
 
 ## 2. Run the debate (Workflow engine)
-Call the **Workflow** tool with:
+First copy the workflow script into this session's scratchpad, because the Workflow tool refuses a script under `~/.claude`: it accepts only a path it returned itself or a file inside the working directory, a directory added to the session, or the scratchpad. Run, with the scratchpad directory your system prompt names:
+
+    bash ~/.claude/hooks/lib/stage-workflow.sh ~/.claude/skills/plan-council/panel.workflow.js "<scratchpad directory>"
+
+It prints one line, the absolute path of an exact copy of the script, and refuses (printing no path) when the scratchpad is missing, relative, or inside `~/.claude`. If the session names no scratchpad, read the script and pass its contents unchanged as `script` instead of `scriptPath`, rather than writing a copy into the project. Then call the **Workflow** tool with:
 
     {
-      scriptPath: "__CLAUDE_HOME__/skills/plan-council/panel.workflow.js",
+      scriptPath: "<the path stage-workflow.sh printed>",
       args: {
         feature: "<the feature>",
         constraints: "<hard constraints>",
@@ -57,7 +61,7 @@ Call the **Workflow** tool with:
       }
     }
 
-That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If what you see there is a placeholder rather than a real path, this copy of the file has not been through the sync yet: use this machine's own config directory (`echo $HOME/.claude`) followed by the rest of the path as written.
+Pass that printed path exactly as it is: the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`.
 
 It starts with a **preflight** that confirms it can actually reach your code and database, then runs with real independent subagents: independent first-passes → distill to 2-3 rival whole options → champion + red-team each → score against the criteria and pick the survivor → synthesize the winner (grafting the runner-up's best ideas, recording overruled dissent and the ideal-vs-doable gap) → **reality-check** against the actual codebase/schema, alongside a **lessons audit** that reads every `~/.claude/LESSONS-INDEX-*.md` file (never the full `LESSONS.md`, too large to read whole), looks up the full entry of any lesson it cites, and flags anywhere the plan repeats a mistake already paid for on a past project → **fix-and-reverify**: if either check finds a problem (a broken file path, or a design that repeats a recorded defect), it corrects the plan *inline* and re-runs both checks (up to 2 rounds), so the plan you read carries neither known-wrong citations nor known-bad designs. The rival options always span a **cost spread** (at least one free/cheapest; a paid option only when clearly better), and every product / scope / cost trade-off, including free-vs-paid: is **escalated to you, not locked by the panel**. It returns `{ plan, selection, options, advocacy, realityCheck, lessonsAudit, preflight, rcRounds, … }`.
 
@@ -107,7 +111,8 @@ When the user has commented on the Discussion and wants the plan updated (e.g. "
 
 If a run is killed part way (a restart, a rate limit, a stop), resume it with
 `Workflow({scriptPath, resumeFromRunId})`, but pass the **args verbatim as the original
-call**. The cache is keyed on a hash of each agent's prompt, so editing the framing even
+call**. In a later session the scratchpad is a different folder, so stage the script again
+(step 2) and pass the new path. The cache is keyed on a hash of each agent's prompt, so editing the framing even
 slightly, including "improving" it with corrections you have since discovered, changes
 every key and the panel silently re-runs from the first pass at full cost instead of
 resuming. There is no warning; it simply starts over.

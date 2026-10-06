@@ -194,6 +194,146 @@ allowed "and one that only reads it is allowed"
 runbash "rm -rf $FIX/elsewhere/x" "$FIX/dev"
 allowed "a write outside payload is allowed even from inside the checkout"
 
+echo "payload write gate: judged by the destination, whatever the write looks like (claude-config#647)"
+
+# On 2026-10-04 the gate refused one agent's shell redirect into payload/mods, while that same
+# agent's earlier python edits to payload/mods went straight past it. Every route a write is
+# actually made by here, each named, because a route nobody tested is the one that stays open (L247).
+runbash "python3 - <<'PY'
+from pathlib import Path
+Path('$FIX/dev/payload/LESSONS.md').write_text('x')
+PY" "$FIX/dev"
+refused "a pathlib write_text into payload is refused"
+runbash "python3 - <<'PY'
+p = '$FIX/dev/payload/LESSONS.md'
+s = open(p).read()
+open(p, 'w').write(s + 'x')
+PY" "$FIX/dev"
+refused "an inline script writing through a variable holding a payload path is refused"
+runbash "python3 -c \"import shutil; shutil.copy('/tmp/x', '$FIX/dev/payload/LESSONS.md')\"" "$FIX/dev"
+refused "a python -c copy into payload is refused"
+runbash "perl -pi -e 's/a/b/' $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "an in place perl edit of a payload file is refused"
+runbash "ln -sf /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "a link written over a payload file is refused"
+runbash "dd if=/tmp/x of=$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "a dd into payload is refused"
+runbash "git checkout -- payload/LESSONS.md" "$FIX/dev"
+refused "a git checkout that rewrites a payload path is refused"
+# A relative destination is a payload write when the command is RUN there, whatever its text says.
+runbash "echo hi > LESSONS.md" "$FIX/dev/payload"
+refused "a relative redirect run from inside payload is refused"
+runbash "cd payload && echo hi > LESSONS.md" "$FIX/dev"
+refused "a redirect after a cd into payload is refused"
+runbash "cd payload/hooks; cp /tmp/x y.sh" "$FIX/dev"
+refused "a copy after a cd into a payload subdirectory is refused"
+# And the reads in those same shapes are still reads.
+# A here-string (<<<) opens no heredoc body, so the line after it is still read as shell.
+runbash "grep x <<<foo
+echo hi > $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "a write on the line after a here-string is still refused"
+runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
+allowed "a read run from inside payload, stderr thrown away, is allowed"
+runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
+allowed "a read after a cd into payload is allowed"
+runbash "cd payload && echo hi > $FIX/elsewhere/out.md" "$FIX/dev"
+allowed "a write to an absolute path outside payload, after a cd into it, is allowed"
+# A flag is not a path, so it is never resolved against where the command runs.
+runbash "mkdir -p $FIX/elsewhere/out" "$FIX/dev/payload"
+allowed "a flag on a writer run from inside payload is not read as a payload path"
+# A branch switch names a branch, not a file: only the paths after -- are what checkout rewrites.
+runbash "git checkout main" "$FIX/dev/payload"
+allowed "a git checkout of a branch from inside payload is not read as a payload write"
+runbash "git checkout main -- LESSONS.md" "$FIX/dev/payload"
+refused "but a git checkout of a payload file after -- still is"
+# git -C <repo> is this repo's own convention, so the subcommand is found past the global options
+# and the paths resolve against the -C directory.
+runbash "git -C $FIX/dev checkout -- payload/LESSONS.md" "$FIX/elsewhere"
+refused "a git -C checkout of a payload path is refused"
+runbash "git -C $FIX/dev -c core.x=y restore payload/LESSONS.md" "$FIX/elsewhere"
+refused "and so is a restore past -C and -c"
+# restore --staged rewrites only the index, never the file, and -s names a commit, not a path.
+runbash "git restore --staged LESSONS.md" "$FIX/dev/payload"
+allowed "a git restore --staged of a payload file writes no file, so it is allowed"
+runbash "git restore -s HEAD~1 --staged --worktree LESSONS.md" "$FIX/dev/payload"
+refused "while restore --staged --worktree does write the file"
+runbash "git restore -s main $FIX/elsewhere/x" "$FIX/dev/payload"
+allowed "and the commit -s names is never read as a payload path"
+runbash "git restore --source=main LESSONS.md" "$FIX/dev/payload"
+refused "a restore of a payload file from another commit still is"
+runbash "git -C $FIX/dev checkout main" "$FIX/elsewhere"
+allowed "while a git -C branch switch names no path"
+runbash "python3 - <<'PY'
+import json
+print(json.load(open('$FIX/dev/payload/LESSONS.md')))
+PY" "$FIX/dev"
+allowed "an inline script that only reads a payload file is still allowed"
+
+echo "payload write gate: what no command text can show is caught after it runs (claude-config#647)"
+
+# A script FILE, a path built at run time, a tool nobody listed: the command text cannot show where
+# those write, so the destination is checked instead. Before the call the gate notes what payload/
+# holds; after it, anything written, added or removed there while nothing protected it is named.
+STATE="$FIX/state"
+prepost(){ # prepost <event> <command> <cwd> <tool use id> [pid file]
+  local pidf="${5:-$PIDF}"
+  OUT="$(python3 -c '
+import json, sys
+print(json.dumps({"hook_event_name": sys.argv[1], "tool_name": "Bash", "cwd": sys.argv[3],
+                  "tool_use_id": sys.argv[4], "tool_input": {"command": sys.argv[2]}}))
+' "$1" "$2" "$3" "$4" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
+}
+printf 'print(1)\n' > "$FIX/w.py"
+rm -f "$HOLD"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t1
+allowed "a script file run from the checkout is not refused before it runs, since nothing shows its target"
+printf 'changed\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t1
+if [ "$RC" -eq 2 ]; then check "a payload file it changed is reported afterwards" ok
+else check "a payload file it changed is reported afterwards" "exit $RC, said: ${OUT:0:160}"; fi
+says "and the report names the file" "$FIX/dev/payload/LESSONS.md"
+says "and gives the hold command, since the write already happened" "claude-sync hold"
+# The note sees what changed under payload/ while the call ran, not who changed it, so the report
+# says only that, and that another writer at the same moment would show too (L11).
+says "and claims only what it measured: what changed while the call ran" "changed under"
+says "naming that another writer at the same moment would show too" "another session or a parallel command"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t2
+: > "$FIX/dev/payload/new.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t2
+says "a payload file it created is reported" "$FIX/dev/payload/new.md"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t3
+rm -f "$FIX/dev/payload/new.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t3
+says "a payload file it removed is reported" "$FIX/dev/payload/new.md"
+# A move keeps the moved file's old modification time, so a check reading mtime alone misses it.
+: > "$FIX/old.md"; touch -t 202001010000 "$FIX/old.md"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t4
+mv "$FIX/old.md" "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t4
+says "a file moved over a payload file, old timestamp and all, is reported" "$FIX/dev/payload/LESSONS.md"
+# The quiet cases, so the report means something when it appears (L36).
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t5
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t5
+allowed "a call that wrote nothing under payload is silent afterwards"
+printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$HOLD"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t6
+printf 'held\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t6
+allowed "a change made under a hold is not reported"
+rm -f "$HOLD"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t7 "$NOPIDF"
+printf 'nowatch\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t7 "$NOPIDF"
+allowed "a change made with no watcher running is not reported"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
+printf 'far\n' > "$FIX/elsewhere/notes.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
+allowed "a call outside any checkout, writing outside one, is silent"
+# Its own bookkeeping is removed once read, so the state it keeps cannot grow with calls (#603).
+left="$(find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$left" = 0 ]; then check "nothing is left in its state directory once each call is answered" ok
+else check "nothing is left in its state directory once each call is answered" "$left files left"; fi
+
 # The documented override, good for one command, because a person who has read the message needs a
 # way past it (L109).
 runbash "SKIP_PAYLOAD_WRITE_CHECK=1 cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
@@ -229,6 +369,11 @@ rm -f "$HOLD"
 edit_nopy "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "with no python3 a payload write is refused rather than allowed in silence"
 says "and the refusal names the reader that is missing" "python3"
+
+# After a call there is nothing to refuse, so the missing reader is not reported again then.
+OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+  | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
+allowed "with no python3 the check after a call stays quiet rather than refusing what already ran"
 
 # Only the state that loses work, exactly as with a reader present. A write that names nothing
 # under payload/ is not this gate's business whatever is missing from PATH (L54, L324).
