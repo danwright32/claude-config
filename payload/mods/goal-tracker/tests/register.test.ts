@@ -447,6 +447,121 @@ test('a question to Dan sends one notification naming the project, with the ques
   expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format for the CSV?']])
 })
 
+// #814 (Dan, 2026-10-05: "when i get a notification I get two"): Claude Code raises a permission
+// request for its own question dialog. That request is the question, not a second thing to do, so
+// one question sends one notification, with its text, and the pane shows it as a question.
+const askPermission = ($: { classic: { PermissionRequest: (e: never) => Promise<unknown> } }, question: string) =>
+  $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question, header: 'Format', options: [], multiSelect: false }] } } as never)
+
+test('a question whose dialog Claude Code also raises as a permission sends one notification, the question (#814)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call(ask('Which date format for the CSV?'))
+  await clock.advance(1)
+  await askPermission($, 'Which date format for the CSV?')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Which date format for the CSV?', kind: 'question' })
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format for the CSV?']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// Lessons review of PR 816: a subagent's question is never held by the tracker's question path, so
+// its dialog's permission request is the only word Dan gets. It is sent once, as the question, never
+// as "needs a permission: AskUserQuestion", and the mark comes off when the question's call returns.
+test("a subagent's question, which only its permission request announces, sends one notification as the question (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Which branch?') as object), agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Which branch?')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Which branch?' })
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which branch?']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// Lessons review of PR 816's second head: the request is matched to the question by its call, never
+// by its text, so a subagent asking the same thing as this conversation is still announced.
+test("a subagent's question worded like this conversation's open question is still announced, once each (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const mine = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  const theirs = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await Promise.all([mine, theirs])
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+  ])
+})
+
+// Lessons review of PR 816's third head: each request belongs to one call. With a subagent's question
+// already announced, this conversation's own identical question is still sent once, not twice.
+test("this conversation's question asked after a subagent's identical one is still sent once (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const theirs = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  const mine = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await Promise.all([mine, theirs])
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+  ])
+})
+
+// Lessons review of PR 816's fourth head: a request raised again for a dialog already announced (a
+// re-prompt) is a repeat, never a second question.
+test('a permission request raised twice for one question still sends one notification (#814)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+})
+
+// A /clear while this conversation's question dialog is open leaves that question this
+// conversation's: its permission request is still no second notification.
+test("a /clear while this conversation's question is open never makes its request a second notification (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  // The question has been announced by the time the /clear lands and its request is raised.
+  await clock.advance(OPEN_MS - 1)
+  expect(w.notified).toHaveLength(1)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified.filter(n => n[1] === 'Ovation is waiting on you')).toHaveLength(1)
+})
+
 // #706: the notification is for a question Dan sees. One refused at once (by picker manners
 // beneath the tracker, or anything else beneath it) never reached him, so it sends none.
 test('a question refused at once sends no notification', withDeps, async ($, on) => {

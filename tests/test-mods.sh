@@ -159,6 +159,74 @@ out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/u
 printf '%s\n' "$out" | grep 'illtyped ok' | grep -q 'types not checked: no TypeScript compiler' \
   && check "and each mod says its types were not checked, and why" ok || check "and each mod says its types were not checked, and why" "$out"
 
+# 4d. The pinned compiler and the borrowed types (#803). Claude Code lays a mod's types only in the
+#     copy it loads (~/.claude/mods/<mod>), which the mirror never carries, so a check of
+#     payload/mods borrows them from there; a pinned compiler in tools/typescript is found with
+#     no TSC_BIN; a mod whose errors were recorded passes while its count is at or under the
+#     record; and every mod left unchecked is summed up as UNMEASURED with the install command.
+M4E="$TMPROOT/m4e"; mkmod "$M4E" borrowed; mkmod "$M4E" illtyped-known; mkmod "$M4E" illtyped-new
+TH="$TMPROOT/types-home"
+for m in borrowed illtyped-known illtyped-new; do laid "$TH/mods/$m"; done
+TSDIR="$TMPROOT/ts"; mkdir -p "$TSDIR/node_modules/.bin"; cp "$TSC" "$TSDIR/node_modules/.bin/tsc"
+printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types checked' \
+  && check "a mod whose types were laid only in the installed copy is type checked with them" ok \
+  || check "a mod whose types were laid only in the installed copy is type checked with them" "$out"
+grep -q -- "-p .*borrowed" "$TSC_LOG" && check "by the pinned compiler, found with no TSC_BIN" ok || check "by the pinned compiler, found with no TSC_BIN" "$(cat "$TSC_LOG")"
+printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q '2 known type errors (#900)' \
+  && check "a mod at its recorded count of type errors passes, naming the count and the issue" ok \
+  || check "a mod at its recorded count of type errors passes, naming the count and the issue" "$out"
+printf '%s\n' "$out" | grep -q 'illtyped-new fails a strict type check (2 errors)' \
+  && check "a mod with no record that fails the type check still fails" ok \
+  || check "a mod with no record that fails the type check still fails" "$out"
+[ "$code" -eq 1 ] && check "and fails the run" ok || check "and fails the run" "exit=$code"
+# One recorded error fixed and a new one made: the count is the same, and the new one still fails.
+printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS9999\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"; rm -rf "${M4E:?}/illtyped-new"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-known' | grep -q 'type errors not in the record.*hooks/register.tsx TS2604 (1 found, 0 recorded)' \
+  && check "an error not in the record fails though the count is unchanged, naming where and how many" ok \
+  || check "an error not in the record fails though the count is unchanged, naming where and how many" "exit=$code out=$out"
+printf 'illtyped-known\thooks/register.tsx TS2339\t3\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q 'fewer than recorded' \
+  && check "a mod under its record passes and says the record can come down" ok \
+  || check "a mod under its record passes and says the record can come down" "exit=$code out=$out"
+# Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
+  && printf '%s\n' "$out" | grep -q 'UNMEASURED: .*not checked ([0-9]* no TypeScript compiler: ' \
+  && check "with types to borrow but no compiler, the compiler is what is named" ok \
+  || check "with types to borrow but no compiler, the compiler is what is named" "$out"
+# Types laid but the scratch copy fails (here, a scratch folder that cannot be written): that is the
+# cause named, never missing types.
+# A user who can write anyway (root, in the Linux container) cannot be refused this way, so there it
+# is said as unmeasured rather than read as a fault in the check (L411).
+RO="$TMPROOT/ro-tmp"; mkdir -p "$RO"; chmod 500 "$RO"
+if [ -w "$RO" ]; then
+  echo "UNMEASURED: this user can write a mode 500 folder, so a scratch copy that fails cannot be staged here"
+else
+  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+  printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'could not copy it to scratch' \
+    && check "a mod whose scratch copy fails says so, not that no types were laid" ok \
+    || check "a mod whose scratch copy fails says so, not that no types were laid" "$out"
+  # Two causes in one run are each counted and named in the summary, never folded into the last.
+  TH2="$TMPROOT/types-home-2"; laid "$TH2/mods/borrowed"
+  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH2" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+  printf '%s\n' "$out" | grep 'UNMEASURED: 2 of 2' | grep 'could not be copied to scratch: borrowed' | grep -q 'no types laid: illtyped-known' \
+    && check "the summary counts and names each cause" ok || check "the summary counts and names each cause" "$out"
+fi
+chmod 700 "$RO"
+# Nothing laid anywhere and no compiler: one UNMEASURED summary naming how many and the install command.
+rm -rf "$TSDIR/node_modules"
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TMPROOT/no-types" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q "UNMEASURED: 2 of 2 mods' types were not checked" \
+  && check "mods left unchecked are summed up as UNMEASURED, never a silent skip" ok \
+  || check "mods left unchecked are summed up as UNMEASURED, never a silent skip" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'npm ci --prefix tools/typescript' \
+  && check "with the command that installs the pinned compiler" ok || check "with the command that installs the pinned compiler" "$out"
+
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
 runit "$M5"
@@ -931,9 +999,76 @@ export const register = on => {
   })
 }
 TS
+# A noun's own slow engine calls count too (#802): the 10 s is not paused while a noun's $ calls
+# run (measured live on 2026-10-05 for #756: a noun whose only wait was `process.run` of `sleep 13`
+# was cut at 10,003 ms). process.run waits up to its timeoutMs, 30 s when none is given, and
+# model.complete has no bound under 10 s at all.
+mknounmod "$M12W" slow-process shell <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, shell: { run: async () => (await built.process.run(['/bin/sleep', '13'])).exitCode } }
+  })
+}
+TS
+mknounmod "$M12W" long-process-timeout fetcher <<'TS'
+const RUN_MS = 30 * 1_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, fetcher: { get: () => built.process.run(['curl', 'x'], { cwd: '/', timeoutMs: RUN_MS }) } }
+  })
+}
+TS
+mknounmod "$M12W" model-call namer <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, namer: { name: () => built.model.complete({ model: 'haiku', prompt: 'x', maxTokens: 10 }) } }
+  })
+}
+TS
+mknounmod "$M12W" model-timed quicknamer <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, quicknamer: { name: () => built.model.complete({ model: 'haiku', prompt: 'x', maxTokens: 10, timeoutMs: 5_000 }) } }
+  })
+}
+TS
+mknounmod "$M12W" short-process quickshell <<'TS'
+const QUICK_MS = 5_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, quickshell: { run: () => built.process.run(['true'], { timeoutMs: QUICK_MS }) } }
+  })
+}
+TS
+mknounmod "$M12W" shorthand-timeout tersely <<'TS'
+const timeoutMs = 5_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, tersely: { run: () => built.process.run(['true'], { cwd: '/', timeoutMs }) } }
+  })
+}
+TS
+mknounmod "$M12W" process-in-hook hooked <<'TS'
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    await $.process.run(['/bin/sleep', '13'])
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, hooked: { now: async () => Date.now() } }
+  })
+}
+TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"18 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"25 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -949,11 +1084,21 @@ for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5;
     && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
     || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
 done
+for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
+    && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
+    || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
+done
+printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
+  && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
+for m in short-process process-in-hook shorthand-timeout model-timed; do
+  ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
+done
 for m in bounded commented outside-any-noun raced-short kept-unread; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long; do rm -rf "${M12W:?}/$m"; done
+for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call; do rm -rf "${M12W:?}/$m"; done
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
   || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"

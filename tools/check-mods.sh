@@ -17,7 +17,10 @@
 #      words are printed (#740). A definite failure of another mod outranks it, as it outranks 3.
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
-# TSC_BIN names a TypeScript compiler for the strict type check; left unset it is tsc on PATH.
+# TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
+# in tools/typescript (installed with `npm ci --prefix tools/typescript`, #803), else tsc on PATH.
+# CHECK_MODS_TS_DIR moves where the pin and its record of known type errors are read from, and
+# CHECK_MODS_TYPES_HOME where a mod's laid types are borrowed from (default ~/.claude), for tests.
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   echo "check-mods: '${dir:-<none given>}' is not a folder, so nothing was checked." >&2
@@ -58,11 +61,31 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   exit 3
 fi
 
-# The TypeScript compiler for the strict type check (#758): TSC_BIN, else tsc on PATH. None is not
-# a failure: each mod's line says its types were not checked.
+# The TypeScript compiler for the strict type check (#758): TSC_BIN, else the pinned one in
+# tools/typescript (#803), else tsc on PATH. None is not a failure, since nothing was measured: each
+# mod's line says its types were not checked, and the run ends with one UNMEASURED line counting
+# them and naming the install command (L411).
+TS_DIR="${CHECK_MODS_TS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/typescript}"
 tsc="${TSC_BIN:-}"
+[ -n "$tsc" ] || { [ -x "$TS_DIR/node_modules/.bin/tsc" ] && tsc="$TS_DIR/node_modules/.bin/tsc"; }
 [ -n "$tsc" ] || tsc="$(command -v tsc 2>/dev/null || true)"
 [ -n "$tsc" ] && [ -x "$tsc" ] || tsc=""
+# Claude Code lays a mod's types only in the copy it loads, ~/.claude/mods/<mod>, and the mirror
+# never carries them (README "Mods"), so a mod checked where none are laid borrows that copy's.
+TYPES_HOME="${CHECK_MODS_TYPES_HOME:-$HOME/.claude}"
+# Type errors already found and recorded (#803), one line per mod, file and error code: the mod, the
+# file and code ("hooks/register.tsx TS2345"), how many, and the issue fixing them. Kept by where and
+# what rather than one count a mod, so fixing one error does not make room for a new one (L367). An
+# error beyond its line fails; a line with fewer left passes and says the record can come down. A
+# mod with no lines must have no errors.
+KNOWN="$TS_DIR/known-type-errors.tsv"
+known_of(){ [ -f "$KNOWN" ] && awk -F'\t' -v m="$1" '$1 == m { print $2 "\t" $3 "\t" $4 }' "$KNOWN"; }
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/check-mods.XXXXXX" 2>/dev/null)" || scratch=""
+trap '[ -n "$scratch" ] && rm -rf "$scratch"' EXIT
+# The mods whose types went unchecked, by cause, each "cause<TAB>mod" (L629: every cause named).
+untyped=0; untyped_why=""
+unchecked(){ untyped=$((untyped + 1)); untyped_why="${untyped_why}$1	$2
+"; }
 
 # The engine's verdict lines: the item marks and the failure summary, a few at most. When there is
 # no such line, the exit code and the last lines of output instead, never an empty reason (#740).
@@ -113,16 +136,40 @@ for d in "${mods[@]}"; do
   # extends, under .claude-plugin/types once it has loaded the mod; with those and a TypeScript
   # compiler the mod is type checked as its tsconfig.json says (strict, noUncheckedIndexedAccess).
   # Without either it is said on the mod's line, never claimed (L411, L440).
-  types="types not checked: no TypeScript compiler (looked for ${TSC_BIN:-tsc on PATH})"
-  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ]; then
-    types="types not checked: Claude Code has not laid its types here"
-  elif [ -n "$tsc" ]; then
+  types="types not checked: no TypeScript compiler (looked for ${TSC_BIN:-$TS_DIR/node_modules/.bin/tsc, then tsc on PATH})"
+  checked="$d"
+  # No compiler is decided first, so it is the cause named whether or not types could be borrowed.
+  if [ -z "$tsc" ]; then
+    unchecked "no TypeScript compiler" "$name"
+    echo "check-mods: $name ok ($types)"
+    continue
+  fi
+  copy_failed=""
+  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ]; then
+    [ -n "$scratch" ] || copy_failed="no scratch folder could be made"
+  fi
+  if [ -z "$copy_failed" ] && [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ]; then
+    # This mod's source beside the types laid for the installed copy of it, in scratch, so nothing
+    # is written into either.
+    checked="$scratch/$name"
+    rm -rf "$checked"; cp -R "$d" "$checked" && rm -rf "$checked/.claude-plugin/types" \
+      && cp -R "$TYPES_HOME/mods/$name/.claude-plugin/types" "$checked/.claude-plugin/types" || { checked=""; copy_failed="the copy failed"; }
+  fi
+  if [ -n "$copy_failed" ]; then
+    # Types were laid; what failed is the scratch copy, which is the cause said (L11).
+    types="types not checked: its laid types are in $TYPES_HOME/mods/$name but it could not copy it to scratch ($copy_failed)"
+    unchecked "could not be copied to scratch" "$name"
+  elif [ -z "$checked" ] || [ ! -f "$checked/.claude-plugin/types/tsconfig.json" ]; then
+    types="types not checked: Claude Code has not laid its types here or in $TYPES_HOME/mods/$name"
+    unchecked "no types laid" "$name"
+  else
     # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
     # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
     # own tsconfig.json (lessons review of #797).
-    out="$("$tsc" -p "$d" --noEmit --allowImportingTsExtensions 2>&1)"; trc=$?
+    out="$("$tsc" -p "$checked" --noEmit --allowImportingTsExtensions 2>&1)"; trc=$?
     if [ "$trc" -ne 0 ]; then
-      errs="$(printf '%s\n' "$out" | grep 'error TS' || true)"
+      # Each error named from the mod's own folder, never the scratch copy it was checked in.
+      errs="$(printf '%s\n' "$out" | grep 'error TS' | sed "s#^[^(]*/$name/#$name/#" || true)"
       if [ -z "$errs" ]; then
         # No error TS line: the compiler itself failed (a crash, a config it could not read), so no
         # type check was measured and none is claimed (L11).
@@ -131,15 +178,44 @@ for d in "${mods[@]}"; do
         continue
       fi
       count="$(printf '%s\n' "$errs" | grep -c 'error TS' || true)"
+      rec="$(known_of "$name")"
+      if [ -n "$rec" ]; then
+        issue="$(printf '%s\n' "$rec" | head -n 1 | cut -f3)"
+        # Each error by its file and code, counted: "hooks/register.tsx TS2345<TAB>3".
+        cur="$(printf '%s\n' "$errs" | sed -E "s#^($name/)?([^(]*)\(.*error (TS[0-9]+):.*#\\2 \\3#" | LC_ALL=C sort | uniq -c \
+          | awk '{ c = $1; $1 = ""; sub(/^ /, ""); print $0 "\t" c }')"
+        over="$(awk -F'\t' 'NR == FNR { lim[$1] = $2; next } { r = ($1 in lim) ? lim[$1] : 0; if ($2 + 0 > r + 0) print $1 " (" $2 " found, " r " recorded)" }' \
+          <(printf '%s\n' "$rec") <(printf '%s\n' "$cur") | paste -sd';' -)"
+        if [ -n "$over" ]; then
+          echo "check-mods: $name has type errors not in the record in $KNOWN ($issue): $over"
+          failed=1
+          continue
+        fi
+        types="types checked, $count known type errors ($issue)"
+        under="$(awk -F'\t' 'NR == FNR { now[$1] = $2; next } { if ($2 + 0 > (($1 in now) ? now[$1] : 0) + 0) n++ } END { print n + 0 }' \
+          <(printf '%s\n' "$cur") <(printf '%s\n' "$rec"))"
+        [ "$under" -gt 0 ] && types="$types, fewer than recorded in $under place(s): lower the record"
+        echo "check-mods: $name ok ($types)"
+        continue
+      fi
       echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "$errs" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"
       failed=1
       continue
     fi
     types="types checked"
+    rec="$(known_of "$name")"
+    [ -n "$rec" ] && types="types checked, none of its recorded errors left: remove its lines from $KNOWN"
   fi
   echo "check-mods: $name ok ($types)"
 done
 echo "check-mods: $n mods checked in $dir"
+# Never a silent skip (#803): how many mods' types went unchecked, why, and the one command that
+# installs the pinned compiler. Said on stderr, and not a failure, since nothing was measured.
+if [ "$untyped" -gt 0 ]; then
+  causes="$(printf '%s' "$untyped_why" | awk -F'\t' 'NF == 2 { if (!($1 in n)) order[++k] = $1; n[$1]++; m[$1] = m[$1] ($1 in seen ? ", " : "") $2; seen[$1] = 1 }
+    END { for (i = 1; i <= k; i++) printf "%s%d %s: %s", (i > 1 ? "; " : ""), n[order[i]], order[i], m[order[i]] }')"
+  echo "check-mods: UNMEASURED: $untyped of $n mods' types were not checked ($causes). Install the pinned compiler with: npm ci --prefix tools/typescript" >&2
+fi
 [ "$failed" -eq 1 ] && exit 1
 if [ "$unmeasured" -eq 1 ]; then
   echo "check-mods: UNMEASURED: Claude Code has hooks modules switched off in this process, so its mods could not be checked. That is not a pass. It said: $off_reason" >&2
