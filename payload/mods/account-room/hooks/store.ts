@@ -163,10 +163,33 @@ export const serializeNicknames = (f: Nicknames): string => {
 }
 
 /**
- * Two readings of one account combined window by window (L510): each window keeps its newest figure,
- * judged by that window's own time (`takenAt` on the limit when it was carried over from an earlier
- * reading, else the reading's). The result is dated by its oldest window, so "as of" never claims a
- * figure is fresher than it is, and a window whose time differs from that date carries its own.
+ * Which of two figures for one window is the newer (#848). A figure is only as fresh as the API
+ * response it came from, but `takenAt` is when the mod read it, so an idle session's old figure read
+ * just now carries the newest time. The figures themselves are judged instead:
+ *
+ * 1. The later `resetsAt` belongs to the later window, and wins.
+ * 2. In one window the higher `used` wins, since use only rises until the reset. The engine's
+ *    SessionRateLimit carries only kind, percentUsed and resetsAt, so a limit raised or reset early
+ *    without moving `resetsAt` cannot be seen; the higher figure then stands until that reset, when
+ *    `effective` reads the window as 0% anyway.
+ * 3. `takenAt` breaks only an exact tie, the second (the later by call) winning a tie of that too.
+ *
+ * A window with no reset time cannot be placed by its figures, so it is judged by `takenAt` alone.
+ */
+const newer = (la: Limit & { takenAt: number }, lb: Limit & { takenAt: number }): Limit & { takenAt: number } => {
+  if (la.resetsAt !== null && lb.resetsAt !== null) {
+    if (la.resetsAt !== lb.resetsAt) return lb.resetsAt > la.resetsAt ? lb : la
+    if (la.used !== lb.used) return lb.used > la.used ? lb : la
+  }
+  return lb.takenAt >= la.takenAt ? lb : la
+}
+
+/**
+ * Two readings of one account combined window by window (L510): each window keeps its newer figure,
+ * judged by the figures (`newer`, #848), its own time (`takenAt` on the limit when it was carried
+ * over from an earlier reading, else the reading's) breaking only a tie. The result is dated by its
+ * oldest window, so "as of" never claims a figure is fresher than it is, and a window whose time
+ * differs from that date carries its own.
  */
 export const combine = (a: Reading | undefined, b: Reading | undefined): Reading | undefined => {
   if (!a || !b) return a ?? b
@@ -174,8 +197,7 @@ export const combine = (a: Reading | undefined, b: Reading | undefined): Reading
     const la = a[w] ? { ...a[w], takenAt: a[w]?.takenAt ?? a.takenAt } : undefined
     const lb = b[w] ? { ...b[w], takenAt: b[w]?.takenAt ?? b.takenAt } : undefined
     if (!la || !lb) return la ?? lb
-    // On a tie the second, the later of the two by call, wins.
-    return lb.takenAt >= la.takenAt ? lb : la
+    return newer(la, lb)
   }
   const five = pick('five')
   const week = pick('week')
