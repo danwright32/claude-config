@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
-import type { ModKitBandRow, ModKitBandSlot, ModKitQuestion } from '../types/index.d.ts'
+import type { ModKitBandRow, ModKitBandSlot } from '../types/index.d.ts'
 
 // The band above the prompt, which Claude Code gives ONE drawing: every mod publishes its rows
 // through $.modkit and mod-kit draws them in the settled order (docs/mods-design.md, "The band,
@@ -9,12 +9,26 @@ import type { ModKitBandRow, ModKitBandSlot, ModKitQuestion } from '../types/ind
 const publisher: { name: string; register: Register } = {
   name: 'publisher',
   register: on => {
+    let staleRow: unknown
+    on('state.set', async ($, e, next) => {
+      const w = e as unknown as { plugin?: string; key?: string; value?: unknown[] }
+      if (staleRow === undefined || w.plugin !== 'mod-kit' || w.key !== 'band') return next(e)
+      const value = [staleRow, ...(w.value ?? [])]
+      staleRow = undefined
+      return next({ ...e, value } as never)
+    })
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
       const [verb, ...rest] = String((e as { command?: string }).command).split(' ')
       try {
         if (verb === 'show') await $.modkit.bandRow(JSON.parse(rest.join(' ')) as ModKitBandRow)
-        if (verb === 'ask') await $.modkit.question(JSON.parse(rest.join(' ')) as ModKitQuestion)
         if (verb === 'clear') await $.modkit.clearBandRow({ mod: rest[0] as string, id: rest[1] as string })
+        // A row left in the band's stored state from before its slot went (#796), as a reload finds
+        // it: only mod-kit writes its state, so the row rides mod-kit's next write of the band.
+        if (verb === 'stale') staleRow = JSON.parse(rest.join(' '))
+        if (verb === 'stored') {
+          const now = (((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: { slot?: string }[] }).value ?? []).map(r => r.slot)
+          return { deny: `stored ${now.join(',')}` }
+        }
       } catch (err) {
         return { deny: `refused: ${String((err as Error).message ?? err)}` }
       }
@@ -39,21 +53,6 @@ const show = async ($: Caller, r: unknown) => {
 const clear = async ($: Caller, mod: string, id: string) => {
   await $.tool.call({ tool: 'Bash', command: `clear ${mod} ${id}` } as never)
 }
-const ask = async ($: Caller, q: unknown) => {
-  const out = (await $.tool.call({ tool: 'Bash', command: `ask ${JSON.stringify(q)}` } as never)) as { deny?: string; text?: string }
-  return out.deny ?? out.text ?? ''
-}
-const question = (mod: string, text: string, extra: Partial<ModKitQuestion> = {}): ModKitQuestion => ({
-  mod,
-  id: 'question',
-  chip: 'Pick',
-  question: text,
-  options: [
-    { button: 'yes', label: 'Yes' },
-    { button: 'no', label: 'No' },
-  ],
-  ...extra,
-})
 const props = (hasSurvey = false) => ({ hasSurvey, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} })
 const band = (surface: 'terminal' | 'desktop' = 'terminal', hasSurvey = false) =>
   ({ plugin: 'mod-kit', surface, component: 'AbovePrompt', props: props(hasSurvey) }) as never
@@ -97,114 +96,35 @@ test('rows are drawn in the settled order of their slots, whatever order they we
   }
 })
 
-test('an open question takes the band alone, and the rest comes back once it is cleared', withPublisher, async ($, on) => {
+// #777: since #744 and #777 every question is Claude Code's own dialog, so the band has no question
+// slot and mod-kit no question builder (L29). A row asking for the old slot is refused by name.
+test('a row in a question slot is refused: the band draws no question', withPublisher, async ($, on) => {
   engineBand(on)
-  await show($, row('needs-a-look', 'NO BUILD'))
-  await show($, row('steps', 'Steps for you'))
-  expect(await ask($, question('publisher', 'Which one?'))).toBe('done')
+  expect(await show($, row('question' as ModKitBandSlot, 'Which one?'))).toMatch(/refused: .*slot "question" is not one of/)
   const ui = await $.ui.mount(band())
-  expect((await shown(ui))[1]).toBe('Which one?')
-  expect(await shown(ui)).not.toContain('NO BUILD')
-  expect(await shown(ui)).not.toContain('Steps for you')
-  await clear($, 'publisher', 'question')
+  expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  await ui.unmount()
+})
+
+// Lessons review of #796: the rows live in $.state, so a question row saved before the slot went
+// survives a reload. It has no place in the order, and sorted on it the band's order was undefined
+// and the stale question, which nothing can answer any more, was drawn.
+test('a row stored under a slot the band no longer has is left out, and the rest keep their order', withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, row('steps', 'Steps for you'))
+  const stale = { mod: 'ask-before-saving', id: 'question:t1', slot: 'question', lines: [[{ text: 'Save this as a standing rule?' }]] }
+  await $.tool.call({ tool: 'Bash', command: `stale ${JSON.stringify(stale)}` } as never)
+  await show($, row('needs-a-look', 'NO BUILD'))
+  // The positive control: the stale row really is in the band's stored state, beside the others.
+  const stored = (await $.tool.call({ tool: 'Bash', command: 'stored' } as never)) as { deny?: string }
+  expect(stored.deny).toBe('stored question,steps,needs-a-look')
+  const ui = await $.ui.mount(band())
   expect(await shown(ui)).toEqual(['NO BUILD', 'Steps for you'])
   await ui.unmount()
-})
-
-// #703: two mods can each have a question open at once (ask before saving's question waits while
-// Claude carries on; picker manners' band question beside it, until #744 removed it). Drawn together,
-// both numbered from 1, a key meant for one answered the other. One question at a time: the first
-// asked is drawn, alone, and the next waits its turn, so a number key can only mean the answer to the
-// question in view.
-test('two open questions: only the first asked is drawn, only its buttons hold the number keys, and the next follows once it is cleared', withPublisher, async ($, on) => {
-  engineBand(on)
-  await ask($, question('ask-before-saving', 'Save this as a standing rule?', { id: 'question:t1', chip: 'Standing rule' }))
-  await ask($, question('second-asker', 'Which window?', { chip: 'Window' }))
-  const firstInView = async (surface: 'terminal' | 'desktop' = 'terminal') => {
-    const ui = await $.ui.mount(band(surface))
-    expect(await shown(ui)).toContain('Save this as a standing rule?')
-    expect(await shown(ui)).not.toContain('Which window?')
-    expect((await ui.find({ type: 'Button', key: 'ask-before-saving:yes' }))?.props.hotkey).toBe('1')
-    expect(await ui.find({ type: 'Button', key: 'second-asker:yes' })).toBeUndefined()
-    await ui.unmount()
-  }
-  for (const surface of ['terminal', 'desktop'] as const) await firstInView(surface)
-  // The one drawn published again (a multi select toggle) keeps its turn.
-  await ask($, question('ask-before-saving', 'Save this as a standing rule?', { id: 'question:t1', chip: 'Standing rule', options: [{ button: 'yes', label: 'Yes', chosen: true }, { button: 'no', label: 'No' }] }))
-  await firstInView()
-  await clear($, 'ask-before-saving', 'question:t1')
-  let ui = await $.ui.mount(band())
-  expect(await shown(ui)).toContain('Which window?')
-  expect((await ui.find({ type: 'Button', key: 'second-asker:yes' }))?.props.hotkey).toBe('1')
-  await ui.unmount()
-  await clear($, 'second-asker', 'question')
-  ui = await $.ui.mount(band())
-  expect(await ui.find({ text: 'engine band' })).toBeDefined()
-  await ui.unmount()
-})
-
-// #703 and #705: the question rows picker manners and ask before saving drew by hand had drifted
-// apart (a bracketed button against a plain one, an amber chip against a grey one, a 4 column
-// indent against 3). mod-kit builds every question, so there is one look: the chip in grey and the
-// question in amber on one line, anything the asker shows between, then each option as Claude
-// Code's plain button with its description indented under it (docs/mods-design.md).
-test('a question is drawn the settled way: grey chip, amber question, plain numbered options, descriptions indented under them', withPublisher, async ($, on) => {
-  engineBand(on)
-  await ask($, {
-    mod: 'publisher',
-    id: 'question',
-    chip: 'Retention',
-    question: 'How long should the registry keep it?',
-    body: [{ divider: true }, [{ text: 'the rule itself' }]],
-    options: [
-      { button: 'opt1', label: '1 day', description: 'Smallest folder.' },
-      { button: 'opt2', label: '7 days', chosen: true },
-    ],
-    submit: { button: 'submit', label: 'Submit' },
-  })
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount(band(surface))
-    const texts = await shown(ui)
-    expect(texts.slice(0, 2)).toEqual(['[Retention] ', 'How long should the registry keep it?'])
-    expect(texts).toContain('the rule itself')
-    expect((await ui.find({ type: 'Text', text: '[Retention] ' }))?.props).toMatchObject({ dimColor: true })
-    expect((await ui.find({ type: 'Text', text: 'How long should the registry keep it?' }))?.props).toMatchObject({ color: 'warning', bold: true })
-    expect((await ui.find({ type: 'Button', key: 'publisher:opt1' }))?.props).toMatchObject({ label: '1 day', hotkey: '1', plain: true })
-    expect((await ui.find({ type: 'Button', key: 'publisher:opt2' }))?.props).toMatchObject({ label: '7 days', hotkey: '2', plain: true })
-    expect((await ui.find({ type: 'Text', text: ' chosen' }))?.props).toMatchObject({ dimColor: true })
-    // The description sits 3 columns in, under the "1: " of its option, and wraps at the band's edge.
-    const description = await ui.find({ type: 'Text', text: 'Smallest folder.' })
-    expect(description?.props).toMatchObject({ dimColor: true, wrap: 'wrap' })
-    const indented = (await ui.findAll({ type: 'Box' })).filter(b => b.props.paddingLeft === 3)
-    expect(indented.map(b => b.text)).toEqual(['Smallest folder.'])
-    const submit = await ui.find({ type: 'Button', key: 'publisher:submit' })
-    expect(submit?.props.label).toBe('Submit')
-    expect(submit?.props.hotkey).toBeUndefined()
-    await ui.unmount()
-  }
-})
-
-test('a question row published through bandRow is refused, naming the question builder', withPublisher, async ($, on) => {
-  engineBand(on)
-  expect(await show($, row('question', 'Which one?'))).toMatch(/refused: .*\$\.modkit\.question/)
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: 'engine band' })).toBeDefined()
-  await ui.unmount()
-})
-
-test('a question with no options, more than nine, an empty label, a repeated button, or no chip is refused by name', withPublisher, async ($, on) => {
-  engineBand(on)
-  const opts = (n: number) => Array.from({ length: n }, (_, i) => ({ button: `o${i}`, label: `Option ${i}` }))
-  expect(await ask($, question('publisher', 'Q?', { options: [] }))).toMatch(/refused: .*at least one option/)
-  expect(await ask($, question('publisher', 'Q?', { options: opts(10) }))).toMatch(/refused: .*at most 9 options/)
-  expect(await ask($, question('publisher', 'Q?', { options: [{ button: 'a', label: '' }] }))).toMatch(/refused: .*label/)
-  expect(await ask($, question('publisher', 'Q?', { options: [{ button: 'a', label: 'A' }, { button: 'a', label: 'B' }] }))).toMatch(/refused: .*button "a" twice/)
-  expect(await ask($, question('publisher', 'Q?', { chip: '' }))).toMatch(/refused: .*chip/)
-  expect(await ask($, question('publisher', 'Q?', { submit: { button: 'a', label: 'Submit' }, options: [{ button: 'a', label: 'A' }] }))).toMatch(/refused: .*button "a" twice/)
-  expect(await ask($, { ...question('publisher', 'Q?'), mod: '' })).toMatch(/refused: .*mod and an id/)
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: 'engine band' })).toBeDefined()
-  await ui.unmount()
+  // And the band's next write takes it out of the stored state for good (L377).
+  await show($, row('message', 'Message for Kris'))
+  const after = (await $.tool.call({ tool: 'Bash', command: 'stored' } as never)) as { deny?: string }
+  expect(after.deny).toBe('stored steps,needs-a-look,message')
 })
 
 // #703: a run cut at the band's edge lost the end of a long option description, which in the end of

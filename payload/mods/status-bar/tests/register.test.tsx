@@ -11,7 +11,7 @@ const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
     // Everything the stand-in uses is inside register: the kit loads it as a module of its own.
-    const ORDER = ['needs-a-look', 'compact', 'steps', 'message', 'question']
+    const ORDER = ['needs-a-look', 'compact', 'steps', 'message']
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])
