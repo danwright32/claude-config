@@ -525,17 +525,25 @@ const PY_NO_WRITERS = new Set(['re', 'json', 'sys', 'pathlib', 'textwrap', 'stri
 // A plain top level import line, read whole: at the start of a line, one statement, an optional
 // comment after it. `import a, b.c as d` and `from a.b import c, d as e` (or `*`).
 const PY_IMPORT_LINE = /^(?:import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)|from\s+([\w.]+)\s+import\s+(\*|\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*))[ \t]*(?:#[^\n]*)?$/
+// sys holds every loaded module in sys.modules, os among them, so sys is quiet only while nothing
+// can reach that table (follow up to #846, #830): `from sys import modules` or `*` binds it bare, an
+// alias reaches it as `s.modules`, and the module's `__dict__` holds it under a computed key. So any
+// `modules` word or any `__dict__` in a program importing sys makes sys a writer.
+const SYS_REACHES_MODULES = /\bmodules\b|__dict__/
 /**
  * Whether every module the program can reach is quiet (lessons reviews of #846, four rounds, each
  * finding another import shape a pattern for imports missed). The default is flipped: the program
  * passes only when every `import` word in its text sits in a plain top level import line read whole,
  * nothing is imported at run time (`__import__`, `importlib`, `import_module`, `sys.modules`,
  * `getattr`, `__builtins__`), and every module each line binds is quiet: a dotted `import a.b` binds
- * `a` too, and `from os import` is quiet only for `path`. Any other `import` (after a colon,
- * indented, after a `;`, inside an expression or a string, across lines) means it cannot be read.
+ * `a` too, `from os import` is quiet only for `path`, and sys is quiet only while the program cannot
+ * reach its module table (SYS_REACHES_MODULES). Any other `import` (after a colon, indented, after a
+ * `;`, inside an expression or a string, across lines) means it cannot be read.
  */
 const onlyQuietModules = (inline: string): boolean => {
   if (/\b(?:__import__|import_module|importlib|getattr|__builtins__)\b|\bsys\s*\.\s*modules\b/.test(inline)) return false
+  const sysReachesModules = SYS_REACHES_MODULES.test(inline)
+  const quiet = (mod: string) => PY_NO_WRITERS.has(mod) && !(mod === 'sys' && sysReachesModules)
   const words = (inline.match(/\bimport\b/g) ?? []).length
   let read = 0
   for (const line of inline.split('\n')) {
@@ -546,14 +554,15 @@ const onlyQuietModules = (inline: string): boolean => {
       for (const part of m[1].split(',')) {
         const mod = part.trim().split(/\s+/)[0] as string
         // `import a.b.c` binds a, so a must be quiet as well as a.b.c.
-        if (!PY_NO_WRITERS.has(mod) || !PY_NO_WRITERS.has(mod.split('.')[0] as string)) return false
+        if (!quiet(mod) || !quiet(mod.split('.')[0] as string)) return false
       }
     } else {
       const mod = m[2] as string
       const names = (m[3] as string).split(',').map(n => n.trim().split(/\s+/)[0])
       if (mod === 'os') {
         if (!names.every(n => n === 'path')) return false
-      } else if (!PY_NO_WRITERS.has(mod)) return false
+      } else if (mod === 'sys' && names.some(n => n === 'modules' || n === '*')) return false
+      else if (!quiet(mod)) return false
     }
   }
   return read === words

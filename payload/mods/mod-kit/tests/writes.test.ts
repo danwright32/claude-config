@@ -533,6 +533,21 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom os import remove\nopen('a.md','w')\nremove('b')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import *\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import path\nif path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
+    // sys holds every loaded module in sys.modules, os among them, so sys is quiet only while that
+    // table cannot be reached (follow up to #846, #830): not by name from a from import, not by a
+    // star import, not by an alias, and not through the module's own __dict__.
+    expect(targets("python3 - <<'EOF'\nfrom sys import modules\nopen('a.md','w')\nmodules['os'].remove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom sys import modules as m\nopen('a.md','w')\nm['os'].remove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom sys import argv, modules\nopen('a.md','w')\nEOF")).toEqual(none)
+    // A star import binds modules whether or not the program spells the word. Every star import was
+    // already refused before this change (measured: `from json import *` names nothing either); this
+    // pins it for sys, where onlyQuietModules now refuses it by name as well.
+    expect(targets("python3 - <<'EOF'\nfrom sys import *\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sys as s\nopen('a.md','w')\ns.modules['os'].remove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.__dict__['mod' + 'ules']['os'].remove('b')\nEOF")).toEqual(none)
+    // The control: sys with none of that is still quiet, so the files are still named.
+    expect(targets("python3 - <<'EOF'\nfrom sys import argv\nopen('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
+    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.stdout.write('done')\nEOF")).toEqual([[`${CWD}/a.md`]])
     // Only python's writes are named so far.
     expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })
