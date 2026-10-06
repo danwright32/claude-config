@@ -4,7 +4,8 @@
 # Claude Code PreToolUse(Bash) hook.
 #
 # Refuse a merge until the lessons review of that pull request's head has FINISHED and its findings
-# have reached the session (claude-config#560). The review itself, and every outcome it can have, is
+# have been READ by the session merging (claude-config#560, #788): the merge presents the findings'
+# read key as PR_REVIEW_READ=<key>, which only the messages carrying them hold. The review itself, and every outcome it can have, is
 # lib/pr-review.sh; this hook only decides whether a command merges and which head it merges.
 #
 # EVERY MERGE ROUTE this hook can see: `gh pr merge`, and a repo's own merge script in command
@@ -75,6 +76,27 @@ fi
 
 args=(check --dir "$repo_dir" --sha "$head")
 [ -n "$base" ] && args+=(--base-ref "origin/$base")
-out="$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
+# The read key the findings' refusal carries, if this merge presents it (claude-config#788). The
+# hook does not inherit the command's own assignments, so it is read from the command text and
+# handed on; anything else in the environment is cleared, so only THIS command can present one.
+#
+# Only as an assignment in front of the MERGE segment itself: text in an echo, or an assignment in
+# front of some other command, says nothing about this merge (L673). Segments are cut the way the
+# merge matcher cuts them, so the segment judged a merge here is the one mt_runs_merge judged.
+read_key=""
+while IFS= read -r rk_seg; do
+  # The segment's leading assignments read as the shell reads them (mt_split_assignments, the same
+  # reader the merge matcher uses), so a key before `GH_TOKEN=$(gh auth token -u x) gh pr merge`
+  # is found, and quotes around the key are removed as the shell would.
+  mt_split_assignments "$rk_seg"
+  rk_found="$(printf '%s' "$MT_ASSIGNS" | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
+  if [ -n "$rk_found" ] && [ -n "$MT_REST" ] && mt_runs_merge "$MT_REST"; then
+    case "$rk_found" in *[!a-f0-9]*) ;; *) read_key="$rk_found" ;; esac
+    break
+  fi
+done <<RKEOF
+$(mt_raw_segments "$command")
+RKEOF
+out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && { printf 'pr-review-gate: %s\n' "$out"; exit 0; }
 refuse "$out"
