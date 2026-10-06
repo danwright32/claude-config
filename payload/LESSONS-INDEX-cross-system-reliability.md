@@ -90,3 +90,4 @@ which is NOT loaded into the session.
 - L744. A cleanup deleting an external object under a request-derived id must check no live record holds that id: a retry adopts the same object.
 - L747. Scope an idempotency key to one attempt, never to inputs a person can repeat, or a cancelled earlier attempt's derived id refuses the next real one.
 - L748. Coordination in a serverless instance's memory spans one instance only; coordinate through a shared store and measure it under spread load.
+- L750. When two writers can create the same row, one a partial recovery copy, the merge on conflict must fill a stored null, not only refuse to overwrite.

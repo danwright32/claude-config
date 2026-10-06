@@ -9710,6 +9710,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   computes per booking, the same as with no coalescing at all.)
   SHORT: Coordination in a serverless instance's memory spans one instance only; coordinate through a shared store and measure it under spread load.
 
+- **L750. When two writers can create the same row, one complete and one a partial recovery copy
+  (an outbox drain, a repair job, a sync), the merge on conflict must fill a stored null from a non
+  null incoming value, not only refuse to overwrite.** A conflict clause that protects stored
+  columns by never updating them also never repairs them, so whichever writer lands first decides
+  those columns for good, and the complete writer's later success reads as having saved them.
+  Write the protection as fill if null (`coalesce(stored, incoming)`), and test both arrival
+  orders. (bidspoke#1805, 2026-10-06: `record_buyer_sale` never updates workflow_id, trace_id, debt
+  or multiplier on conflict, and the minute drain writes a never copied ledger entry with explicit
+  nulls for them, so 8 of the first 118 live buyer sales kept nulls while the node reported
+  `mirrored: true`.)
+  SHORT: When two writers can create the same row, one a partial recovery copy, the merge on conflict must fill a stored null, not only refuse to overwrite.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
