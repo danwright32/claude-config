@@ -449,6 +449,11 @@ export const register: Register = on => {
   // A permission prompt is the session waiting on Dan, as a question is (spec item 4): marked for the
   // pane until the call it belongs to returns, and notified.
   on('classic.PermissionRequest', async ($, e, next) => {
+    // Claude Code raises a permission request for its own question dialog. That request is the
+    // question, already marked and notified with its text by the question's own path, so it is no
+    // second thing waiting on Dan and sends nothing (#814: Dan got "is waiting on you" and "needs a
+    // permission: AskUserQuestion" for every question).
+    if (e.tool_name === 'AskUserQuestion') return next(e)
     const what = permissionFor(e.tool_name, e.tool_input)
     const now = await nowOr($)
     permission = { calls: new Set(callsFor(e.tool_name, e.tool_input)), mark: { question: what, since: now, kind: 'permission' } }

@@ -447,6 +447,40 @@ test('a question to Dan sends one notification naming the project, with the ques
   expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format for the CSV?']])
 })
 
+// #814 (Dan, 2026-10-05: "when i get a notification I get two"): Claude Code raises a permission
+// request for its own question dialog. That request is the question, not a second thing to do, so
+// one question sends one notification, with its text, and the pane shows it as a question.
+const askPermission = ($: { classic: { PermissionRequest: (e: never) => Promise<unknown> } }, question: string) =>
+  $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question, header: 'Format', options: [], multiSelect: false }] } } as never)
+
+test('a question whose dialog Claude Code also raises as a permission sends one notification, the question (#814)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call(ask('Which date format for the CSV?'))
+  await clock.advance(1)
+  await askPermission($, 'Which date format for the CSV?')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Which date format for the CSV?', kind: 'question' })
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format for the CSV?']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test('the permission request for a question arriving before the question is marked still sends one notification (#814)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  await askPermission($, 'Ship it?')
+  const call = $.tool.call(ask('Ship it?'))
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
 // #706: the notification is for a question Dan sees. One refused at once (by picker manners
 // beneath the tracker, or anything else beneath it) never reached him, so it sends none.
 test('a question refused at once sends no notification', withDeps, async ($, on) => {
