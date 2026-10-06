@@ -15,10 +15,13 @@ back.
 - `payload/commands/` — slash commands
 - `payload/mods/`: Claude Code mods, each a plugin folder, loaded on **both** Macs (see Mods below)
 - `payload/settings.hooks.json`: **only** the `hooks` block of `settings.json`
-- `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today only
-  `ultracode`. It is edited in the repo, never published back from a Mac, and a pull writes each
-  key into `settings.json` (refusing the whole file, by name, if it holds any key not on the
-  allowlist in `claude-sync`). Off is `false`, never a deletion.
+- `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
+  `ultracode` (off since 2026-10-06) and the effort level per model, as
+  `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`). It is edited in the
+  repo, never published back from a Mac, and a pull writes each value into `settings.json`
+  (refusing the whole file, by name, if it holds any key not on the allowlist in `claude-sync`, or a
+  value Claude Code would not act on). Off is `false`, never a deletion. A `/effort` pick on one Mac
+  lasts until the next pull puts the shared level back; change the level here instead.
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
@@ -45,7 +48,7 @@ pieces in those files. The same guard refuses it anywhere it is not standing in 
 
 ## What NEVER syncs (stays private to each Mac)
 
-Memory store, session history, caches, the rest of `settings.json` (model / effort / plugins),
+Memory store, session history, caches, the rest of `settings.json` (model / plugins / any effort the shared file does not name),
 and the local permission list (`settings.local.json`). A `pull` cannot overwrite any of these.
 The two exceptions are the shared settings above and `statusLine`: a pull writes the status bar
 mod's status line into `settings.json`, naming this Mac's own copy of its script, when no

@@ -19019,7 +19019,7 @@ sx_pull "$SX4H" "$SX4R" >/dev/null
 check "#772 #695 a Mac with neither the mod nor a shared file keeps settings.json byte for byte" "[ \"\$(cksum < '$SX4H/settings.json')\" = \"\$_sx4sum\" ]"
 
 # A KEY OUTSIDE THE ALLOWLIST is refused by name and nothing from the file is written, so the file
-# cannot become a back door for model or effort.
+# cannot become a back door for the model (effort travels only per model, checked further down).
 SX5R="$WORK/sx5-repo"; sx_repo "$SX5R" '{"ultracode": true, "model": "haiku"}' ''
 SX5H="$WORK/sx5-home"; mkdir -p "$SX5H"; printf '%s\n' "$SX_ORIG" > "$SX5H/settings.json"; _sx5sum="$(cksum < "$SX5H/settings.json")"
 out_sx5="$(sx_pull "$SX5H" "$SX5R")"
@@ -19101,6 +19101,96 @@ SX11H="$WORK/sx11-home"; mkdir -p "$SX11H"
 sx_pull "$SX11H" "$SX10R" >/dev/null
 check "#772 and a write that succeeds there creates it with the status line" \
   "[ \"\$(jq -r '.statusLine.command' '$SX11H/settings.json' 2>/dev/null)\" = 'bash $SX11H/mods/status-bar/statusline.sh' ]"
+
+# EFFORT IS SHARED PER MODEL (2026-10-06). Dan chose to have both Macs start every session at one
+# effort level. Claude Code (2.1.291) reads a user's effort from modelSettings.<model>.effortLevel,
+# which is where /effort saves it; the top level effortLevel in user settings is a legacy key it
+# applies only to older models, so a shared top level value would land and change nothing (L402).
+# The sync carries the per model field and writes only that leaf, never the rest of the entry.
+SX12R="$WORK/sx12-repo"; sx_repo "$SX12R" '{"ultracode": false, "modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}' ''
+SX12H="$WORK/sx12-home"; mkdir -p "$SX12H"
+jq -c '. + {ultracode: true, modelSettings: {"claude-opus-5-5": {effortLevel: "xhigh", autoCompactWindow: 400000}, "claude-sonnet-5-5": {effortLevel: "low"}}}' <<< "$SX_ORIG" > "$SX12H/settings.json"
+out_sx12="$(sx_pull "$SX12H" "$SX12R")"
+dbg "shared effort, first pull: $out_sx12"
+check "shared effort: a pull sets a model's effort from the shared settings file" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-opus-5-5\"].effortLevel' '$SX12H/settings.json')\" = high ]"
+check "shared effort: and keeps that model's other settings" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-opus-5-5\"].autoCompactWindow' '$SX12H/settings.json')\" = 400000 ]"
+check "shared effort: and leaves a model the file does not name as it was" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-sonnet-5-5\"].effortLevel' '$SX12H/settings.json')\" = low ]"
+check "shared effort: and the same file turns ultracode off" "[ \"\$(jq -r '.ultracode' '$SX12H/settings.json')\" = false ]"
+check "shared effort: every other setting is exactly as it was, the top level effortLevel included" \
+  "[ \"\$(jq -cS 'del(.ultracode, .modelSettings)' '$SX12H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "shared effort: and the pull names the effort it wrote" "line_has \"\$out_sx12\" 'settings.json' 'claude-opus-5-5' 'effortLevel'"
+# A false value is still a value written: jq's paths(scalars) drops it, because the filter's output
+# (false) is what decides, so the line named the effort and not ultracode (seen 2026-10-06).
+check "shared effort: and names a setting it turned off as well" "line_has \"\$out_sx12\" 'shared settings' 'ultracode'"
+# Applied is judged on the leaf, not the whole entry: the Mac's entry keeps a field the file does
+# not carry, so comparing whole entries would rewrite settings.json on every pull.
+touch -t 202001010000 "$SX12H/settings.json"; _sx12sum="$(cksum < "$SX12H/settings.json")"
+out_sx12b="$(sx_pull "$SX12H" "$SX12R")"
+check "shared effort: a second pull leaves settings.json byte for byte" "[ \"\$(cksum < '$SX12H/settings.json')\" = \"\$_sx12sum\" ]"
+check "shared effort: and leaves its mtime untouched" "[ \"\$(_suite_mtime '$SX12H/settings.json')\" -lt 1600000000 ]"
+check "shared effort: and claims to have written nothing there" "! line_has \"\$out_sx12b\" 'settings.json' 'effortLevel'"
+
+# A MAC WITH NO modelSettings AT ALL gets the entry made.
+SX13H="$WORK/sx13-home"; mkdir -p "$SX13H"; printf '%s\n' "$SX_ORIG" > "$SX13H/settings.json"
+sx_pull "$SX13H" "$SX12R" >/dev/null
+check "shared effort: a Mac with no per model settings gets the model's entry" \
+  "[ \"\$(jq -c '.modelSettings' '$SX13H/settings.json')\" = '{\"claude-opus-5-5\":{\"effortLevel\":\"high\"}}' ]"
+
+# WHAT THE FILE MAY NOT CARRY is refused by name, and nothing from it is written. max is session only
+# (Claude Code never saves it), a per model key other than effortLevel would carry a setting nobody
+# chose to share, the top level effortLevel is the legacy key that changes nothing on current models,
+# and an alias like "opus" sits under the full model name Claude Code reads first, so it would land
+# and change nothing either.
+sx_refused(){   # $1 = a name for the case  $2 = shared settings JSON -> output; the home is left byte for byte or the check fails
+  local r="$WORK/sxr-$1-repo" h="$WORK/sxr-$1-home" sum out
+  sx_repo "$r" "$2" ''
+  mkdir -p "$h"; jq -c '. + {modelSettings: {"claude-opus-5-5": {effortLevel: "xhigh"}}}' <<< "$SX_ORIG" > "$h/settings.json"
+  sum="$(cksum < "$h/settings.json")"
+  out="$(sx_pull "$h" "$r")"
+  [ "$(cksum < "$h/settings.json")" = "$sum" ] || out="$out
+SETTINGS.JSON WAS CHANGED"
+  printf '%s' "$out"
+}
+out_sx14="$(sx_refused max '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "max"}}}')"
+check "shared effort: max is refused, naming the model and the value" "line_has \"\$out_sx14\" 'settings.shared.json' 'claude-opus-5-5' 'max'"
+check "shared effort: and nothing from that file is written" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx14\""
+out_sx15="$(sx_refused extra '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "high", "maxEffortLevel": "high"}}}')"
+check "shared effort: a per model key other than effortLevel is refused, naming it" "line_has \"\$out_sx15\" 'settings.shared.json' 'maxEffortLevel'"
+check "shared effort: and nothing from that file is written either" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx15\""
+out_sx16="$(sx_refused top '{"effortLevel": "high"}')"
+check "shared effort: the top level effortLevel is refused as a key the sync does not share" "line_has \"\$out_sx16\" 'settings.shared.json' 'carries effortLevel'"
+check "shared effort: and nothing is written for it" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx16\""
+out_sx17="$(sx_refused alias '{"modelSettings": {"opus": {"effortLevel": "high"}}}')"
+check "shared effort: a model alias is refused, naming it" "line_has \"\$out_sx17\" 'settings.shared.json' 'opus' 'full model name'"
+check "shared effort: and nothing is written for an alias" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx17\""
+
+# STATUS judges the per model value too, through the same clone the #695 checks above use.
+git -C "$SX8D" pull -q origin main 2>/dev/null
+printf '{"ultracode": false, "modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'share effort' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "shared effort fixture: the clone holds the per model shared file" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-opus-5-5\"].effortLevel' '$SX8C/payload/settings.shared.json')\" = high ]"
+jq -c '. + {ultracode: false, modelSettings: {"claude-opus-5-5": {effortLevel: "xhigh", autoCompactWindow: 400000}}}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8d="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "shared effort: while the model's effort differs, status lists the shared file as not applied" \
+  "line_has \"\$out_sx8d\" 'settings.shared.json' 'has not applied'"
+jq -c '. + {ultracode: false, modelSettings: {"claude-opus-5-5": {effortLevel: "high", autoCompactWindow: 400000}}}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8e="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "shared effort: once the effort matches, status no longer lists it, whatever else the entry holds" \
+  "! line_has \"\$out_sx8e\" 'settings.shared.json' 'has not applied'"
+
+# THE SHIPPED FILE is one the sync accepts: every value it carries lands. Asserts no particular
+# value, so changing the shared setting later needs no test change (L252).
+SX18R="$WORK/sx18-repo"; sx_repo "$SX18R" "$(cat "$(dirname "$SCRIPT")/payload/settings.shared.json")" ''
+SX18H="$WORK/sx18-home"; mkdir -p "$SX18H"; printf '%s\n' "$SX_ORIG" > "$SX18H/settings.json"
+out_sx18="$(sx_pull "$SX18H" "$SX18R")"
+dbg "the shipped shared file: $out_sx18"
+check "the shipped shared settings file is accepted and every value in it lands" \
+  "jq -en --slurpfile s '$SX18R/payload/settings.shared.json' --slurpfile c '$SX18H/settings.json' '[\$s[0] | paths(type | . != \"object\" and . != \"array\") as \$p | (\$s[0] | getpath(\$p)) == (\$c[0] | getpath(\$p))] | (length > 0 and all)' >/dev/null"
 
 section "== an apply leaves no expanded copy of the payload behind (#641) =="
 # apply_source_dir set EXPANDED_ROOT inside a command substitution at every call site, so the parent
