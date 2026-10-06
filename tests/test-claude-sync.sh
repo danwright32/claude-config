@@ -18923,6 +18923,13 @@ check "#641 an apply leaves no claude-sync-expand copy behind" \
 e641_pull >/dev/null
 check "#641 nor does a second apply with nothing new" \
   "[ \"\$(find '$E41S' -name 'claude-sync-expand.*' 2>/dev/null | wc -l | tr -d ' ')\" = 0 ]"
+# And as production runs it, with no SYNC_SCRATCH_ROOT at all, so the root comes from TMPDIR (review
+# of #785, which asked whether the guard in cleanup_expanded skips the cleanup when it is unset).
+E41T="$WORK/e641-tmpdir"; mkdir -p "$E41T"; rm -rf "$E41H/hooks" "$E41H/agents"
+env -u SYNC_SCRATCH_ROOT TMPDIR="$E41T" CLAUDE_HOME="$E41H" SYNC_REPO="$E41R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#641 fixture: with no scratch root set, the apply still expanded the tokenized files" "grep -qF '$E41H/hooks/x.sh' '$E41H/hooks/tok.sh'"
+check "#641 and with no scratch root set, it leaves no expanded copy in TMPDIR either" \
+  "[ \"\$(find '$E41T' -name 'claude-sync-expand.*' 2>/dev/null | wc -l | tr -d ' ')\" = 0 ]"
 
 section "== a held back hooks block is written to the sync log, naming the hook (#592) =="
 # 2026-10-02: Dans-MacBook-Pro showed "held back the hooks block: a hook is registered for tools its
@@ -19106,6 +19113,16 @@ CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash
 check "#781 a pull leaves the last file of a tree deleted" "[ ! -e '$D81H/agents/only.md' ]"
 CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#781 and the next send carries that deletion too" "! git -C '$D81B' show main:payload/agents/only.md >/dev/null 2>&1"
+# A MAC THAT UPGRADES has no .trees-seen yet (review of #785). Its record is seeded from the commit it
+# last applied, so a tree it really held is still a tree it held, and deleting the last file in it
+# still travels.
+mkdir -p "$D81H/commands"; printf 'the only command\n' > "$D81H/commands/only.md"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#781 upgrade fixture: the only command is in the shared repo" "git -C '$D81B' show main:payload/commands/only.md >/dev/null 2>&1"
+rm -f "$D81A/.trees-seen" "$D81H/commands/only.md"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#781 a Mac with no .trees-seen yet still carries the deletion of a tree's last file" "! git -C '$D81B' show main:payload/commands/only.md >/dev/null 2>&1"
 
 suite_profile
 echo ""
