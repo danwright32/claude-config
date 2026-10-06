@@ -79,7 +79,7 @@ class Recorder(http.server.BaseHTTPRequestHandler):
                     self.wfile.flush()
                     time.sleep(0.1)
             except OSError:
-                with open(log, 'a') as f:
+                with open(log + '.dropped', 'a') as f:
                     f.write('DROPPED /drip\n')
             return
         with open(log, 'a') as f:
@@ -135,7 +135,9 @@ python3 "$TMP/impostor.py" "$TMP/impostor.port" & BG_PIDS="$BG_PIDS $!"
 # standing for a reader to take as its own.
 mkdir -p "$TMP/proxy"
 # Its pid is a process that has already exited, as a left over file's would be.
-DEAD_PID="$(sh -c 'echo $$')"
+sh -c 'exit 0' & DEAD_PID=$!
+wait "$DEAD_PID"
+kill -0 "$DEAD_PID" 2>/dev/null && bad "the stand in for an exited process is really gone (pid $DEAD_PID was reused)"
 printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy/proxy.json"
 # The upstream deadline is shortened so a stalled site is seen to time out within the suite.
 NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000 >"$TMP/proxy.out" 2>&1 & PROXY_PID=$!
@@ -193,8 +195,8 @@ else
   # A browser that goes away mid answer takes the proxy's upstream request with it: the site sees
   # its reader leave within seconds, not after the whole answer.
   code_of -x "$PROXY" --max-time 1 "$PLAIN/drip" >/dev/null
-  for _ in $(seq 1 100); do grep -q '^DROPPED /drip' "$TMP/plain.log" && break; sleep 0.1; done
-  grep -q '^DROPPED /drip' "$TMP/plain.log" && ok || bad "a request the browser abandons is dropped upstream too"
+  for _ in $(seq 1 100); do grep -q '^DROPPED /drip' "$TMP/plain.log.dropped" 2>/dev/null && break; sleep 0.1; done
+  grep -q '^DROPPED /drip' "$TMP/plain.log.dropped" 2>/dev/null && ok || bad "a request the browser abandons is dropped upstream too"
   # A site that drops its answer part way ends the browser's request at once: curl then reports a
   # short transfer (18), never its own deadline (28).
   curl -s --noproxy '' -o /dev/null --max-time 5 -x "$PROXY" "$PLAIN/cut"; rc=$?
