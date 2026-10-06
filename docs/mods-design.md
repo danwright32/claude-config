@@ -844,6 +844,37 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   scope modes mod not loaded it is home; one that cannot answer is named in a dim line and the
   card is shown, since a card shown while away costs less than steps nobody sees.
 - The pane title is "Manual steps" (open: its words).
+- **A step left in prose** (#863). On 2026-10-06 a session ended a turn with "The one thing still
+  waiting on you is the migration command from my earlier message"; the command had only ever been
+  prose in an earlier reply, and Dan never saw it. So at the turn's end (`classic.Stop`) the mod
+  reads Claude's own final message (`last_assistant_message`, never Dan's) for a step handed over
+  in prose: "waiting on you", "once you run" (or apply, paste, click, approve), "you'll need to run",
+  "needs you to paste" and the like, "your step". One negated right before it, in its own clause
+  and within five words ("nothing else is waiting on you", "no longer waiting on you"), or quoted
+  as the name of a thing ("is waiting on you", the notification) does not count; a negation in
+  another clause ("the deploy did not finish, so it's waiting on you") does not hide it. When one is there and no unfinished step is on a card Dan can see
+  (a card carried from an earlier session is held, not shown, so it does not count), the turn end
+  is blocked with: check it against the current state, pin it with the steps tool, say in one line
+  that it is on the card, or say that nothing is left for Dan. Never twice in one chain of turn
+  ends (`stop_hook_active`), so it cannot loop; never in a -p run or the SDK, which have no steps
+  tool; a block from a Stop hook beneath (winding down) is kept beside it. A card that cannot be
+  read is logged and the turn end passes, rather than sending Claude to pin a card that may be
+  there.
+  Measured before it shipped (L172, L36), with the matcher itself, on every turn final message of
+  the 30 days to 2026-10-06 on this Mac: 19 of 7,647 (0.25%) fired, 19 of the 6,091 outside the
+  temp folder sessions that headless runs use (0.31%). Read one by one, 18 hand Dan a real step (a
+  restore to run, a relaunch, a setting to type in, an issue to check), and one says a show is
+  still waiting on his reply in Overture's Reached out list, which is his to do but not a step. The real sentences that only quote or negate the phrase, which a plain match
+  fired on in the same sample, are passing cases in `tests/waiting.test.ts`, and the 2026-10-06
+  wording is the case that must fire.
+  The original session ran on the other Mac, so its wording is taken from the issue.
+- **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
+  "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
+  step waits on Claude, the step line says "sent", and the words go until the next step opens. On
+  the card's own line rather than a row of its own: the card already is the `steps` row of the
+  band whenever no pane holds it, and a pane is always on screen (docked, or inline above the
+  prompt), so a second row naming the same step would state it twice (L605). The issue asked for
+  "waiting on you: <step title>" in the band; the open step's title is the line under the heading.
 
 ### The band, shared by every mod
 

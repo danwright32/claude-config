@@ -123,9 +123,11 @@ describe('cardLines', () => {
       ],
     })
     const l = lines(c)
-    expect(l[0]).toEqual([{ text: 'Cloudflare WAF', color: 'warning' }])
+    // While the open step is Dan's to do, the heading says so (#863), on the card's own line rather
+    // than a second row beside it.
+    expect(l[0]).toEqual([{ text: 'Cloudflare WAF', color: 'warning' }, { text: '  waiting on you', dim: true }])
     expect(l.map(textOf)).toEqual([
-      'Cloudflare WAF',
+      'Cloudflare WAF  waiting on you',
       '1. Create the API token  already done',
       '2. Turn on the rule  [done]',
       'https://dash.cloudflare.com/waf  [copy-link]',
@@ -174,6 +176,7 @@ describe('cardLines', () => {
   test('an exact location stands where the link would, and a sent Done reads as sent', () => {
     const c = sent(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] }), 0, true)
     const l = lines(c)
+    // Sent, the step waits on Claude rather than on Dan, so the heading no longer says it waits on him (#863).
     expect(l.map(textOf)).toEqual(['x', '1. Turn on the WAF rule  sent', 'Keychain Access, login'])
   })
 
