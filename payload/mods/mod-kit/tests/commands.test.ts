@@ -331,3 +331,11 @@ describe('git', () => {
     expect(git(['git'])).toEqual({ sub: undefined, args: [], dir: undefined })
   })
 })
+
+describe('heredocs name the descriptor they feed (#760)', () => {
+  test('standard input carries no fd; another descriptor says which', () => {
+    expect(pipeline("psql db <<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
+    expect(pipeline("psql db 0<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
+    expect(pipeline("psql db 3<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', fd: 3 }])
+  })
+})

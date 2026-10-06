@@ -390,7 +390,7 @@ const INPUT_WORD = /^(\d*)(<<<|<<-?|<)(.*)$/
 const base = (p: string) => p.split('/').pop() ?? p
 const CLOSERS = new Set([')', ...CLOSES])
 
-type Fed = { word: number; body: string }[]
+type Fed = { word: number; body: string; fd?: number }[]
 
 // What a command's own redirects put on its standard input, the last one winning as in the shell:
 // a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
@@ -605,7 +605,10 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       const m = HEREDOC_WORD.exec(w)
       const at = b.starts[n] ?? -1
       const body = m && at >= 0 ? bodyAt.get(at + (m[1] as string).length) : undefined
-      if (body !== undefined) fed.push({ word: n, body })
+      // A heredoc on another descriptor (3<<EOF) says which, so a reader of standard input can
+      // tell it is not what the command reads there (#760).
+      const fd = m && m[1] && m[1] !== '0' ? { fd: Number(m[1]) } : {}
+      if (body !== undefined) fed.push({ word: n, body, ...fd })
     })
     return fed
   }

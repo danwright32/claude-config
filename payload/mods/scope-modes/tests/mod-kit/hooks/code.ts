@@ -102,7 +102,14 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // pathlib's rename and replace move a file (#730). Told from str.replace, which takes two
 // arguments or more, and from a data frame's rename or replace, which take keywords, a mapping or a
 // function: only a call with one plain argument and no keywords is read as a move.
+// A script that imports pandas and nothing of pathlib's is working on data frames and series, whose
+// rename and replace take one name too (#760: `s.rename('total')` was refused as a move, Dan's
+// decision 2026-10-05); one that imports both, or neither, cannot be told apart and is still read
+// as moving.
+const PANDAS = /(?:^|[;\n])[ \t]*(?:import\s+pandas\b|from\s+pandas\b)/
+const PATHLIB = /\bpathlib\b|\bPath\s*\(/
 const pythonMoves = (code: string): CodeVerdict | undefined => {
+  if (PANDAS.test(code) && !PATHLIB.test(code)) return undefined
   for (const m of code.matchAll(/\.\s*(rename|replace)\s*\(/g)) {
     const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
     if (args.length === 1 && !/^\w+\s*=|^[{[]|^lambda\b|^str\s*\./.test(args[0] as string)) return { does: 'write files', seen: m[1] as string }
@@ -285,7 +292,8 @@ const SURFACES: Record<Lang, Surface> = {
     dynamic: [
       { re: /(?<![\w.:])(eval|instance_eval|class_eval|module_eval|instance_exec)\b/, seen: m => m[1] as string },
       // A send whose method is named by a literal is read above; one built at run time cannot be.
-      { re: /(?<![\w.])(?:send|public_send|__send__)\s*(?:\(\s*|\s+)(?!(?::\w+[?!=]?|(['"])\w+[?!=]?\1)\s*(?:[,)\n;]|$))/, seen: 'send of a computed name' },
+      // `def send(x)` defines a method of that name, which sends nothing (#760, Dan's decision).
+      { re: /(?<![\w.])(?<!\bdef\s+(?:self\s*\.\s*)?)(?:send|public_send|__send__)\s*(?:\(\s*|\s+)(?!(?::\w+[?!=]?|(['"])\w+[?!=]?\1)\s*(?:[,)\n;]|$))/, seen: 'send of a computed name' },
       { re: /(?<![\w.])(require|require_relative|load)\s*\(?\s*(?!['"])[\w$@]/, seen: m => `${m[1]} of a computed path` },
     ],
     judge: rubyOpen,
