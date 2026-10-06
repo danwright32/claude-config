@@ -24,6 +24,9 @@ describe('newWork: starting new work is denied while winding down', () => {
     expect(tool('Agent', { prompt: 'Fix the failing check on #616' })).toBeUndefined()
     expect(tool('Agent', { prompt: 'Read the CI log and say why it failed' })).toBeUndefined()
   })
+  test('asking Dan is never new work: a question goes through, so nothing is parked waiting on him (#856)', () => {
+    expect(tool('AskUserQuestion', { questions: [{ question: 'Merge PR #700?' }] })).toBeUndefined()
+  })
   test('fixing what blocks THIS issue is allowed: edits, commits, pushes, merging', () => {
     expect(tool('Edit', { file_path: '/repo/app.ts' })).toBeUndefined()
     expect(bash(['git', 'commit', '-m', 'fix the check'], ['git', 'push'])).toBeUndefined()
