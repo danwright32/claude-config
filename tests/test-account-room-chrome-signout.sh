@@ -112,15 +112,15 @@ out=$(ACCOUNT_ROOM_CHROME_DIR="$TMPROOT/c5" ACCOUNT_ROOM_OPEN="$STUB" /bin/sh "$
 [ "$code" = 1 ] && [ ! -f "$TMPROOT/open.args" ] && check "with no last used profile the logout refuses and opens nothing" ok \
   || check "with no last used profile the logout refuses and opens nothing" "code=$code out=$out"
 
-# 9. The manifest's defaults are these scripts, run the way the mod runs them (/bin/sh -c) from
-# where the mod is installed, ~/.claude/mods/account-room, here a home whose .claude is the payload.
+# 9. The manifest's defaults run these scripts on Dans-MacBook-Pro (bin/browser.sh, #808), the way
+# the mod runs them (/bin/sh -c) from where the mod is installed, ~/.claude/mods/account-room, here a home whose .claude is the payload.
 H="$TMPROOT/home"; mkdir -p "$H"; ln -s "$ROOT/payload" "$H/.claude"
 default(){ /usr/bin/plutil -extract "userConfig.$1.default" raw -o - "$MOD/.claude-plugin/plugin.json"; }
 C="$TMPROOT/c2"
-out=$(HOME="$H" ACCOUNT_ROOM_CHROME_DIR="$C" ACCOUNT_ROOM_CHECK_TRIES=1 ACCOUNT_ROOM_PAUSE=true /bin/sh -c "$(default signedOutCheck)" 2>&1); code=$?
+out=$(HOME="$H" ACCOUNT_ROOM_HOST=Dans-MacBook-Pro ACCOUNT_ROOM_CHROME_DIR="$C" ACCOUNT_ROOM_CHECK_TRIES=1 ACCOUNT_ROOM_PAUSE=true /bin/sh -c "$(default signedOutCheck)" 2>&1); code=$?
 [ "$code" = 0 ] && [ "$out" = "signed out" ] && check "the signedOutCheck default runs the shipped check" ok \
   || check "the signedOutCheck default runs the shipped check" "code=$code out=$out default=$(default signedOutCheck)"
-out=$(HOME="$H" ACCOUNT_ROOM_CHROME_DIR="$C" ACCOUNT_ROOM_OPEN="$STUB" /bin/sh -c "$(default logoutCommand)" 2>&1); code=$?
+out=$(HOME="$H" ACCOUNT_ROOM_HOST=Dans-MacBook-Pro ACCOUNT_ROOM_CHROME_DIR="$C" ACCOUNT_ROOM_OPEN="$STUB" /bin/sh -c "$(default logoutCommand)" 2>&1); code=$?
 [ "$code" = 0 ] && [ -f "$TMPROOT/open.args" ] && check "the logoutCommand default runs the shipped logout" ok \
   || check "the logoutCommand default runs the shipped logout" "code=$code out=$out default=$(default logoutCommand)"
 
