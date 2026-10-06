@@ -461,7 +461,7 @@ export const register: Register = on => {
     for (const x of unused)
       $.ui.toast(
         x.refused !== undefined
-          ? `The For good you gave for saving to ${x.files.join(', ')} ended with the session: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not sent again.`
+          ? `The For good you gave for saving to ${x.files.join(', ')} ended with the session: Claude sent the save, but it was refused before it was saved (${x.refused}), so nothing was saved.`
           : `The For good you gave for saving to ${x.files.join(', ')} was never used before the session ended, so it no longer lets that save through.`,
         { timeoutMs: 10_000 },
       )

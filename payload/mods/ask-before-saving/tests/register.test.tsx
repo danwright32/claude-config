@@ -751,7 +751,9 @@ test('an approval whose save another guard refused is said as refused, never as 
   await ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
   const said = w.toasts.join('\n')
   expect(said).not.toContain('never used')
-  expect(said).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md ended with the session: Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.)')
+  expect(said).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md ended with the session: Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.), so nothing was saved.')
+  // Claude may have sent it again and been refused again: the end never says it was not (lessons review of #806).
+  expect(said).not.toContain('not sent again')
 })
 
 test('Just this session writes nothing and holds the rule, in Claude\'s plain words, in the system prompt through a compaction until the session ends', withKit, async ($, on) => {
