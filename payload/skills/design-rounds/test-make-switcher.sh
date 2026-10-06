@@ -190,7 +190,50 @@ check "no arguments prints usage" "Usage:" "$out"
 # When Chrome is not on this machine the section reports UNMEASURED rather than passing,
 # because a check that silently skips is indistinguishable from one that succeeded.
 
-CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+# Every Chrome run goes through headless-dom.sh (#801): Chrome prints the page at once and then
+# sits in its own teardown, 10 s a run plain and indefinitely with its own profile (measured
+# 2026-10-05), which held this suite to its whole 1,200 s wall clock. The wrapper hands back the
+# page as soon as it is complete, ends Chrome, and fails by name past its deadline (L110). Proved
+# first on stand in Chromes, so the deadline is seen to fire (L1) without a real browser.
+HEADLESS_DOM="$DIR/headless-dom.sh"
+FAKE_CHROME="$TMP/fake-chrome"
+cat > "$FAKE_CHROME" <<'FAKE'
+#!/bin/bash
+# A stand in for Chrome: prints a page (or nothing) and then never exits, as Chrome's teardown does.
+echo "$*" > "$FAKE_ARGS"
+[ "${FAKE_PAGE:-yes}" = yes ] && printf '<html><head></head><body><p>made</p></body></html>\n'
+sleep 300 &
+echo $! > "$FAKE_CHILD"
+wait
+FAKE
+chmod +x "$FAKE_CHROME"
+export FAKE_ARGS="$TMP/fake-args" FAKE_CHILD="$TMP/fake-child"
+child_state(){ local c; c="$(cat "$FAKE_CHILD" 2>/dev/null)"; [ -n "$c" ] || { echo "never started"; return; }; kill -0 "$c" 2>/dev/null && echo alive || echo gone; }
+t0=$SECONDS
+dom="$(HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>/dev/null)"; rc=$?
+took=$((SECONDS - t0))
+check_eq "the page a Chrome printed is handed back though Chrome never exits" "0 <p>made</p>" "$rc $(printf '%s' "$dom" | grep -o '<p>made</p>')"
+check_eq "and at once, not after the deadline" "1" "$([ "$took" -lt 10 ] && echo 1 || echo "0 (took ${took}s)")"
+check_eq "and Chrome and what it started are ended" "gone" "$(child_state)"
+check "Chrome is run with a profile of its own" "--user-data-dir=" "$(cat "$FAKE_ARGS")"
+check "and with the caller's arguments" "--dump-dom file:///x.html" "$(cat "$FAKE_ARGS")"
+rm -f "$FAKE_CHILD"
+t0=$SECONDS
+dom="$(FAKE_PAGE=no HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=2 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/late.err")"; rc=$?
+took=$((SECONDS - t0))
+check_eq "a Chrome that never gives a page fails at the deadline with 124" "124" "$rc"
+check_eq "within a second or two of it" "1" "$([ "$took" -le 5 ] && echo 1 || echo "0 (took ${took}s)")"
+check "and says why, naming the deadline" "no complete page within 2s (HEADLESS_DOM_DEADLINE)" "$(cat "$TMP/late.err")"
+check_eq "and nothing is printed as though it were a page" "" "$dom"
+check_eq "and is ended too" "gone" "$(child_state)"
+
+REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+CHROME="$REAL_CHROME"
+if [[ -x "$REAL_CHROME" ]]; then
+  CHROME="$TMP/chrome"
+  printf '#!/bin/bash\nHEADLESS_DOM_CHROME=%q exec bash %q "$@"\n' "$REAL_CHROME" "$HEADLESS_DOM" > "$CHROME"
+  chmod +x "$CHROME"
+fi
 
 probe() { # probe <page> -> the readout heading at the start and after each key
   python3 - "$1" <<'PROBEPY'
