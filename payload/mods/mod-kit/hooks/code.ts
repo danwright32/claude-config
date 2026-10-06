@@ -558,6 +558,9 @@ const onlyQuietModules = (inline: string): boolean => {
     } else {
       const mod = m[2] as string
       const names = (m[3] as string).split(',').map(n => n.trim().split(/\s+/)[0])
+      // Any module can hold os, sys or sys.modules as an attribute (glob.os, typing.sys), so a from
+      // import of one of those names binds the real module whatever X is, and under any alias (#862).
+      if (names.some(n => n === 'os' || n === 'sys' || n === 'modules' || n === '*')) return false
       if (mod === 'os') {
         if (!names.every(n => n === 'path')) return false
       } else if (!PY_NO_WRITERS.has(mod)) return false
