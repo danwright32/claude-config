@@ -20,7 +20,9 @@
 # prompt time warning stays for the case this cannot see: a hold that lapses mid session.
 #
 # It refuses ONLY in the state that loses work: a live watcher, running from a DIFFERENT clone, and
-# no hold in force. A session editing the clone the watcher itself runs from is editing the source
+# no hold in force, in a checkout the daemon can overwrite. A linked worktree on a branch other than
+# the default is not one (claude-config#800): the daemon never writes into it, and both halves below,
+# the refusal before a call and the report after it, let it through. A session editing the clone the watcher itself runs from is editing the source
 # of the mirror and is not at risk, and neither is one holding the watcher off. Its four questions
 # come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come to two
 # different answers about whether a hold is in force (L370).
@@ -66,6 +68,7 @@ if ps_reader_missing python3; then
   [ -n "$unreadable_watcher" ] || exit 0
   if [ -n "$unreadable_root" ]; then
     sc_is_this_clone "$unreadable_root" "$unreadable_watcher" && exit 0
+    sc_is_own_worktree "$unreadable_root" && exit 0
   fi
   sc_hold_live && exit 0
   cat >&2 <<MSG
@@ -371,6 +374,7 @@ while IFS= read -r t; do
   wcmd="$(sc_watcher_cmd || true)"
   [ -n "$wcmd" ] || continue                       # no watcher: nothing can revert anything
   sc_is_this_clone "$root" "$wcmd" && continue     # the watcher runs from HERE: this is its source
+  sc_is_own_worktree "$root" && continue          # a linked worktree on its own branch (#800)
   sc_hold_live && continue                         # held off: this is exactly what a hold is for
   refuse_root="$root"; refuse_path="$t"; break
 done <<TARGETS
@@ -392,6 +396,7 @@ note_payload_before(){
     root="$(sc_clone_root_of "$dir" 2>/dev/null)" || continue
     [ -n "$root" ] || continue
     sc_is_this_clone "$root" "$wcmd" && continue
+    sc_is_own_worktree "$root" && continue    # nothing mirrors into it, so nothing to report (#800)
     case "
 $roots
 " in *"

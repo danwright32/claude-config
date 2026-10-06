@@ -12,6 +12,7 @@
 #   sc_watcher_cmd     the command line of a LIVE watch daemon, or nothing
 #   sc_is_this_clone   does that watcher run from the clone in question
 #   sc_hold_live       is a hold in force right now
+#   sc_is_own_worktree is this clone a linked worktree on its own branch, which nothing mirrors into
 #
 # Env, honoured by every caller so a test can point all of them at a fixture:
 #   SYNC_WATCH_PID_FILE  the watcher's pid file (default ~/.claude-sync-watch.pid)
@@ -67,6 +68,31 @@ sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
 # this for as long as the bad file sits there, and that is the direction that loses a day of work
 # (L42). It is left on disk for claude-sync itself to report and clear, in its own words, because a
 # hook that removes a decision somebody made destroys state it does not own (L5).
+# Is this clone somewhere the daemon can NOT overwrite (claude-config#800)? The daemon mirrors
+# ~/.claude over payload/ in its OWN clone and pushes to main; it never writes into a linked
+# worktree, and a branch other than the default reaches main only by a reviewed merge. So a linked
+# worktree on such a branch is not at risk, and every other checkout still is: the primary checkout
+# (whatever branch it is on), a linked worktree on the default branch, and one on no branch at all.
+# Written as the reason for refusing rather than a list of exempt places (L615). Any question git
+# cannot answer counts as at risk (L42). The default branch is origin's, else main, else master.
+sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
+  local gd cd br def
+  gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  cd="$(cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$gd" ] && [ -n "$cd" ] || return 1
+  [ "$(cd "$gd" 2>/dev/null && pwd -P)" != "$cd" ] || return 1      # the primary checkout
+  br="$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null)" || return 1
+  [ -n "$br" ] || return 1                                          # on no branch
+  def="$(git -C "$1" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+  def="${def#origin/}"
+  if [ -z "$def" ]; then
+    if git -C "$1" show-ref -q --verify refs/heads/main 2>/dev/null; then def=main
+    elif git -C "$1" show-ref -q --verify refs/heads/master 2>/dev/null; then def=master
+    else return 1; fi
+  fi
+  [ "$br" != "$def" ]
+}
+
 sc_hold_live(){
   local until now
   [ -f "$SYNC_HOLD_FILE" ] || return 1

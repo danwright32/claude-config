@@ -329,6 +329,50 @@ prepost PreToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
 printf 'far\n' > "$FIX/elsewhere/notes.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
 allowed "a call outside any checkout, writing outside one, is silent"
+echo "payload write gate: an agent's own linked worktree on its own branch is not refused (claude-config#800)"
+
+# The daemon mirrors ~/.claude over payload/ in ITS clone and pushes to main; it never writes into a
+# linked worktree, and a branch reaches main only by a reviewed merge. So a linked worktree on a
+# branch other than the default is let through by BOTH halves, the refusal before a call and the
+# report after it, and the primary checkout, and a worktree on the default branch, still are not.
+G="$FIX/gitfix"
+mkdir -p "$G"
+git init -q "$G/primary" 2>/dev/null
+GG(){ git -C "$1" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "${@:2}"; }
+GG "$G/primary" symbolic-ref HEAD refs/heads/main
+mkdir -p "$G/primary/payload"
+: > "$G/primary/claude-sync"
+printf 'x\n' > "$G/primary/payload/a.md"
+GG "$G/primary" add claude-sync payload/a.md
+GG "$G/primary" commit -q -m seed
+GG "$G/primary" checkout -q -b other
+GG "$G/primary" worktree add -q -b feat "$G/wt" 2>/dev/null
+GG "$G/primary" worktree add -q "$G/wtmain" main 2>/dev/null
+[ -f "$G/wt/payload/a.md" ] && [ -f "$G/wtmain/payload/a.md" ] && check "the worktree fixture was built" ok \
+  || check "the worktree fixture was built" "missing worktrees under $G"
+rm -f "$HOLD"
+edit "$G/wt/payload/a.md" "$G/wt"
+allowed "an Edit under payload in a linked worktree on its own branch is let through"
+runbash "printf y > payload/a.md" "$G/wt"
+allowed "a shell write under payload in that worktree is let through"
+prepost PreToolUse "python3 $FIX/w.py" "$G/wt" w1
+printf 'changed\n' > "$G/wt/payload/a.md"
+prepost PostToolUse "python3 $FIX/w.py" "$G/wt" w1
+allowed "and the check after a command says nothing about that worktree's payload"
+edit "$G/primary/payload/a.md" "$G/primary"
+refused "the primary checkout is still refused, whatever branch it is on"
+edit "$G/wtmain/payload/a.md" "$G/wtmain"
+refused "a linked worktree on the default branch is still refused"
+prepost PreToolUse "python3 $FIX/w.py" "$G/wtmain" w2
+printf 'changed\n' > "$G/wtmain/payload/a.md"
+prepost PostToolUse "python3 $FIX/w.py" "$G/wtmain" w2
+if [ "$RC" -eq 2 ]; then check "and its payload changes are still reported after a command" ok
+else check "and its payload changes are still reported after a command" "exit $RC, said: ${OUT:0:160}"; fi
+GG "$G/wt" checkout -q --detach 2>/dev/null
+edit "$G/wt/payload/a.md" "$G/wt"
+refused "a linked worktree on no branch at all is still refused"
+GG "$G/wt" checkout -q feat 2>/dev/null
+
 # Its own bookkeeping is removed once read, so the state it keeps cannot grow with calls (#603).
 left="$(find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$left" = 0 ]; then check "nothing is left in its state directory once each call is answered" ok
