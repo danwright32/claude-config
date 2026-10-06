@@ -181,7 +181,7 @@ run_hook "$W" "ACCEPT_BUNDLE_GROWTH=1 git push"
 want_rc 0 "accepted growth passes"
 want_says "accepted growth" "and says it was accepted"
 accepted="$(record_total "$W")"
-if [ -n "$accepted" ] && [ "$accepted" -gt "$moved" ]; then ok; else bad "acceptance must raise the record (was $first, now '$accepted')"; fi
+if [ -n "$accepted" ] && [ "$accepted" -gt "$moved" ]; then ok; else bad "acceptance must raise the record (was $moved, now '$accepted')"; fi
 run_hook "$W" "git push"
 want_rc 0 "the same bundle passes against the accepted record"
 want_says "unchanged" "and reads as unchanged"
@@ -363,6 +363,32 @@ chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new
 run_hook "$W" "git push"
 want_rc 2 "a committed record that nothing reads does not stand the guard down"
 want_says "nothing in this repository reads it" "and the guard says why it did not stand down"
+# A document that merely MENTIONS the record is not something that reads it: a README or a
+# changelog naming bundle-budget.txt must not switch the guard off (lessons review of PR #782).
+printf 'The budget lives in .githooks/bundle-budget.txt.\n' > "$W/README.md"
+git -C "$W" -c user.name=t -c user.email=t@t add README.md >/dev/null 2>&1
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm docs >/dev/null 2>&1
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
+run_hook "$W" "git push"
+want_rc 2 "a document mentioning the record does not stand the guard down"
+want_silent_on "read by README.md" "and a document is never named as the record's reader"
+# Nor does a document INSIDE a hooks directory: notes beside the hooks are still notes.
+printf 'See bundle-budget.txt.\n' > "$W/.githooks/NOTES.md"
+git -C "$W" -c user.name=t -c user.email=t@t add .githooks/NOTES.md >/dev/null 2>&1
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm notes >/dev/null 2>&1
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
+run_hook "$W" "git push"
+want_rc 2 "a document in a hooks directory mentioning the record does not stand the guard down"
+want_silent_on "read by .githooks/NOTES.md" "and notes beside the hooks are never named as the reader"
+# Nor a note with NO extension: git hooks have none either, so the name alone cannot tell them
+# apart, and only a #! line or the executable mode makes it something that runs (review of #807).
+printf 'The record is bundle-budget.txt.\n' > "$W/.githooks/NOTES"
+git -C "$W" -c user.name=t -c user.email=t@t add .githooks/NOTES >/dev/null 2>&1
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm notes2 >/dev/null 2>&1
+chunk "$W" ".next/static/chunks/big-dep.js" 40000 60      # fresher than the new commit
+run_hook "$W" "git push"
+want_rc 2 "an extensionless note in a hooks directory does not stand the guard down"
+want_silent_on "read by .githooks/NOTES" "and that note is never named as the reader"
 # Now a tracked hook that reads the record, which is the shape Slate has.
 printf '#!/usr/bin/env bash\nrecord=.githooks/bundle-budget.txt\n' > "$W/.githooks/pre-push"
 git -C "$W" -c user.name=t -c user.email=t@t add .githooks/pre-push >/dev/null 2>&1
