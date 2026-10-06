@@ -157,8 +157,9 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
   }
 }
 
-// The PR a reading found, and the issues it closes, which the caller keeps for later checks.
-type Found = { number: number; closes: number[] }
+// The PR a reading found, and the issues it closes, which the caller keeps for later checks; its
+// link, when GitHub gave one, is what tells it apart from a PR this session opened (#856).
+type Found = { number: number; closes: number[]; url?: string }
 const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName'
 
 // What the finish check reads for one PR: the branch's own (found by its head) or one named by
@@ -200,8 +201,8 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
         issues.push({ number: ref.number, state: s === 'CLOSED' ? 'CLOSED' : 'OPEN' })
       }
       r.pr = { number: pr.number, state, issues }
-      found = { number: pr.number, closes: issues.map(i => i.number) }
       prUrl = typeof pr.url === 'string' ? pr.url : undefined
+      found = { number: pr.number, closes: issues.map(i => i.number), url: prUrl }
     }
   }
   // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
@@ -280,25 +281,29 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
       const { reading, found } = await readWind($, t)
       t = await keepFound($, t, found)
       const left = outstanding(reading)
-      // With no PR for the session's own branch, default or not, what is left to finish is the PRs
-      // this session opened, an agent's in a worktree the session is not in included (#702; the
-      // lessons review of #714 found a feature branch with no PR skipped them).
-      if (reading.pr === null) {
-        const opened = await openedOf($)
-        // The session's own repository, to tell a PR opened here from one opened in another; a
-        // remote that cannot be read counts every PR as elsewhere, so nothing is read as cleaned.
-        const own = opened.length ? await sessionSlug($) : undefined
-        for (const o of opened) {
-          const elsewhere = !own || own.toLowerCase() !== o.repo.toLowerCase()
-          const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo, elsewhere)
-          if (one.found && !sameList(o.closes, one.found.closes)) {
-            const closes = one.found.closes
-            await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
-          }
-          left.push(...outstanding(one.reading))
+      // Winding down finalizes everything the session has open, so every PR this session opened is
+      // outstanding until merged, whether or not the session's own branch has a PR (#856: a session
+      // whose branch PR was finished parked three PRs it had opened "waiting on you"). An agent's in a
+      // worktree the session is not in is included (#702). Only PRs this session's own gh pr create
+      // printed are here (noteOpened), so another session's PRs never hold it. The branch's own PR,
+      // read above, is matched by its link and not read twice.
+      const opened = await openedOf($)
+      // The session's own repository, to tell a PR opened here from one opened in another; a
+      // remote that cannot be read counts every PR as elsewhere, so nothing is read as cleaned.
+      const own = opened.length ? await sessionSlug($) : undefined
+      const ownLink = found?.url?.toLowerCase()
+      for (const o of opened) {
+        if (ownLink && ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase()) continue
+        const elsewhere = !own || own.toLowerCase() !== o.repo.toLowerCase()
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo, elsewhere)
+        if (one.found && !sameList(o.closes, one.found.closes)) {
+          const closes = one.found.closes
+          await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
         }
+        left.push(...outstanding(one.reading))
       }
-      return left
+      // One unreadable GitHub answers every read the same way, said once.
+      return [...new Set(left)]
     } catch (err) {
       return [`the finish check failed (${msg(err)})`]
     }
@@ -436,10 +441,15 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
   return undefined
 }
 
+// What winding down means, said the same way in its note, its command's context and the Stop
+// reason (#856): a session read "start nothing new" as permission to park a PR needing Dan.
+const FINALIZE_ALL = 'Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan.'
+const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
+
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
   'NO BUILD': 'No build is on: read, research, run tests and checks, write scratchpad notes and do GitHub issue, milestone and label work. No edits outside the scratchpad, commits, branches, PRs, deploys or data changes.',
   'WINDING DOWN':
-    "Winding down is on: finish this issue (PR merged, deploy live, worktree and branch cleaned, issue closed) and start nothing new. Fix only what blocks this issue's merge or deploy; file anything else. After the merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.",
+    `Winding down is on. ${FINALIZE_ALL} Finish this issue and every other PR this session opened (merged, deploy live, worktree and branch cleaned, issues closed) and start nothing new. ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
 }
 const AWAY_NOTE =
   'Dan is away from the Mac. Deliver results as a private claude.ai page he can read on his phone (the Artifact tool). Open nothing on the Mac and take no focus: anything that needs him at the Mac is held for when he is back.'
@@ -670,7 +680,7 @@ export const register: Register = on => {
       return next(e)
     }
     return {
-      block: `Winding down is not finished: ${left.join('; ')}. Keep watching CI and the deploy, fix only what blocks this issue's merge or deploy, and file anything else. If you need Dan, ask him with a question rather than ending the turn.`,
+      block: `Winding down is not finished: ${left.join('; ')}. ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
     }
   })
 
