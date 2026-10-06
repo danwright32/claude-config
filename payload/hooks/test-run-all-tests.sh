@@ -2294,27 +2294,73 @@ case "$n_shown" in ''|*[!0-9]*) n_shown=0 ;; esac
 # for every suite it starts. Proved with a claude on PATH that records every call: the same status
 # reaches it outside the runner (the control) and does not inside it.
 # ---------------------------------------------------------------------------
+#
+# WHICH claude-sync is driven (claude-config#865). It lives at the root of the CHECKOUT, two levels
+# above payload/hooks, and is never installed. After a pull the suite runs from the INSTALLED copy in
+# ~/.claude/hooks, where two levels up is the home directory, so the control drove a claude-sync
+# that does not exist, status never ran, and the control failed with "no call was recorded" while
+# the guard beside it passed for the same reason (L159). The checkout that run was handed is in
+# RUN_ALL_TESTS_CHECKOUT, the one variable meant for it, so the script is looked for there when this
+# copy is not inside one. Where neither holds it, both checks are said to be UNMEASURED here, never
+# a red that is about the layout rather than the runner (L411).
+# ---------------------------------------------------------------------------
+claude_sync_for_suite(){ # claude_sync_for_suite <suite dir> <checkout or empty>: prints the path, or fails
+  local here; here="$(cd "$1/../.." 2>/dev/null && pwd)" || here=""
+  if [ -n "$here" ] && [ -f "$here/claude-sync" ]; then printf '%s\n' "$here/claude-sync"; return 0; fi
+  if [ -n "$2" ] && [ -f "${2%/}/claude-sync" ]; then printf '%s\n' "${2%/}/claude-sync"; return 0; fi
+  return 1
+}
+# Resolved through cd and pwd, as the function resolves, so a TMPDIR ending in a slash cannot make
+# the expected path differ from the found one by a doubled separator.
+CSR="$(cd "$TMPROOT" && pwd)/claude-sync-resolve"; mkdir -p "$CSR/home/.claude/hooks" "$CSR/co/payload/hooks"
+: > "$CSR/co/claude-sync"
+[ "$(claude_sync_for_suite "$CSR/co/payload/hooks" "")" = "$CSR/co/claude-sync" ] \
+  && check "#865 a suite in a checkout drives that checkout's claude-sync" ok \
+  || check "#865 a suite in a checkout drives that checkout's claude-sync" "got: $(claude_sync_for_suite "$CSR/co/payload/hooks" "")"
+[ "$(claude_sync_for_suite "$CSR/home/.claude/hooks" "$CSR/co")" = "$CSR/co/claude-sync" ] \
+  && check "#865 an installed suite drives the claude-sync of the checkout it was handed" ok \
+  || check "#865 an installed suite drives the claude-sync of the checkout it was handed" "got: $(claude_sync_for_suite "$CSR/home/.claude/hooks" "$CSR/co")"
+claude_sync_for_suite "$CSR/home/.claude/hooks" "" >/dev/null \
+  && check "#865 an installed suite handed no checkout finds no claude-sync" "it found one" \
+  || check "#865 an installed suite handed no checkout finds no claude-sync" ok
+
 CT="$TMPROOT/claude-trap"; mkdir -p "$CT/bin" "$CT/repo/payload" "$CT/cfg"
-SYNC_SCRIPT_REAL="$(cd "$DIR/../.." && pwd)/claude-sync"
-printf '#!/usr/bin/env bash\necho "called: $*" >> "%s/calls"\nexit 97\n' "$CT" > "$CT/bin/claude"; chmod +x "$CT/bin/claude"
-printf '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}\n' > "$CT/repo/payload/settings.shared.json"
-printf '{"model": "opus"}\n' > "$CT/cfg/settings.json"
-ct_status='CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >/dev/null 2>&1'
-: > "$CT/calls"
-( unset SYNC_CLAUDE_BIN; CT="$CT" SYNC_SCRIPT_REAL="$SYNC_SCRIPT_REAL" eval "$ct_status" ) || true
-[ -s "$CT/calls" ] && check "the control: status with no seam set reaches the claude on PATH" ok \
-  || check "the control: status with no seam set reaches the claude on PATH" "no call was recorded"
-: > "$CT/calls"
-CS="$TMPROOT/dir-claude-trap"; mkdir -p "$CS"
-{ printf '#!/usr/bin/env bash\nunset -v _unused\n'
-  printf 'CT=%q; SYNC_SCRIPT_REAL=%q\n' "$CT" "$SYNC_SCRIPT_REAL"
-  printf '%s || true\n' "$ct_status"
-  printf 'echo "passed: 1, failed: 0"\n'; } > "$CS/test-claude-trap.sh"
-chmod +x "$CS/test-claude-trap.sh"
-( unset SYNC_CLAUDE_BIN; bash "$RUNNER" "$CS" >/dev/null 2>&1 ) || true
-[ -f "$CT/calls" ] && [ ! -s "$CT/calls" ] \
-  && check "a suite the runner starts cannot reach a claude command through claude-sync" ok \
-  || check "a suite the runner starts cannot reach a claude command through claude-sync" "$(cat "$CT/calls" 2>&1)"
+if SYNC_SCRIPT_REAL="$(claude_sync_for_suite "$DIR" "${RUN_ALL_TESTS_CHECKOUT:-}")"; then
+  printf '#!/usr/bin/env bash\necho "called: $*" >> "%s/calls"\nexit 97\n' "$CT" > "$CT/bin/claude"; chmod +x "$CT/bin/claude"
+  # The two conditions status needs before it asks claude at all, set here rather than inherited:
+  # a shared file naming an effort per model, and a settings.json naming the model.
+  printf '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}\n' > "$CT/repo/payload/settings.shared.json"
+  printf '{"model": "opus"}\n' > "$CT/cfg/settings.json"
+  ct_status='CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >"$CT/status.out" 2>&1'
+  : > "$CT/calls"
+  ct_rc=0
+  ( unset SYNC_CLAUDE_BIN; CT="$CT" SYNC_SCRIPT_REAL="$SYNC_SCRIPT_REAL" eval "$ct_status" ) || ct_rc=$?
+  # On a failure, what status itself said about the model check, so the reason it did not reach
+  # the probe is in the report rather than re-derived by hand.
+  # status is silent about the model when the shared file names no effort, so an absent section is
+  # said as that, rather than as an empty quote.
+  # Read by awk alone, never through head or tail after a producer, which a short circuiting
+  # consumer can kill under pipefail (L183).
+  ct_model="$(awk 'f { print; exit } $0 == "--- the model this Mac runs ---" { f = 1 }' "$CT/status.out" 2>/dev/null)"
+  ct_model="${ct_model:0:400}"
+  ct_last="$(awk 'END { print }' "$CT/status.out" 2>/dev/null)"; ct_last="${ct_last:0:300}"
+  [ -n "$ct_model" ] || ct_model="no model section at all, so it never reached the claude check or the shared file named no effort"
+  [ -s "$CT/calls" ] && check "the control: status with no seam set reaches the claude on PATH" ok \
+    || check "the control: status with no seam set reaches the claude on PATH" "no call was recorded. status ($SYNC_SCRIPT_REAL) exited $ct_rc; about the model it said: $ct_model; its last line: $ct_last"
+  : > "$CT/calls"
+  CS="$TMPROOT/dir-claude-trap"; mkdir -p "$CS"
+  { printf '#!/usr/bin/env bash\nunset -v _unused\n'
+    printf 'CT=%q; SYNC_SCRIPT_REAL=%q\n' "$CT" "$SYNC_SCRIPT_REAL"
+    printf '%s || true\n' "$ct_status"
+    printf 'echo "passed: 1, failed: 0"\n'; } > "$CS/test-claude-trap.sh"
+  chmod +x "$CS/test-claude-trap.sh"
+  ( unset SYNC_CLAUDE_BIN; bash "$RUNNER" "$CS" >/dev/null 2>&1 ) || true
+  [ -f "$CT/calls" ] && [ ! -s "$CT/calls" ] \
+    && check "a suite the runner starts cannot reach a claude command through claude-sync" ok \
+    || check "a suite the runner starts cannot reach a claude command through claude-sync" "$(cat "$CT/calls" 2>&1)"
+else
+  printf '%s %s\n' "$NOTE_MARK" "the claude-sync seam checks are UNMEASURED here: no claude-sync above $DIR and no checkout handed in RUN_ALL_TESTS_CHECKOUT"
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
