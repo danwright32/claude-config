@@ -45,6 +45,10 @@ and settles its own surfaces in rounds of its own before it is built.
    measured live on 2026-10-05 (2.1.289, #756), a noun whose only wait was
    `$.process.run(['/bin/sleep', '13'])` was rejected at 10,003 ms, like the 13 s timer control at
    10,002 ms. So `$.ui.ask` in a noun is always cut, and so is any other slow `$` call there.
+   Since #802 the check names those too: a noun's own `$.process.run` with no `timeoutMs` under
+   10 s (none given waits up to Claude Code's 30 s default) and any `$.model.complete`, unless the
+   noun races it against a shorter timer. Its first run found two in session-registry's
+   engine.create code (a save's `mv` and the repository root lookup), now bounded at 5 s.
 
 ## Guard surfaces (#607, #608, #609)
 

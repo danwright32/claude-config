@@ -931,9 +931,59 @@ export const register = on => {
   })
 }
 TS
+# A noun's own slow engine calls count too (#802): the 10 s is not paused while a noun's $ calls
+# run (measured live on 2026-10-05 for #756: a noun whose only wait was `process.run` of `sleep 13`
+# was cut at 10,003 ms). process.run waits up to its timeoutMs, 30 s when none is given, and
+# model.complete has no bound under 10 s at all.
+mknounmod "$M12W" slow-process shell <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, shell: { run: async () => (await built.process.run(['/bin/sleep', '13'])).exitCode } }
+  })
+}
+TS
+mknounmod "$M12W" long-process-timeout fetcher <<'TS'
+const RUN_MS = 30 * 1_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, fetcher: { get: () => built.process.run(['curl', 'x'], { cwd: '/', timeoutMs: RUN_MS }) } }
+  })
+}
+TS
+mknounmod "$M12W" model-call namer <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, namer: { name: () => built.model.complete({ model: 'haiku', prompt: 'x', maxTokens: 10, timeoutMs: 5_000 }) } }
+  })
+}
+TS
+mknounmod "$M12W" short-process quickshell <<'TS'
+const QUICK_MS = 5_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, quickshell: { run: () => built.process.run(['true'], { timeoutMs: QUICK_MS }) } }
+  })
+}
+TS
+mknounmod "$M12W" process-in-hook hooked <<'TS'
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    await $.process.run(['/bin/sleep', '13'])
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, hooked: { now: async () => Date.now() } }
+  })
+}
+TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"18 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"23 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -949,11 +999,21 @@ for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5;
     && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
     || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
 done
+for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
+    && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
+    || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
+done
+printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
+  && check "a noun's own model.complete is named (#802)" ok || check "a noun's own model.complete is named (#802)" "$out"
+for m in short-process process-in-hook; do
+  ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
+done
 for m in bounded commented outside-any-noun raced-short kept-unread; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long; do rm -rf "${M12W:?}/$m"; done
+for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call; do rm -rf "${M12W:?}/$m"; done
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
   || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"

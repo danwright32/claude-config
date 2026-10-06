@@ -206,7 +206,11 @@ export const register: Register = on => {
       const dir = dirOf(home)
       const tmp = `${dir}/.${rec.sessionId}.json.tmp`
       await built.fs.write(tmp, JSON.stringify(rec))
-      const mv = await built.process.run(['mv', '-f', tmp, `${dir}/${rec.sessionId}.json`])
+      // Bounded under a noun's 10 s, since this runs inside engine.create's code (#802); a run cut off
+      // is said like any other failed save.
+      const mv = await built.process
+        .run(['mv', '-f', tmp, `${dir}/${rec.sessionId}.json`], { timeoutMs: 5_000 })
+        .catch((err: unknown) => ({ exitCode: -1, stderr: err instanceof Error ? err.message : String(err) }))
       if (mv.exitCode !== 0) built.ui.log(`session-registry: could not save this session's record: ${mv.stderr.trim()}`, { to: 'debug' })
     }
     // Runs inside the queue. `always` is the beat's and the announced start's, which look whether or
@@ -258,7 +262,7 @@ export const register: Register = on => {
         await persist?.()
       }
       const cwd = rec.cwd
-      rec = blank(id, cwd, await built.clock.now(), rootOf(await built.process.run(['git', '-C', cwd, ...topLevel]).catch(() => undefined)))
+      rec = blank(id, cwd, await built.clock.now(), rootOf(await built.process.run(['git', '-C', cwd, ...topLevel], { timeoutMs: 5_000 }).catch(() => undefined)))
       release(rec)
       return 'new'
     }

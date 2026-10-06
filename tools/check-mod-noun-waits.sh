@@ -33,9 +33,13 @@
 # the control (a 13 s timer) was at 10,002 ms. So the refusal of `$.ui.ask` above is never a false
 # one, and any slow `$` call inside a noun is cut the same way.
 #
+#   - a noun's own `$.process.run` with no timeoutMs under 10 s (none given means Claude Code's
+#     30 s default), and any `$.model.complete`, since the noun's 10 s keeps running through them
+#     (#802).
+#
 # What it does not read: a promise stored any other way (inside an object, returned through a
 # chain of variables), a member of a race reached through a variable rather than written in the
-# race, and how long an engine `$` call other than `$.ui.ask` takes. A hook has its own 10 s budget,
+# race, and how long an engine `$` call other than these takes. A hook has its own 10 s budget,
 # which `$` calls do not spend; that is not this check's to judge.
 #
 # Source is read through tools/lib/ts_source.py, the one reader every mod scan shares, so a comment
@@ -564,6 +568,46 @@ for entry, folder, man, files in mods:
             report(
                 f"check-mod-noun-waits: {f.where(at)}: {entry}'s noun code waits on a person through $.ui.ask, whose answer has "
                 f"no bound under 10 s. {CUT}: ask from a hook, whose $ calls do not spend its budget, never from a noun."
+            )
+
+    # A noun's own slow engine calls (#802). Its 10 s is not paused while its $ calls run (measured
+    # live on 2026-10-05, above), so a process.run that may take longer than that is cut the same
+    # way: one with no timeoutMs waits up to Claude Code's default of 30 s, and one whose timeoutMs
+    # cannot be read is not known to be bounded. A model.complete has no bound under 10 s at all.
+    # A call the noun races against a short timer is bounded by the race, as above.
+    for f, start, end, _ in regions:
+        for m in re.finditer(r"\.\s*process\s*\.\s*run\s*\(", f.code[start:end]):
+            at = start + m.start()
+            if (f.rel, at) in judged or is_raced(f, at):
+                continue
+            judged.add((f.rel, at))
+            args = call_args(f.code, start + m.end() - 1) or []
+            opts = args[1].strip() if len(args) > 1 else ""
+            given = re.search(r"(?<![\w$])timeoutMs\s*:\s*([^,}]+)", opts)
+            if given:
+                ms = milliseconds(given.group(1), consts)
+                if ms is not None and ms < LIMIT_MS:
+                    continue
+                why = (f"a timeoutMs of {int(ms):,} ms" if ms is not None
+                       else f"a timeoutMs ({given.group(1).strip()}) whose value cannot be read")
+            elif not opts or (opts.startswith("{") and opts.endswith("}")):
+                why = "no timeoutMs, so Claude Code's default of 30 s"
+            else:
+                why = f"options ({opts}) whose timeoutMs cannot be read"
+            report(
+                f"check-mod-noun-waits: {f.where(at)}: {entry}'s noun code waits on $.process.run with {why}, and "
+                f"the noun's 10 s keeps running while it does. {CUT}: give it a timeoutMs under 10 s, race it "
+                f"against a shorter timer, or run it from a hook."
+            )
+        for m in re.finditer(r"\.\s*model\s*\.\s*complete\s*\(", f.code[start:end]):
+            at = start + m.start()
+            if (f.rel, at) in judged or is_raced(f, at):
+                continue
+            judged.add((f.rel, at))
+            report(
+                f"check-mod-noun-waits: {f.where(at)}: {entry}'s noun code waits on $.model.complete, which can "
+                f"take a minute, and the noun's 10 s keeps running while it does. {CUT}: call the model from a "
+                f"hook, never from a noun."
             )
 
 for line in sorted(set(reports)):
