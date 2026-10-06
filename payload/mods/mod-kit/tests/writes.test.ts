@@ -203,7 +203,7 @@ describe('writes: what the words do not name', () => {
   })
   test('an inline script that writes a file is a write the words do not name', () => {
     expect(read(`python3 -c "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"`).unnamed).toEqual([
-      { what: 'an inline python3 script', words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"], inputs: [] },
+      { what: 'an inline python3 script', words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"], inputs: [], targets: ['/Users/dan/.claude/CLAUDE.md'] },
     ])
     expect(read(`node -e "require('fs').appendFileSync('AGENTS.md', 'x')"`).unnamed.map(u => u.what)).toEqual(['an inline node script'])
   })
@@ -455,5 +455,39 @@ describe('writes: a path held in a variable', () => {
   })
   test('a value set inside a subshell ends with it', () => {
     expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual([`${CWD}/b.md`, `${CWD}/a.md`, '(as written) $G'])
+  })
+})
+
+// #830: ask before saving asked about a python heredoc editing a test file, because the only thing it
+// could judge was every lasting memory path the script's text quoted. A program whose every write is
+// an open or a pathlib write of a file its text names gives those files as `targets`, absolute; one
+// whose writes cannot all be named gives none, and a reader judges it by what its text mentions.
+describe('writes: the files an inline python program names as its writes (#830)', () => {
+  const targets = (command: string, cwd = CWD) => read(command, cwd).unnamed.map(u => u.targets)
+  test('an open for writing, or a pathlib write, of a literal path or a name bound once to one names that file', () => {
+    expect(targets("python3 - <<'EOF'\np='tests/a.test.ts'\ns=open(p).read()\nopen(p,'w').write(s.replace('x', '~/.claude/CLAUDE.md'))\nEOF")).toEqual([[`${CWD}/tests/a.test.ts`]])
+    expect(targets(`python3 -c "open('/tmp/out.txt', 'a').write('x')"`)).toEqual([['/tmp/out.txt']])
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nPath('notes/a.md').write_text('x')\nq = Path('b.md')\nq.write_bytes(b'y')\nwith open('c.md', mode='w') as f:\n  f.write('z')\nEOF")).toEqual([
+      [`${CWD}/notes/a.md`, `${CWD}/b.md`, `${CWD}/c.md`],
+    ])
+    // A cd before it moves where a relative path lands.
+    expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
+  })
+  test('a program with a write whose file its text cannot name gives no targets', () => {
+    const none = [undefined]
+    // A name computed at run time, bound twice, bound by a loop, or a formatted string.
+    expect(targets(`python3 -c "import sys; open(sys.argv[1], 'w').write('x')" out.md`)).toEqual(none)
+    expect(targets("python3 - <<'EOF'\np='a.md'\np='b.md'\nopen(p,'w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfor p in ['a.md']:\n  open(p,'w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nopen(f'{d}/a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nPath('a').joinpath('b.md').write_text('x')\nEOF")).toEqual(none)
+    // A path the shell expands before python reads it.
+    expect(targets(`D=~/.claude; python3 -c "open('$D/CLAUDE.md','a').write('x')"`)).toEqual(none)
+    // Another way to write, a change of folder, or a process beside the open.
+    expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.remove('b.md')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport os\nos.chdir('/x')\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport subprocess\nopen('a.md','w')\nsubprocess.run(['ls'])\nEOF")).toEqual(none)
+    // Only python's writes are named so far.
+    expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })
 })

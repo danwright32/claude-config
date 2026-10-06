@@ -335,16 +335,21 @@ test('the subagent call from #777, a python heredoc building fixture homes in a 
 // through unasked. Only exit 1 means unset; anything else fails the hook, which refuses.
 test('a printenv that fails is never read as the variable being unset: the save is refused', withKit, async ($, on) => {
   const w = world(on)
-  // An inline script the real reader judges writes files, so what the command mentions is read (#752:
-  // the stand-in reader took every python3 command for one, and print(1) writes nothing).
-  const r = await call($, { tool: 'Bash', command: `python3 -c "open('out.txt','w').write('1')" # $PRINTENV_BREAKS/CLAUDE.md` })
+  // An inline script the real reader judges writes files, to a file its text cannot name, so what the
+  // command mentions is read (#752: the stand-in reader took every python3 command for one, and
+  // print(1) writes nothing; #830: one whose file is named is judged by that file alone).
+  const r = await call($, { tool: 'Bash', command: `python3 -c "import sys; open(sys.argv[1],'w').write('1')" out.txt # $PRINTENV_BREAKS/CLAUDE.md` })
   expect(refusalOf(r)).toContain('could not check whether this writes lasting memory')
   expect(w.ran).toEqual([])
 })
 
+// The #777 script writing to a file its text cannot name, so what it mentions is what is judged
+// (#830: the script itself writes the test file it names, which is judged alone).
+const FIXTURE_UNNAMED = FIXTURE.replace("open(p,'w')", "import sys; open(sys.argv[1],'w')")
 test('a path through a variable Claude Code\'s environment holds still counts, so its save is refused', withKit, async ($, on) => {
   const w = world(on, { env: { WORK: '/Users/dan/.claude' } })
-  expect(refusalOf(await call($, { tool: 'Bash', command: FIXTURE }))).toContain(ASKS)
+  expect(FIXTURE_UNNAMED).not.toBe(FIXTURE)
+  expect(refusalOf(await call($, { tool: 'Bash', command: FIXTURE_UNNAMED }))).toContain(ASKS)
   expect(w.ran).toEqual([])
 })
 
@@ -412,6 +417,41 @@ test('a save to a target the words cannot name is refused when the command menti
   await call($, { tool: 'Bash', command: `printf 'x\\n' >> "$OUT"` })
   await call($, { tool: 'Bash', command: 'cat ~/.claude/CLAUDE.md > notes.txt' })
   expect(w.ran.map(r => r.input.command)).toEqual([`printf 'x\\n' >> "$OUT"`, 'cat ~/.claude/CLAUDE.md > notes.txt'])
+})
+
+// #830: a python heredoc editing a test file was asked about because its string literals quoted a
+// memory path as test data, and so was an issue whose body named one. Where mod-kit names a
+// command's real write targets, those are judged, never every path its text quotes.
+const MEM = '~/.claude/projects/p/memory/MEMORY.md'
+test('a command that only quotes a memory path in its text goes straight through: a python heredoc writing a test file, an issue body', withKit, async ($, on) => {
+  const w = world(on)
+  const commands = [
+    `python3 - <<'EOF'\np='payload/mods/ask-before-saving/tests/register.test.tsx'\ns=open(p).read()\ns=s.replace("const A = 1", "const A = '${MEM}'")\nopen(p,'w').write(s)\nEOF`,
+    `python3 - <<'EOF'\nfrom pathlib import Path\nPath('tests/fixture.txt').write_text('${MEM}\\n')\nEOF`,
+    `gh issue create --title "Asked about a quoted path" --body "It asked about ${MEM} again"`,
+    `gh issue create --title x --body-file - <<'EOF'\nIt asked about ${MEM} again\nEOF`,
+    // The body in a fresh temporary file, which is no lasting memory whatever it holds.
+    `B=$(mktemp)\ncat > "$B" <<'EOF'\nIt asked about ${MEM} again\nEOF\ngh issue create --title x --body-file "$B"`,
+  ]
+  for (const command of commands) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.length).toBe(commands.length)
+  quietOnMain(w)
+})
+
+test('a command whose real write target cannot be read is still asked about when its text mentions lasting memory', withKit, async ($, on) => {
+  const w = world(on)
+  const commands = [
+    // A file named at run time, a path the shell builds, a temporary file made inside the memory folder.
+    `python3 - <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('${MEM}')\nEOF`,
+    `python3 - <<EOF\nopen('$OUT/notes.md','w').write('${MEM}')\nEOF`,
+    `F=$(mktemp ~/.claude/projects/p/memory/note.XXXXXX); printf '%s\\n' '- rule' > "$F"`,
+  ]
+  for (const command of commands) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toContain(ASKS)
+  // And a program whose named target is lasting memory is asked about by that target.
+  const named = refusalOf(await call($, { tool: 'Bash', command: `python3 - <<'EOF'\nopen('${HOME}/.claude/projects/q/memory/MEMORY.md','a').write('- rule')\nEOF` }))
+  expect(named).toContain(ASKS)
+  expect(named).toContain('~/.claude/projects/q/memory/MEMORY.md')
+  expect(w.ran).toEqual([])
 })
 
 test('a write anywhere else, a patch that touches no lasting memory, a backup in a temporary folder, and a Bash call that writes nothing go straight through', withKit, async ($, on) => {

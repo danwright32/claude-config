@@ -226,7 +226,7 @@ describe('pipeline: heredocs', () => {
     expect(pipeline(`python3 - <<'EOF'\nimport os\nopen('x', 'w')\nEOF\ngit status`)).toEqual([
       {
         words: ['python3', '-', '<<EOF'],
-        heredocs: [{ word: 2, body: "import os\nopen('x', 'w')" }],
+        heredocs: [{ word: 2, body: "import os\nopen('x', 'w')", quoted: true }],
         language: 'python',
         program: { text: "import os\nopen('x', 'w')", stdin: true },
         verdict: { does: 'write files', seen: 'open in mode w' },
@@ -235,32 +235,32 @@ describe('pipeline: heredocs', () => {
     ])
   })
   test('a spaced <<, a file descriptor before it, a quoted or escaped delimiter, and the words looked past', () => {
-    expect(pipeline('cat << EOF\nls\nEOF')).toEqual([{ words: ['cat', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls' }] }])
-    expect(pipeline('cat 0<<"END"\nx\nEND')).toEqual([{ words: ['cat', '0<<END'], heredocs: [{ word: 1, body: 'x' }] }])
+    expect(pipeline('cat << EOF\nls\nEOF')).toEqual([{ words: ['cat', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls', quoted: false }] }])
+    expect(pipeline('cat 0<<"END"\nx\nEND')).toEqual([{ words: ['cat', '0<<END'], heredocs: [{ word: 1, body: 'x', quoted: true }] }])
     expect(pipeline('sudo -E python3 - <<\\EOF\nprint(1)\nEOF')).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }], language: 'python', program: { text: 'print(1)', stdin: true } },
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: true }], language: 'python', program: { text: 'print(1)', stdin: true } },
     ])
   })
   test('<<- takes the leading tabs off its body', () => {
-    expect(pipeline('cat <<-EOF\n\tone\n\t\ttwo\n\tEOF')).toEqual([{ words: ['cat', '<<-EOF'], heredocs: [{ word: 1, body: 'one\ntwo' }] }])
+    expect(pipeline('cat <<-EOF\n\tone\n\t\ttwo\n\tEOF')).toEqual([{ words: ['cat', '<<-EOF'], heredocs: [{ word: 1, body: 'one\ntwo', quoted: false }] }])
   })
   test('each of several heredocs feeds its own command, read one after another', () => {
     expect(pipeline('cat <<A; python3 - <<B\na\nA\nb\nB\nls')).toEqual([
-      { words: ['cat', '<<A'], heredocs: [{ word: 1, body: 'a' }] },
-      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b' }], language: 'python', program: { text: 'b', stdin: true } },
+      { words: ['cat', '<<A'], heredocs: [{ word: 1, body: 'a', quoted: false }] },
+      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b', quoted: false }], language: 'python', program: { text: 'b', stdin: true } },
       { words: ['ls'] },
     ])
   })
   // A shell fed one this way is read as the commands in the body (#712, program.test.ts).
   test('a heredoc piped on keeps its body on the command it feeds, and the command after the pipe is fed by that one', () => {
     expect(pipeline("cat <<'EOF' | wc -l\nrm -rf build\nEOF")).toEqual([
-      { words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'rm -rf build' }] },
+      { words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'rm -rf build', quoted: true }] },
       { words: ['wc', '-l'], pipedFrom: ['cat', '<<EOF'] },
     ])
   })
   test("a heredoc inside a shell's -c script feeds the command there", () => {
     expect(pipeline(`bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`)).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }], language: 'python', program: { text: 'print(1)', stdin: true } },
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: false }], language: 'python', program: { text: 'print(1)', stdin: true } },
     ])
   })
   test('a heredoc inside a word feeds no command here, and one that never ends has no body', () => {
@@ -279,7 +279,7 @@ describe('the reader after #730', () => {
   // An output redirect was split out of a word however it was spaced (#654), an input one was not,
   // so `cat<<EOF` was a command named cat<<EOF and gave no body.
   test('an input redirect, a heredoc or a here-string begins a word of its own however it is spaced', () => {
-    expect(pipeline('cat<<EOF\nx\nEOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'x' }] }, { words: ['git', 'status'] }])
+    expect(pipeline('cat<<EOF\nx\nEOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: 'x', quoted: false }] }, { words: ['git', 'status'] }])
     expect(pipeline("python3 -<<'EOF'\nprint(1)\nEOF")[0]).toMatchObject({ words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)' }] })
     expect(commands('wc -l<notes.txt')).toEqual([['wc', '-l', '<notes.txt']])
     expect(commands('cat<<<x')).toEqual([['cat', '<<<x']])
@@ -334,18 +334,31 @@ describe('git', () => {
 
 describe('heredocs name the descriptor they feed (#760)', () => {
   test('standard input carries no fd; another descriptor says which', () => {
-    expect(pipeline("psql db <<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
-    expect(pipeline("psql db 0<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
-    expect(pipeline("psql db 3<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', fd: 3 }])
+    expect(pipeline("psql db <<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true }])
+    expect(pipeline("psql db 0<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true }])
+    expect(pipeline("psql db 3<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true, fd: 3 }])
   })
   test('a heredoc a later input redirect replaces as standard input says so', () => {
-    expect(pipeline("psql db <<'SQL' < evil.sql\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', replaced: true }])
-    expect(pipeline("psql db <<'SQL' <<< 'DROP TABLE t'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', replaced: true }])
+    expect(pipeline("psql db <<'SQL' < evil.sql\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true, replaced: true }])
+    expect(pipeline("psql db <<'SQL' <<< 'DROP TABLE t'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true, replaced: true }])
     // A later redirect on another descriptor replaces nothing on standard input.
-    expect(pipeline("psql db <<'SQL' 3< other.txt\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
+    expect(pipeline("psql db <<'SQL' 3< other.txt\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true }])
     // A process substitution is an argument, not a redirect onto standard input.
-    expect(pipeline("diff - <<'X' <(sort b)\na\nX")[0]?.heredocs).toEqual([{ word: 2, body: 'a' }])
+    expect(pipeline("diff - <<'X' <(sort b)\na\nX")[0]?.heredocs).toEqual([{ word: 2, body: 'a', quoted: true }])
     // 00 is descriptor 0 too.
-    expect(pipeline("psql db 00<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
+    expect(pipeline("psql db 00<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true }])
+  })
+  // #831: a quoted delimiter stops the shell expanding the body, so a $ or a backtick in it is text.
+  test('each heredoc says whether its delimiter was quoted, however it was quoted', () => {
+    const quoted = (cmd: string) => pipeline(cmd)[0]?.heredocs?.map(h => h.quoted)
+    expect(quoted("psql db <<'SQL'\nSELECT $1;\nSQL")).toEqual([true])
+    expect(quoted('psql db <<"SQL"\nSELECT $1;\nSQL')).toEqual([true])
+    expect(quoted('psql db <<\\SQL\nSELECT $1;\nSQL')).toEqual([true])
+    expect(quoted("psql db << 'SQL'\nSELECT $1;\nSQL")).toEqual([true])
+    expect(quoted("psql db <<-'SQL'\n\tSELECT 1;\n\tSQL")).toEqual([true])
+    expect(quoted('psql db <<SQL\nSELECT $1;\nSQL')).toEqual([false])
+    expect(quoted('psql db << SQL\nSELECT 1;\nSQL')).toEqual([false])
+    expect(quoted('psql db <<-SQL\n\tSELECT 1;\n\tSQL')).toEqual([false])
+    expect(quoted("cat <<A 3<<'B'\na\nA\nb\nB")).toEqual([false, true])
   })
 })

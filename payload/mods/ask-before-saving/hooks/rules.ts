@@ -6,7 +6,7 @@ export const MOD = 'ask-before-saving'
 
 // What a command writes, as mod-kit's contract spells it (types/index.d.ts there): plain data, since
 // only plain data crosses between mods.
-export type Writes = { files: { word: string; path?: string }[]; unnamed: { what: string; words: string[]; inputs: string[] }[] }
+export type Writes = { files: { word: string; path?: string }[]; unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[] }
 
 // The lasting memory the spec names: the memory folder, MEMORY.md, ~/.claude/CLAUDE.md, LESSONS.md,
 // and a project's CLAUDE.md or AGENTS.md. By file name for the last four, so a project or the config
@@ -79,7 +79,10 @@ export const lastingFiles = async (w: Writes, home: string, inCheckout: InChecko
     const byName = !f.path && NAMES.has(f.word.split('/').pop() ?? '') && (await throughSettable(f.word, command, isSet))
     const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : byName && f.word
     if (hit) add(hit)
-    else if (unread(f)) for (const m of (mentions ??= await mentioned(command, home, inCheckout, isSet))) add(m)
+    // A target through a variable that can hold no path, one only a fresh temporary file sets or
+    // nothing sets at all, reaches no lasting memory, so what the command mentions is not read for it
+    // (#830: an issue body written to `$(mktemp)` named a memory path).
+    else if (unread(f) && (await throughSettable(f.word, command, isSet))) for (const m of (mentions ??= await mentioned(command, home, inCheckout, isSet))) add(m)
   }
   return out
 }
@@ -100,13 +103,19 @@ const ROOTED = /^\$([A-Za-z_]\w*)/
  * Whether the variable `name` can hold a path when `text` runs: set in the environment, or given a
  * value in the text that can be one. A value it is given is followed: a literal, a path under home
  * or a command's output can be anything, so it counts; another variable counts as that one does; a
- * fresh temporary folder (`$(mktemp ...)`) is loaded into no session, so it does not. Any other use
+ * fresh temporary file or folder (`$(mktemp)`, `$(mktemp -d)`, FRESH_TEMP) is loaded into no session,
+ * so it does not. Any other use
  * of the bare name (a loop, a read, a declare) counts. A variable named nowhere and set nowhere
  * expands to nothing in a fresh shell, so a path through it reaches no lasting memory.
  */
 // Variables a shell sets for itself, present in every fresh shell whatever the environment held
 // (lessons review of #783: `$PWD/CLAUDE.md` was judged unset and saved unasked).
 const SHELL_SET = new Set(['HOME', 'PWD', 'OLDPWD', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'HOSTNAME', 'HOST', 'PPID', 'SHLVL', 'ZDOTDIR', 'BASH', 'ZSH_NAME', 'MACHTYPE', 'OSTYPE'])
+
+// A fresh temporary file or folder: mktemp with no template and no folder of its own, or -t and a
+// prefix, which put it in the temporary folder. A template or -p names where it goes, which can be
+// the memory folder, so it can hold a path like any other output (#830).
+const FRESH_TEMP = /^\$\(mktemp(?:\s+-[dqu]+)*(?:\s+-t\s+[\w.-]+)?(?:\s+-[dqu]+)*\s*\)$/
 
 export const settable = async (name: string, text: string, isSet: IsSet, seen: Set<string> = new Set()): Promise<boolean> => {
   if (SHELL_SET.has(name) || seen.has(name)) return true
@@ -115,10 +124,11 @@ export const settable = async (name: string, text: string, isSet: IsSet, seen: S
   const bare = new RegExp(`(^|[^$\\w{])${name}(?!\\w)`, 'gm')
   for (const m of text.matchAll(bare)) {
     const after = text.slice((m.index ?? 0) + m[0].length)
-    const given = /^=(?:"([^"]*)"|'([^']*)'|([^\s;&|]*))/.exec(after)
+    // A command's output unquoted is read whole, to its closing bracket, so `$(mktemp -d)` is all of it.
+    const given = /^=(?:"([^"]*)"|'([^']*)'|(\$\([^()]*\))|([^\s;&|]*))/.exec(after)
     if (!given) return true
-    const value = given[1] ?? given[2] ?? given[3] ?? ''
-    if (value.startsWith('$(mktemp')) continue
+    const value = given[1] ?? given[2] ?? given[3] ?? given[4] ?? ''
+    if (FRESH_TEMP.test(value)) continue
     const root = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/.exec(value)
     if (!root) return true
     // One of the two spellings always matched; a match with neither could hold anything.

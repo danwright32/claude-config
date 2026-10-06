@@ -288,6 +288,10 @@ test('a mention through a variable nothing sets is no lasting memory; one someth
   expect(await mentioned('A="$B"; B="$A"; echo y > "$A/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$A/CLAUDE.md'])
   // A fresh temporary folder is loaded into no session.
   expect(await mentioned('W=$(mktemp -d); echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
+  expect(await mentioned('W="$(mktemp -d -t notes)"; echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
+  // #830: one made where a template or -p puts it can be anywhere, the memory folder included.
+  expect(await mentioned('W=$(mktemp -d ~/.claude/x.XXXX); echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$W/CLAUDE.md'])
+  expect(await mentioned('W=$(mktemp -p ~/.claude); echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$W/CLAUDE.md'])
   // A name that only contains the variable's is not it.
   expect(await mentioned('SYNC_WORK=~/.claude; echo y > "$WORK/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
   // A variable every shell sets for itself is always set, whatever printenv says (lessons review

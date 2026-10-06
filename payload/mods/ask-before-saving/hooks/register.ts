@@ -118,7 +118,8 @@ const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
 // call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
 // patch, an inline script) is judged by the lasting memory its text and any patch file it reads
 // mention, and so is a target they cannot name, such as a variable (#743, lastingFiles); a mention
-// through a variable nothing can set is none (#777). A file in a temporary folder counts inside a
+// through a variable nothing can set is none (#777). An inline program whose text names every file it
+// writes is judged by those files alone (#830). A file in a temporary folder counts inside a
 // checkout there, found by mod-kit's one walk for it (#726). A file that exists and cannot be read,
 // or a disk that cannot say whether a temporary file is in a checkout, fails the hook, and the hook
 // fails closed.
@@ -133,6 +134,12 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   const w = await $.modkit.writes({ command, cwd, home })
   const out = await lastingFiles(w, home, inCheckout, command, isSet)
   for (const u of w.unnamed) {
+    // A program whose text names every file it writes is judged by those files, never by every path
+    // its text quotes (#830: a heredoc editing a test file quoted a memory path as test data).
+    if (u.targets) {
+      for (const t of u.targets) if ((await lastingMemory(t, home, inCheckout)) && !out.includes(display(t, home))) out.push(display(t, home))
+      continue
+    }
     const texts = [command]
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
     for (const t of texts) for (const m of await mentioned(t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)

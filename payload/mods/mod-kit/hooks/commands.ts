@@ -79,7 +79,9 @@ const runs = (words: string[], at: number, r: Runner): number | undefined => {
 // delimiter, quoted, escaped or bare. A line can open several, read one after another.
 const OPENING = /(?<!<)<<(?!<)(-?)\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/g
 
-type Heredoc = { at: number; body: string }
+// `quoted` when any of its delimiter was quoted or escaped, which stops the shell expanding $ and
+// backticks in the body (#831).
+type Heredoc = { at: number; body: string; quoted: boolean }
 
 // A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
 // apostrophe in it would open a quote that swallows the commands after it. Each body is kept with
@@ -88,7 +90,7 @@ type Heredoc = { at: number; body: string }
 const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[] } => {
   const out: string[] = []
   const heredocs: Heredoc[] = []
-  const open: { end: string; tabs: boolean; at: number }[] = []
+  const open: { end: string; tabs: boolean; at: number; quoted: boolean }[] = []
   let body: string[] = []
   // The lines of the heredoc being read, as written, put back as commands if it never ends.
   let unended: string[] = []
@@ -97,7 +99,7 @@ const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[] } => {
     const h = open[0]
     if (h) {
       if (line.trim() === h.end) {
-        heredocs.push({ at: h.at, body: body.join('\n') })
+        heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted })
         open.shift()
         body = []
         unended = []
@@ -108,7 +110,10 @@ const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[] } => {
       continue
     }
     out.push(line)
-    for (const m of line.matchAll(OPENING)) open.push({ end: (m[2] ?? m[3] ?? m[4]) as string, tabs: m[1] === '-', at: offset + (m.index ?? 0) })
+    for (const m of line.matchAll(OPENING)) {
+      const quoted = m[2] !== undefined || m[3] !== undefined || m[0].includes('\\')
+      open.push({ end: (m[2] ?? m[3] ?? m[4]) as string, tabs: m[1] === '-', at: offset + (m.index ?? 0), quoted })
+    }
     offset += line.length + 1
   }
   return { text: [...out, ...unended].join('\n'), heredocs }
@@ -390,7 +395,7 @@ const INPUT_WORD = /^(\d*)(<<<|<<-?|<)(.*)$/
 const base = (p: string) => p.split('/').pop() ?? p
 const CLOSERS = new Set([')', ...CLOSES])
 
-type Fed = { word: number; body: string; fd?: number; replaced?: true }[]
+type Fed = { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
 
 // Whether a word is a redirect onto standard input: an input redirect on descriptor 0 however it is
 // written (none, 0, 00), never a process substitution, which is an argument.
@@ -603,7 +608,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Command[], opts: ReadO
 export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}): Command[] => {
   const out: Command[] = []
   const { text, heredocs } = dropHeredocs(cmd)
-  const bodyAt = new Map(heredocs.map(h => [h.at, h.body]))
+  const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   const read = split(text)
   const begun = read.map(r => begins(r.words, r.starts))
   const fedOf = (b: Begun): Fed => {
@@ -617,12 +622,12 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     b.words.forEach((w, n) => {
       const m = HEREDOC_WORD.exec(w)
       const at = b.starts[n] ?? -1
-      const body = m && at >= 0 ? bodyAt.get(at + (m[1] as string).length) : undefined
+      const h = m && at >= 0 ? heredocAt.get(at + (m[1] as string).length) : undefined
       // A heredoc on another descriptor (3<<EOF) says which, so a reader of standard input can
       // tell it is not what the command reads there (#760).
       const fd = m && !onStdin(w) ? { fd: Number(m[1]) } : {}
       const replaced = m && onStdin(w) && n !== lastStdin ? { replaced: true as const } : {}
-      if (body !== undefined) fed.push({ word: n, body, ...fd, ...replaced })
+      if (h !== undefined) fed.push({ word: n, body: h.body, quoted: h.quoted, ...fd, ...replaced })
     })
     return fed
   }

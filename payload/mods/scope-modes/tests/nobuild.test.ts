@@ -620,4 +620,19 @@ describe('no build: a database client fed a heredoc', () => {
     // psql's own shell escape in the body is judged as on the command line.
     expect(run(`psql "$DB" <<'SQL'\n\\! rm -rf /repo\nSQL`)).not.toBeUndefined()
   })
+  // #831: a quoted delimiter stops the shell expanding the body, so its $ and backticks are the SQL.
+  test('a quoted body holding a $ or a backtick is judged as SQL like any other', () => {
+    expect(run(`psql "$DB" <<'SQL'\nSELECT $$it's$$, $1::int FROM shows;\nSQL`)).toBeUndefined()
+    expect(run(`psql "$DB" <<"SQL"\nSELECT note FROM prices WHERE note = 'costs $5';\nSQL`)).toBeUndefined()
+    expect(run(`psql "$DB" <<\\SQL\nSELECT $1;\nSQL`)).toBeUndefined()
+    expect(run(`mysql shows <<'SQL'\nSELECT \`name\` FROM \`shows\`;\nSQL`)).toBeUndefined()
+    expect(what(run(`psql "$DB" <<'SQL'\nDO $$ BEGIN DELETE FROM jobs; END $$;\nSQL`))).toBe('change data with SQL')
+    expect(what(run(`psql "$DB" <<'SQL'\nUPDATE shows SET price = '$5';\nSQL`))).toBe('change data with SQL')
+  })
+  // psql runs a backticked command in a backslash command's arguments, a shell this text cannot
+  // see once the backtick is read as a quote: in a quoted body, and on the command line too.
+  test("a backtick in one of psql's backslash commands runs a shell", () => {
+    expect(what(run(`psql "$DB" <<'SQL'\n\\set x \`rm -rf /repo\`\nSELECT :x;\nSQL`))).toBe('run a shell command through psql')
+    expect(what(run(`psql "$DB" -c '\\set x \`rm -rf /repo\`'`))).toBe('run a shell command through psql')
+  })
 })
