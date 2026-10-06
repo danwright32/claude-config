@@ -229,6 +229,8 @@ const heredocSql = (c: Cmd): string | undefined | null => {
   const fed = (c.heredocs ?? []).filter(h => h.fd === undefined)
   const last = fed[fed.length - 1]
   if (!last) return undefined
+  // A later redirect replaced it as standard input: what the client reads is not this body.
+  if (last.replaced) return null
   return /[$`]/.test(last.body) ? null : last.body
 }
 const commandRefusal = (c: Cmd): Refusal | undefined => {

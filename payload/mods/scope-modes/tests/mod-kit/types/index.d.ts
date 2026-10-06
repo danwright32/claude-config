@@ -110,7 +110,8 @@ export type ModKit = {
    * does (#698), for a reader that judges what a heredoc feeds (`python3 - <<'EOF'`, `bash <<'EOF'`),
    * which `commands` drops: `word` is the place of its `<<` word in `words`, and `<<-` takes the
    * leading tabs off the body. `fd` names the descriptor a heredoc feeds when it is not standard
-   * input (`3<<EOF`), absent when it is. A heredoc inside a word (`"$(cat <<'EOF' ... )"`) feeds no command
+   * input (`3<<EOF`), absent when it is; `replaced` marks one on standard input that a later
+   * redirect there (`< file`, `<<<`, another heredoc) replaces, so it is not what the command reads. A heredoc inside a word (`"$(cat <<'EOF' ... )"`) feeds no command
    * here, and one that never ends has no body (its lines are read as commands).
    */
   pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
@@ -173,7 +174,7 @@ export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; fra
 export type ModKitCommand = {
   words: string[]
   pipedFrom?: string[]
-  heredocs?: { word: number; body: string; fd?: number }[]
+  heredocs?: { word: number; body: string; fd?: number; replaced?: true }[]
   xargs?: true
   found?: string[]
   language?: ModKitLanguage

@@ -390,7 +390,7 @@ const INPUT_WORD = /^(\d*)(<<<|<<-?|<)(.*)$/
 const base = (p: string) => p.split('/').pop() ?? p
 const CLOSERS = new Set([')', ...CLOSES])
 
-type Fed = { word: number; body: string; fd?: number }[]
+type Fed = { word: number; body: string; fd?: number; replaced?: true }[]
 
 // What a command's own redirects put on its standard input, the last one winning as in the shell:
 // a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
@@ -601,6 +601,13 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const begun = read.map(r => begins(r.words, r.starts))
   const fedOf = (b: Begun): Fed => {
     const fed: Fed = []
+    // The last redirect onto standard input is what the command reads there, as in the shell: a
+    // heredoc before it is replaced (#760, lessons review of #818).
+    let lastStdin = -1
+    b.words.forEach((w, n) => {
+      const i = INPUT_WORD.exec(w)
+      if (i && (i[1] === '' || i[1] === '0')) lastStdin = n
+    })
     b.words.forEach((w, n) => {
       const m = HEREDOC_WORD.exec(w)
       const at = b.starts[n] ?? -1
@@ -608,7 +615,8 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       // A heredoc on another descriptor (3<<EOF) says which, so a reader of standard input can
       // tell it is not what the command reads there (#760).
       const fd = m && m[1] && m[1] !== '0' ? { fd: Number(m[1]) } : {}
-      if (body !== undefined) fed.push({ word: n, body, ...fd })
+      const replaced = m && (m[1] === '' || m[1] === '0') && n !== lastStdin ? { replaced: true as const } : {}
+      if (body !== undefined) fed.push({ word: n, body, ...fd, ...replaced })
     })
     return fed
   }

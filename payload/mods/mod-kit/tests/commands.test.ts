@@ -338,4 +338,10 @@ describe('heredocs name the descriptor they feed (#760)', () => {
     expect(pipeline("psql db 0<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
     expect(pipeline("psql db 3<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', fd: 3 }])
   })
+  test('a heredoc a later input redirect replaces as standard input says so', () => {
+    expect(pipeline("psql db <<'SQL' < evil.sql\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', replaced: true }])
+    expect(pipeline("psql db <<'SQL' <<< 'DROP TABLE t'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', replaced: true }])
+    // A later redirect on another descriptor replaces nothing on standard input.
+    expect(pipeline("psql db <<'SQL' 3< other.txt\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
+  })
 })

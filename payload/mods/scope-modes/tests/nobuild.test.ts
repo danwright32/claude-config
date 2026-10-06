@@ -611,6 +611,10 @@ describe('no build: a database client fed a heredoc', () => {
     expect(what(run(`psql "$DB" <<SQL\nSELECT \`date\`;\nSQL`))).toBe('run SQL that could not be read')
     // A heredoc on another descriptor is not psql's standard input.
     expect(what(run(`psql "$DB" 3<<'SQL'\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
+    // A later redirect replaces the heredoc as standard input, so its body is not what runs
+    // (lessons review of #818).
+    expect(what(run(`psql "$DB" <<'SQL' < evil.sql\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
+    expect(what(run(`psql "$DB" <<'SQL' <<< 'DROP TABLE t'\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
     // A script file still cannot be read, whatever a heredoc holds.
     expect(what(run(`psql "$DB" -f fix.sql <<'SQL'\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
     // psql's own shell escape in the body is judged as on the command line.
