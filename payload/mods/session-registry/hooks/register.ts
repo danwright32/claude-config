@@ -130,7 +130,7 @@ const blank = (sessionId: string, cwd: string, now: number, repoRoot: string | n
   extra: {},
 })
 const fresh = async ($: EngineInterface, sessionId: string, cwd: string): Promise<SessionsRecord> =>
-  blank(sessionId, cwd, await $.clock.now(), rootOf(await $.process.run(['git', '-C', cwd, ...topLevel]).catch(() => undefined)))
+  blank(sessionId, cwd, await $.clock.now(), rootOf(await $.process.run(['git', '-C', cwd, ...topLevel], { timeoutMs: 5_000 }).catch(() => undefined)))
 
 // A beat: the session's id can change under a running process (a /clear), and then this process
 // carries on as a new session with a record of its own. The new record replaces the old inside the
