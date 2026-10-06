@@ -741,8 +741,10 @@ tree on 2026-08-22, at 348 seconds idle and 1943 under load with only 262 of tho
 
 The last row is the one exception, and it is stated rather than quietly left out: what a healthy
 watcher looks like is passed straight to `report_process_family` as arguments, so there is no
-default for the check to read. That makes it the only number here nothing verifies, which is worth
-knowing when deciding how much to trust it.
+default for the check to read. Since #604 only its roots are judged. Depth is deliberately not
+judged for the watcher, and the 64 passed there is a stand in for no limit, not a measured bound.
+That makes the one root the only number here nothing verifies, which is worth knowing when
+deciding how much to trust it.
 
 Two of these are the ones where being wrong LOW is dangerous rather than merely annoying: the lock
 ceiling starts a second run on top of a live one, and the retired window drops a Mac that is only

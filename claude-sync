@@ -9666,16 +9666,16 @@ reap_scratch_if_due(){
 }
 
 report_stray_processes(){
-  # One watcher, which is two processes: the launcher and the subshell it forks around fswatch.
-  # Measured on this Mac 2026-08-17 (pid 13658 with its child 13702), not assumed, because the
-  # first version of this rule allowed no nesting at all and reported every healthy machine.
+  # One watcher is one ROOT. At rest that root has one child, the subshell it forks around fswatch
+  # (pid 13658 with 13702, measured on this Mac 2026-08-17), and the first version of this rule,
+  # which allowed no nesting at all, reported every healthy machine.
   # DEPTH IS NOT A SIGNAL FOR THE WATCHER (claude-config#604). Every send it makes runs inside nested
   # command substitutions (the tick, the lock, the send's own reads), and each is a subshell carrying
   # the same command line, so one healthy watcher mid-send reads 3 or 4 deep: that is the "nested up
   # to 4 deep" of 2026-10-03. A second watcher always shows as a second ROOT, including the loop of a
   # killed one, which is reparented away from it. So only roots are judged here.
   report_process_family "claude-sync watch" "watcher processes" 1 64 \
-    "One watcher is expected, running as two processes. Several started independently means an earlier one was never stopped, and they all react to the same edit."
+    "One watcher is expected, which is one root however deep its sends nest. A second root, including the leftover loop of a watcher that was killed, means an earlier one was never stopped, and they all react to the same edit."
   # One run, permitted to have spawned one child, which is what the suite's own depth limit allows
   # (SUITE_MAX_DEPTH defaults to 1 in tests/test-claude-sync.sh). Deeper than that is the runaway
   # that limit exists to stop, so seeing it here means the limit has been removed or bypassed.
