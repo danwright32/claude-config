@@ -104,6 +104,17 @@ TRIES=1 signed_out "$S"
 [ "$code" = 1 ] && check "a claude.ai session cookie with no expiry is still a session" ok \
   || check "a claude.ai session cookie with no expiry is still a session" "code=$code out=$out"
 
+# 3c. The looks are bounded by elapsed time too, so the check gives its own verdict inside the
+# limit the mod sets however slow each look is (lessons review of #808): with no time left after the first
+# look it answers then, never waiting out its tries.
+S="$TMPROOT/s3c"; store "$S" ".claude.ai:sessionKey:$LATER"
+: > "$TMPROOT/pauses"
+out=$(ACCOUNT_ROOM_SAFARI_COOKIES="$S" ACCOUNT_ROOM_NOW="$NOW" ACCOUNT_ROOM_CHECK_TRIES=5 ACCOUNT_ROOM_CHECK_SECONDS=0 ACCOUNT_ROOM_PAUSE="echo x >> '$TMPROOT/pauses'" /bin/sh "$BIN/safari-signed-out.sh" 2>&1); code=$?
+n=$(wc -l < "$TMPROOT/pauses" | tr -d ' ')
+[ "$code" = 1 ] && [ "$n" = 0 ] && [ "$out" = "still signed in to claude.ai in Safari" ] \
+  && check "with its time spent it answers still signed in at once, with its own verdict" ok \
+  || check "with its time spent it answers still signed in at once, with its own verdict" "code=$code pauses=$n out=$out"
+
 # 4. Safari writes the removal late, so a cookie gone by a later look is a sign out.
 S="$TMPROOT/s4"; store "$S" ".claude.ai:sessionKey:$LATER"
 store "$TMPROOT/s4-after" "claude.ai:lastActiveOrg:$LATER"
