@@ -167,6 +167,7 @@ const world = (on: On, o: Opts = {}) => {
     runs: [] as string[][],
     asked: [] as string[],
     tools: [] as string[],
+    logs: [] as string[],
   }
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/Users/x' })
@@ -236,6 +237,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: undefined }
   })
   on('ui.log', ($, e) => {
+    w.logs.push(e.text)
     const [tag, ...rest] = e.text.split(' ')
     const body = rest.join(' ')
     if (tag === 'CARD') w.cards.push(JSON.parse(body))
@@ -325,6 +327,49 @@ test('"go ahead and build" from Dan turns no build off, and Claude confirms it',
   expect(lastModes(w)).toEqual([])
   expect(r.context?.join('\n')).toMatch(/No build just turned off.*Say so in one line/s)
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
+})
+
+// A message Dan types while a turn runs reaches prompt.submit at Enter carrying that turn's id
+// (the engine's PromptSubmitInput.turnId), so it is read like any other (#805).
+const sayMidTurn = async ($: $T, text: string) =>
+  (await $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false, turnId: 'turn-running' } as never)) as { text: string; context?: string[] }
+
+test('"stop winding down mode" sent mid turn turns winding down off, and the turn end is no longer refused (#805)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/Winding down is not finished/)
+  const r = await sayMidTurn($ as never, 'stop winding down mode. run load 1')
+  expect(lastModes(w)).toEqual([])
+  expect(r.context?.join('\n')).toMatch(/Winding down just turned off.*Say so in one line/s)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.logs.filter(l => l.includes('sent mid turn'))).toEqual(['scope-modes: a message from Dan sent mid turn reached the mod: switched 1, still on note not added'])
+})
+
+test('turning one mode off by name leaves the other mode alone (#805)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const r = await say($ as never, 'stop winding down mode')
+  expect(lastModes(w)).toEqual(['NO BUILD'])
+  expect(r.context?.join('\n') ?? '').not.toMatch(/just turned off/)
+})
+
+test('a message naming the mode that is on, in words that do not switch it, gets a note that it is still on and how to turn it off (#805)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  const r = await sayMidTurn($ as never, 'winding down is done for today, thanks')
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  expect(r.context?.join('\n')).toMatch(/names winding down.*still on.*\/build turns it off/s)
+  // The note switches nothing, and the debug line says so (lessons review of #820).
+  expect(w.logs.filter(l => l.includes('sent mid turn'))).toEqual(['scope-modes: a message from Dan sent mid turn reached the mod: switched 0, still on note added'])
+  // The same words from elsewhere, or with the mode off, add no such note.
+  expect((await say($ as never, 'winding down is done', 'peer')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
+  // Naming it in passing adds no note (lessons review of #820).
+  expect((await say($ as never, 'the project is winding down, add the release notes')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
+  await command($ as never, 'build')
+  expect((await say($ as never, 'the project is winding down')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
 })
 
 test('no build refuses an edit with the grey card, and tells Claude to ask Dan "Switch to build?"', withDeps, async ($, on) => {
