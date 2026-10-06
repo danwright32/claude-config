@@ -418,6 +418,38 @@ grep -q '"status": *"error"' <<< "$got" \
   && check "a silent model is an error, not none" ok \
   || check "a silent model is an error, not none" "spool=$got"
 
+# A TRIMMED BRIEF IS NOT A FINDING (claude-config#860). The digest caps the task it shows the model,
+# and with no sign of the cut the model read a complete brief as one "cut off mid sentence" and filed
+# it, three times in one day for one agent. The digest now marks the cut, and the prompt has to tell
+# the model what that marker means. The marker is read out of the digest the model was actually
+# handed, so the prompt is checked against the digest's real wording rather than this file's copy.
+reset_spool
+LONG_TASK_TRANSCRIPT="$TMPROOT/long-task-agent.jsonl"
+python3 - "$LONG_TASK_TRANSCRIPT" <<'PY_LT'
+import json, sys
+task = "Work issue 860. " + "Read the brief carefully and do every step. " * 300
+with open(sys.argv[1], "w") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"content": task}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done, nothing else seen."}]}}) + "\n")
+PY_LT
+stub 'echo NONE'
+payload "$REPO" "$LONG_TASK_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+lt_input="$(cat "$MODEL_INPUT" 2>/dev/null)"
+lt_prompt="${lt_input%%The transcript follows.*}"
+lt_digest="${lt_input#*The transcript follows.}"
+lt_marker_prefix="$(grep -o '^\[task trimmed by the digest' <<< "$lt_digest")"
+lt_marker_prefix="${lt_marker_prefix%%$'\n'*}"
+[ -n "$lt_marker_prefix" ] \
+  && check "#860 a long brief reaches the model with the digest's trim marker" ok \
+  || check "#860 a long brief reaches the model with the digest's trim marker" "digest=${lt_digest:0:300}"
+contains "${lt_marker_prefix:-NO MARKER WAS FOUND}" "$lt_prompt" \
+  && check "#860 the prompt names that marker" ok \
+  || check "#860 the prompt names that marker" "prompt does not mention '${lt_marker_prefix}'"
+lt_prompt_lc="$(printf '%s' "$lt_prompt" | tr '[:upper:]' '[:lower:]')"
+contains "is not a finding" "$lt_prompt_lc" \
+  && check "#860 and tells the model a trimmed brief is not a finding" ok \
+  || check "#860 and tells the model a trimmed brief is not a finding" "prompt=${lt_prompt:0:200}"
+
 # The DEFAULT launch, the real `claude -p`, switches the global config off (claude-config#538).
 # Every harvest otherwise loads the whole global CLAUDE.md and all twelve lessons index files, which
 # it never reads: measured 64,868 input tokens with them against 29,663 without. Reached through a

@@ -141,6 +141,46 @@ grep -qi 'trimmed' <<< "$out_long" \
   && check "and says it trimmed rather than silently shortening" ok \
   || check "and says it trimmed rather than silently shortening" "out=${out_long:0:200}"
 
+# ---------------------------------------------------------------------------
+# The TASK is capped too, and a cap that says nothing turns a complete brief into what reads as one
+# cut off mid sentence. The harvest model then files exactly that as a finding (claude-config#860:
+# three times in one day for one agent whose brief was whole). So a trimmed task carries a marker
+# saying the digest cut it, at what length and out of how many characters, and a normal brief is
+# not trimmed at all.
+# ---------------------------------------------------------------------------
+LONGTASK="$TMPROOT/longtask.jsonl"
+long_task="$(python3 -c 'print("Brief opening. " + "brief body words. " * 1200 + "BRIEF-TAIL-MARKER")')"
+{ asked "$long_task"; say "Done."; } > "$LONGTASK"
+out_lt="$(python3 "$D" "$LONGTASK" 2>/dev/null)"
+grep -q 'Brief opening' <<< "$out_lt" \
+  && check "a long task keeps its opening" ok \
+  || check "a long task keeps its opening" "out=${out_lt:0:200}"
+grep -q 'BRIEF-TAIL-MARKER' <<< "$out_lt" \
+  && check "a task past the cap is actually trimmed" "the tail survived, so the case tests nothing" \
+  || check "a task past the cap is actually trimmed" ok
+lt_marker="$(grep '^\[task trimmed by the digest' <<< "$out_lt")"
+[ -n "$lt_marker" ] \
+  && check "a trimmed task carries a marker saying the digest cut it" ok \
+  || check "a trimmed task carries a marker saying the digest cut it" "out=${out_lt:0:300}"
+contains_len="${#long_task}"
+grep -q "of $contains_len characters" <<< "$lt_marker" \
+  && check "and the marker names the brief's real length" ok \
+  || check "and the marker names the brief's real length" "marker=$lt_marker want=$contains_len"
+
+# A brief of an ordinary size reaches the harvest whole. Measured 2026-10-06 over 508 real subagent
+# transcripts on this Mac: the median brief was 1,564 characters, so the old cap of 1500 trimmed more
+# than half of them; the 75th percentile was 3,325 and the 90th 5,801.
+NORMALTASK="$TMPROOT/normaltask.jsonl"
+normal_task="$(python3 -c 'print("Normal brief. " + "x" * 5000 + " NORMAL-TAIL-MARKER")')"
+{ asked "$normal_task"; say "Done."; } > "$NORMALTASK"
+out_nt="$(python3 "$D" "$NORMALTASK" 2>/dev/null)"
+grep -q 'NORMAL-TAIL-MARKER' <<< "$out_nt" \
+  && check "a brief of about five thousand characters reaches the harvest whole" ok \
+  || check "a brief of about five thousand characters reaches the harvest whole" "the tail was cut"
+grep -q '^\[task trimmed' <<< "$out_nt" \
+  && check "and carries no trim marker" "marker present on a whole brief" \
+  || check "and carries no trim marker" ok
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

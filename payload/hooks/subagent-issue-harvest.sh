@@ -154,6 +154,12 @@ reason.
 What to leave out is narration of work that is finished: changes the agent made
 and verified, its restating of its own assignment, and its progress commentary.
 
+The task section is shortened before you see it when the brief was long, and
+then ends with a line beginning "[task trimmed by the digest". That cut was made
+by the tool preparing this transcript, not by whoever wrote the brief. A brief
+that stops at that line is not incomplete and is not a finding: never report a
+task as truncated, cut off or missing its ending because of it.
+
 Apply a real bar. Report only things a maintainer would genuinely act on. A
 transcript with nothing of that kind in it is the normal case, not a failure.
 
