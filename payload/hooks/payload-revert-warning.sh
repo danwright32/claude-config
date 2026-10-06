@@ -45,7 +45,7 @@
 #                                  two sessions would overwrite each other's record.
 set -uo pipefail
 
-# The four questions about a checkout, from the library the payload write gate shares, so the two
+# The questions about a checkout, from the library the payload write gate shares, so the two
 # cannot come to two different answers about whether a hold is in force (claude-config#367, L370).
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/sync-clone.sh

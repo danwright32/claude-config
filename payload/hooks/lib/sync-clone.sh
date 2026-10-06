@@ -4,7 +4,7 @@
 # (claude-config#367).
 #
 # Sourced, never executed. payload-revert-warning.sh worked these out for itself, and the gate that
-# refuses a payload write without a hold needs the same four. Two copies of "is a hold in force"
+# refuses a payload write without a hold needs the same ones. Two copies of "is a hold in force"
 # would be two answers to one question, each reading as correct on its own, which is the shape this
 # repo keeps finding (L370).
 #
