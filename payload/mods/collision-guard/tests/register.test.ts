@@ -130,7 +130,7 @@ const KIT = new Map<string, unknown>([
   ["writes {\"command\":\"cat notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
   ["commands {\"command\":\"python3 -c \\\"open('notes.txt','a').write('x')\\\"\"}", [["python3","-c","open('notes.txt','a').write('x')"]]],
   ["git {\"words\":[\"python3\",\"-c\",\"open('notes.txt','a').write('x')\"]}", null],
-  ["writes {\"command\":\"python3 -c \\\"open('notes.txt','a').write('x')\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[{"what":"an inline python3 script","words":["python3","-c","open('notes.txt','a').write('x')"],"inputs":[]}]}],
+  ["writes {\"command\":\"python3 -c \\\"open('notes.txt','a').write('x')\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[{"what":"an inline python3 script","words":["python3","-c","open('notes.txt','a').write('x')"],"inputs":[],"targets":["/repo/notes.txt"]}]}],
   ["commands {\"command\":\"cp /tmp/notes.txt docs\"}", [["cp","/tmp/notes.txt","docs"]]],
   ["git {\"words\":[\"cp\",\"/tmp/notes.txt\",\"docs\"]}", null],
   ["writes {\"command\":\"cp /tmp/notes.txt docs\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"docs","path":"/repo/docs","sources":["/tmp/notes.txt"],"mayBeFolder":true}],"changes":[],"unnamed":[]}],

@@ -138,7 +138,7 @@ test("a heredoc's body, and the program each command runs, are shared on $.modki
   expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([
     {
       words: ['python3', '-', '<<EOF'],
-      heredocs: [{ word: 2, body: "import os; os.system('ls')" }],
+      heredocs: [{ word: 2, body: "import os; os.system('ls')", quoted: true }],
       language: 'python',
       program: { text: "import os; os.system('ls')", stdin: true },
       verdict: { does: 'run a process', seen: 'os.system' },

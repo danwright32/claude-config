@@ -44,7 +44,7 @@ const ENTRIES: Entry[] = [
   {"method":"writes","input":{"command":"cat notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
   {"method":"commands","input":{"command":"python3 -c \"open('notes.txt','a').write('x')\""},"want":[["python3","-c","open('notes.txt','a').write('x')"]]},
   {"method":"git","input":{"words":["python3","-c","open('notes.txt','a').write('x')"]},"want":null},
-  {"method":"writes","input":{"command":"python3 -c \"open('notes.txt','a').write('x')\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[{"what":"an inline python3 script","words":["python3","-c","open('notes.txt','a').write('x')"],"inputs":[]}]}},
+  {"method":"writes","input":{"command":"python3 -c \"open('notes.txt','a').write('x')\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[{"what":"an inline python3 script","words":["python3","-c","open('notes.txt','a').write('x')"],"inputs":[],"targets":["/repo/notes.txt"]}]}},
   {"method":"commands","input":{"command":"cp /tmp/notes.txt docs"},"want":[["cp","/tmp/notes.txt","docs"]]},
   {"method":"git","input":{"words":["cp","/tmp/notes.txt","docs"]},"want":null},
   {"method":"writes","input":{"command":"cp /tmp/notes.txt docs","cwd":"/repo","home":""},"want":{"files":[{"word":"docs","path":"/repo/docs","sources":["/tmp/notes.txt"],"mayBeFolder":true}],"changes":[],"unnamed":[]}},

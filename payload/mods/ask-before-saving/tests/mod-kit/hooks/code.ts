@@ -318,6 +318,9 @@ const perlOpen = (code: string): CodeVerdict | undefined => {
   return undefined
 }
 
+// pathlib's methods that change a file, which pythonTargets reads for the file they name.
+const PY_PATH_METHODS: Rule = { re: /\.(write_text|write_bytes|touch|mkdir|rmdir|unlink|symlink_to|hardlink_to|chmod)\s*\(/, seen: m => m[1] as string }
+
 const SURFACES: Record<Lang, Surface> = {
   python: {
     process: [
@@ -329,7 +332,7 @@ const SURFACES: Record<Lang, Surface> = {
     write: [
       { re: /\bos\.(remove|unlink|rename|renames|replace|rmdir|removedirs|mkdir|makedirs|truncate|chmod|chown|lchown|link|symlink|utime|write|mkfifo|mknod)\s*\(/, seen: m => `os.${m[1]}` },
       { re: /\bshutil\.(copy\w*|move|rmtree|chown|make_archive|unpack_archive)\s*\(/, seen: m => `shutil.${m[1]}` },
-      { re: /\.(write_text|write_bytes|touch|mkdir|rmdir|unlink|symlink_to|hardlink_to|chmod)\s*\(/, seen: m => m[1] as string },
+      PY_PATH_METHODS,
     ],
     dynamic: [
       { re: /(?<![\w.])(eval|exec|compile)\s*\(/, seen: m => m[1] as string },
@@ -462,6 +465,164 @@ const first = (rules: Rule[], code: string): string | undefined => {
     if (m) return typeof r.seen === 'string' ? r.seen : r.seen(m)
   }
   return undefined
+}
+
+// The files a python program writes, where its text names every one (#830): ask before saving judged
+// a heredoc editing a test file by each memory path its string literals quoted, since nothing said
+// which file it wrote. Named only when the judge's every write route found is an open for writing or
+// a pathlib write_text or write_bytes, each of a plain string literal or of a name bound once, by a
+// plain assignment, to one (or to Path of one). Anything else the judge reads as a write, a process,
+// code built at run time, a change of folder, a literal the shell may have expanded ($, a backtick)
+// or a string with an escape or a format in it leaves the files unnamed, and a reader falls back on
+// what the text mentions. Like the judge, it reads the text, so a call inside a string counts too:
+// it can only add a file, never hide one.
+const PY_STRING = /^(?:[rRuUbB]|[rR][bB]|[bB][rR])?(['"])((?:(?!\1)[^\\\n$`])*)\1$/
+const PY_PATH = /^(?:pathlib\s*\.\s*)?Path\s*\(/
+const pyLiteral = (expr: string, code: string, seen: Set<string> = new Set()): string | undefined => {
+  const e = expr.trim()
+  const s = PY_STRING.exec(e)
+  if (s) return s[2]
+  const call = PY_PATH.exec(e)
+  if (call) {
+    const c = callAt(e, call[0].length - 1)
+    return c.end === e.length && c.args.length === 1 ? pyLiteral(c.args[0] as string, code, seen) : undefined
+  }
+  if (!/^[A-Za-z_]\w*$/.test(e) || seen.has(e)) return undefined
+  seen.add(e)
+  const n = escaped(e)
+  // Exactly one binding anywhere, and it is a plain assignment at the start of a statement.
+  const binds = [...code.matchAll(new RegExp(`(?<![\\w.])${n}\\s*(?:[-+*/%&|^@]|\\*\\*|//|>>|<<)?=(?!=)`, 'g'))]
+  const plain = [...code.matchAll(new RegExp(`(?:^|[;\\n])[ \\t]*${n}[ \\t]*=(?!=)([^;\\n]*)`, 'g'))]
+  if (binds.length !== 1 || plain.length !== 1) return undefined
+  const other = [
+    new RegExp(`\\bfor\\b[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
+    new RegExp(`\\bas\\s+${n}\\b`),
+    new RegExp(`\\b${n}\\s*:=`),
+    new RegExp(`\\b(?:global|nonlocal|del|import)\\b[^\\n]*\\b${n}\\b`),
+    new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
+    new RegExp(`(?<![\\w.])${n}\\s*,[^=\\n]*=(?!=)|,\\s*${n}\\s*(?:,[^=\\n]*)?=(?!=)`),
+  ]
+  if (other.some(r => r.test(code))) return undefined
+  return pyLiteral((plain[0] as RegExpExecArray)[1] as string, code, seen)
+}
+// The receiver a method is called on, written just before the `.` at `at`: a call's whole text, or
+// a bare name.
+const receiverBefore = (code: string, at: number): string | undefined => {
+  const before = code.slice(0, at).replace(/\s+$/, '')
+  if (!before.endsWith(')')) return /(?<![\w.])([A-Za-z_]\w*)$/.exec(before)?.[1]
+  let depth = 0
+  for (let i = before.length - 1; i >= 0; i--) {
+    if (before[i] === ')') depth++
+    else if (before[i] === '(' && --depth === 0) return /(?<![\w.])(?:pathlib\s*\.\s*)?Path\s*$/.exec(before.slice(0, i))?.[0].concat(before.slice(i))
+  }
+  return undefined
+}
+// Modules with no way to write a file of their own, so a program importing only these writes only
+// through the routes read below (lessons review of #830: zipfile, sqlite3, tempfile and the rest
+// write files the judge has no rule for, and a list of writers would always miss one, L257). os is
+// not one of them; its path is, taken on its own.
+const PY_NO_WRITERS = new Set(['re', 'json', 'sys', 'pathlib', 'textwrap', 'string', 'collections', 'itertools', 'functools', 'math', 'datetime', 'difflib', 'typing', 'dataclasses', 'enum', 'unicodedata', 'pprint', 'fnmatch', 'glob', 'os.path', 'posixpath'])
+// A plain top level import line, read whole: at the start of a line, one statement, an optional
+// comment after it. `import a, b.c as d` and `from a.b import c, d as e` (or `*`).
+const PY_IMPORT_LINE = /^(?:import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)|from\s+([\w.]+)\s+import\s+(\*|\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*))[ \t]*(?:#[^\n]*)?$/
+/**
+ * Whether every module the program can reach is quiet (lessons reviews of #846, four rounds, each
+ * finding another import shape a pattern for imports missed). The default is flipped: the program
+ * passes only when every `import` word in its text sits in a plain top level import line read whole,
+ * nothing is imported at run time (`__import__`, `importlib`, `import_module`, `sys.modules`,
+ * `getattr`, `__builtins__`), and every module each line binds is quiet: a dotted `import a.b` binds
+ * `a` too, and `from os import` is quiet only for `path`. Any other `import` (after a colon,
+ * indented, after a `;`, inside an expression or a string, across lines) means it cannot be read.
+ */
+const onlyQuietModules = (inline: string): boolean => {
+  if (/\b(?:__import__|import_module|importlib|getattr|__builtins__)\b|\bsys\s*\.\s*modules\b/.test(inline)) return false
+  const words = (inline.match(/\bimport\b/g) ?? []).length
+  let read = 0
+  for (const line of inline.split('\n')) {
+    const m = PY_IMPORT_LINE.exec(line)
+    if (!m) continue
+    read++
+    if (m[1] !== undefined) {
+      for (const part of m[1].split(',')) {
+        const mod = part.trim().split(/\s+/)[0] as string
+        // `import a.b.c` binds a, so a must be quiet as well as a.b.c.
+        if (!PY_NO_WRITERS.has(mod) || !PY_NO_WRITERS.has(mod.split('.')[0] as string)) return false
+      }
+    } else {
+      const mod = m[2] as string
+      const names = (m[3] as string).split(',').map(n => n.trim().split(/\s+/)[0])
+      if (mod === 'os') {
+        if (!names.every(n => n === 'path')) return false
+      } else if (!PY_NO_WRITERS.has(mod)) return false
+    }
+  }
+  return read === words
+}
+const pythonTargets = (code: string): string[] | undefined => {
+  const s = SURFACES.python
+  if (first(s.process, code) || first(s.dynamic, code) || pythonFileinput(code) || pythonMoves(code)) return undefined
+  if (/\bchdir\b|\b(?:globals|locals|vars|setattr)\s*\(/.test(code)) return undefined
+  // pathlib's writers the judge has no rule for (Path.copy, copy_into, move and move_into, new in
+  // 3.14; lchmod; link_to), whatever they are called on.
+  if (/\.\s*(?:copy|copy_into|move|move_into|lchmod|link_to)\s*\(/.test(code)) return undefined
+  // Moves, as far as the text can tell them (lessons review of #846 at 97ea7f3, Dan's decision
+  // 2026-10-06): any rename is one, whatever its arguments; a replace is one when called on Path(...)
+  // or on a name assigned from Path(, or when given its target by name. Any other replace, a string's,
+  // stays allowed, since the text cannot tell the two apart there.
+  if (/\.\s*rename\s*\(/.test(code)) return undefined
+  for (const m of code.matchAll(/\.\s*replace\s*\(/g)) {
+    const receiver = receiverBefore(code, m.index ?? 0)
+    if (receiver === undefined) continue
+    if (PY_PATH.test(receiver)) return undefined
+    if (/^\w+$/.test(receiver) && new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(code)) return undefined
+    if (argsAt(code, (m.index ?? 0) + m[0].length - 1).some(a => /^\w+\s*=/.test(a))) return undefined
+  }
+  if (first(s.write.filter(r => r !== PY_PATH_METHODS), code)) return undefined
+  const out: string[] = []
+  const add = (expr: string | undefined) => {
+    const v = expr === undefined ? undefined : pyLiteral(expr, code)
+    if (v === undefined || v === '') return false
+    if (!out.includes(v)) out.push(v)
+    return true
+  }
+  for (const m of code.matchAll(new RegExp(PY_PATH_METHODS.re.source, 'g'))) {
+    if (m[1] !== 'write_text' && m[1] !== 'write_bytes') return undefined
+    if (!add(receiverBefore(code, m.index ?? 0))) return undefined
+  }
+  for (const m of code.matchAll(/(?:\b([A-Za-z_]\w*)\s*\.\s*|(\.)\s*|(?<![\w.]))open\s*\(/g)) {
+    const receiver = m[1] ?? (m[2] ? '' : undefined)
+    const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
+    const named = (name: string) => args.find(a => new RegExp(`^${name}\\s*=`).test(a))?.replace(/^\w+\s*=\s*/, '')
+    const positional = args.filter(a => !/^\w+\s*=/.test(a))
+    if (receiver !== undefined && !MODE_SECOND.has(receiver)) {
+      // os.open, dbm, shelve and a method's open (a pathlib Path's): its file is not named here, so
+      // one the judge reads as a write leaves the program's files unnamed.
+      if (pythonOpen(code.slice(m.index ?? 0, callAt(code, (m.index ?? 0) + m[0].length - 1).end))) return undefined
+      continue
+    }
+    const modeArg = named('mode') ?? positional[1]
+    if (modeArg === undefined) continue
+    const mode = stringValue(modeArg)
+    if (mode === undefined || !PY_STRING.test(modeArg.trim())) return undefined
+    if (!writesMode(mode)) continue
+    if (!add(named('file') ?? positional[0])) return undefined
+  }
+  return out.length ? out : undefined
+}
+
+/**
+ * The files inline code writes, where its text names every one, or undefined when it cannot (any
+ * language but python, so far, and a python program importing any module that can write a file). Relative paths are as written: the caller resolves them against the
+ * folder the program runs in.
+ */
+export const codeTargets = (lang: Lang, inline: string): string[] | undefined => {
+  if (lang !== 'python') return undefined
+  // The text as written is what python reads only where the shell expanded nothing in it: in an
+  // unquoted heredoc or a double quoted -c a $ or a backtick anywhere can become any code (lessons
+  // review of #846 at fc410a7, L280). Whether it was quoted is not asked: refusing costs a question.
+  if (/[$`]/.test(inline)) return undefined
+  if (!onlyQuietModules(inline)) return undefined
+  return pythonTargets(SURFACES.python.canonical?.(inline) ?? inline)
 }
 
 /** What inline code in a language can do that no build refuses, or undefined when it only reads. */

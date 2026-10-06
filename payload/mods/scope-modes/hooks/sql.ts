@@ -59,6 +59,10 @@ const SQL_WRITE_STATEMENT = /(?:^|;)\s*(?:replace|merge|upsert|copy|vacuum|reind
 const CLIENT_LOADS = /\\copy\s+(?!\()\S+(?:\s*\([^)]*\))?\s+from\b|(?:^|\n)\s*\.(?:import|restore)\b/i
 const CLIENT_RUNS = /\\(?:i|ir|include|include_relative|gexec)\b|(?:^|\n)\s*\.read\b|(?:^|[;\n])\s*(?:source|\\\.)\s/i
 const CLIENT_SHELL = /\\!|(?:^|\n)\s*\.(?:shell|system)\b|(?:^|[;\n])\s*(?:system|pager|\\P)\s+\S|\\copy\b[^\n]*?\b(?:from|to)\s+program\b/i
+// psql runs a backticked command in a backslash command's arguments (`\set x `date``), which both
+// readings blank as a quoted string, so it is looked for in the SQL as written: a backtick anywhere
+// after a backslash command on its line (#831, where a quoted heredoc's backticks began to be read).
+const PSQL_BACKTICK = /\\[A-Za-z!?][^\n]*`/
 // The client commands that write a local file, each followed by its target (lessons review of #714
 // at fad450f): psql's \o, \w and \g (to a file, or `|cmd`, a shell), \copy ... to <file>; sqlite's
 // .output, .once, .backup and .save; MySQL's tee.
@@ -90,7 +94,7 @@ export const sqlRefusal = (sql: string | undefined, client: string, harmless: (t
   if (sql === undefined) return 'run SQL that could not be read'
   const readings = [sqlCode(sql, false), sqlCode(sql, true)]
   const codes = readings.map(r => r.code)
-  if (codes.some(c => CLIENT_SHELL.test(c))) return `run a shell command through ${client}`
+  if (codes.some(c => CLIENT_SHELL.test(c)) || (client === 'psql' && PSQL_BACKTICK.test(sql))) return `run a shell command through ${client}`
   for (const code of codes) {
     for (const { re, last } of CLIENT_TARGETS) {
       for (const m of code.matchAll(re)) {

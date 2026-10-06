@@ -1,5 +1,6 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
 import { git, pipeline, type Command } from './commands.ts'
+import { codeTargets } from './code.ts'
 import { kindOf } from './program.ts'
 
 // The one reader of which files a Bash call changes (#705, L613), over the simple commands the
@@ -649,7 +650,13 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
     if (c.script && !c.script.stdin) {
       // A script file named as an operand, or a program file (awk -f), is not guessed at.
     } else if (p && 'unreadable' in p) unnamed.push({ what: onStdin, words: written, inputs: [] })
-    else if (c.verdict) unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [] })
+    else if (c.verdict) {
+      // The files it writes, where its text names every one and each resolves from here (#830).
+      const named = c.verdict.does === 'write files' && c.language && p && 'text' in p ? codeTargets(c.language, p.text) : undefined
+      const targets = named?.map(abs)
+      const known = targets?.every((t): t is string => t !== undefined) ? { targets } : {}
+      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known })
+    }
     else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
     // A command given its operands by xargs changes files no word names (#730).
     if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: written, inputs: [] })

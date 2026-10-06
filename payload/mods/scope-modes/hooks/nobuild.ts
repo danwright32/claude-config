@@ -224,14 +224,15 @@ const writesRefusal = (w: ModKitWrites): Refusal | undefined => {
 const DB_CLIENTS = new Set(['psql', 'mysql', 'mariadb', 'sqlite3'])
 // The SQL a heredoc puts on a database client's standard input (#760): undefined when none does,
 // null when one does that cannot be read. The last heredoc on descriptor 0 is what the client
-// reads. A body holding $ or a backtick may be expanded by the shell, so its text is not the SQL.
+// reads. An unquoted body holding $ or a backtick may be expanded by the shell, so its text is not
+// the SQL; a quoted delimiter (`<<'SQL'`) stops that, so its body is judged whatever it holds (#831).
 const heredocSql = (c: Cmd): string | undefined | null => {
   const fed = (c.heredocs ?? []).filter(h => h.fd === undefined)
   const last = fed[fed.length - 1]
   if (!last) return undefined
   // A later redirect replaced it as standard input: what the client reads is not this body.
   if (last.replaced) return null
-  return /[$`]/.test(last.body) ? null : last.body
+  return !last.quoted && /[$`]/.test(last.body) ? null : last.body
 }
 const commandRefusal = (c: Cmd): Refusal | undefined => {
   let words = c.words

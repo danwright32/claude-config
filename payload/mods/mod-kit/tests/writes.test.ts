@@ -203,7 +203,7 @@ describe('writes: what the words do not name', () => {
   })
   test('an inline script that writes a file is a write the words do not name', () => {
     expect(read(`python3 -c "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"`).unnamed).toEqual([
-      { what: 'an inline python3 script', words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"], inputs: [] },
+      { what: 'an inline python3 script', words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"], inputs: [], targets: ['/Users/dan/.claude/CLAUDE.md'] },
     ])
     expect(read(`node -e "require('fs').appendFileSync('AGENTS.md', 'x')"`).unnamed.map(u => u.what)).toEqual(['an inline node script'])
   })
@@ -455,5 +455,85 @@ describe('writes: a path held in a variable', () => {
   })
   test('a value set inside a subshell ends with it', () => {
     expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual([`${CWD}/b.md`, `${CWD}/a.md`, '(as written) $G'])
+  })
+})
+
+// #830: ask before saving asked about a python heredoc editing a test file, because the only thing it
+// could judge was every lasting memory path the script's text quoted. A program whose every write is
+// an open or a pathlib write of a file its text names gives those files as `targets`, absolute; one
+// whose writes cannot all be named gives none, and a reader judges it by what its text mentions.
+describe('writes: the files an inline python program names as its writes (#830)', () => {
+  const targets = (command: string, cwd = CWD) => read(command, cwd).unnamed.map(u => u.targets)
+  test('an open for writing, or a pathlib write, of a literal path or a name bound once to one names that file', () => {
+    expect(targets("python3 - <<'EOF'\np='tests/a.test.ts'\ns=open(p).read()\nopen(p,'w').write(s.replace('x', '~/.claude/CLAUDE.md'))\nEOF")).toEqual([[`${CWD}/tests/a.test.ts`]])
+    expect(targets(`python3 -c "open('/tmp/out.txt', 'a').write('x')"`)).toEqual([['/tmp/out.txt']])
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nPath('notes/a.md').write_text('x')\nq = Path('b.md')\nq.write_bytes(b'y')\nwith open('c.md', mode='w') as f:\n  f.write('z')\nEOF")).toEqual([
+      [`${CWD}/notes/a.md`, `${CWD}/b.md`, `${CWD}/c.md`],
+    ])
+    // Plain top level imports of modules with no file writers of their own keep them named, os's
+    // path among them when it is all that is taken from os.
+    expect(targets("python3 - <<'EOF'\nimport json, re, sys\nfrom os import path\nfrom os.path import exists as there  # a comment\nfrom pathlib import Path\nif path.exists('a.json') and there('b'):\n  json.dump(re.sub('a', 'b', sys.argv[0]), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
+    // A string's replace, with two arguments, on a name not taken from Path, is no move.
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nq = Path('b.md')\ns = open('a.md').read()\nq.write_text(s.replace('x', 'y'))\nEOF")).toEqual([[`${CWD}/b.md`]])
+    // A cd before it moves where a relative path lands.
+    expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
+  })
+  test('a program with a write whose file its text cannot name gives no targets', () => {
+    const none = [undefined]
+    // A name computed at run time, bound twice, bound by a loop, or a formatted string.
+    expect(targets(`python3 -c "import sys; open(sys.argv[1], 'w').write('x')" out.md`)).toEqual(none)
+    expect(targets("python3 - <<'EOF'\np='a.md'\np='b.md'\nopen(p,'w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfor p in ['a.md']:\n  open(p,'w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nopen(f'{d}/a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nPath('a').joinpath('b.md').write_text('x')\nEOF")).toEqual(none)
+    // Text the shell may expand before python reads it, anywhere in the program, not only in a path
+    // (lessons review of #846 at fc410a7: `$CODE` in an unquoted heredoc can become any code).
+    expect(targets("python3 - <<EOF\nopen('a.md','w')\n$CODE\nEOF")).toEqual(none)
+    expect(targets("python3 - <<EOF\nopen('a.md','w')\nx = `cat more.py`\nEOF")).toEqual(none)
+    expect(targets(`python3 -c "open('a.md','w'); $(cat more.py)"`)).toEqual(none)
+    expect(targets(`D=~/.claude; python3 -c "open('$D/CLAUDE.md','a').write('x')"`)).toEqual(none)
+    // Another way to write, a change of folder, or a process beside the open.
+    expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.remove('b.md')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport os\nos.chdir('/x')\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport subprocess\nopen('a.md','w')\nsubprocess.run(['ls'])\nEOF")).toEqual(none)
+    // The import rule (lessons reviews of #846, four rounds of import shapes): the files are named
+    // only when every `import`, `__import__` and `importlib` in the text is a plain top level import
+    // line read whole, and every module it binds has no file writers. Anything else cannot be read.
+    // Round 1: a module the judge has no write rules for can write anywhere.
+    expect(targets("python3 - <<'EOF'\nimport zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sqlite3\nopen('a.md','w')\nsqlite3.connect('x.db')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom tempfile import mkstemp\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.makedirs('x')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nm = __import__('zip' + 'file')\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport importlib\nopen('a.md','w')\nEOF")).toEqual(none)
+    // os itself is not quiet, however little of it is used.
+    expect(targets("python3 - <<'EOF'\nimport os\nif os.path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual(none)
+    // Round 4: an import after a colon, indented, or inside an expression is not a plain line.
+    expect(targets("python3 - <<'EOF'\nif 1: import zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\ntry: import sqlite3\nexcept Exception: pass\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nif True:\n    import zipfile\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport json; import zipfile\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom json import (\n  dumps,\n)\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom . import x\nopen('a.md','w')\nEOF")).toEqual(none)
+    // Round 4: a dotted import binds its parent, so `import os.path` binds os.
+    expect(targets("python3 - <<'EOF'\nimport os.path\nopen('a.md','w')\nos.chflags('b', 0)\nEOF")).toEqual(none)
+    // Any rename is a move, however many arguments it takes; a replace is one when it is called on a
+    // Path or on a name assigned from one (Dan, 2026-10-06: str.replace stays allowed, since the text
+    // alone cannot tell the two apart on any other receiver).
+    expect(targets("python3 - <<'EOF'\nopen('a.md','w')\nx.rename('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('x')\nopen('a.md','w')\np.replace('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
+    // A move of a pathlib Path, by its one argument or by name.
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').rename('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace(target='/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    // pathlib's own writers the judge has no rule for.
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').copy('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    // Round 3: os taken apart by a from import is os too: only its path is quiet.
+    expect(targets("python3 - <<'EOF'\nfrom os import chflags\nopen('a.md','w')\nchflags('b', 0)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom os import remove\nopen('a.md','w')\nremove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom os import *\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom os import path\nif path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
+    // Only python's writes are named so far.
+    expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })
 })

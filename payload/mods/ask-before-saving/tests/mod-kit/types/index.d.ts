@@ -109,7 +109,9 @@ export type ModKit = {
    * Each command also carries `heredocs`, the body of every heredoc that feeds it, absent when none
    * does (#698), for a reader that judges what a heredoc feeds (`python3 - <<'EOF'`, `bash <<'EOF'`),
    * which `commands` drops: `word` is the place of its `<<` word in `words`, and `<<-` takes the
-   * leading tabs off the body. `fd` names the descriptor a heredoc feeds when it is not standard
+   * leading tabs off the body. `quoted` says whether any of its delimiter was quoted or escaped
+   * (`<<'EOF'`, `<<"EOF"`, `<<\EOF`), which stops the shell expanding `$` and backticks in the body,
+   * so the body is exactly the text the command reads (#831). `fd` names the descriptor a heredoc feeds when it is not standard
    * input (`3<<EOF`), absent when it is; `replaced` marks one on standard input that a later
    * redirect there (`< file`, `<<<`, another heredoc) replaces, so it is not what the command reads. A heredoc inside a word (`"$(cat <<'EOF' ... )"`) feeds no command
    * here, and one that never ends has no body (its lines are read as commands).
@@ -174,7 +176,7 @@ export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; fra
 export type ModKitCommand = {
   words: string[]
   pipedFrom?: string[]
-  heredocs?: { word: number; body: string; fd?: number; replaced?: true }[]
+  heredocs?: { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
   xargs?: true
   found?: string[]
   language?: ModKitLanguage
@@ -218,12 +220,15 @@ export type ModKitChange = { word: string; path?: string; does: 'remove' | 'touc
  * to files, and the writes its words do not name (`what` names it, "a patch" or "an inline python3
  * script"; `words` is the command as written, a variable's name left in it; `inputs` the files to read to find out, such as the patch file,
  * absolute; `into` the folder a download lands in, where the words name one; `script` when it is a
- * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs).
+ * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs;
+ * `targets`, for a program whose text names every file it writes, those files, absolute, so a reader
+ * judges them rather than every path the text quotes, absent where the file of any write cannot be
+ * named (#830)).
  */
 export type ModKitWrites = {
   files: ModKitWrite[]
   changes: ModKitChange[]
-  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true }[]
+  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[] }[]
 }
 
 /**
