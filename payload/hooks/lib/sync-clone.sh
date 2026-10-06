@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# sync-clone.sh: the four questions every hook about a config CHECKOUT has to answer
+# sync-clone.sh: the questions every hook about a config CHECKOUT has to answer
 # (claude-config#367).
 #
 # Sourced, never executed. payload-revert-warning.sh worked these out for itself, and the gate that
@@ -63,11 +63,6 @@ sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
   return 1
 }
 
-# Is a hold in force? Read only, and expiry is the only thing that makes a marker stop counting.
-# An UNREADABLE marker is NOT a hold: treating one as a hold would silence every guard built on
-# this for as long as the bad file sits there, and that is the direction that loses a day of work
-# (L42). It is left on disk for claude-sync itself to report and clear, in its own words, because a
-# hook that removes a decision somebody made destroys state it does not own (L5).
 # Is this clone somewhere the daemon can NOT overwrite (claude-config#800)? The daemon mirrors
 # ~/.claude over payload/ in its OWN clone and pushes to main; it never writes into a linked
 # worktree, and a branch other than the default reaches main only by a reviewed merge. So a linked
@@ -93,6 +88,11 @@ sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
   [ "$br" != "$def" ]
 }
 
+# Is a hold in force? Read only, and expiry is the only thing that makes a marker stop counting.
+# An UNREADABLE marker is NOT a hold: treating one as a hold would silence every guard built on
+# this for as long as the bad file sits there, and that is the direction that loses a day of work
+# (L42). It is left on disk for claude-sync itself to report and clear, in its own words, because a
+# hook that removes a decision somebody made destroys state it does not own (L5).
 sc_hold_live(){
   local until now
   [ -f "$SYNC_HOLD_FILE" ] || return 1

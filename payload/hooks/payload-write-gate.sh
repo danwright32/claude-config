@@ -20,12 +20,16 @@
 # prompt time warning stays for the case this cannot see: a hold that lapses mid session.
 #
 # It refuses ONLY in the state that loses work: a live watcher, running from a DIFFERENT clone, and
-# no hold in force, in a checkout the daemon can overwrite. A linked worktree on a branch other than
-# the default is not one (claude-config#800): the daemon never writes into it, and both halves below,
-# the refusal before a call and the report after it, let it through. A session editing the clone the watcher itself runs from is editing the source
-# of the mirror and is not at risk, and neither is one holding the watcher off. Its four questions
-# come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come to two
-# different answers about whether a hold is in force (L370).
+# no hold in force, in a checkout the daemon can overwrite. A session editing the clone the watcher
+# itself runs from is editing the source of the mirror and is not at risk, and neither is one
+# holding the watcher off.
+#
+# Nor is an agent's linked worktree on a branch other than the default (claude-config#800): the
+# daemon never writes into it, and its work reaches main only by a reviewed merge. Both halves
+# below, the refusal before a call and the report after it, let it through.
+#
+# The questions come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come
+# to two different answers about whether a hold is in force (L370).
 #
 # Env:
 #   SYNC_WATCH_PID_FILE  the watcher's pid file (default ~/.claude-sync-watch.pid)
@@ -53,8 +57,9 @@ payload="$(cat 2>/dev/null || true)"
 #
 # What is refused is narrowed to what could be a payload write at all, by the raw payload text,
 # because nothing here can read the path out of it: a gate that refused every Edit and every Bash
-# call on such a machine is one nobody keeps (L36, L54). The three questions that decide whether
-# anything is at risk (is there a watcher, does it run from HERE, is a hold in force) are pure
+# call on such a machine is one nobody keeps (L36, L54). The questions that decide whether
+# anything is at risk (is there a watcher, does it run from HERE, is it an own worktree, is a hold in
+# force) are pure
 # shell in lib/sync-clone.sh, so they are asked here exactly as they are below, and a machine where
 # nothing could revert the write is not refused.
 if ps_reader_missing python3; then
