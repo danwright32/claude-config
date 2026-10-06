@@ -189,13 +189,74 @@ check_eq "and no second reviewer ran" "1" "$(calls)"
 # ===========================================================================================
 # 3. check: every outcome the merge gate can meet.
 # ===========================================================================================
-# 3a. finished with findings, not yet delivered: refused once WITH the findings, then allowed.
+# 3a. finished with findings: refused WITH the findings and a read key, until a merge presents that
+#     key (claude-config#788). It used to refuse ONCE and then allow, judging the findings read
+#     because the refusal had been printed; on #774 another hook refused the same merge, only that
+#     hook's message was shown, and the retry merged with nobody having seen them. The key is in
+#     the refusal and nowhere else the session reads, so a merge carrying it proves it was shown.
+key_in(){ [[ "$1" =~ PR_REVIEW_READ=([a-f0-9]+) ]] && printf '%s' "${BASH_REMATCH[1]}"; }
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "undelivered findings refuse the merge this once" "1" "$rc"
+check_eq "unread findings refuse the merge" "1" "$rc"
 check "the refusal carries the finding itself" "deleteEvent still swallows" "$out"
 check "and the count" "1 finding" "$out"
+k1="$(key_in "$out")"
+[ -n "$k1" ] && ok || bad "the refusal names a read key to merge with: $out"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "delivered findings no longer refuse" "0" "$rc"
+check_eq "a second attempt without the key is refused again, the refusal may not have been shown" "1" "$rc"
+check "carrying the findings again" "deleteEvent still swallows" "$out"
+# Each showing issues a FRESH key, and only a hash of each is stored (lessons review of #795): a
+# plain key on disk could be read by a session that never saw the findings.
+k2="$(key_in "$out")"
+[ -n "$k2" ] && [ "$k2" != "$k1" ] && ok || bad "a second showing issues a fresh key (first $k1, second $k2)"
+if grep -rqF "$k1" "$AI_REVIEW_STATE_DIR" 2>/dev/null; then bad "a plain read key is stored on disk"; else ok; fi
+# Printing is not reading, so nothing records "printed" as if it meant something: the old
+# <review>.delivered marker is no longer written by a refusal.
+[ ! -e "$(final_of "$HEAD_SHA").delivered" ] && ok || bad "a refusal still writes the unread .delivered marker"
+out="$(PR_REVIEW_READ=0000dead prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "a wrong key is refused" "1" "$rc"
+out="$(PR_REVIEW_READ="$k1" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "the key from the refusal allows the merge" "0" "$rc"
+check "and says the findings were read on their key" "read: this merge presented their key" "$out"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "once read, a later check of the same head allows" "0" "$rc"
+
+# 3a2. a review file with findings but no finish stamp cannot be given a read key, and the refusal
+#      says THAT, never that the state folder is at fault (L11).
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+printf 'repo=repo\nstatus=ok\nkind=pr\nfindings=1\n\nApp/Sync.swift:3: x (L1). Should be: y.\n' > "$(final_of "$HEAD_SHA")"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "a review with no finish stamp refuses" "1" "$rc"
+check "and says the review records no finish time" "no finish time" "$out"
+check_not "and does not blame the state folder" "could be made in" "$out"
+
+# 3a3. each reason a read key cannot be issued is named, with the remedy that fits it (L11, L111):
+#      a missing tool is not fixed by re-running the review, and a stamp problem is not a tool.
+reset_state
+FAKE_CLAUDE_OUT="App/Sync.swift:3: x (L1). Should be: y. [severity: minor]" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA"
+NOSHA="$WORKDIR/noshasum"; mkdir -p "$NOSHA"
+for t in awk tr od git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
+         cksum cut uname hostname mktemp ls chmod readlink nohup tail xargs find stat sleep kill ps id; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOSHA/$t"
+done
+out="$(PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
+check_eq "with no shasum the merge is still refused" "1" "$rc"
+check "and the refusal names the missing tool" "shasum" "$out"
+out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"
+check_not "a presented key is not blamed when no key can be checked at all" "not this review's key" "$out"
+check_not "and does not send it to re-run the review" "pr-review.sh restart --dir" "$out"
+chmod a-w "$AI_REVIEW_STATE_DIR"
+if ( : > "$AI_REVIEW_STATE_DIR/.probe" ) 2>/dev/null; then
+  # Root, or a filesystem ignoring modes: the case cannot be produced here, so it is said, not failed (L411).
+  rm -f "$AI_REVIEW_STATE_DIR/.probe"; chmod u+w "$AI_REVIEW_STATE_DIR"
+  echo "  UNMEASURED: the state folder stayed writable after chmod a-w, so the no-write case was not produced"
+else
+  out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+  chmod u+w "$AI_REVIEW_STATE_DIR"
+  check_eq "with nowhere to write a key the merge is still refused" "1" "$rc"
+  check "and the refusal says nothing could be written beside the review" "could not be written" "$out"
+fi
 
 # 3b. finished clean: allowed at once.
 reset_state
@@ -412,8 +473,60 @@ wait_final "$HEAD_SHA" || bad "the gate's review finished"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "the first merge after it finishes is refused with the findings" "2" "$rc"
 check "carrying them" "deleteEvent still swallows" "$out"
+gk="$(key_in "$out")"
+# #788: suppose another hook refused this same attempt and only ITS message was shown. The retry,
+# without the key, must be refused again with the findings, never allowed as if they were read.
+out="$(fire_gate "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; rc=$?
+check_eq "a retry without the read key is refused again" "2" "$rc"
+check "carrying the findings again" "deleteEvent still swallows" "$out"
+# The key counts only as an assignment in front of the MERGE itself, never as text elsewhere in the
+# command: an echo or another command carrying it says nothing about this merge (L673).
+out="$(fire_gate "echo 'PR_REVIEW_READ=$gk' && gh pr merge 7 --squash")"; rc=$?
+check_eq "a key that is only mentioned in another command does not count" "2" "$rc"
+out="$(fire_gate "PR_REVIEW_READ=$gk true && gh pr merge 7 --squash")"; rc=$?
+check_eq "a key in front of a different command does not count" "2" "$rc"
+# Before an assignment holding a space (scoping the merge to one of Dan's accounts), still the key.
+out="$(fire_gate "PR_REVIEW_READ=$gk GH_TOKEN=\$(gh auth token -u x; true) gh pr merge 7 --squash")"; rc=$?
+check_eq "a key before an account scoped merge is read as the key" "0" "$rc"
+rm -f "$(final_of "$HEAD_SHA").acknowledged"
+# Quoted, as a shell would accept it, the key is the same key.
+out="$(fire_gate "PR_REVIEW_READ=\"$gk\" gh pr merge 7 --squash")"; rc=$?
+check_eq "a quoted key in front of the merge is read as the key" "0" "$rc"
+out="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
+check_eq "the merge carrying the key from the refusal is allowed" "0" "$rc"
+# An acknowledgement belongs to the review it read: a review file written again for the same head,
+# by any route, must not inherit it.
+f7="$(final_of "$HEAD_SHA")"
+sed 's/^finished=.*/finished=1/' "$f7" > "$f7.tmp" && mv "$f7.tmp" "$f7"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
-check_eq "the next merge is allowed" "0" "$rc"
+check_eq "an acknowledgement does not carry over to a replaced review of the same head" "2" "$rc"
+[ -n "$(key_in "$out")" ] && [ "$(key_in "$out")" != "$gk" ] && ok \
+  || bad "a replaced review of the same head is given a NEW read key (old $gk, now $(key_in "$out"))"
+out2="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
+check_eq "and the earlier review's key does not read the replaced one" "2" "$rc"
+out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
+check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
+# Eight issuers at once each get a whole key that reads the review, none lost to another's write.
+fk="$WORKDIR/concurrent-review.txt"; printf 'status=ok\nfinished=42\n\n' > "$fk"; rm -f "$fk".readkey*
+for i in 1 2 3 4 5 6 7 8; do
+  bash -c '. "$1" && ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+done
+wait
+all_valid=1
+for i in 1 2 3 4 5 6 7 8; do
+  k="$(cat "$WORKDIR/key.$i")"
+  { [ "${#k}" -eq 16 ] && bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$k"; } || all_valid=0
+done
+[ "$all_valid" -eq 1 ] && ok \
+  || bad "eight concurrent issuers each get a key that reads the review (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
+bash -c '. "$1" && ar_review_key_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
+# Never rewritten, only appended: every key issued, first and seventieth, still reads (a trim raced
+# concurrent appends and dropped keys that had been shown; lessons review of #795).
+firstk="$(bash -c '. "$1"; ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_review_issue_key "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
+bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
+rm -f "$WORKDIR"/key.*
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"
 rm -f "$(final_of "$HEAD_SHA")"*
@@ -433,7 +546,8 @@ out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$rc"
 
 # ===========================================================================================
-# 5. The nudge delivers a pr review under the 10,000 char hook cap, and marks it delivered.
+# 5. The nudge shows a pr review under the 10,000 char hook cap, with a read key; showing it there
+#    does not allow the merge (#788).
 # ===========================================================================================
 reset_state
 big="$WORKDIR/big.txt"; : > "$big"
@@ -445,10 +559,26 @@ check "the nudge names it as the pull request review" "Lessons review of the who
 check "with the total count" "200 findings" "$out"
 check "and where the full list is" "$(final_of "$HEAD_SHA")" "$out"
 [ "${#out}" -lt 10000 ] && ok || bad "the nudge stays under the 10,000 char hook cap (was ${#out})"
+# The nudge reaches whichever session prompts next in this repository, which need not be the one
+# merging (on #774 the nudge marked them delivered in the coordinating session while a subagent
+# merged), so showing them there is not proof the merger read them (#788). It carries the read key,
+# so the session that saw them can merge with it.
+nk="$(key_in "$out")"
+[ -n "$nk" ] && ok || bad "the nudge names the read key"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "findings the nudge delivered do not refuse the merge again" "0" "$rc"
-out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
+check_eq "findings the nudge showed still refuse a merge without the key" "1" "$rc"
 [ "${#out}" -lt 10000 ] && ok || bad "the gate's own message stays under the cap too"
+out="$(PR_REVIEW_READ="$nk" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "and the nudge's key allows it" "0" "$rc"
+
+# 5a. With no read key to give (the review records no finish time), the nudge says so and names
+#     the remedy, rather than saying the merge waits on a key it never shows (L11).
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstatus=ok\nkind=pr\nfindings=1\n\nApp/Sync.swift:3: x (L1). Should be: y.\n' "$HEAD_SHA" > "$(final_of "$HEAD_SHA")"
+out="$(printf '{"session_id":"k1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "the nudge says no read key could be made" "No read key could be made" "$out"
+check "and names the restart" "pr-review.sh restart" "$out"
 
 # 5b. The nudge's sentence fits the count: one finding is singular, and a clean review says it is
 #     clean rather than that the merge waits on findings it does not have (L21).
