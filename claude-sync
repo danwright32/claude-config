@@ -7530,6 +7530,48 @@ send_hook_name_pattern(){   # $1 = a hook basename -> an ERE matching it as a wh
   printf '(^|[^A-Za-z0-9_-])%s([^A-Za-z0-9_-]|$)' "$esc"
 }
 
+# THE WHOLE TREE SCANS (claude-config#809). A suite is picked above by NAMING a changed hook, and a
+# scan over every hook (no short circuiting pipes, every hook registered, every hook naming its
+# repository) names none, so it never ran on a send. Measured on 2026-10-05: 16 of the 18 red runs
+# on main from "sync from <host>" commits between 2026-09-08 and 2026-10-05 failed such a scan, the
+# other 2 were flakes. So a scan says what it reads, on a line of its own:
+#     # send-gate: scans hooks/ settings.hooks.json
+# anywhere in a suite file, or on the line straight after a `section "..."` heading for one section
+# of a larger suite. Paths are relative to payload/, and one ending in / covers what is under it.
+# Prints one record per declaration: <suite path> TAB <section title or -> TAB <scopes>.
+send_declared_scans(){
+  local f
+  for f in "$SYNC_REPO"/payload/hooks/test-*.sh "$SYNC_REPO"/tests/test-*.sh; do
+    [ -f "$f" ] || continue
+    awk -v F="$f" '
+      /^section "/ { t = $0; sub(/^section "/, "", t); sub(/"[[:space:]]*$/, "", t); next_is = NR + 1; next }
+      /^# send-gate: scans / {
+        s = $0; sub(/^# send-gate: scans /, "", s)
+        if (NR == next_is) printf "%s\t%s\t%s\n", F, t, s
+        else if (!filewide) { printf "%s\t-\t%s\n", F, s; filewide = 1 }
+      }' "$f" 2>/dev/null
+  done
+  return 0
+}
+
+# Does a changed payload path fall under one of a scan's scopes? $1 = path relative to the repo,
+# $2 = the scopes, space separated, relative to payload/.
+send_path_in_scope(){
+  local rel="${1#payload/}" s
+  local -a scopes=()
+  # Split into an array and walked quoted, so a scope is never expanded as a glob against whatever
+  # directory the send happens to run in.
+  read -r -a scopes <<< "$2"
+  [ "${#scopes[@]}" -gt 0 ] || return 1
+  for s in "${scopes[@]}"; do
+    case "$s" in
+      */) case "$rel" in "$s"*) return 0 ;; esac ;;
+      *) [ "$rel" = "$s" ] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
 send_suites_covering(){   # $1 = a hook's basename -> the suites naming it, one per line
   local f suites=()
   for f in "$SYNC_REPO"/payload/hooks/test-*.sh "$SYNC_REPO"/tests/test-*.sh; do
@@ -7631,6 +7673,40 @@ COVERS
     esac
   done < <(git -C "$SYNC_REPO" diff --cached --name-only -- payload/hooks 2>/dev/null) > "$pairs" 2>/dev/null
 
+  # The whole tree scans (claude-config#809): every declared scan whose scope a changed payload path
+  # falls under is paired with each such path, so a red scan holds back exactly what it judged. A
+  # section is identified as <suite path>::<title>. Its scopes are kept as a D record, because the
+  # remembered verdict for a scan has to change whenever anything in its scope does, not only the
+  # hooks (L40).
+  local scans changed d_suite d_title d_scopes id
+  scans="$(send_declared_scans)"
+  changed="$(git -C "$SYNC_REPO" diff --cached --name-only -- payload 2>/dev/null)"
+  if [ -n "$scans" ] && [ -n "$changed" ]; then
+    while IFS="$(printf '\t')" read -r d_suite d_title d_scopes; do
+      [ -n "$d_suite" ] || continue
+      # Scopes must be PATHS. A line that merely starts with the marker (inside a quoted string, a
+      # fixture) would otherwise register a scan nobody wrote, so anything else is refused by name
+      # rather than run or silently dropped (the lessons review of PR #811, L257, L11).
+      case "$d_scopes" in
+        ''|*[!A-Za-z0-9._/\ -]*)
+          echo "claude-sync: ignored a send-gate declaration in ${d_suite#"$SYNC_REPO"/}${d_title:+ ($d_title)}, because its scopes are not paths: $d_scopes" >&2
+          continue ;;
+      esac
+      id="$d_suite"; [ "$d_title" = "-" ] || id="$d_suite::$d_title"
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        if send_path_in_scope "$f" "$d_scopes"; then
+          printf 'C\t%s\t%s\n' "$id" "$f" >> "$pairs"
+          printf 'D\t%s\t%s\n' "$id" "$d_scopes" >> "$pairs"
+        fi
+      done <<CHANGED
+$changed
+CHANGED
+    done <<SCANS
+$scans
+SCANS
+  fi
+
   uncovered="$(awk -F'\t' '$1=="U"{print $3}' "$pairs" 2>/dev/null | sort -u | tr '\n' ' ')"
 
   # Taken BEFORE anything is held back, because holding back rewrites the index, and the verdict
@@ -7639,9 +7715,26 @@ COVERS
 
   # Deduplicated. A suite that both changed itself and covers a changed hook appears twice, and
   # running it twice is the cost this issue exists to bound.
+  local key sdigest scopes_of title path
   while IFS= read -r suite; do
     [ -n "$suite" ] || continue
-    verdict="$(send_verdict_recall "$(basename "$suite")" "$digest")"
+    # A section is <suite path>::<title>; anything else is a whole suite.
+    path="${suite%%::*}"; title=""
+    case "$suite" in *::*) title="${suite#*::}" ;; esac
+    key="$(basename "$path")"
+    [ -z "$title" ] || key="$key@$(printf '%s' "$title" | shasum -a 256 2>/dev/null | cut -c1-12)"
+    # A declared scan's verdict rests on everything in its scope and on its own text as well as on
+    # the hooks, so its key folds those in; a scope change must re-run it (L40, L336).
+    sdigest="$digest"
+    scopes_of="$(awk -F'\t' -v s="$suite" '$1=="D" && $2==s {print $3; exit}' "$pairs" 2>/dev/null)"
+    if [ -n "$scopes_of" ] && [ -n "$digest" ]; then
+      sdigest="$( { printf '%s\n' "$digest"
+                    # shellcheck disable=SC2086
+                    (set -f; cd "$SYNC_REPO/payload" 2>/dev/null && git ls-files -s -- $scopes_of 2>/dev/null)
+                    shasum -a 256 "$path" 2>/dev/null; } | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+      case "$sdigest" in ''|*[!0-9a-f]*) sdigest="" ;; esac
+    fi
+    verdict="$(send_verdict_recall "$key" "$sdigest")"
     if [ -n "$verdict" ]; then
       reused=$(( reused + 1 ))
     else
@@ -7650,7 +7743,15 @@ COVERS
       # Same shape as the pull's runner: a background child against the clock, because a wait with
       # no deadline cannot fail, it can only hang, and this one holds the sync lock while it does
       # (L110).
-      SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$suite" > "$out" 2>&1 &
+      if [ -n "$title" ]; then
+        # One section alone: its timing record OFF, or a single section rewrites the timings the
+        # full suite deals its shards by, and the machine wide suite lock SKIPPED, or any other run
+        # holding it would read as this check failing and hold back a good file (#809).
+        SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
+          SECTION_ONLY="$title" bash "$path" > "$out" 2>&1 &
+      else
+        SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$path" > "$out" 2>&1 &
+      fi
       pid=$!
       started="$(date +%s)"; killed=0
       while kill -0 "$pid" 2>/dev/null; do
@@ -7676,7 +7777,7 @@ COVERS
       # what the remembered verdict has to survive is a change to the inputs, and a deadline that
       # fired once will fire again on the same bytes on the same machine. It keeps its own word
       # so a reused verdict still says why (#464).
-      send_verdict_record "$(basename "$suite")" "$digest" "$verdict"
+      send_verdict_record "$key" "$sdigest" "$verdict"
     fi
     case "$verdict" in
       fail) failed_suites="$failed_suites$suite
@@ -7701,6 +7802,22 @@ COVERS
     while IFS= read -r suite; do
       [ -n "$suite" ] || continue
       files="$(awk -F'\t' -v s="$suite" '$1=="C" && $2==s {print $3}' "$pairs" 2>/dev/null | sort -u)"
+      # Holding back the lessons file holds back what is RENDERED from it too, exactly as a lessons
+      # fault does (#483): an index published without its source tells the other Mac about a lesson
+      # its LESSONS.md does not hold (the lessons review of PR #811).
+      case "
+$files
+" in
+        *"
+payload/$LESSONS_FILE
+"*) local rf
+            while IFS= read -r rf; do
+              [ -n "$rf" ] && files="$(union_lines "$files" "payload/$rf")"
+            done <<RENDERED
+$(files_rendered_from_lessons)
+RENDERED
+            ;;
+      esac
       while IFS= read -r p; do
         [ -n "$p" ] && send_hold_back_path "$p"
       done <<HELD
@@ -7710,16 +7827,30 @@ HELD
       # different sentence naming the file cannot answer between them about which hook is waiting
       # (L178, L80). A suite stopped at its deadline says so in its own words: the remedy for one
       # that hung is not the remedy for one that is red (L11, #464).
-      why="$(basename "$suite") fails here"
+      # A section is named as the check it is, inside its suite, with the command that runs it
+      # alone; a whole suite keeps the wording it has always had (#809).
+      local name rerun
+      path="${suite%%::*}"
+      case "$suite" in
+        *::*) title="${suite#*::}"
+              name="the check '$title' in $(basename "$path")"
+              rerun="SECTION_ONLY='$title' bash $path" ;;
+        *)    name="$(basename "$path")"
+              case "$path" in
+                "$SYNC_REPO"/payload/hooks/*) rerun="bash $CLAUDE_HOME/hooks/$(basename "$path")" ;;
+                *) rerun="bash $path" ;;
+              esac ;;
+      esac
+      why="$name fails here"
       # Whole lines, so a suite whose path ends another's cannot answer for it.
       case "
 $timed_out_suites" in
         *"
 $suite
-"*) why="$(basename "$suite") did not finish within SYNC_SEND_TESTS_TIMEOUT (${limit}s) here and was stopped with everything it had started" ;;
+"*) why="$name did not finish within SYNC_SEND_TESTS_TIMEOUT (${limit}s) here and was stopped with everything it had started" ;;
       esac
-      echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: bash $CLAUDE_HOME/hooks/$(basename "$suite"). The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
-      notify "held back $(printf '%s' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' '): $why"
+      echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: $rerun. The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
+      notify "held back $(printf '%s' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' '): $why"
     done <<FAILED
 $failed_suites
 FAILED

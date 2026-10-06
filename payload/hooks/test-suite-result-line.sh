@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# A whole tree scan: a send touching these paths runs this suite (claude-config#809).
+# send-gate: scans hooks/ skills/ mods/
 # Every suite in this repo has to end with ONE machine readable score line (claude-config#126).
 #
 # Before this, thirty six suites printed their totals five different ways: `passed: 8, failed: 0`,
