@@ -167,6 +167,9 @@ sed -i.bak 's#stage-workflow\.sh#stage-nothing.sh#g' "$PCH/.claude/skills/plan-c
 out="$(pc_section)"
 grep -q 'FAIL.*stage-workflow' <<< "$out" && ok \
   || bad "plan-council healthcheck fails a SKILL.md that does not stage its workflow" "$out"
+out="$(mv "$PCH/.claude/hooks/lib/workflow-syntax.js" "$TMP/ws.bak"; HOME="$PCH" bash "$PCH/.claude/skills/plan-council/healthcheck.sh" 2>&1 | sed -n '/workflow engine/,/^==/p'; mv "$TMP/ws.bak" "$PCH/.claude/hooks/lib/workflow-syntax.js")"
+grep -q 'FAIL.*workflow-syntax.js is missing' <<< "$out" && ! grep -q 'syntax error' <<< "$out" && ok \
+  || bad "plan-council healthcheck names a missing syntax checker rather than calling every script broken" "$out"
 rm -f "$PCH/.claude/hooks/lib/stage-workflow.sh"
 out="$(pc_section)"
 grep -q 'FAIL.*exact copy' <<< "$out" && ok \

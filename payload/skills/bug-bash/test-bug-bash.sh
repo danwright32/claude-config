@@ -252,7 +252,7 @@ const req = m => ({ request: () => ({ method: () => m }), continue: () => "conti
   const verdicts = r ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].map(m => m + "=" + r.fn(req(m))) : []
   routes.length = 0
   await launch({ chromium: fake, readOnly: false })
-  console.log(JSON.stringify({ hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead), sw: opts.map(o => o.serviceWorkers || "allow") }))
+  console.log(JSON.stringify({ noBrowser: !("browser" in ro), canClose: typeof ro.close === "function", hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead), sw: opts.map(o => o.serviceWorkers || "allow") }))
 })().catch(e => { console.log("ERR " + e.message); process.exit(1) })
 ' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && ok || bad "the explorer launcher loads and launches with a stand in browser" "$out"
@@ -263,6 +263,8 @@ grep -q '"localRoutes":0' <<< "$out" && ok || bad "a local run is not restricted
 # (lessons review of #798).
 grep -q '"sw":\["block","allow"\]' <<< "$out" && ok || bad "a read only context blocks service workers, a local one does not" "$out"
 grep -q '"hasContext":true' <<< "$out" && ok || bad "the launcher hands back the context explorers drive" "$out"
+# No browser handle comes back, so no explorer can make a second context without the read only route.
+grep -q '"noBrowser":true,"canClose":true' <<< "$out" && ok || bad "the launcher hands back a close, never the browser" "$out"
 out="$(node -e 'require(process.argv[1]).launch({ readOnly: true }).then(() => console.log("launched"), e => { console.log(e.message); process.exit(3) })' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 3 ] && grep -qi 'playwright' <<< "$out" && ok || bad "with no Playwright handed in, the launcher refuses by name (rc $rc)" "$out"
 grep -q 'explorer-browser.js' "$DIR/SKILL.md" && ok || bad "SKILL.md has every explorer launch through explorer-browser.js"

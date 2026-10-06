@@ -16,12 +16,15 @@ ok(){ printf '  ok    %s\n' "$1"; }
 bad(){ printf '  FAIL  %s\n' "$1"; fail=1; }
 
 echo "== workflow engine (JS syntax) =="
+# A missing checker is named once, never read as every script being broken.
+if [ ! -f "$D/hooks/lib/workflow-syntax.js" ]; then bad "hooks/lib/workflow-syntax.js is missing, so no workflow script could be checked"; else
 for f in "$D"/skills/plan-council/*.workflow.js; do
   [ -e "$f" ] || { bad "no *.workflow.js found"; break; }
   # Parsed as the Workflow engine runs it, an async function body; `node --check` reads the meta's
   # export as an ES module, where the top level return is a syntax error (#587, PR #798).
   if why="$(node "$D/hooks/lib/workflow-syntax.js" "$f" 2>&1)"; then ok "$(basename "$f")"; else bad "$(basename "$f"): ${why:-syntax error}"; fi
 done
+fi
 
 echo "== skills (frontmatter) =="
 for s in plan-council plan-lite; do
@@ -75,7 +78,8 @@ else
   bad "SKILL.md does not stage panel.workflow.js through hooks/lib/stage-workflow.sh"
 fi
 _pc_tmp="$(mktemp -d)"
-_pc_staged="$(bash "$D/hooks/lib/stage-workflow.sh" "$D/skills/plan-council/panel.workflow.js" "$_pc_tmp" 2>&1)"
+# The path from stdout alone, so a warning on stderr cannot become part of it.
+_pc_staged="$(bash "$D/hooks/lib/stage-workflow.sh" "$D/skills/plan-council/panel.workflow.js" "$_pc_tmp" 2>/dev/null)"
 if [ -f "$_pc_staged" ] && cmp -s "$D/skills/plan-council/panel.workflow.js" "$_pc_staged"; then
   ok "stage-workflow.sh -> $_pc_staged"
 else

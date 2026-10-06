@@ -2,7 +2,7 @@
 //
 //   const { launch } = require(`${process.env.HOME}/.claude/skills/bug-bash/explorer-browser.js`)
 //   const { chromium } = require('<project>/node_modules/playwright')
-//   const { browser, context } = await launch({ chromium, readOnly })
+//   const { context, close } = await launch({ chromium, readOnly })
 //   const page = await context.newPage()
 //
 // A headless browser of the explorer's own, from the project's own Playwright install, with a
@@ -11,7 +11,8 @@
 // every HTTP request that could change something and blocks service workers, so read only is
 // enforced in the browser rather than asked for in a prompt (lessons review of #798, L27): a form an
 // explorer submits there goes nowhere. It is not a sealed box: messages over a WebSocket the page
-// opens are not intercepted, and a script that makes its own context bypasses all of it.
+// opens are not intercepted, and a script that starts its own browser rather than this one bypasses
+// all of it, which is why the skill has every explorer start through here.
 //
 // It refuses, by throwing, when no Playwright browser type is handed in, rather than finding one on
 // its own: which install is used is the project's, and a guessed one is a different browser.
@@ -30,7 +31,9 @@ async function launch({ chromium, readOnly = false, headless = true } = {}) {
   if (readOnly) {
     await context.route('**/*', route => (isRead(route.request().method()) ? route.continue() : route.abort()))
   }
-  return { browser, context }
+  // The browser itself is not handed back, so no explorer can make a second context without the
+  // read only route; close() is all it needs of it.
+  return { context, close: () => browser.close() }
 }
 
 module.exports = { launch, isRead }

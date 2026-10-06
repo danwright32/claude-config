@@ -50,7 +50,9 @@ fi
 STAGE="$DIR/../../hooks/lib/stage-workflow.sh"
 [ -f "$STAGE" ] || fail "hooks/lib/stage-workflow.sh is missing, so the skill cannot stage its workflow"
 _hc_tmp="$(mktemp -d)"
-_staged="$(bash "$STAGE" "$WF" "$_hc_tmp" 2>&1)" || { rm -rf "$_hc_tmp"; fail "stage-workflow.sh refused a fresh scratchpad: $_staged"; }
+# Its path is read from stdout alone; a warning on stderr must not become part of it.
+_staged="$(bash "$STAGE" "$WF" "$_hc_tmp" 2>"$_hc_tmp.err")" || { _why="$(cat "$_hc_tmp.err")"; rm -rf "$_hc_tmp" "$_hc_tmp.err"; fail "stage-workflow.sh refused a fresh scratchpad: $_why"; }
+rm -f "$_hc_tmp.err"
 cmp -s "$WF" "$_staged" || { rm -rf "$_hc_tmp"; fail "stage-workflow.sh printed a path that is not an exact copy: $_staged"; }
 rm -rf "$_hc_tmp"
 
