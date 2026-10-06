@@ -82,7 +82,10 @@ KNOWN="$TS_DIR/known-type-errors.tsv"
 known_of(){ [ -f "$KNOWN" ] && awk -F'\t' -v m="$1" '$1 == m { print $2 "\t" $3 "\t" $4 }' "$KNOWN"; }
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/check-mods.XXXXXX" 2>/dev/null)" || scratch=""
 trap '[ -n "$scratch" ] && rm -rf "$scratch"' EXIT
+# The mods whose types went unchecked, by cause, each "cause<TAB>mod" (L629: every cause named).
 untyped=0; untyped_why=""
+unchecked(){ untyped=$((untyped + 1)); untyped_why="${untyped_why}$1	$2
+"; }
 
 # The engine's verdict lines: the item marks and the failure summary, a few at most. When there is
 # no such line, the exit code and the last lines of output instead, never an empty reason (#740).
@@ -137,7 +140,7 @@ for d in "${mods[@]}"; do
   checked="$d"
   # No compiler is decided first, so it is the cause named whether or not types could be borrowed.
   if [ -z "$tsc" ]; then
-    untyped=$((untyped + 1)); untyped_why="no TypeScript compiler"
+    unchecked "no TypeScript compiler" "$name"
     echo "check-mods: $name ok ($types)"
     continue
   fi
@@ -155,10 +158,10 @@ for d in "${mods[@]}"; do
   if [ -n "$copy_failed" ]; then
     # Types were laid; what failed is the scratch copy, which is the cause said (L11).
     types="types not checked: its laid types are in $TYPES_HOME/mods/$name but it could not copy it to scratch ($copy_failed)"
-    untyped=$((untyped + 1)); untyped_why="could not copy $name to scratch"
+    unchecked "could not be copied to scratch" "$name"
   elif [ -z "$checked" ] || [ ! -f "$checked/.claude-plugin/types/tsconfig.json" ]; then
     types="types not checked: Claude Code has not laid its types here or in $TYPES_HOME/mods/$name"
-    untyped=$((untyped + 1)); untyped_why="no types laid for $name"
+    unchecked "no types laid" "$name"
   else
     # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
     # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
@@ -209,7 +212,9 @@ echo "check-mods: $n mods checked in $dir"
 # Never a silent skip (#803): how many mods' types went unchecked, why, and the one command that
 # installs the pinned compiler. Said on stderr, and not a failure, since nothing was measured.
 if [ "$untyped" -gt 0 ]; then
-  echo "check-mods: UNMEASURED: $untyped of $n mods' types were not checked ($untyped_why$([ "$untyped" -gt 1 ] && echo ', among others')). Install the pinned compiler with: npm ci --prefix tools/typescript" >&2
+  causes="$(printf '%s' "$untyped_why" | awk -F'\t' 'NF == 2 { if (!($1 in n)) order[++k] = $1; n[$1]++; m[$1] = m[$1] ($1 in seen ? ", " : "") $2; seen[$1] = 1 }
+    END { for (i = 1; i <= k; i++) printf "%s%d %s: %s", (i > 1 ? "; " : ""), n[order[i]], order[i], m[order[i]] }')"
+  echo "check-mods: UNMEASURED: $untyped of $n mods' types were not checked ($causes). Install the pinned compiler with: npm ci --prefix tools/typescript" >&2
 fi
 [ "$failed" -eq 1 ] && exit 1
 if [ "$unmeasured" -eq 1 ]; then
