@@ -20,10 +20,14 @@ In conversation with the user, establish:
 Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan: "I'll run 19 domain auditors in parallel, verify the serious findings, and produce an advisory report", and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
 
 ## 2. Run the audit (Workflow engine)
-Call the **Workflow** tool with:
+First copy the workflow script into this session's scratchpad, because the Workflow tool refuses a script under `~/.claude`: it accepts only a path it returned itself or a file inside the working directory, a directory added to the session, or the scratchpad. Run, with the scratchpad directory your system prompt names:
+
+    bash ~/.claude/hooks/lib/stage-workflow.sh ~/.claude/skills/production-ready/production-audit.workflow.js "<scratchpad directory>"
+
+It prints one line, the absolute path of an exact copy of the script, and refuses (printing no path) when the scratchpad is missing, relative, or inside `~/.claude`. If the session names no scratchpad, read the script and pass its contents unchanged as `script` instead of `scriptPath`, rather than writing a copy into the project. Then call the **Workflow** tool with:
 
     {
-      scriptPath: "__CLAUDE_HOME__/skills/production-ready/production-audit.workflow.js",
+      scriptPath: "<the path stage-workflow.sh printed>",
       args: {
         projectDir: "<absolute path to the repo>",
         repo: "<owner/name>",
@@ -31,7 +35,7 @@ Call the **Workflow** tool with:
       }
     }
 
-That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If what you see there is a placeholder rather than a real path, this copy of the file has not been through the sync yet: use this machine's own config directory (`echo $HOME/.claude`) followed by the rest of the path as written.
+Pass that printed path exactly as it is: the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`.
 
 Pass `date` from your own context: the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
 

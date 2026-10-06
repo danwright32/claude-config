@@ -16,10 +16,15 @@ ok(){ printf '  ok    %s\n' "$1"; }
 bad(){ printf '  FAIL  %s\n' "$1"; fail=1; }
 
 echo "== workflow engine (JS syntax) =="
+# A missing checker is named once, never read as every script being broken.
+if [ ! -f "$D/hooks/lib/workflow-syntax.js" ]; then bad "hooks/lib/workflow-syntax.js is missing, so no workflow script could be checked"; else
 for f in "$D"/skills/plan-council/*.workflow.js; do
   [ -e "$f" ] || { bad "no *.workflow.js found"; break; }
-  if node --check "$f" 2>/dev/null; then ok "$(basename "$f")"; else bad "$(basename "$f"): syntax error"; fi
+  # Parsed as the Workflow engine runs it, an async function body; `node --check` reads the meta's
+  # export as an ES module, where the top level return is a syntax error (#587, PR #798).
+  if why="$(node "$D/hooks/lib/workflow-syntax.js" "$f" 2>&1)"; then ok "$(basename "$f")"; else bad "$(basename "$f"): ${why:-syntax error}"; fi
 done
+fi
 
 echo "== skills (frontmatter) =="
 for s in plan-council plan-lite; do
@@ -64,8 +69,23 @@ for h in require-tests-before-push check-style-guide lessons-advisory require-is
 done
 
 echo "== skill -> workflow path resolves =="
-ref=$(grep -o '/Users/[^"]*panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null | awk 'NR <= 1')
-if [ -n "$ref" ] && [ -f "$ref" ]; then ok "scriptPath -> $ref"; else bad "SKILL.md scriptPath missing or broken: '${ref:-none}'"; fi
+# The Workflow tool refuses a script under the config home, so the skill stages a copy into the
+# session scratchpad and passes that (claude-config#587). Checked as the skill does it: the
+# instruction is there, and the helper really produces an exact copy.
+if grep -q 'stage-workflow\.sh.*skills/plan-council/panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null; then
+  ok "SKILL.md stages panel.workflow.js through stage-workflow.sh"
+else
+  bad "SKILL.md does not stage panel.workflow.js through hooks/lib/stage-workflow.sh"
+fi
+_pc_tmp="$(mktemp -d)"
+# The path from stdout alone, so a warning on stderr cannot become part of it.
+_pc_staged="$(bash "$D/hooks/lib/stage-workflow.sh" "$D/skills/plan-council/panel.workflow.js" "$_pc_tmp" 2>/dev/null)"
+if [ -f "$_pc_staged" ] && cmp -s "$D/skills/plan-council/panel.workflow.js" "$_pc_staged"; then
+  ok "stage-workflow.sh -> $_pc_staged"
+else
+  bad "stage-workflow.sh did not produce an exact copy: '${_pc_staged:-none}'"
+fi
+rm -rf "$_pc_tmp"
 
 echo "== grilling gate (both planners open with a grill) =="
 # The `grilling` skill must exist AND both planners must invoke it, and both must be

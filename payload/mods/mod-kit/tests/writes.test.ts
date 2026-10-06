@@ -32,6 +32,28 @@ describe('writes: redirects and tee', () => {
   })
 })
 
+describe('writes: <> opens a file for reading and writing (#760)', () => {
+  test('which creates it, so it is written', () => {
+    expect(paths('exec 3<>notes.txt')).toEqual([`${CWD}/notes.txt`])
+    expect(paths('cat <>notes.txt')).toEqual([`${CWD}/notes.txt`])
+    expect(paths('cmd <> notes.txt')).toEqual([`${CWD}/notes.txt`])
+  })
+})
+
+describe("writes: a shell's own output redirect (#760)", () => {
+  test('is written when the shell is read as the commands its script runs', () => {
+    expect(paths(`bash -c 'make' > build.log`)).toEqual([`${CWD}/build.log`])
+    expect(paths(`bash <<'EOF' > out.txt\nls\nEOF`)).toEqual([`${CWD}/out.txt`])
+    expect(paths(`bash -c 'echo a > a.txt' 2> err.log`)).toEqual([`${CWD}/a.txt`, `${CWD}/err.log`])
+    expect(paths(`bash -c 'ls' 2>&1`)).toEqual([])
+    // Attached to its target as well as spaced from it, since the reader makes the operator a word
+    // of its own however it is written (#654).
+    expect(paths(`bash -c 'make' >build.log`)).toEqual([`${CWD}/build.log`])
+    expect(paths(`sh -c 'ls' 2>err.log`)).toEqual([`${CWD}/err.log`])
+    expect(paths(`bash -c 'ls' &>all.log`)).toEqual([`${CWD}/all.log`])
+  })
+})
+
 describe('writes: a cd before the write', () => {
   test('a relative path after a cd is resolved in the folder it changed into', () => {
     expect(paths("cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- rule\nEOF")).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
@@ -265,8 +287,23 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(changes(`find build -name '*.o' -delete`)).toEqual([`remove ${CWD}/build tree`])
     expect(changes('find -delete')).toEqual([`remove ${CWD} tree`])
     expect(paths('find src -fprint list.txt')).toEqual([`${CWD}/list.txt`])
-    // What -exec runs is read as a command of its own, the folder standing for {}.
-    expect(changes(`find src -name '*.bak' -exec rm {} \\;`)).toEqual([`remove ${CWD}/src`])
+    // What -exec runs is read as a command of its own, the folder standing for {}, and since {}
+    // stands for everything under that folder, what it changes reaches the tree (#760: it was read
+    // as removing src alone, so a guard compared it against files at src exactly).
+    expect(changes(`find src -name '*.bak' -exec rm {} \\;`)).toEqual([`remove ${CWD}/src tree`])
+    expect(changes(`find src -exec chmod 644 {} +`)).toEqual([`mode ${CWD}/src tree`])
+    expect(changes('rm src/a.bak')).toEqual([`remove ${CWD}/src/a.bak`])
+    // Only the operand {} stood for reaches the tree; one the command names itself is that path
+    // alone (lessons review of #798).
+    expect(changes('find src -exec rm other.txt \\;')).toEqual([`remove ${CWD}/other.txt`])
+    expect(changes('find . -name x -exec mkdir out \\;')).toEqual([`folder ${CWD}/out`])
+    expect(changes('find a b -exec rm {} \\;')).toEqual([`remove ${CWD}/a tree`, `remove ${CWD}/b tree`])
+    // A file written where {} stood is every file under that folder too (lessons review of #798).
+    expect(read('find src -exec sed -i s/a/b/ {} \\;').files).toEqual([{ word: 'src', path: `${CWD}/src`, edits: true, tree: true }])
+    expect(read('find src -exec cp x.txt {} \\;').files).toEqual([{ word: 'src', path: `${CWD}/src`, sources: [`${CWD}/x.txt`], mayBeFolder: true, tree: true }])
+    expect(read('find src -exec sed -i s/a/b/ notes.md \\;').files).toEqual([{ word: 'notes.md', path: `${CWD}/notes.md`, edits: true }])
+    // A path written plainly and then where {} stood keeps the tree, as a change does.
+    expect(read('echo x > src; find src -exec sed -i s/a/b/ {} \\;').files).toEqual([{ word: 'src', path: `${CWD}/src`, tree: true }])
   })
   test('a file edited in place is marked as edited, beside files written whole', () => {
     expect(read(`sed -i 's/a/b/' a.md; echo x > b.md`).files).toEqual([

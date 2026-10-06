@@ -130,6 +130,9 @@ describe('the files a shell command writes, as this guard judges them', () => {
   })
   test('a path written and then removed keeps the removal (lessons review of #691)', () => {
     expect(judgedWrites({ files: [{ path: '/repo/d' }], changes: [{ path: '/repo/d', does: 'remove', tree: true }] })).toEqual([{ path: '/repo/d', removes: true, tree: true }])
+    // A file write that reaches a folder's tree (what find -exec writes where {} stood) is judged
+    // against everything under it (lessons review of #798).
+    expect(judgedWrites({ files: [{ path: '/repo/src', tree: true }], changes: [] })).toEqual([{ path: '/repo/src', tree: true }])
   })
   test('what the words cannot name is not guessed at (#654)', () => {
     expect(judgedWrites({ files: [{ word: '$OUT' } as never], changes: [{ word: '*.txt', does: 'remove' } as never] })).toEqual([])
