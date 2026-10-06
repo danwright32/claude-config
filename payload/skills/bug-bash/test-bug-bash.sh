@@ -267,6 +267,14 @@ grep -q '"hasContext":true' <<< "$out" && ok || bad "the launcher hands back the
 grep -q '"noBrowser":true,"canClose":true' <<< "$out" && ok || bad "the launcher hands back a close, never the browser" "$out"
 out="$(node -e 'require(process.argv[1]).launch({ readOnly: true }).then(() => console.log("launched"), e => { console.log(e.message); process.exit(3) })' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 3 ] && grep -qi 'playwright' <<< "$out" && ok || bad "with no Playwright handed in, the launcher refuses by name (rc $rc)" "$out"
+# A setup that fails after the browser started closes it rather than leaking it (lessons review).
+out="$(node -e '
+const { launch } = require(process.argv[1])
+let closed = 0
+const fake = { launch: async () => ({ close: async () => { closed++ }, newContext: async () => ({ route: async () => { throw new Error("route failed") } }) }) }
+launch({ chromium: fake, readOnly: true }).then(() => console.log("no throw"), e => console.log("threw " + e.message + " closed=" + closed))
+' "$LAUNCHER" 2>&1)"
+grep -q 'threw route failed closed=1' <<< "$out" && ok || bad "a failed read only setup closes the browser it started and rethrows" "$out"
 grep -q 'explorer-browser.js' "$DIR/SKILL.md" && ok || bad "SKILL.md has every explorer launch through explorer-browser.js"
 
 # ---------------------------------------------------------------- SKILL.md wires both helpers

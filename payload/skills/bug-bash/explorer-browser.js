@@ -27,10 +27,17 @@ async function launch({ chromium, readOnly = false, headless = true } = {}) {
     throw new Error("explorer-browser: hand in the project's own Playwright browser type: launch({ chromium: require('<project>/node_modules/playwright').chromium, readOnly })")
   }
   const browser = await chromium.launch({ headless })
-  // A service worker's requests do not pass through context.route, so a read only context has none.
-  const context = await browser.newContext(readOnly ? { serviceWorkers: 'block' } : {})
-  if (readOnly) {
-    await context.route('**/*', route => (isRead(route.request().method()) ? route.continue() : route.abort()))
+  let context
+  try {
+    // A service worker's requests do not pass through context.route, so a read only context has none.
+    context = await browser.newContext(readOnly ? { serviceWorkers: 'block' } : {})
+    if (readOnly) {
+      await context.route('**/*', route => (isRead(route.request().method()) ? route.continue() : route.abort()))
+    }
+  } catch (e) {
+    // A browser whose setup failed is closed, never left running with no way to reach it.
+    await browser.close().catch(() => {})
+    throw e
   }
   // The browser itself is not handed back, since close() is all an explorer needs of it. That only
   // narrows the obvious route: context.browser() still reaches it, so the read only route covers
