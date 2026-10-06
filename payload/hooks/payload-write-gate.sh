@@ -229,9 +229,8 @@ def add(tok, base):
         targets.append(p)
 
 # Heredoc BODIES are data, not shell: a python comparison like `a > b` in one is no redirect. They
-# are taken out of the shell reading and kept for the inline script reading below.
+# are taken out of the shell reading; the inline script reading below reads the whole command.
 shell = []
-bodies = []
 lines = cmd.split("\n")
 i = 0
 while i < len(lines):
@@ -242,7 +241,6 @@ while i < len(lines):
     i += 1
     for delim in delims:
         while i < len(lines) and lines[i].strip() != delim:
-            bodies.append(lines[i])
             i += 1
         i += 1
 shell_text = "\n".join(shell)
