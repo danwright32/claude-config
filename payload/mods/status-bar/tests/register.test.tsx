@@ -89,7 +89,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     mkdirFails: '',
     ...init,
   }
-  const files: Record<string, string> = {}
+  // A Mac with no claude.ai login unless a test logs it in (#815).
+  const files: Record<string, string> = { '/Users/x/.claude.json': '{}' }
   const toasts: string[] = []
   const logs: string[] = []
   const debug: string[] = []
@@ -104,6 +105,12 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (w.mkdirFails) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     files[e.path] = e.text
     return { value: undefined }
+  })
+  // The Mac's login file, which a test rewrites to log the Mac in to another account mid session.
+  on('fs.read', ($, e) => {
+    const text = files[e.path]
+    if (text === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
+    return { value: text } as never
   })
   on('process.run', ($, e) => {
     runs.push([...e.argv])
@@ -284,9 +291,9 @@ test('the amber line and the Compact row show together, amber line on top', with
 test('a request starts the hour of cache: the status line file says when it goes cold', withKit, async ($, on) => {
   const { files, clock } = world(on)
   await start($, clock)
-  expect(JSON.parse(files[`${DIR}/s1.json`] as string)).toEqual({ v: 1, sessionId: 's1', cacheExpiresAt: null })
+  expect(JSON.parse(files[`${DIR}/s1.json`] as string)).toEqual({ v: 1, sessionId: 's1', cacheExpiresAt: null, account: {} })
   await step($, clock)
-  expect(JSON.parse(files[`${DIR}/s1.json`] as string)).toEqual({ v: 1, sessionId: 's1', cacheExpiresAt: T0 + HOUR })
+  expect(JSON.parse(files[`${DIR}/s1.json`] as string)).toEqual({ v: 1, sessionId: 's1', cacheExpiresAt: T0 + HOUR, account: {} })
 })
 
 // #697: the spec's "1 hour prompt cache measured from the last request". Every request of a turn
@@ -353,7 +360,7 @@ test('a session with no screen (claude -p) reads nothing and writes nothing: nob
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false } as never)
   await clock.advance(5 * MIN)
   expect(runs.filter(r => r[0] === 'git' || r[0] === 'gh')).toEqual([])
-  expect(Object.keys(files)).toEqual([])
+  expect(Object.keys(files).filter(f => f !== '/Users/x/.claude.json')).toEqual([])
 })
 
 test('a clean end deletes the session file, so no stale cache is read for it', withKit, async ($, on) => {
@@ -588,6 +595,42 @@ test('a folder that is no repository, or a repository with no commits yet, has n
   await ui.unmount()
 })
 
+// #815: the status line names the session's own account, the one its limits belong to, so the
+// account is read from the Mac's login file once, at session start, and carried in the facts file.
+// Another session logging the Mac in to another account (a Switch does) must not change this one's.
+const LOGIN_FILE = '/Users/x/.claude.json'
+const loginAs = (files: Record<string, string>, id: string, name: string, org: string) => {
+  files[LOGIN_FILE] = JSON.stringify({ oauthAccount: { accountUuid: id, organizationUuid: `org-${id}`, displayName: name, emailAddress: `${id}@example.com`, organizationName: org }, other: 'kept out' })
+}
+const accountIn = (files: Record<string, string>) => (JSON.parse(files[`${DIR}/s1.json`] as string) as { account: unknown }).account
+
+test("the facts file names the session's own account, read at its start, and keeps it when the Mac logs in elsewhere (#815)", withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  await start($, clock)
+  const mine = { accountUuid: 'acct-1', organizationUuid: 'org-acct-1', displayName: 'Dan', emailAddress: 'acct-1@example.com', organizationName: 'Pennie' }
+  expect(accountIn(files)).toEqual(mine)
+  // Another session switches the Mac's login; this session's next facts write keeps its own account.
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await step($, clock)
+  expect(cacheIn(files)).toBe(T0 + HOUR)
+  expect(accountIn(files)).toEqual(mine)
+})
+
+test('a login file that cannot be read at session start is recorded as unknown, never as no login (#815)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  files[LOGIN_FILE] = 'not json'
+  await start($, clock)
+  expect(accountIn(files)).toBeNull()
+})
+
+test('a Mac with no claude.ai login at session start (an API key) is recorded as no account (#815)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  files[LOGIN_FILE] = '{}'
+  await start($, clock)
+  expect(accountIn(files)).toEqual({})
+})
+
 // #697: the facts file is the status line's only source for the cache. One that cannot be written
 // (a full or unwritable disk) is said once, in the guards' note style, and nothing else stops: the
 // refresh is still armed at session start, the band still updates and a turn still ends.
@@ -612,7 +655,7 @@ test('a facts folder that cannot be made is said, and the rest still runs', with
   const { clock, w, logs, files } = world(on, { mkdirFails: 'mkdir: /Users/x/.claude/state: Permission denied', unpushed: '2\n' })
   await start($, clock)
   expect(logs.filter(l => /Status bar couldn't save the cache time.*Permission denied/.test(l))).toHaveLength(1)
-  expect(Object.keys(files)).toEqual([])
+  expect(Object.keys(files).filter(f => f !== '/Users/x/.claude.json')).toEqual([])
   const ui = await $.ui.mount(band)
   expect(await shown(ui as never)).toBe('2 unpushed commits')
   w.mkdirFails = ''

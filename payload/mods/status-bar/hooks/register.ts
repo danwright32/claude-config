@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { StatusBar, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
+import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
 import { CACHE_WARN_MS, checksOf, compactDue, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 
@@ -25,6 +25,7 @@ const MOD = 'status-bar'
 
 const modesRef = { plugin: 'status-bar', key: 'modes' } as const
 const cacheRef = { plugin: 'status-bar', key: 'cacheExpiresAt' } as const
+const accountRef = { plugin: 'status-bar', key: 'account' } as const
 
 /** The job watcher's noun (#611) as its contract will be; it may not be loaded at all. */
 type Jobs = { list: () => Promise<Job[]>; agents?: () => Promise<QuietAgent[]> }
@@ -89,7 +90,8 @@ const writeFacts = async ($: EngineInterface) => {
     const id = await $.session.id()
     if (!SESSION_ID.test(id)) return
     const cache = (await $.state.get(cacheRef)).value ?? null
-    const facts: StatusBarFacts = { v: 1, sessionId: id, cacheExpiresAt: cache }
+    const account = (await $.state.get(accountRef)).value ?? null
+    const facts: StatusBarFacts = { v: 1, sessionId: id, cacheExpiresAt: cache, account }
     const tmp = `${dirOf(home)}/.${id}.json.tmp`
     await $.fs.write(tmp, JSON.stringify(facts))
     const mv = await $.process.run(['mv', '-f', tmp, `${dirOf(home)}/${id}.json`])
@@ -98,6 +100,26 @@ const writeFacts = async ($: EngineInterface) => {
     writtenId = id
   } catch (err) {
     cannotSave($, msg(err))
+  }
+}
+
+// The account this session runs on, the one its limits belong to (#815): the Mac's login as it
+// stands at session start. Read once, here, because the login file names whatever the Mac is logged
+// in to NOW, which another session's Switch changes under this one. No login at all (an API key) is
+// an empty record; a file that cannot be read is null, said as unknown, never as no login (L11).
+const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAccount | null> => {
+  try {
+    const o = (JSON.parse(await $.fs.read(`${h}/.claude.json`)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
+    const out: StatusBarAccount = {}
+    if (!o || typeof o !== 'object') return out
+    for (const k of ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress', 'organizationName'] as const) {
+      const v = o[k]
+      if (typeof v === 'string') out[k] = v
+    }
+    return out
+  } catch (err) {
+    $.ui.log(`status-bar: ~/.claude.json could not be read at session start, so the status line shows this session's account as unknown: ${msg(err)}`, { to: 'debug' })
+    return null
   }
 }
 
@@ -331,6 +353,7 @@ export const register: Register = on => {
     startCwd = e.cwd
     home = await $.env.get('HOME')
     if (home) {
+      await $.state.set(accountRef, await readAccount($, home))
       const made = await $.process.run(['mkdir', '-p', dirOf(home)]).catch(err => ({ exitCode: -1, stderr: msg(err) }))
       if (made.exitCode === 0) await writeFacts($)
       else cannotSave($, made.stderr.trim() || `mkdir exited ${made.exitCode}`)
