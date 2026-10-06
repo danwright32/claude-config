@@ -22,6 +22,7 @@ state/
 .ci-red-since
 .my-push
 .mods-seen
+.trees-seen
 
 # The TypeScript compiler pinned for the mods type check (#803), installed per checkout with
 # npm ci --prefix tools/typescript

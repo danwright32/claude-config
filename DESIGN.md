@@ -718,7 +718,7 @@ that is added both fail until this table is updated.
 | 1 hour | `SYNC_SUITE_MAX_AGE=3600` | `status` and the per prompt notice report a suite process of this repo as left running, and name it for `kill -9` | Equal to `SUITE_TIMEOUT`, the ceiling of the slowest suite there is, which is the longest any suite is allowed to run at all. The slowest real run on record is that suite's 1943 seconds at load 160 to 188 on 2026-08-22, so a healthy run never reaches it. The pile of 2026-09-18 had 354 processes past 40 minutes and one at seven hours, proved by #444 | 2026-09-18 |
 | 8 runs | `SYNC_SUITE_MAX_ROOTS=8` | `status` and the per prompt notice report this repo's suites as a pile when more than this many were started independently | The runner's own ceiling on what one whole run has in flight, `HOOK_TESTS_BUDGET`, which is the cores capped at 8. A whole run of the runner is ONE independent start, since everything under it is nested. Measured 2026-09-18: three suites started directly at once read as three, so this leaves room for a few agents each running a suite or two, proved by #444 | 2026-09-18 |
 | 10 minutes | `SYNC_SUITE_PILE_REARM=600` | The per prompt notice that this repo's suites have piled up treats a pile as a new stretch, and says it again in a session, only after this long without one | A chosen number, not a measurement: long enough that suites starting and finishing around the breadth limit read as one stretch, short enough that a pile killed and rebuilt the same afternoon is said again. The notice runs on every prompt in every project, so its cost was measured with it, 2026-09-19 on this Mac at 944 processes and load 5: 58ms median, 60ms p90 and 162ms max over 200 prompts with no pile, of which `ps` alone is 37ms median; with a 559 process pile added to that table as a fixture, 32ms median and 43ms max over 100 (no `ps`). Both are far inside the hook's 5 second timeout, proved by #466 | 2026-09-19 |
-| 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702), proved by #33 | 2026-08-17 |
+| 1 root | not a setting | One healthy watcher | Judged by roots alone since #604. A healthy watcher is a launcher with one child at rest (pid 13658 with 13702, observed 2026-08-17, #33), and every send it makes adds nested command substitutions carrying the same command line, so one watcher mid send read 3 or 4 deep on 2026-10-03. Depth therefore says nothing; a second watcher, including the reparented loop of a killed one, is always a second root, proved by #604 | 2026-10-05 |
 
 The two suite figures above were 123 seconds and "roughly 7x" for eleven days, written down
 2026-08-21, when the suite had 726 checks. It now has 784, and the run time has been 123, then 267, then 191 seconds as
@@ -741,8 +741,10 @@ tree on 2026-08-22, at 348 seconds idle and 1943 under load with only 262 of tho
 
 The last row is the one exception, and it is stated rather than quietly left out: what a healthy
 watcher looks like is passed straight to `report_process_family` as arguments, so there is no
-default for the check to read. That makes it the only number here nothing verifies, which is worth
-knowing when deciding how much to trust it.
+default for the check to read. Since #604 only its roots are judged. Depth is deliberately not
+judged for the watcher, and the 64 passed there is a stand in for no limit, not a measured bound.
+That makes the one root the only number here nothing verifies, which is worth knowing when
+deciding how much to trust it.
 
 Two of these are the ones where being wrong LOW is dangerous rather than merely annoying: the lock
 ceiling starts a second run on top of a live one, and the retired window drops a Mac that is only
@@ -883,6 +885,35 @@ judged by value in `payload_path_applied`, since the file never lands under its 
 
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
+
+## An absence is a deletion only where something was there before (#627, #781)
+
+The mirror cannot tell "this Mac deleted it" from "this Mac never had it" by looking at the folder,
+and guessing wrong in either direction loses a decision. Both cases are now answered from a record
+of what this Mac held, never from the folder alone.
+
+An EMPTY TREE (#627) clears the shared copy only when this Mac held files in that tree at its last
+send or apply (`.trees-seen`, the same rule `.mods-seen` already applied to mods). A fresh Mac's
+empty folders used to wipe that tree from the repo until the other Mac sent it back.
+
+A MISSING FILE (#781) is a deletion made here when the commit this Mac last applied held it and the
+shared repo has not changed it since. The apply holds it back like a local edit, so a pull before
+the next send does not restore it, and that send carries the deletion. A file the other Mac has
+changed in the meantime is restored, newer, because a deletion against an edit is the one case
+where restoring is what loses nothing (L5). No manifest was added: `.last-applied` already names
+the commit, and git already holds its tree.
+
+## One watcher, and a leftover loop stops itself (#604)
+
+`do_watch` refused a second watcher from #251, and status still found five watcher processes on
+2026-10-03. The loop runs in a subshell forked around fswatch, and ending the watcher's top process
+ends only that process: the loop lives on, reparented, and goes on sending on every edit beside the
+watcher that replaced it. So the loop now asks before every send whether the top process is still
+alive (`kill -0 $$`, since `$$` in the subshell is still its id) and whether the pid file still names
+it, and stops with a logged line when either answer is no. The pid file is claimed with noclobber,
+so two watchers starting together cannot both run. Status judges watchers by roots only: every send
+is several nested command substitutions carrying the watcher's own command line, so one healthy
+watcher mid send reads three or four deep, which was the "nested up to 4 deep" of that report.
 
 ## The hooks block is merged in BOTH directions, against the same base
 
