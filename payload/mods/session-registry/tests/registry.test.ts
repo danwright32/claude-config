@@ -137,7 +137,21 @@ test("the save's move and the repository lookup are bounded under a noun's 10 s,
   const of = (cmd: string) => w.bounds.filter(([c]) => c === cmd).map(([, t]) => t)
   expect(of('mv').length).toBeGreaterThan(0)
   expect(of('mv').every(t => t === 5_000)).toBe(true)
+  expect(of('git').length).toBeGreaterThan(0)
   expect(of('git').every(t => t === 5_000)).toBe(true)
+})
+
+test('after a /clear, the new record\'s repository lookup is bounded too (#802)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  const before = w.bounds.length
+  id = 's2'
+  await ($ as unknown as { classic: { SessionStart: (e: never) => Promise<unknown> } }).classic.SessionStart({ source: 'clear' } as never)
+  const after = w.bounds.slice(before).filter(([c]) => c === 'git').map(([, t]) => t)
+  expect(after.length).toBeGreaterThan(0)
+  expect(after.every(t => t === 5_000)).toBe(true)
 })
 
 test('a save whose move throws is said in the debug log, and the session goes on (#802)', withConsumer, async ($, on) => {
