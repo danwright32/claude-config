@@ -22,6 +22,11 @@ back.
   (refusing the whole file, by name, if it holds any key not on the allowlist in `claude-sync`, or a
   value Claude Code would not act on). Off is `false`, never a deletion. A `/effort` pick on one Mac
   lasts until the next pull puts the shared level back; change the level here instead.
+  Because `settings.json` names an alias (`opus`), `claude-sync status` asks the claude command
+  which full model that alias runs on this Mac (`claude -p --bare /model`, answered locally at no
+  cost) and names it when this file has no effort for it, with the entry to add, so a newer model
+  behind the alias is noticed rather than quietly running at its own default (#828). When the
+  claude command cannot answer, status says it could not check, never that the model is fine.
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
@@ -1106,8 +1111,16 @@ that exits without any type error is said as that, never as 0 errors. Where no c
 types are found, each mod's line says its types were not checked and why, and the run ends with one
 UNMEASURED line counting them and naming the install command, which is not a failure. CI never
 reaches the type check: it has no Claude Code, so `check-mods.sh` stops at its own UNMEASURED exit
-(3) before any mod is validated, and there are no laid types to check against. The pinned compiler
-and its record are therefore enforced only on a Mac with Claude Code and the compiler installed.
+(3) before any mod is validated, and there are no laid types to check against; that line names the
+strict type check as UNMEASURED too (#833). The pinned compiler and its record are therefore
+enforced only on a Mac with Claude Code and the compiler installed, and `claude-sync status` names
+a sync clone where the pinned version is not installed, with its `npm ci` command (the apply does
+not install it, which would put npm and the network on every pull). The laid types describe the
+Claude Code build that laid them, so `tools/typescript/claude-code-version` records the build the
+record was measured on (2.1.291, 2026-10-06, all 19 mods clean). Every run that checks types says
+which build they came from against that one, and on a different build each type failure names both,
+so newer types are not read as a regression in a mod; it still fails, because a real regression
+looks the same. Once the record is right on a new build, write that build's version into the file.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),

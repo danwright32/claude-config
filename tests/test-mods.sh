@@ -36,6 +36,7 @@ FAKE="$TMPROOT/claude"; LOG="$TMPROOT/calls"
 cat > "$FAKE" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$STUB_LOG"
+[ "$1" = --version ] && { echo "${FAKE_CC_VERSION:-2.1.291} (Claude Code)"; exit 0; }
 case "$1 $2" in
   "plugin validate") case "$3" in *broken*) printf '  hooks: bad event\n\nValidation failed\n'; exit 1 ;; esac; echo 'Validation passed' ;;
   "plugin test") case "$3" in
@@ -227,6 +228,42 @@ out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TMPROOT/no-typ
 printf '%s\n' "$out" | grep -q 'npm ci --prefix tools/typescript' \
   && check "with the command that installs the pinned compiler" ok || check "with the command that installs the pinned compiler" "$out"
 
+# 4e. Which Claude Code the types came from (#833). The laid types describe the Claude Code build
+#     that laid them, so the record of known errors is only comparable against the build it was
+#     measured on. That build is recorded beside the record, and a run on another build names both,
+#     so a difference reads as newer types and not as a regression in the mod. It still fails: a
+#     real regression on the other build looks exactly the same (L42).
+M4F="$TMPROOT/m4f"; mkmod "$M4F" verclean; mkmod "$M4F" illtyped-ver
+TH4F="$TMPROOT/types-home-4f"; laid "$TH4F/mods/verclean"; laid "$TH4F/mods/illtyped-ver"
+TS4F="$TMPROOT/ts-4f"; mkdir -p "$TS4F/node_modules/.bin"; cp "$TSC" "$TS4F/node_modules/.bin/tsc"
+printf '2.1.291\n' > "$TS4F/claude-code-version"
+run4f(){ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4F" CHECK_MODS_TS_DIR="$TS4F" PATH=/usr/bin:/bin "$@" bash "$CHECK" "$M4F" 2>&1)"; code=$?; }
+run4f env FAKE_CC_VERSION=2.1.291
+printf '%s\n' "$out" | grep -q 'types came from Claude Code 2.1.291, the build the record was measured on' \
+  && check "a run on the recorded Claude Code build says so" ok || check "a run on the recorded Claude Code build says so" "$out"
+run4f env FAKE_CC_VERSION=2.1.300
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-ver fails a strict type check' | grep -q 'Claude Code 2.1.300.*measured on 2.1.291' \
+  && check "a type failure on another Claude Code build names both builds on the mod's line, and still fails" ok \
+  || check "a type failure on another Claude Code build names both builds on the mod's line, and still fails" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'types came from Claude Code 2.1.300, and the record .* was measured on 2.1.291' \
+  && check "and the run ends naming the mismatch" ok || check "and the run ends naming the mismatch" "$out"
+# A compiler that dies on the newer types is the likeliest failure of all on another build, so it
+# names both builds too (review of #847).
+mkmod "$M4F" crashing-ver; laid "$TH4F/mods/crashing-ver"
+run4f env FAKE_CC_VERSION=2.1.300
+printf '%s\n' "$out" | grep 'crashing-ver could not be type checked' | grep -q 'Claude Code 2.1.300.*measured on 2.1.291' \
+  && check "a compiler that dies on another build's types names both builds" ok \
+  || check "a compiler that dies on another build's types names both builds" "$out"
+rm -rf "${M4F:?}/crashing-ver"
+rm -f "$TS4F/claude-code-version"
+run4f env FAKE_CC_VERSION=2.1.291
+printf '%s\n' "$out" | grep -q 'names no Claude Code build' \
+  && check "a record naming no build is said as that" ok || check "a record naming no build is said as that" "$out"
+# The shipped record names a build, in the form claude --version prints it.
+grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' "$ROOT/tools/typescript/claude-code-version" 2>/dev/null \
+  && check "the shipped record names the Claude Code build its types were measured on" ok \
+  || check "the shipped record names the Claude Code build its types were measured on" "$(cat "$ROOT/tools/typescript/claude-code-version" 2>&1)"
+
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
 runit "$M5"
@@ -238,6 +275,9 @@ runit "$M5"
 out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M1" 2>&1)"; code=$?
 [ "$code" -eq 3 ] && check "no claude means exit 3, unmeasured" ok || check "no claude means exit 3, unmeasured" "exit=$code out=$out"
 case "$out" in *UNMEASURED*) check "and says UNMEASURED" ok ;; *) check "and says UNMEASURED" "$out" ;; esac
+# CI is this case, and the strict type check is the part it never reaches, so it is named (#833).
+printf '%s\n' "$out" | grep UNMEASURED | grep -q 'strict type check is UNMEASURED too' \
+  && check "and names the strict type check as unmeasured as well" ok || check "and names the strict type check as unmeasured as well" "$out"
 
 # 6b. Claude Code answering that hooks modules are switched off is machine state the suite cannot
 #     set, so it is UNMEASURED with its own exit code and the engine's words, never a failure of

@@ -55,7 +55,8 @@ if [ -z "$bin" ]; then
   [ -n "$bin" ] || { [ -x "$HOME/.local/bin/claude" ] && bin="$HOME/.local/bin/claude"; }
 fi
 if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-  echo "check-mods: UNMEASURED: $n mod(s) in $dir, and no claude command to check them with (looked for ${bin:-claude on PATH}). That is not a pass." >&2
+  # CI's runner is always here, so the type check it never reaches is named too (#833).
+  echo "check-mods: UNMEASURED: $n mod(s) in $dir, and no claude command to check them with (looked for ${bin:-claude on PATH}). That is not a pass. The strict type check is UNMEASURED too: it checks against the types Claude Code lays, and there is no Claude Code here to lay them." >&2
   # A missing tsconfig.json is a definite failure, which outranks the unmeasured rest.
   [ "$failed" -eq 1 ] && exit 1
   exit 3
@@ -80,6 +81,19 @@ TYPES_HOME="${CHECK_MODS_TYPES_HOME:-$HOME/.claude}"
 # mod with no lines must have no errors.
 KNOWN="$TS_DIR/known-type-errors.tsv"
 known_of(){ [ -f "$KNOWN" ] && awk -F'\t' -v m="$1" '$1 == m { print $2 "\t" $3 "\t" $4 }' "$KNOWN"; }
+# Which Claude Code build the record was measured on (#833). The laid types describe the build that
+# laid them, which is the installed one, so the record is only comparable on that build: on another,
+# a new error may be the newer types rather than a change in the mod. A run names the build its types
+# came from against the recorded one, and on a mismatch every type failure names both. It still
+# fails, because a real regression on the other build looks exactly the same (L42).
+CC_RECORD="$TS_DIR/claude-code-version"
+cc_now="$("$bin" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)"
+cc_rec=""; [ -f "$CC_RECORD" ] && cc_rec="$(head -n 1 "$CC_RECORD" | tr -d '[:space:]')"
+cc_note=""
+if [ -n "$cc_now" ] && [ -n "$cc_rec" ] && [ "$cc_now" != "$cc_rec" ]; then
+  cc_note=" [types from Claude Code $cc_now; the record was measured on $cc_rec, so this may be the newer types rather than a change in the mod]"
+fi
+typed=0
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/check-mods.XXXXXX" 2>/dev/null)" || scratch=""
 trap '[ -n "$scratch" ] && rm -rf "$scratch"' EXIT
 # The mods whose types went unchecked, by cause, each "cause<TAB>mod" (L629: every cause named).
@@ -166,6 +180,7 @@ for d in "${mods[@]}"; do
     # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
     # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
     # own tsconfig.json (lessons review of #797).
+    typed=$((typed + 1))
     out="$("$tsc" -p "$checked" --noEmit --allowImportingTsExtensions 2>&1)"; trc=$?
     if [ "$trc" -ne 0 ]; then
       # Each error named from the mod's own folder, never the scratch copy it was checked in.
@@ -173,7 +188,7 @@ for d in "${mods[@]}"; do
       if [ -z "$errs" ]; then
         # No error TS line: the compiler itself failed (a crash, a config it could not read), so no
         # type check was measured and none is claimed (L11).
-        echo "check-mods: $name could not be type checked: the compiler exited $trc without reporting a type error: $(printf '%s\n' "$out" | sed '/^ *$/d' | tail -n 3 | sed 's/^ *//' | paste -sd';' -)"
+        echo "check-mods: $name could not be type checked: the compiler exited $trc without reporting a type error: $(printf '%s\n' "$out" | sed '/^ *$/d' | tail -n 3 | sed 's/^ *//' | paste -sd';' -)$cc_note"
         failed=1
         continue
       fi
@@ -187,7 +202,7 @@ for d in "${mods[@]}"; do
         over="$(awk -F'\t' 'NR == FNR { lim[$1] = $2; next } { r = ($1 in lim) ? lim[$1] : 0; if ($2 + 0 > r + 0) print $1 " (" $2 " found, " r " recorded)" }' \
           <(printf '%s\n' "$rec") <(printf '%s\n' "$cur") | paste -sd';' -)"
         if [ -n "$over" ]; then
-          echo "check-mods: $name has type errors not in the record in $KNOWN ($issue): $over"
+          echo "check-mods: $name has type errors not in the record in $KNOWN ($issue): $over$cc_note"
           failed=1
           continue
         fi
@@ -198,7 +213,7 @@ for d in "${mods[@]}"; do
         echo "check-mods: $name ok ($types)"
         continue
       fi
-      echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "$errs" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"
+      echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "$errs" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)$cc_note"
       failed=1
       continue
     fi
@@ -209,6 +224,19 @@ for d in "${mods[@]}"; do
   echo "check-mods: $name ok ($types)"
 done
 echo "check-mods: $n mods checked in $dir"
+# The build the checked types came from, against the one the record was measured on (#833). Said
+# only when some mod's types were really checked, since otherwise no type result was compared.
+if [ "$typed" -gt 0 ]; then
+  if [ -z "$cc_rec" ]; then
+    echo "check-mods: the record in $TS_DIR names no Claude Code build, so a type result here cannot be told apart from a change in the types: write this build's version (${cc_now:-unknown}) into $CC_RECORD once the record is right."
+  elif [ -z "$cc_now" ]; then
+    echo "check-mods: could not read which Claude Code build laid these types ('$bin --version' said nothing usable); the record was measured on $cc_rec."
+  elif [ "$cc_now" = "$cc_rec" ]; then
+    echo "check-mods: types came from Claude Code $cc_now, the build the record was measured on."
+  else
+    echo "check-mods: types came from Claude Code $cc_now, and the record in $TS_DIR was measured on $cc_rec. A type failure above may be the newer types rather than a change in a mod; once it is fixed or recorded, write $cc_now into $CC_RECORD."
+  fi
+fi
 # Never a silent skip (#803): how many mods' types went unchecked, why, and the one command that
 # installs the pinned compiler. Said on stderr, and not a failure, since nothing was measured.
 if [ "$untyped" -gt 0 ]; then

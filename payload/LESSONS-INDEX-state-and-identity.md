@@ -77,3 +77,4 @@ which is NOT loaded into the session.
 - L1002. A rule judging an item against a set its own batch is still growing is order dependent, so derive it once over the whole batch first.
 - L1003. A cache invalidated by any change to the whole collection never survives a write, so scope invalidation to the members the value depends on.
 - L1005. A conflict check keyed only on the slot makes the subject clash with itself, so compare identity too, or a real clash and the same record read alike.
+- L751. A newest-wins merge must judge newness by when the value was true at its source, never when this copy read it, or a stale read wins.

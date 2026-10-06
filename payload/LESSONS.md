@@ -5571,6 +5571,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   for, another show that night, and there was no third case for the show itself.)
   SHORT: A conflict check keyed only on the slot makes the subject clash with itself, so compare identity too, or a real clash and the same record read alike.
 
+- **L751. A merge that keeps the NEWEST copy of a value must judge newness by when the value was
+  true at its source, never by when this copy read it, because a copy read late from a stale cache
+  or an idle session carries an old value under a fresh stamp and wins.** Where the source gives no
+  measured time, order by something the value itself implies (a later reset, a count that only
+  rises) and let read time break only an exact tie. The stamp reads as a timestamp of the fact, so
+  nobody asks which event it records. (claude-config#848, 2026-10-06: the account room stamps each
+  session's rate limit figures `takenAt: now`, though a session's figures are only as fresh as its
+  last API response, and `combine` keeps the later `takenAt`. Idle sessions' old figures beat busy
+  ones', one account flipped 6% to 5% and back, another went back to 86% after its window had reset
+  to 0%, and every flip was a real change to write: 236 commits to one readings file in an hour,
+  until three writes in a row lost GitHub's sha check.)
+  SHORT: A newest-wins merge must judge newness by when the value was true at its source, never when this copy read it, or a stale read wins.
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**

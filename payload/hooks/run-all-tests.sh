@@ -59,6 +59,12 @@ if [ "${HOOK_TESTS_RUNNING:-0}" = "1" ] && [ "$#" -eq 0 ] \
   exit 1
 fi
 export HOOK_TESTS_RUNNING=1
+# No suite started from here may reach a real Claude Code through claude-sync (L2). `status` asks
+# the claude command which model settings.json runs (#828) and finds it on PATH when this seam is
+# unset, so a suite that forgot the seam started the real binary. Pointed at nothing for every
+# suite, unconditionally, so an inherited value cannot point it at a real one either; a suite
+# that is ABOUT the check sets its own stub per command.
+export SYNC_CLAUDE_BIN="/nonexistent/run-all-tests/no-claude-for-suites"
 
 # How many lines of a failing suite's own output to print. Enough to act on, bounded so one
 # broken suite cannot bury the other verdicts.

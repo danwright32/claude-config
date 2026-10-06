@@ -4087,6 +4087,97 @@ report_settings_extras(){
       echo "--- settings this sync writes ---"
       echo "  statusLine in $CLAUDE_HOME/settings.json runs ${st#*$'\t'}, not this Mac's status bar ($(status_line_command)), so the status bar mod's line does not show here. The sync never overwrites it: delete the statusLine entry and the next pull writes the status bar's." ;;
   esac
+  report_shared_effort_model
+  report_pinned_compiler
+  return 0
+}
+
+# THE PINNED TYPESCRIPT COMPILER (#833). The strict mod type check uses the compiler pinned in
+# tools/typescript, which each checkout installs by hand once, and without it the hook suite's type
+# check says UNMEASURED on every run, which is easy to stop reading. Not installed by the apply,
+# because that would put npm and the network on every pull; said here instead, against the version
+# the pin asks for, with the one command for this checkout. Quiet when the pinned version is there.
+report_pinned_compiler(){
+  local dir="$SYNC_REPO/tools/typescript" pinned have
+  [ -f "$dir/package.json" ] || return 0
+  pinned="$(jq -r '.devDependencies.typescript // empty | strings' "$dir/package.json" 2>/dev/null || true)"
+  [ -n "$pinned" ] || return 0
+  have="$(jq -r '.version // empty | strings' "$dir/node_modules/typescript/package.json" 2>/dev/null || true)"
+  [ "$have" = "$pinned" ] && return 0
+  echo "--- the pinned TypeScript compiler ---"
+  if [ -z "$have" ]; then
+    echo "  TypeScript $pinned, pinned in $dir, is not installed in this checkout, so the strict mod type check in the hook suite is UNMEASURED here rather than run. Install it once with: npm ci --prefix $dir"
+  else
+    echo "  TypeScript $have is installed in $dir, but the pin asks for $pinned, so the strict mod type check runs on a compiler nobody measured the record with. Install the pinned one with: npm ci --prefix $dir"
+  fi
+  return 0
+}
+
+# The claude command this sync asks: SYNC_CLAUDE_BIN, else claude on PATH, else ~/.local/bin/claude.
+# Prints the candidate even when it is not executable, so a caller can name what it looked for.
+sync_claude_bin(){
+  local bin="${SYNC_CLAUDE_BIN:-}"
+  if [ -z "$bin" ]; then
+    bin="$(command -v claude 2>/dev/null || true)"
+    # The scheduled job runs with launchd's short PATH, where claude is usually not on it.
+    [ -n "$bin" ] || { [ -x "$HOME/.local/bin/claude" ] && bin="$HOME/.local/bin/claude"; }
+  fi
+  printf '%s' "$bin"
+}
+
+# A MODEL WITH NO SHARED EFFORT (#828). Effort is shared per FULL model name, because that is the
+# field Claude Code reads, while settings.json names an alias ("opus"). When the alias moves to a
+# newer model, that model has no entry and runs at its own default, and nothing said the shared level
+# had stopped applying. So status asks the claude command which model settings.json resolves to,
+# never a hand kept list of aliases, and names it when the shared file has no effort for it.
+#
+# Asked as `claude -p --bare "/model"`: /model is answered locally (measured on 2.1.291: a synthetic
+# reply costing 0, in under a second), and the stream's init line carries the full model the session
+# resolved. --bare loads no hooks or plugins, and no session file is kept. Every way of not getting an
+# answer is said as that, never as the model being fine (L98, L11).
+report_shared_effort_model(){
+  local shared="$SYNC_REPO/payload/$SHARED_SETTINGS_FILE" settings="$CLAUDE_HOME/settings.json"
+  local names model bin out rc=0 full level why=""
+  [ -f "$shared" ] || return 0
+  names="$(jq -r '(.modelSettings // {}) | if type == "object" then to_entries[] | select((.value | type) == "object" and .value.effortLevel != null) | .key else empty end' "$shared" 2>/dev/null)" || return 0
+  [ -n "$names" ] || return 0
+  model=""
+  [ -f "$settings" ] && model="$(jq -r '.model // empty | strings' "$settings" 2>/dev/null || true)"
+  bin="$(sync_claude_bin)"
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    why="no claude command was found to ask (looked for ${bin:-claude on PATH})"
+  else
+    # claude-mds-ok: excluded twice, by --bare here and CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 on the launch below; /model is answered locally and reads no rules.
+    local args=(-p --bare --no-session-persistence)
+    [ -n "$model" ] && args+=(--model "$model")
+    args+=(--output-format stream-json --verbose /model)
+    # Asked the way a new session on this Mac would resolve it, never with a model this process
+    # inherited from the session that started it.
+    if [ "$CLAUDE_HOME" = "$HOME/.claude" ]; then
+      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+    else
+      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+    fi
+    if [ "$rc" -eq 124 ]; then
+      why="the claude command, asked for /model, did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped"
+    elif [ "$rc" -ne 0 ]; then
+      why="the claude command, asked for /model, failed (exit $rc)"
+    else
+      full="$(printf '%s\n' "$out" | jq -rs 'map(select(type == "object" and .type == "system" and .subtype == "init") | .model // empty | strings) | first // empty' 2>/dev/null || true)"
+      # A context window suffix ("[1m]") names how the session runs, not the settings key.
+      full="${full%%\[*}"
+      [ -n "$full" ] || why="the claude command, asked for /model, named no model in its answer"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    echo "--- the model this Mac runs ---"
+    echo "  claude-sync could not check whether the shared effort in $SHARED_SETTINGS_FILE applies to the model settings.json runs (${model:-the default}): $why."
+    return 0
+  fi
+  grep -qxF "$full" <<< "$names" && return 0
+  level="$(jq -r --arg m "${names%%$'\n'*}" '.modelSettings[$m].effortLevel' "$shared" 2>/dev/null || true)"
+  echo "--- the model this Mac runs ---"
+  echo "  settings.json's model (${model:-the default}) is $full on this Mac, and $SHARED_SETTINGS_FILE has no shared effort for it (it has one for $(printf '%s\n' "$names" | paste -sd',' - | sed 's/,/, /g')), so $full runs at its own default effort. To share it, add \"$full\": { \"effortLevel\": \"${level:-high}\" } under modelSettings in payload/$SHARED_SETTINGS_FILE."
   return 0
 }
 
@@ -4112,12 +4203,7 @@ check_mods_loaded(){
   local dirs bin listed d name out bad="" names=""
   dirs="$(mod_dirs_here)"
   is_blank "$dirs" && return 0
-  bin="${SYNC_CLAUDE_BIN:-}"
-  if [ -z "$bin" ]; then
-    bin="$(command -v claude 2>/dev/null || true)"
-    # The scheduled job runs with launchd's short PATH, where claude is usually not on it.
-    [ -n "$bin" ] || { [ -x "$HOME/.local/bin/claude" ] && bin="$HOME/.local/bin/claude"; }
-  fi
+  bin="$(sync_claude_bin)"
   if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     echo "claude-sync: could not check the mods on this Mac, because no claude command was found to ask (looked for ${bin:-claude on PATH}). They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
     return 0
