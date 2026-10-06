@@ -151,6 +151,34 @@ const pandasNames = (code: string): Set<string> => {
       new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
     ].some(r => r.test(code))
   }
+  // pandas itself is the seed only while nothing rebinds it, under its own name or any name it was
+  // imported as (`import pandas as pd`, `from pandas import Series`), which the canonical spelling
+  // has turned into `pandas.` (lessons review of #818). Import lines are left out of that check,
+  // since `import pandas as pd` is how the name is bound, not a rebinding.
+  const outsideImports = code.replace(/^[ \t]*(?:import|from)\b[^\n]*$/gm, '')
+  const aliases = new Set<string>(['pandas'])
+  for (const m of code.matchAll(/\bimport\s+pandas\s+as\s+(\w+)/g)) aliases.add(m[1] as string)
+  for (const m of code.matchAll(/\bfrom\s+pandas\s+import\s+\(?([^)\n;]+)/g)) {
+    for (const part of (m[1] as string).split(',')) {
+      const p = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(part)
+      if (p) aliases.add((p[2] ?? p[1]) as string)
+    }
+  }
+  const aliasRebound = [...aliases].some(a => {
+    const n = escaped(a)
+    return [
+      new RegExp(`(?<![\\w.])${n}\\s*=(?!=)`),
+      // `Series = Path` after `from pandas import Series` reads as `pandas.Series = Path` here.
+      new RegExp(`(?<![\\w.])${n}\\s*\\.\\s*\\w+\\s*=(?!=)`),
+      new RegExp(`\\b${n}\\s*:=`),
+      new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
+      new RegExp(`\\bas\\s+${n}\\b`),
+      new RegExp(`(?<![\\w.])${n}\\s*:(?!=)[^=\\n]*=(?!=)`),
+      new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
+      new RegExp(`,\\s*${n}\\s*(?:,[^=\\n]*)?=(?!=)|(?<![\\w.])${n}\\s*,[^=\\n]*=(?!=)`),
+    ].some(r => r.test(outsideImports))
+  })
+  if (aliasRebound) return new Set<string>()
   const names = new Set<string>(['pandas'])
   for (let grew = true; grew; ) {
     grew = false

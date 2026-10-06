@@ -71,6 +71,11 @@ describe('codeVerdict after #760', () => {
     // An assignment anywhere else in a statement (after a header's colon, say) rebinds too.
     expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\nif 1: df = Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\ntry: df = Path('a')\nexcept E: pass\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // pandas itself, or any name it was imported as, rebound to something else is no longer pandas.
+    expect(codeVerdict('python', "import pandas\nfrom pathlib import Path\npandas = Path('a')\npandas.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\npd = Path('a')\npd.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\nfor pd in paths:\n    pd.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "from pandas import Series\nfrom pathlib import Path\nSeries = Path\ns = Series('a')\ns.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     // A chained assignment binds every target in it, not only the first.
     expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\nx = df = Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     // An annotated assignment is a rebinding too.
