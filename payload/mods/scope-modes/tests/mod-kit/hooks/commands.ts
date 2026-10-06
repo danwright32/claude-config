@@ -392,9 +392,6 @@ const CLOSERS = new Set([')', ...CLOSES])
 
 type Fed = { word: number; body: string; fd?: number; replaced?: true }[]
 
-// What a command's own redirects put on its standard input, the last one winning as in the shell:
-// a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
-// file. Another descriptor's (3<file) is not standard input.
 // Whether a word is a redirect onto standard input: an input redirect on descriptor 0 however it is
 // written (none, 0, 00), never a process substitution, which is an argument.
 const onStdin = (w: string): boolean => {
@@ -402,6 +399,9 @@ const onStdin = (w: string): boolean => {
   const m = INPUT_WORD.exec(w)
   return !!m && Number(m[1] || '0') === 0
 }
+// What a command's own redirects put on its standard input, the last one winning as in the shell:
+// a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
+// file. Another descriptor's (3<file) is not standard input.
 const ownStdin = (words: readonly string[], fed: Fed): Stdin | undefined => {
   let s: Stdin | undefined
   for (let i = 0; i < words.length; i++) {

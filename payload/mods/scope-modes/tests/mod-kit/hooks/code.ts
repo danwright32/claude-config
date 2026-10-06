@@ -106,7 +106,7 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // rename and replace take one name too (#760: `s.rename('total')` was refused as a move, Dan's
 // decision 2026-10-05); one that imports both, or neither, cannot be told apart and is still read
 // as moving.
-const PANDAS = /(?:^|[;\n])[ \t]*(?:import\s+pandas\b|from\s+pandas\b)/
+const PANDAS = /(?:^|[;\n])[ \t]*(?:import\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*pandas\b|from\s+pandas\b)/
 const PATHLIB = /\bpathlib\b|\bPath\s*\(/
 const pythonMoves = (code: string): CodeVerdict | undefined => {
   if (PANDAS.test(code) && !PATHLIB.test(code)) return undefined

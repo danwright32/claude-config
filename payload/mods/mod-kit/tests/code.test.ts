@@ -43,6 +43,9 @@ describe('codeVerdict after #760', () => {
   test("a pandas Series.rename with one name is no move; a pathlib rename still is", () => {
     expect(codeVerdict('python', "import pandas as pd\ns = pd.Series([1, 2])\ns = s.rename('total')")).toBeUndefined()
     expect(codeVerdict('python', "import pandas as pd\ndf['x'].replace('a')")).toBeUndefined()
+    // pandas named anywhere in an import list is still pandas.
+    expect(codeVerdict('python', "import os, pandas\ns.rename('total')")).toBeUndefined()
+    expect(codeVerdict('python', "import numpy as np, pandas as pd\ns.rename('total')")).toBeUndefined()
     expect(codeVerdict('python', "from pathlib import Path\nPath('a').rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pathlib\npathlib.Path('a').replace('b')")).toEqual({ does: 'write files', seen: 'replace' })
     // pandas and pathlib in one script: which receiver is which cannot be told, so it is a move.
