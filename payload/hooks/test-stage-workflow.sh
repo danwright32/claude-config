@@ -123,6 +123,14 @@ done
 out="$(bash "$SKILLS/production-ready/healthcheck.sh" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && grep -q 'HEALTHCHECK OK' <<< "$out" && ok || bad "production-ready healthcheck passes on this tree" "$out"
 
+# A missing syntax checker is named, never read as the workflow failing to parse (lessons review).
+mkdir -p "$TMP/pr-nosyn/skills" "$TMP/pr-nosyn/hooks/lib"
+cp -R "$SKILLS/production-ready" "$TMP/pr-nosyn/skills/"
+cp "$HELPER" "$TMP/pr-nosyn/hooks/lib/"
+out="$(bash "$TMP/pr-nosyn/skills/production-ready/healthcheck.sh" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'workflow-syntax.js is missing' <<< "$out" && ok \
+  || bad "production-ready healthcheck names a missing workflow-syntax.js" "$out"
+
 # And it is a real check: a SKILL.md that goes back to passing its installed path fails it.
 # Laid out as installed, skills/ beside hooks/lib/, so every other check in it still passes.
 mkdir -p "$TMP/pr-bad/skills" "$TMP/pr-bad/hooks/lib"

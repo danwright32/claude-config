@@ -23,6 +23,7 @@ WF="$DIR/production-audit.workflow.js"
 # reads its `export const meta` as an ES module, where the script's top level return is a syntax
 # error, and so failed a healthy script on CI's node (#587, PR #798).
 if command -v node >/dev/null 2>&1; then
+  [ -f "$DIR/../../hooks/lib/workflow-syntax.js" ] || fail "hooks/lib/workflow-syntax.js is missing, so the workflow script could not be checked"
   node "$DIR/../../hooks/lib/workflow-syntax.js" "$WF" || fail "workflow script does not parse"
 fi
 grep -q 'phases:' "$WF" || fail "workflow meta missing phases"
