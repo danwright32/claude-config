@@ -539,6 +539,10 @@ const PY_IMPORT_LINE = /^(?:import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\
  */
 const onlyQuietModules = (inline: string): boolean => {
   if (/\b(?:__import__|import_module|importlib|getattr|__builtins__)\b|\bsys\s*\.\s*modules\b/.test(inline)) return false
+  // A quiet module that re-exports os or sys as an attribute (pathlib.os, glob.os, typing.sys and
+  // others) is a route to them, and a module's namespace read whole (__dict__, vars) reaches any
+  // attribute by a computed name (lessons review of #859 at 9971367). Fail safe on any of them.
+  if (/\.\s*(?:os|sys)\b|__dict__|\bvars\s*\(/.test(inline)) return false
   const words = (inline.match(/\bimport\b/g) ?? []).length
   let read = 0
   for (const line of inline.split('\n')) {

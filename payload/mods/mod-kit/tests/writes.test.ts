@@ -552,6 +552,15 @@ describe('writes: the files an inline python program names as its writes (#830)'
     // And sys used plainly is not quiet either: its files are not named, so ask before saving asks.
     expect(targets("python3 - <<'EOF'\nfrom sys import argv\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.stdout.write('done')\nEOF")).toEqual(none)
+    // A quiet module that re-exports os or sys as an attribute is a route to them (lessons review of
+    // #859 at 9971367), as is any module's namespace read whole. Each leaves the files unnamed.
+    expect(targets("python3 - <<'EOF'\nimport pathlib\nopen('a.md','w')\npathlib.os.remove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport glob\nopen('a.md','w')\nglob.os.chflags('b', 0)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport typing\nopen('a.md','w')\ntyping.sys.stdout.write('x')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\njson.__dict__['x']\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\nvars(json)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\ngetattr(json, 'x')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\n__import__('json')\nEOF")).toEqual(none)
     // The control: the same program with a quiet module instead still names its file.
     expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
     // Only python's writes are named so far.
