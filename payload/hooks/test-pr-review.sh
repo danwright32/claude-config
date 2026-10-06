@@ -520,11 +520,12 @@ done
 [ "$all_valid" -eq 1 ] && ok \
   || bad "eight concurrent issuers each get a key that reads the review (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
 bash -c '. "$1" && ar_review_key_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
-# Bounded: seventy showings leave at most 64 stored hashes, and the newest key still reads.
+# Never rewritten, only appended: every key issued, first and seventieth, still reads (a trim raced
+# concurrent appends and dropped keys that had been shown; lessons review of #795).
+firstk="$(bash -c '. "$1"; ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
 lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_review_issue_key "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
-nkeys="$(cat "$fk".readkeys-* | awk 'END { print NR }')"
-[ "$nkeys" -le 64 ] && ok || bad "the read key hashes are bounded (found $nkeys)"
-bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key still reads after a trim"
+bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
+bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
 rm -f "$WORKDIR"/key.*
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"

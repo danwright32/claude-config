@@ -261,7 +261,11 @@ mt_split_assignments() {  # $1 = one segment
   s="${s#"${s%%[![:space:]]*}"}"
   MT_REST="$s"
   [[ "$s" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || return 0
-  if command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" split 2>/dev/null; printf x)"; then
+  # The sentinel is printed only when the reader SUCCEEDED, so a crash falls through to the plain
+  # reading below rather than answering with an empty command (L42, L490).
+  out=""
+  command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" split 2>/dev/null && printf x)"
+  if [ "${out%x}" != "$out" ]; then
     out="${out%x}"
     MT_ASSIGNS="${out%%$'\x1f'*}"
     MT_REST="${out#*$'\x1f'}"; MT_REST="${MT_REST#$'\n'}"

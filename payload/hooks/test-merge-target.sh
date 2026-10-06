@@ -193,6 +193,13 @@ eq "$(printf '%s' 'a; b && c || d' | python3 "$SW" segments)" "a"$'\n'" b "$'\n'
 eq "$(printf '%s' 'echo "a; b" && c' | python3 "$SW" segments)" 'echo "a; b" '$'\n'' c' "and not inside them"
 eq "$(printf '%s' 'A="x y" B=$(p q) cmd arg' | python3 "$SW" split)" "A=x y"$'\n'"B=\$(p q)"$'\n'$'\x1f'$'\n'"cmd arg" "shell-words splits leading assignments from the command"
 printf 'x' | python3 "$SW" nonsense >/dev/null 2>&1; eq "$?" "64" "shell-words refuses an unknown mode"
+# A reader that CRASHES must fall back to the plain reading, never answer "no merge" (L42, L490).
+BROKEN_SW="$(mktemp "${TMPDIR:-/tmp}/broken-sw.XXXXXX")"
+printf 'import sys\nsys.exit(3)\n' > "$BROKEN_SW"
+saved_sw="$MT_SHELL_WORDS"; MT_SHELL_WORDS="$BROKEN_SW"
+if mt_runs_merge 'GH_TOKEN=x gh pr merge 7'; then pass; else fail "a crashed reader hid a merge after an assignment"; fi
+if mt_runs_merge 'echo a; gh pr merge 7'; then pass; else fail "a crashed reader hid a merge after a separator"; fi
+MT_SHELL_WORDS="$saved_sw"; rm -f "$BROKEN_SW"
 # rtk in front is the same merge, and its number and repository are read (lessons review of #795).
 eq "$(mt_pr_number 'rtk gh pr merge 7 --repo a/b')" "7" "an rtk merge names its pull request"
 eq "$(mt_repo_flag 'rtk gh pr merge 7 --repo a/b')" "a/b" "and its repository"
