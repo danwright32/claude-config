@@ -8437,7 +8437,14 @@ section "== scratch a killed run left behind is reclaimed, and nothing else is (
 # `tmp.*` directories belonging to OTHER tools that day, so a sweep written as "old directories in
 # the temp folder" would have deleted them. Every fixture below therefore points at a THROWAWAY
 # root (L2), and the checks that matter most are the ones asserting what SURVIVES.
-_SCR="$WORK/scratch-root"; mkdir -p "$_SCR"
+_SCR="$WORK/scratch-root-36"; mkdir -p "$_SCR"
+# A root of its OWN, never the suite-wide SYNC_SCRATCH_ROOT (claude-config#832). It used to be the
+# same directory, which every claude-sync call this shard makes writes its scratch and run notes
+# under, and which a mutating run sweeps, so what this section reads depended on what every earlier
+# section and anything they left running had put there. On 2026-10-06 the four status checks below
+# went red together in a full run under parallel load and passed alone (L134, L205).
+check "#832 this section's scratch root is not the one every other run uses" \
+  "[ '${_SCR%/}' != '${SYNC_SCRATCH_ROOT%/}' ]"
 _scr_age(){ scratch_age_out "$1"; }
 _scr_dir(){    # name mb
   mkdir -p "$_SCR/$1"
@@ -8471,7 +8478,16 @@ _scr_age "$_SCR/claude-sync-suite.lock"
 _scr_dir "tmp.SOMEONEELSE" 2                    # another tool's scratch, the measured hazard
 _scr_age "$_SCR/tmp.SOMEONEELSE"
 
-_scr_rep="$(_scr_status)"
+_scr_rep="$(_scr_status)"; _scr_rep_rc=$?
+# The report is the LAST thing status prints, so any earlier part of status stopping it leaves the
+# four checks below red with nothing saying why. Its exit code is asserted on its own, and when the
+# report is missing the end of what status DID say is printed, so the next flake carries its own
+# diagnosis rather than needing a reproduction (L177).
+check "#832 status finished before reporting the scratch" "[ '$_scr_rep_rc' -eq 0 ]"
+if [ "$_scr_rep_rc" -ne 0 ] || ! grep -qi 'scratch the tool left behind' <<< "$_scr_rep"; then
+  printf '    status exited %s and its last lines were:\n' "$_scr_rep_rc"
+  tail -15 <<< "$_scr_rep" | sed 's/^/      /'
+fi
 check "#36 status reports abandoned scratch"     "grep -qi 'scratch the tool left behind' <<< \"\$_scr_rep\""
 check "#36 and says how many there are"          "grep -q '2 abandoned' <<< \"\$_scr_rep\""
 # The size, not just the count: the count is what grows and the size is what actually hurts, and
@@ -19191,6 +19207,116 @@ out_sx18="$(sx_pull "$SX18H" "$SX18R")"
 dbg "the shipped shared file: $out_sx18"
 check "the shipped shared settings file is accepted and every value in it lands" \
   "jq -en --slurpfile s '$SX18R/payload/settings.shared.json' --slurpfile c '$SX18H/settings.json' '[\$s[0] | paths(type | . != \"object\" and . != \"array\") as \$p | (\$s[0] | getpath(\$p)) == (\$c[0] | getpath(\$p))] | (length > 0 and all)' >/dev/null"
+
+section "== status names a Mac whose model has no shared effort entry (#828) =="
+# Effort is shared per FULL model name, and settings.json names an alias ("opus"). The day the alias
+# moves to a newer model, that model has no entry, runs at its own default, and nothing said so. The
+# alias is resolved by the claude command itself, never a hand kept list: `claude -p --bare "/model"`
+# is answered locally (measured on 2.1.291: a synthetic reply, total_cost_usd 0), and its init line
+# carries the full model the session resolved to. The stub below speaks that same stream (L2: no
+# real Claude Code), resolving whatever --model it is given through ME_MAP, and logs every call.
+ME="$WORK/me828"; mkdir -p "$ME"
+ME_FAKE="$ME/claude"; ME_LOG="$ME/calls"
+cat > "$ME_FAKE" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$ME_LOG"
+[ -n "${ME_FAIL:-}" ] && { echo "boom" >&2; exit 3; }
+m=""; prev=""
+for a in "$@"; do [ "$prev" = "--model" ] && m="$a"; prev="$a"; done
+[ -n "$m" ] || m=default
+full="$(printf '%s\n' "$ME_MAP" | tr ',' '\n' | awk -F= -v k="$m" '$1 == k { print $2; exit }')"
+[ -n "$full" ] || exit 0
+printf '{"type":"system","subtype":"init","model":"%s"}\n' "$full"
+printf '{"type":"result","subtype":"success","result":"Current model","total_cost_usd":0}\n'
+STUB
+chmod +x "$ME_FAKE"
+# Its own fixtures, so the section runs alone (SECTION_ONLY) as well as after the one above.
+me_repo(){ mkdir -p "$1/payload"; printf '%s\n' "$2" > "$1/payload/settings.shared.json"; }
+ME_ORIG='{"model":"opus","permissions":{"allow":["Bash(ls)"]}}'
+ME_R="$WORK/me828-repo"; me_repo "$ME_R" '{"ultracode": false, "modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}'
+ME_H="$WORK/me828-home"; mkdir -p "$ME_H"
+jq -c '. + {modelSettings: {"claude-opus-5-5": {effortLevel: "high"}}}' <<< "$ME_ORIG" > "$ME_H/settings.json"
+me_status(){   # extra env as arguments -> status output
+  : > "$ME_LOG"
+  env "$@" ME_LOG="$ME_LOG" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true
+}
+
+# The control first: the alias resolves to the model the file names, so nothing is said.
+out_me1="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_MAP='opus=claude-opus-5-5')"
+dbg "#828 alias on the shared model: $out_me1"
+check "#828 the alias was resolved through the claude command, with settings.json's model" \
+  "grep -q -- '--model opus' '$ME_LOG' && grep -q -- '/model' '$ME_LOG'"
+check "#828 asked in print mode, bare, so no hook, plugin or session file is touched" \
+  "grep -q -- '-p ' '$ME_LOG' && grep -q -- '--bare' '$ME_LOG' && grep -q -- '--no-session-persistence' '$ME_LOG'"
+check "#828 a model the shared file names is not reported" "! grep -q 'no shared effort' <<< \"\$out_me1\""
+
+# The alias moved: the newer model has no entry, so it runs at its own default.
+out_me2="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_MAP='opus=claude-opus-6')"
+dbg "#828 alias moved: $out_me2"
+check "#828 a model with no shared effort entry is named, with the alias it came from" \
+  "line_has \"\$out_me2\" 'no shared effort' 'claude-opus-6' 'opus'"
+check "#828 and the line says the shared level does not apply to it" \
+  "line_has \"\$out_me2\" 'claude-opus-6' 'its own default'"
+check "#828 and names the entry to add, at the level the file already shares" \
+  "line_has \"\$out_me2\" '\"claude-opus-6\"' 'effortLevel' 'high' 'settings.shared.json'"
+# A context window suffix is part of how the session names its model, not of the settings key.
+out_me3="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_MAP='opus=claude-opus-5-5[1m]')"
+check "#828 a model carrying a context suffix is matched on its full name" "! grep -q 'no shared effort' <<< \"\$out_me3\""
+
+# A settings.json naming no model runs the default, so no --model is passed and the default is resolved.
+jq -c 'del(.model)' <<< "$ME_ORIG" > "$ME_H/settings.json"
+out_me4="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_MAP='default=claude-sonnet-6')"
+check "#828 with no model in settings.json, no --model is passed" "! grep -q -- '--model' '$ME_LOG'"
+check "#828 and the default model is the one judged" "line_has \"\$out_me4\" 'no shared effort' 'claude-sonnet-6' 'default'"
+printf '%s\n' "$ME_ORIG" > "$ME_H/settings.json"
+
+# Every way the question cannot be answered is said as that, never as the model being fine (L98, L11).
+out_me5="$(me_status SYNC_CLAUDE_BIN="$WORK/no-such-claude-here")"
+check "#828 with no claude command it says the check could not run" \
+  "line_has \"\$out_me5\" 'could not check' 'shared effort' 'no claude command'"
+out_me6="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_FAIL=1)"
+check "#828 a claude that fails is said as that, with its exit code" \
+  "line_has \"\$out_me6\" 'could not check' 'shared effort' 'exit 3'"
+out_me7="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_MAP='')"
+check "#828 an answer naming no model is said as that" \
+  "line_has \"\$out_me7\" 'could not check' 'shared effort' 'named no model'"
+# Status itself still finishes after any of them.
+# Judged by status's exit code, since `status` runs under set -e: a report returning non zero stops
+# every report after it and exits non zero, while no heading is certain to print after this one.
+: > "$ME_LOG"
+env SYNC_CLAUDE_BIN="$ME_FAKE" ME_FAIL=1 ME_LOG="$ME_LOG" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status >/dev/null 2>&1; _me6_rc=$?
+check "#828 and status still finishes cleanly after a failed check" "[ '$_me6_rc' -eq 0 ] && [ -s '$ME_LOG' ]"
+
+# A shared file with no per model effort asks nothing at all.
+ME_R2="$WORK/me828-repo2"; me_repo "$ME_R2" '{"ultracode": false}'
+: > "$ME_LOG"
+out_me8="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP='opus=claude-opus-6' CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#828 with no shared effort to apply, claude is not asked" "[ ! -s '$ME_LOG' ]"
+check "#828 and nothing is said" "! grep -q 'shared effort' <<< \"\$out_me8\""
+
+section "== status says when the pinned TypeScript compiler is not installed (#833) =="
+# The strict mod type check needs the compiler pinned in tools/typescript, installed by hand once
+# per checkout, and without it the hook suite's type check says UNMEASURED on every run, which reads
+# as background noise. Status names it, against the version the pin asks for, with the command.
+TC="$WORK/tc833"; TC_R="$TC/repo"; TC_H="$TC/home"; mkdir -p "$TC_R/tools/typescript" "$TC_H"
+printf '{"private": true, "devDependencies": {"typescript": "7.0.2"}}\n' > "$TC_R/tools/typescript/package.json"
+tc_status(){ CLAUDE_HOME="$TC_H" SYNC_REPO="$TC_R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true; }
+out_tc1="$(tc_status)"
+check "#833 a checkout without the pinned compiler is named, with the version it pins" \
+  "line_has \"\$out_tc1\" 'TypeScript' '7.0.2' 'not installed'"
+check "#833 and the command that installs it, for this checkout" \
+  "line_has \"\$out_tc1\" 'not installed' 'npm ci --prefix $TC_R/tools/typescript'"
+check "#833 and what goes unchecked meanwhile" "line_has \"\$out_tc1\" 'strict mod type check' 'UNMEASURED'"
+mkdir -p "$TC_R/tools/typescript/node_modules/typescript"
+printf '{"name": "typescript", "version": "7.0.1"}\n' > "$TC_R/tools/typescript/node_modules/typescript/package.json"
+out_tc2="$(tc_status)"
+check "#833 a different version installed is named against the pin" "line_has \"\$out_tc2\" '7.0.1' '7.0.2'"
+printf '{"name": "typescript", "version": "7.0.2"}\n' > "$TC_R/tools/typescript/node_modules/typescript/package.json"
+out_tc3="$(tc_status)"
+check "#833 the pinned version installed says nothing" "! grep -q 'pinned TypeScript' <<< \"\$out_tc3\""
+rm -rf "$TC_R/tools"
+out_tc4="$(tc_status)"
+check "#833 a repository with no pin says nothing" "! grep -q 'pinned TypeScript' <<< \"\$out_tc4\""
 
 section "== an apply leaves no expanded copy of the payload behind (#641) =="
 # apply_source_dir set EXPANDED_ROOT inside a command substitution at every call site, so the parent

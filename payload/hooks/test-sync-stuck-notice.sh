@@ -66,6 +66,10 @@ trap 'rm -rf "$WORK"' EXIT
 # per session record. Without the launch agents seam the hook would ask the real scheduled clone
 # (L2, L284).
 FHOME="$WORK/home"; mkdir -p "$FHOME/.claude" "$WORK/agents" "$WORK/state"
+# The clone carries the real payload, whose shared settings make `status` ask the claude command
+# which model this Mac runs (#828). Pointed at nothing here too, so a run outside the runner
+# cannot start a real Claude Code either (L2).
+export SYNC_CLAUDE_BIN="$WORK/no-such-claude"
 # A fixture clone is a directory holding the real tool and the real payload, so the tool resolves
 # its own libraries exactly as a real clone does and reads its state from this directory.
 CLONE="$WORK/clone"; mkdir -p "$CLONE"
