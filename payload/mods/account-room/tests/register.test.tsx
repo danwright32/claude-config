@@ -743,6 +743,20 @@ test('a signed out check that could not read the browser says so, never that cla
   await ui.unmount()
 })
 
+test('an exit 2 with nothing printed is not read as the browser being unreadable: a shell error exits 2 too (#773, L11)', { ...withKit, ...ROUTE }, async ($, on) => {
+  // /bin/sh exits 2 for a syntax error in a hand set signedOutCheck. With no reason printed, nothing
+  // was measured about the browser, so the stop says only that the sign out was not confirmed.
+  const { clock, toasts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, check: { exitCode: 2, stdout: '', stderr: 'sh: syntax error' } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
+  await clock.settle()
+  expect(await shown(ui)).toMatch(/^claude\.ai didn't confirm the sign out\. Nothing else was changed\./)
+  expect(toasts.some(t => t.includes('could not read the browser'))).toBe(false)
+  await ui.unmount()
+})
+
 test("the card's first appearance never waits on this Mac's write to GitHub, and the write still lands (#758)", withKit, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
   await start($, clock)
@@ -1116,6 +1130,18 @@ test('a card the band refuses is said once, in the transcript, not only in the d
   await measure($, clock, limits(97, 50))
   const refused = transcript.filter(l => /the band refused the card, so it is not shown: a band row's slot "room"/.test(l))
   expect(refused).toHaveLength(1)
+})
+
+test("a session start that fails after this Mac's write began still waits for the write and draws its outcome (L73, L515)", withKit, async ($, on) => {
+  // Low at start, so the card shows. The nickname dialog cannot open, so the start fails after the
+  // write to GitHub was started; the write's failure must still reach the card, never left unawaited.
+  const { clock, transcript } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [OTHER]: await otherMac() }, usage: limits(97, 50), openFails: true, ghWriteFails: 'down' })
+  await start($, clock)
+  await clock.settle()
+  const ui = await mountBand($ as never)
+  expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub")
+  expect(transcript.filter(l => /this session's account could not be set up: \S/.test(l))).toHaveLength(1)
+  await ui.unmount()
 })
 
 test('a failure in the work deferred past session start is said in the transcript, never dropped (L73)', withKit, async ($, on) => {

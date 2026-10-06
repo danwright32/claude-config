@@ -528,7 +528,9 @@ const signOut = async ($: EngineInterface, route: SignOutRoute): Promise<SignOut
   if (check.exitCode === 0 && check.stdout.trim() === 'signed out') return { isConfirmed: true }
   // Exit 2 is the check's own "could not tell" (bin/chrome-signed-out.sh: Chrome's profile or its
   // cookies could not be read), so no answer was read and none is claimed (#773, L11).
-  if (check.exitCode === CHECK_COULD_NOT_TELL) return { isConfirmed: false, cause: 'check-unanswered', why: `the signed out check could not read the browser: ${short(check.stdout) || 'no output'}` }
+  // Only with a reason printed: /bin/sh exits 2 for a syntax error in a hand set check too, and that
+  // measured nothing about the browser (L11, L440).
+  if (check.exitCode === CHECK_COULD_NOT_TELL && check.stdout.trim()) return { isConfirmed: false, cause: 'check-unanswered', why: `the signed out check could not read the browser: ${short(check.stdout)}` }
   return { isConfirmed: false, cause: 'not-confirmed', why: `the signed out check exited ${check.exitCode} and said "${short(check.stdout)}"` }
 }
 
@@ -669,11 +671,18 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
   }
   // Started here and awaited once the card is drawn, so the start never waits on GitHub (#758).
   const write = started(record($, s, reading))
-  await settleNicknames($, s.home)
-  if (s.isInteractive) {
-    const nick = await loadNicknames($, s.home)
-    if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
-    else if (!Object.prototype.hasOwnProperty.call(nick.names, s.id)) await ask($, { id: s.id, email: s.email, org: s.org, current: null })
+  try {
+    await settleNicknames($, s.home)
+    if (s.isInteractive) {
+      const nick = await loadNicknames($, s.home)
+      if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
+      else if (!Object.prototype.hasOwnProperty.call(nick.names, s.id)) await ask($, { id: s.id, email: s.email, org: s.org, current: null })
+    }
+  } catch (err) {
+    // The write already started is still awaited and drawn, and a failure of its own is said beside
+    // this one rather than dropped unawaited (L73, L515).
+    await drawBeside($, write).catch(e => once($, 'after-start-write', `Account room: this Mac's readings could not be recorded at start: ${message(e)}`))
+    throw err
   }
   await drawBeside($, write)
 }
