@@ -519,8 +519,10 @@ export const register: Register = on => {
   })
 
   // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
-  // message typed while a turn runs fires here too, at Enter, with that turn's id (the engine's
-  // PromptSubmitInput.turnId), and is read the same way, its notes reaching the model with it (#805).
+  // message typed while a turn runs fires here too, at Enter, with that turn's id, as the engine's
+  // types document it (PromptSubmitInput.turnId), and is read the same way (#805). That delivery is
+  // the engine's documented behaviour, not yet seen live: the tests stand in for the engine, so the
+  // debug log line below records each mid turn message that changed anything, to measure it.
   on('prompt.submit', async ($, e, next) => {
     lastOrigin = e.origin.kind
     const notes: string[] = []

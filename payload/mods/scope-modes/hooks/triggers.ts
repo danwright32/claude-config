@@ -80,7 +80,9 @@ export const triggersIn = (text: string): Trigger[] =>
 const askedOff = (name: string) =>
   new RegExp(
     `\\b${name}(?:\\s+mode)?\\s+(?:is\\s+|are\\s+|${APOS}s\\s+)?(?:now\\s+)?(?:done|over|off|finished|ended)\\b` +
-      `|\\b(?:no more|out of|done with|enough|end|stop|exit|quit|cancel|finish)\\s+(?:the\\s+)?${name}${NAME_END}`,
+      // Verb first, it opens its clause like an instruction, as the off triggers do (fifth review);
+      // "finish" and "enough" are left out, since "finish winding down" asks to complete it.
+      `|${LEAD}(?:get\\s+|we${APOS}?re\\s+|i${APOS}?m\\s+)?(?:no more|out of|done with|end|stop|exit|quit|cancel)\\s+(?:the\\s+)?${name}${NAME_END}`,
     'i',
   )
 
