@@ -649,6 +649,36 @@ test('an approved save another guard refuses when sent again is said as not goin
   expect(notesOf(w)).toContain("Dan's For good on saving this to ~/Apps/slate/AGENTS.md lapsed after 10 minutes: the save you sent was refused before it was saved (Blocked: another session is editing this file.)")
 })
 
+// update() runs its callback again when another write lands between its read and its write. If the
+// approval is gone by the second run (lapsed, used), a match the first run recorded must not stand,
+// or Dan is told about a save no approval covers (the lessons review of #806).
+test('a refused resend whose approval is gone by the time the write lands raises no toast for it', withKit, async ($, on) => {
+  // Once armed, the first conditional write of the approvals misses, because another write emptied
+  // them in between: update reads again and runs its callback over no approval at all.
+  let armed = false
+  let raced = false
+  on('state.set', async ($$, e, next) => {
+    const x = e as unknown as { ref?: { key?: string }; key?: string; options?: { ifVersion?: number }; ifVersion?: number }
+    const key = x.ref?.key ?? x.key
+    const conditional = (x.options?.ifVersion ?? x.ifVersion) !== undefined
+    if (armed && !raced && key === 'approvals' && conditional) {
+      raced = true
+      const { options: _o, ifVersion: _i, ...plain } = x as Record<string, unknown>
+      await next({ ...plain, value: [] } as never)
+      return { value: { isSet: false, version: -1 } } as never
+    }
+    return next(e)
+  })
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  armed = true
+  await call($, input)
+  expect(raced).toBe(true)
+  expect(w.toasts.join('\n')).not.toContain('Not saved to ~/Apps/slate/AGENTS.md')
+})
+
 // And when the guard lets it through on a later send inside the time, it is saved as approved.
 test('an approved save refused once by another guard is still saved when sent again in time', withKit, async ($, on) => {
   const w = world(on, { auto: true })
