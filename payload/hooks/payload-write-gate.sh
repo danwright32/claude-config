@@ -147,7 +147,7 @@ if [ "$event" = "PostToolUse" ]; then
   [ "$n" -gt 20 ] && shown="$shown
   ... and $((n - 20)) more"
   cat >&2 <<MSG
-claude-sync: that command changed $n file(s) under a development checkout's payload/ while a watch daemon was live from another clone and no hold was in force:
+claude-sync: $n file(s) changed under a development checkout's payload/ while that command ran, with a watch daemon live from another clone and no hold in force. What was measured is what changed while it ran, so another session or a parallel command writing there at the same moment would show here too:
 
 $shown
 
@@ -306,7 +306,20 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
             rest = args[i + 1:]
             # checkout and restore name a branch or commit before `--`, and only the paths after
             # it are rewritten; a bare `git checkout main` switches branches and names no path.
-            if sub in ("checkout", "restore") and "--" in rest:
+            if sub == "restore":
+                # --staged alone rewrites the index, never the file; -s/--source names a commit.
+                if ("--staged" in rest or "-S" in rest) and not ("--worktree" in rest or "-W" in rest):
+                    rest = []
+                kept, skip = [], False
+                for w in rest:
+                    if skip:
+                        skip = False
+                    elif w in ("-s", "--source"):
+                        skip = True
+                    elif w != "--":
+                        kept.append(w)
+                rest = kept
+            elif sub == "checkout" and "--" in rest:
                 rest = rest[rest.index("--") + 1:]
             elif sub == "checkout":
                 rest = []

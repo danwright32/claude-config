@@ -252,6 +252,15 @@ runbash "git -C $FIX/dev checkout -- payload/LESSONS.md" "$FIX/elsewhere"
 refused "a git -C checkout of a payload path is refused"
 runbash "git -C $FIX/dev -c core.x=y restore payload/LESSONS.md" "$FIX/elsewhere"
 refused "and so is a restore past -C and -c"
+# restore --staged rewrites only the index, never the file, and -s names a commit, not a path.
+runbash "git restore --staged LESSONS.md" "$FIX/dev/payload"
+allowed "a git restore --staged of a payload file writes no file, so it is allowed"
+runbash "git restore -s HEAD~1 --staged --worktree LESSONS.md" "$FIX/dev/payload"
+refused "while restore --staged --worktree does write the file"
+runbash "git restore -s main $FIX/elsewhere/x" "$FIX/dev/payload"
+allowed "and the commit -s names is never read as a payload path"
+runbash "git restore --source=main LESSONS.md" "$FIX/dev/payload"
+refused "a restore of a payload file from another commit still is"
 runbash "git -C $FIX/dev checkout main" "$FIX/elsewhere"
 allowed "while a git -C branch switch names no path"
 runbash "python3 - <<'PY'
@@ -284,6 +293,10 @@ if [ "$RC" -eq 2 ]; then check "a payload file it changed is reported afterwards
 else check "a payload file it changed is reported afterwards" "exit $RC, said: ${OUT:0:160}"; fi
 says "and the report names the file" "$FIX/dev/payload/LESSONS.md"
 says "and gives the hold command, since the write already happened" "claude-sync hold"
+# The note sees what changed under payload/ while the call ran, not who changed it, so the report
+# says only that, and that another writer at the same moment would show too (L11).
+says "and claims only what it measured: what changed while the call ran" "changed under"
+says "naming that another writer at the same moment would show too" "another session or a parallel command"
 prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t2
 : > "$FIX/dev/payload/new.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t2
