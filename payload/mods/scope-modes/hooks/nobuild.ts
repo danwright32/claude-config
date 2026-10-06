@@ -222,6 +222,17 @@ const writesRefusal = (w: ModKitWrites): Refusal | undefined => {
 }
 
 const DB_CLIENTS = new Set(['psql', 'mysql', 'mariadb', 'sqlite3'])
+// The SQL a heredoc puts on a database client's standard input (#760): undefined when none does,
+// null when one does that cannot be read. The last heredoc on descriptor 0 is what the client
+// reads. A body holding $ or a backtick may be expanded by the shell, so its text is not the SQL.
+const heredocSql = (c: Cmd): string | undefined | null => {
+  const fed = (c.heredocs ?? []).filter(h => h.fd === undefined)
+  const last = fed[fed.length - 1]
+  if (!last) return undefined
+  // A later redirect replaced it as standard input: what the client reads is not this body.
+  if (last.replaced) return null
+  return /[$`]/.test(last.body) ? null : last.body
+}
 const commandRefusal = (c: Cmd): Refusal | undefined => {
   let words = c.words
   // npx and bunx only fetch and run the tool named after them.
@@ -240,7 +251,11 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
   // A database client by every piece of SQL it runs and what it writes itself (sql.ts), MariaDB's
   // own name for its client included (#730). Without SQL given, it reads a file or stdin, which
   // cannot be read.
-  if (DB_CLIENTS.has(cmd)) return why(clientRefusal(cmd, words.slice(1), harmless))
+  if (DB_CLIENTS.has(cmd)) {
+    const body = heredocSql(c)
+    if (body === null) return { what: 'run SQL that could not be read' }
+    return why(clientRefusal(cmd, words.slice(1), harmless, body))
+  }
   return programRefusal({ ...c, words })
 }
 

@@ -102,8 +102,103 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // pathlib's rename and replace move a file (#730). Told from str.replace, which takes two
 // arguments or more, and from a data frame's rename or replace, which take keywords, a mapping or a
 // function: only a call with one plain argument and no keywords is read as a move.
+// A pandas series or data frame's rename and replace take one name too (#760: `s.rename('total')`
+// was refused as a move, Dan's decision 2026-10-05), so a receiver provably bound from pandas is
+// exempt, and only that receiver: pandas being imported says nothing about any other object
+// (lessons review of #818). A chained call (`pd.Series([1]).rename('t')`) has no name to prove,
+// so it is still read as a move, a refusal of the safe kind. The code arrives in its canonical spelling, so
+// every alias of pandas reads as `pandas.` and `from pandas import Series` makes `Series(` read as
+// `pandas.Series(`. A name is pandas's when it is assigned from an expression starting with
+// `pandas.` or with a name already known to be, which follows `df = pandas.read_csv(...)` then
+// `s = df['x']`; a receiver is that name, or a subscript of it.
+// A name counts only when EVERY assignment to it is from pandas: one rebound to anything else
+// (`df = Path('a')`), or bound by any other route (a for loop, a with, a parameter, a tuple target,
+// :=), is unproven and judged like any other receiver (lessons review of #818).
+const pandasNames = (code: string): Set<string> => {
+  const assigned = new Map<string, (string | undefined)[]>()
+  // The whole right hand side must be one chain (a name, then attributes, calls and subscripts);
+  // anything else (`pd or Path('a')`, `x if y else z`, arithmetic) proves nothing. The contents of
+  // brackets are taken out first, so a call's arguments do not count against it.
+  const chainRoot = (rhs: string): string | undefined => {
+    let s = rhs.replace(/(['"])(?:\\.|(?!\1)[^\\])*\1/g, '""')
+    for (let prev = ''; prev !== s; ) {
+      prev = s
+      s = s.replace(/\([^()[\]]*\)|\[[^()[\]]*\]/g, '')
+    }
+    return /^\s*([A-Za-z_]\w*)(?:\s*\.\s*[A-Za-z_]\w*)*\s*(?:#.*)?$/.exec(s)?.[1]
+  }
+  for (const m of code.matchAll(/(?:^|[;\n])[ \t]*([A-Za-z_]\w*)\s*=(?!=)([^;\n]*)/g)) {
+    const roots = assigned.get(m[1] as string) ?? []
+    roots.push(chainRoot(m[2] as string))
+    assigned.set(m[1] as string, roots)
+  }
+  const reboundElsewhere = (name: string): boolean => {
+    const n = escaped(name)
+    // Every `name =` in the code, wherever it stands (after a header's colon, a later chained
+    // target, a keyword argument), against the statement starting assignments judged above: any
+    // the scan did not judge leaves the name unproven, so a route not listed below cannot keep it.
+    const everywhere = [...code.matchAll(new RegExp(`(?<![\\w.])${n}\\s*=(?!=)`, 'g'))].length
+    if (everywhere > (assigned.get(name)?.length ?? 0)) return true
+    return [
+      new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
+      new RegExp(`\\bas\\s+${n}\\b`),
+      new RegExp(`\\b${n}\\s*:=`),
+      // A later target of a chained assignment (`x = df = Path('a')`).
+      new RegExp(`=(?!=)\\s*${n}\\s*=(?!=)`),
+      new RegExp(`(?:^|[;\\n])[ \\t]*${n}\\s*:(?!=)[^=\\n]*=(?!=)`),
+      new RegExp(`(?:^|[;\\n])[ \\t]*[\\w\\s,()[\\]*]*,\\s*\\(?\\s*${n}\\s*\\)?\\s*(?:,[^=\\n]*)?=(?!=)`),
+      new RegExp(`(?:^|[;\\n])[ \\t]*\\(?\\s*${n}\\s*,[^=\\n]*=(?!=)`),
+      new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
+    ].some(r => r.test(code))
+  }
+  // pandas itself is the seed only while nothing rebinds it, under its own name or any name it was
+  // imported as (`import pandas as pd`, `from pandas import Series`), which the canonical spelling
+  // has turned into `pandas.` (lessons review of #818). Import lines are left out of that check,
+  // since `import pandas as pd` is how the name is bound, not a rebinding.
+  const outsideImports = code.replace(/^[ \t]*(?:import|from)\b[^\n]*$/gm, '')
+  const aliases = new Set<string>(['pandas'])
+  for (const m of code.matchAll(/\bimport\s+pandas\s+as\s+(\w+)/g)) aliases.add(m[1] as string)
+  for (const m of code.matchAll(/\bfrom\s+pandas\s+import\s+\(?([^)\n;]+)/g)) {
+    for (const part of (m[1] as string).split(',')) {
+      const p = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(part)
+      if (p) aliases.add((p[2] ?? p[1]) as string)
+    }
+  }
+  const aliasRebound = [...aliases].some(a => {
+    const n = escaped(a)
+    return [
+      new RegExp(`(?<![\\w.])${n}\\s*=(?!=)`),
+      // `Series = Path` after `from pandas import Series` reads as `pandas.Series = Path` here.
+      new RegExp(`(?<![\\w.])${n}\\s*\\.\\s*\\w+\\s*=(?!=)`),
+      new RegExp(`\\b${n}\\s*:=`),
+      new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
+      new RegExp(`\\bas\\s+${n}\\b`),
+      new RegExp(`(?<![\\w.])${n}\\s*:(?!=)[^=\\n]*=(?!=)`),
+      new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
+      new RegExp(`,\\s*${n}\\s*(?:,[^=\\n]*)?=(?!=)|(?<![\\w.])${n}\\s*,[^=\\n]*=(?!=)`),
+    ].some(r => r.test(outsideImports))
+  })
+  if (aliasRebound) return new Set<string>()
+  const names = new Set<string>(['pandas'])
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const [name, roots] of assigned) {
+      if (names.has(name) || reboundElsewhere(name)) continue
+      // `s = s.rename(...)` derives the name from itself, which keeps whatever the rest made it.
+      if (roots.every(r => r !== undefined && (names.has(r) || r === name)) && roots.some(r => r !== undefined && names.has(r))) {
+        names.add(name)
+        grew = true
+      }
+    }
+  }
+  return names
+}
 const pythonMoves = (code: string): CodeVerdict | undefined => {
+  const pandas = pandasNames(code)
   for (const m of code.matchAll(/\.\s*(rename|replace)\s*\(/g)) {
+    // A bare name or a subscript of one; an attribute of something else (`obj.df`) is not it.
+    const receiver = /(?<![\w.])([A-Za-z_]\w*)(?:\s*\[[^\]]*\])*\s*$/.exec(code.slice(0, m.index))?.[1]
+    if (receiver !== undefined && pandas.has(receiver)) continue
     const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
     if (args.length === 1 && !/^\w+\s*=|^[{[]|^lambda\b|^str\s*\./.test(args[0] as string)) return { does: 'write files', seen: m[1] as string }
   }
@@ -285,7 +380,8 @@ const SURFACES: Record<Lang, Surface> = {
     dynamic: [
       { re: /(?<![\w.:])(eval|instance_eval|class_eval|module_eval|instance_exec)\b/, seen: m => m[1] as string },
       // A send whose method is named by a literal is read above; one built at run time cannot be.
-      { re: /(?<![\w.])(?:send|public_send|__send__)\s*(?:\(\s*|\s+)(?!(?::\w+[?!=]?|(['"])\w+[?!=]?\1)\s*(?:[,)\n;]|$))/, seen: 'send of a computed name' },
+      // `def send(x)` defines a method of that name, which sends nothing (#760, Dan's decision).
+      { re: /(?<![\w.])(?<!\bdef\s+(?:self\s*\.\s*)?)(?:send|public_send|__send__)\s*(?:\(\s*|\s+)(?!(?::\w+[?!=]?|(['"])\w+[?!=]?\1)\s*(?:[,)\n;]|$))/, seen: 'send of a computed name' },
       { re: /(?<![\w.])(require|require_relative|load)\s*\(?\s*(?!['"])[\w$@]/, seen: m => `${m[1]} of a computed path` },
     ],
     judge: rubyOpen,

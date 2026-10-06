@@ -112,7 +112,7 @@ describe('refused in no build', () => {
   test('data changing SQL, and SQL that cannot be read', () => {
     expect(what(bash(['psql', '$DB', '-c', "UPDATE shows SET name = 'x'"]))).toBe('change data with SQL')
     expect(what(bash(['psql', '$DB', '-f', 'fix.sql']))).toBe('run SQL that could not be read')
-    // psql fed SQL on standard input reads none on its command line, which cannot be judged.
+    // psql fed a heredoc that never ends has no body to judge.
     expect(what(bash(['psql', '$DB', '<<SQL']))).toBe('run SQL that could not be read')
     expect(what(bash(['sqlite3', 'app.db', 'DELETE FROM t']))).toBe('change data with SQL')
     expect(what(tool('mcp__claude_ai_Supabase__execute_sql', { query: 'delete from shows' }))).toBe('change data with SQL')
@@ -588,5 +588,36 @@ describe('no build after #760', () => {
     expect(what(run('exec 3<>notes.txt'))).toBe('write to notes.txt')
     expect(what(run('cat <>notes.txt'))).toBe('write to notes.txt')
     expect(what(run('cmd <> notes.txt'))).toBe('write to notes.txt')
+  })
+})
+
+// #760 item 6, decided by Dan on 2026-10-05: psql fed a heredoc is judged by its body, as SQL on its
+// command line is.
+describe('no build: a database client fed a heredoc', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test('read only SQL in the body runs', () => {
+    expect(run(`psql "$DATABASE_URL" <<'SQL'\nSELECT count(*) FROM shows;\nSQL`)).toBeUndefined()
+    expect(run(`psql "$DB" -v ON_ERROR_STOP=1 <<'SQL'\nSELECT id FROM jobs WHERE status = 'delete';\nSELECT 1;\nSQL`)).toBeUndefined()
+  })
+  test('SQL that changes data is refused', () => {
+    expect(what(run(`psql "$DB" <<'SQL'\nUPDATE shows SET name = 'x';\nSQL`))).toBe('change data with SQL')
+    expect(what(run(`psql "$DB" <<'SQL'\nSELECT 1;\nDELETE FROM jobs;\nSQL`))).toBe('change data with SQL')
+    // -c and a heredoc together: both are judged.
+    expect(what(run(`psql "$DB" -c 'SELECT 1' <<'SQL'\nDROP TABLE shows;\nSQL`))).toBe('change data with SQL')
+  })
+  test('what cannot be read stays refused', () => {
+    // A body the shell expands ($ or a backtick) is SQL nobody can read from the text.
+    expect(what(run(`psql "$DB" <<SQL\nSELECT * FROM $TABLE;\nSQL`))).toBe('run SQL that could not be read')
+    expect(what(run(`psql "$DB" <<SQL\nSELECT \`date\`;\nSQL`))).toBe('run SQL that could not be read')
+    // A heredoc on another descriptor is not psql's standard input.
+    expect(what(run(`psql "$DB" 3<<'SQL'\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
+    // A later redirect replaces the heredoc as standard input, so its body is not what runs
+    // (lessons review of #818).
+    expect(what(run(`psql "$DB" <<'SQL' < evil.sql\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
+    expect(what(run(`psql "$DB" <<'SQL' <<< 'DROP TABLE t'\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
+    // A script file still cannot be read, whatever a heredoc holds.
+    expect(what(run(`psql "$DB" -f fix.sql <<'SQL'\nSELECT 1;\nSQL`))).toBe('run SQL that could not be read')
+    // psql's own shell escape in the body is judged as on the command line.
+    expect(run(`psql "$DB" <<'SQL'\n\\! rm -rf /repo\nSQL`)).not.toBeUndefined()
   })
 })

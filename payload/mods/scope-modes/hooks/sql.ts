@@ -175,13 +175,18 @@ const readClient = (cmd: string, args: readonly string[]): Client => {
 }
 
 /** Why no build refuses a database client's command line, or undefined; undefined for any other command. */
-export const clientRefusal = (cmd: string, args: readonly string[], harmless: (target: string) => boolean): string | undefined => {
+export const clientRefusal = (cmd: string, args: readonly string[], harmless: (target: string) => boolean, stdin?: string): string | undefined => {
   if (cmd !== 'psql' && cmd !== 'mysql' && cmd !== 'mariadb' && cmd !== 'sqlite3') return undefined
   // mariadb is MariaDB's own name for the mysql client, read by the same options (#730).
   const c = readClient(cmd === 'mariadb' ? 'mysql' : cmd, args)
   if (c.shell) return `run a shell command through ${cmd}`
-  // A script file it runs cannot be read, and with no SQL given it reads stdin, which cannot either.
-  if (c.file || !c.sql.length) return 'run SQL that could not be read'
+  // A script file it runs cannot be read. A heredoc's body handed in is judged as SQL on its command
+  // line is (#760, Dan's decision 2026-10-05), and with no SQL at all standard input cannot be read.
+  // The body is judged even beside -c, which psql then does not read: judging it too errs toward
+  // refusing, never toward running something unjudged.
+  if (c.file) return 'run SQL that could not be read'
+  if (stdin !== undefined) c.sql.push(stdin)
+  if (!c.sql.length) return 'run SQL that could not be read'
   const out = c.outputs.find(t => !harmless(t))
   if (out !== undefined) return `write to ${out.replace(/\/+$/, '').split('/').pop() || out}`
   for (const s of c.sql) {
