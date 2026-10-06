@@ -1373,7 +1373,8 @@ Not settled by any round, built so the spec holds, and each an open question for
   sign out also toasts the reason ("Switch stopped: no browser logout route is set up"), so Try
   again is not the only way to find out why (L148).
 - **The browser sign out route was proven on 2026-10-05** (#659), on Google Chrome on
-  Daniels-MacBook-Pro-2, and ships as the manifest's defaults, so both Macs get it with the mod.
+  Daniels-MacBook-Pro-2. Since #808 that Chrome route runs on Dans-MacBook-Pro only, chosen by
+  `bin/browser.sh` (below); Daniels-MacBook-Pro-2 signs out through Safari.
   `logoutCommand` runs `bin/chrome-logout.sh`, which loads `https://claude.ai/logout` in Chrome's
   last used profile (read from Chrome's `Local State`), because that is the profile `claude auth
   login` opens its sign in page in (Dan's pick over a fixed profile or every signed in profile).
@@ -1388,6 +1389,23 @@ Not settled by any round, built so the spec holds, and each an open question for
   cookie changes to disk about every 30 seconds, so the check looks once a second for up to 50
   tries, and the mod now allows it 60 seconds rather than 30. Chrome comes to the front when the
   logout page opens, which is acceptable here since the sign in page follows straight after.
+- **The browser is chosen per Mac** (#808, Dan 2026-10-05: "the sign out prompt ... open in safari
+  on this mac and chrome on my other mac"). The defaults run `bin/browser.sh logout` and
+  `bin/browser.sh signed-out`, which read the Mac's LocalHostName and run Safari's pair on
+  Daniels-MacBook-Pro-2 and Chrome's pair on Dans-MacBook-Pro (proven on Daniels-MacBook-Pro-2, not
+  yet run on Dans-MacBook-Pro, #786); a Mac named in neither is
+  refused by name rather than given a browser (L75). Keyed in the script, not a synced setting,
+  because the payload is shared and a per Mac default cannot live in one manifest.
+  `bin/safari-logout.sh` opens `https://claude.ai/logout` in Safari. `bin/safari-signed-out.sh`
+  prints "signed out" once Safari's `Cookies.binarycookies` (in Safari's container) holds no
+  unexpired claude.ai `sessionKey`, read by `bin/safari-cookies.py`, which prints only a count. It
+  was measured before it was built (L82): on Daniels-MacBook-Pro-2 on 2026-10-05 a Claude Code
+  session reads that store with no Full Disk Access prompt (532,410 bytes, 1,930 cookies, one live
+  claude.ai session). A store the system refuses says so and names Full Disk Access; one that does
+  not parse says that; either is exit 2 with the reason, so the card says the check could not read
+  the browser rather than claiming an answer (#773). Not yet proven: that Safari's logout page
+  removes the cookie and how long Safari takes to write the removal to the store. That proof needs
+  a real Switch with Dan present, as #659 had for Chrome, and stays open on #808.
 - **Dismiss** lasts for the rest of the session, as the spec says; it does not come back if the
   account recovers and runs low again in the same session.
 - **/accounts rename** with no name renames this session's account; with a name (a nickname or an
