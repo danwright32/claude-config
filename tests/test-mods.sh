@@ -117,6 +117,48 @@ grep -q "plugin test $M4B/uionly" "$LOG" && check "a mod with only .test.tsx fil
 ! grep -q "plugin test $M4B/typedtsx" "$LOG" && check "a .test.tsx under generated types is ignored" ok \
   || check "a .test.tsx under generated types is ignored" "$(cat "$LOG")"
 
+# 4c. Strict types (#758). Claude Code lays its declarations and the tsconfig a mod extends under
+#     .claude-plugin/types once it has loaded the mod; with those and a TypeScript compiler, a mod is
+#     type checked as its own tsconfig.json says, and errors fail the run by name and count. The
+#     compiler is a stub that fails any mod whose folder name holds "illtyped" (L2: no real tsc).
+TSC="$TMPROOT/tsc"; TSC_LOG="$TMPROOT/tsc-calls"
+cat > "$TSC" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$TSC_LOG"
+case "$2" in *crashing*) printf 'node:internal/modules/cjs/loader:1228\n  throw err;\nError: Cannot find module typescript\n'; exit 1 ;; esac
+case "$2" in *illtyped*) printf 'hooks/register.tsx(3,1): error TS2339: no such thing\nhooks/register.tsx(9,1): error TS2604: not a component\n'; exit 2 ;; esac
+# Every mod imports its own files as ./x.ts, which the tsconfig Claude Code lays does not allow, so
+# real tsc refuses each one unless the check allows them itself (lessons review of #797).
+case " $* " in *" --allowImportingTsExtensions "*) ;; *) printf "hooks/register.tsx(1,20): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\n"; exit 2 ;; esac
+exit 0
+STUB
+chmod +x "$TSC"
+laid(){ mkdir -p "$1/.claude-plugin/types"; printf '{}\n' > "$1/.claude-plugin/types/tsconfig.json"; }
+M4C="$TMPROOT/m4c"; mkmod "$M4C" illtyped; laid "$M4C/illtyped"; mkmod "$M4C" welltyped; laid "$M4C/welltyped"; mkmod "$M4C" unlaid
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod failing a strict type check fails the run" ok || check "a mod failing a strict type check fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'illtyped' | grep -q '2 errors' \
+  && check "naming the mod and how many errors" ok || check "naming the mod and how many errors" "$out"
+printf '%s\n' "$out" | grep 'welltyped ok' | grep -q 'types checked' \
+  && check "a mod that type checks says its types were checked" ok || check "a mod that type checks says its types were checked" "$out"
+printf '%s\n' "$out" | grep 'unlaid ok' | grep -q 'types not checked: Claude Code has not laid its types here' \
+  && check "a mod with no laid types says so rather than claiming a check" ok || check "a mod with no laid types says so rather than claiming a check" "$out"
+! grep -q "$M4C/unlaid" "$TSC_LOG" && check "and the compiler is not run on it" ok || check "and the compiler is not run on it" "$(cat "$TSC_LOG")"
+# A compiler that fails without reporting any type error measured nothing, so it is said as that,
+# never as "0 errors" (lessons review of #797, L11).
+M4D="$TMPROOT/m4d"; mkmod "$M4D" crashing; laid "$M4D/crashing"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4D" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'crashing' | grep -q 'could not be type checked: the compiler exited 1 without reporting a type error: .*Cannot find module typescript' \
+  && check "a compiler that fails with no type error is named as such, and fails the run" ok \
+  || check "a compiler that fails with no type error is named as such, and fails the run" "exit=$code out=$out"
+! printf '%s\n' "$out" | grep -q '0 errors' && check "and never claims 0 errors" ok || check "and never claims 0 errors" "$out"
+# No compiler anywhere: said per mod, and not a failure, since nothing was measured (L411).
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4C" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "with no compiler, the type check is skipped rather than failed" ok || check "with no compiler, the type check is skipped rather than failed" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'illtyped ok' | grep -q 'types not checked: no TypeScript compiler' \
+  && check "and each mod says its types were not checked, and why" ok || check "and each mod says its types were not checked, and why" "$out"
+
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
 runit "$M5"

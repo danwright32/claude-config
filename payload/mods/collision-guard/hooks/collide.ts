@@ -150,7 +150,7 @@ export const latestRequest = (tail: string): string | undefined => {
 export type ShellWrite = { path: string; sources?: string[]; removes?: true; tree?: true }
 
 type Written = {
-  files: { path?: string; sources?: string[]; mayBeFolder?: true }[]
+  files: { path?: string; sources?: string[]; mayBeFolder?: true; tree?: true }[]
   changes: { path?: string; does: string; tree?: true }[]
 }
 export const judgedWrites = (w: Written): ShellWrite[] => {
@@ -162,7 +162,7 @@ export const judgedWrites = (w: Written): ShellWrite[] => {
     if (!had) out.push({ path, ...extra })
     else Object.assign(had, extra.removes ? { removes: true } : {}, extra.tree ? { tree: true } : {})
   }
-  for (const f of w.files) if (f.path) add(f.path, f.mayBeFolder && f.sources?.length ? { sources: f.sources } : {})
+  for (const f of w.files) if (f.path) add(f.path, { ...(f.mayBeFolder && f.sources?.length ? { sources: f.sources } : {}), ...(f.tree ? { tree: true as const } : {}) })
   for (const c of w.changes) {
     if (!c.path) continue
     if (c.does === 'remove') add(c.path, c.tree ? { removes: true, tree: true } : { removes: true })

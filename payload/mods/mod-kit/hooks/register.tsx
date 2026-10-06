@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
 import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCall, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
-import { compose, drop, isDivider, mostRows, paneRefusal, put, questionRefusal, questionRow, refusal, wraps } from './band.ts'
+import { compose, drop, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
@@ -58,7 +58,9 @@ export const register: Register = (on, options) => {
     const change = async (fn: (rows: ModKitBandRow[]) => ModKitBandRow[]) => {
       for (let attempt = 0; attempt < 10; attempt++) {
         const held = await built.state.get(band)
-        const r = await built.state.set(band, fn(held.value ?? []), { ifVersion: held.version })
+        // A row stored under a slot the band no longer has (a question row from before #796) is
+        // dropped on the next write, so it does not stay in the state for good (L377).
+        const r = await built.state.set(band, fn((held.value ?? []).filter(row => isSlot(row.slot))), { ifVersion: held.version })
         if (r.isSet) return
       }
       throw new Error('the band changed under every one of 10 attempts to update it')
@@ -91,12 +93,6 @@ export const register: Register = (on, options) => {
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)
-        await change(rows => put(rows, row))
-      },
-      question: async q => {
-        const why = questionRefusal(q)
-        if (why) throw new Error(why)
-        const row = questionRow(q)
         await change(rows => put(rows, row))
       },
       clearBandRow: async ({ mod, id }) => {

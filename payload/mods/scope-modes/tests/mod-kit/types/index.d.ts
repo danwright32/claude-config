@@ -102,7 +102,9 @@ export type ModKit = {
    * fed on standard input (`cat x.scpt | osascript`); `language`, the language of either; and
    * `verdict`, what the program can do, judged per language (writes files, runs a process, or builds
    * code at run time and cannot be read), absent when it only reads. `xargs` marks a command xargs
-   * runs, whose operands come from its input (#730).
+   * runs, whose operands come from its input (#730); `found`, on a command a find -exec runs, the
+   * folders find starts from, which its `{}` is written as and which stand for everything under
+   * them (#760).
    *
    * Each command also carries `heredocs`, the body of every heredoc that feeds it, absent when none
    * does (#698), for a reader that judges what a heredoc feeds (`python3 - <<'EOF'`, `bash <<'EOF'`),
@@ -128,19 +130,7 @@ export type ModKit = {
    * through `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`.
    */
   bandRow: (row: ModKitBandRow) => Promise<void>
-  /**
-   * Asks a question in the band, drawn the one settled way (docs/mods-design.md, "The band, shared
-   * by every mod"), or replaces the question this mod already asks under the same id (it keeps its
-   * turn). The only way into the `question` slot: `bandRow` refuses a question row, so every
-   * question reads the same (#703, #705). One question is drawn at a time, the first asked; the rest
-   * wait, each drawn once the one before it is cleared with `clearBandRow`, so a number key can only
-   * mean the answer to the question in view. Option n is pressed by the key n and its press reaches
-   * the publisher as `<mod>:<button>`, as any band button's does. Rejects a question with no mod,
-   * id, chip or question, no options or more than nine, an option with no label, a button id used
-   * twice, or body lines of the wrong shape.
-   */
-  question: (question: ModKitQuestion) => Promise<void>
-  /** Takes this mod's row with that id out of the band, a question included. Clearing a row that is not there is fine. */
+  /** Takes this mod's row with that id out of the band. Clearing a row that is not there is fine. */
   clearBandRow: (input: { mod: string; id: string }) => Promise<void>
   /**
    * Draws a side pane the mod opened with `$.ui.open({ id })` as a card, with the band's own row
@@ -184,6 +174,7 @@ export type ModKitCommand = {
   pipedFrom?: string[]
   heredocs?: { word: number; body: string }[]
   xargs?: true
+  found?: string[]
   language?: ModKitLanguage
   program?: ModKitProgram
   script?: { files: string[]; stdin?: true }
@@ -208,7 +199,7 @@ export type ModKitGit = { sub: string | undefined; args: string[]; dir: string |
  * folder, as only the disk can say. A `word` holding `$F` with a `path` is a variable the command
  * set, read as its value (#743).
  */
-export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true }
+export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }
 
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),
@@ -231,38 +222,14 @@ export type ModKitWrites = {
 }
 
 /**
- * One answer to a question in the band. `button` is its id within the mod (its press arrives as
- * `<mod>:<button>`), `label` what it reads, `description` the line drawn under it, and `chosen`
- * marks an option of a multi select question as picked so far.
- */
-export type ModKitQuestionOption = { button: string; label: string; description?: string; chosen?: boolean }
-
-/**
- * A question in the band, as `$.modkit.question` draws it: `[chip]` in grey and the question in
- * amber on one line; then `body`, any lines the asker shows before the answers (ask before saving's
- * rule and the file it goes to); then each option on its own line as Claude Code's plain button,
- * "1: label", its number its hotkey, its description dim and indented under it, wrapping at the
- * band's edge; then `submit`, when given, as a bracketed button (a multi select question's Submit).
- */
-export type ModKitQuestion = {
-  mod: string
-  id: string
-  chip: string
-  question: string
-  body?: ModKitBandLine[]
-  options: ModKitQuestionOption[]
-  submit?: { button: string; label: string }
-}
-
-/**
  * Where a band row sits, drawn top to bottom in this order (docs/mods-design.md, "The band, shared
  * by every mod"): the status rows first (the amber needs-a-look line, then the Compact row), the
  * account room card about this account's limits (#659), then
  * what waits on Dan nearest the prompt (the handoff card at session start, the held while away card,
- * the steps card, then a message to send). An open question, published with `$.modkit.question`,
- * takes the band alone, one question at a time, and everything else comes back once it is cleared.
+ * the steps card, then a message to send). No question is drawn in the band: since #744 and #777
+ * every question is Claude Code's own dialog.
  */
-export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'room' | 'handoff' | 'held' | 'steps' | 'message' | 'question'
+export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'room' | 'handoff' | 'held' | 'steps' | 'message'
 
 /**
  * A run of text in a band line, in the terminal's own colours: `color` is a theme key ('warning' is

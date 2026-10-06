@@ -49,6 +49,13 @@ for every earlier small step. The cost of moving it is that growth made of sever
 inside the margin is never judged as a whole; a repository that cares commits its own record and
 judges against its merge base, and check-bundle-budget.sh stands down there.
 
+The record moves BEFORE the push it judged goes out, because this runs as a pre push hook and
+nothing here learns whether the push then landed. A push another gate refuses, or one that is
+abandoned, has still moved the record to its total. That is accepted rather than tracked, because
+it heals on the next measurement: a later build without the unshipped growth reads smaller, the
+record is lowered to it, and growth after that is judged against the real total again. What it can
+cost is one push judged against a total up to one margin too high.
+
 THE MARGINS. Growth blocks only when it exceeds BOTH the percentage and the absolute amount, and
 they were set from the Slate build on 2026-09-18 (see check-bundle-budget.sh's header).
 """

@@ -492,7 +492,7 @@ Each in a rendered design round unless marked picker.
 
 | Mod | Surface | Decision |
 | --- | --- | --- |
-| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744, and ask before saving in #777; the look stays as mod-kit's question, which no mod draws now |
+| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744, and ask before saving in #777; mod-kit's question builder went in #796 |
 | Ask before saving (#618) | The question | Superseded by #777: Claude asks in Claude Code's own dialog, naming the file and stating the rule in plain words. Was: the rule's exact text and the file it would go to between the question and the three answers, set off by a grey rule |
 | Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
 | Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
@@ -835,9 +835,8 @@ Claude Code gives the band above the prompt one drawing, so the mods that use it
 When several want it at once, the status rows come first (the amber needs-a-look line, then the
 Compact row), and what waits on Dan sits under them, nearest the prompt where he will act: the
 steps card, then a message to send (Dan chose status on top over waiting first and one at a
-time). An open question takes the band alone, and everything else comes back the moment it is
-answered, so a number key can only mean the answer (design round, over the question at the
-bottom of everything).
+time). Questions are not drawn in the band: since #744 and #777 Claude Code's own dialog asks
+every question.
 
 How it is built (#610): mod-kit holds the band's one hook, and `tools/check-mod-shared-parts.sh`
 fails any other mod that hooks `AbovePrompt`: any line of its hooks naming it as a string, in any
@@ -846,8 +845,8 @@ that tests `e.component` (#698; a line that is only a comment is not read). The 
 result row, `ToolResult`. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
 `$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
-`compact`, `room` (the account room card, #659), `handoff`, `held`, `steps` and `message`; a `question` row takes the band alone until it
-is cleared. Rows in
+`compact`, `room` (the account room card, #659), `handoff`, `held`, `steps` and `message` (a
+`question` slot that took the band alone went in #796). Rows in
 one slot keep the order they were first published in, and a row published again under its id is
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
 line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
@@ -864,7 +863,7 @@ rather than drawing the band themselves.
 
 The settled extension (2026-10-04), for the cards that followed the status bar: two more slots,
 `handoff` and `held`, so the order top to bottom is needs-a-look, compact, handoff, held, steps,
-message, and a question still alone. The account room (#659) then added `room` after compact, so
+message. The account room (#659) then added `room` after compact, so
 the order is needs-a-look, compact, room, handoff, held, steps, message. Status stays on top and what waits on Dan sits nearest the
 prompt, as Dan chose; the handoff card appears only at session start. A row may carry a `frame`:
 `{ kind: 'box' }` draws it inside a rounded border (the held while away card), `{ kind: 'left-rule' }`
@@ -875,23 +874,12 @@ lines of a card. A part may carry `indent`, the blank columns drawn before it (o
 first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
 
-One question at a time, and one look for every question (#703, #705, after the milestone audit).
-(Since #777 no mod asks in the band: ask before saving has Claude ask in Claude Code's own dialog,
-as picker manners has since #744. What follows is the noun as built; it has no caller now.)
-Two mods could each have a question open at once: ask before saving left its question in the band
-while Claude carries on, and picker manners' band question (until #744 removed it) could land beside
-it. Drawn together, both numbered from 1, a key meant for the picker could press For good. So the
-band draws the first question asked, alone, and the next once it is cleared. (The noun that named
-the one in view, `$.modkit.shownQuestion()`, had picker manners as its only caller and went with
-its band question in #744.) A question is
-asked with `$.modkit.question({ mod, id, chip, question, body, options, submit })`, which builds it
-the settled way: `[chip]` grey and the question amber on one line, the asker's `body` lines (ask
-before saving's rule and file), each option as Claude Code's plain button `1: label`, its number its
-hotkey, its description dim and indented 3 columns under it, and `submit` last, bracketed. `bandRow`
-refuses a `question` row, so no mod draws a question its own way; the two hand built rows had drifted
-into two looks on one surface. A text run may carry `wrap: true`, drawn on as many lines as it needs
-rather than cut at the band's edge (a question's text and its descriptions wrap, so the brackets at
-the end of an issue review option are never cut off). Inside a left rule (#734), a row with no run
+No question in the band (#796). Picker manners (#744) and then ask before saving (#777) moved to
+Claude Code's own question dialog, so the band's question slot and mod-kit's question builder
+(`$.modkit.question`, which drew one question at a time, alone, in one settled look, #703, #705)
+had no caller and were removed in #796 (L29). A row naming a `question` slot is refused as no slot. A text
+run may carry `wrap: true`, drawn on as many lines as it needs rather than cut at the band's edge
+(so the brackets at the end of a long line are never cut off). Inside a left rule (#734), a row with no run
 that wraps keeps one rule mark per line; a row with one draws its rule as a single column laid over
 the row's whole height and clipped to it, holding a mark for every row its lines could take (one per
 character of a wrapping line, since a terminal row holds at least one), so the rule reaches down
@@ -1187,8 +1175,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   whose saves are Write and Edit tool uses, and the engine's declaration names its memory fork among
   the loops whose calls raise `tool.call`, carrying an id no agent list names. Since #777 its saves
   are refused, never asked, and the main session is told what it would have saved (above).
-- The band look (mod-kit's `$.modkit.question`) is no longer drawn by any mod since #777; the noun
-  itself, with no caller left, is removed by #796.
+- The band look (mod-kit's `$.modkit.question`) had no other caller, so it was removed too (#796).
 
 ## Picker manners (#615), built 2026-10-04
 
@@ -1358,9 +1345,25 @@ Not settled by any round, built so the spec holds, and each an open question for
   changed." (no `logoutCommand` and `signedOutCheck` set); "The browser logout command failed.
   Nothing else was changed." (it exited non zero, could not start, or ran past 60 seconds); "The
   signed out check could not be run. Nothing else was changed." (the check could not start or ran
-  past 60 seconds); "A reload cut Switch off before the sign out was confirmed. Nothing else was
+  past 60 seconds); "The signed out check could not read the browser, so whether it signed out is
+  unknown. Nothing else was changed." (the check ran and exited 2, its "could not tell", as
+  `bin/chrome-signed-out.sh` does when Chrome's last used profile or its cookies cannot be read, so
+  no answer was read, #773); "A reload cut Switch off before the sign out was confirmed. Nothing else was
   changed." (the mod reloaded mid sign out, so nothing checked the page afterwards). The toast
   carries the detail, as before.
+- **A nickname typed as an email address** is refused (#758): the nicknames file is in the public
+  claude-config repository, so a name holding something shaped like `name@domain.tld` would publish
+  it. The dialog stays open and a toast says why: "The nickname could not be saved: it looks like an
+  email address, and the nicknames file is published in a public repository. Use a name instead."
+- **The nickname dialog on the mobile app**, which draws no text field yet, shows the question and
+  "Type the name in the terminal or the desktop app." with Skip alone (#758).
+- **/accounts rename with a name, while some Macs could not be read** (#758): no match is not "No
+  account is called ...". It says which read failed: "No account that could be read is called
+  "work". The other Macs' accounts could not be listed: gh api failed: ..." (or "Dans-MacBook-Pro's
+  accounts could not be read: ..." for one Mac's file).
+- **The card's first appearance** never waits on this Mac's write to GitHub (#758): the write runs on
+  its own queue beside the redraw, and the card is drawn again when it lands, so a save that failed
+  shows then. Reading every Mac's file still comes first, since the card is drawn from it.
 - **The waiting question's line** falls back on "Claude Code has not placed it" when Claude Code
   gives no reason, names an account with no email as "the Acme account" (or "this account" with no
   org either), and is said once per account.
