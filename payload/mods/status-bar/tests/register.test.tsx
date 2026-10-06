@@ -107,6 +107,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: undefined }
   })
   // The Mac's login file, which a test rewrites to log the Mac in to another account mid session.
+  on('fs.exists', ($, e) => ({ value: e.path in files }) as never)
   on('fs.read', ($, e) => {
     const text = files[e.path]
     if (text === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
@@ -615,6 +616,22 @@ test("the facts file names the session's own account, read at its start, and kee
   await step($, clock)
   expect(cacheIn(files)).toBe(T0 + HOUR)
   expect(accountIn(files)).toEqual(mine)
+})
+
+test('a second session start in the same session, as a reload of the mod brings, keeps the account first read (#815)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  await start($, clock)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await start($, clock)
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-1')
+})
+
+test('a Mac with no login file at all is no account, not an unknown one (#815)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  delete files[LOGIN_FILE]
+  await start($, clock)
+  expect(accountIn(files)).toEqual({})
 })
 
 test('a login file that cannot be read at session start is recorded as unknown, never as no login (#815)', withKit, async ($, on) => {

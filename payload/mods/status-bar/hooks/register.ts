@@ -109,6 +109,9 @@ const writeFacts = async ($: EngineInterface) => {
 // an empty record; a file that cannot be read is null, said as unknown, never as no login (L11).
 const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAccount | null> => {
   try {
+    // No login file at all is no claude.ai login, like an empty one; only a file that is there and
+    // cannot be read or parsed is unknown.
+    if (!(await $.fs.exists(`${h}/.claude.json`))) return {}
     const o = (JSON.parse(await $.fs.read(`${h}/.claude.json`)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
     const out: StatusBarAccount = {}
     if (!o || typeof o !== 'object') return out
@@ -353,7 +356,9 @@ export const register: Register = on => {
     startCwd = e.cwd
     home = await $.env.get('HOME')
     if (home) {
-      await $.state.set(accountRef, await readAccount($, home))
+      // Read once a session: a second session.start in the same process (a reload of the mod) keeps
+      // the account first read, since the login file may name another session's Switch by then.
+      if ((await $.state.get(accountRef)).value === undefined) await $.state.set(accountRef, await readAccount($, home))
       const made = await $.process.run(['mkdir', '-p', dirOf(home)]).catch(err => ({ exitCode: -1, stderr: msg(err) }))
       if (made.exitCode === 0) await writeFacts($)
       else cannotSave($, made.stderr.trim() || `mkdir exited ${made.exitCode}`)
