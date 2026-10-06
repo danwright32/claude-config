@@ -75,9 +75,11 @@ try:
             expiry = struct.unpack("<d", c[40:48])[0]
             if cstring(c, domain_at).lstrip(".") != "claude.ai" or cstring(c, name_at) != "sessionKey":
                 continue
-            # An expired cookie is no session: a logout may leave one behind dated in the past. One with
-            # no expiry of its own (stored as 0) lasts as long as Safari runs, so it is live.
-            if expiry <= 0 or expiry + MAC_EPOCH > now:
+            # An expired cookie is no session: a logout may leave one behind dated in the past. Only an
+            # expiry known to have passed counts as gone: one with no expiry of its own (stored as 0)
+            # lasts as long as Safari runs, and one that is not a number is not known to have passed.
+            expired = expiry > 0 and expiry + MAC_EPOCH <= now
+            if not expired:
                 live += 1
     if data[at + 4:at + 12] != FOOTER:
         raise ValueError("the file ends before its footer")

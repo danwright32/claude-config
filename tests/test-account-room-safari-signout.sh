@@ -48,7 +48,7 @@ def cookie(domain, name, expiry):
         strings += s.encode() + b"\0"
     head = struct.pack("<iiii", 56 + len(strings), 0, 0, 0) + struct.pack("<iiii", *offs) + b"\0" * 8
     # "session" writes an expiry of 0, as a cookie with no expiry date of its own is stored.
-    when = 0.0 if expiry == "session" else float(expiry) - MAC_EPOCH
+    when = 0.0 if expiry == "session" else float("nan") if expiry == "nan" else float(expiry) - MAC_EPOCH
     return head + struct.pack("<dd", when, 0.0) + strings
 def page(cookies):
     n = len(cookies)
@@ -103,6 +103,13 @@ S="$TMPROOT/s3b"; store "$S" ".claude.ai:sessionKey:session"
 TRIES=1 signed_out "$S"
 [ "$code" = 1 ] && check "a claude.ai session cookie with no expiry is still a session" ok \
   || check "a claude.ai session cookie with no expiry is still a session" "code=$code out=$out"
+
+# 3b2. An expiry that is not a number is not known to have passed, so the cookie counts as live:
+# never read as gone, which would say signed out (lessons review of #808).
+S="$TMPROOT/s3n"; store "$S" ".claude.ai:sessionKey:nan"
+TRIES=1 signed_out "$S"
+[ "$code" = 1 ] && check "a claude.ai session cookie whose expiry is not a number is still a session" ok \
+  || check "a claude.ai session cookie whose expiry is not a number is still a session" "code=$code out=$out"
 
 # 3c. The looks are bounded by elapsed time too, so the check gives its own verdict inside the
 # limit the mod sets however slow each look is (lessons review of #808): with no time left after the first
