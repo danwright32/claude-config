@@ -54,6 +54,9 @@ describe('codeVerdict after #760', () => {
     expect(codeVerdict('python', "import pandas\nimport py\npy.path.local('a').rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pandas as pd\nsftp.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "x = 'import pandas'\nf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // A chained call has no bound name to prove pandas by, so it is still read as a move (accepted,
+    // since it errs toward refusing; bind the result to a name to run it).
+    expect(codeVerdict('python', "import pandas as pd\npd.Series([1]).rename('t')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "from pathlib import Path\nPath('a').rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pathlib\npathlib.Path('a').replace('b')")).toEqual({ does: 'write files', seen: 'replace' })
     // pandas and pathlib in one script: which receiver is which cannot be told, so it is a move.

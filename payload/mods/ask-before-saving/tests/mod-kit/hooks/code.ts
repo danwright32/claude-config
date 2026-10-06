@@ -102,13 +102,11 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // pathlib's rename and replace move a file (#730). Told from str.replace, which takes two
 // arguments or more, and from a data frame's rename or replace, which take keywords, a mapping or a
 // function: only a call with one plain argument and no keywords is read as a move.
-// A script that imports pandas and nothing of pathlib's is working on data frames and series, whose
-// rename and replace take one name too (#760: `s.rename('total')` was refused as a move, Dan's
-// decision 2026-10-05); one that imports both, or neither, cannot be told apart and is still read
-// as moving.
-//
-// Only a receiver provably bound from pandas is exempt (lessons review of #818): pandas being
-// imported says nothing about any other object. The code arrives in its canonical spelling, so
+// A pandas series or data frame's rename and replace take one name too (#760: `s.rename('total')`
+// was refused as a move, Dan's decision 2026-10-05), so a receiver provably bound from pandas is
+// exempt, and only that receiver: pandas being imported says nothing about any other object
+// (lessons review of #818). A chained call (`pd.Series([1]).rename('t')`) has no name to prove,
+// so it is still read as a move, a refusal of the safe kind. The code arrives in its canonical spelling, so
 // every alias of pandas reads as `pandas.` and `from pandas import Series` makes `Series(` read as
 // `pandas.Series(`. A name is pandas's when it is assigned from an expression starting with
 // `pandas.` or with a name already known to be, which follows `df = pandas.read_csv(...)` then
