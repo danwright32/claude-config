@@ -131,7 +131,7 @@ test('the record is written whole, never in place, so a reader cannot see half o
   expect(w.writes.every(p => p !== `${DIR}/s1.json`)).toBe(true)
 })
 
-test("the save's move and the repository lookup are bounded under a noun's 10 s, and a move cut off is said as a failed save (#802)", withConsumer, async ($, on) => {
+test("the save's move and the repository lookup are bounded under a noun's 10 s (#802)", withConsumer, async ($, on) => {
   const w = world(on)
   await start($)
   const of = (cmd: string) => w.bounds.filter(([c]) => c === cmd).map(([, t]) => t)

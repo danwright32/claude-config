@@ -370,6 +370,23 @@ def judge(f, at, files, consts):
     )
 
 
+def unbounded(opts, default, consts):
+    """Why a call given these options may outlast a noun's 10 s, or None when a timeoutMs under it
+    bounds it. Written out (`timeoutMs: 5_000`) or as a shorthand key (`{ timeoutMs }`), which reads
+    the constant of that name."""
+    given = re.search(r"(?<![\w$])timeoutMs\s*(?::\s*([^,}]+)|(?=\s*[,}]))", opts)
+    if given:
+        expr = given.group(1) if given.group(1) is not None else "timeoutMs"
+        ms = milliseconds(expr, consts)
+        if ms is not None and ms < LIMIT_MS:
+            return None
+        return (f"a timeoutMs of {int(ms):,} ms" if ms is not None
+                else f"a timeoutMs ({expr.strip()}) whose value cannot be read")
+    if not opts or (opts.startswith("{") and opts.endswith("}")):
+        return "no timeoutMs, so " + default
+    return f"options ({opts}) whose timeoutMs cannot be read"
+
+
 def spans_top(code, a, b):
     """The spans of code[a:b] split on the commas standing at its own top level, blank ones left out."""
     out, depth, start = [], 0, a
@@ -573,7 +590,8 @@ for entry, folder, man, files in mods:
     # A noun's own slow engine calls (#802). Its 10 s is not paused while its $ calls run (measured
     # live on 2026-10-05, above), so a process.run that may take longer than that is cut the same
     # way: one with no timeoutMs waits up to Claude Code's default of 30 s, and one whose timeoutMs
-    # cannot be read is not known to be bounded. A model.complete has no bound under 10 s at all.
+    # cannot be read is not known to be bounded. A model.complete is judged the same way, with no
+    # bound of its own when it names none.
     # A call the noun races against a short timer is bounded by the race, as above.
     for f, start, end, _ in regions:
         for m in re.finditer(r"\.\s*process\s*\.\s*run\s*\(", f.code[start:end]):
@@ -582,21 +600,9 @@ for entry, folder, man, files in mods:
                 continue
             judged.add((f.rel, at))
             args = call_args(f.code, start + m.end() - 1) or []
-            opts = args[1].strip() if len(args) > 1 else ""
-            # Written out (`timeoutMs: 5_000`) or as a shorthand key (`{ timeoutMs }`), which reads
-            # the constant of that name.
-            given = re.search(r"(?<![\w$])timeoutMs\s*(?::\s*([^,}]+)|(?=\s*[,}]))", opts)
-            if given:
-                expr = given.group(1) if given.group(1) is not None else "timeoutMs"
-                ms = milliseconds(expr, consts)
-                if ms is not None and ms < LIMIT_MS:
-                    continue
-                why = (f"a timeoutMs of {int(ms):,} ms" if ms is not None
-                       else f"a timeoutMs ({expr.strip()}) whose value cannot be read")
-            elif not opts or (opts.startswith("{") and opts.endswith("}")):
-                why = "no timeoutMs, so Claude Code's default of 30 s"
-            else:
-                why = f"options ({opts}) whose timeoutMs cannot be read"
+            why = unbounded(args[1].strip() if len(args) > 1 else "", "Claude Code's default of 30 s", consts)
+            if why is None:
+                continue
             report(
                 f"check-mod-noun-waits: {f.where(at)}: {entry}'s noun code waits on $.process.run with {why}, and "
                 f"the noun's 10 s keeps running while it does. {CUT}: give it a timeoutMs under 10 s, race it "
@@ -607,10 +613,15 @@ for entry, folder, man, files in mods:
             if (f.rel, at) in judged or is_raced(f, at):
                 continue
             judged.add((f.rel, at))
+            # Judged like process.run, by the timeoutMs in its request (lessons review of #802).
+            args = call_args(f.code, start + m.end() - 1) or []
+            why = unbounded(args[0].strip() if args else "", "no bound of its own: a completion can take a minute", consts)
+            if why is None:
+                continue
             report(
-                f"check-mod-noun-waits: {f.where(at)}: {entry}'s noun code waits on $.model.complete, which can "
-                f"take a minute, and the noun's 10 s keeps running while it does. {CUT}: call the model from a "
-                f"hook, never from a noun."
+                f"check-mod-noun-waits: {f.where(at)}: {entry}'s noun code waits on $.model.complete with {why}, "
+                f"and the noun's 10 s keeps running while it does. {CUT}: give it a timeoutMs under 10 s, race "
+                f"it against a shorter timer, or call the model from a hook."
             )
 
 for line in sorted(set(reports)):
