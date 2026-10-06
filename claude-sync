@@ -7547,6 +7547,14 @@ COVERS
   if [ -n "$scans" ] && [ -n "$changed" ]; then
     while IFS="$(printf '\t')" read -r d_suite d_title d_scopes; do
       [ -n "$d_suite" ] || continue
+      # Scopes must be PATHS. A line that merely starts with the marker (inside a quoted string, a
+      # fixture) would otherwise register a scan nobody wrote, so anything else is refused by name
+      # rather than run or silently dropped (the lessons review of PR #811, L257, L11).
+      case "$d_scopes" in
+        ''|*[!A-Za-z0-9._/\ -]*)
+          echo "claude-sync: ignored a send-gate declaration in ${d_suite#"$SYNC_REPO"/}${d_title:+ ($d_title)}, because its scopes are not paths: $d_scopes" >&2
+          continue ;;
+      esac
       id="$d_suite"; [ "$d_title" = "-" ] || id="$d_suite::$d_title"
       while IFS= read -r f; do
         [ -n "$f" ] || continue
@@ -7657,6 +7665,22 @@ SCANS
     while IFS= read -r suite; do
       [ -n "$suite" ] || continue
       files="$(awk -F'\t' -v s="$suite" '$1=="C" && $2==s {print $3}' "$pairs" 2>/dev/null | sort -u)"
+      # Holding back the lessons file holds back what is RENDERED from it too, exactly as a lessons
+      # fault does (#483): an index published without its source tells the other Mac about a lesson
+      # its LESSONS.md does not hold (the lessons review of PR #811).
+      case "
+$files
+" in
+        *"
+payload/$LESSONS_FILE
+"*) local rf
+            while IFS= read -r rf; do
+              [ -n "$rf" ] && files="$(union_lines "$files" "payload/$rf")"
+            done <<RENDERED
+$(files_rendered_from_lessons)
+RENDERED
+            ;;
+      esac
       while IFS= read -r p; do
         [ -n "$p" ] && send_hold_back_path "$p"
       done <<HELD

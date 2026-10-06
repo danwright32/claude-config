@@ -15671,6 +15671,48 @@ dbg "#809 send once the rule file is fixed: $out_809e"
 check "#809 a change inside a scan's scope re-runs it" \
   "[ \"\$(grep -c '^section == rules carry no drift' '$WT_RUNS' || true)\" -gt '$wt_sec_before' ]"
 check "#809 and the fixed file publishes" "grep -q 'rules fixed' '$WTR/payload/CLAUDE.md'"
+
+# A scan holding back LESSONS.md holds back what is RENDERED from it too, or the index a session on
+# the other Mac loads tells it about a lesson its LESSONS.md does not hold (#483's rule; the lessons
+# review of PR #811). Shown with a positive control, since an index that never carries a lesson
+# would satisfy the refusal for nothing (L159).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'section(){ :; }\n'
+  printf 'if [ -n "${SECTION_LIST:-}" ]; then exit 0; fi\n'
+  printf 'section "== lessons carry no drift (#2) =="\n'
+  printf '# send-gate: scans LESSONS.md\n'
+  printf 'if grep -q LDRIFT "$(dirname "$0")/../payload/LESSONS.md"; then echo "SUITE-RESULT passed=0 failed=1"; exit 1; fi\n'
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+} > "$WTR/tests/test-claude-sync.sh"
+printf -- '- **L1. first lesson.** body\n' > "$WTH/LESSONS.md"
+wt_send >/dev/null
+printf -- '- **L2. LDRIFT lesson.** body\n' >> "$WTH/LESSONS.md"
+out_809f="$(wt_send)"
+dbg "#809 send of a lesson a declared section refuses: $out_809f"
+check "#809 a lessons file a scan refuses is held back" "! grep -q LDRIFT '$WTR/payload/LESSONS.md'"
+check "#809 and no index the repo holds carries the held lesson" \
+  "! grep -l LDRIFT '$WTR'/payload/LESSONS-INDEX*.md >/dev/null 2>&1"
+sed -i.bak 's/LDRIFT/clean/' "$WTH/LESSONS.md"; rm -f "$WTH/LESSONS.md.bak"
+wt_send >/dev/null
+check "#809 the control: once it passes, the index the repo holds carries that lesson" \
+  "grep -l 'L2. clean lesson' '$WTR'/payload/LESSONS-INDEX*.md >/dev/null 2>&1"
+
+# A declaration whose scopes are not paths is REFUSED by name, never run: a line that only happens
+# to start with the marker (inside a string, say) would otherwise register a scan nobody wrote
+# (the lessons review of PR #811, L257).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '# send-gate: scans '"'"'*) true ;; esac\n'
+  printf 'printf "bogus\\n" >> "%s"\n' "$WT_RUNS"
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+} > "$WTR/tests/test-bogus.sh"
+printf '#!/usr/bin/env bash\necho fine again\n' > "$WTH/hooks/fine.sh"
+out_809g="$(wt_send)"
+dbg "#809 send with a malformed declaration in the repo: $out_809g"
+check "#809 a declaration whose scopes are not paths is not run" "[ \"\$(wt_runs bogus)\" = 0 ]"
+check "#809 and it is named as refused, with its file" \
+  "line_has \"\$out_809g\" 'send-gate' 'test-bogus.sh' 'not paths'"
 rm -rf "$WTR/tests"
 
 # THE REAL SCANS carry their declaration. Each one below turned a sync commit red on main between
@@ -15686,10 +15728,28 @@ for _wt_t in '(#418) ==' '(claude-config#369) ==' '(#140, #145) =='; do
   # Read into a variable and matched with case: a pipe into grep -q can kill its producer under
   # pipefail and report a failure that never happened (L183).
   _wt_after="$(grep -A1 -F "$_wt_t\"" "$_wt_root/tests/test-claude-sync.sh" 2>/dev/null || true)"
+  # The marker is assembled, never spelled at the start of a line here, or this very check would
+  # be read by the send as a declaration of its own (the lessons review of PR #811).
+  _wt_mark="$(printf '\n%s%s' '# send-gate' ': scans ')"
   check "#809 the section ending $_wt_t declares what it scans, on the line after its heading" \
-    "case \"\$_wt_after\" in *'
-# send-gate: scans '*) true ;; *) false ;; esac"
+    "case \"\$_wt_after\" in *\"\$_wt_mark\"*) true ;; *) false ;; esac"
 done
+# And the only lines in this suite that READ as declarations are the real ones: one per declared
+# section, none file wide.
+_wt_decl_n="$(grep -c '^# send-gate: scans ' "$_wt_root/tests/test-claude-sync.sh" || true)"
+check "#809 this suite carries exactly the three section declarations ($_wt_decl_n)" "[ '$_wt_decl_n' = 3 ]"
+# Every scope a real declaration names exists under payload/, or a typo would declare a scan no
+# change can ever reach, and it would read as covered (the lessons review of PR #811, L96).
+_wt_missing=""
+_wt_scopes="$(grep -h '^# send-gate: scans ' "$_wt_root"/payload/hooks/test-*.sh "$_wt_root"/tests/test-*.sh 2>/dev/null | sed 's/^# send-gate: scans //' | tr ' ' '\n' | grep -v '^$' | sort -u)"
+while IFS= read -r _wt_sc; do
+  [ -n "$_wt_sc" ] || continue
+  [ -e "$_wt_root/payload/$_wt_sc" ] || _wt_missing="$_wt_missing $_wt_sc"
+done <<WTSCOPES
+$_wt_scopes
+WTSCOPES
+check "#809 every declared scope exists under payload/" \
+  "[ -z '$_wt_missing' ] || { echo '    missing:$_wt_missing' >&2; false; }"
 SYNC_NO_SEND_TESTS=1
 
 
