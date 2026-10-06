@@ -368,6 +368,14 @@ printf 'changed\n' > "$G/wtmain/payload/a.md"
 prepost PostToolUse "python3 $FIX/w.py" "$G/wtmain" w2
 if [ "$RC" -eq 2 ]; then check "and its payload changes are still reported after a command" ok
 else check "and its payload changes are still reported after a command" "exit $RC, said: ${OUT:0:160}"; fi
+# Any question git cannot answer counts as at risk (L42): with the common dir unreadable the
+# worktree cannot be told from the primary checkout, so it is refused.
+FAKEGIT="$FIX/fakegit"; mkdir -p "$FAKEGIT"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "--git-common-dir" ] && exit 1; done\nexec %s "$@"\n' "$(command -v git)" > "$FAKEGIT/git"
+chmod +x "$FAKEGIT/git"
+OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$G/wt" "$G/wt/payload/a.md" \
+  | env PATH="$FAKEGIT:$PATH" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+refused "a worktree whose common git dir cannot be read is still refused"
 GG "$G/wt" checkout -q --detach 2>/dev/null
 edit "$G/wt/payload/a.md" "$G/wt"
 refused "a linked worktree on no branch at all is still refused"

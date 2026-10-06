@@ -71,9 +71,13 @@ sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
 # Written as the reason for refusing rather than a list of exempt places (L615). Any question git
 # cannot answer counts as at risk (L42). The default branch is origin's, else main, else master.
 sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
-  local gd cd br def
+  local gd common cd br def
   gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
-  cd="$(cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || return 1
+  # Read first and refused when empty: `cd ""` succeeds, so an unanswered lookup would otherwise
+  # resolve to the checkout itself and pass for a linked worktree.
+  common="$(cd "$1" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$common" ] || return 1
+  cd="$(cd "$1" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" || return 1
   [ -n "$gd" ] && [ -n "$cd" ] || return 1
   [ "$(cd "$gd" 2>/dev/null && pwd -P)" != "$cd" ] || return 1      # the primary checkout
   br="$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null)" || return 1
