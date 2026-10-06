@@ -174,7 +174,7 @@ do_start() {
     printf '===== FILES THIS PUSH CHANGED: the complete list, %s file(s), from %s..%s =====\n' "$total" "$short_mb" "$short"
     git diff --name-status "$mb" "$full_sha" 2>/dev/null | awk -F '\t' 'NR > 500 { over++; next } { printf "%s\t%s\t(changed, shown below)\n", $1, $NF } END { if (over) printf "TRUNCATED: %d more changed file(s) are not listed\n", over }'
     printf '===== END OF FILE LIST =====\n\n'
-    git diff --no-color -U20 "$mb" "$full_sha"
+    ar_review_diff "$(ar_generated_paths "$mb" "$full_sha")" "$mb" "$full_sha"
   } > "$diff_file" 2>/dev/null
   size="$(wc -c < "$diff_file" | tr -d '[:space:]')"
   if [ "${size:-0}" -gt "$PRR_MAX_BYTES" ]; then

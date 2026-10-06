@@ -188,7 +188,8 @@ if [ -e "$final_file" ] || [ -e "$pending_file" ]; then
 fi
 
 CODE_PATHS=('*.ts' '*.tsx' '*.js' '*.jsx' '*.py' '*.sh' '*.sql')
-git diff --no-color -U20 "$mb" "$head_sha" -- "${CODE_PATHS[@]}" > "$diff_file" 2>/dev/null \
+# Generated files at no context (claude-config#591), by the same helper the pull request review uses.
+ar_review_diff "$(ar_generated_paths "$mb" "$head_sha" "${CODE_PATHS[@]}")" "$mb" "$head_sha" "${CODE_PATHS[@]}" > "$diff_file" 2>/dev/null \
   || { rm -f "$diff_file"; say "skipped: git could not produce the diff $short_mb..$short_head."; }
 
 size="$(wc -c < "$diff_file" | tr -d '[:space:]')"

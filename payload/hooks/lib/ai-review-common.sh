@@ -115,6 +115,61 @@ ar_redact() {   # [--stderr]
   fi
 }
 
+# GENERATED FILES, as the repository itself marks them (claude-config#591). A file .gitattributes
+# sends to a merge driver of its own (`merge=<name>`, other than git's built in text, binary and
+# union, which hand written files use too) or marks `linguist-generated` is produced from the tree,
+# so at twenty lines of context its diff is mostly text nobody wrote: on overture PR #4401 the
+# generated project.pbxproj (measured 2026-09-30), 30 added lines, was 145 KB of the 373 KB that put an ordinary branch
+# over the review cap. Read from the attributes AT the head being reviewed, never the checkout's,
+# which may be on another branch entirely (L398). Prints the changed paths so marked, one per line.
+ar_generated_paths() {   # $1 = base, $2 = head, $3.. = pathspecs (none means every file)
+  local base="$1" head="$2" names attrs
+  shift 2
+  names="$(git -c core.quotepath=false diff --name-only "$base" "$head" -- "$@" 2>/dev/null)"
+  [ -n "$names" ] || return 0
+  # --source needs git 2.40; an older git reads the working tree's attributes instead, which is the
+  # checkout rather than the head and is said nowhere, so it is the fallback and not the rule.
+  # NUL separated both ways (-z), because check-attr C-quotes a non-ASCII name in its ordinary
+  # output whatever core.quotepath says, and a quoted name matches no file. Each answer is then
+  # three fields, path, attribute, value, turned into three lines for awk. pipefail inside each
+  # substitution, or the status is tr's and a git refusing --source never reaches the fallback.
+  attrs="$(set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
+    | git check-attr -z --source "$head" --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')" \
+    || attrs="$(set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
+    | git check-attr -z --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')"
+  printf '%s\n' "$attrs" | awk '
+    NR % 3 == 1 { p = $0; next }
+    NR % 3 == 2 { a = $0; next }
+    {
+      v = $0
+      if (a == "linguist-generated" && (v == "set" || v == "true")) gen[p] = 1
+      if (a == "merge" && v !~ /^(unspecified|unset|set|text|binary|union)$/) gen[p] = 1
+      if (!(p in seen)) { seen[p] = 1; order[++n] = p }
+    }
+    END { for (i = 1; i <= n; i++) if (order[i] in gen) print order[i] }'
+}
+
+# The review diff: every file at -U20, except the generated ones, which follow under a header saying
+# so, at -U0, every changed line and none of the context (claude-config#591). Printed to stdout.
+ar_review_diff() {   # $1 = generated paths (newline list, from ar_generated_paths), $2 = base, $3 = head, $4.. = pathspecs
+  local gen="$1" base="$2" head="$3" p short rc=0
+  local -a excl=() incl=()
+  shift 3
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    excl+=(":(exclude,literal)$p"); incl+=(":(literal)$p")
+  done <<GEN
+$gen
+GEN
+  git diff --no-color -U20 "$base" "$head" -- "$@" ${excl[@]+"${excl[@]}"} || rc=$?
+  [ "${#incl[@]}" -gt 0 ] || return "$rc"
+  short="$(git rev-parse --short "$head" 2>/dev/null || printf '%s' "$head")"
+  printf '\n===== GENERATED FILES (marked so by .gitattributes at %s): only the changed lines, no context, and their full text is left out: %s =====\n' \
+    "$short" "$(printf '%s\n' "$gen" | sed '/^$/d' | paste -sd ' ' -)"
+  git diff --no-color -U0 "$base" "$head" -- "${incl[@]}" || rc=$?
+  return "$rc"
+}
+
 # Appends the full text at $3 of each file changed between $2 and $3 (added or modified, matching the
 # pathspecs after $5, or every file when none are given) to $1, smallest first, while $4 bytes of
 # budget last. Prints "<files in> <files out> <names left out>" for the caller's start line. Moved
@@ -123,20 +178,28 @@ ar_redact() {   # [--stderr]
 # large generated file and five small real ones should still show the five, and a file that does
 # not fit is named rather than silently absent (L98).
 ar_append_full_files() {   # $1 = input file, $2 = base, $3 = head, $4 = byte budget, $5.. = pathspecs
-  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short
+  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short gen
   shift 4
   short="$(git rev-parse --short "$head" 2>/dev/null || printf '%s' "$head")"
+  # A generated file's full text is the bulk ar_review_diff exists to leave out (claude-config#591),
+  # and its header already says so, so it is skipped here rather than counted as not fitting.
+  gen="$(ar_generated_paths "$base" "$head" "$@")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     fsize="${line%% *}"; f="${line#* }"
     case "$fsize" in ''|*[!0-9]*) continue ;; esac
+    case "
+$gen
+" in *"
+$f
+"*) continue ;; esac
     if [ "$fsize" -le "$budget" ] \
        && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short" "$f"; git show "$head:$f"; } >> "$out" 2>/dev/null; then
       budget=$((budget - fsize)); in=$((in + 1))
     else
       left=$((left + 1)); names="$names $f"
     fi
-  done < <(git diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
+  done < <(git -c core.quotepath=false diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
            | while IFS= read -r f; do [ -n "$f" ] && printf '%s %s\n' "$(git cat-file -s "$head:$f" 2>/dev/null || echo x)" "$f"; done \
            | sort -n)
   printf '%s %s%s' "$in" "$left" "$names"

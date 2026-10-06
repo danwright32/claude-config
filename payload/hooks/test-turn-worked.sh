@@ -109,6 +109,41 @@ BROKEN="$TMPROOT/broken.jsonl"; printf 'not json\n{"type":"assistant"\n' > "$BRO
   && check "the control: it can say yes at all" ok \
   || check "the control: it can say yes at all" "it never says yes, so every 'no' above proves nothing"
 
+# ---------------------------------------------------------------------------
+# Its cost is the LAST TURN, never the whole session (claude-config#603). Two Stop hooks run this on
+# every prompt, and a session's transcript only grows: read whole, the work per prompt grows with
+# every turn before it. Counted in bytes read, never timed (L224), and the history is padded until
+# it is far bigger than any one read block, so a reader that reads it all cannot pass.
+# ---------------------------------------------------------------------------
+HIST="$TMPROOT/history.jsonl"
+# Built by one python3, not one per line, so the fixture costs nothing next to what it measures.
+python3 -c '
+import json, sys
+with open(sys.argv[1], "w") as f:
+    for i in range(2000):
+        f.write(json.dumps({"type": "user", "message": {"content": "old turn %d %s" % (i, "x" * 2000)}}) + "\n")
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}}) + "\n")
+' "$HIST"
+SHORT="$TMPROOT/short.jsonl"
+{ user_line 'go'; tool_line Edit; } > "$SHORT"
+cat "$SHORT" >> "$HIST"
+stats_short="$TMPROOT/stats.short"; stats_long="$TMPROOT/stats.long"
+a_short="$(TURN_WORKED_STATS="$stats_short" python3 "$T" "$SHORT" 2>/dev/null)"
+a_long="$(TURN_WORKED_STATS="$stats_long" python3 "$T" "$HIST" 2>/dev/null)"
+[ "$a_long" = "yes" ] && [ "$a_short" = "yes" ] \
+  && check "the answer after a long history is the last turn's" ok \
+  || check "the answer after a long history is the last turn's" "short=$a_short long=$a_long"
+read_short="$(cat "$stats_short" 2>/dev/null)"; read_long="$(cat "$stats_long" 2>/dev/null)"
+hist_size="$(wc -c < "$HIST" | tr -d ' ')"
+case "$read_long" in
+  ''|*[!0-9]*) check "it reports how much it read" "it wrote '$read_long'" ;;
+  *) if [ "$read_long" -le 131072 ] && [ "$hist_size" -gt $((read_long * 20)) ]; then
+       check "a 2000 turn history is not read to answer about the last turn" ok
+     else
+       check "a 2000 turn history is not read to answer about the last turn" "read $read_long of $hist_size bytes (short transcript: $read_short)"
+     fi ;;
+esac
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

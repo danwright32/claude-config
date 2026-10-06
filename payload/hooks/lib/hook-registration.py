@@ -119,15 +119,23 @@ def faults_for(settings, hooks_dir):
             continue
         with open(path, errors="replace") as f:
             head = "".join(f.readline() for _ in range(8))
-        m = HEADER.search(head)
-        if not m:
+        # A hook may declare both tool events, one header line each (claude-config#647), and is held
+        # to each declaration under its own event.
+        decl = {}
+        for m in HEADER.finditer(head):
+            decl.setdefault(m.group(1), m.group(2))
+        if not decl:
             continue
-        event, spec = m.group(1), m.group(2)
-        declared = spec.split("|")
-        for tool in declared:
-            if not any(matches(mt, tool) for mt in runs.get((event, base), [])):
-                faults.append(f"UNWIRED {base} declares {event}({spec}) and is not run for {tool}")
+        first_event = next(iter(decl))
+        for event, spec in decl.items():
+            declared = spec.split("|")
+            for tool in declared:
+                if not any(matches(mt, tool) for mt in runs.get((event, base), [])):
+                    faults.append(f"UNWIRED {base} declares {event}({spec}) and is not run for {tool}")
         for ev in TOOL_EVENTS:
+            event = ev if ev in decl else first_event
+            spec = decl[event]
+            declared = spec.split("|")
             for mt in sorted(set(runs.get((ev, base), []))):
                 if mt in ("", "*"):
                     faults.append(f"EXTRA {base} declares {event}({spec}) and is run under {ev} for every tool (matcher {mt!r})")
