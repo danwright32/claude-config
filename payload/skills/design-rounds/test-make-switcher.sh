@@ -201,9 +201,11 @@ cat > "$FAKE_CHROME" <<'FAKE'
 #!/bin/bash
 # A stand in for Chrome: prints a page (or nothing) and then never exits, as Chrome's teardown does.
 echo "$*" > "$FAKE_ARGS"
-[ "${FAKE_PAGE:-yes}" = yes ] && printf '<html><head></head><body><p>made</p></body></html>\n'
+# Its helper starts, and is recorded, before the page is printed: the wrapper may stop it the
+# moment the page is complete, so nothing after the page is sure to run.
 sleep 300 &
 echo $! > "$FAKE_CHILD"
+[ "${FAKE_PAGE:-yes}" = yes ] && printf '<html><head></head><body><p>made</p></body></html>\n'
 wait
 FAKE
 chmod +x "$FAKE_CHROME"
