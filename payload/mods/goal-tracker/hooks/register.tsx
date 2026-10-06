@@ -98,10 +98,14 @@ const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() =>
 
 // What the session waits on Dan for, each kept apart so that one ending never erases another
 // (#694): the open question (ask before saving's included, asked in the same dialog since #777) and
-// the open permission prompt with the calls it may belong to. The pane shows the one asked latest.
+// the open permission prompt with the calls it may belong to, and each question the tracker does not
+// hold (a subagent's), by its own call. The pane shows the one asked latest.
 type Waiting = NonNullable<Progress['waiting']>
 let question: { id: string; mark: Waiting } | undefined
 let permission: { calls: Set<string>; mark: Waiting } | undefined
+// A question announced by its dialog's permission request alone, keyed by its call, apart from
+// `permission`: a Bash prompt open beside it keeps its own mark and calls (#824, #694).
+const unheldQuestions = new Map<string, Waiting>()
 // The calls of this conversation's own questions while they run, which the question path marks and
 // notifies; a permission request raised inside one of them is that question (#814).
 const heldQuestions = new Set<string>()
@@ -109,7 +113,7 @@ const heldQuestions = new Set<string>()
 const claimedQuestions = new Set<string>()
 const waitingNow = (): Waiting | undefined => {
   let latest: Waiting | undefined
-  for (const m of [question?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
+  for (const m of [question?.mark, permission?.mark, ...unheldQuestions.values()]) if (m && (!latest || m.since > latest.since)) latest = m
   return latest
 }
 const withWaiting = (p: Progress): Progress => {
@@ -140,11 +144,12 @@ const callsFor = (tool: string, asked: unknown): string[] => {
   return (named.length ? named : ofTool).map(([id]) => id)
 }
 // A prompt raised inside a call has been answered, either way, once that call has returned or
-// rejected. True when that took the permission mark off.
+// rejected. True when that took a mark off: an unheld question's, or the permission's.
 const callEnded = (id: string): boolean => {
   running.delete(id)
   claimedQuestions.delete(id)
-  if (!permission?.calls.delete(id) || permission.calls.size) return false
+  const hadQuestion = unheldQuestions.delete(id)
+  if (!permission?.calls.delete(id) || permission.calls.size) return hadQuestion
   permission = undefined
   return true
 }
@@ -331,12 +336,25 @@ const beginAgain = async ($: EngineInterface) => {
   toldNoClock = false
   toldNoNotify = false
   project = undefined
+  // heldQuestions and claimedQuestions describe calls still in flight, as `running` does, so a
+  // /clear leaves them to each call's own end (lessons review of PR 816). All but one: a question
+  // whose notification the /clear drops unsent is still on screen, and nothing else would tell Dan
+  // of it (#824). It stops being held, so its dialog's request announces it; and when that request
+  // has already come, it is marked and notified here, as a question the tracker does not hold.
+  if (unsent) {
+    const id = unsent.id
+    const mark = question?.id === id ? question.mark : undefined
+    dropUnsent(id)
+    heldQuestions.delete(id)
+    if (mark && claimedQuestions.has(id)) {
+      unheldQuestions.set(id, mark)
+      waitingOnYou($, mark.question)
+    }
+  }
   question = undefined
   permission = undefined
-  // heldQuestions and claimedQuestions describe calls still in flight, as `running` does, so a
-  // /clear leaves them to each call's own end (lessons review of PR 816).
-  if (unsent) dropUnsent(unsent.id)
   countedCalls.clear()
+  if (progress) progress = withWaiting(progress)
 }
 
 export const register: Register = on => {
@@ -448,7 +466,10 @@ export const register: Register = on => {
     const text = e.text.trim()
     // Dan sending a message is never a session waiting on his permission: a mark whose call could
     // not be matched as it returned is cleared here at the latest (lessons review of f0a8ff9).
-    if (isPerson && permission) {
+    // A question's request matched to no call (none was running of its tool) is cleared here too.
+    let stale = false
+    if (isPerson) for (const id of [...unheldQuestions.keys()]) if (!running.has(id)) stale = unheldQuestions.delete(id) || stale
+    if (isPerson && (permission || stale)) {
       permission = undefined
       const before = progress
       if (progress) progress = withWaiting(progress)
@@ -474,23 +495,27 @@ export const register: Register = on => {
     // Matched by the call it was raised inside, never by the question's text (lessons review of PR
     // 816): a subagent asking what this conversation asks is still its own question.
     const calls = callsFor(e.tool_name, e.tool_input)
+    let own: string | undefined
     if (isQuestion) {
       // Each request belongs to one question's call: the first running one it matches that no
       // request has claimed yet, so two identical questions (a subagent's beside this
       // conversation's) are told apart by the order they asked in (lessons review of PR 816).
-      const own = calls.find(id => !claimedQuestions.has(id))
+      own = calls.find(id => !claimedQuestions.has(id))
       // Every running question it matches already claimed: a request raised again for a dialog
       // already announced (a re-prompt), never a second question (lessons review of PR 816).
       if (own === undefined && calls.length > 0) return next(e)
       if (own !== undefined) {
         claimedQuestions.add(own)
         if (heldQuestions.has(own)) return next(e)
-        calls.splice(0, calls.length, own)
       }
     }
     const what = isQuestion ? questionOf(e.tool_input) : permissionFor(e.tool_name, e.tool_input)
     const now = await nowOr($)
-    permission = { calls: new Set(calls), mark: { question: what, since: now, kind: isQuestion ? 'question' : 'permission' } }
+    const mark: Waiting = { question: what, since: now, kind: isQuestion ? 'question' : 'permission' }
+    // A question's mark is its own call's, never the permission slot (#824); one matched to no
+    // running call is keyed apart too, and Dan's next message clears it.
+    if (isQuestion) unheldQuestions.set(own ?? `request-${++unnamed}`, mark)
+    else permission = { calls: new Set(calls), mark }
     if (progress) {
       progress = withWaiting(progress)
       await publish($, now)
