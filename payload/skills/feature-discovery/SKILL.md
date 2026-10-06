@@ -44,7 +44,21 @@ Treat it as a floor:
 ## After shared understanding
 
 Once you and the user share a clear picture of the feature, continue down the normal
-pipeline rather than building ad hoc:
+pipeline rather than building ad hoc. First, where it applies, offer a picture of the parts.
+
+### Offer a picture of the parts
+
+When the feature has two or more moving parts that hand data to each other (screens, services,
+jobs, stores, outside systems), offer Dan a simple diagram of those parts and the data passing
+between them, before the hand off below. Ask with an AskUserQuestion picker, and draw it only when
+Dan says yes. Skip the offer when the feature has one moving part.
+
+Show it as a published artifact with the Artifact tool, loading the artifact-diagramming skill first,
+never only as a file or a file card in the chat, which Dan cannot see. Keep it small: one box per
+part and one labelled arrow per flow of data, named in Dan's words rather than the code's. If
+drawing it shows a part or a flow the interview never covered, ask about it before moving on.
+
+### Then hand off
 
 - Hand off to `superpowers:brainstorming` to turn the understanding into a design,
   then `superpowers:writing-plans` for the implementation plan.
