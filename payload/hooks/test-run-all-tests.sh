@@ -2326,12 +2326,27 @@ claude_sync_for_suite "$CSR/home/.claude/hooks" "" >/dev/null \
 
 CT="$TMPROOT/claude-trap"; mkdir -p "$CT/bin" "$CT/repo/payload" "$CT/cfg"
 if SYNC_SCRIPT_REAL="$(claude_sync_for_suite "$DIR" "${RUN_ALL_TESTS_CHECKOUT:-}")"; then
-  printf '#!/usr/bin/env bash\necho "called: $*" >> "%s/calls"\nexit 97\n' "$CT" > "$CT/bin/claude"; chmod +x "$CT/bin/claude"
+  # It also records the environment status ran it under, which is what #870's write check reads.
+  printf '#!/usr/bin/env bash\necho "called: $*" >> "%s/calls"\nenv > "%s/env"\nexit 97\n' "$CT" "$CT" > "$CT/bin/claude"; chmod +x "$CT/bin/claude"
   # The two conditions status needs before it asks claude at all, set here rather than inherited:
   # a shared file naming an effort per model, and a settings.json naming the model.
   printf '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}\n' > "$CT/repo/payload/settings.shared.json"
   printf '{"model": "opus"}\n' > "$CT/cfg/settings.json"
-  ct_status='CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >"$CT/status.out" 2>&1'
+  # The fixture's own home (claude-config#870). status reads the launch agents, the clone registry
+  # and every other clone's hook suite record from HOME, so with the real one this fixture's output
+  # was this Mac's live records (L2, L439), and anything status ever writes beside one of them would
+  # land in the real file. A launch agent in the fixture's home names a clone holding a record, so a
+  # status run that read this home says so by naming that clone, and one that read the real home
+  # does not. Under the temp root on purpose: the clone registry drops temp entries, the launch
+  # agents do not. The process table is this Mac's live state too, and status lists stray suite
+  # processes from it with their command lines, so it reads an empty table here instead.
+  mkdir -p "$CT/fixturehome/Library/LaunchAgents" "$CT/ct-marker-clone" "$CT/tmp" "$CT/scr"
+  : > "$CT/ps"
+  : > "$CT/ct-marker-clone/claude-sync"
+  printf 'outcome=passed\tat=%s\texit=0\n' "$(date +%s)" > "$CT/ct-marker-clone/.hook-tests"
+  printf '<plist><dict><key>ProgramArguments</key><array><string>/bin/bash</string><string>%s/ct-marker-clone/claude-sync</string></array></dict></plist>\n' "$CT" \
+    > "$CT/fixturehome/Library/LaunchAgents/com.claudesync.ctmarker.plist"
+  ct_status='HOME="$CT/fixturehome" TMPDIR="$CT/tmp" SYNC_PS_FIXTURE="$CT/ps" CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >"$CT/status.out" 2>&1'
   : > "$CT/calls"
   ct_rc=0
   ( unset SYNC_CLAUDE_BIN; CT="$CT" SYNC_SCRIPT_REAL="$SYNC_SCRIPT_REAL" eval "$ct_status" ) || ct_rc=$?
@@ -2347,6 +2362,38 @@ if SYNC_SCRIPT_REAL="$(claude_sync_for_suite "$DIR" "${RUN_ALL_TESTS_CHECKOUT:-}
   [ -n "$ct_model" ] || ct_model="no model section at all, so it never reached the claude check or the shared file named no effort"
   [ -s "$CT/calls" ] && check "the control: status with no seam set reaches the claude on PATH" ok \
     || check "the control: status with no seam set reaches the claude on PATH" "no call was recorded. status ($SYNC_SCRIPT_REAL) exited $ct_rc; about the model it said: $ct_model; its last line: $ct_last"
+  # What that status run read and wrote stays inside the scratch root (claude-config#870). READS:
+  # it reported the record of the clone only the fixture's home names, and named no path under the
+  # real home once the scratch root and the script's own checkout are taken out of its output (so
+  # a TMPDIR inside the home still measures). WRITES: the roots status derives its default write
+  # paths from (HOME, CLAUDE_HOME, SYNC_REPO, SYNC_SCRATCH_ROOT, TMPDIR) are read back from the
+  # environment the status process itself saw, by the stand in claude it runs, and each must sit
+  # under the scratch root, rather than trusted from the assignment above (L188).
+  grep -qF "ct-marker-clone, which a background job runs from" "$CT/status.out" \
+    && check "#870 the claude probe's status reads the fixture's home, not this Mac's" ok \
+    || check "#870 the claude probe's status reads the fixture's home, not this Mac's" "it never named the clone the fixture's launch agent points at, so it read another home. It said: $(awk '/hook suite/' "$CT/status.out" | cut -c1-300)"
+  ct_seen="$(cat "$CT/status.out" 2>/dev/null)"
+  for ct_strip in "$TMPROOT" "$(cd "$TMPROOT" && pwd -P)" "$(cd "$(dirname "$SYNC_SCRIPT_REAL")" && pwd)" "$(cd "$(dirname "$SYNC_SCRIPT_REAL")" && pwd -P)"; do
+    [ -n "$ct_strip" ] && ct_seen="${ct_seen//"$ct_strip"/}"
+  done
+  case "$ct_seen" in
+    *"${HOME%/}/"*) check "#870 the claude probe's status names nothing under the real home" "$(printf '%s\n' "$ct_seen" | grep -F "${HOME%/}/" | cut -c1-300)" ;;
+    *) check "#870 the claude probe's status names nothing under the real home" ok ;;
+  esac
+  ct_env_bad=""
+  ct_root_p="$(cd "$TMPROOT" && pwd -P)"
+  for ct_var in HOME CLAUDE_HOME SYNC_REPO SYNC_SCRATCH_ROOT TMPDIR; do
+    ct_val="$(awk -F= -v k="$ct_var" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$CT/env" 2>/dev/null)"
+    ct_val_p="$( [ -n "$ct_val" ] && cd "$ct_val" 2>/dev/null && pwd -P)" || ct_val_p=""
+    case "$ct_val_p" in "$ct_root_p"/*) ;; *) ct_env_bad="$ct_env_bad $ct_var=${ct_val:-unset}" ;; esac
+  done
+  if [ ! -s "$CT/env" ]; then
+    check "#870 the home, config, repo, scratch and temp folders the claude probe's status ran with are under the scratch root" "no environment was recorded, so the stand in claude never ran and where status writes is unmeasured"
+  elif [ -n "$ct_env_bad" ]; then
+    check "#870 the home, config, repo, scratch and temp folders the claude probe's status ran with are under the scratch root" "outside it:$ct_env_bad"
+  else
+    check "#870 the home, config, repo, scratch and temp folders the claude probe's status ran with are under the scratch root" ok
+  fi
   : > "$CT/calls"
   CS="$TMPROOT/dir-claude-trap"; mkdir -p "$CS"
   { printf '#!/usr/bin/env bash\nunset -v _unused\n'
