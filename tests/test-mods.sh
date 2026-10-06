@@ -168,7 +168,7 @@ M4E="$TMPROOT/m4e"; mkmod "$M4E" borrowed; mkmod "$M4E" illtyped-known; mkmod "$
 TH="$TMPROOT/types-home"
 for m in borrowed illtyped-known illtyped-new; do laid "$TH/mods/$m"; done
 TSDIR="$TMPROOT/ts"; mkdir -p "$TSDIR/node_modules/.bin"; cp "$TSC" "$TSDIR/node_modules/.bin/tsc"
-printf 'illtyped-known\t2\t#900\n' > "$TSDIR/known-type-errors.tsv"
+printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
 : > "$TSC_LOG"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types checked' \
@@ -182,16 +182,23 @@ printf '%s\n' "$out" | grep -q 'illtyped-new fails a strict type check (2 errors
   && check "a mod with no record that fails the type check still fails" ok \
   || check "a mod with no record that fails the type check still fails" "$out"
 [ "$code" -eq 1 ] && check "and fails the run" ok || check "and fails the run" "exit=$code"
-printf 'illtyped-known\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"; rm -rf "${M4E:?}/illtyped-new"
+# One recorded error fixed and a new one made: the count is the same, and the new one still fails.
+printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS9999\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"; rm -rf "${M4E:?}/illtyped-new"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-known' | grep -q 'more type errors (2) than the 1 recorded' \
-  && check "a mod over its recorded count fails, naming both counts" ok \
-  || check "a mod over its recorded count fails, naming both counts" "exit=$code out=$out"
-printf 'illtyped-known\t5\t#900\n' > "$TSDIR/known-type-errors.tsv"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-known' | grep -q 'type errors not in the record.*hooks/register.tsx TS2604 (1 found, 0 recorded)' \
+  && check "an error not in the record fails though the count is unchanged, naming where and how many" ok \
+  || check "an error not in the record fails though the count is unchanged, naming where and how many" "exit=$code out=$out"
+printf 'illtyped-known\thooks/register.tsx TS2339\t3\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q 'fewer than the 5 recorded' \
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q 'fewer than recorded' \
   && check "a mod under its record passes and says the record can come down" ok \
   || check "a mod under its record passes and says the record can come down" "exit=$code out=$out"
+# Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
+  && printf '%s\n' "$out" | grep -q 'UNMEASURED: .*(no TypeScript compiler' \
+  && check "with types to borrow but no compiler, the compiler is what is named" ok \
+  || check "with types to borrow but no compiler, the compiler is what is named" "$out"
 # Nothing laid anywhere and no compiler: one UNMEASURED summary naming how many and the install command.
 rm -rf "$TSDIR/node_modules"
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TMPROOT/no-types" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?

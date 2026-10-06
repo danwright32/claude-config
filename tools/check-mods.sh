@@ -73,10 +73,13 @@ tsc="${TSC_BIN:-}"
 # Claude Code lays a mod's types only in the copy it loads, ~/.claude/mods/<mod>, and the mirror
 # never carries them (README "Mods"), so a mod checked where none are laid borrows that copy's.
 TYPES_HOME="${CHECK_MODS_TYPES_HOME:-$HOME/.claude}"
-# Type errors already found and recorded, one mod a line: name, count, the issue fixing them (#803).
-# A mod at or under its count passes and says so; over it, it fails. A mod not listed must have none.
+# Type errors already found and recorded (#803), one line per mod, file and error code: the mod, the
+# file and code ("hooks/register.tsx TS2345"), how many, and the issue fixing them. Kept by where and
+# what rather than one count a mod, so fixing one error does not make room for a new one (L367). An
+# error beyond its line fails; a line with fewer left passes and says the record can come down. A
+# mod with no lines must have no errors.
 KNOWN="$TS_DIR/known-type-errors.tsv"
-known_of(){ [ -f "$KNOWN" ] && awk -F'\t' -v m="$1" '$1 == m { print $2 "\t" $3; exit }' "$KNOWN"; }
+known_of(){ [ -f "$KNOWN" ] && awk -F'\t' -v m="$1" '$1 == m { print $2 "\t" $3 "\t" $4 }' "$KNOWN"; }
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/check-mods.XXXXXX")" || scratch=""
 trap '[ -n "$scratch" ] && rm -rf "$scratch"' EXIT
 untyped=0; untyped_why=""
@@ -132,7 +135,13 @@ for d in "${mods[@]}"; do
   # Without either it is said on the mod's line, never claimed (L411, L440).
   types="types not checked: no TypeScript compiler (looked for ${TSC_BIN:-$TS_DIR/node_modules/.bin/tsc, then tsc on PATH})"
   checked="$d"
-  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ] && [ -n "$tsc" ] && [ -n "$scratch" ]; then
+  # No compiler is decided first, so it is the cause named whether or not types could be borrowed.
+  if [ -z "$tsc" ]; then
+    untyped=$((untyped + 1)); untyped_why="no TypeScript compiler"
+    echo "check-mods: $name ok ($types)"
+    continue
+  fi
+  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ] && [ -n "$scratch" ]; then
     # This mod's source beside the types laid for the installed copy of it, in scratch, so nothing
     # is written into either.
     checked="$scratch/$name"
@@ -142,8 +151,6 @@ for d in "${mods[@]}"; do
   if [ -z "$checked" ] || [ ! -f "$checked/.claude-plugin/types/tsconfig.json" ]; then
     types="types not checked: Claude Code has not laid its types here or in $TYPES_HOME/mods/$name"
     untyped=$((untyped + 1)); untyped_why="no types laid for $name"
-  elif [ -z "$tsc" ]; then
-    untyped=$((untyped + 1)); untyped_why="no TypeScript compiler"
   else
     # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
     # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
@@ -162,14 +169,21 @@ for d in "${mods[@]}"; do
       count="$(printf '%s\n' "$errs" | grep -c 'error TS' || true)"
       rec="$(known_of "$name")"
       if [ -n "$rec" ]; then
-        limit="${rec%%$'\t'*}"; issue="${rec#*$'\t'}"
-        if [ "$count" -gt "$limit" ] 2>/dev/null; then
-          echo "check-mods: $name has more type errors ($count) than the $limit recorded in $KNOWN ($issue): $(printf '%s\n' "$errs" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"
+        issue="$(printf '%s\n' "$rec" | head -n 1 | cut -f3)"
+        # Each error by its file and code, counted: "hooks/register.tsx TS2345<TAB>3".
+        cur="$(printf '%s\n' "$errs" | sed -E "s#^($name/)?([^(]*)\(.*error (TS[0-9]+):.*#\\2 \\3#" | LC_ALL=C sort | uniq -c \
+          | awk '{ c = $1; $1 = ""; sub(/^ /, ""); print $0 "\t" c }')"
+        over="$(awk -F'\t' 'NR == FNR { lim[$1] = $2; next } { r = ($1 in lim) ? lim[$1] : 0; if ($2 + 0 > r + 0) print $1 " (" $2 " found, " r " recorded)" }' \
+          <(printf '%s\n' "$rec") <(printf '%s\n' "$cur") | paste -sd';' -)"
+        if [ -n "$over" ]; then
+          echo "check-mods: $name has type errors not in the record in $KNOWN ($issue): $over"
           failed=1
           continue
         fi
         types="types checked, $count known type errors ($issue)"
-        [ "$count" -lt "$limit" ] 2>/dev/null && types="$types, fewer than the $limit recorded: lower the record"
+        under="$(awk -F'\t' 'NR == FNR { now[$1] = $2; next } { if ($2 + 0 > (($1 in now) ? now[$1] : 0) + 0) n++ } END { print n + 0 }' \
+          <(printf '%s\n' "$cur") <(printf '%s\n' "$rec"))"
+        [ "$under" -gt 0 ] && types="$types, fewer than recorded in $under place(s): lower the record"
         echo "check-mods: $name ok ($types)"
         continue
       fi
@@ -179,7 +193,7 @@ for d in "${mods[@]}"; do
     fi
     types="types checked"
     rec="$(known_of "$name")"
-    [ -n "$rec" ] && types="types checked, none of the ${rec%%$'\t'*} recorded errors left: remove its line from $KNOWN"
+    [ -n "$rec" ] && types="types checked, none of its recorded errors left: remove its lines from $KNOWN"
   fi
   echo "check-mods: $name ok ($types)"
 done

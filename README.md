@@ -1098,7 +1098,7 @@ types laid for its installed copy. It allows the `./x.ts` imports every mod uses
 (`--allowImportingTsExtensions`), since the laid tsconfig does not, so no mod needs its own copy of
 that setting. Errors fail the run with the mod named and counted, except a mod listed in
 `tools/typescript/known-type-errors.tsv` (the errors found on the first run, 2026-10-05, in 12 mods,
-being fixed under #822), which passes at or under its recorded count and fails over it. A compiler
+being fixed under #822), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it, so fixing one error makes no room for a new one. A compiler
 that exits without any type error is said as that, never as 0 errors. Where no compiler or no laid
 types are found, each mod's line says its types were not checked and why, and the run ends with one
 UNMEASURED line counting them and naming the install command, which is not a failure. CI has no
