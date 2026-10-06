@@ -86,6 +86,75 @@ test('each window keeps its own time, so a later merge never puts an older figur
   expect(combine(arriving, stored)).toEqual(combine(stored, arriving))
 })
 
+// The commits behind #848, replayed: account 9d39's five hour figure in readings/Dans-MacBook-Pro.json
+// as sessions on one account overwrote each other. A session's figure is only as fresh as its last
+// API response, but its `takenAt` is when the mod read it, so an idle session's old figure read just
+// now beat a busy session's current one.
+const W1 = 1791316800000 // the earlier five hour window's reset
+const W2 = 1791318600000 // the later one
+const at = (used: number, resetsAt: number | null, takenAt: number) => ({ takenAt, five: { used, resetsAt } })
+const who = { id: 'a', email: 'a@x.com', org: 'Acme' }
+
+test('a figure from an earlier window never beats the later window, however recently it was read (#848, 903ba6c)', () => {
+  const later = at(0, W2, 1791300987367) // c28b4fd
+  const stale = at(86, W1, 1791300991758) // 903ba6c: read later, from the window already over
+  expect(combine(later, stale)?.five?.used).toBe(0)
+  expect(combine(stale, later)?.five?.used).toBe(0)
+  // Through both callers: this Mac's file, and every Mac's files merged.
+  const f = file('m', { a: { email: 'a@x.com', org: 'Acme', seenAt: later.takenAt, reading: later } })
+  const next = withSighting(f, 'm', who, stale, stale.takenAt)
+  expect(next.accounts.a?.reading?.five).toEqual({ used: 0, resetsAt: W2 })
+  // Nothing the card shows moved, so nothing is written to GitHub.
+  expect(isWorthWriting(f, next, stale.takenAt)).toBe(false)
+  const m = merge([file('A', { a: { email: 'a@x.com', org: 'Acme', seenAt: later.takenAt, reading: later } }), file('B', { a: { email: 'a@x.com', org: 'Acme', seenAt: stale.takenAt, reading: stale } })])
+  expect(m.get('a')?.reading?.five?.used).toBe(0)
+})
+
+test('inside one window the higher figure stands, since use only rises until the reset (#848, bf0cadf)', () => {
+  const busy = at(6, W2, 1791301018907) // 1076fde
+  const idle = at(5, W2, 1791301020331) // bf0cadf: read later, an older figure
+  expect(combine(busy, idle)?.five?.used).toBe(6)
+  expect(combine(idle, busy)?.five?.used).toBe(6)
+  const f = file('m', { a: { email: 'a@x.com', org: 'Acme', seenAt: busy.takenAt, reading: busy } })
+  const next = withSighting(f, 'm', who, idle, idle.takenAt)
+  expect(next.accounts.a?.reading?.five).toEqual({ used: 6, resetsAt: W2 })
+  expect(isWorthWriting(f, next, idle.takenAt)).toBe(false)
+  const m = merge([file('A', { a: { email: 'a@x.com', org: 'Acme', seenAt: idle.takenAt, reading: idle } }), file('B', { a: { email: 'a@x.com', org: 'Acme', seenAt: busy.takenAt, reading: busy } })])
+  expect(m.get('a')?.reading?.five?.used).toBe(6)
+})
+
+test('the whole replayed run settles on the true figure at each step instead of flapping (#848)', () => {
+  // c28b4fd .. a7705b6 in commit order; the card's figure should only ever rise inside a window.
+  const run = [at(0, W2, 1791300987367), at(86, W1, 1791300991758), at(3, W2, 1791301001272), at(6, W2, 1791301018907), at(5, W2, 1791301020331), at(6, W2, 1791301024536)]
+  let f: MacFile | undefined
+  const shown: number[] = []
+  let writes = 0
+  for (const r of run) {
+    const next = withSighting(f, 'm', who, r, r.takenAt)
+    if (isWorthWriting(f, next, r.takenAt)) writes++
+    f = next
+    shown.push(f.accounts.a?.reading?.five?.used as number)
+  }
+  expect(shown).toEqual([0, 0, 3, 6, 6, 6])
+  // The first file, then 0 to 3, then 3 to 6: three writes, not six.
+  expect(writes).toBe(3)
+})
+
+test('figures decide before read times; read time breaks only an exact tie, and an unknown reset falls back to it', () => {
+  // A later window wins even when it was read earlier.
+  expect(combine(at(90, W1, T + H), at(2, W2, T))?.five?.used).toBe(2)
+  // The same figures read again: the later read stands, so the file can say it is still current.
+  expect(combine(at(6, W2, T), at(6, W2, T + H))).toEqual(at(6, W2, T + H))
+  expect(combine(at(6, W2, T + H), at(6, W2, T))).toEqual(at(6, W2, T + H))
+  // A window with no reset time cannot be placed by its figures, so the later read stands, as before.
+  expect(combine(at(50, null, T + H), at(10, W2, T))?.five?.used).toBe(50)
+  expect(combine(at(50, W2, T), at(10, null, T + H))?.five?.used).toBe(10)
+  // Windows are judged apart: the weekly figure can come from the other reading.
+  const a = { takenAt: T + H, five: { used: 4, resetsAt: W2 }, week: { used: 30, resetsAt: W2 + 5 * 24 * H } }
+  const b = { takenAt: T, five: { used: 7, resetsAt: W2 }, week: { used: 20, resetsAt: W2 + 5 * 24 * H } }
+  expect(combine(a, b)).toEqual({ takenAt: T, five: { used: 7, resetsAt: W2 }, week: { used: 30, resetsAt: W2 + 5 * 24 * H, takenAt: T + H } })
+})
+
 test('a readings file that does not parse is refused with why, never read as no readings (L215)', () => {
   expect(parseMacFile('{"v":1,"mac":"m","accounts":{}}')).toEqual({ v: 1, mac: 'm', accounts: {} })
   expect(parseMacFile('{"v":1,"mac":"m","acc')).toMatch(/^not readable JSON/)

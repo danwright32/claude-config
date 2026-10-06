@@ -442,8 +442,9 @@ test('at 95% on the 5 hour limit the boxed card names the account with room; bel
   expect(await shown(ui)).toBe('This account is low. Work has room   88% of 5h left, resets 6:40 PM · 70% of week left, resets Thu 9 AM · as of 2h ago')
   expect((await ui.find({ type: 'Button', key: 'account-room:switch' }))?.props).toMatchObject({ label: 'Switch' })
   expect((await ui.find({ type: 'Button', key: 'account-room:dismiss' }))?.props).toMatchObject({ label: 'Dismiss' })
-  // Back under the trigger (the window reset), the card goes.
-  await measure($, clock, limits(3, 50))
+  // Back under the trigger because the window reset, so the next window's reset time comes with
+  // it: a lower figure in the same window is an older one and never clears the card (#848).
+  await measure($, clock, limits(3, 50, T0 + 8 * HOUR))
   expect(await shown(ui)).toBe('engine band')
   await ui.unmount()
 })
@@ -854,8 +855,9 @@ test('a failed Switch does not outlive the low spell: when the account runs low 
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
   await clock.advance(1)
   expect(await shown(ui)).toMatch(/^No sign out was attempted/)
-  await measure($, clock, limits(5, 50))
-  await measure($, clock, limits(96, 50))
+  // The window resets (a later reset time, #848), then runs low again in the new one.
+  await measure($, clock, limits(5, 50, T0 + 8 * HOUR))
+  await measure($, clock, limits(96, 50, T0 + 8 * HOUR))
   expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
   await ui.unmount()
 })
