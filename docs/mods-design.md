@@ -238,13 +238,15 @@ Built (#610), with what the rounds left to the build, each taken from the rounds
 the spec rather than chosen afresh, and open to Dan changing:
 
 - The status line reads `claude-config | 5h 68% (1h 52m) | week 91% (4d 14h) | cache 41m |
-  Opus 5.5 (high) | Dan, Personal`, as every round drew it: the account is the login's display name
-  (its email when it has none) and the organisation, or the account room's nickname in their place
+  Opus 5.5 (high) | Dan, Personal`, as every round drew it: the account is the session's own, as
+  the login file named it at session start (#815), by its display name (its email when it has none)
+  and the organisation, or the account room's nickname in their place
   when the account has one. It is drawn by `statusline.sh` in the mod's
   folder, which the `statusLine` setting names; that setting lives in each Mac's own settings and
   does not travel, so it is set once per Mac. A fact that cannot be read says so ("cache unknown"
-  when the mod has written nothing for the session, "account unknown" when the login file cannot be
-  read), never a blank. The design rounds' shared terminal (`skills/design-rounds/screens/
+  when the mod has written nothing for the session, "account unknown" when the login file could not be
+  read at session start; only a facts file from before #815 reads the login file as it stands),
+  never a blank. The design rounds' shared terminal (`skills/design-rounds/screens/
   terminal.js`) draws this same line, all in its grey and divided by `|`, whenever a round names
   no status line, and refuses a coloured segment, since a scope mode leads the band; its tests
   read the line from here (#699).
