@@ -167,6 +167,7 @@ const world = (on: On, o: Opts = {}) => {
     runs: [] as string[][],
     asked: [] as string[],
     tools: [] as string[],
+    logs: [] as string[],
   }
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/Users/x' })
@@ -236,6 +237,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: undefined }
   })
   on('ui.log', ($, e) => {
+    w.logs.push(e.text)
     const [tag, ...rest] = e.text.split(' ')
     const body = rest.join(' ')
     if (tag === 'CARD') w.cards.push(JSON.parse(body))
@@ -341,6 +343,7 @@ test('"stop winding down mode" sent mid turn turns winding down off, and the tur
   expect(lastModes(w)).toEqual([])
   expect(r.context?.join('\n')).toMatch(/Winding down just turned off.*Say so in one line/s)
   expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.logs.filter(l => l.includes('sent mid turn'))).toEqual(['scope-modes: a message from Dan sent mid turn reached the mod: switched 1, still on note not added'])
 })
 
 test('turning one mode off by name leaves the other mode alone (#805)', withDeps, async ($, on) => {
@@ -359,6 +362,8 @@ test('a message naming the mode that is on, in words that do not switch it, gets
   const r = await sayMidTurn($ as never, 'winding down is done for today, thanks')
   expect(lastModes(w)).toEqual(['WINDING DOWN'])
   expect(r.context?.join('\n')).toMatch(/names winding down.*still on.*\/build turns it off/s)
+  // The note switches nothing, and the debug line says so (lessons review of #820).
+  expect(w.logs.filter(l => l.includes('sent mid turn'))).toEqual(['scope-modes: a message from Dan sent mid turn reached the mod: switched 0, still on note added'])
   // The same words from elsewhere, or with the mode off, add no such note.
   expect((await say($ as never, 'winding down is done', 'peer')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
   // Naming it in passing adds no note (lessons review of #820).

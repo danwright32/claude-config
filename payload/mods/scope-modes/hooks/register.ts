@@ -522,7 +522,7 @@ export const register: Register = on => {
   // message typed while a turn runs fires here too, at Enter, with that turn's id, as the engine's
   // types document it (PromptSubmitInput.turnId), and is read the same way (#805). That delivery is
   // the engine's documented behaviour, not yet seen live: the tests stand in for the engine, so the
-  // debug log line below records each mid turn message that changed anything, to measure it.
+  // debug log line below records each mid turn message from Dan and how many modes it switched.
   on('prompt.submit', async ($, e, next) => {
     lastOrigin = e.origin.kind
     const notes: string[] = []
@@ -550,14 +550,18 @@ export const register: Register = on => {
           notes.push(`Dan's message switched every session to ${t.place}. Say so in one line first: "${placeSentence(t.place, told)}"`)
         }
       }
+      // Every note so far is a switch the message made; the still on note below switches nothing.
+      const switched = notes.length
       // A message asking to end the mode still on, in words that did not switch it, is said rather than
       // left for Claude to read as switched: the hook would go on enforcing a mode Claude thinks is off.
       const stillOn = await scopeOf($)
-      if (stillOn && !triggers.some(t => t.kind !== 'place') && scopesAskedOffIn(e.text).includes(stillOn)) {
+      const askedOff = stillOn && !triggers.some(t => t.kind !== 'place') && scopesAskedOffIn(e.text).includes(stillOn)
+      if (stillOn && askedOff) {
         const name = SCOPE_NAME[stillOn].toLowerCase()
         notes.push(`Dan's message names ${name}, but not in words that switch it, so ${name} is still on. If he meant to turn it off, say in one line first that ${name} is still on and /build turns it off; never act as though it were off.`)
       }
-      if (e.turnId !== undefined && notes.length) $.ui.log(`scope-modes: a message sent mid turn was read: ${notes.length} note(s)`, { to: 'debug' })
+      if (e.turnId !== undefined)
+        $.ui.log(`scope-modes: a message from Dan sent mid turn reached the mod: switched ${switched}, still on note ${askedOff ? 'added' : 'not added'}`, { to: 'debug' })
     }
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
