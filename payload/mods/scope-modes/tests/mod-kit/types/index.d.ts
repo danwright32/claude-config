@@ -197,7 +197,10 @@ export type ModKitGit = { sub: string | undefined; args: string[]; dir: string |
  * cd that cannot be followed), a copy's `sources`, `edits` for one edited in place, and
  * `mayBeFolder` for a copy of one source onto one name, which lands inside it when it is an existing
  * folder, as only the disk can say. A `word` holding `$F` with a `path` is a variable the command
- * set, read as its value (#743).
+ * set, read as its value (#743); a copy into a folder held in one keeps it (`$D/note.md`, #752).
+ * A redirect's target is given as its own place in the command spells it; any other word is matched
+ * to its spelling by string, so a literal word equal to a variable's value in the same command is
+ * given as the variable (#752).
  */
 export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }
 
@@ -211,7 +214,7 @@ export type ModKitChange = { word: string; path?: string; does: 'remove' | 'touc
 /**
  * What a command changes: the files its words name content goes into, the other changes it makes
  * to files, and the writes its words do not name (`what` names it, "a patch" or "an inline python3
- * script"; `words` is the command; `inputs` the files to read to find out, such as the patch file,
+ * script"; `words` is the command as written, a variable's name left in it; `inputs` the files to read to find out, such as the patch file,
  * absolute; `into` the folder a download lands in, where the words name one; `script` when it is a
  * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs).
  */
