@@ -1101,8 +1101,10 @@ that setting. Errors fail the run with the mod named and counted, except a mod l
 being fixed under #822), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it, so fixing one error makes no room for a new one. A compiler
 that exits without any type error is said as that, never as 0 errors. Where no compiler or no laid
 types are found, each mod's line says its types were not checked and why, and the run ends with one
-UNMEASURED line counting them and naming the install command, which is not a failure. CI has no
-Claude Code, so no laid types, and its check is always that UNMEASURED line.
+UNMEASURED line counting them and naming the install command, which is not a failure. CI never
+reaches the type check: it has no Claude Code, so `check-mods.sh` stops at its own UNMEASURED exit
+(3) before any mod is validated, and there are no laid types to check against. The pinned compiler
+and its record are therefore enforced only on a Mac with Claude Code and the compiler installed.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
