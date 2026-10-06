@@ -562,6 +562,92 @@ test("a /clear while this conversation's question is open never makes its reques
   expect(w.notified.filter(n => n[1] === 'Ovation is waiting on you')).toHaveLength(1)
 })
 
+// #824 item 2: a /clear in the second before this conversation's question is notified drops that
+// notification unsent. The question is still on screen, so Dan is still told of it, once: by its
+// request when that comes after the /clear, and at the /clear when the request came first.
+test('a /clear before a question is notified, its request raised after, still sends it once (#824)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  await clock.advance(1)
+  expect(w.notified).toHaveLength(0)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await askPermission($, 'Ship it?')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Ship it?', kind: 'question' })
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test('a /clear before a question is notified, its request raised before, still sends it once (#824)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  expect(w.notified).toHaveLength(0)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// #824 item 1: a subagent's question is marked by its own call, apart from a permission prompt open
+// beside it, so each ending takes off only its own mark (#694).
+const bashPrompt = ($: Raiser) =>
+  $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run the test suite' } } as never)
+test("a subagent's question asked while a permission is open leaves the permission's mark and call alone (#824)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const bashCall = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the test suite' } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await bashPrompt($ as never)
+  await clock.advance(1)
+  const theirs = $.tool.call({ ...(ask('Which branch?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Which branch?')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Which branch?', kind: 'question' })
+  await clock.advance(OPEN_MS)
+  await theirs
+  // The question's end takes off its own mark only: the permission is still open.
+  expect(last(w)?.waiting).toMatchObject({ question: 'Run the test suite', kind: 'permission' })
+  w.answer?.()
+  await bashCall
+  expect(last(w)?.waiting).toBeUndefined()
+  expect(w.notified).toEqual([
+    ['-title', 'Ovation needs a permission', '-message', 'Run the test suite', '-sound', 'Glass'],
+    ['-title', 'Ovation is waiting on you', '-message', 'Which branch?'],
+  ])
+})
+
+// And the other way round: the permission's call ending first leaves the subagent's question marked.
+test("a permission answered while a subagent's question is open leaves the question's mark (#824)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const bashCall = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the test suite' } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await bashPrompt($ as never)
+  await clock.advance(1)
+  const theirs = $.tool.call({ ...(ask('Which branch?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Which branch?')
+  w.answer?.()
+  await bashCall
+  expect(last(w)?.waiting).toMatchObject({ question: 'Which branch?', kind: 'question' })
+  await clock.advance(OPEN_MS)
+  await theirs
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
 // #706: the notification is for a question Dan sees. One refused at once (by picker manners
 // beneath the tracker, or anything else beneath it) never reached him, so it sends none.
 test('a question refused at once sends no notification', withDeps, async ($, on) => {
@@ -922,6 +1008,34 @@ test("a permission mark left over is cleared by Dan's next message", withDeps, a
   await start($)
   await $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } } as never)
   expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  await prompt($, 'carry on')
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// Lessons review of PR 825: a /clear begins again with no waiting marks, a question's request
+// matched to no call included, so the next idle prompt is "What's next?" again.
+test("a /clear drops a question's request matched to no call, so an idle prompt says What's next? (#824)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await askPermission($, 'Which branch?')
+  await idle($)
+  expect(w.notified.filter(n => n[3] === "What's next?")).toHaveLength(0)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await idle($)
+  expect(w.notified.filter(n => n[3] === "What's next?")).toHaveLength(1)
+})
+
+// #824: a question's request matched to no running call is marked apart from the permission slot,
+// and Dan's next message clears it as it does a permission left over. A message from elsewhere does not.
+test("a question's request matched to no call is cleared by Dan's next message, not another plugin's (#824)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await askPermission($, 'Which branch?')
+  expect(last(w)?.waiting).toMatchObject({ kind: 'question', question: 'Which branch?' })
+  await $.prompt.submit({ text: 'from a plugin', origin: { kind: 'plugin', name: 'other' } } as never)
+  expect(last(w)?.waiting).toMatchObject({ kind: 'question', question: 'Which branch?' })
   await prompt($, 'carry on')
   expect(last(w)?.waiting).toBeUndefined()
 })
