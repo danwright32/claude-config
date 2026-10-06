@@ -181,6 +181,16 @@ fresh_cache
 run "git add -A"
 allowed "a file this session's script deleted is this session's too"
 git -C "$REPO" -c commit.gpgsign=false commit -q -am "gone removed" >/dev/null 2>&1 || true
+# A record whose message is not an object (a plain string, as some record kinds carry) must not
+# abort the read: every mention in the same chunk would be lost, and this session's own files called
+# foreign (lessons review of #799, L215).
+printf '{"type": "summary", "timestamp": "2026-10-05T20:00:00Z", "message": "a plain string"}\n' >> "$TR"
+printf 'after odd\n' > "$REPO/afterodd.txt"
+mention_edit "$REPO/afterodd.txt"
+fresh_cache
+run "git add -A"
+allowed "a transcript record whose message is a plain string does not lose the session's mentions"
+rm -f "$REPO/afterodd.txt"
 
 echo "check add scope: a checkout somebody else is working in"
 

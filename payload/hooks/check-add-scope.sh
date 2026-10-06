@@ -176,7 +176,10 @@ for line in sys.stdin:
         continue
     # The times around each Bash call, so a file its script wrote without naming can be credited.
     t = epoch(rec.get("timestamp") or "") if isinstance(rec, dict) else None
-    content = ((rec.get("message") or {}).get("content") if isinstance(rec, dict) else None) or []
+    # A message that is not an object (some record kinds carry a plain string) has no content, and
+    # must not abort the read, which would lose every mention in this chunk (L215).
+    msg = rec.get("message") if isinstance(rec, dict) else None
+    content = (msg.get("content") if isinstance(msg, dict) else None) or []
     if t is not None and isinstance(content, list):
         for c in content:
             if not isinstance(c, dict):
