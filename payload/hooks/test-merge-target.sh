@@ -160,6 +160,16 @@ eq "${MT_ASSIGNS%%$'\n'*}" "PR_REVIEW_READ=ab12" "an assignment's value with its
 mt_split_assignments 'GH_TOKEN=`gh auth token -u x` X=${Y:-a b} gh pr merge 7'
 eq "$MT_ASSIGNS" 'GH_TOKEN=`gh auth token -u x`'$'\n''X=${Y:-a b}'$'\n' "backtick and brace values kept as the shell sees them"
 eq "$MT_REST" 'gh pr merge 7' "the merge after them"
+# Nesting the shell allows: a substitution inside double quotes holding its own quotes and a
+# space, and quotes inside a substitution inside quotes (lessons review of #795).
+for w in 'X="$(a "b c")" gh pr merge 7' \
+         'X="${Y:-"a b"}" gh pr merge 7' \
+         "X=\"\$(printf '%s' 'p q')\" gh pr merge 7"; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after a nested quoted assignment was not read as a merge: $w"; fi
+done
+mt_split_assignments 'X="$(a "b c")" gh pr merge 7'
+eq "$MT_ASSIGNS" 'X=$(a "b c")'$'\n' "a nested value kept as the shell sees it, outer quotes removed"
+eq "$MT_REST" 'gh pr merge 7' "and the merge after it"
 mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
 eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.

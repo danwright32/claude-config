@@ -240,38 +240,58 @@ MTEOF
 # Sets MT_ASSIGNS, one NAME=value per line with one layer of quotes removed from the value, and
 # MT_REST, the command that follows. A segment that is assignments only leaves MT_REST empty.
 mt_split_assignments() {  # $1 = one segment
-  local s="$1" name val c q depth i n
+  # A value is read with a STACK of open contexts, the way the shell nests them: " and ' and `
+  # quotes, $( and ${ substitutions. Inside a substitution quotes open afresh, so
+  # X="$(a "b c")" is one word; a space ends the word only with nothing open. One layer of
+  # outermost quotes is removed, as the shell removes it; everything inside is kept as written.
+  local s="$1" name val c nx top stack i n
   MT_ASSIGNS=""
   s="${s#"${s%%[![:space:]]*}"}"
   while [[ "$s" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; do
     name="${BASH_REMATCH[1]}"
-    i=$(( ${#name} + 1 )); n=${#s}; val=""; q=""; depth=0
+    i=$(( ${#name} + 1 )); n=${#s}; val=""; stack=""
     while [ "$i" -lt "$n" ]; do
-      c="${s:$i:1}"
-      # A backslash outside single quotes keeps the next character in the value, so an escaped
-      # quote or space neither closes a quote nor ends the word.
-      if [ "$c" = "\\" ] && [ "$q" != "'" ] && [ $((i + 1)) -lt "$n" ]; then
-        val="$val${s:$((i + 1)):1}"; i=$((i + 2)); continue
-      fi
-      if [ -n "$q" ]; then
-        # A closing quote is part of the value only where the opening one was: inside $( ) or ${ },
-        # and always for a backtick, whose delimiters belong to the substitution.
-        if [ "$c" = "$q" ]; then
-          { [ "$depth" -gt 0 ] || [ "$q" = '`' ]; } && val="$val$c"
-          q=""
+      c="${s:$i:1}"; nx="${s:$((i + 1)):1}"; top="${stack: -1}"
+      if [ "$top" = "'" ]; then
+        if [ "$c" = "'" ]; then
+          stack="${stack%?}"; [ -n "$stack" ] && val="$val$c"
         else val="$val$c"; fi
-      else
-        case "$c" in
-          \"|\') q="$c"; [ "$depth" -gt 0 ] && val="$val$c" ;;
-          # A backtick substitution runs to its closing backtick, kept whole like a quote.
-          \`) q="$c"; val="$val$c" ;;
-          # $( ... ) and ${ ... } are one word to their closing bracket, spaces included.
-          \(|\{) depth=$((depth + 1)); val="$val$c" ;;
-          \)|\}) [ "$depth" -gt 0 ] && depth=$((depth - 1)); val="$val$c" ;;
-          ' '|$'\t') [ "$depth" -eq 0 ] && break; val="$val$c" ;;
-          *) val="$val$c" ;;
-        esac
+        i=$((i + 1)); continue
       fi
+      if [ "$c" = "\\" ] && [ $((i + 1)) -lt "$n" ]; then
+        # Escaped: the next character never opens, closes or ends anything. At the top level, or
+        # directly inside the outermost double quote, the shell drops the backslash itself.
+        if [ -z "$stack" ] || [ "$stack" = '"' ]; then val="$val$nx"; else val="$val$c$nx"; fi
+        i=$((i + 2)); continue
+      fi
+      case "$c" in
+        \")
+          if [ "$top" = '"' ]; then
+            stack="${stack%?}"; [ -n "$stack" ] && val="$val$c"
+          else
+            [ -n "$stack" ] && val="$val$c"; stack="$stack$c"
+          fi ;;
+        \')
+          if [ "$top" = '"' ]; then val="$val$c"
+          else [ -n "$stack" ] && val="$val$c"; stack="$stack$c"; fi ;;
+        \`)
+          if [ "$top" = '`' ]; then stack="${stack%?}"; else stack="$stack$c"; fi
+          val="$val$c" ;;
+        \$)
+          if [ "$nx" = "(" ] || [ "$nx" = "{" ]; then
+            stack="$stack$nx"; val="$val$c$nx"; i=$((i + 2)); continue
+          fi
+          val="$val$c" ;;
+        \()
+          [ "$top" != '"' ] && stack="$stack$c"; val="$val$c" ;;
+        \))
+          [ "$top" = "(" ] && stack="${stack%?}"; val="$val$c" ;;
+        \})
+          [ "$top" = "{" ] && stack="${stack%?}"; val="$val$c" ;;
+        ' '|$'\t')
+          [ -z "$stack" ] && break; val="$val$c" ;;
+        *) val="$val$c" ;;
+      esac
       i=$((i + 1))
     done
     MT_ASSIGNS="$MT_ASSIGNS$name=$val"$'\n'
