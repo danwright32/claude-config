@@ -468,16 +468,21 @@ test('a question whose dialog Claude Code also raises as a permission sends one 
   expect(last(w)?.waiting).toBeUndefined()
 })
 
-test('the permission request for a question arriving before the question is marked still sends one notification (#814)', withDeps, async ($, on) => {
+// Lessons review of PR 816: a subagent's question is never held by the tracker's question path, so
+// its dialog's permission request is the only word Dan gets. It is sent once, as the question, never
+// as "needs a permission: AskUserQuestion", and the mark comes off when the question's call returns.
+test("a subagent's question, which only its permission request announces, sends one notification as the question (#814)", withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world(on, { clock, questionOpenMs: OPEN_MS })
   await start($)
-  await askPermission($, 'Ship it?')
-  const call = $.tool.call(ask('Ship it?'))
+  const call = $.tool.call({ ...(ask('Which branch?') as object), agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Which branch?')
+  expect(last(w)?.waiting).toMatchObject({ question: 'Which branch?' })
   await clock.advance(OPEN_MS)
   await call
   await clock.advance(2 * MIN)
-  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which branch?']])
   expect(last(w)?.waiting).toBeUndefined()
 })
 
