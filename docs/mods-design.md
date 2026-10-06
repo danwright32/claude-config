@@ -720,16 +720,26 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
 - What winding down finishes, as the milestone audit (#702) left it. Turning it on again (the
   phrase or `/winddown`) keeps the target it has, PR included, rather than reading it afresh. While
   the session sits on its default branch with no PR, each check reads the branch again and follows
-  the session onto one. With no PR for the session's own branch, it finishes every PR this session
-  opened: each `gh pr create` the session or any of its agents runs is noted from the link gh
-  prints, so a PR an agent opened in a worktree the session is not in is finished before "safe to
-  close"; each is read in the repository its link names, its branch the PR's own head. A PR in
+  the session onto one. It finishes every PR this session opened, whether or not the session's own
+  branch has a PR (#856; before that only a session with no PR of its own looked, and a session
+  whose branch PR was finished parked three PRs it had opened "waiting on you"): each `gh pr create`
+  the session or any of its agents runs is noted from the link gh prints, so a PR an agent opened in
+  a worktree the session is not in is finished before "safe to close", and only those, so another
+  session's PRs never hold it; the branch's own PR, matched by its link, is read once. Each is read
+  in the repository its link names, its branch the PR's own head. A PR in
   another repository than the session's has its branch on GitHub checked there, while its local
   branch and worktree, in a checkout this session cannot see, are said to be unreadable rather than
   read as cleaned, so winding down does not call it finished. A note that cannot be made is
   toasted, since winding down would not know that PR. An agent named after this
   branch's PR, an issue that PR closes, or a PR the session opened goes ahead (the PR is looked up
   first when it has not been yet); any other issue number is still new work.
+- Winding down means finalizing everything (Dan, 2026-10-06, #856: "winding down means finalizing
+  everything. ask me questions if you have them when they come up but those should be merged"). Its
+  note, the `/winddown` context and the turn end refusal all say it the same way: winding down
+  finalizes everything the session has open, every PR it opened is merged and never left open
+  waiting on Dan, and when a decision or sign off is needed Claude asks him right then with an
+  AskUserQuestion picker, one question at a time, and merges once he answers. Asking is never new
+  work, so AskUserQuestion is never refused while winding down.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app
   forward, cliclick and Peekaboo. Since the milestone audit (#702) also an AppleScript dialog
   (`display dialog`, `display alert`, `choose file` and the like; a notification banner takes no

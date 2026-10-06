@@ -2,7 +2,9 @@ import type { Cmd } from './nobuild.ts'
 
 // Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
 // or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
-// what blocks this issue's merge or deploy is allowed; starting new work is denied.
+// what blocks this issue's merge or deploy is allowed; starting new work is denied. Asking Dan
+// (AskUserQuestion) is never new work: winding down finalizes everything the session has open, so a
+// PR needing his sign off is asked about and merged, never parked waiting on him (#856).
 
 export type Refusal = { what: string }
 type Unreadable = { unreadable: string }

@@ -138,7 +138,9 @@ const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 type Session = { sessionId: string }
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
 // unless headRefName says otherwise) and by `gh pr view` only by its own number.
-type Gh = { pr: { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
+type GhPr = { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] }
+// `others` are PRs GitHub also holds, found only by `gh pr view` by number (#856).
+type Gh = { pr: GhPr | null; others?: GhPr[]; issues: Record<number, string>; fails?: string }
 type Opts = {
   /** What a `gh pr create` call prints, as gh does: the new PR's link. */
   created?: string
@@ -209,7 +211,11 @@ const world = (on: On, o: Opts = {}) => {
       if (gh.fails) return fail(1, gh.fails)
       const head = gh.pr?.headRefName ?? 'scope-modes-616'
       if (a[0] === 'pr' && a[1] === 'list') return ok(JSON.stringify(gh.pr && a[a.indexOf('--head') + 1] === head ? [{ headRefName: head, ...gh.pr }] : []))
-      if (a[0] === 'pr' && a[1] === 'view') return gh.pr && a[2] === String(gh.pr.number) ? ok(JSON.stringify({ headRefName: head, ...gh.pr })) : fail(1, 'no pull requests found')
+      if (a[0] === 'pr' && a[1] === 'view') {
+        if (gh.pr && a[2] === String(gh.pr.number)) return ok(JSON.stringify({ headRefName: head, ...gh.pr }))
+        const other = gh.others?.find(p => a[2] === String(p.number))
+        return other ? ok(JSON.stringify(other)) : fail(1, 'no pull requests found')
+      }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN' }))
     }
@@ -628,6 +634,74 @@ test('turned on from the default branch, winding down finishes the PRs this sess
   expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
   // GitHub was asked about PR #31 in the repository its link names.
   expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName')).toBe(true)
+})
+
+// #856: winding down finalizes everything the session has open. A session whose own branch PR was
+// finished parked three PRs it had opened "waiting on you"; every one it opened is outstanding.
+const FINALIZE = [
+  /Winding down finalizes everything this session has open/,
+  /every PR (it|this session) opened is merged, never left open waiting on Dan/,
+  /When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers/,
+]
+
+test('a session whose own PR is finished is not finished while a PR it opened is still open (#856)', withDeps, async ($, on) => {
+  const pr31 = (state: string) => ({ number: 31, state, url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] })
+  // PR #40 is open in the same repository, opened by another session: it never holds this one.
+  const pr40 = { number: 40, state: 'OPEN', url: 'https://github.com/o/r/pull/40', headRefName: 'other-40', closingIssuesReferences: [] }
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/12\n' })
+  w.o.gh = { ...merged(), others: [pr31('OPEN'), pr40] }
+  await start($ as never, clock)
+  // The session opens its own branch's PR, then a second one it means to leave for Dan.
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  w.o.created = 'https://github.com/o/r/pull/31\n'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g2' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: PR #31 is not merged yet\./)
+  for (const want of FINALIZE) expect(block).toMatch(want)
+  // The branch's own PR is read once, as the branch's, not again as one the session opened.
+  expect(block).not.toMatch(/PR #12/)
+  expect(w.runs.some(r => r.join(' ').startsWith('gh pr view 12 '))).toBe(false)
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  // Merged, it finishes; another session's open PR never held it.
+  w.o.gh = { ...merged(), others: [pr31('MERGED'), pr40] }
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+  expect(w.runs.some(r => r.join(' ').startsWith('gh pr view 40 '))).toBe(false)
+})
+
+// The lessons review of #857: with no link from GitHub, the branch's own PR is matched by its number
+// in the session's own repository, so it is still read once.
+test("the branch's own PR GitHub gave no link for is still read once, not again as one the session opened (#856)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/12\n' })
+  w.o.gh = { ...merged(), pr: { number: 12, state: 'MERGED', closingIssuesReferences: [{ number: 616 }] } }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/GitHub gave no link for PR #12/)
+  expect(w.runs.some(r => r.join(' ').startsWith('gh pr view 12 '))).toBe(false)
+})
+
+test('winding down never refuses AskUserQuestion: Claude asks Dan rather than parking a PR (#856)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  const r = await call($ as never, { tool: 'AskUserQuestion', questions: [{ question: 'Merge PR #31, the wording change?', options: [{ label: 'Merge' }, { label: 'Close it' }] }], tool_use_id: 'q1' } as never)
+  expect(r).toBe('answered Yes')
+  expect(w.asked).toEqual(['Merge PR #31, the wording change?'])
+  expect(w.cards).toEqual([])
+})
+
+test('the winding down note, its command context and the Stop reason all say to finalize everything, asking Dan with a picker and merging (#856)', withDeps, async ($, on) => {
+  const { clock } = world(on, { gh: merged('OPEN') })
+  await start($ as never, clock)
+  const ran = (await command($ as never, 'winddown')).context?.join('\n') ?? ''
+  const note = (await say($ as never, 'carry on')).context?.join('\n') ?? ''
+  const block = (await stop($ as never)).block ?? ''
+  for (const [where, text] of [['command', ran], ['note', note], ['stop', block]] as const)
+    for (const want of FINALIZE) expect({ where, ok: want.test(text) }).toEqual({ where, ok: true })
 })
 
 test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
