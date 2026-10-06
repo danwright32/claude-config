@@ -12300,8 +12300,10 @@ dbg "#221 red: $out_red"
 check "#221 a red head is NOT applied" "! ci_applied red"
 check "#221 and it says the tests failed" \
   "case \"\$out_red\" in *'FAILED its tests'*) true ;; *) false ;; esac"
+# `sync`, not `pull` (claude-config#845): the gate returns before this Mac's own commit is pushed,
+# so the clone is ahead and the red commit puts it behind too, and a pull refuses that divergence.
 check "#221 and it names the command that applies it anyway" \
-  "case \"\$out_red\" in *'claude-sync pull'*) true ;; *) false ;; esac"
+  "case \"\$out_red\" in *\"run 'claude-sync sync' yourself\"*) true ;; *) false ;; esac"
 check "#221 and the marker the watcher logs says which outcome it was" \
   "case \"\$out_red\" in *'SEND-OUTCOME ci-red'*) true ;; *) false ;; esac"
 
@@ -16943,19 +16945,194 @@ check "#473 the union after the rename is still every lesson exactly once" \
 
 # THE STAND DOWN IS NO BROADER THAN THE REASON (L324). A conflict in a file nobody generates is
 # still a conflict, and continuing through it would commit whichever side git happened to leave.
+# A hook, not CLAUDE.md, since #845: two lines added to a top level rule file are merged entry by
+# entry by the pull, so the rebase now merges them too, and this check is about a file nothing settles.
 DRHC="$WORK/derived-homeC"; DRRC="$WORK/derived-repoC"
+mkdir -p "$DRHA/hooks"; printf '#!/bin/sh\necho base\n' > "$DRHA/hooks/dr-hook.sh"
+drsync "$DRHA" "$DRA" >/dev/null 2>&1
 git clone -q "$DRB" "$DRRC" 2>/dev/null
 mkdir -p "$DRHC"; echo '{"hooks":{}}' > "$DRHC/settings.json"
 env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$DRHC" SYNC_REPO="$DRRC" SYNC_NO_NOTIFY=1 \
   bash "$SCRIPT" pull >/dev/null 2>&1
-printf 'A rules from Mac A\n' > "$DRHA/CLAUDE.md.notes"
-printf '# rules\n@LESSONS.md\nA side says this\n' > "$DRHA/CLAUDE.md"
+printf '#!/bin/sh\necho A side says this\n' > "$DRHA/hooks/dr-hook.sh"
 drsync "$DRHA" "$DRA" >/dev/null 2>&1
-printf '# rules\n@LESSONS.md\nC side says something else entirely\n' > "$DRHC/CLAUDE.md"
+printf '#!/bin/sh\necho C side says something else entirely\n' > "$DRHC/hooks/dr-hook.sh"
 out_drc="$(drsync "$DRHC" "$DRRC")"; drc_rc=$?
 dbg "#282 a real content conflict said: $out_drc"
-check "#282 a conflict in a file nobody generates still stops" \
+check "#282 a conflict in a file nobody generates or merges still stops" \
   "[ '$drc_rc' -ne 0 ] || case \"\$out_drc\" in *'reconcile by hand'*) true ;; *) false ;; esac"
+section "== a diverged clone whose conflict is only in entry merged files is reconciled by sync (claude-config#845) =="
+# On 2026-10-06 this Mac could not send for 16 hours (99 sends skipped). Its sync clone held a
+# commit the shared repo had not seen, and the repo held one this clone did not have, and both had
+# changed the same entry of mods/account-room-nicknames.json. `pull` refused, because it can only
+# fast forward, and named `sync`; `sync` rebased, stopped on that file, aborted, and the send named
+# `pull`. Each command named the other as the fix and neither could move, until somebody approved
+# a hand reset of the clone.
+#
+# Both files here are ones the PULL already settles without a person: a top level rule file it
+# merges entry by entry, and the nicknames, whose own mod merges the copy the apply sets aside. So
+# the rebase settles them the same way rather than aborting, and any other conflicted path still
+# aborts (L324). The fixture is the incident's shape: the commit stays local because the repo could
+# not be reached when it was made, and the live file moves on past that commit afterwards.
+unset SYNC_NO_GIT
+EMB="$WORK/entrymerge-bare.git"; git init -q --bare "$EMB"
+EMRA="$WORK/entrymerge-repoA"; git clone -q "$EMB" "$EMRA" 2>/dev/null
+EMHA="$WORK/entrymerge-homeA"; mkdir -p "$EMHA/mods" "$EMHA/hooks"
+echo '{"hooks":{}}' > "$EMHA/settings.json"
+printf '# rules\n\n- shared rule\n' > "$EMHA/CLAUDE.md"
+printf '#!/bin/sh\necho base\n' > "$EMHA/hooks/em-hook.sh"
+em_nick(){ # em_nick <aaaa name> <aaaa at> <bbbb name> <bbbb at>
+  printf '{\n  "v": 2,\n  "names": {\n    "aaaa": {"name":"%s","at":%s},\n    "bbbb": {"name":"%s","at":%s}\n  }\n}\n' "$1" "$2" "$3" "$4"
+}
+em_nick first 100 other 100 > "$EMHA/mods/account-room-nicknames.json"
+emrun(){ # emrun <home> <repo> <command>
+  env CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_HOSTNAME="$(basename "$1")" SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$3" 2>&1
+}
+emrun "$EMHA" "$EMRA" sync >/dev/null
+EMRB="$WORK/entrymerge-repoB"; git clone -q "$EMB" "$EMRB" 2>/dev/null
+EMHB="$WORK/entrymerge-homeB"; mkdir -p "$EMHB"; echo '{"hooks":{}}' > "$EMHB/settings.json"
+emrun "$EMHB" "$EMRB" pull >/dev/null
+check "#845 both Macs start from the same published nicknames" \
+  "grep -q '\"first\"' '$EMHB/mods/account-room-nicknames.json' && grep -q 'shared rule' '$EMHB/CLAUDE.md'"
+
+# Mac A answers entry aaaa and appends a rule, and publishes.
+em_nick fromA 300 other 100 > "$EMHA/mods/account-room-nicknames.json"
+printf -- '- rule from Mac A\n' >> "$EMHA/CLAUDE.md"
+emrun "$EMHA" "$EMRA" sync >/dev/null
+# Mac B answers the SAME entry and appends a rule while the repo cannot be reached, so its commit
+# stays in its clone. Then it answers another entry, so the live file is past its own commit.
+em_nick fromB 200 other 100 > "$EMHB/mods/account-room-nicknames.json"
+printf -- '- rule from Mac B\n' >> "$EMHB/CLAUDE.md"
+git -C "$EMRB" remote set-url origin "$WORK/entrymerge-unreachable.git"
+emrun "$EMHB" "$EMRB" sync >/dev/null
+git -C "$EMRB" remote set-url origin "$EMB"
+em_nick fromB 200 otherB 250 > "$EMHB/mods/account-room-nicknames.json"
+em_branch="$(git -C "$EMRB" symbolic-ref --short HEAD)"
+git -C "$EMRB" fetch -q origin
+check "#845 the fixture really has diverged, which is what makes a pull refuse" \
+  "[ \"\$(git -C '$EMRB' rev-list --count 'origin/$em_branch..HEAD')\" -gt 0 ] && [ \"\$(git -C '$EMRB' rev-list --count 'HEAD..origin/$em_branch')\" -gt 0 ]"
+# And the two sides really do conflict on these files, or every check below measures a rebase that
+# never stopped (L159).
+em_probe="$WORK/entrymerge-probe"; git clone -q "$EMRB" "$em_probe" 2>/dev/null
+git -C "$em_probe" fetch -q "$EMB" "$em_branch" 2>/dev/null
+git -C "$em_probe" -c user.name=t -c user.email=t@t rebase FETCH_HEAD >/dev/null 2>&1
+check "#845 the replayed commit conflicts on exactly the two entry merged files" \
+  "[ \"\$(git -C '$em_probe' diff --name-only --diff-filter=U | sort | tr '\n' ' ')\" = 'payload/CLAUDE.md payload/mods/account-room-nicknames.json ' ]"
+
+out_emp="$(emrun "$EMHB" "$EMRB" pull)"; emp_rc=$?
+dbg "#845 pull on the diverged clone said: $out_emp"
+check "#845 pull refuses the divergence and names the command that can reconcile it" \
+  "[ $emp_rc -ne 0 ] && line_has \"\$out_emp\" 'have diverged' 'claude-sync sync'"
+# The remedy is read OUT of the refusal and run, never retyped here, so a message naming the wrong
+# command fails this rather than reading as advice (L406).
+em_remedy="$(grep -oE 'claude-sync [a-z-]+' <<< "$out_emp" | awk 'END { print $2 }')"
+check "#845 the remedy pull names is not pull itself" "[ -n '$em_remedy' ] && [ '$em_remedy' != 'pull' ]"
+out_ems="$(emrun "$EMHB" "$EMRB" "$em_remedy")"; ems_rc=$?
+dbg "#845 the named remedy ($em_remedy) said: $out_ems"
+check "#845 the remedy completes rather than aborting the rebase" "[ $ems_rc -eq 0 ]"
+check "#845 and it never names pull, the command that just refused, as the way out" \
+  "out_lacks \"\$out_ems\" \"claude-sync pull\""
+check "#845 and it never names itself as the way out either" \
+  "out_lacks \"\$out_ems\" \"claude-sync sync\""
+check "#845 and it is not left mid rebase" "[ ! -d '$EMRB/.git/rebase-merge' ] && [ ! -d '$EMRB/.git/rebase-apply' ]"
+git -C "$EMRB" fetch -q origin
+check "#845 both sides end in step: nothing here the repo lacks, nothing there this clone lacks" \
+  "[ \"\$(git -C '$EMRB' rev-list --count 'origin/$em_branch..HEAD')\" = 0 ] && [ \"\$(git -C '$EMRB' rev-list --count 'HEAD..origin/$em_branch')\" = 0 ]"
+# The rule file is merged entry by entry, both rules kept once each, and published.
+em_rules="$(git -C "$EMB" show "$em_branch:payload/CLAUDE.md")"
+check "#845 the shared CLAUDE.md carries both Macs' rules" \
+  "grep -q 'rule from Mac A' <<< \"\$em_rules\" && grep -q 'rule from Mac B' <<< \"\$em_rules\""
+check "#845 and each exactly once, with no conflict marker" \
+  "[ \"\$(grep -c 'rule from Mac' <<< \"\$em_rules\")\" = 2 ] && ! grep -q '^<<<<<<<' <<< \"\$em_rules\""
+check "#845 and the live CLAUDE.md here holds both, each once" \
+  "[ \"\$(grep -c 'rule from Mac' '$EMHB/CLAUDE.md')\" = 2 ] && grep -q 'rule from Mac A' '$EMHB/CLAUDE.md'"
+# The nicknames: the shared copy holds A's answer, never a conflict marker, and every answer B gave
+# is still on this Mac, in the copy its mod merges back (a name over a skip, the later of two names).
+em_nicks="$(git -C "$EMB" show "$em_branch:payload/mods/account-room-nicknames.json")"
+check "#845 the shared nicknames are A's answer, whole, never a conflict marker" \
+  "grep -q '\"fromA\"' <<< \"\$em_nicks\" && ! grep -q '^<<<<<<<' <<< \"\$em_nicks\""
+em_copy="$EMHB/mods/account-room-nicknames.json.conflict-$(basename "$EMHB")"
+check "#845 no answer B gave is lost: both are in the copy its mod merges back" \
+  "grep -q '\"fromB\"' '$em_copy' && grep -q '\"otherB\"' '$em_copy'"
+check "#845 and that copy is one the mod reads, by the prefix it looks for" \
+  "grep -qF \"COPY_PREFIX = 'account-room-nicknames.json.conflict-'\" '$(dirname "$SCRIPT")/payload/mods/account-room/hooks/register.tsx'"
+# It says the rebase settled each file, in that file's own terms, rather than staying silent about
+# it: a run that recovered must not read like one that never conflicted (L11, L98).
+check "#845 it says the rule file was merged inside the rebase" \
+  "line_has \"\$out_ems\" 'CLAUDE\.md' 'had not seen' 'merged entry by entry'"
+check "#845 and that the nicknames went to the mod that owns them" \
+  "line_has \"\$out_ems\" 'mods/account-room-nicknames\.json' 'had not seen' 'mod that owns'"
+# And the apply does not call a file its own mod merges one that could NOT be merged.
+check "#845 the apply names the nicknames copy as the mod's to merge, not as unmergeable" \
+  "line_has \"\$out_ems\" 'mods/account-room-nicknames\.json' 'merges the two entry by entry at its next session start' && ! grep -q 'could NOT be merged.*account-room-nicknames' <<< \"\$out_ems\""
+
+# A send while diverged, holding back a file the repo has changed, names a command that can
+# actually receive: never pull, which refuses a diverged clone (L111). Measured again in the same
+# shape, on a fresh pair of clones.
+EMRC="$WORK/entrymerge-repoC"; git clone -q "$EMB" "$EMRC" 2>/dev/null
+EMHC="$WORK/entrymerge-homeC"; mkdir -p "$EMHC"; echo '{"hooks":{}}' > "$EMHC/settings.json"
+emrun "$EMHC" "$EMRC" pull >/dev/null
+em_nick fromA2 400 other 100 > "$EMHA/mods/account-room-nicknames.json"
+emrun "$EMHA" "$EMRA" sync >/dev/null
+em_nick fromC 350 other 100 > "$EMHC/mods/account-room-nicknames.json"
+git -C "$EMRC" remote set-url origin "$WORK/entrymerge-unreachable.git"
+emrun "$EMHC" "$EMRC" sync >/dev/null
+git -C "$EMRC" remote set-url origin "$EMB"
+em_nick fromC 350 otherC 360 > "$EMHC/mods/account-room-nicknames.json"
+out_emh="$(emrun "$EMHC" "$EMRC" push)"
+dbg "#845 push on a diverged clone holding a file back said: $out_emh"
+check "#845 a push holding a file back on a diverged clone names sync, not pull" \
+  "line_has \"\$out_emh\" 'NOT publishing' 'claude-sync sync' && out_lacks \"\$out_emh\" \"claude-sync pull\""
+em_remedy2="$(grep 'NOT publishing' <<< "$out_emh" | grep -oE 'claude-sync [a-z-]+' | awk 'END { print $2 }')"
+out_emh2="$(emrun "$EMHC" "$EMRC" "$em_remedy2")"; emh2_rc=$?
+dbg "#845 the push's remedy ($em_remedy2) said: $out_emh2"
+git -C "$EMRC" fetch -q origin
+check "#845 and running the command it names brings that clone in step too" \
+  "[ $emh2_rc -eq 0 ] && [ \"\$(git -C '$EMRC' rev-list --count 'HEAD...origin/$em_branch')\" = 0 ]"
+
+# THE STAND DOWN IS NO BROADER THAN THE REASON (L324). The same nickname clash beside a conflicted
+# file nobody merges entry by entry still aborts, leaves the clone as it was, and names no command
+# that cannot help.
+EMRD="$WORK/entrymerge-repoD"; git clone -q "$EMB" "$EMRD" 2>/dev/null
+EMHD="$WORK/entrymerge-homeD"; mkdir -p "$EMHD"; echo '{"hooks":{}}' > "$EMHD/settings.json"
+emrun "$EMHD" "$EMRD" pull >/dev/null
+em_nick fromA3 500 other 100 > "$EMHA/mods/account-room-nicknames.json"
+printf '#!/bin/sh\necho A\n' > "$EMHA/hooks/em-hook.sh"
+emrun "$EMHA" "$EMRA" sync >/dev/null
+em_nick fromD 450 other 100 > "$EMHD/mods/account-room-nicknames.json"
+printf '#!/bin/sh\necho D\n' > "$EMHD/hooks/em-hook.sh"
+git -C "$EMRD" remote set-url origin "$WORK/entrymerge-unreachable.git"
+emrun "$EMHD" "$EMRD" sync >/dev/null
+git -C "$EMRD" remote set-url origin "$EMB"
+em_before_d="$(git -C "$EMRD" rev-parse HEAD)"
+out_emd="$(emrun "$EMHD" "$EMRD" sync)"; emd_rc=$?
+dbg "#845 a conflict beside a file nobody merges said: $out_emd"
+check "#845 a conflict also in a file nobody merges entry by entry still aborts" \
+  "[ $emd_rc -ne 0 ] && line_has \"\$out_emd\" 'reconcile by hand' 'claude-sync status'"
+check "#845 and that abort leaves the clone where it was, not mid rebase" \
+  "[ \"\$(git -C '$EMRD' rev-parse HEAD)\" = '$em_before_d' ] && [ ! -d '$EMRD/.git/rebase-merge' ]"
+check "#845 and it names neither pull nor sync as the way out" \
+  "out_lacks \"\$out_emd\" \"claude-sync (pull|sync)\""
+
+# A rule file BOTH Macs created has no common base, and merging against an empty one keeps both
+# whole copies as one add/add hunk. So that conflict still aborts rather than writing it twice.
+EMRE="$WORK/entrymerge-repoE"; git clone -q "$EMB" "$EMRE" 2>/dev/null
+EMHE="$WORK/entrymerge-homeE"; mkdir -p "$EMHE"; echo '{"hooks":{}}' > "$EMHE/settings.json"
+emrun "$EMHE" "$EMRE" pull >/dev/null
+printf -- '- rule from Mac A\n@EMNEW.md\n' >> "$EMHA/CLAUDE.md"; printf '# new\n- written on Mac A\n' > "$EMHA/EMNEW.md"
+emrun "$EMHA" "$EMRA" sync >/dev/null
+cp "$EMHA/CLAUDE.md" "$EMHE/CLAUDE.md"; printf '# new\n- written on Mac E\n' > "$EMHE/EMNEW.md"
+git -C "$EMRE" remote set-url origin "$WORK/entrymerge-unreachable.git"
+emrun "$EMHE" "$EMRE" sync >/dev/null
+git -C "$EMRE" remote set-url origin "$EMB"
+em_new_a="$(git -C "$EMB" show "$em_branch:payload/EMNEW.md" 2>/dev/null || true)"
+em_new_e="$(git -C "$EMRE" show HEAD:payload/EMNEW.md 2>/dev/null || true)"
+check "#845 the fixture: both Macs really did create EMNEW.md" \
+  "grep -q 'Mac A' <<< \"\$em_new_a\" && grep -q 'Mac E' <<< \"\$em_new_e\""
+out_eme="$(emrun "$EMHE" "$EMRE" sync)"; eme_rc=$?
+dbg "#845 a rule file both Macs created said: $out_eme"
+check "#845 a rule file both Macs created is not merged into two whole copies" \
+  "[ $eme_rc -ne 0 ] && line_has \"\$out_eme\" 'reconcile by hand' 'EMNEW\.md'"
 section "== the sync path reports what arrived, the same way pull does (claude-config#283) =="
 # do_pull calls summarize_applied, which lists what landed and adds the start-a-new-session notice
 # when an arriving file cannot be seen by a running session. do_sync called neither: its only

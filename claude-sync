@@ -1910,6 +1910,31 @@ is_derived_rule_file(){   # $1 = path relative to the payload
   return 1
 }
 
+# THE FILES A PULL SETTLES WITHOUT A PERSON (claude-config#845). Two kinds, and the rebase in a sync
+# settles a conflict confined to them the same way the pull does, rather than aborting and leaving a
+# diverged clone that neither command can move.
+#
+# A top level rule file, which merge_rule_files merges entry by entry against the copy this Mac last
+# applied. One predicate for both callers, so the rebase can never treat as mergeable a file the pull
+# would hand to a person, or the other way round (L16). A top level payload file with no live file of
+# the same name (the hooks fragment, the shared settings) is merged into settings.json by its own
+# code and is not one of these.
+is_entry_merged_rule_file(){   # $1 = path relative to the payload
+  case "${1:-}" in ''|*/*) return 1 ;; esac
+  is_derived_rule_file "$1" && return 1
+  [ -f "$CLAUDE_HOME/$1" ]
+}
+
+# A file whose own reader merges it entry by entry, from the `<file>.conflict-<Mac>` copy the apply
+# sets beside it (preserve_local_conflicts). The sync stays blind to what such a file means; the mod
+# that owns it is the one reader that knows (#747), so the sync's whole part is to keep this Mac's
+# copy where that mod looks. Listed by path, and the suite asserts the account room mod still looks
+# for exactly this file's copies, so a rename on either side fails there rather than here (L96).
+OWNER_MERGED_FILES="mods/account-room-nicknames.json"
+is_owner_merged_file(){   # $1 = path relative to the payload
+  case " $OWNER_MERGED_FILES " in *" ${1:-} "*) [ -n "${1:-}" ] ;; *) return 1 ;; esac
+}
+
 # Every derived index file PRESENT in a tree, one name per line, whether or not a current section
 # still produces it. The sweep, the staging and the merge recovery all ask this, so none of them
 # can end up walking a different set (L41).
@@ -2735,8 +2760,16 @@ resolve_lessons_conflict(){
 # It LOOPS, because a rebase replays one commit at a time and can stop on the next one for the same
 # reason. Bounded, because an unbounded loop around a command that can keep failing is a hang, and
 # a hang is worse than a failure (L110).
+#
+# AND A CONFLICT CONFINED TO FILES THE PULL SETTLES (claude-config#845). A top level rule file is
+# merged here with the very merge the pull uses, and refused when that merge cannot settle it, so a
+# same line clash still stops. A file whose own mod merges it keeps the shared repo's copy in the
+# commit, and this Mac's copy goes through the apply, which sets it beside the file for that mod,
+# exactly as on a pull. Before this, a diverged clone with either conflict could not move: `pull`
+# only fast forwards and named `sync`, and `sync` aborted here and named `pull`.
 resolve_derived_conflicts(){   # -> 0 carried through, 1 not this, 2 a real lesson number clash
-  local i=0 paths p rel handled any=0 lessons rc unioned=0 derived=0
+  local i=0 paths p rel handled any=0 lessons rc unioned=0 derived=0 need_index
+  local rule_paths owner_paths b o t merged_rules="" kept_owned=""
   while [ "$i" -lt 100 ]; do
     i=$(( i + 1 ))
     paths="$(git -C "$SYNC_REPO" diff --name-only --diff-filter=U 2>/dev/null)"
@@ -2748,7 +2781,7 @@ resolve_derived_conflicts(){   # -> 0 carried through, 1 not this, 2 a real less
       git -C "$SYNC_REPO" rev-parse --absolute-git-dir >/dev/null 2>&1 || return 1
       break
     fi
-    handled=0; lessons=0
+    handled=0; lessons=0; rule_paths=""; owner_paths=""
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       rel="${p#payload/}"
@@ -2760,6 +2793,23 @@ resolve_derived_conflicts(){   # -> 0 carried through, 1 not this, 2 a real less
       # Two appended entries never contradict each other, so the sides are combined; a genuine
       # clash on a number is answered separately below and stops the sync.
       if [ "$rel" = "$LESSONS_FILE" ]; then handled=$(( handled + 1 )); lessons=1; continue; fi
+      # Settled below only when BOTH sides still hold the file. A deletion on either side is not
+      # two copies of one list, and taking the survivor would decide it for somebody (L5).
+      if is_entry_merged_rule_file "$rel" || is_owner_merged_file "$rel"; then
+        git -C "$SYNC_REPO" cat-file -e ":2:$p" 2>/dev/null || return 1
+        git -C "$SYNC_REPO" cat-file -e ":3:$p" 2>/dev/null || return 1
+        if is_owner_merged_file "$rel"; then owner_paths="$owner_paths$p
+"
+        else
+          # A rule file needs the copy both sides parted from. Two Macs ADDING the same file have
+          # none, and a merge against an empty base is one whole file add/add hunk, which keeping
+          # both sides would write twice and call merged (review of #845).
+          git -C "$SYNC_REPO" cat-file -e ":1:$p" 2>/dev/null || return 1
+          rule_paths="$rule_paths$p
+"
+        fi
+        handled=$(( handled + 1 )); continue
+      fi
       return 1
     done <<DERIVED_PATHS
 $paths
@@ -2775,9 +2825,41 @@ DERIVED_PATHS
       [ "$rc" -eq 0 ] || return 1
       unioned=1
     fi
+    # A rule file, merged by the pull's own merge with this Mac's side first and the shared side
+    # second, as merge_rule_files orders them. Stage 3 is the commit being replayed, which is this
+    # Mac's; stage 2 is the shared repo's; stage 1 is where they parted. A merge that cannot settle
+    # the file refuses the whole recovery, so a same line clash still stops here as it always has.
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      b="$(lesson_stage_file "$p" 1)"; o="$(lesson_stage_file "$p" 3)"; t="$(lesson_stage_file "$p" 2)"
+      rc=0; entry_merge_rule_text "$o" "$b" "$t" "$SYNC_REPO/$p" || rc=$?
+      rm -f "$b" "$o" "$t"
+      [ "$rc" -eq 0 ] || return 1
+      merged_rules="$merged_rules${p#payload/} "
+    done <<ENTRY_RULES
+$rule_paths
+ENTRY_RULES
+    # A file its own mod merges: the shared copy goes into the commit, and this Mac's copy is left to
+    # the apply, which finds the live file differing from what arrives and sets it beside the file
+    # for that mod. The commit's own version of it is kept in .resolved as well, because the live
+    # file can have moved on since that commit and the commit's copy is then held nowhere else (L5).
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      t="$(lesson_stage_file "$p" 2)"; o="$(lesson_stage_file "$p" 3)"
+      rc=0; cat "$t" > "$SYNC_REPO/$p" 2>/dev/null || rc=1
+      [ "$rc" -eq 0 ] && keep_resolved_copy "${p#payload/}" "$o"
+      rm -f "$t" "$o"
+      [ "$rc" -eq 0 ] || return 1
+      kept_owned="$kept_owned${p#payload/} "
+    done <<ENTRY_OWNED
+$owner_paths
+ENTRY_OWNED
     # Rebuilt from the source sitting beside it in the working tree, which is the MERGED one:
-    # either LESSONS.md combined cleanly by git, or it was just combined above.
-    regenerate_payload_index_from_worktree || return 1
+    # either LESSONS.md combined cleanly by git, or it was just combined above. A clone with no
+    # lessons file at all has nothing to render, which only a stop on the files above can reach.
+    need_index=0
+    { [ "$lessons" -eq 1 ] || [ "$derived" -eq 1 ] || [ -f "$PAYLOAD/$LESSONS_FILE" ]; } && need_index=1
+    if [ "$need_index" -eq 1 ]; then regenerate_payload_index_from_worktree || return 1; fi
     # STAGED EXPLICITLY, not left to appear in the conflicted list (claude-config#329). The
     # `merge=ours` rule a few functions up means git resolves the index ITSELF and never reports it
     # as conflicted, so it is not among the paths staged below. Regenerating it then leaves a
@@ -2815,9 +2897,14 @@ DERIVED_MARKERS
 $paths
 DERIVED_ADD
     any=1
+    # A commit whose only change was this Mac's copy of an owner merged file is EMPTY once the shared
+    # copy is taken, and git refuses to continue an empty pick. Skipping it is the same outcome: that
+    # copy reaches the mod through the apply, not through this commit.
+    rc=continue
+    git -C "$SYNC_REPO" diff --cached --quiet 2>/dev/null && rc=skip
     # GIT_EDITOR=true, or a continue that wants a commit message opens an editor nobody is sitting
     # at and the daemon hangs on it.
-    if GIT_EDITOR=true git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" rebase --continue >/dev/null 2>&1; then
+    if GIT_EDITOR=true git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" rebase "--$rc" >/dev/null 2>&1; then
       # Finished, unless it stopped again, which the next turn of the loop finds out.
       git -C "$SYNC_REPO" rev-parse --verify -q REBASE_HEAD >/dev/null 2>&1 || break
     else
@@ -2841,6 +2928,14 @@ DERIVED_ADD
   # something else did (L11).
   if [ "$derived" -eq 1 ]; then
     echo "claude-sync: both Macs changed a generated lessons index file, which is rendered from LESSONS.md rather than written by hand, so every one of them was regenerated from the merged lessons and the sync carried on. Nothing needs reconciling."
+  fi
+  # Each kind in its own words, naming the files, because what happened to this Mac's copy differs
+  # between them and only one of them leaves anything for later (L11).
+  if [ -n "$merged_rules" ]; then
+    echo "claude-sync: both Macs changed ${merged_rules% } while this clone held a commit the shared repo had not seen, so the two copies were merged entry by entry, the same merge a pull makes, and the sync carried on. Nothing needs reconciling."
+  fi
+  if [ -n "$kept_owned" ]; then
+    echo "claude-sync: both Macs changed ${kept_owned% } while this clone held a commit the shared repo had not seen. The shared repo's copy was kept in the commit and this Mac's copy is set aside by the apply below for the mod that owns the file, which merges the two entry by entry, so the sync carried on and nothing was lost. The commit's own copy is also in $RESOLVED_DIR."
   fi
   return 0
 }
@@ -3623,7 +3718,17 @@ stage_local_to_payload(){
 $protected
 SWPROT
   if [ -n "$_sw_held" ]; then
-    echo "claude-sync: NOT publishing $(comma_list "$_sw_held") because the shared repo has changed $([ "$(printf '%s\n' "$_sw_held" | wc -l | tr -d ' ')" = 1 ] && printf 'it' || printf 'them') since this Mac last applied, and mirroring this Mac's copy upward would revert what is there. Nothing here was altered and nothing was lost. Run 'claude-sync pull', which merges the two copies entry by entry, and the next send publishes the result. Everything else synced normally." >&2
+    # The way out depends on what runs next (claude-config#845). A sync receives straight after this,
+    # so sending its reader to another command was advice to repeat work already under way; and from
+    # a clone holding unsent commits, `pull` refuses and names `sync`, so naming `pull` there sent
+    # somebody round a loop that cost one Mac 16 hours of sends (L111).
+    local _sw_next
+    if [ "${SYNC_RECEIVES_NEXT:-0}" = "1" ]; then
+      _sw_next="This sync goes on to receive the repo's version and settle the two copies on this Mac, and says below if it cannot; the next send publishes the result."
+    else
+      _sw_next="Run '$(receive_command)', which receives the repo's version and settles the two copies on this Mac, and the next send publishes the result."
+    fi
+    echo "claude-sync: NOT publishing $(comma_list "$_sw_held") because the shared repo has changed $([ "$(printf '%s\n' "$_sw_held" | wc -l | tr -d ' ')" = 1 ] && printf 'it' || printf 'them') since this Mac last applied, and mirroring this Mac's copy upward would revert what is there. Nothing here was altered and nothing was lost. $_sw_next" >&2
     # SAID, NOT NOTIFIED. The watcher sends on every save, and this state lasts until the next pull,
     # so a desktop notification here is one per keystroke for a condition the very next pull clears:
     # the alert that teaches people to dismiss alerts (L36). The suite already holds that line, in
@@ -3637,7 +3742,7 @@ SWPROT
   if [ -n "$_sw_stale" ]; then
     protected="${protected:+$protected
 }$_sw_stale"
-    echo "claude-sync: NOT publishing $(comma_list "$_sw_stale") because this Mac's copy is an earlier version the shared repo has since replaced, so sending it would undo that change there. Nothing here was altered. Run 'claude-sync pull' to bring the current version onto this Mac." >&2
+    echo "claude-sync: NOT publishing $(comma_list "$_sw_stale") because this Mac's copy is an earlier version the shared repo has since replaced, so sending it would undo that change there. Nothing here was altered. $(if [ "${SYNC_RECEIVES_NEXT:-0}" = "1" ]; then printf 'This sync goes on to bring the current version onto this Mac.'; else printf "Run '%s' to bring the current version onto this Mac." "$(receive_command)"; fi)" >&2
   fi
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
@@ -5079,6 +5184,27 @@ resolve_add_add_hunks(){
   '
 }
 
+# The one entry by entry merge of a rule file, used by the pull (merge_rule_files) and by the rebase
+# inside a sync (resolve_derived_conflicts, claude-config#845). Written once, so the two can never
+# settle the same pair of copies differently (L370). Three way first; where that stops, only hunks
+# that both sides ADDED are settled, by keeping both. Never writes a result still carrying a conflict
+# marker, and never an empty one: these load as rules.
+entry_merge_rule_text(){   # $1 = this Mac's copy  $2 = the common base  $3 = the other side  $4 = where the result goes
+  local m r rc=1
+  m="$(scratch_file)" || return 1
+  r="$(scratch_file)" || { rm -f "$m"; return 1; }
+  if git merge-file --quiet -p "$1" "$2" "$3" > "$m" 2>/dev/null; then
+    cp "$m" "$r" && rc=0
+  else
+    git merge-file --diff3 -p "$1" "$2" "$3" > "$m" 2>/dev/null || true
+    if [ -s "$m" ] && resolve_add_add_hunks < "$m" > "$r" 2>/dev/null; then rc=0; fi
+  fi
+  if [ "$rc" -eq 0 ] && { [ ! -s "$r" ] || grep -q '^<<<<<<< \|^>>>>>>> ' "$r"; }; then rc=1; fi
+  [ "$rc" -eq 0 ] && { cat "$r" > "$4" 2>/dev/null || rc=1; }
+  rm -f "$m" "$r"
+  return "$rc"
+}
+
 # Settling a number collision means renumbering the copy that was never published,
 # and that fix has to survive the very next merge. It did not: the merge above is
 # additive by design, so an entry this Mac still holds under its OLD number and the
@@ -5494,7 +5620,7 @@ usable_lesson_start(){   # $1 = the candidate
 }
 
 merge_rule_files(){
-  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided band
+  local last p local_f tmpb tmpr reported="" resolved renumbered start fmax collided band
   MERGED_RULE_FILES=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
@@ -5508,20 +5634,21 @@ merge_rule_files(){
     # (#83). What merges is LESSONS.md, and the index follows from that.
     is_derived_rule_file "$p" && continue
     local_f="$CLAUDE_HOME/$p"
-    [ -f "$local_f" ] && [ -f "$PAYLOAD/$p" ] || continue
+    is_entry_merged_rule_file "$p" && [ -f "$PAYLOAD/$p" ] || continue
     tmpb="$(scratch_file)"
     if ! git -C "$SYNC_REPO" show "$last:payload/$p" > "$tmpb" 2>/dev/null; then rm -f "$tmpb"; continue; fi
     # nothing of ours to merge, or already exactly what is arriving
     if cmp -s "$tmpb" "$local_f" || cmp -s "$PAYLOAD/$p" "$local_f"; then rm -f "$tmpb"; continue; fi
-    tmpm="$(scratch_file)"; tmpr="$(scratch_file)"; resolved=""
-    if git merge-file --quiet -p "$local_f" "$tmpb" "$PAYLOAD/$p" > "$tmpm" 2>/dev/null; then
-      cp "$tmpm" "$tmpr"; resolved=1
-    else
-      git merge-file --diff3 -p "$local_f" "$tmpb" "$PAYLOAD/$p" > "$tmpm" 2>/dev/null || true
-      if [ -s "$tmpm" ] && resolve_add_add_hunks < "$tmpm" > "$tmpr" 2>/dev/null; then resolved=1; fi
-    fi
-    # Never write a file still carrying conflict markers: these load as rules.
-    if [ -n "$resolved" ] && [ -s "$tmpr" ] && ! grep -q '^<<<<<<< \|^>>>>>>> ' "$tmpr"; then
+    # Or the arriving copy already holds everything this Mac changed, which is what a sync's rebase
+    # leaves once it has merged the file itself (claude-config#845). Merging again then compares this
+    # Mac's entry against "the other Mac's entry, then this Mac's", and diff3 reports that as one
+    # add/add hunk whose two sides both carry this Mac's entry, so keeping both wrote it twice.
+    # preserve_local_conflicts asks the same question with the same predicate and takes the arriving
+    # copy, saying so, which is the right answer when nothing of this Mac's is missing from it.
+    if local_side_contained "$p" "$local_f" "$last"; then rm -f "$tmpb"; continue; fi
+    tmpr="$(scratch_file)"; resolved=""
+    entry_merge_rule_text "$local_f" "$tmpb" "$PAYLOAD/$p" "$tmpr" && resolved=1
+    if [ -n "$resolved" ]; then
       renumbered="$(drop_renumbered_duplicates "$tmpr" "$PAYLOAD/$p")"
       # Split by CAUSE, not just reported together. A renumber and an exact duplicate both
       # remove a copy, but they are different news and only one of them leaves mentions to
@@ -5588,7 +5715,7 @@ COLLIDED
 $p"
       reported="$reported$p "
     fi
-    rm -f "$tmpb" "$tmpm" "$tmpr"
+    rm -f "$tmpb" "$tmpr"
   done < <(unapplied_paths)
   if ! is_blank "$reported"; then
     echo "claude-sync: both Macs had edited these rule files, so their entries were MERGED and nothing was dropped (your previous copy is beside them as .syncbak): ${reported}" >&2
@@ -5820,7 +5947,7 @@ local_side_contained(){   # $1 = payload path  $2 = the live local file  $3 = la
 }
 
 preserve_local_conflicts(){
-  local last p local_f sfx saved="" detail resolved=""
+  local last p local_f sfx saved="" detail resolved="" owned=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
@@ -5861,6 +5988,10 @@ $p"*) continue ;; esac
     # about to say. It is only ever about copies an EARLIER run left behind.
     PRESERVED_CONFLICTS="$PRESERVED_CONFLICTS
 $p$sfx"
+    # A file whose own mod merges this copy back is not one that "could NOT be merged": it is merged,
+    # by the one reader that knows what it means, at its next session start (#747, claude-config#845).
+    # Said in its own words and not notified, because nothing is waiting on a person (L11, L36).
+    if is_owner_merged_file "$p"; then owned+="$p "; continue; fi
     # Say what is actually at stake in this file, not just its name.
     detail=""
     [ -f "$PAYLOAD/$p" ] && detail="$(only_in_first "$local_f" "$PAYLOAD/$p")"
@@ -5871,6 +6002,9 @@ $p$sfx"
     # and one whose only copy is now sitting beside it are different outcomes, and reporting them
     # in one sentence would make the second read as reassuring as the first (L11).
     echo "claude-sync: both Macs changed these files, but this Mac's version held no line the other Mac's version did not already have, so the other Mac's version was applied and nothing was set aside beside them. A copy of what this Mac had is in $RESOLVED_DIR for $(duration_in_words "${SYNC_RESOLVED_MAX_AGE:-$SYNC_RESOLVED_MAX_AGE_DEFAULT}"): ${resolved}" >&2
+  fi
+  if ! is_blank "$owned"; then
+    echo "claude-sync: both Macs changed these files, so the other Mac's version was applied and this Mac's was kept next to it with the suffix $sfx, where the mod that owns each file merges the two entry by entry at its next session start. Nothing needs doing: ${owned}" >&2
   fi
   is_blank "$saved" && return 0
   echo "claude-sync: both Macs changed these files and they could NOT be merged automatically, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2
@@ -6057,6 +6191,16 @@ unpushed_commits(){
   [ -n "$up" ] || return 1
   n="$(git -C "$SYNC_REPO" rev-list --count "$up..HEAD" 2>/dev/null || echo 0)"
   [ "${n:-0}" -gt 0 ]
+}
+
+# THE COMMAND THAT CAN RECEIVE, FROM WHERE THIS CLONE STANDS (claude-config#845). A pull only fast
+# forwards, so from a clone holding commits the shared repo has not seen it refuses as soon as the
+# repo has moved too, and names `sync`. A message naming `pull` from that state sent its reader round
+# a loop: on 2026-10-06 the send named pull, pull named sync, and sync named pull, for 16 hours
+# (L111). With nothing unsent here, pull is the narrower command and is right. Read from the refs
+# this clone already holds, never a fetch: a message is not where the network gets touched.
+receive_command(){
+  if have_git && unpushed_commits; then printf 'claude-sync sync'; else printf 'claude-sync pull'; fi
 }
 
 # ---------- push ----------
@@ -7354,7 +7498,7 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       case "$rd_n" in ''|*[!0-9]*) rd_n=0 ;; esac
       rd_n=$(( rd_n + 1 ))
       rd_age=$(( rd_now - rd_since ))
-      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) FAILED its tests, so it was not applied here. Nothing is lost: it applies as soon as a green commit lands, or now if you run 'claude-sync pull' yourself." >&2
+      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) FAILED its tests, so it was not applied here. Nothing is lost: it applies as soon as a green commit lands, or now if you run '$(receive_command)' yourself." >&2
       # Past the window it is a different event and gets different words, because "it failed this
       # time" and "it has been failing all day" need different actions from the reader and one
       # sentence covering both hides whichever it did not name (L11). It is never applied anyway:
@@ -7383,7 +7527,7 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       echo "claude-sync: the shared repo's newest commit (${sha:0:8}) is still being tested, so it was not applied here yet. It applies once the tests finish." >&2
       send_outcome ci-pending ;;
     cancelled)
-      echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run 'claude-sync pull' yourself if you know it is good." >&2
+      echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run '$(receive_command)' yourself if you know it is good." >&2
       notify "not applied: the tests for the shared repo's head were cancelled"
       send_outcome ci-cancelled ;;
     none)
@@ -7458,9 +7602,9 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
         return 1
       fi
       if [ -n "$ci_why" ]; then
-        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests: $ci_why. So it was not applied here yet. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Nothing needs fixing on this Mac; run 'claude-sync pull' yourself to apply it now." >&2
+        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests: $ci_why. So it was not applied here yet. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Nothing needs fixing on this Mac; run '$(receive_command)' yourself to apply it now." >&2
       else
-        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
+        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run '$(receive_command)' yourself, or check that gh is installed and logged in." >&2
       fi
       send_outcome ci-unreadable ;;
   esac
@@ -7472,7 +7616,12 @@ do_sync(){
   # unapplied_paths), so the original order is safe: send local changes, integrate
   # theirs, then apply. Receiving first is NOT an option here, because the apply
   # mirrors with --delete and would erase a local file that has never been sent.
+  # SYNC_RECEIVES_NEXT tells the staging that this same run receives straight after it, so a file it
+  # holds back is not answered by naming another command (claude-config#845). Cleared straight after,
+  # so the staging publish_merged_rule_files does once the receiving is over says the plain thing.
+  SYNC_RECEIVES_NEXT=1
   stage_local_to_payload
+  SYNC_RECEIVES_NEXT=0
   local pushed=0 branch before="" after=""
   local fetch_err="" pull_err="" stash_before=0 stash_after=0 stash_top="" gitdir=""
   local derived_rc=0
@@ -8195,7 +8344,7 @@ do_send(){
     if bh_last="$(behind_last_reconcile)" && [ "$(( bh_now - bh_last ))" -lt "$bh_window" ] 2>/dev/null; then
       # Held off. Said in its own words, because "the reconcile just attempted did not clear it"
       # would be a claim about something this run did not do (L11).
-      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied. The reconcile that would fix it was attempted $(age_in_words "$(( bh_now - bh_last ))") ago and refused, so it is held off for another $(duration_in_words "$(( bh_window - (bh_now - bh_last) ))") rather than retried on every edit ($(record_behind_skip "$bh_last")). Run 'claude-sync pull' and read what it says." >&2
+      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied. The reconcile that would fix it was attempted $(age_in_words "$(( bh_now - bh_last ))") ago and refused, so it is held off for another $(duration_in_words "$(( bh_window - (bh_now - bh_last) ))") rather than retried on every edit ($(record_behind_skip "$bh_last")). Run '$(receive_command)' and read what it says." >&2
       send_outcome behind
       return 0
     fi
@@ -8208,7 +8357,7 @@ do_send(){
     else
       # It did not clear. THIS is the state worth counting: one is a hiccup, twenty in a row is a
       # Mac that has stopped syncing, and before this nothing could tell them apart.
-      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied and the reconcile just attempted did not clear them ($(record_behind_skip "$bh_tried")). Run 'claude-sync pull' and read what it says; until then nothing leaves this Mac." >&2
+      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied and the reconcile just attempted did not clear them ($(record_behind_skip "$bh_tried")). Run '$(receive_command)' and read what it says; until then nothing leaves this Mac." >&2
       send_outcome behind
       return 0
     fi
@@ -8820,12 +8969,12 @@ sync_stuck_records(){
     n="$(awk 'NR==1{print $1}' "$BEHIND_SKIPS_FILE" 2>/dev/null)"
     case "$n" in
       ''|*[!0-9]*)
-        printf 'sending-unreadable\t-\t-\t%s\n' "the record of skipped sends at $BEHIND_SKIPS_FILE could not be read, so whether sends are being skipped cannot be told from it. The next send that is skipped or gets through replaces it; if this keeps being said, run 'claude-sync pull' from $SYNC_REPO and read what it says." ;;
+        printf 'sending-unreadable\t-\t-\t%s\n' "the record of skipped sends at $BEHIND_SKIPS_FILE could not be read, so whether sends are being skipped cannot be told from it. The next send that is skipped or gets through replaces it; if this keeps being said, run '$(receive_command)' from $SYNC_REPO and read what it says." ;;
       *)
         if [ "$n" -gt 0 ] 2>/dev/null; then
           first="$(behind_skips_since || true)"
           printf 'sending\t%s\t%s\t%s\n' "$n" "${first:--}" \
-            "sending is stuck: skipped $n send(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))") ago, because this Mac is behind the shared repo and the reconcile each one tried did not clear it. Run 'claude-sync pull' and read what it says."
+            "sending is stuck: skipped $n send(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))") ago, because this Mac is behind the shared repo and the reconcile each one tried did not clear it. Run '$(receive_command)' and read what it says."
         fi ;;
     esac
   fi
@@ -8836,7 +8985,7 @@ sync_stuck_records(){
     n="$(awk 'NR==1{print $2}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
     case "$n" in
       ''|*[!0-9]*)
-        printf 'receiving-unreadable\t-\t-\t%s\n' "the record of failed test verdicts at $CI_RED_SINCE_FILE could not be read, so whether config is being refused here cannot be told from it. The next automatic pull that reads a verdict replaces it; if this keeps being said, run 'claude-sync pull' from $SYNC_REPO and read what it says." ;;
+        printf 'receiving-unreadable\t-\t-\t%s\n' "the record of failed test verdicts at $CI_RED_SINCE_FILE could not be read, so whether config is being refused here cannot be told from it. The next automatic pull that reads a verdict replaces it; if this keeps being said, run '$(receive_command)' from $SYNC_REPO and read what it says." ;;
       *)
         if [ "$n" -gt 0 ] 2>/dev/null; then
           first="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
@@ -9248,7 +9397,7 @@ report_unapplied_payload(){
   done <<HELD
 $held
 HELD
-  echo "  Nothing is lost on either side: this Mac's copy is untouched and the repo keeps its own. 'claude-sync pull' merges the two copies entry by entry, and the next send publishes the result."
+  echo "  Nothing is lost on either side: this Mac's copy is untouched and the repo keeps its own. '$(receive_command)' merges the two copies entry by entry, and the next send publishes the result."
   return 0
 }
 
