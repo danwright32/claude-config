@@ -14,12 +14,15 @@ const PHRASES: readonly RegExp[] = [
   /\byour (?:manual )?step\b/gi,
 ]
 
-// A sentence saying the opposite: "nothing else is waiting on you", "isn't ... waiting on you".
+// The phrase said the other way round: "nothing else is waiting on you", "this is no longer
+// waiting on you". Only a negation attached to the phrase counts, in the same clause and within
+// its last few words, so "the deploy did not finish, so it's waiting on you" still fires.
 const NEGATED = /\b(?:nothing|not|no longer|none|no one|never)\b|n't\b/i
+const NEGATION_WORDS = 5
 // The phrase quoted as the name of a thing ("is waiting on you", the notification), not said to Dan.
 const QUOTED = /["“'‘`](?:(?:is|are|still|now)\s+)*$/i
-// Where the sentence holding the phrase starts.
-const BOUNDARY = /[.!?;\n][^.!?;\n]*$/
+// Where the clause holding the phrase starts.
+const BOUNDARY = /[.!?;:,\n][^.!?;:,\n]*$/
 
 /** The phrase in `text` saying a step waits on Dan, as written; null when there is none. */
 export const waitingPhrase = (text: string): string | null => {
@@ -31,8 +34,8 @@ export const waitingPhrase = (text: string): string | null => {
       const at = m.index ?? 0
       const before = plain.slice(0, at)
       if (QUOTED.test(before)) continue
-      const sentence = before.slice((BOUNDARY.exec(before)?.index ?? -1) + 1)
-      if (NEGATED.test(sentence)) continue
+      const clause = before.slice((BOUNDARY.exec(before)?.index ?? -1) + 1)
+      if (NEGATED.test(clause.trim().split(/\s+/).slice(-NEGATION_WORDS).join(' '))) continue
       if (!best || at < best.at) best = { at, phrase: text.slice(at, at + m[0].length) }
       break
     }

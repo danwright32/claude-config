@@ -40,10 +40,19 @@ describe('waitingPhrase', () => {
     for (const said of [
       'The three issues are filed and nothing else is waiting on you.',
       'Every open design question is now settled, and nothing is waiting on you for design.',
-      "So this show isn't hidden, and it's still waiting on you in Reached out.",
       'This is no longer waiting on you.',
     ])
       expect(waitingPhrase(said)).toBeNull()
+  })
+
+  // Lessons review of PR 866: a negation elsewhere in the sentence says nothing about the phrase.
+  test('a negation in another clause, or far from the phrase, does not hide a real hand-off', () => {
+    for (const said of [
+      "The deploy did not finish, so it's waiting on you: run the migration from the dashboard.",
+      "So this show isn't hidden, and it's still waiting on you in Reached out.",
+      "I can't apply it from here because the console is not reachable from this Mac, which leaves it waiting on you.",
+    ])
+      expect(waitingPhrase(said)).toBe('waiting on you')
   })
 
   test('the phrase quoted, as the name of a notification or a state, passes', () => {
