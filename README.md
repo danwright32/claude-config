@@ -224,6 +224,12 @@ config, and is swept after two weeks, so a wrong resolution is recoverable witho
 DELETION is not treated as contained even though its lines are all present in the arriving version:
 the deleted line is work too, and the version this Mac last applied is what tells the two apart.
 
+The same two settlements hold inside a `sync` whose clone has diverged from the shared repo
+(#845). A rule file both Macs changed is merged entry by entry inside the rebase, and a file whose
+own mod merges it (the account room nicknames) keeps the shared copy while this Mac's goes beside
+it as `.conflict-<host>` for that mod. Anything else conflicting still stops the sync, and says to
+reconcile by hand.
+
 Both reports go quiet on their own: as soon as the content is back in the live file, or the copy is
 deleted, there is nothing outstanding to report. A copy whose content is already in the live file is
 still listed by `status`, named as safe to delete, because only you can decide to remove it.

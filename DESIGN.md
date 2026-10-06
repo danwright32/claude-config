@@ -1012,6 +1012,37 @@ then has nothing left to refuse. Doing it in the recovery keeps the union and th
 same place, at the moment the rebase can still be abandoned, and it needs no per clone config, so
 it is in force on a clone that has never run it and under every rebase backend.
 
+### And when a file the pull settles conflicts (#845)
+
+On 2026-10-06 this Mac could not send for 16 hours (99 sends skipped). The clone held a commit the
+shared repo had not seen, the repo held one the clone did not have, and both had changed the same
+entry of `mods/account-room-nicknames.json`. `pull` only fast forwards, so it refused and named
+`sync`; `sync` rebased, stopped on that file, aborted, and the send named `pull`. Each command named
+the other, and the clone moved only after a hand reset somebody had to approve.
+
+The pull already settles two kinds of file without a person, so the rebase now settles them the
+same way. A top level rule file is merged with the pull's own entry by entry merge (one function,
+`entry_merge_rule_text`, for both), and a merge that cannot settle it still stops the sync, so a
+same line clash is refused exactly as before. A file whose own mod merges it (today only the
+nicknames, listed in `OWNER_MERGED_FILES`) keeps the shared copy in the commit; the apply then
+finds this Mac's live copy differing and sets it beside the file as `.conflict-<Mac>`, which the mod
+merges back entry by entry at its next session start, as on any pull. The sync never learns what
+that file means. A commit left empty by taking the shared copy is skipped rather than continued,
+and the commit's own copy goes to `.resolved/`, because the live file can have moved on since.
+Any other conflicted path, alongside these or alone, still aborts.
+
+Once the rebase has merged a rule file, the apply's own merge would compare the live copy (this
+Mac's entry) against the arriving one (the other Mac's entry, then this Mac's), and diff3 reports
+that as one add/add hunk whose two sides both carry this Mac's entry, so keeping both wrote it
+twice. So the apply skips the merge when the arriving copy already holds every line this Mac
+changed, using the same containment predicate `preserve_local_conflicts` uses, and takes the
+arriving copy. `--zdiff3` would also have avoided the repeat, and was not used because it changes
+what every pull merge reports, including the duplicate drop #257 tests.
+
+No message names a command that cannot help from where the clone stands (L111). A file held back
+during a `sync` says that this same sync receives next, rather than naming another command; from a
+clone holding unsent commits, every other remedy names `sync`, because `pull` refuses there.
+
 ## A merge has to reach the repo before the sync says it worked
 
 Measured 2026-09-04. A reconcile merged `LESSONS.md` and printed both "nothing was dropped" and
