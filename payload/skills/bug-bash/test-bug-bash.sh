@@ -3,6 +3,7 @@
 #
 #   target-guard.sh  decides whether a bug bash may run against a URL at all: a local production
 #                    build only, a deployment only when read only is asked for, never a dev server.
+#   read-only-proxy.js holds a read only run to reading outside any browser (#813).
 #   report.py        builds what Dan reads from the run's findings file, and refuses to call a
 #                    finding a bug unless a test failed for the reason the explorer gave.
 #
@@ -23,7 +24,9 @@ GUARD="$DIR/target-guard.sh"
 REPORT="$DIR/report.py"
 TMP="$(mktemp -d)"
 SERVER_PID=""
-cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; rm -rf "$TMP"; }
+# Every other process the suite starts in the background, stopped with it.
+BG_PIDS=""
+cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; for p in $BG_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; rm -rf "$TMP"; }
 trap cleanup EXIT
 
 pass=0
@@ -33,6 +36,218 @@ bad() { fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '  output
 expect() { # expect <description> <want rc> <want words> <got rc> <got output>
   if [ "$4" -eq "$2" ] && grep -qi -- "$3" <<< "$5"; then ok; else bad "$1 (want rc $2, got $4)" "$5"; fi
 }
+
+# ---------------------------------------------------------------- read-only-proxy.js
+# A read only run is held to reading outside the browser (#813): a local proxy every explorer
+# browser goes through refuses every request that could change something, and every WebSocket,
+# before it reaches the site. Tested against fixture sites that record every request they receive,
+# one over http and one over https, so a write that got through is seen where it would land. Nothing
+# here reaches a real site: the fixtures are on this machine, and the guard's probe goes to a name
+# that resolves nowhere.
+PROXY_JS="$DIR/read-only-proxy.js"
+cat > "$TMP/recorder.py" <<'PY'
+import http.server, socketserver, sys, os, ssl, time
+log, port_file = sys.argv[1], sys.argv[2]
+cert = sys.argv[3] if len(sys.argv) > 3 else None
+class Recorder(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a, **k):
+        pass
+    # Every request is recorded before it is answered: method, path, and whether it asked to upgrade.
+    def any(self):
+        n = int(self.headers.get('content-length') or 0)
+        if n:
+            self.rfile.read(n)
+        if self.path == '/stall':
+            time.sleep(60)
+            return
+        # An answer cut off part way: it promises 100 bytes, sends 5 and closes.
+        if self.path == '/cut':
+            self.send_response(200)
+            self.send_header('content-length', '100')
+            self.end_headers()
+            self.wfile.write(b'start')
+            self.wfile.flush()
+            return
+        # A slow answer, a byte at a time: it records when its reader went away, which is when a
+        # write to the socket fails.
+        if self.path == '/drip':
+            self.send_response(200)
+            self.end_headers()
+            try:
+                for _ in range(200):
+                    self.wfile.write(b'.')
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except OSError:
+                with open(log + '.dropped', 'a') as f:
+                    f.write('DROPPED /drip\n')
+            return
+        with open(log, 'a') as f:
+            f.write('%s %s%s\n' % (self.command, self.path, ' upgrade' if self.headers.get('upgrade') else ''))
+        body = b'fixture ok\n'
+        self.send_response(200)
+        self.send_header('content-length', str(len(body)))
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(body)
+    do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = any
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+httpd = Server(('127.0.0.1', 0), Recorder)
+if cert:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert, cert)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+with open(port_file + '.tmp', 'w') as f:
+    f.write(str(httpd.server_address[1]))
+os.rename(port_file + '.tmp', port_file)
+httpd.serve_forever()
+PY
+# A stand in that answers the proxy's health check as the proxy does, but forwards every write.
+cat > "$TMP/impostor.py" <<'PY'
+import http.server, socketserver, sys, os
+port_file = sys.argv[1]
+class Impostor(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a, **k):
+        pass
+    def any(self):
+        body = b'{"proxy":"bug-bash-read-only"}' if self.path.endswith('/__bug-bash-proxy__/health') else b'forwarded\n'
+        self.send_response(200)
+        self.send_header('content-length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_GET = do_POST = any
+httpd = socketserver.TCPServer(('127.0.0.1', 0), Impostor)
+with open(port_file + '.tmp', 'w') as f:
+    f.write(str(httpd.server_address[1]))
+os.rename(port_file + '.tmp', port_file)
+httpd.serve_forever()
+PY
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+  -keyout "$TMP/site.key" -out "$TMP/site.crt" >/dev/null 2>&1
+cat "$TMP/site.key" "$TMP/site.crt" > "$TMP/site.pem"
+python3 "$TMP/recorder.py" "$TMP/plain.log" "$TMP/plain.port" & BG_PIDS="$BG_PIDS $!"
+python3 "$TMP/recorder.py" "$TMP/tls.log" "$TMP/tls.port" "$TMP/site.pem" & BG_PIDS="$BG_PIDS $!"
+python3 "$TMP/impostor.py" "$TMP/impostor.port" & BG_PIDS="$BG_PIDS $!"
+# The proxy verifies the real site's certificate as usual; here the fixture's is made trusted the
+# way Node itself offers, so no switch in the proxy turns verification off.
+# A stale proxy.json from an earlier run in the same directory, which the proxy must not leave
+# standing for a reader to take as its own.
+mkdir -p "$TMP/proxy"
+# Its pid is a process that has already exited, as a left over file's would be.
+sh -c 'exit 0' & DEAD_PID=$!
+wait "$DEAD_PID"
+kill -0 "$DEAD_PID" 2>/dev/null && bad "the stand in for an exited process is really gone (pid $DEAD_PID was reused)"
+printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy/proxy.json"
+# The upstream deadline is shortened so a stalled site is seen to time out within the suite.
+NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000 >"$TMP/proxy.out" 2>&1 & PROXY_PID=$!
+BG_PIDS="$BG_PIDS $PROXY_PID"
+for _ in $(seq 1 400); do
+  [ -s "$TMP/plain.port" ] && [ -s "$TMP/tls.port" ] && [ -s "$TMP/impostor.port" ] && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" 2>/dev/null && break
+  sleep 0.05
+done
+PROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy/proxy.json" 2>/dev/null)"
+PROXY_CA="$TMP/proxy/certs/ca.pem"
+PLAIN="http://127.0.0.1:$(cat "$TMP/plain.port" 2>/dev/null)"
+SECURE="https://localhost:$(cat "$TMP/tls.port" 2>/dev/null)"
+IMPOSTOR="http://127.0.0.1:$(cat "$TMP/impostor.port" 2>/dev/null)"
+# --noproxy '' so no proxy setting in the environment lets curl skip the proxy for this machine.
+code_of() { curl -s --noproxy '' -o /dev/null -w '%{http_code}' --max-time 10 "$@"; }
+if [ -z "$PROXY" ]; then
+  bad "the read only proxy started and wrote its address" "$(cat "$TMP/proxy.out" 2>/dev/null)"
+else
+  out="$(curl -s --noproxy '*' --max-time 5 "$PROXY/__bug-bash-proxy__/health")"
+  grep -q '"proxy":"bug-bash-read-only"' <<< "$out" && ok || bad "the proxy answers its health check as itself" "$out"
+
+  # Reads pass: the positive control, so a refusal below is the proxy's choice, not a dead path (L159).
+  got="$(code_of -x "$PROXY" "$PLAIN/read?token=secret")"
+  [ "$got" = 200 ] && grep -qx 'GET /read?token=secret' "$TMP/plain.log" && ok || bad "a GET through the proxy reaches the site" "$got $(cat "$TMP/plain.log" 2>/dev/null)"
+  got="$(code_of -x "$PROXY" -I "$PLAIN/head")"
+  [ "$got" = 200 ] && grep -qx 'HEAD /head' "$TMP/plain.log" && ok || bad "a HEAD through the proxy reaches the site" "$got"
+  got="$(code_of -x "$PROXY" --cacert "$PROXY_CA" "$SECURE/secure-read")"
+  [ "$got" = 200 ] && grep -qx 'GET /secure-read' "$TMP/tls.log" && ok || bad "a GET over https, through the proxy's tunnel, reaches the site" "$got $(cat "$TMP/proxy.out")"
+
+  # Writes never reach the site, over http, over https, or inside a plain CONNECT tunnel.
+  for m in POST PUT PATCH DELETE; do
+    got="$(code_of -x "$PROXY" -X "$m" --data x=1 "$PLAIN/write-$m")"
+    [ "$got" = 405 ] && ok || bad "a $m through the proxy is refused (got $got)"
+    got="$(code_of -x "$PROXY" --cacert "$PROXY_CA" -X "$m" --data x=1 "$SECURE/write-$m")"
+    [ "$got" = 405 ] && ok || bad "a $m over https through the proxy is refused (got $got)"
+  done
+  got="$(code_of -p -x "$PROXY" -X POST --data x=1 "$PLAIN/tunnelled-write")"
+  [ "$got" = 405 ] && ok || bad "a POST inside a plain CONNECT tunnel is refused (got $got)"
+  # WebSocket upgrades are refused: a socket's messages cannot be judged one by one.
+  got="$(code_of -x "$PROXY" -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PLAIN/socket")"
+  [ "$got" = 403 ] && ok || bad "a WebSocket upgrade through the proxy is refused (got $got)"
+  got="$(code_of -x "$PROXY" --cacert "$PROXY_CA" -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$SECURE/socket")"
+  [ "$got" = 403 ] && ok || bad "a WebSocket upgrade over https through the proxy is refused (got $got)"
+  writes="$(grep -Ev '^(GET|HEAD) ' "$TMP/plain.log" "$TMP/tls.log"; grep -h 'upgrade$' "$TMP/plain.log" "$TMP/tls.log")"
+  [ -z "$writes" ] && ok || bad "the fixture sites received no write and no upgrade" "$writes"
+
+  # Every request is logged with its verdict, and never with its query string (L741).
+  grep -q '^REFUSED POST http://127.0.0.1:[0-9]*/write-POST$' "$TMP/proxy/requests.log" && grep -q '^FORWARDED GET https://localhost:[0-9]*/secure-read$' "$TMP/proxy/requests.log" && ok \
+    || bad "the proxy logs each request with its verdict" "$(cat "$TMP/proxy/requests.log" 2>/dev/null)"
+  ! grep -q 'token=secret' "$TMP/proxy/requests.log" && ok || bad "the proxy's log leaves out query strings"
+
+  # A site that never answers is given up on with a 504, never held open for the whole run (L110).
+  got="$(code_of -x "$PROXY" "$PLAIN/stall")"
+  [ "$got" = 504 ] && ok || bad "a stalled site is answered 504 once the upstream deadline passes (got $got)"
+  # A browser that goes away mid answer takes the proxy's upstream request with it: the site sees
+  # its reader leave within seconds, not after the whole answer.
+  code_of -x "$PROXY" --max-time 1 "$PLAIN/drip" >/dev/null
+  for _ in $(seq 1 100); do grep -q '^DROPPED /drip' "$TMP/plain.log.dropped" 2>/dev/null && break; sleep 0.1; done
+  grep -q '^DROPPED /drip' "$TMP/plain.log.dropped" 2>/dev/null && ok || bad "a request the browser abandons is dropped upstream too"
+  # A site that drops its answer part way ends the browser's request at once: curl then reports a
+  # short transfer (18), never its own deadline (28).
+  curl -s --noproxy '' -o /dev/null --max-time 5 -x "$PROXY" "$PLAIN/cut"; rc=$?
+  [ "$rc" -ne 0 ] && [ "$rc" -ne 28 ] && ok || bad "an answer the site cuts off ends the browser's request too (curl rc $rc)"
+  # A tunnel opened and then sent nothing is closed after the deadline, never held open.
+  out="$(python3 - "${PROXY#http://}" "${PLAIN#http://}" <<'PY'
+import socket, sys
+host, port = sys.argv[1].split(':')
+s = socket.create_connection((host, int(port)), timeout=5)
+s.sendall(('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (sys.argv[2], sys.argv[2])).encode())
+got = b''
+while b'\r\n\r\n' not in got:
+    got += s.recv(1024)
+try:
+    print('closed' if s.recv(1024) == b'' else 'data')
+except socket.timeout:
+    print('still open')
+PY
+)"
+  [ "$out" = closed ] && ok || bad "an idle tunnel is closed after the deadline" "$out"
+  # Clients that reset the connection as they are refused (a WebSocket upgrade, a malformed
+  # CONNECT, and an upgrade inside a tunnel) never take the proxy down: it still answers after.
+  python3 - "${PROXY#http://}" "${PLAIN#http://}" <<'PY'
+import socket, struct, sys
+host, port = sys.argv[1].split(':')
+target = sys.argv[2]
+upgrade = 'GET http://%s/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n' % (target, target)
+bad_connect = 'CONNECT nonsense HTTP/1.1\r\nHost: nonsense\r\n\r\n'
+tunnel = 'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target)
+inner = 'GET /socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n' % target
+def reset(first, then=None):
+    s = socket.create_connection((host, int(port)), timeout=5)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+    s.sendall(first.encode())
+    if then:
+        got = b''
+        while b'\r\n\r\n' not in got:
+            got += s.recv(1024)
+        s.sendall(then.encode())
+    s.close()
+for _ in range(30):
+    reset(upgrade)
+    reset(bad_connect)
+    reset(tunnel, inner)
+PY
+  out="$(curl -s --noproxy '*' --max-time 5 "$PROXY/__bug-bash-proxy__/health")"
+  grep -q '"proxy":"bug-bash-read-only"' <<< "$out" && kill -0 "$PROXY_PID" 2>/dev/null && ok \
+    || bad "clients resetting refused connections never take the proxy down" "$(tail -5 "$TMP/proxy.out")"
+  # The run's certificates outlive any run, so https does not stop working part way through one.
+  openssl x509 -checkend $((7 * 86400)) -noout -in "$PROXY_CA" >/dev/null && ok || bad "the proxy's certificate authority is good for at least a week"
+fi
 
 # ---------------------------------------------------------------- target-guard.sh
 # Three fixture sites under one server: a production build, a Next dev server, a Vite dev server.
@@ -107,9 +322,14 @@ else
   out="$(bash "$GUARD" "$BASE/loop/" 2>&1)"; rc=$?
   expect "a redirect chain past the hop limit is refused" 6 "redirects more than" "$rc" "$out"
 
-  # Read only asked for against a local URL stays read only (lessons review of #798).
-  out="$(bash "$GUARD" --read-only "$BASE/prod/" 2>&1)"; rc=$?
-  expect "read only against a local build is still read only" 0 "^READ-ONLY " "$rc" "$out"
+  # Read only asked for against a local URL stays read only (lessons review of #798), and still
+  # needs the read only proxy (#813).
+  out="$(bash "$GUARD" --read-only --proxy "$PROXY" "$BASE/prod/" 2>&1)"; rc=$?
+  expect "read only against a local build is still read only" 0 "^READ-ONLY .* via $PROXY" "$rc" "$out"
+  # The guard's header documents the line it prints, so a reader parsing by it is not misled (L32).
+  grep -q '`READ-ONLY <url> via <proxy>`' "$GUARD" && ok || bad "target-guard.sh's header names the READ-ONLY line it prints"
+  out="$(BUG_BASH_PROXY= bash "$GUARD" --read-only "$BASE/prod/" 2>&1)"; rc=$?
+  expect "read only against a local build with no proxy is refused" 7 "no read only proxy" "$rc" "$out"
 
 
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
@@ -125,8 +345,36 @@ out="$(PATH="$TMP/bin:$PATH" bash "$GUARD" "https://app.example.com/" 2>&1)"; rc
 expect "a deployed site is refused without read only" 3 "real users" "$rc" "$out"
 [ ! -e "$TMP/curl-calls" ] && ok || bad "the refusal of a deployed site makes no request to it"
 
-out="$(PATH="$TMP/bin:$PATH" bash "$GUARD" --read-only "https://app.example.com/" 2>&1)"; rc=$?
-expect "a deployed site with read only is allowed in read only mode" 0 "^READ-ONLY https://app.example.com/" "$rc" "$out"
+# A read only run starts only behind a working read only proxy (#813), refused before any request
+# is made to the target: with none named, with nothing answering where it is named, with something
+# else answering there, and with something that answers as the proxy but lets a write through.
+out="$(BUG_BASH_PROXY= PATH="$TMP/bin:$PATH" bash "$GUARD" --read-only "https://app.example.com/" 2>&1)"; rc=$?
+expect "a read only run with no proxy is refused" 7 "no read only proxy" "$rc" "$out"
+[ ! -e "$TMP/curl-calls" ] && ok || bad "a read only run refused for no proxy makes no request"
+dead_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+out="$(bash "$GUARD" --read-only --proxy "http://127.0.0.1:$dead_port" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a read only run whose proxy is not answering is refused" 7 "answers as the bug bash read only proxy" "$rc" "$out"
+out="$(bash "$GUARD" --read-only --proxy "$PLAIN" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a read only run whose proxy is some other server is refused" 7 "answers as the bug bash read only proxy" "$rc" "$out"
+out="$(bash "$GUARD" --read-only --proxy "$IMPOSTOR" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a read only run whose proxy lets a write through is refused" 7 "did not refuse a write" "$rc" "$out"
+out="$(bash "$GUARD" --read-only --proxy "http://proxy.example.com:8080" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a read only proxy that is not on this machine is refused" 7 "not a local http proxy" "$rc" "$out"
+# The guard and the launcher judge a proxy address by one rule (L263): a name the launcher would
+# refuse, though it is on this machine, is refused by the guard too, even with the proxy behind it.
+out="$(bash "$GUARD" --read-only --proxy "http://foo.localhost:${PROXY##*:}" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a proxy address the launcher would refuse is refused by the guard" 7 "not a local http proxy" "$rc" "$out"
+# The guard holds no copy of the proxy's health path or answer: it asks the launcher (L370).
+! grep -Eq '__bug-bash-proxy__|bug-bash-read-only' "$GUARD" && ok || bad "target-guard.sh holds no copy of the proxy's health path or answer"
+: > "$TMP/proxy/requests.log"
+out="$(bash "$GUARD" --read-only --proxy "$PROXY" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a deployed site with read only is allowed behind the proxy" 0 "^READ-ONLY https://app.example.com/ via $PROXY" "$rc" "$out"
+out="$(BUG_BASH_PROXY="$PROXY" bash "$GUARD" --read-only "https://app.example.com/" 2>&1)"; rc=$?
+expect "the proxy can be named by BUG_BASH_PROXY" 0 "^READ-ONLY https://app.example.com/ via $PROXY" "$rc" "$out"
+# The guard's own check went only to the probe name, which resolves nowhere, and was refused there.
+probe_log="$(cat "$TMP/proxy/requests.log" 2>/dev/null)"
+grep -q '^REFUSED POST http://bug-bash-probe.invalid/write$' <<< "$probe_log" && ! grep -q 'example.com' <<< "$probe_log" && ok \
+  || bad "the guard's write probe goes only to a name that resolves nowhere, and is refused" "$probe_log"
 
 # Hosts that only look local are not local.
 out="$(PATH="$TMP/bin:$PATH" bash "$GUARD" "http://localhost.example.com/" 2>&1)"; rc=$?
@@ -240,11 +488,12 @@ expect "a read only run is labelled read only" 0 "read only" "$rc" "$out"
 # launcher every explorer uses aborts any request that is not a read. Driven with a stand in
 # Playwright, so no browser starts here; what is asserted is what the launcher wires.
 LAUNCHER="$DIR/explorer-browser.js"
-out="$(node -e '
+out="$(BUG_BASH_PROXY="$PROXY" node -e '
 const { launch, isRead } = require(process.argv[1])
 const routes = []
 const opts = []
-const fake = { launch: async () => ({ newContext: async o => { opts.push(o || {}); return { route: async (pat, fn) => routes.push({ pat, fn }) } } }) }
+const launches = []
+const fake = { launch: async o => { launches.push(o || {}); return { newContext: async o => { opts.push(o || {}); return { route: async (pat, fn) => routes.push({ pat, fn }) } } } } }
 const req = m => ({ request: () => ({ method: () => m }), continue: () => "continued", abort: () => "aborted" })
 ;(async () => {
   const ro = await launch({ chromium: fake, readOnly: true })
@@ -252,7 +501,7 @@ const req = m => ({ request: () => ({ method: () => m }), continue: () => "conti
   const verdicts = r ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].map(m => m + "=" + r.fn(req(m))) : []
   routes.length = 0
   await launch({ chromium: fake, readOnly: false })
-  console.log(JSON.stringify({ noBrowser: !("browser" in ro), canClose: typeof ro.close === "function", hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead), sw: opts.map(o => o.serviceWorkers || "allow") }))
+  console.log(JSON.stringify({ noBrowser: !("browser" in ro), canClose: typeof ro.close === "function", hasContext: !!ro.context, routed: !!r, verdicts, localRoutes: routes.length, isRead: ["GET","post"].map(isRead), sw: opts.map(o => o.serviceWorkers || "allow"), certs: opts.map(o => !!o.ignoreHTTPSErrors), proxies: launches.map(o => (o.proxy && o.proxy.server) || "none"), bypass: launches.map(o => (o.args || []).join(" ")) }))
 })().catch(e => { console.log("ERR " + e.message); process.exit(1) })
 ' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && ok || bad "the explorer launcher loads and launches with a stand in browser" "$out"
@@ -263,12 +512,17 @@ grep -q '"localRoutes":0' <<< "$out" && ok || bad "a local run is not restricted
 # (lessons review of #798).
 grep -q '"sw":\["block","allow"\]' <<< "$out" && ok || bad "a read only context blocks service workers, a local one does not" "$out"
 grep -q '"hasContext":true' <<< "$out" && ok || bad "the launcher hands back the context explorers drive" "$out"
+# A read only browser goes through the read only proxy, loopback hosts included, and accepts the
+# certificates the proxy makes to see inside https; a local run does neither (#813).
+grep -qF "\"proxies\":[\"$PROXY\",\"none\"]" <<< "$out" && ok || bad "a read only browser is launched through the read only proxy, a local one is not" "$out"
+grep -qF '"bypass":["--proxy-bypass-list=<-loopback>",""]' <<< "$out" && ok || bad "a read only browser sends this machine's hosts through the proxy too" "$out"
+grep -q '"certs":\[true,false\]' <<< "$out" && ok || bad "only a read only context accepts the proxy's certificates" "$out"
 # No browser handle comes back, so no explorer can make a second context without the read only route.
 grep -q '"noBrowser":true,"canClose":true' <<< "$out" && ok || bad "the launcher hands back a close, never the browser" "$out"
 out="$(node -e 'require(process.argv[1]).launch({ readOnly: true }).then(() => console.log("launched"), e => { console.log(e.message); process.exit(3) })' "$LAUNCHER" 2>&1)"; rc=$?
 [ "$rc" -eq 3 ] && grep -qi 'playwright' <<< "$out" && ok || bad "with no Playwright handed in, the launcher refuses by name (rc $rc)" "$out"
 # A setup that fails after the browser started closes it rather than leaking it (lessons review).
-out="$(node -e '
+out="$(BUG_BASH_PROXY="$PROXY" node -e '
 const { launch } = require(process.argv[1])
 let closed = 0
 const fake = { launch: async () => ({ close: async () => { closed++ }, newContext: async () => ({ route: async () => { throw new Error("route failed") } }) }) }
@@ -276,6 +530,66 @@ launch({ chromium: fake, readOnly: true }).then(() => console.log("no throw"), e
 ' "$LAUNCHER" 2>&1)"
 grep -q 'threw route failed closed=1' <<< "$out" && ok || bad "a failed read only setup closes the browser it started and rethrows" "$out"
 grep -q 'explorer-browser.js' "$DIR/SKILL.md" && ok || bad "SKILL.md has every explorer launch through explorer-browser.js"
+# A read only browser is never launched without the proxy answering as itself (#813): with none
+# named, with nothing answering, and with some other server answering. The stand in counts every
+# launch, so a refusal is seen to come before the browser starts.
+proxied_launch() { # $1 = proxy value ("" for none)
+  BUG_BASH_PROXY="$1" node -e '
+const { launch } = require(process.argv[1])
+let launched = 0
+const fake = { launch: async () => { launched++; return { close: async () => {}, newContext: async () => ({ route: async () => {} }) } } }
+launch({ chromium: fake, readOnly: true }).then(() => console.log("launched=" + launched), e => console.log("threw launched=" + launched + " " + e.message))
+' "$LAUNCHER" 2>&1
+}
+out="$(proxied_launch "")"
+grep -q '^threw launched=0 .*read only proxy' <<< "$out" && ok || bad "a read only browser with no proxy named is refused before it launches" "$out"
+out="$(proxied_launch "http://127.0.0.1:$dead_port")"
+grep -q '^threw launched=0 .*not answering' <<< "$out" && ok || bad "a read only browser whose proxy is not answering is refused before it launches" "$out"
+out="$(proxied_launch "$PLAIN")"
+grep -q '^threw launched=0 .*not as the bug bash read only proxy' <<< "$out" && ok || bad "a read only browser whose proxy is some other server is refused before it launches" "$out"
+out="$(proxied_launch "$PROXY")"
+grep -q '^launched=1$' <<< "$out" && ok || bad "a read only browser whose proxy answers as itself launches" "$out"
+out="$(node -e 'const m = require(process.argv[1]); console.log(typeof m.MARK, typeof m.HEALTH)' "$LAUNCHER" 2>&1)"
+[ "$out" = "string string" ] && ! grep -Eq "^const (MARK|HEALTH) =" "$PROXY_JS" && ok \
+  || bad "the proxy takes its health path and answer from explorer-browser.js, never a copy of its own" "$out"
+grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the read only proxy for a read only run"
+
+# ---------------------------------------------------------------- the proxy's address does not outlive it
+# A second proxy started on a directory a live one is using refuses, and leaves the live one's
+# proxy.json alone.
+if [ -n "${PROXY_PID:-}" ]; then
+  # Started in the background and waited on with a deadline, so a proxy that wrongly starts is
+  # stopped and reported rather than holding the suite.
+  node "$PROXY_JS" --state "$TMP/proxy" >"$TMP/second.out" 2>&1 & second=$!
+  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
+  out="$(cat "$TMP/second.out")"
+  [ "$rc" = 3 ] && grep -q "already running" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
+    || bad "a second proxy on a live proxy's directory refuses and leaves its proxy.json (rc $rc)" "$out"
+fi
+# A left over proxy.json whose pid now belongs to some other live process (here, this suite's own
+# shell) names no proxy: nothing answers at its address, so it is stale, and a new proxy starts.
+mkdir -p "$TMP/proxy3"
+printf '{"proxy":"http://127.0.0.1:%s","pid":%s}\n' "$dead_port" "$$" > "$TMP/proxy3/proxy.json"
+node "$PROXY_JS" --state "$TMP/proxy3" >"$TMP/third.out" 2>&1 & third=$!
+BG_PIDS="$BG_PIDS $third"
+for _ in $(seq 1 200); do grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null && break; kill -0 "$third" 2>/dev/null || break; sleep 0.05; done
+grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null && ok \
+  || bad "a proxy.json whose pid was reused by something that is not a proxy does not stop a new proxy" "$(cat "$TMP/third.out")"
+kill "$third" 2>/dev/null; wait "$third" 2>/dev/null
+# A proxy.json left behind names a dead process as the proxy, so the proxy removes it as it stops,
+# here on a hangup, the signal a closed terminal sends.
+if [ -n "${PROXY_PID:-}" ]; then
+  kill -HUP "$PROXY_PID" 2>/dev/null
+  for _ in $(seq 1 200); do kill -0 "$PROXY_PID" 2>/dev/null || break; sleep 0.05; done
+  [ ! -e "$TMP/proxy/proxy.json" ] && ok || bad "a stopped proxy removes its proxy.json" "$(cat "$TMP/proxy/proxy.json" 2>/dev/null)"
+fi
+# A proxy that cannot start (here, no openssl to make its certificates) refuses by name, and leaves
+# no stale proxy.json from an earlier run standing in its place.
+mkdir -p "$TMP/proxy2" "$TMP/no-openssl"
+printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy2/proxy.json"
+out="$(PATH="$TMP/no-openssl" "$(command -v node)" "$PROXY_JS" --state "$TMP/proxy2" 2>&1)"; rc=$?
+[ "$rc" -eq 1 ] && grep -q 'will not start' <<< "$out" && [ ! -e "$TMP/proxy2/proxy.json" ] && ok   || bad "a proxy that cannot start refuses by name and removes a stale proxy.json (rc $rc)" "$out"
 
 # ---------------------------------------------------------------- SKILL.md wires both helpers
 SKILL="$DIR/SKILL.md"
