@@ -120,6 +120,10 @@ if [ -z "$wcmd" ]; then
   state="no-watcher"
 elif is_this_checkout; then
   state="editing-the-source $root"
+elif sc_is_own_worktree "$root"; then
+  # An agent's linked worktree on its own branch: nothing mirrors into it, the same answer the
+  # payload write gate gives from the same shared question (claude-config#800, L370).
+  state="own-worktree $root"
 else
   clone="$(watcher_clone_name)"
   if hold_live; then state="held $root $clone"; else state="warn $root $clone"; fi

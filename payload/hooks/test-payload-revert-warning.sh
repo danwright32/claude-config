@@ -199,6 +199,33 @@ out12="$(run s1 "$FIX/dev")"
   && check "#279 and the fixture still warns once the reason for silence is removed" ok \
   || check "#279 and the fixture still warns once the reason for silence is removed" "it stayed quiet"
 
+# An agent's own linked worktree on its own branch is not at risk, and this agrees with the payload
+# write gate about that (claude-config#800, L370): quiet there, and still a warning in a worktree on
+# the default branch, from the same shared question.
+G="$FIX/gitfix"
+mkdir -p "$G"
+git init -q "$G/primary" 2>/dev/null
+GG(){ git -C "$1" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "${@:2}"; }
+GG "$G/primary" symbolic-ref HEAD refs/heads/main
+mkdir -p "$G/primary/payload"; : > "$G/primary/claude-sync"; printf 'x\n' > "$G/primary/payload/a.md"
+GG "$G/primary" add claude-sync payload/a.md
+GG "$G/primary" commit -q -m seed
+GG "$G/primary" checkout -q -b other
+GG "$G/primary" worktree add -q -b feat "$G/wt" 2>/dev/null
+GG "$G/primary" worktree add -q "$G/wtmain" main 2>/dev/null
+fresh
+out_wt="$(run s1 "$G/wt")"
+[ -z "$out_wt" ] && check "#800 an agent's linked worktree on its own branch is not warned about" ok \
+  || check "#800 an agent's linked worktree on its own branch is not warned about" "out=$out_wt"
+fresh
+out_main="$(run s1 "$G/wtmain")"
+[ -n "$out_main" ] && check "#800 a linked worktree on the default branch still is" ok \
+  || check "#800 a linked worktree on the default branch still is" "it stayed quiet"
+fresh
+out_primary="$(run s1 "$G/primary")"
+[ -n "$out_primary" ] && check "#800 and so is the primary checkout" ok \
+  || check "#800 and so is the primary checkout" "it stayed quiet"
+
 # A subdirectory of the checkout is the same checkout: a session is rarely sitting at the root.
 fresh
 out13="$(run s1 "$FIX/dev/payload/hooks")"
