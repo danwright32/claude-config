@@ -73,12 +73,14 @@ export const triggersIn = (text: string): Trigger[] =>
     .filter((t, i, all) => all.findIndex(o => JSON.stringify(o) === JSON.stringify(t)) === i)
 
 // Saying a mode should end, bound to its name: "<name> (mode) is done/over/off", or "no more/out
-// of/done with/stop <name>", or the name called a mode. An end word elsewhere in the sentence ("the
-// project is winding down, we're done with the sprint") is not (second lessons review of #820).
+// of/done with/stop <name>" ending its clause as the triggers require (so "stop winding down the
+// cluster" is prose, third lessons review of #820), or the name called a mode. An end word
+// elsewhere in the sentence ("the project is winding down, we're done with the sprint") is not
+// (second lessons review of #820).
 const askedOff = (name: string) =>
   new RegExp(
     `\\b${name}(?:\\s+mode)?\\s+(?:is\\s+|are\\s+|${APOS}s\\s+)?(?:now\\s+)?(?:done|over|off|finished|ended)\\b` +
-      `|\\b(?:no more|out of|done with|enough|end|stop|exit|quit|cancel|finish)\\s+(?:the\\s+)?${name}\\b` +
+      `|\\b(?:no more|out of|done with|enough|end|stop|exit|quit|cancel|finish)\\s+(?:the\\s+)?${name}${NAME_END}` +
       `|\\b${name}\\s+mode\\b`,
     'i',
   )
