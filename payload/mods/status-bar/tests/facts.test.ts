@@ -43,7 +43,7 @@ describe('unpushedOf', () => {
   })
 })
 
-const texts = (parts: ReturnType<typeof lookParts>) => parts.map(p => ('text' in p ? p.text : `[${p.label}]`)).join('')
+const texts = (parts: ReturnType<typeof lookParts>) => parts.map(p => p.text).join('')
 const now = 100 * HOUR
 const fresh = (count: number) => ({ count, readAt: now, isStale: false })
 

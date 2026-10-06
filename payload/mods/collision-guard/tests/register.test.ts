@@ -53,6 +53,14 @@ const deps: { name: string; register: Register } = {
             }
             throw new Error(`could not tell whether ${path} is in a checkout`)
           },
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
+          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
         },
         sessions: {
           list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),

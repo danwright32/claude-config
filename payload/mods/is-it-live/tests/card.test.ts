@@ -82,7 +82,7 @@ test('the boxed card: the state word leads the title in its colour, then what ch
   const failed = cardOf({ ...base, deploy: 'failed', checked: 'The deploy job failed at the build step.', state: 'unconfirmed', title: 'x', url: 'u' })
   expect(failed.title[0]).toEqual({ text: 'Could not confirm live:', color: 'warning', bold: true })
   expect(failed.lines[0]).toEqual([{ text: 'The deploy job failed at the build step.' }])
-  expect(cardOf({ ...base, deploy: 'none', state: 'no-deploy', title: 'x', url: 'u' }).title[0].text).toBe('Merged, no deploy step recorded:')
+  expect(cardOf({ ...base, deploy: 'none', state: 'no-deploy', title: 'x', url: 'u' }).title[0]?.text).toBe('Merged, no deploy step recorded:')
 })
 
 test('the text the model reads says what the boxed card says, line for line', () => {

@@ -220,7 +220,8 @@ test('the dialog Claude opens shows the mod\'s own answers, and For good saves t
   const answered = await askDan($, w, refused, 'For good', '~/.claude/projects/p/memory/MEMORY.md', 'skip the screenshots')
   // Dan saw Claude's plain words, the file, and the three answers with what each does.
   expect(w.asked.length).toBe(1)
-  const q = w.asked[0].questions[0]
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
   expect(q.question).toBe('Save to ~/.claude/projects/p/memory/MEMORY.md for good: skip the screenshots?')
   // Claude Code's dialog takes a header of at most 12 characters (lessons review of #783).
   expect(q.header).toBe('Memory rule')
@@ -274,6 +275,9 @@ test("a subagent's write to lasting memory is refused and never asked about: not
   expect(w.ran.map(x => x.input.file_path)).toEqual(['README.md'])
 })
 
+// The test runner's own timers, which a mod's declarations (es2023, with no DOM and no Node) leave out.
+declare function setTimeout(run: () => void, ms: number): number
+declare function clearTimeout(id: number | undefined): void
 // A deadline on a wait for a condition, so one never met fails by name rather than hanging.
 const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -794,7 +798,7 @@ test('a question that is not about a save is left to Claude Code untouched', wit
   const q = { question: 'Which first?', header: 'Next', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }
   const r = await call($, { tool: 'AskUserQuestion', questions: [q], metadata: { source: 'next-issue' } })
   expect(r.deny).toBeUndefined()
-  expect(w.asked[0].questions[0]).toEqual(q)
+  expect(w.asked[0]?.questions[0]).toEqual(q)
   expect(contextOf(r)).toBe('')
 })
 

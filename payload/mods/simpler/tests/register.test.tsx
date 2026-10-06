@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import type { On, PromptOrigin, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { LONG_WORDS, REPORT_EVERY_MS, judge, requestText } from '../hooks/simpler.ts'
@@ -81,15 +82,15 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
 }
 const CLAIM = '/Users/x/.claude/state/simpler/weekly.lock'
 
-const answer = ($: Parameters<Parameters<typeof test>[1]>[0], text: string, extra: Record<string, unknown> = {}) =>
+const answer = ($: Engine, text: string, extra: Record<string, unknown> = {}) =>
   $.turn.complete({ answer: text, durationMs: 1, isAborted: false, turnId: 't', reason: 'answer', ...extra } as never)
-const start = ($: Parameters<Parameters<typeof test>[1]>[0], isInteractive = true) =>
+const start = ($: Engine, isInteractive = true) =>
   $.session.start({ cwd: '/Users/x/Documents/Bidspoke', surface: isInteractive ? 'terminal' : null, isInteractive })
-const mountReply = ($: Parameters<Parameters<typeof test>[1]>[0], surface: (typeof SURFACES)[number], text = FIRST_BLOCK, isFirstOfReply = true) =>
+const mountReply = ($: Engine, surface: (typeof SURFACES)[number], text = FIRST_BLOCK, isFirstOfReply = true) =>
   $.ui.mount({ plugin: 'simpler', surface, component: 'AssistantMessage', props: { text, isFirstOfReply } })
-const type = ($: Parameters<Parameters<typeof test>[1]>[0], inputText: string) =>
+const type = ($: Engine, inputText: string) =>
   ($.prompt as unknown as { edit: (e: unknown) => Promise<unknown> }).edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText })
-const submitAs = ($: Parameters<Parameters<typeof test>[1]>[0], origin: PromptOrigin) =>
+const submitAs = ($: Engine, origin: PromptOrigin) =>
   ($.prompt as unknown as { submit: (e: unknown) => Promise<unknown> }).submit({ text: 'hi', wait: false, origin })
 
 // The drawing's leaves in document order: each Text's words and each Button's label.

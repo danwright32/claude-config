@@ -121,15 +121,17 @@ export const settable = async (name: string, text: string, isSet: IsSet, seen: S
     if (value.startsWith('$(mktemp')) continue
     const root = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/.exec(value)
     if (!root) return true
-    if (await settable(root[1] ?? root[2], text, isSet, seen)) return true
+    // One of the two spellings always matched; a match with neither could hold anything.
+    const named = root[1] ?? root[2]
+    if (named === undefined || (await settable(named, text, isSet, seen))) return true
   }
   return false
 }
 
 // A word through a variable is judged by whether that variable could hold a path; any other word is.
 const throughSettable = async (word: string, text: string, isSet: IsSet): Promise<boolean> => {
-  const root = ROOTED.exec(word)
-  return !root || (await settable(root[1], text, isSet))
+  const named = ROOTED.exec(word)?.[1]
+  return named === undefined || (await settable(named, text, isSet))
 }
 
 // A lasting memory file named in a script's or a patch's text: a path ending in one of the names,
