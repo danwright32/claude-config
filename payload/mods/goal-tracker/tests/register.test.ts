@@ -528,6 +528,40 @@ test("this conversation's question asked after a subagent's identical one is sti
   ])
 })
 
+// Lessons review of PR 816's fourth head: a request raised again for a dialog already announced (a
+// re-prompt) is a repeat, never a second question.
+test('a permission request raised twice for one question still sends one notification (#814)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Ship it?']])
+})
+
+// A /clear while this conversation's question dialog is open leaves that question this
+// conversation's: its permission request is still no second notification.
+test("a /clear while this conversation's question is open never makes its request a second notification (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const call = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  // The question has been announced by the time the /clear lands and its request is raised.
+  await clock.advance(OPEN_MS - 1)
+  expect(w.notified).toHaveLength(1)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await call
+  await clock.advance(2 * MIN)
+  expect(w.notified.filter(n => n[1] === 'Ovation is waiting on you')).toHaveLength(1)
+})
+
 // #706: the notification is for a question Dan sees. One refused at once (by picker manners
 // beneath the tracker, or anything else beneath it) never reached him, so it sends none.
 test('a question refused at once sends no notification', withDeps, async ($, on) => {
