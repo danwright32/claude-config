@@ -84,15 +84,15 @@ refuses "a destination inside the config home is refused, since the tool refuses
 ln -s "$FAKEHOME" "$TMP/linkhome"
 refuses "the config home reached through a symlink is still refused" "config" "$SRC" "$TMP/linkhome/skills"
 
-# A config home that does not exist yet is still the config home: the refusal compares against its
-# spelling rather than standing down (lessons review of #798).
+# A config home that does not exist yet: a destination inside it cannot exist either, so it is
+# refused as no folder (rc 3) before the config home comparison is reached. The comparison's
+# fallback to the spelling is a backstop for that order changing; this pins the order.
 NOHOME="$TMP/nohome/.claude"
 mkdir -p "$TMP/nohome-dest"
 o="$(CLAUDE_HOME="$NOHOME" bash "$HELPER" "$SRC" "$NOHOME" 2>&1)"; r=$?
-[ "$r" -ne 0 ] && ! grep -q '^/' <<< "$o" && ok \
+[ "$r" -eq 3 ] && grep -qi 'not a directory' <<< "$o" && ! grep -q '^/' <<< "$o" && ok \
   || bad "a destination inside a config home that does not exist is still refused (rc $r)" "$o"
-# The refusal compares against the spelling too: a real folder at a config home's path, reached
-# while CLAUDE_HOME names it but before cd can resolve it, is refused by name.
+# A config home named with a trailing slash is the same folder, refused as the config home.
 mkdir -p "$NOHOME"
 o="$(CLAUDE_HOME="$NOHOME/" bash "$HELPER" "$SRC" "$NOHOME" 2>&1)"; r=$?
 [ "$r" -eq 4 ] && grep -qi 'config' <<< "$o" && ok \

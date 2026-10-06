@@ -417,7 +417,14 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
     const tree = foundRoots.includes(word)
     if (!word || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
-    if (seen.has(key)) return
+    // A path written twice is kept once, a tree on either keeping the tree, as a change does.
+    if (seen.has(key)) {
+      if (tree) {
+        const had = files.find(f => (path ? f.path === path : !f.path && f.word === (asWritten.get(word) ?? word)))
+        if (had) had.tree = true
+      }
+      return
+    }
     seen.add(key)
     const sources = extra?.sources
     files.push({

@@ -46,6 +46,11 @@ describe("writes: a shell's own output redirect (#760)", () => {
     expect(paths(`bash <<'EOF' > out.txt\nls\nEOF`)).toEqual([`${CWD}/out.txt`])
     expect(paths(`bash -c 'echo a > a.txt' 2> err.log`)).toEqual([`${CWD}/a.txt`, `${CWD}/err.log`])
     expect(paths(`bash -c 'ls' 2>&1`)).toEqual([])
+    // Attached to its target as well as spaced from it, since the reader makes the operator a word
+    // of its own however it is written (#654).
+    expect(paths(`bash -c 'make' >build.log`)).toEqual([`${CWD}/build.log`])
+    expect(paths(`sh -c 'ls' 2>err.log`)).toEqual([`${CWD}/err.log`])
+    expect(paths(`bash -c 'ls' &>all.log`)).toEqual([`${CWD}/all.log`])
   })
 })
 
@@ -297,6 +302,8 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(read('find src -exec sed -i s/a/b/ {} \\;').files).toEqual([{ word: 'src', path: `${CWD}/src`, edits: true, tree: true }])
     expect(read('find src -exec cp x.txt {} \\;').files).toEqual([{ word: 'src', path: `${CWD}/src`, sources: [`${CWD}/x.txt`], mayBeFolder: true, tree: true }])
     expect(read('find src -exec sed -i s/a/b/ notes.md \\;').files).toEqual([{ word: 'notes.md', path: `${CWD}/notes.md`, edits: true }])
+    // A path written plainly and then where {} stood keeps the tree, as a change does.
+    expect(read('echo x > src; find src -exec sed -i s/a/b/ {} \\;').files).toEqual([{ word: 'src', path: `${CWD}/src`, tree: true }])
   })
   test('a file edited in place is marked as edited, beside files written whole', () => {
     expect(read(`sed -i 's/a/b/' a.md; echo x > b.md`).files).toEqual([

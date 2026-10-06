@@ -194,12 +194,6 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
   return { program: { unreadable: stdin.unreadable } }
 }
 
-/**
- * The commands a `find -exec` (or `-execdir`, `-ok`, `-okdir`) runs, up to its `;` or `+`, once for
- * each folder find starts from (`.` when it names none), that folder standing for `{}`. The reader
- * reads each as a command of its own, so its runners are looked past and its program read (lessons
- * review of #714; #730: a wrapper in front of it hid the command).
- */
 /** The folders a find starts from, which its -exec's {} is written as: `.` when it names none. */
 export const findRoots = (words: readonly string[]): string[] => {
   if (base(words[0] ?? '') !== 'find') return []
@@ -208,6 +202,12 @@ export const findRoots = (words: readonly string[]): string[] => {
   const roots = firstExpr < 0 ? args : args.slice(0, firstExpr)
   return roots.length ? roots : ['.']
 }
+/**
+ * The commands a `find -exec` (or `-execdir`, `-ok`, `-okdir`) runs, up to its `;` or `+`, once for
+ * each folder find starts from (`.` when it names none), that folder standing for `{}`. The reader
+ * reads each as a command of its own, so its runners are looked past and its program read (lessons
+ * review of #714; #730: a wrapper in front of it hid the command).
+ */
 export const execsOf = (words: readonly string[]): string[][] => {
   if (base(words[0] ?? '') !== 'find') return []
   const args = words.slice(1)
