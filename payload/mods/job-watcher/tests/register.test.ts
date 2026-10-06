@@ -16,6 +16,18 @@ const deps: { name: string; register: Register } = {
         // guard refuses a token; mod-kit's own tests prove the real one asks the secret guard.
         modkit: {
           screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
+          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
+          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         },
         sessions: {
           list: async () => {

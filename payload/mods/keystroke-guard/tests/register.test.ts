@@ -37,6 +37,17 @@ const kit: { name: string; register: Register } = {
         modkit: {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
           commands: async ({ command }: { command: string }) => read(command),
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
+          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
         },
       }
     })

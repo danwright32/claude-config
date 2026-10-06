@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
@@ -207,7 +208,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   return { w, mem, opened, opens, closed, prompts, toasts, copies, tools, commands }
 }
 
-type Mounted = { press: (t: object) => Promise<unknown>; find: (q: object) => Promise<{ props: Record<string, unknown>; children: unknown[] } | undefined>; unmount: () => Promise<void> }
+type Mounted = Pick<KitMounted<'terminal'>, 'press' | 'find' | 'unmount'>
 type Engine = {
   session: { start: (e: never) => Promise<unknown> }
   tool: { call: (e: never) => Promise<unknown> }
