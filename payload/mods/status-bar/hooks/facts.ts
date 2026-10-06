@@ -1,8 +1,9 @@
 import type { StatusBarMode } from '../types/index.d.ts'
 
 // The status bar's judgments, pure so each is tested on its own (#610, docs/mods-design.md
-// "Status bar (#610)"). The wording follows the design rounds' renderings: "PR #636 checks
-// failing", "1 job running", "dev server kept 2h 14m", "2 unpushed commits", "ctx 74%".
+// "Status bar (#610)"). The wording follows the design rounds' renderings, the jobs' as #784
+// reworded them: "PR #636 checks failing", "1 job running", "dev server running 2h 14m",
+// "2 unpushed commits", "ctx 74%".
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -51,31 +52,67 @@ export type PrReading = { number: number; checks: Checks; readAt: number; isStal
  * a count that could not be read again is never a zero (L215), it is the last one, aged (#697).
  */
 export type UnpushedReading = { count: number; readAt: number; isStale: boolean }
-/** One background job as the job watcher (#611) reports it through $.jobs. */
-export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean }
+/**
+ * One background job as the job watcher (#611) reports it through $.jobs. state and owner came with
+ * #784; a watcher older than that sends neither, and its stuck flag stands for stalled.
+ */
+export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean; state?: 'running' | 'waiting' | 'stalled'; owner?: string | null; ownerId?: string | null }
+/** A background agent listed as running whose tool calls stopped twenty minutes ago or more (#759). */
+export type QuietAgent = { name: string; quietMs: number }
 
 export type LookPart = { text: string; color?: string; bold?: boolean; dim?: boolean }
 
 const AMBER = 'warning'
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
+// How a job's state reads (#784, Dan, 2026-10-05: "kept" and "stuck" were internal words, and
+// "stuck" was wrong for a run still queued). A stalled job says who acts on it, so Dan can see it is
+// not his to do: Claude for this conversation's own, the agent for an agent's.
+const stateOf = (j: Job): 'running' | 'waiting' | 'stalled' => j.state ?? (j.stuck ? 'stalled' : 'running')
+const STATE_WORDS = { running: 'running', waiting: 'waiting', stalled: 'not progressing' } as const
+const STATE_ORDER = ['stalled', 'waiting', 'running'] as const
+// One owner's jobs as phrases, the stalled first: in each state its unkept jobs counted, then its
+// kept ones each by the name Claude gave it, with its run time.
+const jobPhrases = (jobs: readonly Job[], actor: string): string[] => {
+  const out: string[] = []
+  for (const s of STATE_ORDER) {
+    const who = s === 'stalled' ? `, left to ${actor}` : ''
+    const n = jobs.filter(j => !j.kept && stateOf(j) === s).length
+    if (n) out.push(`${plural(n, 'job', 'jobs')} ${STATE_WORDS[s]}${who}`)
+    for (const j of jobs.filter(j => j.kept && stateOf(j) === s)) out.push(`${j.label} ${STATE_WORDS[s]} ${span(j.runMs)}${who}`)
+  }
+  return out
+}
+
 /**
  * The amber needs-a-look line, most urgent first so a narrow window cuts off what can wait longest:
  * the scope modes in bold (no build or winding down, and away, can be on at once, each its own
- * bold item divided like the rest), then a failing or running PR, stuck jobs, running jobs, kept jobs, unpushed
- * commits. Empty when nothing needs a look and no mode is on, so the band does not show.
+ * bold item divided like the rest), then a failing or running PR, background agents gone quiet,
+ * this conversation's jobs (not progressing, then waiting, then running), each background agent's
+ * jobs under its task's name, and unpushed commits. Empty when nothing needs a look and no mode is
+ * on, so the band does not show.
  */
-export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
+export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; agents?: readonly QuietAgent[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
   const items: string[] = []
   // A reading whose refresh since failed is kept with its age, never blanked (L682).
   const age = (r: { readAt: number; isStale: boolean }) => (r.isStale ? `, as of ${span(f.now - r.readAt)} ago` : '')
   if (f.pr && (f.pr.checks === 'failing' || f.pr.checks === 'running')) items.push(`PR #${f.pr.number} checks ${f.pr.checks}${age(f.pr)}`)
-  // A job the watcher measured as stuck is marked so, ahead of the ones running fine (#706).
-  const stuck = f.jobs.filter(j => !j.kept && j.stuck).length
-  if (stuck) items.push(`${plural(stuck, 'job', 'jobs')} stuck`)
-  const running = f.jobs.filter(j => !j.kept && !j.stuck).length
-  if (running) items.push(`${plural(running, 'job', 'jobs')} running`)
-  for (const j of f.jobs.filter(j => j.kept)) items.push(`${j.label} kept ${span(j.runMs)}${j.stuck ? ', stuck' : ''}`)
+  // A background agent gone quiet comes first among the work in flight: it may be hung (#759).
+  for (const a of f.agents ?? []) items.push(`agent ${a.name} quiet ${span(a.quietMs)}, left to Claude`)
+  // This conversation's own jobs, a stalled one ahead of those running fine (#706), then each
+  // background agent's as one item under its task's name (#784).
+  items.push(...jobPhrases(f.jobs.filter(j => !j.owner), 'Claude'))
+  // Grouped by the agent's id, never its description: two agents given the same task stay apart,
+  // each then named with the start of its id (lessons review of PR 794).
+  const keyOf = (j: Job) => j.ownerId ?? j.owner ?? ''
+  const agentJobs = f.jobs.filter(j => !!j.owner)
+  const keys = [...new Set(agentJobs.map(keyOf))]
+  const nameOf = (k: string) => agentJobs.find(j => keyOf(j) === k)?.owner ?? ''
+  for (const k of keys) {
+    const name = nameOf(k)
+    const shared = keys.filter(o => nameOf(o) === name).length > 1
+    items.push(`agent ${name}${shared ? ` (${k.slice(0, 6)})` : ''}: ${jobPhrases(agentJobs.filter(j => keyOf(j) === k), 'the agent').join(', ')}`)
+  }
   if (f.unpushed && f.unpushed.count > 0) items.push(`${plural(f.unpushed.count, 'unpushed commit', 'unpushed commits')}${age(f.unpushed)}`)
   const parts: LookPart[] = []
   for (const m of f.modes) {

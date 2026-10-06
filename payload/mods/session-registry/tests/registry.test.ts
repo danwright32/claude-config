@@ -340,6 +340,73 @@ test('after a /clear, an edit queued before the switch lands on the old record, 
   expect(w.own('s2').edits).toEqual([])
 })
 
+// #751: session.end closes the record before anyone knows whether the id will change. When it does
+// not (a resume of this same session), the conversation goes on under that record, so the look
+// that settles it reopens the record; a read or a write during the /clear never does, since it can
+// see the old id before the switch.
+test('an end that keeps its id reopens the record once the announced start finds the id unchanged (#751)', withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await $.session.end({ reason: 'resume', sessionId: 's1' } as never)
+  expect(w.own('s1').closedAt).toBe(100 * MIN)
+  await ($ as unknown as Classic).classic.SessionStart({ source: 'resume' } as never)
+  expect(w.own('s1').closedAt).toBe(null)
+  const l = JSON.parse(await call($, 'list')) as { open: { sessionId: string }[] }
+  expect(l.open.map(s => s.sessionId)).toEqual(['s1'])
+})
+
+test('an end that keeps its id is reopened by the beat too, when no start is announced (#751)', withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  await w.clock.advance(MIN + 1)
+  expect(w.own('s1').closedAt).toBe(null)
+})
+
+test('a read or a write during the /clear never reopens the record, though it sees the old id (#751)', withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  await call($, 'list')
+  await call($, 'edit /repo/a.ts')
+  expect(w.own('s1').closedAt).toBe(100 * MIN)
+})
+
+test('an end that is not a /clear or a resume is never reopened by the beat (#751)', withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await $.session.end({ reason: 'other', sessionId: 's1' } as never)
+  await w.clock.advance(MIN + 1)
+  expect(w.own('s1').closedAt).toBe(100 * MIN)
+})
+
+test('a record reopened before the id switched is closed again when the new conversation gets its own (#751)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  // The announcement arrives before the switch: it sees the old id and reopens the record.
+  await ($ as unknown as Classic).classic.SessionStart({ source: 'clear' } as never)
+  expect(w.own('s1').closedAt).toBe(null)
+  id = 's2'
+  await w.clock.advance(MIN + 1)
+  expect(w.own('s1').closedAt).toBe(101 * MIN)
+  expect(w.own('s2')).toMatchObject({ sessionId: 's2', closedAt: null })
+})
+
+test('the announced start says in the debug log which id it saw against the one session.end closed (#751)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  id = 's2'
+  await ($ as unknown as Classic).classic.SessionStart({ source: 'clear' } as never)
+  expect(w.logs).toContain('session-registry: the announced start after a clear saw session id s2; session.end had closed s1, so the id had already switched.')
+  await $.session.end({ reason: 'resume', sessionId: 's2' } as never)
+  await ($ as unknown as Classic).classic.SessionStart({ source: 'resume' } as never)
+  expect(w.logs).toContain('session-registry: the announced start after a resume saw session id s2; session.end had closed s2, so the id had not changed.')
+})
+
 // The transcript path never reaches a module from the start hook (live check of #605, 2026-10-04:
 // every record on this Mac had none), so the registry works it out where it is read, from Claude
 // Code's own layout, and hands it on only when that file is really there.

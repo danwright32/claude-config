@@ -56,7 +56,11 @@ const deps: { name: string; register: Register } = {
         },
         sessions: {
           list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),
-          noteEdit: async ({ path }: { path: string }) => built.ui.log('EDIT ' + path),
+          // A path naming 'unwritable' is one whose note the registry cannot write (#751).
+          noteEdit: async ({ path }: { path: string }) => {
+            if (path.includes('unwritable')) throw new Error("this session's record could not be written")
+            await built.ui.log('EDIT ' + path)
+          },
           setExtra: async () => undefined,
         },
       }
@@ -82,6 +86,12 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 // What mod-kit's readers give for each request these tests make (commands, writes and git), each
 // measured from the reader itself (#712).
 const KIT = new Map<string, unknown>([
+  // #751: one command writing a file whose note fails beside one whose note lands, measured from
+  // mod-kit's readers on 2026-10-05.
+  ["commands {\"command\":\"echo x > unwritable.txt; echo y > fine.txt\"}", [["echo","x",">","unwritable.txt"],["echo","y",">","fine.txt"]]],
+  ["git {\"words\":[\"echo\",\"x\",\">\",\"unwritable.txt\"]}", null],
+  ["git {\"words\":[\"echo\",\"y\",\">\",\"fine.txt\"]}", null],
+  ["writes {\"command\":\"echo x > unwritable.txt; echo y > fine.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"unwritable.txt","path":"/repo/unwritable.txt"},{"word":"fine.txt","path":"/repo/fine.txt"}],"changes":[],"unnamed":[]}],
   ["commands {\"command\":\"git checkout main\"}", [["git","checkout","main"]]],
   ["git {\"words\":[\"git\",\"checkout\",\"main\"]}", {"sub":"checkout","args":["main"]}],
   ["writes {\"command\":\"git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
@@ -292,6 +302,32 @@ test('an edit nobody else is making goes through and is noted for the others', w
   expect(w.reached).toContain('Edit')
   expect(w.prompts.length).toBe(0)
   expect(w.edits).toEqual(['/repo/src/a.ts'])
+})
+
+test('a note the registry cannot write never fails the call that already ran, and is said once (#751)', withDeps, async ($, on) => {
+  const w = world(on)
+  const first = (await $.tool.call(edit('/repo/src/unwritable.ts', 'c1'))) as { isError?: boolean; text?: string; context?: string[] }
+  expect(w.reached).toContain('Edit')
+  expect(first.isError).not.toBe(true)
+  expect(first.text).toBe('ran')
+  expect((first.context ?? []).join(' ')).toContain("could not record that this session edited /repo/src/unwritable.ts: this session's record could not be written")
+  // Said once until a note lands, never on every call.
+  const second = (await $.tool.call(edit('/repo/src/unwritable.ts', 'c2'))) as { context?: string[] }
+  expect((second.context ?? []).join(' ')).not.toContain('could not record')
+  // One that lands rearms it.
+  await $.tool.call(edit('/repo/src/fine.ts', 'c3'))
+  expect(w.edits).toEqual(['/repo/src/fine.ts'])
+  const again = (await $.tool.call(edit('/repo/src/unwritable.ts', 'c4'))) as { context?: string[] }
+  expect((again.context ?? []).join(' ')).toContain('could not record')
+})
+
+test('a call whose notes partly land is still said once, never on every such call (#751)', withDeps, async ($, on) => {
+  const w = world(on)
+  const said = async (id: string) => (((await $.tool.call(bash('echo x > unwritable.txt; echo y > fine.txt', id))) as { context?: string[] }).context ?? []).join(' ')
+  expect(await said('m1')).toContain('could not record that this session edited /repo/unwritable.txt')
+  expect(w.edits).toEqual(['/repo/fine.txt'])
+  expect(await said('m2')).not.toContain('could not record')
+  expect(await said('m3')).not.toContain('could not record')
 })
 
 test('an edit another open session made first is judged, and a Proceed goes through with a toast', withDeps, async ($, on) => {
