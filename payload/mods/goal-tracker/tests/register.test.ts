@@ -1012,6 +1012,20 @@ test("a permission mark left over is cleared by Dan's next message", withDeps, a
   expect(last(w)?.waiting).toBeUndefined()
 })
 
+// Lessons review of PR 825: a /clear begins again with no waiting marks, a question's request
+// matched to no call included, so the next idle prompt is "What's next?" again.
+test("a /clear drops a question's request matched to no call, so an idle prompt says What's next? (#824)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await askPermission($, 'Which branch?')
+  await idle($)
+  expect(w.notified.filter(n => n[3] === "What's next?")).toHaveLength(0)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await idle($)
+  expect(w.notified.filter(n => n[3] === "What's next?")).toHaveLength(1)
+})
+
 // #824: a question's request matched to no running call is marked apart from the permission slot,
 // and Dan's next message clears it as it does a permission left over. A message from elsewhere does not.
 test("a question's request matched to no call is cleared by Dan's next message, not another plugin's (#824)", withDeps, async ($, on) => {

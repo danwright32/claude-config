@@ -353,6 +353,9 @@ const beginAgain = async ($: EngineInterface) => {
   }
   question = undefined
   permission = undefined
+  // A question's request matched to no call belongs to the conversation that ended; one whose call
+  // still runs is in flight, and comes off when that call ends (lessons review of PR 825).
+  for (const id of [...unheldQuestions.keys()]) if (!running.has(id)) unheldQuestions.delete(id)
   countedCalls.clear()
   if (progress) progress = withWaiting(progress)
 }
