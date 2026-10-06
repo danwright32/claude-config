@@ -128,6 +128,23 @@ else
 fi
 chmod 600 "$S"
 
+# 8b. Safari rewrites its store in place, so one look can catch it half written. A store that does
+# not parse on one look is looked at again; only one that never parses is exit 2 (lessons review).
+S="$TMPROOT/s9"; store "$TMPROOT/s9-good" "claude.ai:lastActiveOrg:$LATER"; head -c 40 "$TMPROOT/s9-good" > "$S"
+PAUSE="cp '$TMPROOT/s9-good' '$S'" TRIES=3 signed_out "$S"
+[ "$code" = 0 ] && [ "$out" = "signed out" ] && check "a store caught half written is looked at again, not taken as unreadable" ok \
+  || check "a store caught half written is looked at again, not taken as unreadable" "code=$code out=$out"
+: > "$TMPROOT/pauses"
+PAUSE="echo x >> '$TMPROOT/pauses'" TRIES=3 signed_out "$TMPROOT/s6"
+n=$(wc -l < "$TMPROOT/pauses" | tr -d ' ')
+[ "$code" = 2 ] && [ "$n" = 2 ] && check "a store that never parses is exit 2 after every try" ok \
+  || check "a store that never parses is exit 2 after every try" "code=$code pauses=$n out=$out"
+: > "$TMPROOT/pauses"
+PAUSE="echo x >> '$TMPROOT/pauses'" TRIES=3 signed_out "$TMPROOT/no-such-store"
+n=$(wc -l < "$TMPROOT/pauses" | tr -d ' ')
+[ "$code" = 2 ] && [ "$n" = 0 ] && check "while a store that cannot be opened is exit 2 at once" ok \
+  || check "while a store that cannot be opened is exit 2 at once" "code=$code pauses=$n out=$out"
+
 # 9. The logout loads claude.ai's logout page in Safari.
 STUB="$TMPROOT/open"; printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/open.args"\nexit "${OPEN_EXIT:-0}"\n' "$TMPROOT" > "$STUB"; chmod +x "$STUB"
 out=$(ACCOUNT_ROOM_OPEN="$STUB" /bin/sh "$BIN/safari-logout.sh" 2>&1); code=$?

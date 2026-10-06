@@ -1373,7 +1373,8 @@ Not settled by any round, built so the spec holds, and each an open question for
   sign out also toasts the reason ("Switch stopped: no browser logout route is set up"), so Try
   again is not the only way to find out why (L148).
 - **The browser sign out route was proven on 2026-10-05** (#659), on Google Chrome on
-  Daniels-MacBook-Pro-2, and ships as the manifest's defaults, so both Macs get it with the mod.
+  Daniels-MacBook-Pro-2. Since #808 that Chrome route runs on Dans-MacBook-Pro only, chosen by
+  `bin/browser.sh` (below); Daniels-MacBook-Pro-2 signs out through Safari.
   `logoutCommand` runs `bin/chrome-logout.sh`, which loads `https://claude.ai/logout` in Chrome's
   last used profile (read from Chrome's `Local State`), because that is the profile `claude auth
   login` opens its sign in page in (Dan's pick over a fixed profile or every signed in profile).

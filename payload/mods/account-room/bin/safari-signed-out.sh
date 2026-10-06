@@ -15,9 +15,18 @@ PAUSE="${ACCOUNT_ROOM_PAUSE:-/bin/sleep 1}"
 command -v python3 >/dev/null 2>&1 || { echo "could not read Safari's cookies: python3 is not installed"; exit 2; }
 i=0
 while :; do
-  n=$(python3 "$HERE/safari-cookies.py") || { echo "$n"; exit 2; }
-  if [ "$n" = 0 ]; then echo "signed out"; exit 0; fi
   i=$((i + 1))
+  if ! n=$(python3 "$HERE/safari-cookies.py"); then
+    # A store that does not parse may be one Safari is rewriting, so it is looked at again; one that
+    # cannot be opened will not open on the next look, and a parse failure on the last is the answer.
+    case "$n" in
+      "could not parse "*) [ "$i" -ge "$TRIES" ] && { echo "$n"; exit 2; } ;;
+      *) echo "$n"; exit 2 ;;
+    esac
+    eval "$PAUSE"
+    continue
+  fi
+  if [ "$n" = 0 ]; then echo "signed out"; exit 0; fi
   if [ "$i" -ge "$TRIES" ]; then echo "still signed in to claude.ai in Safari"; exit 1; fi
   eval "$PAUSE"
 done
