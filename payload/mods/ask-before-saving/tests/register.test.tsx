@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVAL_MS } from '../hooks/rules.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is refused until
 // Dan answers, his own permanent words skip the question, and each answer does what the spec says.
@@ -10,10 +11,11 @@ import { APPROVAL_MS } from '../hooks/rules.ts'
 // A write is never held open while Dan reads: a hook that waits on him is cut at its 10 second
 // budget and the write then runs (measured 2026-10-04), so the call is refused at once.
 
-// mod-kit, standing in: a mod cannot import another mod's files. It reads what a command writes
-// from a table the tests fill in the shape the real reader gives. mod-kit's own tests prove the real
-// one.
-type Writes = { files: { word: string; path?: string }[]; unnamed: { what: string; words: string[]; inputs: string[] }[] }
+// mod-kit, standing in: a mod cannot import another mod's files. What a command writes is read by
+// mod-kit's own reader, a byte for byte copy under tests/mod-kit that tools/check-mod-shared-parts.sh
+// holds to mod-kit's (#752: a table of commands and the output the reader was believed to give was
+// kept in step with mod-kit's tests by hand, and its older entries had no counterpart at all). The
+// stand-in asks the world (`__modkit`), which reads with that copy, as scope modes' tests do.
 // #777: the subagent call that raised a question in Dan's main session, cut to the lines that matter.
 // A python heredoc editing a test file, whose text builds throwaway fixture homes.
 const FIXTURE =
@@ -24,32 +26,14 @@ const FIXTURE =
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
-    // Everything the stand-in uses is inside register: the kit loads it as a module of its own.
-    const CWD = '/Users/dan/Apps/slate'
-    const MEM = '/Users/dan/.claude/projects/p/memory'
-    const python = { files: [], unnamed: [{ what: 'an inline python3 script', words: [], inputs: [] }] }
-    const WRITES: Record<string, Writes> = {
-      "cat >> CLAUDE.md <<'EOF'\n- Never merge on Fridays.\nEOF": { files: [{ word: 'CLAUDE.md', path: `${CWD}/CLAUDE.md` }], unnamed: [] },
-      "cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- skip it\nEOF": { files: [{ word: 'note.md', path: `${MEM}/note.md` }], unnamed: [] },
-      'cp note.md ~/.claude/projects/p/memory/': { files: [{ word: '~/.claude/projects/p/memory/note.md', path: `${MEM}/note.md` }], unnamed: [] },
-      "python3 -c \"open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\"": python,
-      'git apply rules.patch': { files: [], unnamed: [{ what: 'a patch', words: [], inputs: [`${CWD}/rules.patch`] }] },
-      'git apply other.patch': { files: [], unnamed: [{ what: 'a patch', words: [], inputs: [`${CWD}/other.patch`] }] },
-      'cp CLAUDE.md /tmp/backup/CLAUDE.md': { files: [{ word: '/tmp/backup/CLAUDE.md', path: '/tmp/backup/CLAUDE.md' }], unnamed: [] },
-      'cp CLAUDE.md /tmp/repo/CLAUDE.md': { files: [{ word: '/tmp/repo/CLAUDE.md', path: '/tmp/repo/CLAUDE.md' }], unnamed: [] },
-      // #743: a variable the command set is read as its value; a target the words cannot name is
-      // given as written, with no path.
-      [`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`]: { files: [{ word: '$F', path: `${MEM}/MEMORY.md` }], unnamed: [] },
-      [`export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`]: { files: [{ word: '$F', path: `${MEM}/MEMORY.md` }], unnamed: [] },
-      [`printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`]: { files: [{ word: '$(ls ~/.claude/projects/p/memory/MEMORY.md)' }], unnamed: [] },
-      [`printf 'x\\n' >> "$OUT"`]: { files: [{ word: '$OUT' }], unnamed: [] },
-      'cat ~/.claude/CLAUDE.md > notes.txt': { files: [{ word: 'notes.txt', path: `${CWD}/notes.txt` }], unnamed: [] },
-    }
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const modkit = {
-        // Any other python3 command is an inline script, a write its words do not name.
-        writes: async ({ command }: { command: string }) => WRITES[command] ?? (/(^|; )python3 /.test(command) ? python : { files: [], unnamed: [] }),
+        writes: async (input: { command: string; cwd: string; home: string }) => {
+          const r = await built.process.run(['__modkit', 'writes', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
         // A checkout cloned at /tmp/repo, a folder under /tmp/locked the disk cannot read, and no
         // other checkout in a temporary folder (#726).
         workingTree: async ({ path }: { path: string }) => {
@@ -68,6 +52,9 @@ const guard: { name: string; register: Register } = {
   register: on => {
     on('tool.call', async ($, e, next) => {
       if (JSON.stringify(e).includes('GUARD-REFUSES')) return { deny: 'Blocked: this carries a dash.' }
+      // Refusing every call while the test's world holds /gate/refuses, as the collision guard refuses
+      // a file another session is editing: a refusal the second send can meet and the first did not.
+      if (await $.fs.exists('/gate/refuses')) return { deny: 'Blocked: another session is editing this file.' }
       // A guard that takes its time on a call carrying the marker: a read the test's world holds.
       if (JSON.stringify(e).includes('HOLD-AT-GUARD')) await $.fs.read('/gate/guard')
       return next(e)
@@ -77,7 +64,10 @@ const guard: { name: string; register: Register } = {
 // The notes Claude reads. A plugin's own $.session.append reaches no hook in a test in 2.1.289, the
 // test's or another plugin's (both measured 2026-10-04: "no implementation for session.append"), so
 // every note fails here, and the mod's fallback for a note that cannot be added (a toast carrying
-// the whole note, so Dan sees what Claude was not told) is how the test reads it.
+// the whole note, so Dan sees what Claude was not told) is how the test reads it. The kit's error
+// now adds "a test answers it with on('session.append', ...)", but measured again on 2026-10-05
+// (#764) a test's hook on 'session.append', with or without { door: 'note' }, is never called and
+// the call still rejects with "no implementation for session.append", so this stands.
 const withKit = { plugins: [modKit, guard] }
 const notesOf = (w: { toasts: string[] }) =>
   w.toasts
@@ -113,6 +103,12 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
   const env: Record<string, string> = { HOME, ...(init.env ?? {}) }
   const printenv: string[] = []
   on('process.run', ($, e) => {
+    // mod-kit's write reader, read here with its copy (the stand-in above asks for it).
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'writes') {
+      const input = JSON.parse(String(e.argv[2])) as { command: string; cwd: string; home: string }
+      const out = JSON.stringify(commandWrites(input.command, input.cwd, input.home))
+      return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     if (e.argv[0] !== '/usr/bin/printenv') throw new Error(`unexpected command: ${e.argv.join(' ')}`)
     printenv.push(String(e.argv[1]))
     const value = env[String(e.argv[1])]
@@ -335,7 +331,9 @@ test('the subagent call from #777, a python heredoc building fixture homes in a 
 // through unasked. Only exit 1 means unset; anything else fails the hook, which refuses.
 test('a printenv that fails is never read as the variable being unset: the save is refused', withKit, async ($, on) => {
   const w = world(on)
-  const r = await call($, { tool: 'Bash', command: 'python3 -c "print(1)" # $PRINTENV_BREAKS/CLAUDE.md' })
+  // An inline script the real reader judges writes files, so what the command mentions is read (#752:
+  // the stand-in reader took every python3 command for one, and print(1) writes nothing).
+  const r = await call($, { tool: 'Bash', command: `python3 -c "open('out.txt','w').write('1')" # $PRINTENV_BREAKS/CLAUDE.md` })
   expect(refusalOf(r)).toContain('could not check whether this writes lasting memory')
   expect(w.ran).toEqual([])
 })
@@ -632,6 +630,96 @@ test('an approval past its time is refused where it is used even when nothing an
   expect(w.ran).toEqual([])
 })
 
+// #764: an approved save sent again but refused by another guard before this mod's check never used
+// its approval, which then lapsed as "unused" though Claude did send it (L11). Dan is told at once
+// that it did not go through, and the lapse says why, never that it went unused.
+test('an approved save another guard refuses when sent again is said as not going through, never as unused', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  const r = await call($, input)
+  expect(refusalOf(r)).toBe('Blocked: another session is editing this file.')
+  expect(w.ran).toEqual([])
+  expect(w.toasts.join('\n')).toContain('Not saved to ~/Apps/slate/AGENTS.md: Blocked: another session is editing this file.')
+  await w.clock.advance(APPROVAL_MS)
+  const said = [w.toasts.join('\n'), notesOf(w)].join('\n')
+  expect(said).not.toContain('unused')
+  expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md lapsed after 10 minutes: Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.)')
+  expect(notesOf(w)).toContain("Dan's For good on saving this to ~/Apps/slate/AGENTS.md lapsed after 10 minutes: the save you sent was refused before it was saved (Blocked: another session is editing this file.)")
+})
+
+// update() runs its callback again when another write lands between its read and its write. If the
+// approval is gone by the second run (lapsed, used), a match the first run recorded must not stand,
+// or Dan is told about a save no approval covers (the lessons review of #806).
+test('a refused resend whose approval is gone by the time the write lands raises no toast for it', withKit, async ($, on) => {
+  // Once armed, the first conditional write of the approvals misses, because another write emptied
+  // them in between: update reads again and runs its callback over no approval at all.
+  let armed = false
+  let raced = false
+  on('state.set', async ($$, e, next) => {
+    const x = e as unknown as { ref?: { key?: string }; key?: string; options?: { ifVersion?: number }; ifVersion?: number }
+    const key = x.ref?.key ?? x.key
+    const conditional = (x.options?.ifVersion ?? x.ifVersion) !== undefined
+    if (armed && !raced && key === 'approvals' && conditional) {
+      raced = true
+      const { options: _o, ifVersion: _i, ...plain } = x as Record<string, unknown>
+      await next({ ...plain, value: [] } as never)
+      return { value: { isSet: false, version: -1 } } as never
+    }
+    return next(e)
+  })
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  armed = true
+  await call($, input)
+  expect(raced).toBe(true)
+  expect(w.toasts.join('\n')).not.toContain('Not saved to ~/Apps/slate/AGENTS.md')
+})
+
+// And when the guard lets it through on a later send inside the time, it is saved as approved.
+test('an approved save refused once by another guard is still saved when sent again in time', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  await call($, input)
+  delete w.files['/gate/refuses']
+  const again = await call($, input)
+  expect(again.deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Write'])
+  expect(contextOf(again)).toContain('Saved to ~/Apps/slate/AGENTS.md, as Dan answered For good.')
+})
+
+// And where a lapsed approval is found as the call arrives (a reload dropped its timer), the same:
+// sent and refused is never called unused, to Dan or to Claude (#764, L11).
+test('an approval refused once and found past its time where it is used is said as refused, never as unused', withKit, async ($, on) => {
+  let now = 0
+  on('clock.now', () => ({ value: now }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  await call($, input)
+  delete w.files['/gate/refuses']
+  now = APPROVAL_MS
+  const late = refusalOf(await call($, input))
+  expect(late).toContain(ASKS)
+  expect(late).toContain('the save you sent before was refused (Blocked: another session is editing this file.)')
+  expect(late).not.toContain('unused')
+  expect(w.toasts.join('\n')).not.toContain('unused')
+  // Claude did send it again here, late: the lapse never says it was not sent (lessons review of #806).
+  expect(w.toasts.join('\n')).not.toContain('not sent again')
+  expect(w.toasts.join('\n')).toContain('and it was not saved within that time')
+  expect(w.toasts.join('\n')).toContain('Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.)')
+  expect(w.ran).toEqual([])
+})
+
 test('For good whose save then fails says so to Dan, and never that it was saved', withKit, async ($, on) => {
   const w = world(on, { failWrites: true })
   const input = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'gone', new_string: 'gone\n- rule' }
@@ -650,6 +738,22 @@ test('an approval the session ends before Claude uses is dropped, and Dan is tol
   expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md was never used before the session ended')
   expect(refusalOf(await call($, input))).toContain(ASKS)
   expect(w.ran).toEqual([])
+})
+
+// The lessons review of #806: one Claude sent that another guard refused is not "never used" at
+// session end either (#764, L11).
+test('an approval whose save another guard refused is said as refused, never as unused, when the session ends', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  await call($, input)
+  await ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  const said = w.toasts.join('\n')
+  expect(said).not.toContain('never used')
+  expect(said).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md ended with the session: Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.), so nothing was saved.')
+  // Claude may have sent it again and been refused again: the end never says it was not (lessons review of #806).
+  expect(said).not.toContain('not sent again')
 })
 
 test('Just this session writes nothing and holds the rule, in Claude\'s plain words, in the system prompt through a compaction until the session ends', withKit, async ($, on) => {

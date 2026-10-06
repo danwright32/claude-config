@@ -25,6 +25,11 @@ export type AskBeforeSavingApproval = {
   files: string[]
   /** When it lapses, in milliseconds since the epoch, as $.clock.now() reads. */
   until: number
+  /**
+   * Why the save Claude sent again was refused before this mod's check saw it (another guard), so
+   * the approval stood unused: its lapse says so rather than calling it unused (#764).
+   */
+  refused?: string
 }
 
 declare module 'claude-code' {
