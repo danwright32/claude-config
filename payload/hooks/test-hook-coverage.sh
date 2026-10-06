@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# A whole tree scan: a send touching these paths runs this suite (claude-config#809).
+# send-gate: scans hooks/ settings.hooks.json
 # A ratchet on hooks that no test suite names (claude-config#124).
 #
 # Eleven of them had nothing, including subagent-digest.py, whose own docstring spells out a three

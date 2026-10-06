@@ -302,6 +302,19 @@ A changed `test-*.sh` is its own relevant suite. A changed hook that NO suite na
 with a line saying plainly that nothing verified it, since the coverage ratchet is what gates an
 uncovered hook and a send that ran nothing must not read like one whose suites all passed.
 
+A scan over every hook names none of them, so that question never picks it, and those scans were
+what turned main red: of the 18 red runs from `sync from <host>` commits between 2026-09-08 and
+2026-10-05, 16 failed one (short circuiting pipes, hook registration, hooks naming their repository,
+short form drift, result lines) and the other 2 were flakes (#809). So a scan declares what it reads
+with a `# send-gate: scans <paths>` line, paths relative to `payload/`, either anywhere in a suite
+or on the line straight after a `section "..."` heading for one section of the sync suite. A send
+touching those paths runs it, a section alone with its timing record off and the suite lock
+skipped, and a red scan holds back the files in its scope like any red suite. Its verdict is
+remembered against its scope and its own text, so a burst of sends pays once. Measured on
+2026-10-05 on a loaded Mac: the four standalone scans take about 30 seconds together, the hook
+coverage suite most of it, and each section about 8.5 seconds, while the watcher pushed about 12
+times a day, a quarter of them within six seconds of the one before.
+
 A red suite costs a trip to the hooks it covers, and to nothing else. The first version of this gate
 refused the WHOLE send, which is the more expensive of the two failures: an unrelated red suite then
 stopped rule files, skills and lessons reaching the other Mac as well, and a watcher that has quietly
