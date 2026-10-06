@@ -2286,6 +2286,36 @@ case "$n_shown" in ''|*[!0-9]*) n_shown=0 ;; esac
   && check "#505 a suite marking many lines is capped rather than allowed to flood" ok \
   || check "#505 a suite marking many lines is capped rather than allowed to flood" "it printed $n_shown"
 
+# ---------------------------------------------------------------------------
+# No suite the runner starts can reach a real Claude Code through claude-sync (#828 review, L2).
+# `claude-sync status` asks the claude command which model settings.json runs, and finds it on PATH
+# when SYNC_CLAUDE_BIN is unset. A suite that forgot to set it (test-sync-stuck-notice.sh did, with
+# the real payload behind its clone) started the real binary. The runner points the seam at nothing
+# for every suite it starts. Proved with a claude on PATH that records every call: the same status
+# reaches it outside the runner (the control) and does not inside it.
+# ---------------------------------------------------------------------------
+CT="$TMPROOT/claude-trap"; mkdir -p "$CT/bin" "$CT/repo/payload" "$CT/cfg"
+SYNC_SCRIPT_REAL="$(cd "$DIR/../.." && pwd)/claude-sync"
+printf '#!/usr/bin/env bash\necho "called: $*" >> "%s/calls"\nexit 97\n' "$CT" > "$CT/bin/claude"; chmod +x "$CT/bin/claude"
+printf '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}\n' > "$CT/repo/payload/settings.shared.json"
+printf '{"model": "opus"}\n' > "$CT/cfg/settings.json"
+ct_status='CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >/dev/null 2>&1'
+: > "$CT/calls"
+( unset SYNC_CLAUDE_BIN; CT="$CT" SYNC_SCRIPT_REAL="$SYNC_SCRIPT_REAL" eval "$ct_status" ) || true
+[ -s "$CT/calls" ] && check "the control: status with no seam set reaches the claude on PATH" ok \
+  || check "the control: status with no seam set reaches the claude on PATH" "no call was recorded"
+: > "$CT/calls"
+CS="$TMPROOT/dir-claude-trap"; mkdir -p "$CS"
+{ printf '#!/usr/bin/env bash\nunset -v _unused\n'
+  printf 'CT=%q; SYNC_SCRIPT_REAL=%q\n' "$CT" "$SYNC_SCRIPT_REAL"
+  printf '%s || true\n' "$ct_status"
+  printf 'echo "passed: 1, failed: 0"\n'; } > "$CS/test-claude-trap.sh"
+chmod +x "$CS/test-claude-trap.sh"
+( unset SYNC_CLAUDE_BIN; bash "$RUNNER" "$CS" >/dev/null 2>&1 ) || true
+[ -f "$CT/calls" ] && [ ! -s "$CT/calls" ] \
+  && check "a suite the runner starts cannot reach a claude command through claude-sync" ok \
+  || check "a suite the runner starts cannot reach a claude command through claude-sync" "$(cat "$CT/calls" 2>&1)"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
