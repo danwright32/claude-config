@@ -473,6 +473,8 @@ describe('writes: the files an inline python program names as its writes (#830)'
     // Plain top level imports of modules with no file writers of their own keep them named, os's
     // path among them when it is all that is taken from os.
     expect(targets("python3 - <<'EOF'\nimport json, re, sys\nfrom os import path\nfrom os.path import exists as there  # a comment\nfrom pathlib import Path\nif path.exists('a.json') and there('b'):\n  json.dump(re.sub('a', 'b', sys.argv[0]), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
+    // A string's replace, with two arguments, on a name not taken from Path, is no move.
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nq = Path('b.md')\ns = open('a.md').read()\nq.write_text(s.replace('x', 'y'))\nEOF")).toEqual([[`${CWD}/b.md`]])
     // A cd before it moves where a relative path lands.
     expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
   })
@@ -515,6 +517,12 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom . import x\nopen('a.md','w')\nEOF")).toEqual(none)
     // Round 4: a dotted import binds its parent, so `import os.path` binds os.
     expect(targets("python3 - <<'EOF'\nimport os.path\nopen('a.md','w')\nos.chflags('b', 0)\nEOF")).toEqual(none)
+    // Any rename is a move, however many arguments it takes; a replace is one when it is called on a
+    // Path or on a name assigned from one (Dan, 2026-10-06: str.replace stays allowed, since the text
+    // alone cannot tell the two apart on any other receiver).
+    expect(targets("python3 - <<'EOF'\nopen('a.md','w')\nx.rename('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('x')\nopen('a.md','w')\np.replace('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
     // A move of a pathlib Path, by its one argument or by name.
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').rename('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace(target='/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)

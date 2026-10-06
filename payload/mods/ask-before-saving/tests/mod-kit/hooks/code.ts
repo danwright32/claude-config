@@ -565,10 +565,18 @@ const pythonTargets = (code: string): string[] | undefined => {
   // pathlib's writers the judge has no rule for (Path.copy, copy_into, move and move_into, new in
   // 3.14; lchmod; link_to), whatever they are called on.
   if (/\.\s*(?:copy|copy_into|move|move_into|lchmod|link_to)\s*\(/.test(code)) return undefined
-  // A rename or replace given its target by name (`Path(p).rename(target=...)`), which the judge's
-  // move rule, reading one plain argument, does not see (lessons review of #846 at 97ea7f3).
-  for (const m of code.matchAll(/\.\s*(?:rename|replace)\s*\(/g))
+  // Moves, as far as the text can tell them (lessons review of #846 at 97ea7f3, Dan's decision
+  // 2026-10-06): any rename is one, whatever its arguments; a replace is one when called on Path(...)
+  // or on a name assigned from Path(, or when given its target by name. Any other replace, a string's,
+  // stays allowed, since the text cannot tell the two apart there.
+  if (/\.\s*rename\s*\(/.test(code)) return undefined
+  for (const m of code.matchAll(/\.\s*replace\s*\(/g)) {
+    const receiver = receiverBefore(code, m.index ?? 0)
+    if (receiver === undefined) continue
+    if (PY_PATH.test(receiver)) return undefined
+    if (/^\w+$/.test(receiver) && new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(code)) return undefined
     if (argsAt(code, (m.index ?? 0) + m[0].length - 1).some(a => /^\w+\s*=/.test(a))) return undefined
+  }
   if (first(s.write.filter(r => r !== PY_PATH_METHODS), code)) return undefined
   const out: string[] = []
   const add = (expr: string | undefined) => {
