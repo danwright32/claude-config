@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { isDans, scopesNamedIn, triggersIn } from '../hooks/triggers.ts'
+import { isDans, scopesAskedOffIn, triggersIn } from '../hooks/triggers.ts'
 
 // Each phrase the specs name (#616, #621), and the ones mined from Dan's chats that they quote.
 describe('triggersIn', () => {
@@ -45,12 +45,17 @@ describe('triggersIn', () => {
       expect(triggersIn(t)).toEqual([])
   })
 
-  test('the scope modes a message names, whether or not it switches them (#805)', () => {
-    expect(scopesNamedIn('winding down is done, thanks')).toEqual(['WINDING DOWN'])
-    expect(scopesNamedIn('no more wind-down please')).toEqual(['WINDING DOWN'])
-    expect(scopesNamedIn('get out of no build')).toEqual(['NO BUILD'])
-    expect(scopesNamedIn('read-only is over')).toEqual(['NO BUILD'])
-    expect(scopesNamedIn('run load 1')).toEqual([])
+  test('the scope modes a message asks to end, in words the triggers do not read (#805)', () => {
+    expect(scopesAskedOffIn('winding down is done, thanks')).toEqual(['WINDING DOWN'])
+    expect(scopesAskedOffIn('no more wind-down please')).toEqual(['WINDING DOWN'])
+    expect(scopesAskedOffIn('get out of no build')).toEqual(['NO BUILD'])
+    expect(scopesAskedOffIn('read-only is over')).toEqual(['NO BUILD'])
+    expect(scopesAskedOffIn('the no build mode is getting in the way')).toEqual(['NO BUILD'])
+    expect(scopesAskedOffIn('run load 1')).toEqual([])
+    // The name in passing, or asked about, is not a request to end the mode (lessons review of #820).
+    for (const t of ['use a read-only connection', "there's no build step in this repo", 'the project is winding down',
+      'is winding down over?', 'Ok. Is no build done?'])
+      expect(scopesAskedOffIn(t)).toEqual([])
   })
 
   test('ordinary sentences that share a word turn nothing on', () => {

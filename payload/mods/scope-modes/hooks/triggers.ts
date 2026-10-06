@@ -72,13 +72,28 @@ export const triggersIn = (text: string): Trigger[] =>
     // Two phrasings of one mode in a message switch it once.
     .filter((t, i, all) => all.findIndex(o => JSON.stringify(o) === JSON.stringify(t)) === i)
 
+// Words saying a mode should end, beside its name in one sentence.
+const OFF_WORD = /\b(?:stop(?:ped)?|off|end(?:ed)?|done|over|exit|out of|no more|cancel|quit|finish(?:ed)?|enough)\b/i
+
 /**
- * The scope modes a message names at all, switching them or not: what lets the mod tell Claude that
- * a message about the mode that is on did not switch it, rather than leave Claude to act as though
- * it had (#805).
+ * The scope modes a message asks to end in words the triggers do not read: a sentence, not a
+ * question, naming the mode and either calling it a mode or saying it should end ("winding down is
+ * done for today"). What lets the mod tell Claude the mode is still on, rather than leave Claude to
+ * act as though it were off (#805). The name in passing ("use a read only connection", "there's no
+ * build step") is not one, as the triggers refuse it too (lessons review of #820).
  */
-export const scopesNamedIn = (text: string): Scope[] =>
-  (Object.keys(NAME) as Scope[]).filter(s => new RegExp(`\\b${NAME[s]}\\b`, 'i').test(text))
+export const scopesAskedOffIn = (text: string): Scope[] => {
+  const out: Scope[] = []
+  for (const m of text.matchAll(/[^.!?\n]+[.!?\n]?/g)) {
+    const sentence = m[0]
+    if (sentence.trim().endsWith('?')) continue
+    for (const s of Object.keys(NAME) as Scope[]) {
+      const named = new RegExp(`\\b${NAME[s]}\\b(\\s+mode\\b)?`, 'i').exec(sentence)
+      if (named && (named[1] || OFF_WORD.test(sentence)) && !out.includes(s)) out.push(s)
+    }
+  }
+  return out
+}
 
 /**
  * Whether a prompt is Dan's own words: his Enter at the terminal, or his phone through Remote

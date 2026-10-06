@@ -361,6 +361,8 @@ test('a message naming the mode that is on, in words that do not switch it, gets
   expect(r.context?.join('\n')).toMatch(/names winding down.*still on.*\/build turns it off/s)
   // The same words from elsewhere, or with the mode off, add no such note.
   expect((await say($ as never, 'winding down is done', 'peer')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
+  // Naming it in passing adds no note (lessons review of #820).
+  expect((await say($ as never, 'the project is winding down, add the release notes')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
   await command($ as never, 'build')
   expect((await say($ as never, 'the project is winding down')).context?.join('\n') ?? '').not.toMatch(/names winding down/)
 })

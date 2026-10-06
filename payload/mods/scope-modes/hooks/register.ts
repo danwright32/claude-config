@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
-import { isDans, scopesNamedIn, triggersIn, type Trigger } from './triggers.ts'
+import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
@@ -548,10 +548,10 @@ export const register: Register = on => {
           notes.push(`Dan's message switched every session to ${t.place}. Say so in one line first: "${placeSentence(t.place, told)}"`)
         }
       }
-      // A message that names the mode still on, in words that did not switch it, is said rather than
+      // A message asking to end the mode still on, in words that did not switch it, is said rather than
       // left for Claude to read as switched: the hook would go on enforcing a mode Claude thinks is off.
       const stillOn = await scopeOf($)
-      if (stillOn && !triggers.some(t => t.kind !== 'place') && scopesNamedIn(e.text).includes(stillOn)) {
+      if (stillOn && !triggers.some(t => t.kind !== 'place') && scopesAskedOffIn(e.text).includes(stillOn)) {
         const name = SCOPE_NAME[stillOn].toLowerCase()
         notes.push(`Dan's message names ${name}, but not in words that switch it, so ${name} is still on. If he meant to turn it off, say in one line first that ${name} is still on and /build turns it off; never act as though it were off.`)
       }
