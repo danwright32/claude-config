@@ -88,6 +88,60 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
   ' 2>/dev/null
 }
 
+# The READ KEYS of one pull request review's findings (claude-config#788). Every message that
+# shows the findings (the merge gate's refusal, the nudge) ISSUES a fresh random key and prints it,
+# and only its sha256 is kept, one per line, in <file>.readkeys-<finished stamp>. A merge presenting
+# PR_REVIEW_READ=<key> then proves the findings reached the session doing the merge, because the
+# plain key exists nowhere but in a message that carried them: a session that never saw them cannot
+# read it off the disk (lessons review of #795). Before this the gate judged findings read because
+# it had PRINTED them, and on #774 another hook refused the same merge, only that hook's message
+# was shown, and the retry merged unread. The stamp in the name means a review written again for
+# the same head starts with no valid key. A line under PIPE_BUF is appended atomically, so
+# concurrent issuers never lose each other's key. A key that cannot be issued prints nothing and
+# fails, and the caller refuses, since no merge can present a key nobody was shown (L42).
+ar__review_keys_file() {   # $1 = finished review file -> the hash file for its current stamp
+  local fin
+  fin="$(awk 'index($0, "finished=") == 1 { print substr($0, 10); exit } /^$/ { exit }' "$1" 2>/dev/null)"
+  case "$fin" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$1.readkeys-$fin"
+}
+ar__key_hash() { printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{ print $1 }'; }
+#
+# Exits with WHY a key could not be issued, each its own cause and remedy (L11, L111), read back
+# into words by ar_review_key_failure: 2 the review records no finish time, 3 a tool it needs
+# (od, shasum, /dev/urandom) is missing, 4 nothing could be written beside the review.
+ar_review_issue_key() {   # $1 = finished review file -> prints a fresh key
+  local kf k h
+  kf="$(ar__review_keys_file "$1")" || return 2
+  command -v od >/dev/null 2>&1 && command -v shasum >/dev/null 2>&1 && [ -r /dev/urandom ] || return 3
+  k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ "${#k}" -eq 16 ] || return 3
+  h="$(ar__key_hash "$k")"
+  [ -n "$h" ] || return 3
+  # Braced, so a refused redirection is silenced too: it fails before an inner 2> applies.
+  # Only ever appended, never rewritten: a trim raced concurrent appends and dropped keys that had
+  # been shown (lessons review of #795). The size is 65 bytes per showing of this one review, so
+  # a thousand refusals is 65 KB, and the file goes with the review in the 14 day sweep.
+  { printf '%s\n' "$h" >> "$kf"; } 2>/dev/null || return 4
+  printf '%s' "$k"
+}
+# The sentence for an ar_review_issue_key failure: what went wrong and the remedy that fits it.
+ar_review_key_failure() {   # $1 = its exit code, $2 = the review file, $3 = the restart command
+  case "$1" in
+    2) printf 'this review file records no finish time, so it cannot be given a read key and no merge can show these were read; run it again with: %s' "$3" ;;
+    3) printf 'no read key could be issued because od, shasum or /dev/urandom is missing on this machine, so no merge can show these were read; install the missing tool (re-running the review will not help), or merge with the override after telling Dan why' ;;
+    4) printf 'no read key could be issued because it could not be written beside %s, so no merge can show these were read; make that folder writable, or merge with the override after telling Dan why' "$2" ;;
+    *) printf 'no read key could be issued (cause %s unknown), so no merge can show these were read; merge with the override after telling Dan why' "$1" ;;
+  esac
+}
+ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 when it was issued
+  local kf h
+  case "$2" in ''|*[!a-f0-9]*) return 1 ;; esac
+  kf="$(ar__review_keys_file "$1")" || return 1
+  h="$(ar__key_hash "$2")"
+  [ -n "$h" ] && grep -qxF "$h" "$kf" 2>/dev/null
+}
+
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one
 # rule file, lib/review-redact.sed, which says what it drops and what it redacts. The runner
 # (lib/ai-review-run.py) sends the reviewer's stderr and any unparsed answer through this BEFORE
