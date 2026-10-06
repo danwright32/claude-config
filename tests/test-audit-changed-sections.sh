@@ -219,6 +219,100 @@ case "$o9" in
   *) check "and the summary counts what was not judged" "out=$o9" ;;
 esac
 
+# --- WHICH PART FAILED (claude-config#625). A section run alone runs the prelude first, and the
+#     suite reports the two apart. On 2026-10-03 a push was blocked as the changed section failing
+#     on Linux while the suite's own line read prelude_fail=4 target_fail=0. So the audit reads the
+#     counts: a failing prelude under a passing section is its own outcome, worded as that.
+mkcountrunner(){          # $1 = repo  $2 = prelude_fail  $3 = target_fail  $4 = target_pass (12)  -> stub exits 1
+  cat > "$1/tests/run-on-linux.sh" <<STUB
+#!/usr/bin/env bash
+echo "stub linux runner ran: SECTION_ONLY=\${SECTION_ONLY:-}"
+echo "SUITE-SECTIONS prelude_pass=29 prelude_fail=$2 target_pass=${4:-12} target_fail=$3 repeat_pass=0 repeat_fail=0 total_pass=41 total_fail=$(( $2 + $3 ))"
+echo "SUITE-RESULT passed=41 failed=$(( $2 + $3 ))"
+exit 1
+STUB
+  chmod +x "$1/tests/run-on-linux.sh"
+}
+R10="$(mkrepo linuxprelude)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R10/tests/test-claude-sync.sh"
+mkcountrunner "$R10" 4 0
+o10="$(runlinux "$R10")"; c10=$?
+[ "$c10" -eq 4 ] && check "a failing prelude under a passing section has its own exit status" ok \
+                 || check "a failing prelude under a passing section has its own exit status" "exit=$c10 out=$o10"
+grep -q 'PRELUDE failed' <<< "$o10" \
+  && check "and it says the prelude failed" ok \
+  || check "and it says the prelude failed" "out=$o10"
+grep -q 'prelude failed 4 check' <<< "$o10" \
+  && check "and how many of the prelude's checks failed" ok \
+  || check "and how many of the prelude's checks failed" "out=$o10"
+case "$o10" in
+  *"FAIL their own checks"*|*"do not run on their own"*) check "and does not blame the section that passed" "out=$o10" ;;
+  *) check "and does not blame the section that passed" ok ;;
+esac
+grep -q 'unchanged base' <<< "$o10" \
+  && check "and names how to tell a broken base from a change elsewhere" ok \
+  || check "and names how to tell a broken base from a change elsewhere" "out=$o10"
+
+# A section that ran NONE of its own checks, because the prelude stopped the run first, has not
+# passed anything, and must not be said to have (claude-config#776 review, L440).
+R13="$(mkrepo linuxpreludecut)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R13/tests/test-claude-sync.sh"
+mkcountrunner "$R13" 4 0 0
+o13="$(runlinux "$R13")"; c13=$?
+[ "$c13" -eq 4 ] && check "a prelude failure that cut the section short is still the prelude's" ok \
+                 || check "a prelude failure that cut the section short is still the prelude's" "exit=$c13 out=$o13"
+case "$o13" in
+  *"own checks passed"*) check "and does not claim the section's checks passed when none ran" "out=$o13" ;;
+  *) check "and does not claim the section's checks passed when none ran" ok ;;
+esac
+grep -q 'ran none of its own checks' <<< "$o13" \
+  && check "and says the section ran none of its own checks" ok \
+  || check "and says the section ran none of its own checks" "out=$o13"
+
+# A section the runner could not run at all must still be named as UNMEASURED when ANOTHER
+# section's failure refuses the push, or a section nobody judged reads as covered (L98; the
+# lessons review of PR #776). One section fails on the prelude, the other is unmeasured.
+R14="$(mkrepo linuxmixed)"
+perl -pi -e 's/^echo a$/echo a-edited/; s/^echo b$/echo b-edited/' "$R14/tests/test-claude-sync.sh"
+cat > "$R14/tests/run-on-linux.sh" <<'STUB'
+#!/usr/bin/env bash
+case "${SECTION_ONLY:-}" in
+  *beta*) echo "stub: could not run"; exit 3 ;;
+esac
+echo "SUITE-SECTIONS prelude_pass=29 prelude_fail=4 target_pass=12 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=41 total_fail=4"
+exit 1
+STUB
+chmod +x "$R14/tests/run-on-linux.sh"
+o14="$(runlinux "$R14")"; c14=$?
+[ "$c14" -eq 4 ] && check "a prelude failure beside an unmeasured section still exits as the prelude" ok \
+                 || check "a prelude failure beside an unmeasured section still exits as the prelude" "exit=$c14 out=$o14"
+grep -q 'UNMEASURED' <<< "$o14" \
+  && check "and the unmeasured section is still said to be UNMEASURED" ok \
+  || check "and the unmeasured section is still said to be UNMEASURED" "out=$o14"
+
+# The section's OWN checks failing is still the section's failure, with the prelude failing too
+# or not: the counts only ever narrow the blame, never move it off a section that failed.
+R11="$(mkrepo linuxtarget)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R11/tests/test-claude-sync.sh"
+mkcountrunner "$R11" 4 2
+o11="$(runlinux "$R11")"; c11=$?
+[ "$c11" -eq 1 ] && check "a section whose own checks fail on Linux still fails the audit as the section" ok \
+                 || check "a section whose own checks fail on Linux still fails the audit as the section" "exit=$c11 out=$o11"
+grep -q 'FAIL their own checks when run on Linux' <<< "$o11" \
+  && check "and on Linux it says so in those words" ok \
+  || check "and on Linux it says so in those words" "out=$o11"
+
+# A prelude failure when the change ALSO edits the prelude is not handed off to the base.
+R12="$(mkrepo linuxpreludeedit)"
+perl -pi -e 's/^PREAMBLE=1$/PREAMBLE=2/; s/^echo a$/echo a-edited/' "$R12/tests/test-claude-sync.sh"
+mkcountrunner "$R12" 3 0
+o12="$(runlinux "$R12")"; c12=$?
+[ "$c12" -eq 4 ] && check "a prelude failure with the prelude edited still reads as the prelude" ok \
+                 || check "a prelude failure with the prelude edited still reads as the prelude" "exit=$c12 out=$o12"
+grep -q 'also edits the prelude' <<< "$o12" \
+  && check "and says the change edits the prelude, rather than blaming the base" ok \
+  || check "and says the change edits the prelude, rather than blaming the base" "out=$o12"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

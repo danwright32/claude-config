@@ -76,7 +76,7 @@ out_clean="$(bash "$M" "$CLEAN" -n 1 2>&1)"; code_clean=$?
 [ "$code_clean" -eq 0 ] \
   && check "a real repo measures cleanly" ok \
   || check "a real repo measures cleanly" "exit=$code_clean out=$out_clean"
-printf '%s' "$out_clean" | grep -qE 'advised on [0-9]+ of [0-9]+ commits' \
+grep -qE 'advised on [0-9]+ of [0-9]+ commits' <<< "$out_clean" \
   && check "and reports how many commits it read, not just how many fired" ok \
   || check "and reports how many commits it read, not just how many fired" "out=$out_clean"
 grep -q 'OVERALL' <<< "$out_clean" \
@@ -100,10 +100,10 @@ printf 'rm -rf "$target_directory"\n' > "$RISKY/cleanup.sh"
 git -C "$RISKY" add -A >/dev/null 2>&1
 git -C "$RISKY" commit -q -m "add the cleanup script"
 out_risky="$(bash "$M" "$RISKY" -n 2 2>&1)"
-printf '%s' "$out_risky" | grep -qE 'advised on [1-9][0-9]* of' \
+grep -qE 'advised on [1-9][0-9]* of' <<< "$out_risky" \
   && check "a commit the advisory really does flag is counted as a firing" ok \
   || check "a commit the advisory really does flag is counted as a firing" "out=$out_risky"
-printf '%s' "$out_risky" | grep -qE '^ +[0-9]+ ' \
+grep -qE '^ +[0-9]+ ' <<< "$out_risky" \
   && check "and the trigger that did it is named, so the number can be acted on" ok \
   || check "and the trigger that did it is named, so the number can be acted on" "out=$out_risky"
 

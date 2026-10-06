@@ -68,14 +68,11 @@ type WorldOpts = {
   clock?: { sleep: (ms: number) => Promise<void> }
   questionOpenMs?: number
   slowMs?: number
-  /** What ask before saving holds while a save waits on Dan. */
-  pending?: unknown
 }
 const world = (on: On, opts: WorldOpts = {}) => {
   const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
   let writes = 0
   on('process.run', ($, e) => {
-    if (e.argv[0] === '__pending') return { value: { exitCode: 0, stdout: JSON.stringify(opts.pending ?? []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (e.argv[0] === 'terminal-notifier') {
       w.notified.push(e.argv.slice(1))
       if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -896,55 +893,6 @@ test("a subagent's refused calls are its own, not the session's", withDeps, asyn
   await start($)
   for (const id of ['s1', 's2', 's3']) await appendRow($, [{ id, error: 'refused' }], 'sub1')
   expect(w.progress.filter(p => p.failed !== undefined)).toEqual([])
-})
-
-// #706: a save waiting in the band for Dan's answer (ask before saving) is a question waiting on him:
-// marked for the pane, notified once, and no idle "What's next?" while it waits. Read from its writes
-// of the questions it holds (`ask-before-saving.pending`), which every plugin sees.
-// It refuses the save and holds the question (a call to '__save' here), and lets it go once Dan
-// answers ('__answered'). What it holds comes from the world: an inline plugin cannot reach this
-// file's variables.
-const AskBeforeSaving: { name: string; register: Register } = {
-  name: 'ask-before-saving',
-  register: on => {
-    const pending = { plugin: 'ask-before-saving', key: 'pending' } as never
-    on('tool.call', { tool: '__save' as never }, async $ => {
-      await $.state.set(pending, JSON.parse((await $.process.run(['__pending'])).stdout) as never)
-      return { deny: 'Not saved yet. Dan is being asked in the band.' } as never
-    })
-    on('tool.call', { tool: '__answered' as never }, async $ => {
-      await $.state.set(pending, [] as never)
-      return { result: 'answered' } as never
-    })
-  },
-}
-const command = ($: { tool: { call: (e: never) => Promise<unknown> } }, name: 'save' | 'answered') => $.tool.call({ tool: `__${name}` } as never)
-const SAVE = { id: 'toolu_9', tool: 'Write', input: {}, files: ['~/.claude/CLAUDE.md'], text: 'Always run the tests.' }
-
-test('a save waiting in the band marks the session waiting, notifies once, and holds back What next', { plugins: [deps, AskBeforeSaving] }, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  const w = world(on, { pending: [SAVE] })
-  await start($)
-  await command($, 'save')
-  await command($, 'save')
-  expect(last(w)?.waiting).toMatchObject({ question: 'Save this as a standing rule?', kind: 'question' })
-  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Save this as a standing rule?']])
-  await idle($)
-  expect(w.notified.length).toBe(1)
-  await command($, 'answered')
-  expect(last(w)?.waiting).toBeUndefined()
-  await idle($)
-  expect(w.notified[1]).toEqual(['-title', 'Claude Code', '-message', "What's next?"])
-})
-
-test('a save question that cannot be read marks and notifies nothing, and is said', { plugins: [deps, AskBeforeSaving] }, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  const w = world(on, { pending: [{ id: 9 }] })
-  await start($)
-  await command($, 'save')
-  expect(w.notified).toEqual([])
-  expect(w.progress.filter(p => p.waiting !== undefined)).toEqual([])
-  expect(w.logs.filter(l => l.includes('could not read the save question ask before saving holds'))).toHaveLength(1)
 })
 
 // #706: the handoff mod's Use button submits the saved opening prompt as Dan's own words, from the

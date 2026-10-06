@@ -1,14 +1,12 @@
-/** A save to lasting memory waiting on Dan's answer in the band. */
+/** A save to lasting memory refused until Claude asks Dan in Claude Code's dialog and he answers (#777). */
 export type AskBeforeSavingQuestion = {
-  /** The refused call's tool_use_id. */
+  /** The refused call's tool_use_id, which the dialog's `metadata.source` names. */
   id: string
   /** The tool and its arguments as Claude sent them, which For good asks Claude to send again. */
   tool: 'Write' | 'Edit' | 'Bash'
   input: Record<string, unknown>
   /** Where it would go, as Dan reads it (home as ~). */
   files: string[]
-  /** What would be saved: the new lines of a Write, an Edit's new text, a Bash command as written. */
-  text: string
   /**
    * What the save writes (rules.ts saveKey), taken where Dan is asked, so For good approves the file
    * he was shown however the session moves before he answers. Absent on a question stored before
@@ -27,20 +25,16 @@ export type AskBeforeSavingApproval = {
   files: string[]
   /** When it lapses, in milliseconds since the epoch, as $.clock.now() reads. */
   until: number
-  /** How Claude was asked: a note read at its next step, or a prompt of its own. */
-  told: 'note' | 'prompt'
-  /** What Claude was asked, sent again as a prompt when a note went unread. */
-  text: string
 }
 
 declare module 'claude-code' {
   interface PluginState {
     /**
-     * In $.state so a reload of the mod keeps them, and dropped at session end: the questions waiting
-     * on Dan (the first is the one shown), the rules he gave for this session only, his latest
-     * message, read for the words that already make a rule permanent, the saves he answered For good
-     * that Claude has yet to send again, and the main loop's running turn, null between turns.
+     * In $.state so a reload of the mod keeps them, and dropped at session end: the refused saves
+     * waiting for Claude to ask Dan in the dialog, the rules he gave for this session only, his
+     * latest message, read for the words that already make a rule permanent, and the saves he
+     * answered For good that Claude has yet to send again.
      */
-    'ask-before-saving': { pending: AskBeforeSavingQuestion[]; rules: string[]; lastPrompt: string | null; approvals: AskBeforeSavingApproval[]; turn: string | null }
+    'ask-before-saving': { pending: AskBeforeSavingQuestion[]; rules: string[]; lastPrompt: string | null; approvals: AskBeforeSavingApproval[] }
   }
 }

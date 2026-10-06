@@ -41,10 +41,13 @@ one reader every count ratchet in this config uses rather than a second parser (
     # source: <chunks directory>
     total: <bytes gzipped>
 
-The record only ever goes DOWN on its own (a smaller total replaces it, so a saving is kept) or is
-raised by an explicit acceptance (--accept, the ACCEPT_BUNDLE_GROWTH=1 hatch). Growth inside the
-margin passes without moving the record, so ten small additions cannot ratchet the budget up one
-step at a time: each is judged against the last total somebody actually accepted.
+The record follows every total that PASSES: a smaller total replaces it, growth inside the margin
+replaces it, and growth past the margin replaces it only through an explicit acceptance (--accept,
+the ACCEPT_BUNDLE_GROWTH=1 hatch). Until claude-config#586 growth inside the margin left the record
+where it was, so the record drifted behind main and the next push, whatever it changed, was billed
+for every earlier small step. The cost of moving it is that growth made of several pushes each
+inside the margin is never judged as a whole; a repository that cares commits its own record and
+judges against its merge base, and check-bundle-budget.sh stands down there.
 
 THE MARGINS. Growth blocks only when it exceeds BOTH the percentage and the absolute amount, and
 they were set from the Slate build on 2026-09-18 (see check-bundle-budget.sh's header).
@@ -262,10 +265,17 @@ def main(argv):
         return 0
 
     if not past_both:
+        # The record MOVES to a total that passed (claude-config#586). Left behind, every change
+        # inside the margin was billed to whichever push came next: in Slate the record sat 11 KB
+        # behind main and a branch that changed no client code read +2.7% against it. What this
+        # gives up, said rather than hidden (L93): growth made of several pushes each inside the
+        # margin is never judged as a whole. A repository where that matters commits its own record
+        # and judges against the merge base, and the hook stands down there.
+        write_record(path, a.remote, total, source, "moved: growth inside the margin passed")
         print(f"bundle-budget: the client bundle grew from {fmt(recorded)} to {fmt(total)} bytes "
               f"gzipped (+{fmt(growth)}, {pct_text}), inside the margin ({a.pct:g}% and "
-              f"{fmt(a.abs_)} bytes, both must be exceeded). The record stays at "
-              f"{fmt(recorded)}.")
+              f"{fmt(a.abs_)} bytes, both must be exceeded). The record moves to "
+              f"{fmt(total)}, so the next push is judged only on what it adds.")
         return 0
 
     print(f"PUSH BLOCKED: the client bundle grew from {fmt(recorded)} to {fmt(total)} bytes "

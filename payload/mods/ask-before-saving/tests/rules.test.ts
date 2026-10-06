@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { APPROVAL_MS, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, questionOf, resolvePath, saveKey, stands } from '../hooks/rules.ts'
+import { APPROVAL_MS, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -231,35 +231,80 @@ test('the text shown is what would be saved: the new lines of a rewrite, the who
   expect(addedText('# Memory\n', '# Memory\n- a\n')).toBe('# Memory')
 })
 
-// The look is mod-kit's ($.modkit.question, one look for every question in the band, #705); this
-// is what ask before saving hands it: the rule's exact text and its file between grey rules, then
-// the three answers with what each does under it.
-test('the question: the chip and question, the rule and its file set off by grey rules, then the three answers', () => {
-  const q = questionOf({ id: 't1', text: 'Ask before saving a standing rule.\n- and this', files: ['~/.claude/CLAUDE.md'] })
-  expect(q.mod).toBe('ask-before-saving')
-  expect(q.chip).toBe('Standing rule')
-  expect(q.question).toBe('Save this as a standing rule?')
-  expect(q.body).toEqual([
-    { divider: true },
-    [{ text: 'Ask before saving a standing rule.', wrap: true }],
-    [{ text: '- and this', wrap: true }],
-    [{ text: '~/.claude/CLAUDE.md', dim: true }],
-    { divider: true },
-  ])
-  expect(q.options.map(o => [o.label, o.description])).toEqual([
-    ['For good', 'Saved to ~/.claude/CLAUDE.md'],
-    ['Just this session', 'Kept until this session ends; nothing is written'],
-    ['Not at all', 'Nothing is saved'],
-  ])
+// #777: the question is asked in Claude Code's own dialog, by Claude, never in the band. The mod hands
+// Claude what to ask: the file named, the rule in plain words, never the command, and the three
+// answers, whose labels and lines the mod sets itself so the answer read back is one of them.
+test("the instruction to ask names the file, asks for the rule in plain words, and carries the save's id", () => {
+  const t = askInstruction('toolu_1', ['~/.claude/CLAUDE.md'])
+  expect(t).toContain('AskUserQuestion')
+  expect(t).toContain('{"source": "ask-before-saving:toolu_1"}')
+  expect(t).toContain('~/.claude/CLAUDE.md')
+  expect(t).toContain('one plain sentence')
+  expect(t).toContain('never the command')
+  expect(t).toContain('send this same call again unchanged')
+  expect(t).not.toContain('band')
 })
 
-// L243: a press must answer the save it was drawn for, so a second press after the first was
-// answered cannot land on the next save in line. The row and its buttons carry the save's identity.
-test('each save asks under its own id, and its buttons carry that id, so a press answers only the save it was drawn for', () => {
-  const a = questionOf({ id: 'toolu_a', text: 'x', files: ['CLAUDE.md'] })
-  const b = questionOf({ id: 'toolu_b', text: 'y', files: ['AGENTS.md'] })
-  expect(a.id).not.toBe(b.id)
-  expect(a.options.map(o => o.button)).toEqual(['for-good:toolu_a', 'this-session:toolu_a', 'not-at-all:toolu_a'])
+test('the three answers each say what they do, and a save id is read back only from its own source', () => {
+  expect(dialogOptions(['~/.claude/CLAUDE.md']).map(o => [o.label, o.description])).toEqual([
+    ['For good', 'Saved to ~/.claude/CLAUDE.md'],
+    ['Just this session', 'Followed until this session ends; nothing is written'],
+    ['Not at all', 'Nothing is saved'],
+  ])
+  expect(sourceOf('toolu_a')).toBe('ask-before-saving:toolu_a')
+  expect(saveIdOf('ask-before-saving:toolu_a')).toBe('toolu_a')
+  expect(saveIdOf('next-issue')).toBeUndefined()
+  expect(saveIdOf(undefined)).toBeUndefined()
+  expect(saveIdOf('ask-before-saving:')).toBeUndefined()
+})
+
+test('the rule kept for this session is the plain words Claude asked with, without the file or the question mark', () => {
+  expect(ruleOf('Save to ~/.claude/CLAUDE.md for good: never merge on Fridays?', ['~/.claude/CLAUDE.md'])).toBe('never merge on Fridays')
+  expect(ruleOf('Never merge on Fridays, saved to CLAUDE.md?', ['CLAUDE.md'])).toBe('Never merge on Fridays, saved to CLAUDE.md')
+})
+
+// #777: a subagent's call building throwaway fixture homes in a test file mentioned `$E27HA/CLAUDE.md`
+// inside a python heredoc and was asked about as a save. Each Bash call is a fresh shell, so a
+// variable the command never sets and nothing in the environment holds expands to nothing, and a
+// path through it reaches no lasting memory. One the command sets, a loop or read fills, or the
+// environment holds still counts: asking is the harmless side.
+test('a mention through a variable nothing sets is no lasting memory; one something can set still counts', async () => {
+  const { inCheckout } = checkouts()
+  const unset = async () => false
+  const env = (name: string) => async (n: string) => n === name
+  const fixture = "python3 - <<'EOF'\np='tests/t.sh'\nnew=r'''\nE27HA=\"$WORK/e627-homeA\"; printf '# rules\\n' > \"$E27HA/CLAUDE.md\"\n'''\nEOF"
+  expect(await mentioned(fixture, HOME, inCheckout, unset)).toEqual([])
+  // The same text with nothing to say what is set, as before #777, counted.
+  expect(await mentioned(fixture, HOME, inCheckout)).toEqual(['$E27HA/CLAUDE.md'])
+  expect(await mentioned('echo x >> "$CLAUDE_PROJECT_DIR/CLAUDE.md"', HOME, inCheckout, env('CLAUDE_PROJECT_DIR'))).toEqual(['$CLAUDE_PROJECT_DIR/CLAUDE.md'])
+  expect(await mentioned('echo x >> "$NOPE/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
+  expect(await mentioned(`D=~/.claude; python3 -c "open('$D/CLAUDE.md','a')"`, HOME, inCheckout, unset)).toEqual(['$D/CLAUDE.md'])
+  expect(await mentioned('R=~/.claude; D="$R/x"; echo y >> "$D/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$D/CLAUDE.md'])
+  expect(await mentioned('D="$CLAUDE_PROJECT_DIR"; echo y >> "$D/AGENTS.md"', HOME, inCheckout, env('CLAUDE_PROJECT_DIR'))).toEqual(['$D/AGENTS.md'])
+  expect(await mentioned('export D=$HOME/.claude; echo y >> "$D/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$D/CLAUDE.md'])
+  expect(await mentioned('for D in a b; do echo y >> "$D/CLAUDE.md"; done', HOME, inCheckout, unset)).toEqual(['$D/CLAUDE.md'])
+  expect(await mentioned('read -r D; echo y >> "$D/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$D/CLAUDE.md'])
+  expect(await mentioned('W=$(cat where.txt); echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$W/CLAUDE.md'])
+  expect(await mentioned('A="$B"; B="$A"; echo y > "$A/CLAUDE.md"', HOME, inCheckout, unset)).toEqual(['$A/CLAUDE.md'])
+  // A fresh temporary folder is loaded into no session.
+  expect(await mentioned('W=$(mktemp -d); echo y > "$W/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
+  // A name that only contains the variable's is not it.
+  expect(await mentioned('SYNC_WORK=~/.claude; echo y > "$WORK/CLAUDE.md"', HOME, inCheckout, unset)).toEqual([])
+  // A variable every shell sets for itself is always set, whatever printenv says (lessons review
+  // of #783: `$PWD/CLAUDE.md` was judged unset and its save went through unasked).
+  for (const v of ['PWD', 'OLDPWD', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL'])
+    expect(await mentioned(`echo y >> "$${v}/CLAUDE.md"`, HOME, inCheckout, unset)).toEqual([`$${v}/CLAUDE.md`])
+  expect(await mentioned('D="$PWD"; echo y >> "$D/AGENTS.md"', HOME, inCheckout, unset)).toEqual(['$D/AGENTS.md'])
+  // A path spelled out beside it is judged as before.
+  expect(await mentioned('echo y > "$NOPE/x"; cat ~/.claude/CLAUDE.md', HOME, inCheckout, unset)).toEqual(['~/.claude/CLAUDE.md'])
+})
+
+test("a target named through a variable nothing sets is judged the same, by name or by the command's mentions", async () => {
+  const { inCheckout } = checkouts()
+  const unset = async () => false
+  const judge = (word: string, command: string) => lastingFiles({ files: [{ word }], unnamed: [] }, HOME, inCheckout, command, unset)
+  expect(await judge('$E27HA/CLAUDE.md', 'E27HA="$WORK/a"; printf x > "$E27HA/CLAUDE.md"')).toEqual([])
+  expect(await judge('$D/CLAUDE.md', 'D=$(cat where); printf x > "$D/CLAUDE.md"')).toEqual(['$D/CLAUDE.md'])
 })
 
 // #738: For good approves a save, and Claude sends the call again from a request of its own. What
