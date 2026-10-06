@@ -520,8 +520,11 @@ const receiverBefore = (code: string, at: number): string | undefined => {
 // Modules with no way to write a file of their own, so a program importing only these writes only
 // through the routes read below (lessons review of #830: zipfile, sqlite3, tempfile and the rest
 // write files the judge has no rule for, and a list of writers would always miss one, L257). os is
-// not one of them; its path is, taken on its own.
-const PY_NO_WRITERS = new Set(['re', 'json', 'sys', 'pathlib', 'textwrap', 'string', 'collections', 'itertools', 'functools', 'math', 'datetime', 'difflib', 'typing', 'dataclasses', 'enum', 'unicodedata', 'pprint', 'fnmatch', 'glob', 'os.path', 'posixpath'])
+// not one of them; its path is, taken on its own. Nor is sys (follow up to #846, #830): it holds every
+// loaded module and the import machinery (sys.modules, sys.meta_path, reachable by getattr, dir or
+// __dict__ as well as by name), so each review found another route from it to os. Any import of sys,
+// or of anything from it, leaves the program's files unnamed.
+const PY_NO_WRITERS = new Set(['re', 'json', 'pathlib', 'textwrap', 'string', 'collections', 'itertools', 'functools', 'math', 'datetime', 'difflib', 'typing', 'dataclasses', 'enum', 'unicodedata', 'pprint', 'fnmatch', 'glob', 'os.path', 'posixpath'])
 // A plain top level import line, read whole: at the start of a line, one statement, an optional
 // comment after it. `import a, b.c as d` and `from a.b import c, d as e` (or `*`).
 const PY_IMPORT_LINE = /^(?:import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)|from\s+([\w.]+)\s+import\s+(\*|\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*))[ \t]*(?:#[^\n]*)?$/
@@ -536,6 +539,10 @@ const PY_IMPORT_LINE = /^(?:import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\
  */
 const onlyQuietModules = (inline: string): boolean => {
   if (/\b(?:__import__|import_module|importlib|getattr|__builtins__)\b|\bsys\s*\.\s*modules\b/.test(inline)) return false
+  // A quiet module that re-exports os or sys as an attribute (pathlib.os, glob.os, typing.sys and
+  // others) is a route to them, and a module's namespace read whole (__dict__, vars) reaches any
+  // attribute by a computed name (lessons review of #859 at 9971367). Fail safe on any of them.
+  if (/\.\s*(?:os|sys)\b|__dict__|\bvars\s*\(/.test(inline)) return false
   const words = (inline.match(/\bimport\b/g) ?? []).length
   let read = 0
   for (const line of inline.split('\n')) {
