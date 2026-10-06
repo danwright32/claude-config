@@ -4147,25 +4147,26 @@ report_shared_effort_model(){
   if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     why="no claude command was found to ask (looked for ${bin:-claude on PATH})"
   else
+    # claude-mds-ok: excluded twice, by --bare here and CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 on the launch below; /model is answered locally and reads no rules.
     local args=(-p --bare --no-session-persistence)
     [ -n "$model" ] && args+=(--model "$model")
     args+=(--output-format stream-json --verbose /model)
     # Asked the way a new session on this Mac would resolve it, never with a model this process
     # inherited from the session that started it.
     if [ "$CLAUDE_HOME" = "$HOME/.claude" ]; then
-      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
     else
-      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
     fi
     if [ "$rc" -eq 124 ]; then
-      why="'claude -p /model' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped"
+      why="the claude command, asked for /model, did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped"
     elif [ "$rc" -ne 0 ]; then
-      why="'claude -p /model' failed (exit $rc)"
+      why="the claude command, asked for /model, failed (exit $rc)"
     else
-      full="$(printf '%s\n' "$out" | jq -r 'select(type == "object" and .type == "system" and .subtype == "init") | .model // empty' 2>/dev/null | head -n 1 || true)"
+      full="$(printf '%s\n' "$out" | jq -rs 'map(select(type == "object" and .type == "system" and .subtype == "init") | .model // empty | strings) | first // empty' 2>/dev/null || true)"
       # A context window suffix ("[1m]") names how the session runs, not the settings key.
       full="${full%%\[*}"
-      [ -n "$full" ] || why="'claude -p /model' named no model in its answer"
+      [ -n "$full" ] || why="the claude command, asked for /model, named no model in its answer"
     fi
   fi
   if [ -n "$why" ]; then
@@ -4174,7 +4175,7 @@ report_shared_effort_model(){
     return 0
   fi
   grep -qxF "$full" <<< "$names" && return 0
-  level="$(jq -r --arg m "$(printf '%s\n' "$names" | head -n 1)" '.modelSettings[$m].effortLevel' "$shared" 2>/dev/null || true)"
+  level="$(jq -r --arg m "${names%%$'\n'*}" '.modelSettings[$m].effortLevel' "$shared" 2>/dev/null || true)"
   echo "--- the model this Mac runs ---"
   echo "  settings.json's model (${model:-the default}) is $full on this Mac, and $SHARED_SETTINGS_FILE has no shared effort for it (it has one for $(printf '%s\n' "$names" | paste -sd',' - | sed 's/,/, /g')), so $full runs at its own default effort. To share it, add \"$full\": { \"effortLevel\": \"${level:-high}\" } under modelSettings in payload/$SHARED_SETTINGS_FILE."
   return 0
