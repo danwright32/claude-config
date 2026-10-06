@@ -310,7 +310,11 @@ export const register: Register = on => {
         const k = saveKey(tool, input, at.cwd, at.home)
         // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
         let hit = undefined as AskBeforeSavingApproval | undefined
-        await update($, approvalsRef, a => (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x)))
+        // Reset at the top of the callback, as takeApproval does, in case update runs it again.
+        await update($, approvalsRef, a => {
+          hit = undefined
+          return (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x))
+        })
         if (hit) $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
         return r
       }
