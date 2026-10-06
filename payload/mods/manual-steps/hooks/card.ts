@@ -125,7 +125,8 @@ export type CardPart =
   | { button: 'done' | 'copy' | 'copy-link'; label: string }
 
 /**
- * The card's lines: the amber heading, then each step on its own line. Only the next step is open,
+ * The card's lines: the amber heading, "waiting on you" after it while the open step is Dan's,
+ * then each step on its own line. Only the next step is open,
  * bold in the terminal's own text colour, with Done and, indented under it, its link or location,
  * its clicks and any value with Copy. A later step is its title alone; a finished one is dimmed and
  * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
@@ -133,8 +134,12 @@ export type CardPart =
  * hyperlinks, with Copy link beside it for the terminals that do not, Apple Terminal among them (#708).
  */
 export const cardLines = (card: StepsCard): CardPart[][] => {
-  const lines: CardPart[][] = [[{ text: card.heading, color: AMBER }]]
   const open = nextStep(card)
+  // While the open step is Dan's to do, the heading says it waits on him (#863), on the card's own
+  // line rather than a row of its own beside the card, so the band and the pane state it once.
+  // Sent, it waits on Claude, and the step line says so.
+  const isDans = open !== undefined && !card.steps[open]?.isSent
+  const lines: CardPart[][] = [[{ text: card.heading, color: AMBER }, ...(isDans ? [{ text: '  waiting on you', dim: true }] : [])]]
   card.steps.forEach((s, i) => {
     const label = `${i + 1}. ${s.title}`
     if (s.finished) {
