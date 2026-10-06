@@ -120,10 +120,18 @@ for d in "${mods[@]}"; do
     # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
     # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
     # own tsconfig.json (lessons review of #797).
-    if ! out="$("$tsc" -p "$d" --noEmit --allowImportingTsExtensions 2>&1)"; then
+    out="$("$tsc" -p "$d" --noEmit --allowImportingTsExtensions 2>&1)"; trc=$?
+    if [ "$trc" -ne 0 ]; then
       errs="$(printf '%s\n' "$out" | grep 'error TS' || true)"
+      if [ -z "$errs" ]; then
+        # No error TS line: the compiler itself failed (a crash, a config it could not read), so no
+        # type check was measured and none is claimed (L11).
+        echo "check-mods: $name could not be type checked: the compiler exited $trc without reporting a type error: $(printf '%s\n' "$out" | sed '/^ *$/d' | tail -n 3 | sed 's/^ *//' | paste -sd';' -)"
+        failed=1
+        continue
+      fi
       count="$(printf '%s\n' "$errs" | grep -c 'error TS' || true)"
-      echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "${errs:-$out}" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"
+      echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "$errs" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"
       failed=1
       continue
     fi
