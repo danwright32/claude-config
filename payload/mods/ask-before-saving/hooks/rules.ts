@@ -328,8 +328,9 @@ export const ruleText = (s: string): string => s.replace(/\*\*/g, '').replace(/\
 export const MIN_RULE = 40
 
 /**
- * The longest SHORT line an approved entry may carry: the index's own cap (ENTRY_CAP in
- * hooks/test-rule-file-budget.sh, 160 today), so the short form is a short form and nothing more.
+ * The longest index line an approved entry's SHORT line may render as, `- L<n>. <short>`: the
+ * index's own cap, ENTRY_CAP in hooks/test-rule-file-budget.sh, which hooks/test-durable-lesson-check.sh
+ * holds this to, so the short form is a short form and nothing more.
  */
 export const MAX_SHORT = 160
 
@@ -366,20 +367,24 @@ export const lessonAddition = (tool: string, input: Record<string, unknown>, old
  * Whether the added text is exactly that one lesson (lessons review of #869: anything else written
  * beside the rule reached every session unseen by Dan): one new entry, `- **L<n>.` then the rule as
  * he approved it (bold and wrapping aside), then at most its provenance (repo#N, then a date), then at most
- * one SHORT line no longer than the index's cap. Blank lines around it are the file's spacing.
+ * one SHORT line whose index line, `- L<n>. <short>`, is within the index's cap. Blank lines around it
+ * are the file's spacing.
  */
 export const addsLesson = (added: string, rule: string): boolean => {
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
-  if (shortAt !== -1) {
-    if (shortAt !== lines.length - 1 || shortAt === 0) return false
-    if ((lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '').length > MAX_SHORT) return false
-  }
+  if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
   const body = ruleText((shortAt === -1 ? lines : lines.slice(0, shortAt)).join('\n'))
-  // Provenance is its shape and nothing more, one or more `repo#N` and an optional date (second
-  // lessons review of #869: any text in parentheses let a sentence Dan never read ride along).
-  const provenance = String.raw`(?: \([\w.-]+#\d+(?:, [\w.-]+#\d+)*(?:, \d{4}-\d{2}-\d{2})?\))?`
-  return new RegExp(`^- L\\d+\\. ${escapeRe(ruleText(rule))}${provenance}$`).test(body)
+  // Provenance is its shape and nothing more, one or more `repo#N` (owner qualified or not) and an
+  // optional date (lessons reviews of #869: any text in parentheses let a sentence Dan never read
+  // ride along, and `owner/repo#N` is a provenance too).
+  const ref = String.raw`(?:[\w.-]+\/)?[\w.-]+#\d+`
+  const provenance = String.raw`(?: \(${ref}(?:, ${ref})*(?:, \d{4}-\d{2}-\d{2})?\))?`
+  const m = new RegExp(`^- L(\\d+)\\. ${escapeRe(ruleText(rule))}${provenance}$`).exec(body)
+  if (!m) return false
+  if (shortAt === -1) return true
+  // Counted as the index renders it, `- L<n>. <short>` (third lessons review of #869).
+  return `- L${m[1]}. ${(lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')}`.length <= MAX_SHORT
 }
 
 /**

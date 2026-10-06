@@ -192,6 +192,16 @@ else
   fi
 fi
 
+# AND THE MOD HOLDS AN APPROVED SHORT LINE TO THE SAME CAP (#867). Ask before saving lets an approved
+# lesson's SHORT line through only within the index cap, so its MAX_SHORT is that cap, compared here
+# rather than trusted as a copy (L41).
+maxshort="$(sed -n 's/^export const MAX_SHORT = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
+if [ -n "$realcap" ] && [ "$maxshort" = "$realcap" ]; then
+  PASS=$((PASS+1)); echo "PASS: ask before saving holds an approved SHORT line to the budget suite's cap ($realcap)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: ask before saving's MAX_SHORT (${maxshort:-unread}) is not the budget suite's ENTRY_CAP (${realcap:-unread}), so an approved lesson can pass the mod and be refused by the send"
+fi
+
 echo "----"
 echo "passed $PASS, failed $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"

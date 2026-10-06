@@ -1083,3 +1083,31 @@ test("a refused shell call while a lesson approval stands keeps the guard's own 
   expect(refusalOf(r)).toBe('Blocked: this carries a dash.')
   expect(w.printenv).toEqual([])
 })
+
+// Third lessons review of #869: the SHORT line is held to the index cap as the index counts it, with
+// its `- L<n>. ` prefix; an owner qualified repo is a provenance; and a lapsed lesson approval is
+// told to Claude in the refusal, as For good's is.
+test('a SHORT line over the index cap with its prefix is asked about, and an owner qualified provenance goes through', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const over = ENTRY.replace('SHORT: Fill a stored null on conflict.', `SHORT: ${'x'.repeat(155)}`)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${over}## Data safety` }))).toContain(ASKS)
+  const owned = ENTRY.replace('(slate#9, 2026-10-06)', '(dwright-pennie/slate#9, 2026-10-06)')
+  expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${owned}## Data safety` })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('a lesson approval found past its time where it is used is told to Claude in the refusal', withKit, async ($, on) => {
+  let now = 0
+  on('clock.now', () => ({ value: now }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  now = APPROVAL_MS
+  const late = refusalOf(await call($, addLesson))
+  expect(late).toContain(ASKS)
+  expect(late).toContain(`Dan's earlier Add to LESSONS.md on this save lapsed after 10 minutes`)
+  expect(w.ran).toEqual([])
+})

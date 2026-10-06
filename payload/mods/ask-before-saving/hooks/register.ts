@@ -284,15 +284,15 @@ const takeLesson = async ($: EngineInterface, added: string) => {
     return keep
   })
   for (const x of lapsed) $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
-  return live as AskBeforeSavingApproval | undefined
+  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
 }
 
 // What Claude reads when the approval for the call it sent has lapsed (#764: never "unused" for one
 // it sent that another guard refused).
 const lapsedNote = (x: AskBeforeSavingApproval) =>
   x.refused !== undefined
-    ? `Dan's earlier For good on this save lapsed after ${MINUTES} minutes; the save you sent before was refused (${x.refused}), so he has to be asked again.`
-    : `Dan's earlier For good on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
+    ? `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes; the save you sent before was refused (${x.refused}), so he has to be asked again.`
+    : `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
 // What a subagent is told when its write would save lasting memory: refused, never asked (#777).
 const agentRefusal = (where: string) =>
@@ -451,9 +451,9 @@ export const register: Register = on => {
     // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
     // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
     const added = await lessonAdded($, tool, input, at)
-    const lesson = added === undefined ? undefined : await takeLesson($, added)
-    if (lesson) {
-      lessonUsed.set(String(raw.tool_use_id ?? ''), lesson)
+    const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
+    if (lesson.live) {
+      lessonUsed.set(String(raw.tool_use_id ?? ''), lesson.live)
       return next(e)
     }
     // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
@@ -466,7 +466,8 @@ export const register: Register = on => {
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
     const ask = askInstruction(id, files)
-    return { deny: lapsed ? `${lapsedNote(lapsed)} ${ask}` : ask }
+    const late = lapsed ?? lesson.lapsed
+    return { deny: late ? `${lapsedNote(late)} ${ask}` : ask }
   }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
@@ -509,7 +510,7 @@ export const register: Register = on => {
       lapseAfter($, APPROVAL_MS, made)
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file} that only adds one entry: "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line of at most ${MAX_SHORT} characters. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {
