@@ -46,7 +46,7 @@ const path = require('path')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
 // The read predicate, the health path and its answer are the launcher's, so the two cannot drift.
-const { isRead, MARK, HEALTH } = require('./explorer-browser.js')
+const { isRead, MARK, HEALTH, proxyAnswers } = require('./explorer-browser.js')
 
 // Headers that describe one connection, never forwarded across the proxy.
 const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'proxy-authenticate', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
@@ -71,27 +71,34 @@ const removeState = () => {
     console.error(`read-only-proxy: could not remove ${stateFile}: ${e.message}`)
   }
 }
-// A proxy.json naming a live proxy means this directory is in use: refuse rather than take its
-// address away. One naming a process that is gone is left from an earlier run, and is removed.
-try {
-  const prior = JSON.parse(fs.readFileSync(stateFile, 'utf8')).pid
-  if (Number.isInteger(prior) && prior > 0 && prior !== process.pid) {
+// A proxy.json naming a proxy that is still up means this directory is in use: refuse rather than
+// take its address away. Up means its pid is alive AND its address answers as this proxy, since a
+// pid can be handed to another process once its proxy is gone. Anything else is left from an
+// earlier run, and is removed.
+async function claimStateDir() {
+  let prior
+  try {
+    prior = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+  } catch {
+    // No proxy.json, or one that cannot be read: it names nothing that is up.
+  }
+  const pid = prior && prior.pid
+  if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && typeof prior.proxy === 'string') {
     let alive = false
     try {
-      process.kill(prior, 0)
+      process.kill(pid, 0)
       alive = true
     } catch (e) {
       alive = e.code === 'EPERM'
     }
-    if (alive) {
-      console.error(`read-only-proxy: a proxy is already running for ${stateDir} (pid ${prior}); stop it or use another --state directory.`)
+    const answers = alive && (await proxyAnswers(prior.proxy, 2000).then(() => true, () => false))
+    if (answers) {
+      console.error(`read-only-proxy: a proxy is already running for ${stateDir} (pid ${pid}, ${prior.proxy}); stop it or use another --state directory.`)
       process.exit(3)
     }
   }
-} catch {
-  // No proxy.json, or one that cannot be read: nothing live is named, so it is removed below.
+  removeState()
 }
-removeState()
 // Certificates outlive any run: a run that went on past them would fail every https tunnel.
 const CERT_DAYS = '30'
 const UPSTREAM_MS = Number(argOf('--upstream-timeout-ms') || 30_000)
@@ -265,7 +272,7 @@ server.on('connect', (req, client, head) => {
   })
 })
 
-makeAuthority().then(
+claimStateDir().then(makeAuthority).then(
   () =>
     server.listen(Number(argOf('--port') || 0), '127.0.0.1', () => {
       const { port } = server.address()

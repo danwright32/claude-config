@@ -561,6 +561,16 @@ if [ -n "${PROXY_PID:-}" ]; then
   [ "$rc" = 3 ] && grep -q "already running" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
     || bad "a second proxy on a live proxy's directory refuses and leaves its proxy.json (rc $rc)" "$out"
 fi
+# A left over proxy.json whose pid now belongs to some other live process (here, this suite's own
+# shell) names no proxy: nothing answers at its address, so it is stale, and a new proxy starts.
+mkdir -p "$TMP/proxy3"
+printf '{"proxy":"http://127.0.0.1:%s","pid":%s}\n' "$dead_port" "$$" > "$TMP/proxy3/proxy.json"
+node "$PROXY_JS" --state "$TMP/proxy3" >"$TMP/third.out" 2>&1 & third=$!
+BG_PIDS="$BG_PIDS $third"
+for _ in $(seq 1 200); do grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null && break; kill -0 "$third" 2>/dev/null || break; sleep 0.05; done
+grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null && ok \
+  || bad "a proxy.json whose pid was reused by something that is not a proxy does not stop a new proxy" "$(cat "$TMP/third.out")"
+kill "$third" 2>/dev/null; wait "$third" 2>/dev/null
 # A proxy.json left behind names a dead process as the proxy, so the proxy removes it as it stops,
 # here on a hangup, the signal a closed terminal sends.
 if [ -n "${PROXY_PID:-}" ]; then
