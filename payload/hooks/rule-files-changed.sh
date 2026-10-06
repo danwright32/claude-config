@@ -71,6 +71,7 @@ STATE="$STATE_DIR/claude-rule-files-${key}.state"
 # a slash points outside the set a config sync carries, so it is not this hook's
 # business (again, claude-sync's own rule for the same list).
 rule_files() {
+  local line target
   printf 'CLAUDE.md\n'
   while IFS= read -r line; do
     case "$line" in '@'?*) ;; *) continue ;; esac
@@ -85,17 +86,29 @@ rule_files() {
 # by line. A file named as an import but missing is recorded as missing rather
 # than skipped: it appearing or disappearing is exactly the kind of change worth
 # reporting, and skipping it would make the two states read the same.
+#
+# ONE shasum over every file present, never one per file (claude-config#603): this runs on every
+# prompt, and the import list grows with every section the lessons index is split into.
 snapshot() {
-  local f h
+  local f h names present=() hashes
+  names="$(rule_files | sort -u)"
   while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    if [ -f "$RULES_DIR/$f" ]; then
-      h="$(shasum "$RULES_DIR/$f" 2>/dev/null | cut -d' ' -f1)"
-    else
-      h="absent"
-    fi
-    printf '%s  %s\n' "${h:-unreadable}" "$f"
-  done < <(rule_files | sort -u)
+    [ -n "$f" ] && [ -f "$RULES_DIR/$f" ] && present+=("$f")
+  done <<< "$names"
+  hashes=""
+  [ "${#present[@]}" -gt 0 ] && hashes="$(cd "$RULES_DIR" && shasum -- "${present[@]}" 2>/dev/null)"
+  # One awk joins the hashes back onto the names, in the names' order. shasum prints
+  # "<hash>  <name>", so the name is everything after the first two spaces.
+  {
+    printf '%s\n' "$hashes" | sed 's/^/H /'
+    [ "${#present[@]}" -gt 0 ] && printf 'P %s\n' "${present[@]}"
+    printf '%s\n' "$names" | sed 's/^/N /'
+  } | awk '
+    /^H / { l = substr($0, 3); i = index(l, "  "); if (i) h[substr(l, i + 2)] = substr(l, 1, i - 1); next }
+    /^P / { p[substr($0, 3)] = 1; next }
+    /^N / { n = substr($0, 3); if (n == "") next
+            v = (n in p) ? ((n in h) ? h[n] : "unreadable") : "absent"
+            printf "%s  %s\n", v, n }'
 }
 
 current="$(snapshot)"
