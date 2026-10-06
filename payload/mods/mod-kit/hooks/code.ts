@@ -111,14 +111,35 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // `pandas.Series(`. A name is pandas's when it is assigned from an expression starting with
 // `pandas.` or with a name already known to be, which follows `df = pandas.read_csv(...)` then
 // `s = df['x']`; a receiver is that name, or a subscript of it.
+// A name counts only when EVERY assignment to it is from pandas: one rebound to anything else
+// (`df = Path('a')`), or bound by any other route (a for loop, a with, a parameter, a tuple target,
+// :=), is unproven and judged like any other receiver (lessons review of #818).
 const pandasNames = (code: string): Set<string> => {
+  const assigned = new Map<string, (string | undefined)[]>()
+  for (const m of code.matchAll(/(?:^|[;\n])[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*([A-Za-z_]\w*)?/g)) {
+    const roots = assigned.get(m[1] as string) ?? []
+    roots.push(m[2])
+    assigned.set(m[1] as string, roots)
+  }
+  const reboundElsewhere = (name: string): boolean => {
+    const n = escaped(name)
+    return [
+      new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
+      new RegExp(`\\bas\\s+${n}\\b`),
+      new RegExp(`\\b${n}\\s*:=`),
+      new RegExp(`(?:^|[;\\n])[ \\t]*[\\w\\s,()[\\]*]*,\\s*\\(?\\s*${n}\\s*\\)?\\s*(?:,[^=\\n]*)?=(?!=)`),
+      new RegExp(`(?:^|[;\\n])[ \\t]*\\(?\\s*${n}\\s*,[^=\\n]*=(?!=)`),
+      new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
+    ].some(r => r.test(code))
+  }
   const names = new Set<string>(['pandas'])
-  const binds = [...code.matchAll(/(?:^|[;\n])[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*([A-Za-z_]\w*)/g)]
   for (let grew = true; grew; ) {
     grew = false
-    for (const b of binds) {
-      if (!names.has(b[1] as string) && names.has(b[2] as string)) {
-        names.add(b[1] as string)
+    for (const [name, roots] of assigned) {
+      if (names.has(name) || reboundElsewhere(name)) continue
+      // `s = s.rename(...)` derives the name from itself, which keeps whatever the rest made it.
+      if (roots.every(r => r !== undefined && (names.has(r) || r === name)) && roots.some(r => r !== undefined && names.has(r))) {
+        names.add(name)
         grew = true
       }
     }

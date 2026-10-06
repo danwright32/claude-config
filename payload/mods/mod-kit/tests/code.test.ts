@@ -54,6 +54,17 @@ describe('codeVerdict after #760', () => {
     expect(codeVerdict('python', "import pandas\nimport py\npy.path.local('a').rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pandas as pd\nsftp.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "x = 'import pandas'\nf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // A name bound from pandas and then rebound to anything else, or bound by any other route (a
+    // loop, a with, a parameter, a tuple, :=), is no longer proved pandas (lessons review of #818).
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.read_csv('a.csv')\ndf = Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\ndf = 'a.txt'\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nfor df in paths:\n    df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nwith open('x') as df:\n    df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\ndef f(df):\n    df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nx, df = 1, p\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nif (df := p):\n    df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // Rebound only from pandas, it is still pandas.
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\ndf = df.dropna()\ndf.rename('t')")).toBeUndefined()
     // A chained call has no bound name to prove pandas by, so it is still read as a move (accepted,
     // since it errs toward refusing; bind the result to a name to run it).
     expect(codeVerdict('python', "import pandas as pd\npd.Series([1]).rename('t')")).toEqual({ does: 'write files', seen: 'rename' })

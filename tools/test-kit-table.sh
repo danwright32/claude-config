@@ -72,12 +72,19 @@ out="$(python3 "$TOOL" "$D" --check 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && grep -q 'unknown reader: paths' <<< "$out" && ok || bad "an entry for a reader the tool does not know is refused by name (rc $rc)" "$out"
 # A carried test that cannot be written is a refusal by name (exit 2), not a traceback, and leaves
 # no temporary file behind (lessons review of #818).
+# A runner that can write anyway (root ignores the mode) cannot stage the case, so it says
+# UNMEASURED rather than failing for a reason that is not the tool's (L411).
 D="$(mk readonly)"
 chmod 555 "$D/payload/mods/mod-kit/tests"
-out="$(python3 "$TOOL" "$D" 2>&1)"; rc=$?
-chmod 755 "$D/payload/mods/mod-kit/tests"
-[ "$rc" -eq 2 ] && grep -q 'cannot write' <<< "$out" && ! grep -q Traceback <<< "$out" && ! ls "$D/payload/mods/mod-kit/tests/"*.tmp >/dev/null 2>&1 && ok \
-  || bad "a carried test that cannot be written is refused by name and leaves nothing behind (rc $rc)" "$out"
+if [ -w "$D/payload/mods/mod-kit/tests" ]; then
+  chmod 755 "$D/payload/mods/mod-kit/tests"
+  echo "UNMEASURED: this runner can write a 555 folder, so the cannot write case cannot be staged here"
+else
+  out="$(python3 "$TOOL" "$D" 2>&1)"; rc=$?
+  chmod 755 "$D/payload/mods/mod-kit/tests"
+  [ "$rc" -eq 2 ] && grep -q 'cannot write' <<< "$out" && ! grep -q Traceback <<< "$out" && ! ls "$D/payload/mods/mod-kit/tests/"*.tmp >/dev/null 2>&1 && ok \
+    || bad "a carried test that cannot be written is refused by name and leaves nothing behind (rc $rc)" "$out"
+fi
 out="$(python3 "$TOOL" 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && grep -qi 'usage' <<< "$out" && ok || bad "no arguments prints usage (rc $rc)" "$out"
 
