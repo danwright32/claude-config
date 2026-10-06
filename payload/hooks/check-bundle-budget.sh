@@ -152,7 +152,9 @@ if [ -n "$own_record" ]; then
         case "${_cand##*/}" in
           *.sh|*.bash|*.py|*.js|*.mjs|*.cjs|*.ts) own_reader="$_cand"; break ;;
           *.*) ;;
-          *) own_reader="$_cand"; break ;;
+          # No extension is how a git hook is named, and how a note can be named too, so it has to
+          # start with a #! line to count; the executable mode is judged just below either way.
+          *) [ "$(head -c 2 "$_cand" 2>/dev/null)" = '#!' ] && { own_reader="$_cand"; break; } ;;
         esac ;;
     esac
     case "$(git ls-files -s -- "$_cand" 2>/dev/null | awk 'NR==1 { print $1 }')" in   # tracked-only: the mode git committed is what runs
