@@ -3395,13 +3395,22 @@ tree_was_held(){   # $1 = a tree name
   [ "$1" = mods ] && mods_were_here && return 0
   return 1
 }
-record_trees_seen(){
+record_trees_seen(){   # $1 = keep on an apply, which never drops a tree from the record
   local d ex s out=""
   for d in "${MIRROR_DIRS[@]}" skills; do
     ex=()
     [ "$d" = skills ] && for s in $(skill_excludes); do ex+=("$s"); done
-    tree_holds_files "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"} && out="$out$d
+    if tree_holds_files "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"}; then
+      out="$out$d
 "
+    # An apply can leave a tree empty because it HELD BACK this Mac's deletion of its last file
+    # (claude-config#781). Dropping the tree then would make the next send read the empty folder as
+    # never held and refuse to carry that deletion (review of #785). Only a send, which has just
+    # mirrored the tree, takes a tree off the record.
+    elif [ "${1:-}" = keep ] && grep -qxF "$d" "$TREES_SEEN_FILE" 2>/dev/null; then
+      out="$out$d
+"
+    fi
   done
   printf '%s' "$out" > "$TREES_SEEN_FILE" 2>/dev/null || true
   return 0
@@ -4419,7 +4428,7 @@ $f
   record_mods_seen
   # The status line and the shared settings, after the hooks block for the same reason (#772, #695).
   write_settings_extras
-  record_trees_seen
+  record_trees_seen keep
   # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
   # or a renumber the index that does exist is one edit behind (#63).

@@ -19087,6 +19087,17 @@ check "#781 a file deleted here that the other Mac has since changed is restored
 CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#781 and the next send carries the deletion to the shared repo" "! git -C '$D81B' show main:payload/hooks/b.sh >/dev/null 2>&1"
 check "#781 while the other hooks stay" "git -C '$D81B' show main:payload/hooks/a.sh >/dev/null 2>&1 && git -C '$D81B' show main:payload/hooks/d.sh >/dev/null 2>&1"
+# THE LAST FILE IN A TREE (review of #785). The pull leaves the folder empty, and an apply that then
+# recorded the tree as never held made the next send refuse to clear it (#627's guard), so the
+# deletion never reached the shared repo. An apply never drops a tree from the record.
+mkdir -p "$D81H/agents"; printf 'the only agent\n' > "$D81H/agents/only.md"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#781 fixture: the only agent is in the shared repo" "git -C '$D81B' show main:payload/agents/only.md >/dev/null 2>&1"
+rm -f "$D81H/agents/only.md"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#781 a pull leaves the last file of a tree deleted" "[ ! -e '$D81H/agents/only.md' ]"
+CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#781 and the next send carries that deletion too" "! git -C '$D81B' show main:payload/agents/only.md >/dev/null 2>&1"
 
 suite_profile
 echo ""
