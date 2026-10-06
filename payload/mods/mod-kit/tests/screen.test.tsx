@@ -8,7 +8,9 @@ import type { Register } from 'claude-code'
 const answerer: { name: string; register: Register } = {
   name: 'manual-steps',
   register: on => {
-    on('tool.call', { tool: 'Pin' }, async ($, e) => {
+    // Its tool is matched in the hook, since a stand-in's tool is in no list of tools Claude Code's types name.
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'Pin') return next(e)
       const refused = await $.modkit.screen(e as never)
       if (refused) return refused
       await $.ui.toast('ACTED')
@@ -85,7 +87,9 @@ test('a TypeError from inside a loaded secret guard refuses the call too (#707 r
 const idless: { name: string; register: Register } = {
   name: 'handoff',
   register: on => {
-    on('tool.call', { tool: 'Save' }, async ($, e) => {
+    // Its tool is matched in the hook, since a stand-in's tool is in no list of tools Claude Code's types name.
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'Save') return next(e)
       const { tool_use_id: _id, ...call } = e as unknown as Record<string, unknown>
       const refused = await $.modkit.screen(call as never)
       return refused ?? ({ result: 'Saved.' } as never)

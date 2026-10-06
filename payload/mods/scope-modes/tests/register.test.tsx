@@ -61,6 +61,12 @@ const deps: { name: string; register: Register } = {
           // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
           // token; mod-kit's own tests prove the real one asks the secret guard.
           screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
+          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         },
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),
@@ -852,7 +858,9 @@ test('coming home: one boxed card of what was held, nothing opens until a button
 const holder: { name: string; register: Register } = {
   name: 'manual-steps',
   register: on => {
-    on('tool.call', { tool: 'HoldIt' }, async $ => {
+    // Its tool is matched in the hook, since a stand-in's tool is in no list of tools Claude Code's types name.
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'HoldIt') return next(e)
       const r = await $.scopeModes.hold({ label: 'Paste the key into Stripe', prompt: 'Walk Dan through the Stripe key step.' })
       return { result: r, text: JSON.stringify(r) } as never
     })

@@ -55,7 +55,8 @@ const rulesRef = { plugin: 'ask-before-saving', key: 'rules' } as const
 const promptRef = { plugin: 'ask-before-saving', key: 'lastPrompt' } as const
 const approvalsRef = { plugin: 'ask-before-saving', key: 'approvals' } as const
 
-const TOOLS = new Set(['Write', 'Edit', 'Bash'])
+const TOOL_NAMES = ['Write', 'Edit', 'Bash'] as const
+const TOOLS: ReadonlySet<string> = new Set(TOOL_NAMES)
 const MINUTES = APPROVAL_MS / 60_000
 
 // The saves Dan's own words made permanent, by what they write (saveKey): added by the tool.call
@@ -248,87 +249,87 @@ export const register: Register = on => {
     return next(e)
   })
 
-  for (const tool of TOOLS) {
-    on('tool.call', { tool }, async ($, e, next) => {
-      const raw = e as unknown as Record<string, unknown>
-      const id = String(raw.tool_use_id ?? '')
-      const input = argsOf(raw)
+  // One hook over the three tools, matched as any one of them.
+  on('tool.call', { tool: TOOL_NAMES }, async ($, e, next) => {
+    const tool = e.tool
+    const raw = e as unknown as Record<string, unknown>
+    const id = String(raw.tool_use_id ?? '')
+    const input = argsOf(raw)
 
-      // A subagent's call (#777): judged here, where the loop is known, refused when it would save
-      // lasting memory, and never asked about. One the classic hook beneath must let through.
-      if (e.agentId !== undefined) {
-        const at = await whereOf($)
-        const files = await lastingTargets($, tool, input, at)
-        if (files.length) {
-          const where = files.join(', ')
-          const listed = (await $.agent.list()).some(a => a.id === e.agentId)
-          // Claude Code's own background loop (the memory writer): the main session decides with Dan.
-          if (!listed)
-            await tell(
-              $,
-              `A background loop of Claude Code's (the memory writer, or another agent no list names) tried to save to ${where} and was refused, so nothing was saved. ` +
-                `What it would have saved: ${await savedText($, tool, input, at)}. If it is worth keeping, save it yourself, and you will be told how to ask Dan first.`,
-            )
-          return { deny: agentRefusal(where) }
-        }
-        const key = saveKey(tool, input, at.cwd, at.home)
-        fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
-        try {
-          return await next(e)
-        } finally {
-          const left = (fromAgent.get(key) ?? 1) - 1
-          if (left > 0) fromAgent.set(key, left)
-          else fromAgent.delete(key)
-        }
+    // A subagent's call (#777): judged here, where the loop is known, refused when it would save
+    // lasting memory, and never asked about. One the classic hook beneath must let through.
+    if (e.agentId !== undefined) {
+      const at = await whereOf($)
+      const files = await lastingTargets($, tool, input, at)
+      if (files.length) {
+        const where = files.join(', ')
+        const listed = (await $.agent.list()).some(a => a.id === e.agentId)
+        // Claude Code's own background loop (the memory writer): the main session decides with Dan.
+        if (!listed)
+          await tell(
+            $,
+            `A background loop of Claude Code's (the memory writer, or another agent no list names) tried to save to ${where} and was refused, so nothing was saved. ` +
+              `What it would have saved: ${await savedText($, tool, input, at)}. If it is worth keeping, save it yourself, and you will be told how to ask Dan first.`,
+          )
+        return { deny: agentRefusal(where) }
       }
-
-      // Dan's own words made it permanent: saved without asking, through every other mod's checks, and
-      // Claude says what it saved. And a save Dan answered For good, sent again: what became of it is
-      // said here, the one place its result can be read.
-      let key: string | undefined
-      let files: string[] = []
-      if (madePermanent((await $.state.get(promptRef)).value)) {
-        const at = await whereOf($)
-        files = await lastingTargets($, tool, input, at)
-        if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
-      }
-      let r: Awaited<ReturnType<typeof next>>
-      let forGood: string | undefined
+      const key = saveKey(tool, input, at.cwd, at.home)
+      fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
       try {
-        r = await next(e)
+        return await next(e)
       } finally {
-        // Taken by the classic hook when the call reached it; dropped here when a guard refused first.
-        if (key !== undefined) approved.delete(key)
-        forGood = reissued.get(id)
-        reissued.delete(id)
+        const left = (fromAgent.get(key) ?? 1) - 1
+        if (left > 0) fromAgent.set(key, left)
+        else fromAgent.delete(key)
       }
-      // A save Dan answered For good, sent again, refused by another guard before the classic hook
-      // could take its approval (#764): Dan is told now that it did not go through, and the approval,
-      // which still stands for a later send, records why, so its lapse never calls it unused.
-      if (forGood === undefined && r.deny !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
-        const at = await whereOf($)
-        const k = saveKey(tool, input, at.cwd, at.home)
-        // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
-        let hit = undefined as AskBeforeSavingApproval | undefined
-        // Reset at the top of the callback, as takeApproval does, in case update runs it again.
-        await update($, approvalsRef, a => {
-          hit = undefined
-          return (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x))
-        })
-        if (hit) $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
-        return r
-      }
-      if (forGood !== undefined) {
-        const why = r.deny ?? (r.isError ? (r.text ?? 'the tool reported an error') : undefined)
-        if (why === undefined) return { ...r, context: [...(r.context ?? []), `Saved to ${forGood}, as Dan answered For good.`] }
-        // Claude reads the failure in the result; Dan, who answered For good, would otherwise not.
-        $.ui.toast(`Not saved to ${forGood}: ${why}`, { timeoutMs: 10_000 })
-        return r
-      }
-      if (!files.length || r.deny !== undefined || r.isError) return r
-      return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
-    }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
-  }
+    }
+
+    // Dan's own words made it permanent: saved without asking, through every other mod's checks, and
+    // Claude says what it saved. And a save Dan answered For good, sent again: what became of it is
+    // said here, the one place its result can be read.
+    let key: string | undefined
+    let files: string[] = []
+    if (madePermanent((await $.state.get(promptRef)).value)) {
+      const at = await whereOf($)
+      files = await lastingTargets($, tool, input, at)
+      if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
+    }
+    let r: Awaited<ReturnType<typeof next>>
+    let forGood: string | undefined
+    try {
+      r = await next(e)
+    } finally {
+      // Taken by the classic hook when the call reached it; dropped here when a guard refused first.
+      if (key !== undefined) approved.delete(key)
+      forGood = reissued.get(id)
+      reissued.delete(id)
+    }
+    // A save Dan answered For good, sent again, refused by another guard before the classic hook
+    // could take its approval (#764): Dan is told now that it did not go through, and the approval,
+    // which still stands for a later send, records why, so its lapse never calls it unused.
+    if (forGood === undefined && r.deny !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
+      const at = await whereOf($)
+      const k = saveKey(tool, input, at.cwd, at.home)
+      // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
+      let hit = undefined as AskBeforeSavingApproval | undefined
+      // Reset at the top of the callback, as takeApproval does, in case update runs it again.
+      await update($, approvalsRef, a => {
+        hit = undefined
+        return (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x))
+      })
+      if (hit) $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
+      return r
+    }
+    if (forGood !== undefined) {
+      // Tested on r itself, so the result it spreads is known to be one that went through.
+      if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `Saved to ${forGood}, as Dan answered For good.`] }
+      // Claude reads the failure in the result; Dan, who answered For good, would otherwise not.
+      $.ui.toast(`Not saved to ${forGood}: ${r.deny ?? r.text ?? 'the tool reported an error'}`, { timeoutMs: 10_000 })
+      return r
+    }
+    if (!files.length || r.deny !== undefined || r.isError) return r
+    return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
+  }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
   // Refused here, beneath every mod's tool.call hook and after the settings hooks beneath this one, so
   // Claude is told to ask only about a write every guard lets through.
@@ -411,7 +412,8 @@ export const register: Register = on => {
       // file named), for a while, and Claude told, in this result, to send the call again, given whole
       // since a compaction may take the call out of its context.
       const now = await $.clock.now()
-      const key = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
+      // Typed, or `??` gives the then q.key's own type, possibly undefined, to infer from.
+      const key: string = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
       const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, where)
