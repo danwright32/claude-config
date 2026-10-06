@@ -484,7 +484,11 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfor p in ['a.md']:\n  open(p,'w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nopen(f'{d}/a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nPath('a').joinpath('b.md').write_text('x')\nEOF")).toEqual(none)
-    // A path the shell expands before python reads it.
+    // Text the shell may expand before python reads it, anywhere in the program, not only in a path
+    // (lessons review of #846 at fc410a7: `$CODE` in an unquoted heredoc can become any code).
+    expect(targets("python3 - <<EOF\nopen('a.md','w')\n$CODE\nEOF")).toEqual(none)
+    expect(targets("python3 - <<EOF\nopen('a.md','w')\nx = `cat more.py`\nEOF")).toEqual(none)
+    expect(targets(`python3 -c "open('a.md','w'); $(cat more.py)"`)).toEqual(none)
     expect(targets(`D=~/.claude; python3 -c "open('$D/CLAUDE.md','a').write('x')"`)).toEqual(none)
     // Another way to write, a change of folder, or a process beside the open.
     expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.remove('b.md')\nEOF")).toEqual(none)

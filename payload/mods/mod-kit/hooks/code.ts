@@ -605,6 +605,10 @@ const pythonTargets = (code: string): string[] | undefined => {
  */
 export const codeTargets = (lang: Lang, inline: string): string[] | undefined => {
   if (lang !== 'python') return undefined
+  // The text as written is what python reads only where the shell expanded nothing in it: in an
+  // unquoted heredoc or a double quoted -c a $ or a backtick anywhere can become any code (lessons
+  // review of #846 at fc410a7, L280). Whether it was quoted is not asked: refusing costs a question.
+  if (/[$`]/.test(inline)) return undefined
   if (!onlyQuietModules(inline)) return undefined
   return pythonTargets(SURFACES.python.canonical?.(inline) ?? inline)
 }
