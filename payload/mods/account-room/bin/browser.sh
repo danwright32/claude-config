@@ -20,4 +20,6 @@ case "$host" in
   "") echo "could not read this Mac's name, so no browser was chosen to sign out in"; exit 2 ;;
   *) echo "no browser is set for this Mac ($host) to sign out in"; exit 2 ;;
 esac
-exec /bin/sh "$HERE/$browser-$step.sh"
+script="$HERE/$browser-$step.sh"
+[ -f "$script" ] || { echo "the $browser $step script is missing ($script)"; exit 2; }
+exec /bin/sh "$script"

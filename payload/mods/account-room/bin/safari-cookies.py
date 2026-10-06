@@ -44,20 +44,32 @@ def cstring(buf, at):
     return buf[at:end].decode("utf-8", "replace")
 
 
+# Every part of the shape is checked, because a store read while Safari rewrites it must fail to
+# parse rather than parse as one holding no cookies, which would say signed out (lessons review of
+# #808): each page's header, each cookie's offset, and the footer that closes the file.
+FOOTER = bytes.fromhex("071720050000004b")
 live = 0
 try:
     if data[:4] != b"cook":
         raise ValueError("not a Safari cookie store")
     pages = struct.unpack(">i", data[4:8])[0]
+    if pages < 0:
+        raise ValueError("a negative page count")
     sizes = struct.unpack(">%di" % pages, data[8:8 + 4 * pages])
     at = 8 + 4 * pages
     for size in sizes:
         page = data[at:at + size]
         at += size
-        if len(page) != size:
+        if len(page) != size or size < 8:
             raise ValueError("a page runs past the end of the file")
+        if page[:4] != b"\0\0\x01\0":
+            raise ValueError("a page without its header")
         count = struct.unpack("<i", page[4:8])[0]
+        if count < 0 or 8 + 4 * count > size:
+            raise ValueError("a page whose cookie count does not fit it")
         for off in struct.unpack("<%di" % count, page[8:8 + 4 * count]):
+            if off < 8 + 4 * count or off + 56 > size:
+                raise ValueError("a cookie outside its page")
             c = page[off:]
             domain_at, name_at = struct.unpack("<ii", c[16:24])
             expiry = struct.unpack("<d", c[40:48])[0]
@@ -67,6 +79,10 @@ try:
             # no expiry of its own (stored as 0) lasts as long as Safari runs, so it is live.
             if expiry <= 0 or expiry + MAC_EPOCH > now:
                 live += 1
+    if data[at + 4:at + 12] != FOOTER:
+        raise ValueError("the file ends before its footer")
 except (ValueError, struct.error, IndexError) as e:
     fail("could not parse Safari's cookies: %s" % e)
+except Exception as e:  # never a bare crash: the check must say why it could not tell
+    fail("could not parse Safari's cookies: %s: %s" % (type(e).__name__, e))
 print(live)

@@ -18,6 +18,7 @@ i=0
 while :; do
   i=$((i + 1))
   if ! n=$(python3 "$HERE/safari-cookies.py"); then
+    [ -n "$n" ] || n="could not read Safari's cookies: the reader stopped without saying why"
     # A store that does not parse may be one Safari is rewriting, so it is looked at again; one that
     # cannot be opened will not open on the next look, and a parse failure on the last is the answer.
     case "$n" in

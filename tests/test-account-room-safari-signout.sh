@@ -154,6 +154,30 @@ n=$(wc -l < "$TMPROOT/pauses" | tr -d ' ')
 [ "$code" = 2 ] && [ "$n" = 0 ] && check "while a store that cannot be opened is exit 2 at once" ok \
   || check "while a store that cannot be opened is exit 2 at once" "code=$code pauses=$n out=$out"
 
+# 8c. A store whose shape is wrong anywhere is not read as one with no cookies, which would say
+# signed out while Safari is signed in: a page whose header is zeroed, a cookie offset outside its
+# page, and a store missing its closing footer (lessons review of #808).
+S="$TMPROOT/s10"; store "$S" ".claude.ai:sessionKey:$LATER"
+python3 - "$S" <<'PY'
+import struct, sys
+p = sys.argv[1]
+d = bytearray(open(p, "rb").read())
+n = struct.unpack(">i", d[4:8])[0]
+first = 8 + 4 * n
+d[first:first + 4] = b"\0\0\0\0"
+open(p + ".zeroed", "wb").write(d)
+d = bytearray(open(p, "rb").read())
+d[first + 8:first + 12] = struct.pack("<i", 100000)
+open(p + ".wild", "wb").write(d)
+open(p + ".nofooter", "wb").write(open(p, "rb").read()[:-8])
+PY
+for kind in zeroed wild nofooter; do
+  TRIES=1 signed_out "$S.$kind"
+  [ "$code" = 2 ] && case "$out" in "could not parse Safari's cookies: "?*) true ;; *) false ;; esac \
+    && check "a store with a $kind part is could not parse, never signed out" ok \
+    || check "a store with a $kind part is could not parse, never signed out" "code=$code out=$out"
+done
+
 # 9. The logout loads claude.ai's logout page in Safari.
 STUB="$TMPROOT/open"; printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/open.args"\nexit "${OPEN_EXIT:-0}"\n' "$TMPROOT" > "$STUB"; chmod +x "$STUB"
 out=$(ACCOUNT_ROOM_OPEN="$STUB" /bin/sh "$BIN/safari-logout.sh" 2>&1); code=$?
@@ -176,11 +200,15 @@ route Daniels-MacBook-Pro-2 logout
 args=$(tr '\n' '|' < "$TMPROOT/open.args" 2>/dev/null); rm -f "$TMPROOT/open.args"
 [ "$code" = 0 ] && [ "$args" = "-a|Safari|https://claude.ai/logout|" ] && check "on Daniels-MacBook-Pro-2 the logout opens in Safari" ok \
   || check "on Daniels-MacBook-Pro-2 the logout opens in Safari" "code=$code args=$args out=$out"
-route Dans-MacBook-Pro logout
-args=$(tr '\n' '|' < "$TMPROOT/open.args" 2>/dev/null); rm -f "$TMPROOT/open.args"
-[ "$code" = 0 ] && [ "$args" = "-na|Google Chrome|--args|--profile-directory=Profile 3|https://claude.ai/logout|" ] \
-  && check "on Dans-MacBook-Pro it keeps the proven Chrome route" ok \
-  || check "on Dans-MacBook-Pro it keeps the proven Chrome route" "code=$code args=$args out=$out"
+if [ -x /usr/bin/plutil ]; then
+  route Dans-MacBook-Pro logout
+  args=$(tr '\n' '|' < "$TMPROOT/open.args" 2>/dev/null); rm -f "$TMPROOT/open.args"
+  [ "$code" = 0 ] && [ "$args" = "-na|Google Chrome|--args|--profile-directory=Profile 3|https://claude.ai/logout|" ] \
+    && check "on Dans-MacBook-Pro it keeps the proven Chrome route" ok \
+    || check "on Dans-MacBook-Pro it keeps the proven Chrome route" "code=$code args=$args out=$out"
+else
+  echo "UNMEASURED: the Chrome route reads Chrome's profile with macOS's plutil, which this machine lacks"
+fi
 route Someone-Elses-Mac logout
 [ "$code" = 2 ] && [ ! -f "$TMPROOT/open.args" ] && [ "$out" = "no browser is set for this Mac (Someone-Elses-Mac) to sign out in" ] \
   && check "a Mac with no browser set is refused by name and nothing is opened" ok \
@@ -190,6 +218,11 @@ out=$(ACCOUNT_ROOM_HOST=Daniels-MacBook-Pro-2 ACCOUNT_ROOM_SAFARI_COOKIES="$TMPR
   || check "on Daniels-MacBook-Pro-2 the check reads Safari's store" "code=$code out=$out"
 out=$(ACCOUNT_ROOM_HOST=Daniels-MacBook-Pro-2 ACCOUNT_ROOM_SAFARI_COOKIES="$TMPROOT/s1" ACCOUNT_ROOM_NOW="$NOW" ACCOUNT_ROOM_CHECK_TRIES=1 /bin/sh "$BIN/browser.sh" signed-out 2>&1); code=$?
 [ "$code" = 1 ] && check "and passes on its still signed in" ok || check "and passes on its still signed in" "code=$code out=$out"
+# A browser script the sync has not delivered is named, never a bare exit 127.
+LONE="$TMPROOT/lone"; mkdir -p "$LONE"; cp "$BIN/browser.sh" "$LONE/"
+out=$(ACCOUNT_ROOM_HOST=Daniels-MacBook-Pro-2 /bin/sh "$LONE/browser.sh" signed-out 2>&1); code=$?
+[ "$code" = 2 ] && case "$out" in "the safari signed-out script is missing ("*"/lone/safari-signed-out.sh)") true ;; *) false ;; esac \
+  && check "a missing browser script is named, exit 2" ok || check "a missing browser script is named, exit 2" "code=$code out=$out"
 out=$(ACCOUNT_ROOM_HOST=Daniels-MacBook-Pro-2 /bin/sh "$BIN/browser.sh" sideways 2>&1); code=$?
 [ "$code" = 2 ] && check "a step that is neither logout nor signed-out is refused" ok || check "a step that is neither logout nor signed-out is refused" "code=$code out=$out"
 
