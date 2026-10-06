@@ -25,6 +25,21 @@ export type StatusBarFacts = {
    * Null before any request, and again after a compaction or /clear replaces the conversation.
    */
   cacheExpiresAt: number | null
+  /**
+   * The account this session runs on, read from the Mac's login file at session start (#815): empty
+   * with no claude.ai login, null when the file could not be read then. Absent in a file written
+   * before #815, where the status line reads the login file as it stands.
+   */
+  account?: StatusBarAccount | null
+}
+
+/** The login file's oauthAccount fields the status line names an account by. */
+export type StatusBarAccount = {
+  accountUuid?: string
+  organizationUuid?: string
+  displayName?: string
+  emailAddress?: string
+  organizationName?: string
 }
 
 declare module 'claude-code' {
@@ -32,7 +47,7 @@ declare module 'claude-code' {
     statusbar: StatusBar
   }
   interface PluginState {
-    /** In $.state so a reload of the mod keeps them: the modes on, and when the prompt cache goes cold. */
-    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null }
+    /** In $.state so a reload of the mod keeps them: the modes on, when the prompt cache goes cold, and the session's account. */
+    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null }
   }
 }
