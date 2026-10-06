@@ -300,6 +300,16 @@ marker stayed at the previous commit, every path the push committed read as unap
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
 this Mac while every push reported a clean send (#511).
 
+Only a change that came from the shared repo counts as one this Mac has not applied. A sync that
+cannot reach the shared repo commits this Mac's edit into its clone and stops before applying, so
+the marker stays behind a commit made here. Counting that commit held back the next edit to the
+same file with a message blaming the shared repo for it. A path is now held back only when a commit
+the shared repo also holds changed it, and when the clone has no copy of the shared branch to ask,
+every path counts as before (#855). Two things that false hold back had been covering for now speak
+for themselves: a `push` the shared repo refuses says it published nothing and, when the shared repo
+holds commits this clone lacks, names `claude-sync sync`; and the rebase that settles entry merged
+files carries on when it stops again on this Mac's next commit, rather than aborting.
+
 ### Sending checks the hooks it is about to publish
 
 A `send` runs the suites covering the hooks in that send, and holds back the hooks a failing suite
