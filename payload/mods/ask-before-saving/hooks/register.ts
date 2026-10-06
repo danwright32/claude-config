@@ -164,7 +164,14 @@ const tell = async ($: EngineInterface, text: string) => {
   if (why !== undefined) $.ui.toast(`Claude was not told: ${text} (${why})`, { timeoutMs: 10_000 })
 }
 
-const lapsedFor = (where: string) => `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes unused, so it no longer lets that save through.`
+// What Dan reads when an approval lapses: unused, or sent and refused by another guard before it
+// was saved, which is never called unused (#764, L11).
+const lapsedFor = (x: AskBeforeSavingApproval) => {
+  const where = x.files.join(', ')
+  return x.refused !== undefined
+    ? `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not sent again in time.`
+    : `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes unused, so it no longer lets that save through.`
+}
 
 // Every approval past its time is taken out and said, to Dan and to Claude (L523): one Claude never
 // used must not stand open, and must not lapse in silence either.
@@ -177,14 +184,13 @@ const lapse = async ($: EngineInterface) => {
   })
   for (const x of gone) {
     const where = x.files.join(', ')
-    // One Claude sent that another guard refused was not unused (#764, L11): it says why it was not saved.
-    if (x.refused !== undefined) {
-      $.ui.toast(`The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not sent again in time.`, { timeoutMs: 10_000 })
-      await tell($, `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes: the save you sent was refused before it was saved (${x.refused}), so nothing was saved, and sending it again asks him again.`)
-      continue
-    }
-    $.ui.toast(lapsedFor(where), { timeoutMs: 10_000 })
-    await tell($, `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes unused: it no longer lets that save through, and sending it again asks him again.`)
+    $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
+    await tell(
+      $,
+      x.refused !== undefined
+        ? `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes: the save you sent was refused before it was saved (${x.refused}), so nothing was saved, and sending it again asks him again.`
+        : `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes unused: it no longer lets that save through, and sending it again asks him again.`,
+    )
   }
 }
 // Times the lapse, never throwing: a timer that cannot be set is said. The approval is then refused
@@ -214,11 +220,16 @@ const takeApproval = async ($: EngineInterface, key: string) => {
     }
     return keep
   })
-  for (const x of lapsed) $.ui.toast(lapsedFor(x.files.join(', ')), { timeoutMs: 10_000 })
-  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed.length > 0 }
+  for (const x of lapsed) $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
+  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
 }
 
-const LAPSED = `Dan's earlier For good on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
+// What Claude reads when the approval for the call it sent has lapsed (#764: never "unused" for one
+// it sent that another guard refused).
+const lapsedNote = (x: AskBeforeSavingApproval) =>
+  x.refused !== undefined
+    ? `Dan's earlier For good on this save lapsed after ${MINUTES} minutes; the save you sent before was refused (${x.refused}), so he has to be asked again.`
+    : `Dan's earlier For good on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
 // What a subagent is told when its write would save lasting memory: refused, never asked (#777).
 const agentRefusal = (where: string) =>
@@ -344,7 +355,7 @@ export const register: Register = on => {
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
     const ask = askInstruction(id, files)
-    return { deny: lapsed ? `${LAPSED} ${ask}` : ask }
+    return { deny: lapsed ? `${lapsedNote(lapsed)} ${ask}` : ask }
   }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
@@ -442,7 +453,14 @@ export const register: Register = on => {
     await $.state.set(approvalsRef, [])
     $.ui.invalidate('prompt.section')
     // Dan answered For good believing it saved; one Claude never sent again is said, not dropped quietly.
-    for (const x of unused) $.ui.toast(`The For good you gave for saving to ${x.files.join(', ')} was never used before the session ended, so it no longer lets that save through.`, { timeoutMs: 10_000 })
+    // One Claude sent that another guard refused was used, and says why it was not saved (#764, L11).
+    for (const x of unused)
+      $.ui.toast(
+        x.refused !== undefined
+          ? `The For good you gave for saving to ${x.files.join(', ')} ended with the session: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not sent again.`
+          : `The For good you gave for saving to ${x.files.join(', ')} was never used before the session ended, so it no longer lets that save through.`,
+        { timeoutMs: 10_000 },
+      )
     return next(e)
   })
 }

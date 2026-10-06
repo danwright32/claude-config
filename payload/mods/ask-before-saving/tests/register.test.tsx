@@ -663,6 +663,30 @@ test('an approved save refused once by another guard is still saved when sent ag
   expect(contextOf(again)).toContain('Saved to ~/Apps/slate/AGENTS.md, as Dan answered For good.')
 })
 
+// And where a lapsed approval is found as the call arrives (a reload dropped its timer), the same:
+// sent and refused is never called unused, to Dan or to Claude (#764, L11).
+test('an approval refused once and found past its time where it is used is said as refused, never as unused', withKit, async ($, on) => {
+  let now = 0
+  on('clock.now', () => ({ value: now }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  await call($, input)
+  delete w.files['/gate/refuses']
+  now = APPROVAL_MS
+  const late = refusalOf(await call($, input))
+  expect(late).toContain(ASKS)
+  expect(late).toContain('the save you sent before was refused (Blocked: another session is editing this file.)')
+  expect(late).not.toContain('unused')
+  expect(w.toasts.join('\n')).not.toContain('unused')
+  expect(w.toasts.join('\n')).toContain('Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.)')
+  expect(w.ran).toEqual([])
+})
+
 test('For good whose save then fails says so to Dan, and never that it was saved', withKit, async ($, on) => {
   const w = world(on, { failWrites: true })
   const input = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'gone', new_string: 'gone\n- rule' }
@@ -681,6 +705,20 @@ test('an approval the session ends before Claude uses is dropped, and Dan is tol
   expect(w.toasts.join('\n')).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md was never used before the session ended')
   expect(refusalOf(await call($, input))).toContain(ASKS)
   expect(w.ran).toEqual([])
+})
+
+// The lessons review of #806: one Claude sent that another guard refused is not "never used" at
+// session end either (#764, L11).
+test('an approval whose save another guard refused is said as refused, never as unused, when the session ends', withKit, async ($, on) => {
+  const w = world(on, { auto: true })
+  const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
+  w.files['/gate/refuses'] = '1'
+  await call($, input)
+  await ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  const said = w.toasts.join('\n')
+  expect(said).not.toContain('never used')
+  expect(said).toContain('The For good you gave for saving to ~/Apps/slate/AGENTS.md ended with the session: Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.)')
 })
 
 test('Just this session writes nothing and holds the rule, in Claude\'s plain words, in the system prompt through a compaction until the session ends', withKit, async ($, on) => {
