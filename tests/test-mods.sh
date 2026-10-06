@@ -159,6 +159,74 @@ out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/u
 printf '%s\n' "$out" | grep 'illtyped ok' | grep -q 'types not checked: no TypeScript compiler' \
   && check "and each mod says its types were not checked, and why" ok || check "and each mod says its types were not checked, and why" "$out"
 
+# 4d. The pinned compiler and the borrowed types (#803). Claude Code lays a mod's types only in the
+#     copy it loads (~/.claude/mods/<mod>), which the mirror never carries, so a check of
+#     payload/mods borrows them from there; a pinned compiler in tools/typescript is found with
+#     no TSC_BIN; a mod whose errors were recorded passes while its count is at or under the
+#     record; and every mod left unchecked is summed up as UNMEASURED with the install command.
+M4E="$TMPROOT/m4e"; mkmod "$M4E" borrowed; mkmod "$M4E" illtyped-known; mkmod "$M4E" illtyped-new
+TH="$TMPROOT/types-home"
+for m in borrowed illtyped-known illtyped-new; do laid "$TH/mods/$m"; done
+TSDIR="$TMPROOT/ts"; mkdir -p "$TSDIR/node_modules/.bin"; cp "$TSC" "$TSDIR/node_modules/.bin/tsc"
+printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types checked' \
+  && check "a mod whose types were laid only in the installed copy is type checked with them" ok \
+  || check "a mod whose types were laid only in the installed copy is type checked with them" "$out"
+grep -q -- "-p .*borrowed" "$TSC_LOG" && check "by the pinned compiler, found with no TSC_BIN" ok || check "by the pinned compiler, found with no TSC_BIN" "$(cat "$TSC_LOG")"
+printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q '2 known type errors (#900)' \
+  && check "a mod at its recorded count of type errors passes, naming the count and the issue" ok \
+  || check "a mod at its recorded count of type errors passes, naming the count and the issue" "$out"
+printf '%s\n' "$out" | grep -q 'illtyped-new fails a strict type check (2 errors)' \
+  && check "a mod with no record that fails the type check still fails" ok \
+  || check "a mod with no record that fails the type check still fails" "$out"
+[ "$code" -eq 1 ] && check "and fails the run" ok || check "and fails the run" "exit=$code"
+# One recorded error fixed and a new one made: the count is the same, and the new one still fails.
+printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS9999\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"; rm -rf "${M4E:?}/illtyped-new"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-known' | grep -q 'type errors not in the record.*hooks/register.tsx TS2604 (1 found, 0 recorded)' \
+  && check "an error not in the record fails though the count is unchanged, naming where and how many" ok \
+  || check "an error not in the record fails though the count is unchanged, naming where and how many" "exit=$code out=$out"
+printf 'illtyped-known\thooks/register.tsx TS2339\t3\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q 'fewer than recorded' \
+  && check "a mod under its record passes and says the record can come down" ok \
+  || check "a mod under its record passes and says the record can come down" "exit=$code out=$out"
+# Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
+  && printf '%s\n' "$out" | grep -q 'UNMEASURED: .*not checked ([0-9]* no TypeScript compiler: ' \
+  && check "with types to borrow but no compiler, the compiler is what is named" ok \
+  || check "with types to borrow but no compiler, the compiler is what is named" "$out"
+# Types laid but the scratch copy fails (here, a scratch folder that cannot be written): that is the
+# cause named, never missing types.
+# A user who can write anyway (root, in the Linux container) cannot be refused this way, so there it
+# is said as unmeasured rather than read as a fault in the check (L411).
+RO="$TMPROOT/ro-tmp"; mkdir -p "$RO"; chmod 500 "$RO"
+if [ -w "$RO" ]; then
+  echo "UNMEASURED: this user can write a mode 500 folder, so a scratch copy that fails cannot be staged here"
+else
+  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+  printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'could not copy it to scratch' \
+    && check "a mod whose scratch copy fails says so, not that no types were laid" ok \
+    || check "a mod whose scratch copy fails says so, not that no types were laid" "$out"
+  # Two causes in one run are each counted and named in the summary, never folded into the last.
+  TH2="$TMPROOT/types-home-2"; laid "$TH2/mods/borrowed"
+  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH2" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+  printf '%s\n' "$out" | grep 'UNMEASURED: 2 of 2' | grep 'could not be copied to scratch: borrowed' | grep -q 'no types laid: illtyped-known' \
+    && check "the summary counts and names each cause" ok || check "the summary counts and names each cause" "$out"
+fi
+chmod 700 "$RO"
+# Nothing laid anywhere and no compiler: one UNMEASURED summary naming how many and the install command.
+rm -rf "$TSDIR/node_modules"
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TMPROOT/no-types" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q "UNMEASURED: 2 of 2 mods' types were not checked" \
+  && check "mods left unchecked are summed up as UNMEASURED, never a silent skip" ok \
+  || check "mods left unchecked are summed up as UNMEASURED, never a silent skip" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'npm ci --prefix tools/typescript' \
+  && check "with the command that installs the pinned compiler" ok || check "with the command that installs the pinned compiler" "$out"
+
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
 runit "$M5"

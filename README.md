@@ -1089,14 +1089,22 @@ and the engine's words, when `claude` answers that hooks modules are turned off 
 (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
 set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
 exit code and the last lines of output instead of an empty reason.
-It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, wherever Claude
-Code has laid its types under the mod's `.claude-plugin/types/` (it does once it has loaded the mod)
-and a TypeScript compiler is found (`TSC_BIN`, else `tsc` on the path). It allows the `./x.ts`
-imports every mod uses itself (`--allowImportingTsExtensions`), since the laid tsconfig does not, so
-no mod needs its own copy of that setting. Errors fail the run with the
-mod named and counted; where either is missing, the mod's line says its types were not checked and
-why, which is not a failure. Neither Mac nor CI has `tsc` installed today, so this check runs only
-where somebody points `TSC_BIN` at one.
+It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
+TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed once per checkout
+with `npm ci --prefix tools/typescript`; `TSC_BIN` overrides it, and `tsc` on the path is the last
+resort). Claude Code lays a mod's types only in the copy it loads, `~/.claude/mods/<mod>/.claude-plugin/types/`,
+which the mirror never carries, so a mod in `payload/mods` is checked in a scratch copy beside the
+types laid for its installed copy. It allows the `./x.ts` imports every mod uses itself
+(`--allowImportingTsExtensions`), since the laid tsconfig does not, so no mod needs its own copy of
+that setting. Errors fail the run with the mod named and counted, except a mod listed in
+`tools/typescript/known-type-errors.tsv` (the errors found on the first run, 2026-10-05, in 12 mods,
+being fixed under #822), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it, so fixing one error makes no room for a new one. A compiler
+that exits without any type error is said as that, never as 0 errors. Where no compiler or no laid
+types are found, each mod's line says its types were not checked and why, and the run ends with one
+UNMEASURED line counting them and naming the install command, which is not a failure. CI never
+reaches the type check: it has no Claude Code, so `check-mods.sh` stops at its own UNMEASURED exit
+(3) before any mod is validated, and there are no laid types to check against. The pinned compiler
+and its record are therefore enforced only on a Mac with Claude Code and the compiler installed.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
