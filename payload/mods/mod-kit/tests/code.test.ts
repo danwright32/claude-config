@@ -68,6 +68,9 @@ describe('codeVerdict after #760', () => {
     // A right hand side that is more than a pandas chain proves nothing.
     expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd or Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.read_csv(x) if y else Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // An assignment anywhere else in a statement (after a header's colon, say) rebinds too.
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\nif 1: df = Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\ntry: df = Path('a')\nexcept E: pass\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     // A chained assignment binds every target in it, not only the first.
     expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\nx = df = Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     // An annotated assignment is a rebinding too.

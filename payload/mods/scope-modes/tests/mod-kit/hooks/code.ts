@@ -134,6 +134,11 @@ const pandasNames = (code: string): Set<string> => {
   }
   const reboundElsewhere = (name: string): boolean => {
     const n = escaped(name)
+    // Every `name =` in the code, wherever it stands (after a header's colon, a later chained
+    // target, a keyword argument), against the statement starting assignments judged above: any
+    // the scan did not judge leaves the name unproven, so a route not listed below cannot keep it.
+    const everywhere = [...code.matchAll(new RegExp(`(?<![\\w.])${n}\\s*=(?!=)`, 'g'))].length
+    if (everywhere > (assigned.get(name)?.length ?? 0)) return true
     return [
       new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
       new RegExp(`\\bas\\s+${n}\\b`),
