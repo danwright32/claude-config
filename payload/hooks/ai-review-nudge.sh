@@ -41,8 +41,9 @@
 # once NUDGE_BUDGET characters have been printed the rest wait, unshown, for the next prompt.
 #
 # The lessons review of a whole branch (lib/pr-review.sh, kind=pr) is shown here too, under its own
-# heading, and marked DELIVERED (<file>.delivered) once shown, which is what lets the merge gate
-# allow the merge without refusing once to deliver the findings itself.
+# heading. Showing it here does not allow the merge (claude-config#788): this reaches whichever
+# session prompts next, not necessarily the one merging, so it carries the findings' read key and
+# the merge gate waits for a merge presenting it.
 #
 # Nothing in either loop below may start a process per FILE: the state directory holds every
 # repository's reviews for 14 days (1,975 files on 2026-10-03), and one `basename` per file took the
@@ -213,12 +214,19 @@ for base in $todo; do
           noun="findings"; [ "${m_findings:-}" = "1" ] && noun="finding"
           printf 'Lessons review of the whole branch %s %s at %s, finished in %s with %s %s (the full review is in %s). The merge waits until these have been read: check each against the code before acting on it.\n' \
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took" "${m_findings:-?}" "$noun" "$f"
+          # Showing them here is not proof the MERGING session saw them (#788), so the merge gate
+          # waits for this key, which only the messages carrying the findings hold.
+          rkrc=0; rk="$(ar_review_issue_key "$f")" || rkrc=$?
+          if [ "$rkrc" -eq 0 ] && [ -n "$rk" ]; then
+            printf 'Once read, merge with: PR_REVIEW_READ=%s <the merge command>\n' "$rk"
+          else
+            printf 'No read key could be made: %s.\n' "$(ar_review_key_failure "$rkrc" "$f" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir <the repository> --sha ${m_sha:-<head>}")"
+          fi
           printf '%s\n' "$body"
         fi ;;
       *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
     esac
-    touch "$f.delivered" 2>/dev/null || true
     mark_shown "$base"
     continue
   fi
@@ -252,6 +260,6 @@ IFS=$' \t\n'
 
 # Housekeeping and the fast path stamp: this session has now seen everything written so far.
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
-find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 [ -n "$LIST" ] && { touch "$LIST" 2>/dev/null || true; }
 exit 0
