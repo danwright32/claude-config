@@ -80,7 +80,7 @@ TYPES_HOME="${CHECK_MODS_TYPES_HOME:-$HOME/.claude}"
 # mod with no lines must have no errors.
 KNOWN="$TS_DIR/known-type-errors.tsv"
 known_of(){ [ -f "$KNOWN" ] && awk -F'\t' -v m="$1" '$1 == m { print $2 "\t" $3 "\t" $4 }' "$KNOWN"; }
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/check-mods.XXXXXX")" || scratch=""
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/check-mods.XXXXXX" 2>/dev/null)" || scratch=""
 trap '[ -n "$scratch" ] && rm -rf "$scratch"' EXIT
 untyped=0; untyped_why=""
 
@@ -141,14 +141,22 @@ for d in "${mods[@]}"; do
     echo "check-mods: $name ok ($types)"
     continue
   fi
-  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ] && [ -n "$scratch" ]; then
+  copy_failed=""
+  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ]; then
+    [ -n "$scratch" ] || copy_failed="no scratch folder could be made"
+  fi
+  if [ -z "$copy_failed" ] && [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ]; then
     # This mod's source beside the types laid for the installed copy of it, in scratch, so nothing
     # is written into either.
     checked="$scratch/$name"
     rm -rf "$checked"; cp -R "$d" "$checked" && rm -rf "$checked/.claude-plugin/types" \
-      && cp -R "$TYPES_HOME/mods/$name/.claude-plugin/types" "$checked/.claude-plugin/types" || checked=""
+      && cp -R "$TYPES_HOME/mods/$name/.claude-plugin/types" "$checked/.claude-plugin/types" || { checked=""; copy_failed="the copy failed"; }
   fi
-  if [ -z "$checked" ] || [ ! -f "$checked/.claude-plugin/types/tsconfig.json" ]; then
+  if [ -n "$copy_failed" ]; then
+    # Types were laid; what failed is the scratch copy, which is the cause said (L11).
+    types="types not checked: its laid types are in $TYPES_HOME/mods/$name but it could not copy it to scratch ($copy_failed)"
+    untyped=$((untyped + 1)); untyped_why="could not copy $name to scratch"
+  elif [ -z "$checked" ] || [ ! -f "$checked/.claude-plugin/types/tsconfig.json" ]; then
     types="types not checked: Claude Code has not laid its types here or in $TYPES_HOME/mods/$name"
     untyped=$((untyped + 1)); untyped_why="no types laid for $name"
   else

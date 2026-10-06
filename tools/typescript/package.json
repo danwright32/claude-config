@@ -1,7 +1,7 @@
 {
   "name": "claude-config-typescript",
   "private": true,
-  "description": "The TypeScript compiler tools/check-mods.sh type checks every mod with (#803), pinned here so both Macs and CI run the same one.",
+  "description": "The TypeScript compiler tools/check-mods.sh type checks every mod with (#803), pinned so every Mac that runs the check uses the same one. Only a Mac with Claude Code installed runs it: CI has no laid types.",
   "devDependencies": {
     "typescript": "7.0.2"
   }
