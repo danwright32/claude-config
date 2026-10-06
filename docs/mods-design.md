@@ -1392,7 +1392,8 @@ Not settled by any round, built so the spec holds, and each an open question for
 - **The browser is chosen per Mac** (#808, Dan 2026-10-05: "the sign out prompt ... open in safari
   on this mac and chrome on my other mac"). The defaults run `bin/browser.sh logout` and
   `bin/browser.sh signed-out`, which read the Mac's LocalHostName and run Safari's pair on
-  Daniels-MacBook-Pro-2 and Chrome's proven pair on Dans-MacBook-Pro; a Mac named in neither is
+  Daniels-MacBook-Pro-2 and Chrome's pair on Dans-MacBook-Pro (proven on Daniels-MacBook-Pro-2, not
+  yet run on Dans-MacBook-Pro, #786); a Mac named in neither is
   refused by name rather than given a browser (L75). Keyed in the script, not a synced setting,
   because the payload is shared and a per Mac default cannot live in one manifest.
   `bin/safari-logout.sh` opens `https://claude.ai/logout` in Safari. `bin/safari-signed-out.sh`

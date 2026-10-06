@@ -19,7 +19,7 @@
     "logoutCommand": {
       "type": "string",
       "title": "Browser logout command",
-      "description": "Shell command that signs claude.ai out in the browser. The default (bin/browser.sh, #808) chooses the browser by this Mac's name: Safari on Daniels-MacBook-Pro-2, and on Dans-MacBook-Pro Google Chrome's last used profile, the route proven on 2026-10-05 (#659).",
+      "description": "Shell command that signs claude.ai out in the browser. The default (bin/browser.sh, #808) chooses the browser by this Mac's name: Safari on Daniels-MacBook-Pro-2, and on Dans-MacBook-Pro Google Chrome's last used profile, the route proven on Daniels-MacBook-Pro-2 on 2026-10-05 (#659) and not yet run on Dans-MacBook-Pro (#786).",
       "default": "/bin/sh \"$HOME/.claude/mods/account-room/bin/browser.sh\" logout"
     },
     "signedOutCheck": {
