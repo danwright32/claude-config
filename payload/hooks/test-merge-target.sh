@@ -139,6 +139,88 @@ for w in 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY tools/wait
 done
 eq "$(mt_pr_number 'PY=$(. ./venv-python.sh; printf %s "$POSTROLL_PYTHON"); $PY tools/wait_for_checks.py 1421 --merge')" \
   "1421" "the variable spelling names its pull request"
+# A leading assignment whose value holds a space, a command substitution or a quoted string, is ONE
+# word to the shell. Cut at its first space, `GH_TOKEN=$(gh auth token -u x) gh pr merge 7` left
+# `auth token -u x) gh pr merge 7`, which merges nothing by its first word, so every merge gate
+# stood down on the form a session uses to merge as one of Dan's accounts (found by the lessons
+# review of #795).
+for w in 'GH_TOKEN=$(gh auth token -u danwright32) gh pr merge 7 --squash' \
+         'MSG="two words" gh pr merge 7 --squash' \
+         "NOTE='a b c' gh pr merge 7" \
+         'A=1 GH_TOKEN=$(gh auth token -u x) B="c d" gh pr merge 7' \
+         'MSG="a \" b" gh pr merge 7' \
+         'A=a\ b gh pr merge 7' \
+         'GH_TOKEN=`gh auth token -u x` gh pr merge 7' \
+         'X=${Y:-a b} gh pr merge 7'; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after an assignment holding a space was not read as a merge: $w"; fi
+done
+mt_split_assignments 'PR_REVIEW_READ="ab12" GH_TOKEN=$(gh auth token -u x) gh pr merge 7'
+eq "$MT_REST" "gh pr merge 7" "the command after assignments holding spaces"
+eq "${MT_ASSIGNS%%$'\n'*}" "PR_REVIEW_READ=ab12" "an assignment's value with its quotes removed"
+mt_split_assignments 'GH_TOKEN=`gh auth token -u x` X=${Y:-a b} gh pr merge 7'
+eq "$MT_ASSIGNS" 'GH_TOKEN=`gh auth token -u x`'$'\n''X=${Y:-a b}'$'\n' "backtick and brace values kept as the shell sees them"
+eq "$MT_REST" 'gh pr merge 7' "the merge after them"
+# Nesting the shell allows: a substitution inside double quotes holding its own quotes and a
+# space, and quotes inside a substitution inside quotes (lessons review of #795).
+for w in 'X="$(a "b c")" gh pr merge 7' \
+         'X="${Y:-"a b"}" gh pr merge 7' \
+         "X=\"\$(printf '%s' 'p q')\" gh pr merge 7"; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after a nested quoted assignment was not read as a merge: $w"; fi
+done
+mt_split_assignments 'X="$(a "b c")" gh pr merge 7'
+eq "$MT_ASSIGNS" 'X=$(a "b c")'$'\n' "a nested value kept as the shell sees it, outer quotes removed"
+eq "$MT_REST" 'gh pr merge 7' "and the merge after it"
+# A separator INSIDE a substitution or quotes does not end the command (lessons review of #795):
+# cut there, `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` was two halves, neither a merge.
+for w in 'GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7' \
+         'GH_TOKEN=$(gh auth token -u x || echo y) gh pr merge 7' \
+         'MSG="a; b && c" gh pr merge 7'; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after an assignment holding a separator was not read as a merge: $w"; fi
+done
+eq "$(mt_pr_number 'GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7')" "7" "and it names its pull request"
+# Parentheses that are not a substitution never hold the cut open: arithmetic, a stray or quoted
+# bracket, a subshell inside a substitution, and a case pattern all leave the merge after && seen.
+for w in 'echo $((1+2)) && gh pr merge 7' 'echo ) && gh pr merge 7' 'echo "(" && gh pr merge 7' \
+         'x=$( (cd a; ls) ) && gh pr merge 7' 'case a in a) true ;; esac && gh pr merge 7' \
+         "echo don't; gh pr merge 7" 'echo "unclosed && gh pr merge 7'; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after a parenthesis that is not a substitution was not seen: $w"; fi
+done
+if mt_runs_merge 'echo "done; gh pr merge 7"'; then fail "a merge quoted after a separator inside an echo was read as a merge"; else pass; fi
+# lib/shell-words.py, the reader behind the two functions above, directly: its two modes, and a
+# refusal by exit code for anything else, so a typo in a caller is a failure, not an empty answer.
+SW="$HOOK_DIR/lib/shell-words.py"
+eq "$(printf '%s' 'a; b && c || d' | python3 "$SW" segments)" "a"$'\n'" b "$'\n'" c "$'\n'" d" "shell-words cuts at each separator outside quotes"
+eq "$(printf '%s' 'echo "a; b" && c' | python3 "$SW" segments)" 'echo "a; b" '$'\n'' c' "and not inside them"
+eq "$(printf '%s' 'A="x y" B=$(p q) cmd arg' | python3 "$SW" split)" "A=x y"$'\n'"B=\$(p q)"$'\n'$'\x1f'$'\n'"cmd arg" "shell-words splits leading assignments from the command"
+printf 'x' | python3 "$SW" nonsense >/dev/null 2>&1; eq "$?" "64" "shell-words refuses an unknown mode"
+# A reader that CRASHES must fall back to the plain reading, never answer "no merge" (L42, L490).
+BROKEN_SW="$(mktemp "${TMPDIR:-/tmp}/broken-sw.XXXXXX")"
+printf 'import sys\nsys.exit(3)\n' > "$BROKEN_SW"
+saved_sw="$MT_SHELL_WORDS"; MT_SHELL_WORDS="$BROKEN_SW"
+if mt_runs_merge 'GH_TOKEN=x gh pr merge 7'; then pass; else fail "a crashed reader hid a merge after an assignment"; fi
+if mt_runs_merge 'echo a; gh pr merge 7'; then pass; else fail "a crashed reader hid a merge after a separator"; fi
+MT_SHELL_WORDS="$saved_sw"; rm -f "$BROKEN_SW"
+# rtk in front is the same merge, and its number and repository are read (lessons review of #795).
+eq "$(mt_pr_number 'rtk gh pr merge 7 --repo a/b')" "7" "an rtk merge names its pull request"
+eq "$(mt_repo_flag 'rtk gh pr merge 7 --repo a/b')" "a/b" "and its repository"
+# The shell reading runs on every command that mentions a merge, so its cost must not grow faster
+# than the text: the bash scan it replaced grew with the SQUARE of it, 13 s at 13 KB and 52 s at
+# 26 KB (measured 2026-10-05), past every hook's timeout. Judged against a yardstick from this
+# same run, never a fixed number of seconds (L224): doubling the text may at most roughly double
+# the time, and the slack covers python's start up, which dominates both readings when linear.
+now_s(){ python3 -c 'import time; print("%.3f" % time.time())'; }
+half="$(python3 -c 'q = chr(92) + chr(34); print(("we should merge the " + q + "branch" + q + " after review; ") * 300)')"
+big="$half$half"
+[ "${#big}" -gt 25000 ] && pass || fail "the 26 KB fixture was not built (${#big} bytes)"
+t0="$(now_s)"
+mt_runs_merge "gh issue comment 5 --body \"$half\"" && fail "an issue body about a merge was read as a merge" || pass
+t1="$(now_s)"
+mt_runs_merge "gh issue comment 5 --body \"$big\"" && fail "an issue body about a merge was read as a merge" || pass
+t2="$(now_s)"
+if python3 -c 'import sys; a, b, c = map(float, sys.argv[1:]); sys.exit(0 if (c - b) <= 3 * (b - a) + 1.0 else 1)' "$t0" "$t1" "$t2"; then pass
+else fail "reading grows faster than the text: 13 KB took $(python3 -c "print(round($t1 - $t0, 2))") s, 26 KB took $(python3 -c "print(round($t2 - $t1, 2))") s"; fi
+mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
+eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.
 if mt_runs_merge '$PY tools/wait_for_checks.py 7'; then
   fail "the tool merely waiting for checks, run by a variable, was read as a merge"

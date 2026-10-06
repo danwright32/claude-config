@@ -219,20 +219,62 @@ MTEOF
 # on them buys nothing while giving a quoted payload one more way to be cut into
 # a segment that starts with the phrase.
 mt_command_segments() {  # $1 = command
-  local body seg
-  body="$(mt_strip_heredocs "$1")"
-  body="${body//&&/$'\n'}"
-  body="${body//||/$'\n'}"
-  body="${body//;/$'\n'}"
+  local seg
   while IFS= read -r seg; do
-    seg="${seg#"${seg%%[![:space:]]*}"}"
-    while [[ "$seg" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+(.*)$ ]]; do
-      seg="${BASH_REMATCH[1]}"
-    done
-    printf '%s\n' "$seg"
+    mt_split_assignments "$seg"
+    printf '%s\n' "$MT_REST"
   done <<MTEOF
-$body
+$(mt_raw_segments "$1")
 MTEOF
+}
+
+# The command cut at `&&`, `||`, `;` and newlines, one segment per line, but only where those
+# sit OUTSIDE quotes and substitutions (lessons review of #795): cut inside them,
+# `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` became two halves, neither a merge, and
+# every merge gate stood down. Heredoc bodies are stripped first. Read by lib/shell-words.py, one
+# process for the whole command: the same scan in bash took 55 s on a 26 KB command (measured
+# 2026-10-05). With no
+# python3 the plain cut at every separator is used, which can only over cut.
+MT_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+mt_raw_segments() {  # $1 = command
+  local s out
+  s="$(mt_strip_heredocs "$1")"
+  if command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" segments 2>/dev/null)"; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  s="${s//&&/$'\n'}"; s="${s//||/$'\n'}"; s="${s//;/$'\n'}"
+  printf '%s\n' "$s"
+}
+
+# A segment's leading `NAME=value` assignments, read as the shell reads them (lib/shell-words.py
+# split): a value runs to the first space with nothing open, so `GH_TOKEN=$(gh auth token -u x) gh
+# pr merge` is one assignment and then the merge, and X="$(a "b c")" is one word. Cutting at the
+# first space left `auth token -u x) gh pr merge`, whose first word merges nothing, and every merge
+# gate stood down on the form a session uses to merge as one of Dan's accounts (lessons review of
+# #795). Sets MT_ASSIGNS, one NAME=value per line with one layer of outermost quotes removed, and
+# MT_REST, the command that follows. A segment that is assignments only leaves MT_REST empty. A
+# segment with no leading assignment is answered without starting python at all.
+mt_split_assignments() {  # $1 = one segment
+  local s="$1" out
+  MT_ASSIGNS=""
+  s="${s#"${s%%[![:space:]]*}"}"
+  MT_REST="$s"
+  [[ "$s" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || return 0
+  # The sentinel is printed only when the reader SUCCEEDED, so a crash falls through to the plain
+  # reading below rather than answering with an empty command (L42, L490).
+  out=""
+  command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" split 2>/dev/null && printf x)"
+  if [ "${out%x}" != "$out" ]; then
+    out="${out%x}"
+    MT_ASSIGNS="${out%%$'\x1f'*}"
+    MT_REST="${out#*$'\x1f'}"; MT_REST="${MT_REST#$'\n'}"
+    return 0
+  fi
+  while [[ "$s" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+(.*)$ ]]; do
+    s="${BASH_REMATCH[1]}"
+  done
+  MT_REST="$s"
 }
 
 mt_command_heads() {  # $1 = command
@@ -331,7 +373,7 @@ mt_runs_merge() {  # $1 = command
 mt_pr_number() {  # $1 = command
   local direct seg prev tok
   local -a MT_TOKENS
-  direct="$(mt__merge_selector "$1")"
+  direct="$(mt__merge_selector "$(mt__selector_input "$1")")"
   direct="${direct#*$'\t'}"
   [ -n "$direct" ] && { printf '%s' "$direct"; return; }
 
@@ -402,6 +444,34 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
   if [ -n "$from_cd" ] && [ -d "$from_cd" ]; then printf '%s' "$from_cd"; return; fi
 
   mt_checkout_dir "$d"
+}
+
+# What mt__merge_selector reads: the `gh pr merge` segment itself, its leading assignments
+# removed, when the shell reading finds one (lessons review of #795). The selector tokenizes the
+# whole command and cannot see inside $( ), so in `GH_TOKEN=$(gh auth token -u x; true) gh pr
+# merge 7` the merge did not sit at a command start and its number was lost. With no such segment
+# the whole command is read as before.
+mt__selector_input() {  # $1 = command
+  local seg a b c d
+  while IFS= read -r seg; do
+    mt_split_assignments "$seg"
+    read -r a b c d <<MTSEOF
+$MT_REST
+MTSEOF
+    # `rtk gh pr merge` is the same merge; the selector reads `gh` at a command start, so the rtk
+    # word is dropped from what it is handed.
+    if [ "${a##*/}" = "rtk" ]; then
+      a="$b"; b="$c"; c="${d%% *}"
+      if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+        printf '%s' "${MT_REST#*rtk}"; return 0
+      fi
+    elif [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+      printf '%s' "$MT_REST"; return 0
+    fi
+  done <<MTSEOF
+$(mt_raw_segments "$1")
+MTSEOF
+  printf '%s' "$1"
 }
 
 # WHICH pull request, and in WHICH repository, the gh merge invocation itself names. One
@@ -509,7 +579,7 @@ print((link_repo or repo) + "\t" + number, end="")
 # #470). The flag or the link, read by mt__merge_selector above, which holds the reasoning.
 mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
   local sel
-  sel="$(mt__merge_selector "$1")"
+  sel="$(mt__merge_selector "$(mt__selector_input "$1")")"
   printf '%s' "${sel%%$'\t'*}"
 }
 
