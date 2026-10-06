@@ -6677,6 +6677,7 @@ check "#335 and left the same calls to judge, only without it" \
 check "#335 a commit writing call with no identity is caught" "[ -n \"\$(_gitidentity '$_GIP')\" ]"
 
 section "== a CI verdict names the repository it came from (#418) =="
+# send-gate: scans hooks/
 # `gh run list` with no --repo answers about whatever repository the reader's shell happens to be
 # in, exits 0, and warns about nothing, so a verdict about another project is indistinguishable
 # from the right one (L58, L179). Four sentences in this tool handed the reader exactly that bare
@@ -11978,6 +11979,7 @@ check "#83 and its copy is still set aside" "ls '$IXHB'/RTK.md.conflict-* >/dev/
 
 
 section "== a short form still means what its rule means (claude-config#369) =="
+# send-gate: scans LESSONS.md
 # LESSONS-INDEX.md renders a hand written SHORT: line for 480 of the 638 lessons rather than the
 # rule sentence itself, so that the file which loads into every session fits under the platform's
 # 150,000 character memory warning. test-rule-file-budget.sh enforces the LENGTH cap, and nothing
@@ -14652,6 +14654,7 @@ for _sr_arm in as-found quiet; do
 done
 
 section "== a comment that quotes a measured number says when it was measured (#140, #145) =="
+# send-gate: scans hooks/run-all-tests.sh
 # Six comments and one CI step quoted how many sections this suite has, and every number was from
 # an earlier week. Each had been measured to justify a decision (where the prelude ends, whether
 # sharding was worth it, how long the changed-section audit costs), so a stale one makes the
@@ -15578,6 +15581,194 @@ check "#269 a new hook whose suite is red is not published at all" \
   "[ ! -e '$HDR/payload/hooks/gamma.sh' ]"
 check "#269 and the repo is not left holding a staged copy of it" \
   "! git -C '$HDR' ls-files --error-unmatch payload/hooks/gamma.sh >/dev/null 2>&1"
+SYNC_NO_SEND_TESTS=1
+
+
+section "== a send runs the whole tree scans its changes fall under (claude-config#809) =="
+# The send gate picks a suite by whether it NAMES a changed hook, so a scan over every hook (no
+# short circuiting pipes, every hook registered, every hook naming its repository) names none of
+# them and was never run. Measured on 2026-10-05: 16 of the 18 red runs on main between 2026-09-08
+# and 2026-10-05 that came from "sync from <host>" commits failed exactly such a scan, the other 2
+# were flakes, and none was a Linux only defect. So a suite, or one section of a suite, declares
+# what it scans with a `# send-gate: scans <paths>` line, and a send touching those paths runs it,
+# holding back the files in its scope when it fails, under the same remembered verdict as #269.
+unset SYNC_NO_SEND_TESTS
+WTB="$WORK/wholetree-bare.git"; git init -q --bare "$WTB"
+WTR="$WORK/wholetree-repo"; git clone -q "$WTB" "$WTR"
+WTH="$WORK/wholetree-home"; mkdir -p "$WTH/hooks"
+echo '{"hooks":{}}' > "$WTH/settings.json"
+printf '# rules\n' > "$WTH/CLAUDE.md"
+WT_RUNS="$WORK/wholetree-runs"; : > "$WT_RUNS"
+wt_runs(){ grep -cxF "$1" "$WT_RUNS" 2>/dev/null || true; }
+# A whole tree scan over the hooks, red whenever any hook beside it holds the word BAD. It names no
+# hook, which is exactly the shape the old selection could never pick.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '# send-gate: scans hooks/\n'
+  printf 'printf "scan\\n" >> "%s"\n' "$WT_RUNS"
+  printf 'if grep -l BAD "$(dirname "$0")"/*.sh | grep -v test-; then echo "SUITE-RESULT passed=0 failed=1"; exit 1; fi\n'
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+} > "$WTH/hooks/test-scan.sh"
+printf '#!/usr/bin/env bash\necho fine\n' > "$WTH/hooks/fine.sh"
+wt_send(){ CLAUDE_HOME="$WTH" SYNC_REPO="$WTR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1; }
+out_809a="$(wt_send)"
+dbg "#809 first send: $out_809a"
+check "#809 a clean hook publishes with the scan green" "[ -f '$WTR/payload/hooks/fine.sh' ]"
+check "#809 and the scan really ran for it, naming no hook" "[ \"\$(wt_runs scan)\" -ge 1 ]"
+
+# The defect: a changed hook that no suite NAMES, failing a scan over every hook.
+printf '#!/usr/bin/env bash\necho BAD\n' > "$WTH/hooks/fine.sh"
+out_809b="$(wt_send)"; rc_809b=$?
+dbg "#809 send of a hook a whole tree scan refuses: $out_809b"
+check "#809 a hook a whole tree scan refuses is held back" \
+  "! grep -q BAD '$WTR/payload/hooks/fine.sh'"
+check "#809 and one line names the scan and the hook it held back" \
+  "line_has \"\$out_809b\" 'NOT publishing' 'fine.sh' 'test-scan.sh'"
+check "#809 and the send still delivers rather than failing whole" "[ $rc_809b -eq 0 ]"
+
+# Cost: a send touching nothing in the scan's scope does not run it, and one whose scoped inputs
+# are unchanged reuses the verdict. The watcher sends in bursts (a quarter of sync pushes came
+# within six seconds of the one before), so this is what keeps the gate cheap.
+wt_before="$(wt_runs scan)"
+printf '# rules changed\n' > "$WTH/CLAUDE.md"
+out_809c="$(wt_send)"
+check "#809 a send outside the scan's scope does not run it" "[ \"\$(wt_runs scan)\" = '$wt_before' ]"
+check "#809 and that send went out" "grep -q 'rules changed' '$WTR/payload/CLAUDE.md'"
+check "#809 and the refused hook stays held back across it" "! grep -q BAD '$WTR/payload/hooks/fine.sh'"
+
+# A SECTION of the sync suite declares its scope the same way, on the line after its heading, and is
+# run alone. Its timing record is switched off and the machine lock skipped, or a single section run
+# would rewrite the timings the full suite deals shards by and refuse whenever another run holds
+# the lock, reading as a red check.
+mkdir -p "$WTR/tests"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'section(){ :; }\n'
+  printf 'if [ -n "${SECTION_LIST:-}" ]; then exit 0; fi\n'
+  printf 'printf "section %%s lock=%%s timings=[%%s]\\n" "$SECTION_ONLY" "${SUITE_NO_LOCK:-}" "${SUITE_SECTION_TIMINGS-unset}" >> "%s"\n' "$WT_RUNS"
+  printf 'section "== rules carry no drift (#1) =="\n'
+  printf '# send-gate: scans CLAUDE.md\n'
+  printf 'if grep -q DRIFT "$(dirname "$0")/../payload/CLAUDE.md"; then echo "SUITE-RESULT passed=0 failed=1"; exit 1; fi\n'
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+} > "$WTR/tests/test-claude-sync.sh"
+printf '# rules DRIFT\n' > "$WTH/CLAUDE.md"
+out_809d="$(wt_send)"
+dbg "#809 send of a rule file a declared section refuses: $out_809d"
+check "#809 a declared section is run for a change in its scope" \
+  "grep -q '^section == rules carry no drift (#1) ==' '$WT_RUNS'"
+check "#809 with the machine lock skipped and the timing record off" \
+  "grep -q '^section == rules carry no drift (#1) == lock=1 timings=\[\]' '$WT_RUNS'"
+check "#809 and the file it refuses is held back" "! grep -q DRIFT '$WTR/payload/CLAUDE.md'"
+check "#809 and one line names the section and the file" \
+  "line_has \"\$out_809d\" 'NOT publishing' 'CLAUDE.md' 'rules carry no drift'"
+# The control: the remembered verdict of a scan rests on its SCOPE, which here is a rule file and
+# not a hook, so fixing the rule file must re-run the section and let it through. Keyed on the hooks
+# alone it would refuse that file for ever (L336, L159).
+wt_sec_before="$(grep -c '^section == rules carry no drift' "$WT_RUNS" || true)"
+printf '# rules fixed\n' > "$WTH/CLAUDE.md"
+out_809e="$(wt_send)"
+dbg "#809 send once the rule file is fixed: $out_809e"
+check "#809 a change inside a scan's scope re-runs it" \
+  "[ \"\$(grep -c '^section == rules carry no drift' '$WT_RUNS' || true)\" -gt '$wt_sec_before' ]"
+check "#809 and the fixed file publishes" "grep -q 'rules fixed' '$WTR/payload/CLAUDE.md'"
+
+# A scan holding back LESSONS.md holds back what is RENDERED from it too, or the index a session on
+# the other Mac loads tells it about a lesson its LESSONS.md does not hold (#483's rule; the lessons
+# review of PR #811). Shown with a positive control, since an index that never carries a lesson
+# would satisfy the refusal for nothing (L159).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'section(){ :; }\n'
+  printf 'if [ -n "${SECTION_LIST:-}" ]; then exit 0; fi\n'
+  printf 'section "== lessons carry no drift (#2) =="\n'
+  printf '# send-gate: scans LESSONS.md\n'
+  printf 'if grep -q LDRIFT "$(dirname "$0")/../payload/LESSONS.md"; then echo "SUITE-RESULT passed=0 failed=1"; exit 1; fi\n'
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+} > "$WTR/tests/test-claude-sync.sh"
+printf -- '- **L1. first lesson.** body\n' > "$WTH/LESSONS.md"
+wt_send >/dev/null
+printf -- '- **L2. LDRIFT lesson.** body\n' >> "$WTH/LESSONS.md"
+out_809f="$(wt_send)"
+dbg "#809 send of a lesson a declared section refuses: $out_809f"
+check "#809 a lessons file a scan refuses is held back" "! grep -q LDRIFT '$WTR/payload/LESSONS.md'"
+check "#809 and no index the repo holds carries the held lesson" \
+  "! grep -l LDRIFT '$WTR'/payload/LESSONS-INDEX*.md >/dev/null 2>&1"
+sed -i.bak 's/LDRIFT/clean/' "$WTH/LESSONS.md"; rm -f "$WTH/LESSONS.md.bak"
+wt_send >/dev/null
+check "#809 the control: once it passes, the index the repo holds carries that lesson" \
+  "grep -l 'L2. clean lesson' '$WTR'/payload/LESSONS-INDEX*.md >/dev/null 2>&1"
+
+# A declaration whose scopes are not paths is REFUSED by name, never run: a line that only happens
+# to start with the marker (inside a string, say) would otherwise register a scan nobody wrote
+# (the lessons review of PR #811, L257).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '# send-gate: scans '"'"'*) true ;; esac\n'
+  printf 'printf "bogus\\n" >> "%s"\n' "$WT_RUNS"
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+} > "$WTR/tests/test-bogus.sh"
+printf '#!/usr/bin/env bash\necho fine again\n' > "$WTH/hooks/fine.sh"
+out_809g="$(wt_send)"
+dbg "#809 send with a malformed declaration in the repo: $out_809g"
+check "#809 a declaration whose scopes are not paths is not run" "[ \"\$(wt_runs bogus)\" = 0 ]"
+check "#809 and it is named as refused, with its file" \
+  "line_has \"\$out_809g\" 'send-gate' 'test-bogus.sh' 'not paths'"
+rm -rf "$WTR/tests"
+
+# THE REAL SCANS carry their declaration. Each one below turned a sync commit red on main between
+# 2026-09-08 and 2026-10-05, and a send runs it only while its marker is there, so losing one
+# silently returns that class to main (L96: the list is what the measurement found, and a scan
+# not on it is not run on a send).
+_wt_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
+for _wt_s in test-pipefail-shortcircuit.sh test-hook-coverage.sh test-playwright-subagent-gate.sh test-suite-result-line.sh; do
+  check "#809 $_wt_s declares what it scans" \
+    "grep -q '^# send-gate: scans ' '$_wt_root/payload/hooks/$_wt_s'"
+done
+for _wt_t in '(#418) ==' '(claude-config#369) ==' '(#140, #145) =='; do
+  # Read into a variable and matched with case: a pipe into grep -q can kill its producer under
+  # pipefail and report a failure that never happened (L183).
+  _wt_after="$(grep -A1 -F "$_wt_t\"" "$_wt_root/tests/test-claude-sync.sh" 2>/dev/null || true)"
+  # The marker is assembled, never spelled at the start of a line here, or this very check would
+  # be read by the send as a declaration of its own (the lessons review of PR #811).
+  _wt_mark="$(printf '\n%s%s' '# send-gate' ': scans ')"
+  check "#809 the section ending $_wt_t declares what it scans, on the line after its heading" \
+    "case \"\$_wt_after\" in *\"\$_wt_mark\"*) true ;; *) false ;; esac"
+done
+# And the only lines in this suite that READ as declarations are the real ones: one per declared
+# section, none file wide.
+_wt_decl_n="$(grep -c '^# send-gate: scans ' "$_wt_root/tests/test-claude-sync.sh" || true)"
+check "#809 this suite carries exactly the three section declarations ($_wt_decl_n)" "[ '$_wt_decl_n' = 3 ]"
+# Every scope a real declaration names exists under payload/, or a typo would declare a scan no
+# change can ever reach, and it would read as covered (the lessons review of PR #811, L96).
+_wt_missing=""
+_wt_scopes="$(grep -h '^# send-gate: scans ' "$_wt_root"/payload/hooks/test-*.sh "$_wt_root"/tests/test-*.sh 2>/dev/null | sed 's/^# send-gate: scans //' | tr ' ' '\n' | grep -v '^$' | sort -u)"
+while IFS= read -r _wt_sc; do
+  [ -n "$_wt_sc" ] || continue
+  [ -e "$_wt_root/payload/$_wt_sc" ] || _wt_missing="$_wt_missing $_wt_sc"
+done <<WTSCOPES
+$_wt_scopes
+WTSCOPES
+# The fixture suite above only echoes the variables back, which proves the send SETS them and not
+# that this suite OBEYS them (L52, the lessons review of PR #811). So the real suite is run one
+# section alone, exactly as the send runs it, against a throwaway cache. The control first: with
+# the timing variable unset it writes timings there, so an empty directory below is a measurement.
+_wt_sec='== nothing depends on a tool only BSD has (#38) =='
+_wt_cache="$WORK/wholetree-cache"; rm -rf "$_wt_cache"
+env -u SUITE_SECTION_TIMINGS XDG_CACHE_HOME="$_wt_cache/control" SUITE_NO_LOCK=1 SECTION_ONLY="$_wt_sec" \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+_wt_ctl_n="$(find "$_wt_cache/control" -type f 2>/dev/null | grep -c . || true)"
+check "#809 the control: a section run with the timing variable unset records its timing ($_wt_ctl_n)" \
+  "[ '${_wt_ctl_n:-0}' -ge 1 ]"
+# Now as the send runs it: top level, the lock skipped, the timing record off.
+_wt_send_out="$(XDG_CACHE_HOME="$_wt_cache/send" SUITE_SECTION_TIMINGS= SUITE_NO_LOCK=1 SECTION_ONLY="$_wt_sec" \
+  SUITE_DEPTH=0 SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+_wt_send_n="$(find "$_wt_cache/send" -type f 2>/dev/null | grep -c . || true)"
+check "#809 a section run as the send runs it writes no timing record ($_wt_send_n)" \
+  "[ '${_wt_send_n:-0}' -eq 0 ]"
+check "#809 and it runs to a verdict rather than refusing over another run's lock" \
+  "case \"\$_wt_send_out\" in *'another run is already going'*) false ;; *'SUITE-RESULT passed='*) true ;; *) false ;; esac"
+check "#809 every declared scope exists under payload/" \
+  "[ -z '$_wt_missing' ] || { echo '    missing:$_wt_missing' >&2; false; }"
 SYNC_NO_SEND_TESTS=1
 
 

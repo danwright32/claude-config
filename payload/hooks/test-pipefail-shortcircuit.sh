@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# A whole tree scan: a send touching these paths runs this suite (claude-config#809).
+# send-gate: scans hooks/ skills/ mods/
 # A ratchet on pipelines whose reader can leave before the writer has finished (claude-config#132).
 #
 # `producer | grep -q needle` under `set -o pipefail` can report a failure that never happened:
