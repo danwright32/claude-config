@@ -583,13 +583,16 @@ for entry, folder, man, files in mods:
             judged.add((f.rel, at))
             args = call_args(f.code, start + m.end() - 1) or []
             opts = args[1].strip() if len(args) > 1 else ""
-            given = re.search(r"(?<![\w$])timeoutMs\s*:\s*([^,}]+)", opts)
+            # Written out (`timeoutMs: 5_000`) or as a shorthand key (`{ timeoutMs }`), which reads
+            # the constant of that name.
+            given = re.search(r"(?<![\w$])timeoutMs\s*(?::\s*([^,}]+)|(?=\s*[,}]))", opts)
             if given:
-                ms = milliseconds(given.group(1), consts)
+                expr = given.group(1) if given.group(1) is not None else "timeoutMs"
+                ms = milliseconds(expr, consts)
                 if ms is not None and ms < LIMIT_MS:
                     continue
                 why = (f"a timeoutMs of {int(ms):,} ms" if ms is not None
-                       else f"a timeoutMs ({given.group(1).strip()}) whose value cannot be read")
+                       else f"a timeoutMs ({expr.strip()}) whose value cannot be read")
             elif not opts or (opts.startswith("{") and opts.endswith("}")):
                 why = "no timeoutMs, so Claude Code's default of 30 s"
             else:

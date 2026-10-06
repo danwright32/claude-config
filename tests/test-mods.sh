@@ -969,6 +969,15 @@ export const register = on => {
   })
 }
 TS
+mknounmod "$M12W" shorthand-timeout tersely <<'TS'
+const timeoutMs = 5_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, tersely: { run: () => built.process.run(['true'], { cwd: '/', timeoutMs }) } }
+  })
+}
+TS
 mknounmod "$M12W" process-in-hook hooked <<'TS'
 export const register = on => {
   on('session.start', async ($, e, next) => {
@@ -983,7 +992,7 @@ export const register = on => {
 TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"23 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"24 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1006,7 +1015,7 @@ for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.t
 done
 printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
   && check "a noun's own model.complete is named (#802)" ok || check "a noun's own model.complete is named (#802)" "$out"
-for m in short-process process-in-hook; do
+for m in short-process process-in-hook shorthand-timeout; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
 done
 for m in bounded commented outside-any-noun raced-short kept-unread; do
