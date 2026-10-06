@@ -343,5 +343,9 @@ describe('heredocs name the descriptor they feed (#760)', () => {
     expect(pipeline("psql db <<'SQL' <<< 'DROP TABLE t'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', replaced: true }])
     // A later redirect on another descriptor replaces nothing on standard input.
     expect(pipeline("psql db <<'SQL' 3< other.txt\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
+    // A process substitution is an argument, not a redirect onto standard input.
+    expect(pipeline("diff - <<'X' <(sort b)\na\nX")[0]?.heredocs).toEqual([{ word: 2, body: 'a' }])
+    // 00 is descriptor 0 too.
+    expect(pipeline("psql db 00<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;' }])
   })
 })

@@ -18,7 +18,6 @@ Exit codes: 0 written or current; 1 not current (--check); 2 usage, or a table t
 
 import json
 import os
-import re
 import sys
 
 TABLE = 'payload/mods/collision-guard/tests/register.test.ts'
@@ -45,7 +44,7 @@ def entries(text):
         rest = s[at:].lstrip()
         if not rest.startswith(','):
             raise ValueError(f'KIT line {n} has no value after its key')
-        value, at2 = dec.raw_decode(rest[1:].lstrip())
+        value, _ = dec.raw_decode(rest[1:].lstrip())
         method, _, arg = key.partition(' ')
         if method not in METHODS:
             raise ValueError(f'KIT line {n} asks an unknown reader: {method}')

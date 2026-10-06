@@ -395,6 +395,13 @@ type Fed = { word: number; body: string; fd?: number; replaced?: true }[]
 // What a command's own redirects put on its standard input, the last one winning as in the shell:
 // a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
 // file. Another descriptor's (3<file) is not standard input.
+// Whether a word is a redirect onto standard input: an input redirect on descriptor 0 however it is
+// written (none, 0, 00), never a process substitution, which is an argument.
+const onStdin = (w: string): boolean => {
+  if (w.startsWith('<(')) return false
+  const m = INPUT_WORD.exec(w)
+  return !!m && Number(m[1] || '0') === 0
+}
 const ownStdin = (words: readonly string[], fed: Fed): Stdin | undefined => {
   let s: Stdin | undefined
   for (let i = 0; i < words.length; i++) {
@@ -402,7 +409,7 @@ const ownStdin = (words: readonly string[], fed: Fed): Stdin | undefined => {
     const m = INPUT_WORD.exec(w)
     if (!m || w.startsWith('<(')) continue
     const at = i
-    const mine = m[1] === '' || m[1] === '0'
+    const mine = onStdin(w)
     const op = m[2] as string
     const rest = m[3] as string
     if (op === '<<<') {
@@ -605,8 +612,7 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     // heredoc before it is replaced (#760, lessons review of #818).
     let lastStdin = -1
     b.words.forEach((w, n) => {
-      const i = INPUT_WORD.exec(w)
-      if (i && (i[1] === '' || i[1] === '0')) lastStdin = n
+      if (onStdin(w)) lastStdin = n
     })
     b.words.forEach((w, n) => {
       const m = HEREDOC_WORD.exec(w)
@@ -614,8 +620,8 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       const body = m && at >= 0 ? bodyAt.get(at + (m[1] as string).length) : undefined
       // A heredoc on another descriptor (3<<EOF) says which, so a reader of standard input can
       // tell it is not what the command reads there (#760).
-      const fd = m && m[1] && m[1] !== '0' ? { fd: Number(m[1]) } : {}
-      const replaced = m && (m[1] === '' || m[1] === '0') && n !== lastStdin ? { replaced: true as const } : {}
+      const fd = m && !onStdin(w) ? { fd: Number(m[1]) } : {}
+      const replaced = m && onStdin(w) && n !== lastStdin ? { replaced: true as const } : {}
       if (body !== undefined) fed.push({ word: n, body, ...fd, ...replaced })
     })
     return fed
