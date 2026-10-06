@@ -561,6 +561,16 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\nvars(json)\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\ngetattr(json, 'x')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\n__import__('json')\nEOF")).toEqual(none)
+    // A from import of os, sys or modules out of any module, quiet or not, aliased or not, binds the
+    // real one (#862, lessons review of #859 at dbfb11c). Each leaves the files unnamed.
+    expect(targets("python3 - <<'EOF'\nfrom glob import os\nopen('a.md','w')\nos.chflags('b', 0)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom glob import os as o\nopen('a.md','w')\no.chflags('b', 0)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom typing import sys\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import os\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom json import dumps, os\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom posixpath import modules\nopen('a.md','w')\nEOF")).toEqual(none)
+    // The control: a from import of an ordinary name out of a quiet module still names its file.
+    expect(targets("python3 - <<'EOF'\nfrom json import dumps\nopen('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
     // The control: the same program with a quiet module instead still names its file.
     expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
     // Only python's writes are named so far.
