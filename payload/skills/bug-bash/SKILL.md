@@ -38,8 +38,17 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    It prints `LOCAL <url>`, or refuses a host that is not this machine (real users), a redirect off
    it, or a dev server it recognises (Next.js, Vite and what serves through it, webpack's): a first
    compile reads as a dead link. Against a deployment Dan names, only ever run it with
-   `--read-only`: it prints `READ-ONLY <url>`, every explorer launches with `readOnly: true`, and
-   every finding is at most a risk.
+   `--read-only`, behind the read only proxy, which refuses every request that could change
+   something and every WebSocket, outside any browser. Start it in the background, then pass the
+   `proxy` value from `<run dir>/proxy/proxy.json`:
+
+       node ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy"
+       bash ~/.claude/skills/bug-bash/target-guard.sh --read-only --proxy "<proxy>" "<url>"
+
+   The guard refuses (exit 7) unless that proxy answers and refuses a test write. It prints
+   `READ-ONLY <url> via <proxy>`; every explorer then gets `BUG_BASH_PROXY=<proxy>` and launches
+   with `readOnly: true`, and every finding is at most a risk. `<run dir>/proxy/requests.log`
+   lists what was forwarded and refused. Stop the proxy (the `pid` in proxy.json) when the run ends.
 
 ## 3. Explore (at most 4 agents at a time)
 
@@ -49,9 +58,10 @@ output directory `<scratchpad>/bug-bash/<run>/explorer-<n>/`. Tell each explorer
 - Drive a **headless Playwright browser of your own**, from a script you write in your output
   directory, started only through
   `require(process.env.HOME + '/.claude/skills/bug-bash/explorer-browser.js').launch({ chromium, readOnly })`
-  with `chromium` from the project's own `node_modules/playwright`. In a read only run it aborts
-  every HTTP request that is not a read and blocks service workers; WebSocket messages still pass,
-  so an explorer in a read only run submits nothing and sends nothing over a socket. Never the Playwright MCP browser (one browser for the whole session; the
+  with `chromium` from the project's own `node_modules/playwright`. In a read only run it
+  refuses to start unless the read only proxy in `BUG_BASH_PROXY` answers, sends everything through
+  it, and aborts every request that is not a read before it leaves; launch no browser any other
+  way. Never the Playwright MCP browser (one browser for the whole session; the
   `playwright-subagent-gate` hook refuses it) and never Claude in Chrome (Dan's real browser and
   sign ins). Measured on 2026-10-05: four such browsers launched at once ran in 1.2 to 1.5 s, and a
   cookie set in one was absent from the other three.

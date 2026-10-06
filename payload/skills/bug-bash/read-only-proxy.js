@@ -1,0 +1,221 @@
+#!/usr/bin/env node
+// read-only-proxy.js: the guard a read only bug bash runs behind (claude-config#813).
+//
+//   node ~/.claude/skills/bug-bash/read-only-proxy.js --state <dir>
+//
+// A read only run looks at a deployment with real users. Blocking writes inside the browser (the
+// route explorer-browser.js sets) covers only the context it hands back: a browser an explorer
+// launches for itself, a second context, and every WebSocket message pass it by (lessons review of
+// PR #798, L27). So the rule is also enforced here, outside any browser: a local proxy every
+// explorer browser is launched through, which forwards a request only when it reads.
+//
+// What it forwards: GET, HEAD and OPTIONS (the CORS preflight a cross origin read needs), the one
+// list explorer-browser.js reads by. What it refuses, without a byte reaching the site: every other
+// method (405), and every WebSocket or other protocol upgrade (403), since a socket's messages are
+// not requests and cannot be judged one by one. It refuses them to every host, the target's and any
+// third party's alike.
+//
+// HTTPS is judged too: a CONNECT tunnel is opened onto this proxy's own TLS, with a certificate for
+// that host signed by a certificate authority made for this run (openssl, in <dir>/certs), so the
+// method inside is seen. The browser is launched to accept it. Upstream, the real site's
+// certificate is verified as usual. A tunnel whose certificate cannot be made is refused, never
+// passed through blind.
+//
+// Once listening it writes <dir>/proxy.json: { "proxy": "http://127.0.0.1:<port>", "pid", "ca" }.
+// GET <proxy>/__bug-bash-proxy__/health answers { "proxy": "bug-bash-read-only" }, which is how
+// target-guard.sh and explorer-browser.js know it is this proxy that is up. Every request is logged,
+// one line each, to <dir>/requests.log as `<verdict> <method> <origin><path>`, the query string and
+// fragment left out (they can carry tokens, L741).
+//
+// It runs until stopped: whoever starts it stops it when the run ends (kill the pid in proxy.json).
+
+'use strict'
+const http = require('http')
+const https = require('https')
+const tls = require('tls')
+const net = require('net')
+const fs = require('fs')
+const path = require('path')
+const crypto = require('crypto')
+const { execFile } = require('child_process')
+const { isRead } = require('./explorer-browser.js')
+
+const MARK = 'bug-bash-read-only'
+const HEALTH = '/__bug-bash-proxy__/health'
+// Headers that describe one connection, never forwarded across the proxy.
+const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'proxy-authenticate', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
+
+function argOf(name) {
+  const i = process.argv.indexOf(name)
+  return i > 0 ? process.argv[i + 1] : undefined
+}
+const stateDir = argOf('--state')
+if (!stateDir) {
+  console.error('read-only-proxy: give --state <dir>, where proxy.json, the certificates and requests.log go.')
+  process.exit(2)
+}
+fs.mkdirSync(path.join(stateDir, 'certs'), { recursive: true })
+const certDir = path.join(stateDir, 'certs')
+const logFile = path.join(stateDir, 'requests.log')
+
+const log = (verdict, method, origin, rawPath) => {
+  const p = String(rawPath || '/').split(/[?#]/)[0]
+  try {
+    fs.appendFileSync(logFile, `${verdict} ${method} ${origin}${p}\n`)
+  } catch (e) {
+    console.error(`read-only-proxy: could not write ${logFile}: ${e.message}`)
+  }
+}
+
+const run = (args) =>
+  new Promise((resolve, reject) =>
+    execFile('openssl', args, { cwd: certDir }, (err, _out, stderr) => (err ? reject(new Error(`openssl ${args[0]}: ${stderr || err.message}`)) : resolve())),
+  )
+
+// The run's certificate authority and the one key every host's certificate shares.
+async function makeAuthority() {
+  await run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=bug bash read only proxy', '-keyout', 'ca.key', '-out', 'ca.pem'])
+  await run(['genrsa', '-out', 'leaf.key', '2048'])
+}
+const contexts = new Map()
+// A host name, or an IP literal, safe to put in a file name and a subjectAltName.
+const safeHost = h => /^[A-Za-z0-9.:-]+$/.test(h) && h.length <= 253
+function contextFor(host) {
+  if (!contexts.has(host)) {
+    const made = (async () => {
+      if (!safeHost(host)) throw new Error(`a host name it will not put in a certificate: ${JSON.stringify(host)}`)
+      const base = crypto.createHash('sha256').update(host).digest('hex').slice(0, 16)
+      const san = net.isIP(host) ? `IP:${host}` : `DNS:${host}`
+      fs.writeFileSync(path.join(certDir, `${base}.ext`), `subjectAltName=${san}\nextendedKeyUsage=serverAuth\n`)
+      await run(['req', '-new', '-key', 'leaf.key', '-subj', `/CN=${host.slice(0, 64)}`, '-out', `${base}.csr`])
+      await run(['x509', '-req', '-in', `${base}.csr`, '-CA', 'ca.pem', '-CAkey', 'ca.key', '-set_serial', `0x${crypto.randomBytes(8).toString('hex')}`, '-days', '2', '-extfile', `${base}.ext`, '-out', `${base}.pem`])
+      return tls.createSecureContext({ key: fs.readFileSync(path.join(certDir, 'leaf.key')), cert: fs.readFileSync(path.join(certDir, `${base}.pem`)) })
+    })()
+    // A failure is not cached: the next tunnel to that host tries again.
+    made.catch(() => contexts.delete(host))
+    contexts.set(host, made)
+  }
+  return contexts.get(host)
+}
+
+const refuse = (res, code, why) => {
+  res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8', 'x-bug-bash-proxy': 'refused', connection: 'close' })
+  res.end(`Refused by the bug bash read only proxy: ${why}\n`)
+}
+
+const originOf = t => `${t.scheme}://${net.isIPv6(t.host) ? `[${t.host}]` : t.host}${t.port === (t.scheme === 'https' ? 443 : 80) ? '' : `:${t.port}`}`
+
+// One request, already known to be bound for `target` (scheme, host, port) at `reqPath`.
+function forward(req, res, target, reqPath) {
+  const origin = originOf(target)
+  if (!isRead(req.method)) {
+    log('REFUSED', req.method, origin, reqPath)
+    req.resume()
+    return refuse(res, 405, `${req.method} could change something, and this run only reads.`)
+  }
+  log('FORWARDED', req.method, origin, reqPath)
+  const headers = {}
+  for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k.toLowerCase())) headers[k] = v
+  const lib = target.scheme === 'https' ? https : http
+  const up = lib.request({ host: target.host, port: target.port, method: req.method, path: reqPath, headers, servername: net.isIP(target.host) ? undefined : target.host }, upRes => {
+    const out = {}
+    for (const [k, v] of Object.entries(upRes.headers)) if (!HOP.has(k.toLowerCase())) out[k] = v
+    res.writeHead(upRes.statusCode || 502, out)
+    upRes.pipe(res)
+  })
+  up.on('error', e => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8', 'x-bug-bash-proxy': 'upstream-error' })
+      res.end(`The bug bash read only proxy could not reach ${origin}: ${e.message}\n`)
+    } else res.destroy()
+  })
+  req.pipe(up)
+}
+
+// An upgrade is refused whatever its method: once switched, the socket's messages are not requests.
+const refuseUpgrade = (req, socket, origin) => {
+  log('REFUSED', `${req.method} upgrade:${String(req.headers.upgrade || '')}`, origin, req.url)
+  socket.end(`HTTP/1.1 403 Forbidden\r\nx-bug-bash-proxy: refused\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\nRefused by the bug bash read only proxy: a ${req.headers.upgrade || 'protocol'} upgrade carries messages it cannot judge.\n`)
+}
+
+// Requests arriving inside a CONNECT tunnel, the tunnel's target on the socket.
+const tunnelled = http.createServer((req, res) => forward(req, res, req.socket.bugBashTarget, req.url))
+tunnelled.on('upgrade', (req, socket) => {
+  const t = socket.bugBashTarget
+  refuseUpgrade(req, socket, originOf(t))
+})
+tunnelled.on('clientError', (_e, socket) => socket.destroy())
+
+const server = http.createServer((req, res) => {
+  if (req.url === HEALTH) {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    return res.end(JSON.stringify({ proxy: MARK }))
+  }
+  let u
+  try {
+    u = new URL(req.url)
+  } catch {
+    return refuse(res, 400, 'it is a proxy: send it absolute URLs.')
+  }
+  if (u.protocol !== 'http:') return refuse(res, 400, `it forwards http:// requests directly and https:// through CONNECT, not ${u.protocol}`)
+  forward(req, res, { scheme: 'http', host: u.hostname.replace(/^\[|\]$/g, ''), port: Number(u.port || 80) }, `${u.pathname}${u.search}`)
+})
+// A plain upgrade names its absolute URL as its path, so the origin is left empty.
+server.on('upgrade', (req, socket) => refuseUpgrade(req, socket, ''))
+server.on('clientError', (_e, socket) => socket.destroy())
+
+server.on('connect', (req, client, head) => {
+  const m = /^\[?([^\]]+?)\]?:(\d+)$/.exec(req.url || '')
+  if (!m) {
+    log('REFUSED', 'CONNECT', String(req.url), '')
+    return client.end('HTTP/1.1 400 Bad Request\r\nx-bug-bash-proxy: refused\r\n\r\n')
+  }
+  const host = m[1]
+  const port = Number(m[2])
+  client.on('error', () => {})
+  client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+  if (head && head.length) client.unshift(head)
+  // The first byte says what the tunnel carries: 0x16 opens a TLS handshake; anything else is
+  // plain HTTP (a ws:// socket or an http:// request tunnelled), judged just the same.
+  client.once('data', first => {
+    client.pause()
+    client.unshift(first)
+    if (first[0] !== 0x16) {
+      client.bugBashTarget = { scheme: 'http', host, port }
+      tunnelled.emit('connection', client)
+      client.resume()
+      return
+    }
+    contextFor(host).then(
+      secureContext => {
+        const secure = new tls.TLSSocket(client, { isServer: true, secureContext })
+        secure.on('error', () => client.destroy())
+        secure.bugBashTarget = { scheme: 'https', host, port }
+        tunnelled.emit('connection', secure)
+        client.resume()
+      },
+      e => {
+        // No certificate, no tunnel: never passed through unjudged.
+        log('REFUSED', 'CONNECT', `https://${host}:${port}`, `/ (${e.message.split('\n')[0]})`)
+        client.destroy()
+      },
+    )
+  })
+})
+
+makeAuthority().then(
+  () =>
+    server.listen(Number(argOf('--port') || 0), '127.0.0.1', () => {
+      const { port } = server.address()
+      const state = { proxy: `http://127.0.0.1:${port}`, pid: process.pid, ca: path.join(certDir, 'ca.pem') }
+      const file = path.join(stateDir, 'proxy.json')
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(state) + '\n')
+      fs.renameSync(`${file}.tmp`, file)
+      console.log(`read-only-proxy: listening on ${state.proxy}`)
+    }),
+  e => {
+    console.error(`read-only-proxy: could not make the run's certificate authority, so it will not start: ${e.message}`)
+    process.exit(1)
+  },
+)
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0))
