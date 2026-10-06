@@ -359,7 +359,13 @@ expect "a read only run whose proxy is some other server is refused" 7 "answers 
 out="$(bash "$GUARD" --read-only --proxy "$IMPOSTOR" "https://app.example.com/" 2>&1)"; rc=$?
 expect "a read only run whose proxy lets a write through is refused" 7 "did not refuse a write" "$rc" "$out"
 out="$(bash "$GUARD" --read-only --proxy "http://proxy.example.com:8080" "https://app.example.com/" 2>&1)"; rc=$?
-expect "a read only proxy that is not on this machine is refused" 7 "not on this machine" "$rc" "$out"
+expect "a read only proxy that is not on this machine is refused" 7 "not a local http proxy" "$rc" "$out"
+# The guard and the launcher judge a proxy address by one rule (L263): a name the launcher would
+# refuse, though it is on this machine, is refused by the guard too, even with the proxy behind it.
+out="$(bash "$GUARD" --read-only --proxy "http://foo.localhost:${PROXY##*:}" "https://app.example.com/" 2>&1)"; rc=$?
+expect "a proxy address the launcher would refuse is refused by the guard" 7 "not a local http proxy" "$rc" "$out"
+# The guard holds no copy of the proxy's health path or answer: it asks the launcher (L370).
+! grep -Eq '__bug-bash-proxy__|bug-bash-read-only' "$GUARD" && ok || bad "target-guard.sh holds no copy of the proxy's health path or answer"
 : > "$TMP/proxy/requests.log"
 out="$(bash "$GUARD" --read-only --proxy "$PROXY" "https://app.example.com/" 2>&1)"; rc=$?
 expect "a deployed site with read only is allowed behind the proxy" 0 "^READ-ONLY https://app.example.com/ via $PROXY" "$rc" "$out"

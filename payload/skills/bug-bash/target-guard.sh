@@ -83,13 +83,15 @@ if [ "$read_only" -eq 1 ]; then
     *) echo "target-guard: refusing $proxy as the read only proxy: it listens on a local http:// address. $no_proxy_fix" >&2; exit 7 ;;
   esac
   proxy="${proxy%/}"
-  if ! is_local_host "$(host_of "$proxy")"; then
-    echo "target-guard: refusing $proxy as the read only proxy: it is not on this machine. $no_proxy_fix" >&2
+  # Which addresses may be the proxy, and what it answers as, are the launcher's to say, so the guard
+  # asks explorer-browser.js rather than keeping copies that could drift from it (L263, L370).
+  if ! command -v node >/dev/null 2>&1; then
+    echo "target-guard: refusing a read only run: node is not on PATH, and the read only proxy and its check both need it." >&2
     exit 7
   fi
-  health="$(curl -s --noproxy '*' --max-time 5 "$proxy/__bug-bash-proxy__/health" 2>/dev/null)"
-  if ! grep -q '"proxy":"bug-bash-read-only"' <<< "$health"; then
-    echo "target-guard: refusing a read only run: nothing at $proxy answers as the bug bash read only proxy. $no_proxy_fix" >&2
+  launcher="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/explorer-browser.js"
+  if ! why="$(node -e 'require(process.argv[1]).proxyAnswers(process.argv[2]).then(() => process.exit(0), e => { console.log(e.message); process.exit(1) })' "$launcher" "$proxy" 2>&1)"; then
+    echo "target-guard: refusing a read only run: nothing at $proxy answers as the bug bash read only proxy (${why#explorer-browser: }). $no_proxy_fix" >&2
     exit 7
   fi
   # A write sent through it, to a name that resolves nowhere (.invalid), must come back refused by
