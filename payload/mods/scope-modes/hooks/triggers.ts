@@ -74,21 +74,19 @@ export const triggersIn = (text: string): Trigger[] =>
 
 // Saying a mode should end, bound to its name: "<name> (mode) is done/over/off", or "no more/out
 // of/done with/stop <name>" ending its clause as the triggers require (so "stop winding down the
-// cluster" is prose, third lessons review of #820), or the name called a mode. An end word
-// elsewhere in the sentence ("the project is winding down, we're done with the sprint") is not
-// (second lessons review of #820).
+// cluster" is prose, third lessons review of #820). An end word elsewhere in the sentence ("the
+// project is winding down, we're done with the sprint", second review) or the name merely called a
+// mode ("the database is in read only mode", fourth review) is not.
 const askedOff = (name: string) =>
   new RegExp(
     `\\b${name}(?:\\s+mode)?\\s+(?:is\\s+|are\\s+|${APOS}s\\s+)?(?:now\\s+)?(?:done|over|off|finished|ended)\\b` +
-      `|\\b(?:no more|out of|done with|enough|end|stop|exit|quit|cancel|finish)\\s+(?:the\\s+)?${name}${NAME_END}` +
-      `|\\b${name}\\s+mode\\b`,
+      `|\\b(?:no more|out of|done with|enough|end|stop|exit|quit|cancel|finish)\\s+(?:the\\s+)?${name}${NAME_END}`,
     'i',
   )
 
 /**
  * The scope modes a message asks to end in words the triggers do not read: a sentence, not a
- * question, naming the mode and either calling it a mode or saying it should end ("winding down is
- * done for today"). What lets the mod tell Claude the mode is still on, rather than leave Claude to
+ * question, naming the mode and saying it should end ("winding down is done for today"). What lets the mod tell Claude the mode is still on, rather than leave Claude to
  * act as though it were off (#805). The name in passing ("use a read only connection", "there's no
  * build step") is not one, as the triggers refuse it too (lessons review of #820).
  */
