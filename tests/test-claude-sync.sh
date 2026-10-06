@@ -351,7 +351,7 @@ sec_begin(){
   # SUITE_SLOW_IN=<text> pauses deliberately in the first matching section, so the duration column
   # can be watched reporting a KNOWN number. Without it every section reads 0s on a fast machine and
   # a broken clock looks exactly like a fast suite (L1, L182).
-  if [ -n "${SUITE_SLOW_IN:-}" ] && printf '%s' "$1" | grep -qi -- "$SUITE_SLOW_IN"; then
+  if [ -n "${SUITE_SLOW_IN:-}" ] && grep -qi -- "$SUITE_SLOW_IN" <<< "$1"; then
     echo "  (test seam: pausing deliberately in this section)"
     # The SAME unit the watchdog polls in (claude-config#206). These two numbers only mean anything
     # relative to each other: this pause exists to keep a run moving faster than the watchdog can
@@ -362,7 +362,7 @@ sec_begin(){
   # SUITE_HANG_IN=<text> stalls deliberately in the first matching section. A deadline can only
   # be trusted once it has been watched killing something (L1), and waiting for a real stall to
   # turn up is not a test.
-  if [ -n "${SUITE_HANG_IN:-}" ] && printf '%s' "$1" | grep -qi -- "$SUITE_HANG_IN"; then
+  if [ -n "${SUITE_HANG_IN:-}" ] && grep -qi -- "$SUITE_HANG_IN" <<< "$1"; then
     echo "  (test seam: hanging deliberately in this section)"
     # Hung on a child it is WAITING for, not sitting in a foreground sleep. Bash defers a trapped
     # signal until the foreground command finishes, so a run stalled inside `sleep 60` cannot run
@@ -2713,7 +2713,7 @@ check "and it arrived with its content intact"   "grep -q 'INSTRUCTION BODY' '$C
 check "agent arrived on Mac 2"              "[ -f '$CH2/agents/plan-redteam.md' ]"
 check "Mac 2 plugin skill NOT deleted"      "[ -f '$CH2/skills/wrangler/SKILL.md' ]"
 check "hooks merged into settings"          "jq -e '.hooks.UserPromptSubmit' '$CH2/settings.json' >/dev/null"
-check "hook path rewritten to Mac2 home"    "jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' '$CH2/settings.json' | grep -q '$CH2/hooks/tdd-nudge.sh'"
+check "hook path rewritten to Mac2 home"    "grep -q '$CH2/hooks/tdd-nudge.sh' <<< \"\$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' '$CH2/settings.json')\""
 check "no token left in settings"           "! grep -q '__CLAUDE_HOME__' '$CH2/settings.json'"
 check "Mac 2 model preserved"               "jq -e '.model==\"opus\"' '$CH2/settings.json' >/dev/null"
 check "Mac 2 LOCAL permissions preserved"   "jq -e '.permissions.allow[0]==\"MAC2-ONLY-KEEP-ME\"' '$CH2/settings.json' >/dev/null"
@@ -3073,7 +3073,7 @@ echo '{"hooks":{}}' > "$WLC/settings.json"
 WLEMIT="$WORK/wl-emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$WLEMIT"; chmod +x "$WLEMIT"
 WLNOTIFIER="$WORK/wl-fake-notifier"; printf '#!/usr/bin/env bash\ntrue\n' > "$WLNOTIFIER"; chmod +x "$WLNOTIFIER"
 wl_out="$(SYNC_FSWATCH="$WLEMIT" SYNC_NOTIFIER="$WLNOTIFIER" CLAUDE_HOME="$WLC" SYNC_REPO="$WLR" bash "$SCRIPT" watch 2>&1)"
-check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'watch: sync FAILED (exit 1)'"
+check "watch output logs the failure"     "grep -qi 'watch: sync FAILED (exit 1)' <<< \"\$wl_out\""
 check "logged failure names the file"     "line_has \"\$wl_out\" 'watch: sync FAILED' 'hooks/leak\.sh'"
 
 section "== pull/sync auto-restarts the watch daemon when claude-sync itself changed =="
@@ -3170,7 +3170,7 @@ out_st_add="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCR
 # pattern that aged (#72, L103). Codes read from rsync 3.4.1 on macOS and 3.4.1 on the CI runner;
 # the CI job prints its rsync version, see .github/workflows/tests.yml.
 check "status names a hook missing from the payload" \
-  "printf '%s' \"\$out_st_add\" | grep -q '^hooks: >f+[^ ]* added\.sh'"
+  "grep -q '^hooks: >f+[^ ]* added\.sh' <<< \"\$out_st_add\""
 
 # A file in the payload that is gone locally: --delete is in the command, so a
 # working status must show the pending deletion. This is the exact case that
@@ -3189,7 +3189,7 @@ printf 'bbbb\n' > "$STHOME/hooks/edit.sh"
 touch -t 202601010000 "$STHOME/hooks/edit.sh"
 out_st_edit="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status names a same-size same-mtime edit" \
-  "printf '%s' \"\$out_st_edit\" | grep -q '^hooks: >fc[^ ]* edit\.sh'"
+  "grep -q '^hooks: >fc[^ ]* edit\.sh' <<< \"\$out_st_edit\""
 
 # status must report what a push would ACTUALLY do, so it has to honor the same
 # exclude set as stage_local_to_payload. Some skills are git clones carrying
@@ -3215,7 +3215,7 @@ check "status ignores nested .git the way a push does" \
 check "status ignores .DS_Store the way a push does" \
   "! grep -q '\.DS_Store' <<< \"\$out_st_ex\""
 check "status still reports the real skill file next to them" \
-  "printf '%s' \"\$out_st_ex\" | grep -q 'skills: >f+[^ ]* cloned/SKILL\.md'"
+  "grep -q 'skills: >f+[^ ]* cloned/SKILL\.md' <<< \"\$out_st_ex\""
 
 # A plugin-managed skill is excluded from the sync, so status must not offer it.
 mkdir -p "$STHOME/skills/wrangler"
@@ -3458,6 +3458,31 @@ touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
 check "pull applies a same-size same-mtime edit"     "grep -q 'cccc' '$QSRC/hooks/tiny.sh'"
 
+section "== a pull leaves a file whose bytes already match untouched, timestamps included (#754) =="
+# Claude Code watches every mod folder by each file's change time (ctime), and reloads the mod when
+# one moves: probed 2026-10-05 on 2.1.289, an rsync -a of identical bytes carrying a newer mtime
+# reloaded every mod it crossed, each line reading "plugin.json changed, reloaded (modules: ...
+# unchanged)", while writes to settings.json (same bytes, an env change, a hooks change, a new mod
+# folder named) reloaded nothing. -a copies the payload's mtime onto a file whose content already
+# matches, which moves its ctime, and the summary reads that '.' line as no change at all. A git
+# rebase or checkout in the clone gives unchanged files a new mtime, so one pull reloaded all 19.
+# The check is on mtime, which is what -a would have rewritten, and in the same fixture a file whose
+# content DID change is still applied (L159: the positive fires where the negative is asserted).
+TSRC="$WORK/ts-home"; TREPO="$WORK/ts-repo"
+mkdir -p "$TSRC/hooks" "$TREPO/payload/hooks"
+echo '{"hooks":{}}' > "$TSRC/settings.json"
+printf 'same\n' > "$TSRC/hooks/same.sh"
+printf 'same\n' > "$TREPO/payload/hooks/same.sh"
+printf 'old\n' > "$TSRC/hooks/moved.sh"
+printf 'new content\n' > "$TREPO/payload/hooks/moved.sh"
+touch -t 202601010000 "$TSRC/hooks/same.sh" "$TSRC/hooks/moved.sh"
+touch -t 202601020000 "$TREPO/payload/hooks/same.sh" "$TREPO/payload/hooks/moved.sh"
+ts_before="$(_suite_mtime "$TSRC/hooks/same.sh")"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TSRC" SYNC_REPO="$TREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+check "pull still applies a file whose content changed" "grep -q 'new content' '$TSRC/hooks/moved.sh'"
+check "pull leaves the mtime of a file whose bytes already match (#754)" \
+  "[ -n '$ts_before' ] && [ \"\$(_suite_mtime '$TSRC/hooks/same.sh')\" = '$ts_before' ]"
+
 section "== a test run may not apply into the real config (#277) =="
 # The bracket in run-all-tests.sh watched the live rule files and blamed the suites for any change,
 # and it could not say WHO: the sync daemon installs config into them, and another Claude session
@@ -3614,16 +3639,16 @@ echo MAC-B-MY-OWN-EDIT > "$CFBH/hooks/x.sh"
 out_cf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" sync 2>&1)"
 check "the other Mac's version is applied"        "grep -q MAC-A-VERSION '$CFBH/hooks/x.sh'"
 check "the local edit is kept beside it"          "grep -rq MAC-B-MY-OWN-EDIT '$CFBH/hooks/'"
-check "the kept copy is named as a conflict"      "ls '$CFBH/hooks/' | grep -q 'x.sh.conflict'"
+check "the kept copy is named as a conflict"      "grep -q 'x.sh.conflict' <<< \"\$(ls '$CFBH/hooks/')\""
 check "and the conflict is reported, not silent"  "grep -qi 'both Macs changed' <<< \"\$out_cf\""
 check "the report names the file"                 "line_has \"\$out_cf\" 'could NOT be merged' 'hooks/x\.sh'"
 # No conflict on a file this Mac never touched: no stray copy, no noise.
 check "an untouched file gets the new version"    "grep -q A-CHANGED-THIS-TOO '$CFBH/hooks/y.sh'"
-check "and leaves no conflict copy behind"        "! ls '$CFBH/hooks/' | grep -q 'y.sh.conflict'"
+check "and leaves no conflict copy behind"        "! grep -q 'y.sh.conflict' <<< \"\$(ls '$CFBH/hooks/')\""
 # Conflict copies are local evidence; they must never travel to the other Mac.
-check "conflict copies are not sent up"           "! ls '$CFB/payload/hooks/' | grep -q conflict"
+check "conflict copies are not sent up"           "! grep -q conflict <<< \"\$(ls '$CFB/payload/hooks/')\""
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" sync >/dev/null 2>&1
-check "and still are not sent on a later sync"    "! ls '$CFB/payload/hooks/' | grep -q conflict"
+check "and still are not sent on a later sync"    "! grep -q conflict <<< \"\$(ls '$CFB/payload/hooks/')\""
 
 section "== a send must not leave this Mac wedged against its own commit =="
 # .last-applied is written only by the apply step, and send deliberately has no
@@ -3889,7 +3914,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" push >/dev/
 # passing for a new reason, which is not the reason they were written for (L472, L143).
 git -C "$HCJR" rev-parse HEAD^ > "$HCJR/.last-applied" 2>/dev/null || true
 check "the hooks fragment really did change" \
-  "git -C '$HCJR' diff --name-only \"\$(cat '$HCJR/.last-applied')\" HEAD -- payload | grep -q settings.hooks.json"
+  "grep -q settings.hooks.json <<< \"\$(git -C '$HCJR' diff --name-only \"\$(cat '$HCJR/.last-applied')\" HEAD -- payload)\""
 echo 'edit after a hooks change' > "$HCJ/hooks/hcj-after.sh"
 out_hcj="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" send 2>&1)"
 check "a merged-only payload entry does not block sending" "[ -f '$HCJR/payload/hooks/hcj-after.sh' ]"
@@ -3967,7 +3992,7 @@ check "the notice names the newly added skill"   "grep -q 'rs-added' <<< \"\$not
 check "it does NOT name the edited hook script"  "! grep -q 'rs-hook' <<< \"\$notice_ns\""
 # It is one sentence a person reads at a glance, so it has to render as one: the
 # first draft joined the last filename straight onto the next word.
-check "the notice reads as a sentence"           "! printf '%s' \"\$notice_ns\" | grep -q '[A-Za-z0-9]('"
+check "the notice reads as a sentence"           "! grep -q '[A-Za-z0-9](' <<< \"\$notice_ns\""
 check "nor an edit to an existing skill"         "! grep -q 'rs-existing' <<< \"\$notice_ns\""
 # The whole point is that it stays quiet otherwise: a pull carrying only hook
 # edits must not tell you to restart, or the notice becomes noise to scroll past.
@@ -3981,7 +4006,7 @@ check "hook-only pull says nothing about restarting" "! grep -qi 'new Claude Cod
 rm -rf "$NSAH/skills/rs-added"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
 out_ns3="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
-check "a removed skill also earns the notice"    "printf '%s' \"\$out_ns3\" | grep -i 'new Claude Code session' | grep -q 'rs-added'"
+check "a removed skill also earns the notice"    "grep -q 'rs-added' <<< \"\$(grep -i 'new Claude Code session' <<< \"\$out_ns3\")\""
 
 # A hook REGISTRATION added or removed is the same kind of change (claude-config#176). Claude Code
 # takes its snapshot of the hooks block at session start, so a hook the pull just registered is
@@ -5212,7 +5237,7 @@ check "#43 a mention in a synced skills file is warned about" \
 # Named by the path it lives at, never by its basename: SKILL.md is the commonest
 # filename in the whole config, so "SKILL.md also mentions L2" names nothing findable.
 check "#43 a nested file is named by its path, not its basename" \
-  "! printf '%s' \"\$out_lnm\" | grep -qE '(^|[^/])SKILL\.md also mentions'"
+  "! grep -qE '(^|[^/])SKILL\.md also mentions' <<< \"\$out_lnm\""
 check "#43 neither subdirectory file is rewritten" \
   "grep -q 'see L2 for the rule' '$LNMBH/hooks/x.sh' && grep -q 'see L2 for the rule' '$LNMBH/skills/demo/SKILL.md'"
 # The renumbered file must publish on the very next send, which is the whole point.
@@ -5288,7 +5313,7 @@ outZ3="$(SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC3" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync 2>&1)"
 check "a different alias is untouched"  "grep -q 'echo something else' '$ZRC3'"
 check "no second alias appended"        "[ \"\$(grep -c 'alias claudesync=' '$ZRC3')\" = 1 ]"
-check "the difference is reported"      "printf '%s' \"\$outZ3\" | grep -qi 'differ\|already\|points'"
+check "the difference is reported"      "grep -qi 'differ\|already\|points' <<< \"\$outZ3\""
 
 # 5. `~` and the expanded home directory are the SAME path, so an alias written with a
 # tilde (which is how it was added by hand on this Mac) must count as already installed
@@ -5339,7 +5364,7 @@ check "renumber: this Mac's lesson survives"        "grep -q 'mine.\\*\\* writte
 check "renumber: it survives under its NEW number"  "grep -q 'L3. mine' '$RNBH/LESSONS.md'"
 check "renumber: the old-numbered copy is gone"     "! grep -q 'L2. mine' '$RNBH/LESSONS.md'"
 check "renumber: the lesson appears exactly once"   "[ \"\$(grep -c 'written only on Mac B' '$RNBH/LESSONS.md')\" = 1 ]"
-check "renumber: no duplicate numbers are created"  "! printf '%s' \"\$out_rn\" | grep -qi 'used twice\\|used 2 times'"
+check "renumber: no duplicate numbers are created"  "! grep -qi 'used twice\\|used 2 times' <<< \"\$out_rn\""
 check "renumber: numbering passes its own check" \
   "CLAUDE_HOME='$RNBH' SYNC_REPO='$RNB' bash '$RNB/claude-sync' check-lessons >/dev/null 2>&1"
 # The report has to name what was dropped and both numbers involved, or a silently
@@ -5387,11 +5412,11 @@ check "renumber: the unsent entry is renumbered, not left colliding" \
 check "renumber: the settled collision is reported, not silent" \
   "line_has \"\$out_rn2\" 'renumbered' 'L9 became L10'"
 check "renumber: no duplicate number remains afterwards" \
-  "! printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
+  "! grep -qi 'used twice\\|used 2 times' <<< \"\$out_rn2\""
 # A warning that cries wolf gets ignored: nothing in this file mentions L9 in
 # body text, so neither a rewrite report nor a go-and-check warning may fire here.
 check "renumber: no mention handling when nothing mentions the old number" \
-  "! printf '%s' \"\$out_rn2\" | grep -qiE 'rewrote|also mentions|still mentions'"
+  "! grep -qiE 'rewrote|also mentions|still mentions' <<< \"\$out_rn2\""
 
 section "== #257: an exact duplicate is dropped, but must not be called a renumber =="
 # Seen for real on Dans-MacBook-Pro, 2026-09-01. A by-hand rebase resolution had put the
@@ -5526,7 +5551,7 @@ bare_log_up2="$(git -C "$UPB" log --oneline main 2>/dev/null || true)"
 check "#16 sync exited cleanly before its commit is looked for" \
   "[ '$rc_up2' -eq 0 ] || { echo \"    sync exited $rc_up2 and said: $out_up2\" >&2; false; }"
 check "#16 sync also sends a non-payload commit" \
-  "printf '%s' \"\$bare_log_up2\" | grep -q 'second edit outside payload' || { echo \"    sync exited $rc_up2 saying: $out_up2\" >&2; echo \"    the remote log holds: $bare_log_up2\" >&2; false; }"
+  "grep -q 'second edit outside payload' <<< \"\$bare_log_up2\" || { echo \"    sync exited $rc_up2 saying: $out_up2\" >&2; echo \"    the remote log holds: $bare_log_up2\" >&2; false; }"
 
 # And it must still stay quiet when there is genuinely nothing to do, or the line
 # becomes noise and the real "already up to date" case stops meaning anything.
@@ -5669,7 +5694,7 @@ out_conf20="$(CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
 check "#20 status names a top-level conflict copy" \
   "grep -q 'LESSONS.md.conflict-OtherMac' <<< \"\$out_conf20\""
 check "#20 status names a nested conflict copy" \
-  "printf '%s' \"\$out_conf20\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac \([0-9]+ days old'"
+  "grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac \([0-9]+ days old' <<< \"\$out_conf20\""
 check "#20 status says how old each copy is" \
   "grep -q '9 days' <<< \"\$out_conf20\""
 check "#20 status says what to do about them" \
@@ -5775,7 +5800,7 @@ out_sust="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync 2>&1)"
 check "#22 a sustained outage fails too" "[ $rc_sust -ne 0 ]"
 check "#22 a sustained outage does raise an alert" "[ -s '$NOTED' ]"
 check "#22 a sustained outage says how long it has been failing" \
-  "printf '%s' \"\$out_sust\" | grep -qE 'Syncing has now been failing for (less than a minute|[0-9]+ (minute|hour|day|week|month)s?)'"
+  "grep -qE 'Syncing has now been failing for (less than a minute|[0-9]+ (minute|hour|day|week|month)s?)' <<< \"\$out_sust\""
 # The sub-minute case is the one that shows why (#77). Dividing seconds by 60 and printing the
 # result told somebody their sync had been failing for "0 minutes", which is not a duration anybody
 # can act on and reads as though nothing is wrong. A shared renderer has a word for it.
@@ -5933,7 +5958,7 @@ check "#320 verify exits zero on a timestamp only difference" \
 mkskill "$VFHA/skills/v/SKILL.md" 'V2 changed on A'
 CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 out_v3="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
-check "#23 verify reports the other Mac as behind"  "printf '%s' \"\$out_v3\" | grep -qE 'macB: BEHIND by [0-9]+ config change'"
+check "#23 verify reports the other Mac as behind"  "grep -qE 'macB: BEHIND by [0-9]+ config change' <<< \"\$out_v3\""
 # Asserts the NUMBER, not just the word: the count was first written as "commits since the
 # marker's timestamp", which is a stand-in for the real quantity and goes wrong whenever the
 # two Macs' clocks disagree. A test that only looked for the word "behind" passed on it.
@@ -6006,7 +6031,7 @@ check "#24 a healthy sync records no outage" \
 printf 'garbage line with no fields\n' >> "$OCR/.outage-log"
 out_ocbad="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; rc_ocbad=$?
 check "#24 status survives a corrupt outage log"  "[ $rc_ocbad -eq 0 ]"
-check "#24 and says a record could not be read"   "printf '%s' \"\$out_ocbad\" | grep -qE '[0-9]+ record\(s\) unreadable and not counted'"
+check "#24 and says a record could not be read"   "grep -qE '[0-9]+ record\(s\) unreadable and not counted' <<< \"\$out_ocbad\""
 
 section "== local state carried in from elsewhere is not trusted (#25) =="
 # Four files now hold local state in the sync folder and none had a defined lifetime:
@@ -6671,7 +6696,10 @@ _cir_re='(gh|"\$gh")[[:space:]]+(run[[:space:]]+list|pr[[:space:]]+checks|api)'
 # remote no slug can be derived from (L11: a message may claim only what its check measured). A
 # literal repos/<owner>/<name> path counts too, since `gh api` has no --repo and that path is how
 # it names one; a {owner}/{repo} placeholder or a variable does not match the character class.
-_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+# An ACCOUNT endpoint is about no repository at all, so naming one is not possible and its answer
+# cannot be about the wrong one: `gh api rate_limit`, which the CI gate asks when a read was refused
+# for a used up limit (claude-config#593), and `gh api user`. Exempted by that reason, as a shape.
+_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|api[[:space:]]+(rate_limit|user)([[:space:]]|$)'
 _cir_lines(){   # $1 = a copy of the tool to read
   # Comments stripped and continuation lines joined, exactly as every other source scan here does
   # it, so a query split over two lines is judged as the one line it really is.
@@ -7375,7 +7403,7 @@ _held="$(_try_lock "$_lockdir/live")"; _held_rc=$?
 _held_elapsed=$(( $(date +%s) - _t0 ))
 check "#32 a second run does not start while one is going" "[ '$_held_rc' -ne 0 ]"
 check "#32 it names the run that holds the lock"  "grep -q '$$' <<< \"\$_held\""
-check "#32 it says how long that run has been going" "printf '%s' \"\$_held\" | grep -qE '[0-9]+s'"
+check "#32 it says how long that run has been going" "grep -qE '[0-9]+s' <<< \"\$_held\""
 check "#32 and runs none of the checks"           "! grep -q '^PASS=' <<< \"\$_held\""
 
 # A crashed run must not wedge the suite for good. The owner being gone is the evidence, not the
@@ -7756,7 +7784,7 @@ cat > "$WORK/ps-healthy" <<'PSEOF'
 PSEOF
 _ps_ok="$(_status_with "$WORK/ps-healthy")"
 check "#33 one watcher and one run are not reported" \
-  "! printf '%s' \"\$_ps_ok\" | grep -qi 'left running\|stray'"
+  "! grep -qi 'left running\|stray' <<< \"\$_ps_ok\""
 
 # Three separate watchers. A count alone would catch this one.
 cat > "$WORK/ps-many" <<'PSEOF'
@@ -7780,7 +7808,7 @@ cat > "$WORK/ps-chain" <<'PSEOF'
 PSEOF
 _ps_chain="$(_status_with "$WORK/ps-chain")"
 check "#33 a run nested inside a run is reported" "grep -qi 'test run' <<< \"\$_ps_chain\""
-check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" | grep -qE 'nested [0-9]+ deep inside another'"
+check "#33 and it says how deeply they are nested" "grep -qE 'nested [0-9]+ deep inside another' <<< \"\$_ps_chain\""
 
 # The control (L143): an EMPTY listing must report nothing even though this machine really does
 # have a watcher running right now. Matched on the stray report's OWN wording, which is
@@ -7792,7 +7820,7 @@ check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" 
 : > "$WORK/ps-none"
 _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
-  "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher processes\|test runs'"
+  "! grep -qi 'left running\|watcher processes\|test runs' <<< \"\$_ps_none\""
 
 section "== status speaks about a pile of suites, and a scratch size that cannot finish (#444, #466) =="
 # On 2026-09-18 559 of this repo's suite processes had run for up to seven hours at zero CPU on a
@@ -8020,7 +8048,7 @@ _PORTABLE_HELPERS="$WORK/helpers.sh"
 . "$_PORTABLE_HELPERS"
 echo 'x' > "$WORK/mtime-probe"
 _pm="$(file_mtime "$WORK/mtime-probe")"
-check "#38 the mtime helper returns a bare timestamp" "printf '%s' \"\$_pm\" | grep -qE '^[0-9]+$'"
+check "#38 the mtime helper returns a bare timestamp" "grep -qE '^[0-9]+$' <<< \"\$_pm\""
 # The claim that matters is not "it returns a number" but "it returns the RIGHT number", measured
 # against the suite's own independent reader rather than against itself (L70).
 check "#38 and it agrees with the suite's own reader" "[ \"\$_pm\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
@@ -8060,12 +8088,12 @@ GNUDATE
 chmod +x "$_GNUBIN/stat" "$_GNUBIN/date"
 _gnu_mtime="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; file_mtime '$WORK/mtime-probe'")"
 check "#38 the mtime helper still answers with GNU-shaped tools" \
-  "printf '%s' \"\$_gnu_mtime\" | grep -qE '^[0-9]+$'"
+  "grep -qE '^[0-9]+$' <<< \"\$_gnu_mtime\""
 # The specific trap: the filesystem block must not be carried along with the number.
 check "#38 and does not carry the filesystem block with it" \
   "[ \"\$_gnu_mtime\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
 check "#38 and the stand-in really was used" \
-  "PATH='$_GNUBIN:'\$PATH command -v stat | grep -q gnu-bin"
+  "grep -q gnu-bin <<< \"\$(PATH='$_GNUBIN:'\$PATH command -v stat)\""
 _gnu_date="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; date_from_epoch 1000000000 '+%Y-%m-%d'")"
 check "#38 the date helper still answers with GNU-shaped tools" \
   "[ '$_gnu_date' = '2001-09-08' ] || [ '$_gnu_date' = '2001-09-09' ]"
@@ -8434,12 +8462,12 @@ check "#36 status reports abandoned scratch"     "grep -qi 'scratch the tool lef
 check "#36 and says how many there are"          "grep -q '2 abandoned' <<< \"\$_scr_rep\""
 # The size, not just the count: the count is what grows and the size is what actually hurts, and
 # 2 items could be 2 KB or 2 GB.
-check "#36 and how much space they hold"         "printf '%s' \"\$_scr_rep\" | grep -qE '[0-9]+ MB'"
+check "#36 and how much space they hold"         "grep -qE '[0-9]+ MB' <<< \"\$_scr_rep\""
 check "#36 and names the command that reclaims them" "grep -q 'reap-scratch' <<< \"\$_scr_rep\""
 
 _scr_out="$(_reap)"
 check "#36 the reaper says how many it reclaimed" "grep -q 'reclaimed 2' <<< \"\$_scr_out\""
-check "#36 and how much space it got back"        "printf '%s' \"\$_scr_out\" | grep -qE '[0-9]+ MB'"
+check "#36 and how much space it got back"        "grep -qE '[0-9]+ MB' <<< \"\$_scr_out\""
 # The scan reads the temp directory once per NAME, and on a real Mac that directory holds six
 # figures of entries: measured 113,000 here on 2026-08-21, six passes, 1.28 seconds of every
 # single `status` call
@@ -8472,7 +8500,7 @@ _scr_again="$(_reap)"
 check "#36 reaping again finds nothing and says so" \
   "grep -qi 'no abandoned scratch' <<< \"\$_scr_again\""
 check "#36 and status goes quiet once they are gone" \
-  "! _scr_status | grep -qi 'scratch the tool left behind'"
+  "! grep -qi 'scratch the tool left behind' <<< \"\$(_scr_status)\""
 
 # An automatic deletion policy is the user's decision, never a silent default (L9). Planted old,
 # so a sweep that ignored the off switch would really remove them and the check cannot pass by
@@ -9412,14 +9440,34 @@ fi
 # One launch for all four, exactly as the grouped form above (claude-config#204). This was four
 # processes spelt out one after another, each paying the whole selection over again to be told
 # about one shard of a partition it had already worked out in full.
-_bw_old="$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
-  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
-check "#151 dealt out the old way, a section really is borrowed by a shard that does not own it" \
-  "[ -n \"\$(_bw_borrowed \"\$_bw_old\")\" ]"
-# And the same four shards still divide the sections between them that way, so what the check
-# above caught is the BORROWING and not a selector that fell over (L140).
+#
+# The deal is FIXED here rather than read off whatever this run happens to have measured
+# (claude-config#595). This launch used to inherit the live timings store, and the deal is by
+# measured seconds, so whether the dependent and its prerequisite fell into different shards at
+# four was a property of that day's timings: on 2026-09-11 a run on main dealt them into the SAME
+# shard, nothing was borrowed, and this failed with nothing wrong. An EMPTY store makes the deal
+# count based, which depends only on where the two sections sit in the file. Even that is not
+# trusted at one count, because a section added between them can make their distance a multiple of
+# four: the counts are tried in turn until one separates them, and with fewer sections than 840
+# (the smallest number every count from two to eight divides) one of them always does.
+ST_BW_EMPTY="$WORK/bw-empty"; mkdir -p "$ST_BW_EMPTY"
+_bw_old=""; _bw_old_n=""
+for _bw_try in 2 3 4 5 6 7 8; do
+  _bw_old="$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD="1/$_bw_try" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
+    SUITE_SECTION_TIMINGS="$ST_BW_EMPTY" \
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  if [ -n "$(_bw_borrowed "$_bw_old")" ]; then _bw_old_n="$_bw_try"; break; fi
+done
+check "#151 dealt out the old way, a section really is borrowed by a shard that does not own it (at ${_bw_old_n:-no} shards)" \
+  "[ -n \"\$_bw_old_n\" ] && [ -n \"\$(_bw_borrowed \"\$_bw_old\")\" ]"
+# The deal really was the count based one, so the result above cannot have come from a timings
+# store this run did not choose (L134).
+check "#151 and that deal was by section count, from no measured timings at all" \
+  "grep -q 'dealt by section count' <<< \"\$_bw_old\""
+# And the same shards still divide the sections between them that way, so what the check above
+# caught is the BORROWING and not a selector that fell over (L140).
 check "#151 and that old dealing is otherwise a sound division too" \
-  "printf '%s\\n' \"\$_bw_old\" | shard_coverage_verdict 4 >/dev/null"
+  "printf '%s\\n' \"\$_bw_old\" | shard_coverage_verdict ${_bw_old_n:-4} >/dev/null"
 
 section "== the suite can be run as Linux from a Mac (claude-config#337) =="
 # Two defects shipped on 2026-09-07 that were green on every machine anybody looks at and red only
@@ -9445,7 +9493,13 @@ check "#337 and the script resolves an image for exactly that" \
 _LINT="$WORK/lin-tree"
 mkdir -p "$_LINT/tests" "$_LINT/.github/workflows"
 cp "$_LIN" "$_LINT/tests/run-on-linux.sh"
-sed 's/runs-on: ubuntu-latest/runs-on: windows-2022/' "$_WF" > "$_LINT/.github/workflows/tests.yml"
+sed 's/runs-on: [^[:space:]]*/runs-on: windows-2022/' "$_WF" > "$_LINT/.github/workflows/tests.yml"
+# The rewrite matches whatever runner is declared, and is asserted to have landed: it named
+# ubuntu-latest until claude-config#597 named the image, and a substitution that matches nothing
+# leaves the real runner in place and every check below about a refusal fails or, worse, passes
+# for the wrong reason (L100).
+check "#337 the planted workflow really does declare the unknown runner" \
+  "grep -q 'runs-on: windows-2022' '$_LINT/.github/workflows/tests.yml'"
 _lin_bad="$(bash "$_LINT/tests/run-on-linux.sh" 2>&1)"; _lin_bad_rc=$?
 check "#337 a runner it has no image for is refused" "[ '$_lin_bad_rc' -ne 0 ]"
 check "#337 and the refusal says it can no longer claim to reproduce CI" \
@@ -9455,8 +9509,9 @@ check "#337 and the refusal says it can no longer claim to reproduce CI" \
 # the list of what the suite actually shells out to, so it is read from there rather than kept by
 # hand beside it: a dependency added to CI would otherwise be absent from the container, and the
 # suite would fail there for a reason that has nothing to do with the code (L96, L41).
-_lin_probed="$( { sed -n 's/^ *\([a-z][a-z0-9_-]*\) --version.*/\1/p' "$_WF"
-                  sed -n 's/.*command -v \([a-z][a-z0-9_-]*\).*/\1/p' "$_WF"; } | sort -u | grep -v '^$' )"
+# Through the runner's own plan, the one place that list is derived, which
+# tests/test-ci-environment-tools.sh also reads (claude-config#624, L41).
+_lin_probed="$(SYNC_LINUX_PRINT_PLAN=1 bash "$_LIN" 2>/dev/null | sed -n 's/^probed: //p' | tr ' ' '\n' | grep -v '^$' )"
 # Counted and rendered BEFORE the check rather than inside it. A `printf ... | grep` written into a
 # check, title included, is the shape the #55 scan bans, and it is right to: a pair of greps over
 # one captured value can be answered by two unrelated parts of it.
@@ -9529,7 +9584,9 @@ check "#338 the same inputs give the same tag, or nothing is ever reused" \
 _LINT2="$WORK/lin-tree-image"
 mkdir -p "$_LINT2/tests" "$_LINT2/.github/workflows"
 cp "$_LIN" "$_LINT2/tests/run-on-linux.sh"
-sed 's/runs-on: ubuntu-latest/runs-on: ubuntu-22.04/' "$_WF" > "$_LINT2/.github/workflows/tests.yml"
+sed 's/runs-on: [^[:space:]]*/runs-on: ubuntu-22.04/' "$_WF" > "$_LINT2/.github/workflows/tests.yml"
+check "#338 the planted workflow really does declare the other image" \
+  "grep -q 'runs-on: ubuntu-22.04' '$_LINT2/.github/workflows/tests.yml'"
 _lin_tag3="$(SYNC_DOCKER=/no/such-docker SYNC_LINUX_PRINT_PLAN=1 bash "$_LINT2/tests/run-on-linux.sh" 2>&1 | sed -n 's/^tag: //p')"
 check "#338 a different image gives a different tag ($_lin_tag3)" \
   "[ -n '$_lin_tag3' ] && [ '$_lin_tag3' != '$_lin_tag1' ]"
@@ -10122,7 +10179,7 @@ _gc="$(SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SUITE_SPAWN_UNTIL=push SUITE_
 check "#37 the spawn probe actually started a child" \
   "grep -q 'the child exited' <<< \"\$_gc\""
 check "#37 a filtered run hands the flag to nothing it starts" \
-  "printf '%s' \"\$_gc\" | grep -q 'inherits SUITE_FILTERED as: <unset>'"
+  "grep -q 'inherits SUITE_FILTERED as: <unset>' <<< \"\$_gc\""
 check "#37 its child honours the section limit it was given" \
   "grep -q 'stopped after SECTION_UNTIL=push' <<< \"\$_gc\""
 # The other half, and the one that names the actual damage: not merely that the child stopped, but
@@ -10200,7 +10257,7 @@ check "#45 a resolved copy is no longer reported as outstanding by the pull" \
 # it, but named as safe rather than as work outstanding. A copy that says nothing about its own
 # state is indistinguishable from one holding the last surviving version of a lesson (L11).
 check "#45 status still lists the resolved copy, named as safe to delete" \
-  "printf '%s' \"\$out_p45done\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*(nothing|safe)'"
+  "grep -qE 'LESSONS\.md\.conflict-OtherMac.*(nothing|safe)' <<< \"\$out_p45done\""
 # The other copy has NOT been resolved and must still be reported in the same run: a report that
 # went quiet the moment one of them was dealt with would hide the rest.
 check "#45 the copy that is still outstanding is still named" \
@@ -10312,7 +10369,7 @@ check "#53 both paths report exactly the same files" \
 # and the count that follows is what says no to them. The old path is still there behind the seam
 # and still opens all four hundred, which is what makes this assertion mean something.
 check "#53 only the files that could match are opened" \
-  "printf '%s' \"\$cs_fast_err\" | grep -qE 'examined 5 (candidate )?file'"
+  "grep -qE 'examined 5 (candidate )?file' <<< \"\$cs_fast_err\""
 check "#53 the slow path opens the whole tree, so the comparison is real" \
   "[ \"\$(printf '%s' \"\$cs_slow_err\" | sed -nE 's/.*examined ([0-9]+).*/\1/p')\" -gt 400 ]"
 check "#53 a binary file is never scanned"       "! grep -q 'logo.png' <<< \"\$cs_fast\""
@@ -10484,7 +10541,7 @@ check "#44 and it does not take a band anyone else holds" \
 check "#44 the move is reported, not silent" \
   "grep -qi 'moved to 1001 to 1500' <<< \"\$out_bdcol\""
 check "#44 and it mints from the band it moved to" \
-  "printf '%s' \"\$out_bdcol\" | grep -q \"L\$(cat '$BDR/lesson-bands/MacZulu')\""
+  "grep -q \"L\$(cat '$BDR/lesson-bands/MacZulu')\" <<< \"\$out_bdcol\""
 # Settled for good: asking again neither moves it nor reports anything.
 out_bdcol2="$(SYNC_HOSTNAME=MacZulu SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 check "#44 a settled collision stays settled" \
@@ -10497,7 +10554,7 @@ bd_junk_rc=0
 out_bdjunk="$(SYNC_HOSTNAME=MacFive SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)" || bd_junk_rc=$?
 check "#44 a band file with no number in it refuses"  "[ \"\$bd_junk_rc\" -ne 0 ]"
 check "#44 and names the file to fix"                 "grep -q 'lesson-bands/MacFive holds no number' <<< \"\$out_bdjunk\""
-check "#44 and does not mint a number anyway"         "! printf '%s' \"\$out_bdjunk\" | grep -qE '^L[0-9]+$'"
+check "#44 and does not mint a number anyway"         "! grep -qE '^L[0-9]+$' <<< \"\$out_bdjunk\""
 rm -f "$BDR/lesson-bands/MacFive"
 
 # A band is worth nothing to the other Mac until it can see it, and only a commit carries it.
@@ -10506,7 +10563,7 @@ mkdir -p "$BDG/payload"; printf 'seed\n' > "$BDG/payload/seed.txt"
 git -C "$BDG" add -A && git -C "$BDG" -c user.name=t -c user.email=t@e commit -q -m seed
 SYNC_HOSTNAME=MacFour SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDG" bash "$SCRIPT" next-lesson >/dev/null 2>&1
 check "#44 a claim is committed, so it reaches the other Mac" \
-  "git -C '$BDG' log --oneline -- lesson-bands | grep -q ."
+  "grep -q . <<< \"\$(git -C '$BDG' log --oneline -- lesson-bands)\""
 check "#44 and the working tree is left clean" \
   "[ -z \"\$(git -C '$BDG' status --porcelain lesson-bands 2>/dev/null)\" ]"
 section "== a full band inside a pull rolls over, instead of renumbering to nothing (claude-config#512) =="
@@ -10656,7 +10713,7 @@ check "#50 frontmatter written in the body does not count" "[ ! -e '$BSR/payload
 # Named WITH the reason on one line: "four skills were skipped" sends nobody anywhere, and two
 # separate greps over a push report that lists paths anyway prove nothing (L172, #55).
 check "#50 the push names the empty directory and why"  "grep -qE 'empty.*SKILL\.md' <<< \"\$out_bs\""
-check "#50 the push names the loose file and why"       "printf '%s' \"\$out_bs\" | grep -qE 'design-notes\.md.*(not a skill|bare file)'"
+check "#50 the push names the loose file and why"       "grep -qE 'design-notes\.md.*(not a skill|bare file)' <<< \"\$out_bs\""
 check "#50 the push names the one missing a description" "grep -qE 'nofm.*description' <<< \"\$out_bs\""
 # Silence when everything can load, or the warning becomes furniture and stops being read.
 BS2="$WORK/badskill-home2"; BSR2="$WORK/badskill-repo2"
@@ -10774,13 +10831,13 @@ rm -rf "$DSH/skills/wrangler" "$DSR/payload/skills/durable-objects"
 ds_ok_rc=0
 out_dsok="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1)" || ds_ok_rc=$?
 check "#49 a clean config passes"                  "[ \"\$ds_ok_rc\" -eq 0 ]"
-check "#49 and says how many plugin skills it read" "printf '%s' \"\$out_dsok\" | grep -qE '2 (plugin )?skill'"
+check "#49 and says how many plugin skills it read" "grep -qE '2 (plugin )?skill' <<< \"\$out_dsok\""
 # A Mac with no plugins at all cannot answer this question, and must say so rather than passing:
 # zero plugin skills read is not the same as no duplicates found.
 DSN="$WORK/dupskill-none"; mkdir -p "$DSN/skills"; echo '{"hooks":{}}' > "$DSN/settings.json"
 out_dsnone="$(CLAUDE_HOME="$DSN" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1 || true)"
 check "#49 no plugins at all is reported as nothing to compare against" \
-  "printf '%s' \"\$out_dsnone\" | grep -qiE 'no plugin|nothing to compare'"
+  "grep -qiE 'no plugin|nothing to compare' <<< \"\$out_dsnone\""
 # And the standing report, so a duplicate that arrives with a plugin install surfaces without
 # anybody thinking to run the check (L148).
 mkdir -p "$DSH/skills/wrangler"; mkskill "$DSH/skills/wrangler/SKILL.md" 'back again'
@@ -11520,11 +11577,11 @@ PLUGSET
 out_pg="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 dbg "status with plugin settings: $out_pg"
 check "#48 status names the plugins that load on this Mac" \
-  "printf '%s' \"\$out_pg\" | grep -qE 'enabled.*(superpowers|cloudflare)'"
+  "grep -qE 'enabled.*(superpowers|cloudflare)' <<< \"\$out_pg\""
 check "#48 and the ones that do not" \
-  "printf '%s' \"\$out_pg\" | grep -qE 'off.*vercel-plugin|vercel-plugin.*off'"
+  "grep -qE 'off.*vercel-plugin|vercel-plugin.*off' <<< \"\$out_pg\""
 check "#48 and says plainly that this is per Mac" \
-  "printf '%s' \"\$out_pg\" | grep -qiE 'per Mac|this Mac only|never synced'"
+  "grep -qiE 'per Mac|this Mac only|never synced' <<< \"\$out_pg\""
 # No setting at all is a real state with real consequences (every installed plugin loads
 # everywhere), and it is the state this Mac was in. Saying nothing would report it as fine.
 cat > "$PGH/settings.json" <<'PLUGSET2'
@@ -11532,7 +11589,7 @@ cat > "$PGH/settings.json" <<'PLUGSET2'
 PLUGSET2
 out_pg2="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#48 a Mac with no plugin settings is told what that means" \
-  "printf '%s' \"\$out_pg2\" | grep -qiE 'no plugin (enablement|settings)'"
+  "grep -qiE 'no plugin (enablement|settings)' <<< \"\$out_pg2\""
 
 section "== the lessons index is derived, and the full text is read on demand (#63) =="
 # LESSONS.md is 179 entries and about 116 KB, imported in full into every session in every project.
@@ -12118,6 +12175,22 @@ printf '%s\n' "\$*" >> "$WORK/ci-calls.log"
 # the third would report a working lookup as a broken one (L10, L11).
 [ "\${CI_STATE:-}" = "none" ] && exit 0
 [ -n "\${CI_STATE:-}" ] || exit 1
+# A gh whose account has used up its REST limit (claude-config#593), in the words the real one
+# prints, and the rate_limit endpoint (which costs nothing against the limit) saying when it resets.
+if [ "\${CI_STATE:-}" = "ratelimited" ]; then
+  case "\$*" in
+    *rate_limit*) printf '%s %s\n' "\${CI_REMAINING:-0}" "\${CI_RESET:-0}"; exit 0 ;;
+  esac
+  # One error body per kind, in gh's own words, so the classifier is judged on what GitHub sends
+  # rather than one line of my own (L52).
+  case "\${CI_RL_KIND:-primary}" in
+    primary)   echo "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    secondary) echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID ABCD:1234. (HTTP 403)" >&2 ;;
+    429)       echo "gh: Too many requests (HTTP 429)" >&2 ;;
+    other403)  echo "gh: Resource not accessible by integration (HTTP 403)" >&2 ;;
+  esac
+  exit 1
+fi
 printf '%s\n' "\$CI_STATE"
 STUB
 chmod +x "$CIBIN/gh"
@@ -12226,6 +12299,43 @@ check "#221 and it says it could not read the answer, not that it failed" \
   "case \"\$out_unread\" in *'could not read whether'*) true ;; *) false ;; esac"
 check "#221 and unreadable carries its own marker" \
   "case \"\$out_unread\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+check "#593 an unreadable verdict that is not a rate limit does not claim to be one" \
+  "case \"\$out_unread\" in *'rate limit'*) false ;; *) true ;; esac"
+
+# RATE LIMITED is unreadable for a reason the reader can do nothing about but wait, and it has a
+# known end (claude-config#593). On 2026-10-02 a CI review in another session used up the account's
+# REST limit for over 40 minutes and config sync paused on both Macs with nothing saying why. So the
+# cause and the reset time are said, in Eastern time, as Dan reads every time.
+_rl_reset=$(( $(date +%s) + 1500 ))
+# Formatted by perl rather than the tool's own date helper, so the expectation cannot share a
+# mistake with the code it judges (L70).
+_rl_when="$(TZ=America/New_York perl -MPOSIX -e 'print strftime("%-I:%M %p ET", localtime($ARGV[0]))' "$_rl_reset")"
+out_rl="$(CI_RESET="$_rl_reset" ci_case ratelimited ratelimited)"
+dbg "#593 rate limited: $out_rl"
+check "#593 a rate limited verdict is still not applied" "! ci_applied ratelimited"
+check "#593 and it names the rate limit as the cause" \
+  "case \"\$out_rl\" in *'rate limit'*) true ;; *) false ;; esac"
+check "#593 and when it resets, in Eastern time ($_rl_when)" \
+  "case \"\$out_rl\" in *\"\$_rl_when\"*) true ;; *) false ;; esac"
+check "#593 and it is still the unreadable outcome, so the watcher log and the clock treat it as one" \
+  "case \"\$out_rl\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+# A secondary limit leaves the primary one with calls to spare and has no reset time to quote, so
+# it is named as that rather than given a time the reader would wait for in vain (L11).
+out_rl_old="$(SYNC_CI_UNREADABLE_AFTER=0 CI_RESET="$_rl_reset" ci_case ratelimited-old ratelimited)"
+check "#593 past the window a rate limited verdict is applied like any unreadable one, and still names the cause" \
+  "case \"\$out_rl_old\" in *'WITHOUT a verdict'*\"\$_rl_when\"*) true ;; *) false ;; esac"
+# The KIND is read from gh's error text, never inferred from the rate_limit endpoint: here the
+# primary limit reads as used up too, and the secondary body must still win.
+out_rl2="$(CI_RL_KIND=secondary CI_RESET="$_rl_reset" ci_case ratelimited2 ratelimited)"
+check "#593 a secondary rate limit is named from gh's own text, without quoting the primary reset time" \
+  "case \"\$out_rl2\" in *'secondary rate limit'*) case \"\$out_rl2\" in *\"\$_rl_when\"*) false ;; *) true ;; esac ;; *) false ;; esac"
+out_rl3="$(CI_RL_KIND=429 CI_RESET="$_rl_reset" ci_case ratelimited3 ratelimited)"
+check "#593 an HTTP 429 is read as a rate limit, and as the short secondary kind" \
+  "case \"\$out_rl3\" in *'secondary rate limit'*) true ;; *) false ;; esac"
+# A 403 that is NOT a rate limit stays plainly unreadable, so its advice still points at gh's login.
+out_rl4="$(CI_RL_KIND=other403 CI_RESET="$_rl_reset" ci_case ratelimited4 ratelimited)"
+check "#593 a 403 that is not a rate limit is not called one" \
+  "case \"\$out_rl4\" in *'rate limit'*) false ;; *'could not read whether'*) true ;; *) false ;; esac"
 
 # AN UNREADABLE VERDICT MUST NOT BLOCK FOR EVER (claude-config#327). Failing closed is right while
 # the answer might still arrive, and wrong once it is clear no answer is coming: gh not logged in,
@@ -13976,7 +14086,7 @@ check "#105 even though every check inside it passed" "grep -q 'FAIL=0' '$_SO8'"
 _SOG="$(SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SECTION_ONLY=push SUITE_SPAWN_UNTIL=push SUITE_TIMEOUT=90 bash "$SCRIPT_SELF" 2>&1)"
 check "#105 the spawn probe for that started a child" "grep -q 'the child exited' <<< \"\$_SOG\""
 check "#105 a child does not inherit the one-section filter" \
-  "printf '%s' \"\$_SOG\" | grep -q 'inherits SECTION_ONLY as: <unset>'"
+  "grep -q 'inherits SECTION_ONLY as: <unset>' <<< \"\$_SOG\""
 
 # The title derivation, proved on the shape that would have broken it (claude-config#111). It uses
 # the one expression the real derivations use, not a copy written beside them, or the check could
@@ -18581,6 +18691,33 @@ _638main="$(git -C "$S38B" show main:payload/CLAUDE.md 2>/dev/null || true)"
 check "#638 a stale top level rule file is not published" "case \"\$_638main\" in *'from the merge'*) true ;; *) false ;; esac"
 check "#638 and the send names it as held back" "line_has \"\$out_638t\" 'NOT publishing' 'CLAUDE.md' 'earlier'"
 
+# AN UNCHANGED FILE UNDER AN APPLY THAT NO LONGER COPIES TIMES (#754, review finding 7 in #790).
+# Since #754 the apply leaves a file whose bytes already match alone, mtime included, so a git
+# rebase or checkout in the clone can leave the payload's copy NEWER than an identical one here.
+# local_copy_is_past_release must still decide both ways correctly: an identical copy is no local
+# edit and no stale copy, and once the repo moves past it, an untouched copy of the old release is
+# stale however old its mtime, and is replaced. The control in the same fixture (L159) is the genuine
+# edit kept above.
+printf 'other-v1\n' > "$S38HB/mods/guard/hooks/other.ts"; touch -t 202001010000 "$S38HB/mods/guard/hooks/other.ts"
+# The payload copy already holds the same bytes: release one's other.ts arrived with the first send
+# from A, at the top of this section. Asserted rather than assumed, so the touch below can only
+# change a time, never create a file (the review of f04f7c0 read it as creating one).
+check "#754 fixture: the payload copy holds the same bytes before its mtime moves" "grep -qx 'other-v1' '$S38C/payload/mods/guard/hooks/other.ts'"
+touch "$S38C/payload/mods/guard/hooks/other.ts"
+_754before="$(_suite_mtime "$S38HB/mods/guard/hooks/other.ts")"
+out_754a="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#754 an identical file whose payload copy git rewrote is left alone, mtime included" \
+  "grep -qx 'other-v1' '$S38HB/mods/guard/hooks/other.ts' && [ \"\$(_suite_mtime '$S38HB/mods/guard/hooks/other.ts')\" = '$_754before' ]"
+check "#754 and is not called a local edit" "! line_has \"\$out_754a\" 'would have reverted' 'mods/guard/hooks/other.ts'"
+git -C "$S38D" pull -q origin main 2>/dev/null
+printf 'other-v2\n' > "$S38D/payload/mods/guard/hooks/other.ts"
+git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -am 'merge a change to other.ts' 2>/dev/null
+git -C "$S38D" push -q origin main 2>/dev/null
+out_754b="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#754 once the repo moves on, the untouched copy of the old release is replaced" "grep -qx 'other-v2' '$S38HB/mods/guard/hooks/other.ts'"
+check "#754 and named as updated, not a local edit" \
+  "line_has \"\$out_754b\" 'updated' 'mods/guard/hooks/other.ts' && ! line_has \"\$out_754b\" 'would have reverted' 'mods/guard/hooks/other.ts'"
+
 # A SKILL THAT CANNOT LOAD HERE is not named with the pull remedy (review of c9a97de): a pull leaves
 # such an entry alone, so "run claude-sync pull" would be advice that cannot work (L11).
 mkskill "$S38HA/skills/s638/SKILL.md" 'a skill for the #638 checks'
@@ -18599,6 +18736,160 @@ rm -f "$S38HB/skills/s638/SKILL.md"
 out_638u="$(SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
 check "#638 a stale file in a skill that cannot load is not offered the pull remedy" \
   "! line_has \"\$out_638u\" 'earlier version' 'skills/s638'"
+
+section "== the status line and the shared settings are written into each Mac's settings.json (#772, #695) =="
+# 2026-10-05: the status bar mod reached Dans-MacBook-Pro and its status line never showed, because
+# the statusLine setting naming its script lives in each Mac's own settings.json, which the sync did
+# not write, and nothing said it was missing (#772). And Dan chose to have ONE other setting,
+# ultracode, carried between the Macs from an allowlisted payload file, without reopening the rule
+# that the rest of settings.json stays per Mac (#695).
+sx_repo(){   # $1 = a fresh repo dir  $2 = shared settings JSON, or empty for none  $3 = 1 to carry the status bar mod
+  git init -q "$1"; mkdir -p "$1/payload"
+  [ -n "$2" ] && printf '%s\n' "$2" > "$1/payload/settings.shared.json"
+  if [ "${3:-}" = 1 ]; then
+    mkdir -p "$1/payload/mods/status-bar"
+    printf '#!/usr/bin/env bash\necho status\n' > "$1/payload/mods/status-bar/statusline.sh"
+  fi
+  return 0
+}
+sx_pull(){   # $1 = home  $2 = repo -> output
+  CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true
+}
+SX_ORIG='{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"bash x.sh"}]}]},"model":"opus","effortLevel":"high","permissions":{"allow":["Bash(ls)"]}}'
+
+# A FRESH MAC: no statusLine and no ultracode.
+SX1R="$WORK/sx1-repo"; sx_repo "$SX1R" '{"ultracode": true}' 1
+SX1H="$WORK/sx1-home"; mkdir -p "$SX1H"; printf '%s\n' "$SX_ORIG" > "$SX1H/settings.json"
+out_sx1="$(sx_pull "$SX1H" "$SX1R")"
+dbg "#772 first pull on a fresh Mac: $out_sx1"
+check "#772 fixture: the status bar script arrived" "[ -f '$SX1H/mods/status-bar/statusline.sh' ]"
+check "#772 a pull writes statusLine naming this Mac's own copy of the script" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX1H/settings.json')\" = 'bash $SX1H/mods/status-bar/statusline.sh' ]"
+check "#772 as a command status line" "[ \"\$(jq -r '.statusLine.type' '$SX1H/settings.json')\" = command ]"
+check "#695 a pull sets ultracode from the shared settings file" "[ \"\$(jq -r '.ultracode' '$SX1H/settings.json')\" = true ]"
+check "#772 #695 every other setting is exactly as it was" \
+  "[ \"\$(jq -cS 'del(.statusLine, .ultracode)' '$SX1H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "#772 #695 and the pull names what it wrote" "line_has \"\$out_sx1\" 'settings.json' 'status line' && line_has \"\$out_sx1\" 'settings.json' 'ultracode'"
+# A second pull with nothing new leaves the file and its mtime alone: settings.json is a WatchPath,
+# and a needless rewrite would trigger the next sync. The mtime is SET into the past rather than
+# waited on, so a rewrite in the same second cannot hide (L290).
+touch -t 202001010000 "$SX1H/settings.json"; _sx1sum="$(cksum < "$SX1H/settings.json")"
+out_sx1b="$(sx_pull "$SX1H" "$SX1R")"
+check "#772 #695 a second pull with nothing new leaves settings.json byte for byte" "[ \"\$(cksum < '$SX1H/settings.json')\" = \"\$_sx1sum\" ]"
+check "#772 #695 and leaves its mtime untouched" "[ \"\$(_suite_mtime '$SX1H/settings.json')\" -lt 1600000000 ]"
+check "#772 #695 and claims to have written nothing there" "! line_has \"\$out_sx1b\" 'settings.json' 'status line' && ! line_has \"\$out_sx1b\" 'settings.json' 'ultracode'"
+
+# ONE ALREADY SET CORRECTLY, with a refresh interval of its own: kept exactly as it is.
+SX2H="$WORK/sx2-home"; mkdir -p "$SX2H"
+jq -c --arg c "bash $SX2H/mods/status-bar/statusline.sh" '. + {statusLine: {type: "command", command: $c, refreshInterval: 10}, ultracode: true}' <<< "$SX_ORIG" > "$SX2H/settings.json"
+_sx2sum="$(cksum < "$SX2H/settings.json")"
+sx_pull "$SX2H" "$SX1R" >/dev/null
+check "#772 a status line already naming this Mac's script is left byte for byte" "[ \"\$(cksum < '$SX2H/settings.json')\" = \"\$_sx2sum\" ]"
+
+# ONE SET TO SOMETHING ELSE: never overwritten, and named by status.
+SX3H="$WORK/sx3-home"; mkdir -p "$SX3H"
+jq -c '. + {statusLine: {type: "command", command: "bash /elsewhere/my-line.sh"}}' <<< "$SX_ORIG" > "$SX3H/settings.json"
+sx_pull "$SX3H" "$SX1R" >/dev/null
+check "#772 a status line pointing somewhere else is not overwritten" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX3H/settings.json')\" = 'bash /elsewhere/my-line.sh' ]"
+check "#772 #695 while the shared setting still lands beside it" "[ \"\$(jq -r '.ultracode' '$SX3H/settings.json')\" = true ]"
+out_sx3s="$(CLAUDE_HOME="$SX3H" SYNC_REPO="$SX1R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#772 status with a status line elsewhere: $out_sx3s"
+check "#772 status names a status line set to another command" \
+  "line_has \"\$out_sx3s\" 'statusLine' '/elsewhere/my-line.sh' && line_has \"\$out_sx3s\" 'statusLine' 'mods/status-bar/statusline.sh'"
+# Control (L159): the Mac set correctly gets no such line.
+out_sx2s="$(CLAUDE_HOME="$SX2H" SYNC_REPO="$SX1R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#772 and says nothing about a status line that is already right" "! grep -q 'statusLine' <<< \"\$out_sx2s\""
+
+# A MAC WITHOUT THE STATUS BAR MOD gets no status line at all, and a missing shared file sets nothing.
+SX4R="$WORK/sx4-repo"; sx_repo "$SX4R" '' ''
+SX4H="$WORK/sx4-home"; mkdir -p "$SX4H"; printf '%s\n' "$SX_ORIG" > "$SX4H/settings.json"; _sx4sum="$(cksum < "$SX4H/settings.json")"
+sx_pull "$SX4H" "$SX4R" >/dev/null
+check "#772 #695 a Mac with neither the mod nor a shared file keeps settings.json byte for byte" "[ \"\$(cksum < '$SX4H/settings.json')\" = \"\$_sx4sum\" ]"
+
+# A KEY OUTSIDE THE ALLOWLIST is refused by name and nothing from the file is written, so the file
+# cannot become a back door for model or effort.
+SX5R="$WORK/sx5-repo"; sx_repo "$SX5R" '{"ultracode": true, "model": "haiku"}' ''
+SX5H="$WORK/sx5-home"; mkdir -p "$SX5H"; printf '%s\n' "$SX_ORIG" > "$SX5H/settings.json"; _sx5sum="$(cksum < "$SX5H/settings.json")"
+out_sx5="$(sx_pull "$SX5H" "$SX5R")"
+dbg "#695 a shared file carrying a key outside the allowlist: $out_sx5"
+check "#695 a key outside the allowlist is refused, naming it" "line_has \"\$out_sx5\" 'settings.shared.json' 'model'"
+check "#695 and nothing from that file is written" "[ \"\$(cksum < '$SX5H/settings.json')\" = \"\$_sx5sum\" ]"
+
+# OFF IS false, never a deletion: a shared false turns a local true off.
+SX6R="$WORK/sx6-repo"; sx_repo "$SX6R" '{"ultracode": false}' ''
+SX6H="$WORK/sx6-home"; mkdir -p "$SX6H"; jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX6H/settings.json"
+sx_pull "$SX6H" "$SX6R" >/dev/null
+check "#695 a shared false turns ultracode off" "[ \"\$(jq -r '.ultracode' '$SX6H/settings.json')\" = false ]"
+
+# AN UNREADABLE settings.json fails loud and is left exactly as it was.
+SX7H="$WORK/sx7-home"; mkdir -p "$SX7H"; printf '{ not json\n' > "$SX7H/settings.json"; _sx7sum="$(cksum < "$SX7H/settings.json")"
+out_sx7="$(sx_pull "$SX7H" "$SX1R")"
+check "#695 #772 an unreadable settings.json is left exactly as it was" "[ \"\$(cksum < '$SX7H/settings.json')\" = \"\$_sx7sum\" ]"
+check "#695 #772 and the pull says the settings could not be written" "line_has \"\$out_sx7\" 'settings.json' 'ultracode' 'could not'"
+
+# APPLIED IS JUDGED BY THE VALUE, not by a file of that name: settings.shared.json never lands under
+# its own name, so a byte comparison would call it unapplied for ever (the comment above
+# payload_path_applied). Seen through status, which lists what this clone holds and has not applied.
+SX8B="$WORK/sx8-bare.git"; git init -q --bare -b main "$SX8B"
+SX8D="$WORK/sx8-dev"; git clone -q "$SX8B" "$SX8D" 2>/dev/null; mkdir -p "$SX8D/payload"; printf '# rules\n' > "$SX8D/payload/CLAUDE.md"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m base 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+SX8C="$WORK/sx8-clone"; git clone -q "$SX8B" "$SX8C" 2>/dev/null
+SX8H="$WORK/sx8-home"; mkdir -p "$SX8H"; printf '%s\n' "$SX_ORIG" > "$SX8H/settings.json"
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf '{"ultracode": true}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'share ultracode' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+# The clone moves to the new commit WITHOUT an apply, which is the state status reports on.
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#695 fixture: the clone holds the shared file and the Mac has not applied it" \
+  "[ -f '$SX8C/payload/settings.shared.json' ] && [ \"\$(jq -r '.ultracode' '$SX8H/settings.json')\" = null ]"
+out_sx8a="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 before the value is in settings.json, status lists the shared file as not applied" \
+  "line_has \"\$out_sx8a\" 'settings.shared.json' 'has not applied'"
+jq -c '. + {ultracode: true}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8b="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 once the value is there, status no longer lists it" "! line_has \"\$out_sx8b\" 'settings.shared.json' 'has not applied'"
+# And a send never publishes the shared file from settings.json, nor mirrors it away: it is edited in
+# the repo only. Applied first, so the Mac is not behind and the send really stages and publishes
+# (review of #775: a send refused for being behind proved nothing, L159).
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+jq -c '. + {ultracode: false}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+printf '# rules, edited on this Mac\n' > "$SX8H/CLAUDE.md"
+CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+_sx8main="$(git -C "$SX8B" show main:payload/CLAUDE.md 2>/dev/null || true)"
+check "#695 fixture: the send really published" "case \"\$_sx8main\" in *'edited on this Mac'*) true ;; *) false ;; esac"
+check "#695 a send leaves the shared file in the shared repo as the repo holds it" \
+  "[ \"\$(git -C '$SX8B' show main:payload/settings.shared.json 2>/dev/null | jq -r '.ultracode')\" = true ]"
+# A SHARED FILE THE APPLY REFUSES has nothing to apply, so status must not list it as unapplied for
+# ever: no pull can ever satisfy it, and the refusal is already said by the apply (review of #775).
+git -C "$SX8D" pull -q origin main 2>/dev/null
+printf '{"ultracode": "yes"}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'a bad shared value' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#695 fixture: the clone holds the refused shared file" "[ \"\$(jq -r '.ultracode' '$SX8C/payload/settings.shared.json')\" = yes ]"
+out_sx8c="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#695 a shared file the apply refuses is not listed as unapplied" "! line_has \"\$out_sx8c\" 'settings.shared.json' 'has not applied'"
+
+# AN ALLOWED KEY OF THE WRONG TYPE is refused by name too (review of #775): ultracode is a boolean,
+# and "yes" or null written into settings.json is a value Claude Code may read either way.
+SX9R="$WORK/sx9-repo"; sx_repo "$SX9R" '{"ultracode": "yes"}' ''
+SX9H="$WORK/sx9-home"; mkdir -p "$SX9H"; printf '%s\n' "$SX_ORIG" > "$SX9H/settings.json"; _sx9sum="$(cksum < "$SX9H/settings.json")"
+out_sx9="$(sx_pull "$SX9H" "$SX9R")"
+check "#695 an allowed key of the wrong type is refused, naming it" "line_has \"\$out_sx9\" 'settings.shared.json' 'ultracode' 'boolean'"
+check "#695 and nothing from a file with a wrong type is written" "[ \"\$(cksum < '$SX9H/settings.json')\" = \"\$_sx9sum\" ]"
+
+# A MAC WITH NO settings.json gets one only when a write succeeds (review of #775): a stub left by a
+# failed write is a file the Mac did not have. A failed write is forced by a jq that always fails.
+SX10H="$WORK/sx10-home"; mkdir -p "$SX10H/bin"
+printf '#!/usr/bin/env bash\ncase "$*" in *statusLine*) exit 5 ;; esac\nexec %s "$@"\n' "$(command -v jq)" > "$SX10H/bin/jq"; chmod +x "$SX10H/bin/jq"
+SX10R="$WORK/sx10-repo"; sx_repo "$SX10R" '' 1
+# Only the write's own filter mentions statusLine as an assignment target, so only that call fails.
+PATH="$SX10H/bin:$PATH" CLAUDE_HOME="$SX10H" SYNC_REPO="$SX10R" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#772 a failed write on a Mac with no settings.json leaves none behind" "[ ! -e '$SX10H/settings.json' ]"
+SX11H="$WORK/sx11-home"; mkdir -p "$SX11H"
+sx_pull "$SX11H" "$SX10R" >/dev/null
+check "#772 and a write that succeeds there creates it with the status line" \
+  "[ \"\$(jq -r '.statusLine.command' '$SX11H/settings.json' 2>/dev/null)\" = 'bash $SX11H/mods/status-bar/statusline.sh' ]"
 
 suite_profile
 echo ""

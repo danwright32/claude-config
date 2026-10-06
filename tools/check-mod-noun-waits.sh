@@ -16,13 +16,27 @@
 #     executor never settles at all is reported too. An executor named rather than written in place
 #     is read where it is defined, and one that cannot be found is reported as unreadable.
 #   - `$.ui.ask` (as `$` or `built`), Claude Code's own question dialog: a person has no bound.
+#   - a promise made OUTSIDE a noun's code (in another hook, say) and kept in a variable, or in a
+#     map or list through .set, .push, .unshift or .add, whose name a noun's code reads: judged as
+#     above and named where it is made (#756).
+# A wait is bounded too when the noun races it, `Promise.race([wait, timer])`, against a timer made
+# in another executor: one written in place, a constant holding one, or a call to a mod function
+# making one, its delay read through the call's own arguments (`sleep(5_000)`); likewise a helper
+# whose promise a timer settles is judged at every call a noun makes of it (#756).
 # A noun's code is each `engine.create` hook's (where the nouns' methods are written), each hook on
 # a noun's own event (`on('modkit.screen', ...)`, any noun any mod's contract declares on $), and
 # every function of the mod those call, followed by name through every source file of the mod.
 #
-# What it does not read: a promise made outside a noun's code and handed to it later, a race against
-# a timer made in another executor, and how long an engine `$` call other than `$.ui.ask` takes.
-# A hook has its own 10 s budget, which `$` calls do not spend; that is not this check's to judge.
+# Measured live on 2026-10-05 (2.1.289, a throwaway plugin in a headless `claude -p`, #756): a
+# noun's 10 s does NOT stop while its own `$` calls are in flight, unlike a hook's budget. A noun
+# whose only wait was `$.process.run(['/bin/sleep', '13'])` was rejected at 10,003 ms, exactly as
+# the control (a 13 s timer) was at 10,002 ms. So the refusal of `$.ui.ask` above is never a false
+# one, and any slow `$` call inside a noun is cut the same way.
+#
+# What it does not read: a promise stored any other way (inside an object, returned through a
+# chain of variables), a member of a race reached through a variable rather than written in the
+# race, and how long an engine `$` call other than `$.ui.ask` takes. A hook has its own 10 s budget,
+# which `$` calls do not spend; that is not this check's to judge.
 #
 # Source is read through tools/lib/ts_source.py, the one reader every mod scan shares, so a comment
 # or a string naming the shape is never taken for code.
@@ -44,7 +58,7 @@ import ast, json, os, re, sys
 
 root = sys.argv[1]
 sys.path.insert(0, sys.argv[2])
-from ts_source import CODE, _definition, block_after, closing, code_only, is_jsx, kinds, top_members
+from ts_source import CODE, block_after, closing, code_only, function_span, is_jsx, kinds, top_members
 
 LIMIT_MS = 10_000
 CUT = "Claude Code cuts a noun call off at 10 s (#744)"
@@ -134,12 +148,10 @@ def hooks_on(f, wanted):
 
 def definition(files, name):
     """Where the function called name is defined in the mod: (file, start, end), or None."""
-    pattern = r"\b(?:const|let|var)\s+" + re.escape(name) + r"\b[^=]*=(?!=)|\bfunction\s+" + re.escape(name) + r"\b"
     for f in files:
-        found = _definition(f.code, name, f.kinds)
-        if found:
-            start = re.search(pattern, f.code).start()
-            return f, start, start + len(found)
+        span = function_span(f.code, name, f.kinds)
+        if span:
+            return f, span[0], span[1]
     return None
 
 
@@ -354,6 +366,86 @@ def judge(f, at, files, consts):
     )
 
 
+def spans_top(code, a, b):
+    """The spans of code[a:b] split on the commas standing at its own top level, blank ones left out."""
+    out, depth, start = [], 0, a
+    for j in range(a, b):
+        c = code[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            out.append((start, j))
+            start = j + 1
+    out.append((start, b))
+    return [(x, y) for x, y in out if code[x:y].strip()]
+
+
+def promises_in(code, a, b):
+    return [a + m.start() for m in re.finditer(r"(?<![\w$.])new\s+Promise\b", code[a:b])]
+
+
+def call_args(code, open_at):
+    """The argument texts of the call whose ( is at open_at, or None when it never closes."""
+    end = closing(code, open_at)
+    if end is None:
+        return None
+    return [code[x:y].strip() for x, y in spans_top(code, open_at + 1, end - 1)]
+
+
+def with_args(consts, params, args):
+    """consts with each of a function's parameters bound to the argument a call passes it."""
+    out = dict(consts)
+    for name, arg in zip(params, args):
+        out[name] = arg
+    return out
+
+
+def helper_timer(files, name, args, consts):
+    """Whether calling the mod's function name with args makes a promise a timer under 10 s settles."""
+    found = definition(files, name)
+    if not found:
+        return False
+    df, start, stop = found
+    fn = function_of(df.code[start:stop])
+    if fn is None:
+        return False
+    bound = with_args(consts, fn[0], args)
+    inside = promises_in(df.code, start, stop)
+    return bool(inside) and all(judge(df, at, files, bound) is None for at in inside)
+
+
+def is_timer(f, a, b, files, consts):
+    """Whether the race member f.code[a:b] is a promise settled under 10 s."""
+    text = f.code[a:b]
+    lead = len(text) - len(text.lstrip())
+    expr = text.strip()
+    if re.match(r"new\s+Promise\b", expr):
+        return judge(f, a + lead, files, consts) is None
+    m = re.fullmatch(r"(" + IDENT + r")\s*\(", expr[: expr.find("(") + 1]) if "(" in expr else None
+    if m and expr.endswith(")"):
+        args = call_args(f.code, a + lead + expr.find("("))
+        return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, m.group(1), args, consts)
+    if re.fullmatch(IDENT, expr):
+        for g in files:
+            d = re.search(r"(?<![\w$.])(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code)
+            if d:
+                return judge(g, d.end(), files, consts) is None
+    return False
+
+
+def stored_in(code, at):
+    """The name a promise made at at is kept under: a variable it is assigned to, or the map or list
+    it is put in through .set, .push, .unshift or .add, or None."""
+    line = code[code.rfind("\n", 0, at) + 1 : at]
+    m = re.search(r"(?<![\w$.])(" + IDENT + r")\s*\.\s*(?:set|push|unshift|add)\s*\([^()]*$", line)
+    if m:
+        return m.group(1)
+    m = re.search(r"(?<![\w$.])(" + IDENT + r")\s*(?::[^=;]*)?(?<![=!<>])=\s*$", line)
+    return m.group(1) if m and m.group(1) not in KEYWORDS else None
+
+
 for entry, folder, man, files in mods:
     consts = constants(files)
     # The noun code: the engine.create hooks and hooks on a noun's event, then every function of the
@@ -364,34 +456,106 @@ for entry, folder, man, files in mods:
             if end is None:
                 report(f"check-mod-noun-waits: {f.where(start)}: {entry}'s hook there never closes its brackets, so its noun code cannot be read.")
                 continue
-            todo.append((f, start, end))
+            todo.append((f, start, end, None))
             handler = re.search(r",\s*(" + IDENT + r")\s*\)$", f.code[start:end])
             if handler:
                 found = definition(files, handler.group(1))
                 if found:
-                    todo.append(found)
+                    todo.append((*found, handler.group(1)))
     regions = []
     while todo:
-        f, start, end = todo.pop()
+        f, start, end, name = todo.pop()
         if (f.rel, start, end) in seen:
             continue
         seen.add((f.rel, start, end))
-        regions.append((f, start, end))
+        regions.append((f, start, end, name))
         for m in re.finditer(r"(?<![\w$.])(" + IDENT + r")\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
             if m.group(1) not in KEYWORDS:
                 found = definition(files, m.group(1))
                 if found:
-                    todo.append(found)
+                    todo.append((*found, m.group(1)))
+
+    # Each member of a Promise.race a noun's code writes, raced against a timer under 10 s (the limit
+    # measured on 2026-10-05).
+    raced = []
+    for f, start, end, _ in regions:
+        for m in re.finditer(r"(?<![\w$.])Promise\s*\.\s*race\s*\(\s*\[", f.code[start:end]):
+            open_at = start + m.end() - 1
+            close = closing(f.code, open_at)
+            if close is None:
+                continue
+            members = spans_top(f.code, open_at + 1, close - 1)
+            timers = [x for x in members if is_timer(f, x[0], x[1], files, consts)]
+            if timers:
+                raced += [(f.rel, x[0], x[1]) for x in members if x not in timers]
+
+    def is_raced(f, at):
+        return any(rel == f.rel and a <= at < b for rel, a, b in raced)
+
+    def mentions_in_nouns(name):
+        """Each place a noun's code reads name: (file, position). A key of an object written in place
+        (`{ held: ... }`, a method named like the store) reads nothing."""
+        out = []
+        for f, start, end, _ in regions:
+            for m in re.finditer(r"(?<![\w$.])" + re.escape(name) + r"(?![\w$])", f.code[start:end]):
+                before = f.code[start : start + m.start()].rstrip()
+                if re.match(r"\s*\??:(?!:)", f.code[start + m.end() : end]) and (not before or before[-1] in "{,"):
+                    continue
+                out.append((f, start + m.start()))
+        return out
+
+    def calls_in_nouns(name):
+        """Each call a noun's code makes of the mod's function name: (file, position, its arguments)."""
+        out = []
+        for f, start, end, own in regions:
+            if own == name:
+                continue
+            for m in re.finditer(r"(?<![\w$.])" + re.escape(name) + r"\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
+                args = call_args(f.code, start + m.end() - 1)
+                out.append((f, start + m.start(), args or []))
+        return out
+
     judged = set()
-    for f, start, end in regions:
-        for m in re.finditer(r"(?<![\w$.])new\s+Promise\b", f.code[start:end]):
-            at = start + m.start()
+    for f, start, end, name in regions:
+        for at in promises_in(f.code, start, end):
             if (f.rel, at) in judged:
                 continue
             judged.add((f.rel, at))
-            finding = judge(f, at, files, consts)
+            if is_raced(f, at):
+                continue
+            calls = calls_in_nouns(name) if name else []
+            fn = function_of(f.code[start:end]) if calls else None
+            if calls and fn is not None:
+                # A helper: judged at each call a noun makes, with that call's arguments, and a call
+                # the noun races against a short timer is bounded by the race.
+                bad = [judge(f, at, files, with_args(consts, fn[0], args)) for g, pos, args in calls if not is_raced(g, pos)]
+                finding = next((x for x in bad if x), None)
+            else:
+                finding = judge(f, at, files, consts)
             if finding:
                 report(finding)
+
+    # A promise made outside every noun's code and kept where a noun reads it (#756).
+    for f in files:
+        for at in promises_in(f.code, 0, len(f.code)):
+            if any(g.rel == f.rel and a <= at < b for g, a, b, _ in regions):
+                continue
+            kept = stored_in(f.code, at)
+            if not kept:
+                continue
+            reads = [(g, pos) for g, pos in mentions_in_nouns(kept) if not is_raced(g, pos)]
+            if not reads:
+                continue
+            finding = judge(f, at, files, consts)
+            if finding:
+                g, pos = reads[0]
+                why = finding.split(": ", 2)[2]
+                report(
+                    f"check-mod-noun-waits: {f.where(at)}: {entry} makes a promise here, outside its nouns' code, kept in "
+                    f"{kept}, which a noun returns (read at {g.where(pos)}). {why}"
+                )
+
+    for f, start, end, _ in regions:
         for m in re.finditer(r"\.\s*ui\s*\.\s*ask\s*\(", f.code[start:end]):
             at = start + m.start()
             if (f.rel, at) in judged:

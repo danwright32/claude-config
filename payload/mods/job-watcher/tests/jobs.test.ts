@@ -192,11 +192,15 @@ describe('the line Dan sees after leftovers are judged', () => {
       ),
     ).toBe('Left 2 leftover jobs from a closed session running (dev server, test watcher).')
   })
-  test('session records that could not be read are said, so their jobs are not taken as none', () => {
-    expect(leftoverLine([], ['abc.json'])).toBe('Session records unreadable; leftover jobs not checked.')
+  // #753: what could not be read is named, so the line claims only what was measured (L11).
+  test('session records that could not be read are named, so their jobs are not taken as none', () => {
+    expect(leftoverLine([], ['abc.json'])).toBe('Session record abc.json could not be read, so its leftover jobs were not checked.')
     expect(leftoverLine([{ kind: 'stopped', name: 'curl loop', session: 'a' }], ['abc.json', 'def.json'])).toBe(
-      'Stopped 1 leftover job from a closed session (curl loop); session records unreadable; leftover jobs not checked.',
+      'Stopped 1 leftover job from a closed session (curl loop); 2 session records could not be read (abc.json, def.json), so their leftover jobs were not checked.',
     )
+  })
+  test('a sessions folder that could not be read is named as the registry names it', () => {
+    expect(leftoverLine([], ['the sessions folder'])).toBe('The sessions folder could not be read, so leftover jobs were not checked.')
   })
   test('nothing judged and nothing unreadable is no line at all', () => {
     expect(leftoverLine([], [])).toBeUndefined()

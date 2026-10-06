@@ -17,18 +17,39 @@ on:
     branches: [main]
   pull_request:
 
-# A superseded run tells you nothing you will act on, and the watcher pushes config changes one
-# commit at a time, so several can be queued at once.
+# On a pull request branch a newer push really does supersede the old one, so the older run is
+# cancelled: it tells you nothing you will act on.
+#
+# On main it is the opposite, and main is NEVER cancelled (claude-config#594). Every commit there is
+# a separate change that has landed, and when main goes red the runs for the commits just before
+# are exactly the ones that say which commit did it. Cancelling them, as this did for every push
+# until October 2026, cost 207 of 602 runs on main in September, and the clearest case was a merge
+# that failed with the one run that could have named the culprit (a sync push landing in between)
+# cancelled. The sync watcher pushes config changes one commit at a time, so on main several can be
+# queued at once, and each still gets its verdict. Not cancelling loses nothing that matters: the
+# only thing a run writes is the timings cache.
+#
+# Turning cancel-in-progress off is only half of that. A concurrency group holds one running and
+# one PENDING run, and a newer run queuing into the group cancels the pending one regardless, so
+# with one group per branch the middle of three commits landing together still lost its verdict.
+# On main the group is therefore the commit itself, and elsewhere it stays the branch.
+# tests/test-ci-workflow.sh holds both halves.
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
 jobs:
   suite:
-    runs-on: ubuntu-latest
+    # NAMED, never ubuntu-latest (claude-config#597). GitHub moves ubuntu-latest to Ubuntu 26 on
+    # 2026-10-19, and this suite leans on GNU tool and bash behaviour, so an image changing on a date
+    # would turn main red with no commit to blame. Ubuntu 26.04 was tried first, on 2026-10-05 (run
+    # 37365305290, bash 5.3.9): the only thing it broke was tests/run-on-linux.sh having no image for
+    # it, which is added in the same change. Moving image again is a commit CI judges, and
+    # tests/test-ci-workflow.sh refuses a -latest label.
+    runs-on: ubuntu-26.04
     # The BACKSTOP, and it must never be the thing that fires. The suite sets its own two
     # deadlines and, when one of them fires, says which SECTION it died in, which is a far more
     # useful failure than a job the platform cuts off with no explanation at all.
@@ -92,7 +113,10 @@ jobs:
     # to finish afterwards, against a job that measured about fourteen minutes on 2026-09-19.
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a commit, with the version beside it, so the code that runs cannot change under
+      # the same tag, and on a major that runs on Node 24 rather than the deprecated Node 20
+      # (claude-config#597). tests/test-ci-workflow.sh refuses a tag, or a major still on Node 20.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # History IS needed now: the changed-section step below diffs this push against its base
           # to work out which sections to run on their own, and a shallow clone has no base commit
@@ -114,7 +138,7 @@ jobs:
       # failure and is not silent either, because both readers SAY which rule they used.
       - name: Restore what earlier runs measured
         id: timings-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/claude-config
           key: claude-config-timings-${{ github.run_id }}
@@ -135,6 +159,10 @@ jobs:
           # needs python3 too. Named here because this step is the list run-on-linux.sh builds its
           # container from: unnamed, the container had none and failed four checks CI passed.
           python3 --version
+          # require-changelog-tag.sh and pr-merge-quiz.sh run `node -e`, and test-changelog-tag.sh
+          # runs node directly. Named for the same reason as python3, and held to it by
+          # tests/test-ci-environment-tools.sh, which fails on an invoked interpreter not named here.
+          node --version
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
           # How many cores this runner actually has (claude-config#210). The HOOK_TESTS_BUDGET
