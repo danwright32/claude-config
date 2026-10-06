@@ -118,6 +118,10 @@ type World = {
   ghRefuse: number
   /** How long GitHub takes to answer, on the test clock. */
   ghDelayMs: number
+  /** Holds every write to GitHub until the test releases it, so the card can be read meanwhile. */
+  ghWriteGate: Promise<void> | undefined
+  /** A write to GitHub, once released, fails to connect ('down') or the gh run itself throws ('throws'). */
+  ghWriteFails: 'down' | 'throws' | undefined
   /** A lock left behind by a session that died, last touched this long before the start. */
   staleLockMs: number
   /** Reading the session's usage fails. */
@@ -150,7 +154,7 @@ const ok = (stdout = ''): Run => ({ exitCode: 0, stdout, stderr: '' })
 // This Mac beneath the account room: files in memory, the host commands it runs, the clock, the
 // session's rate limits, and Claude Code's own band beneath mod-kit's.
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, checkTimeoutMs: undefined, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
+  const w: World = { files: {}, usage: [], logout: ok(), check: ok('signed out\n'), authLogin: ok(), logoutGate: undefined, ghDown: false, ghLoggedOut: false, ghMissing: false, ghNoAccess: false, ghLogin: 'danwright32', ghRefuse: 0, ghDelayMs: 0, ghWriteGate: undefined, ghWriteFails: undefined, staleLockMs: 0, usageFails: false, tokenWriteFails: false, openFails: false, openWaits: false, authLoginThrows: false, checkThrows: false, checkTimeoutMs: undefined, liveReadFails: false, openReason: 'the terminal is 120 columns wide; a pane opened unasked needs 144', ...init }
   // Every gh command the mod ran, and each write it asked GitHub for with the sha it gave.
   const gh: string[][] = []
   const puts: { path: string; sha?: string }[] = []
@@ -253,6 +257,9 @@ const world = (on: On, init: Partial<World> = {}) => {
       return refused(404, held.length ? 'Not Found' : 'This repository is empty.')
     }
     if (method === 'PUT') {
+      if (w.ghWriteGate) await w.ghWriteGate
+      if (w.ghWriteFails === 'throws') throw new Error('gh was killed')
+      if (w.ghWriteFails === 'down') return { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n' }
       const body = JSON.parse(stdin ?? '{}') as { content?: string; sha?: string }
       puts.push({ path: p, ...(body.sha ? { sha: body.sha } : {}) })
       if (w.ghRefuse > 0) {
@@ -383,7 +390,11 @@ type Ui = {
 }
 const shown = async (ui: Ui) => (await ui.findAll({ type: 'Text' })).filter(t => t.children.every(c => typeof c === 'string')).map(t => t.text).join('')
 const mountBand = async ($: { ui: { mount: (t: never) => Promise<unknown> } }) => (await $.ui.mount(band)) as Ui
-const pane = { plugin: 'account-room', surface: 'terminal', component: 'Pane', requestId: PANE, props: { title: 'Nickname', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 10 }, view: {} } } as never
+const paneOn = (surface: 'terminal' | 'mobile') => ({ plugin: 'account-room', surface, component: 'Pane', requestId: PANE, props: { title: 'Nickname', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 10 }, view: {} } }) as never
+const pane = paneOn('terminal')
+// The nickname dialog drawn on a surface. Mounted is typed over every surface, and mobile's has no
+// input, so the terminal drawing is read through Ui, which names the acts these tests use.
+const mountPane = async ($: { ui: { mount: (t: never) => Promise<unknown> } }, surface: 'terminal' | 'mobile' = 'terminal') => (await $.ui.mount(paneOn(surface))) as Ui
 
 // Work, read 2 hours ago on the other Mac, with plenty of room.
 const otherMac = async (fiveUsed = 12, weekUsed = 30) =>
@@ -717,6 +728,72 @@ test("the signed out check gets a minute, because Chrome saves a cookie's remova
   await ui.unmount()
 })
 
+test('a signed out check that could not read the browser says so, never that claude.ai did not confirm (#773, L11)', { ...withKit, ...ROUTE }, async ($, on) => {
+  // Exit 2 is the check's "could not tell", as bin/chrome-signed-out.sh gives it when Chrome's last
+  // used profile or its cookies cannot be read: no answer was read, so none is claimed.
+  const { clock, runs, toasts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, check: { exitCode: 2, stdout: "could not read Chrome's last used profile\n", stderr: '' } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
+  await clock.settle()
+  expect(await shown(ui)).toMatch(/^The signed out check could not read the browser, so whether it signed out is unknown\. Nothing else was changed\./)
+  expect(toasts).toContain("Switch stopped: the signed out check could not read the browser: could not read Chrome's last used profile")
+  expect(runs.some(r => r[0] === 'claude')).toBe(false)
+  await ui.unmount()
+})
+
+test('an exit 2 with nothing printed is not read as the browser being unreadable: a shell error exits 2 too (#773, L11)', { ...withKit, ...ROUTE }, async ($, on) => {
+  // /bin/sh exits 2 for a syntax error in a hand set signedOutCheck. With no reason printed, nothing
+  // was measured about the browser, so the stop says only that the sign out was not confirmed.
+  const { clock, toasts } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() }, check: { exitCode: 2, stdout: '', stderr: 'sh: syntax error' } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  await measure($, clock, limits(97, 50))
+  await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
+  await clock.settle()
+  expect(await shown(ui)).toMatch(/^claude\.ai didn't confirm the sign out\. Nothing else was changed\./)
+  expect(toasts.some(t => t.includes('could not read the browser'))).toBe(false)
+  await ui.unmount()
+})
+
+test("the card's first appearance never waits on this Mac's write to GitHub, and the write still lands (#758)", withKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  const ui = await mountBand($ as never)
+  // Every GitHub answer now takes 20 seconds. The low reading's write is one answer (this Mac's file
+  // was read at start), and reading every Mac is two (the folder, then each file at once): the card
+  // is up at 40 seconds, where waiting on the write first would put it at 60.
+  w.ghDelayMs = 20_000
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: limits(97, 50), changed: ['rateLimits'] } as never)
+  await clock.advance(45_000)
+  expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+  await clock.advance(30_000)
+  expect(JSON.parse(w.files[OWN] as string).accounts[await accountKey('acct-home', 'org-1')].reading.five.used).toBe(97)
+  await ui.unmount()
+})
+
+for (const fails of ['down', 'throws'] as const) {
+  test(`a write to GitHub that ${fails === 'down' ? 'fails' : 'throws'} lands after the card is drawn, and the card is drawn again to say so (#758)`, withKit, async ($, on) => {
+    const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+    await start($, clock)
+    const ui = await mountBand($ as never)
+    let release = () => {}
+    w.ghWriteGate = new Promise<void>(r => { release = r })
+    await $.session.measure({ context: { window: 200_000 }, rateLimits: limits(97, 50), changed: ['rateLimits'] } as never)
+    await clock.settle()
+    // Drawn while the write is still held: low, with no word yet about the save.
+    expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+    expect(await shown(ui)).not.toContain('could not be saved to GitHub')
+    w.ghWriteFails = fails
+    release()
+    await clock.settle()
+    expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+    expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub")
+    await ui.unmount()
+  })
+}
+
 test('a weekly reset after the clocks change reads in the offset of that day', withKit, async ($, on) => {
   const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
@@ -813,7 +890,7 @@ test('the first session on an account the mod has not seen asks once for a nickn
   const { w, clock, opened, closed } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
   await start($, clock)
   expect(opened).toEqual([PANE])
-  const ui = (await $.ui.mount(pane)) as Ui
+  const ui = await mountPane($)
   expect(await shown(ui)).toContain('What should this account be called?')
   expect(await shown(ui)).toContain('work@example.com, Acme')
   expect((await ui.find({ type: 'Text', text: 'work@example.com, Acme' }))?.props).toMatchObject({ dimColor: true })
@@ -845,7 +922,7 @@ test('in a window too narrow to show the nickname question, the transcript says 
 test('Enter in the field saves too; an empty name saves nothing and the dialog stays', withKit, async ($, on) => {
   const { w, clock, closed } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
   await start($, clock)
-  const ui = (await $.ui.mount(pane)) as Ui
+  const ui = await mountPane($)
   await ui.input({ key: 'nickname', text: '   ', kind: 'submit' })
   expect(w.files[NICKNAMES]).toBeUndefined()
   expect(closed).toEqual([])
@@ -857,7 +934,7 @@ test('Enter in the field saves too; an empty name saves nothing and the dialog s
 test('Skip records that the ask was answered, so it is not asked again', withKit, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
   await start($, clock)
-  const ui = (await $.ui.mount(pane)) as Ui
+  const ui = await mountPane($)
   await ui.press({ key: 'skip' })
   expect(JSON.parse(w.files[NICKNAMES] as string).names).toEqual({ [await accountKey('acct-work', 'org-1')]: { name: null, at: T0 } })
   await ui.unmount()
@@ -899,7 +976,7 @@ test('the other way round: the name the sync applied stands, and the skip it set
 test('a Skip pressed after a name arrived from the other Mac keeps the name (#747)', withKit, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
   await start($, clock)
-  const ui = (await $.ui.mount(pane)) as unknown as Ui
+  const ui = await mountPane($)
   // The sync delivers the other Mac's name while the question is open here.
   w.files[NICKNAMES] = await named({ 'acct-work': 'dwright (team)' })
   await ui.press({ key: 'skip' })
@@ -935,13 +1012,13 @@ test('/accounts rename opens the dialog for this account, or for the one named, 
   type Cmd = { command: { run: (e: never) => Promise<{ text?: string }> } }
   await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename' } as never)
   expect(opened).toEqual([PANE])
-  let ui = (await $.ui.mount(pane)) as Ui
+  let ui = await mountPane($)
   expect(await shown(ui)).toContain('home@example.com, Acme')
   await ui.input({ key: 'nickname', text: 'Personal', kind: 'submit' })
   await ui.unmount()
   expect(JSON.parse(w.files[NICKNAMES] as string).names[await accountKey('acct-home', 'org-1')].name).toBe('Personal')
   await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename work' } as never)
-  ui = (await $.ui.mount(pane)) as Ui
+  ui = await mountPane($)
   expect(await shown(ui)).toContain('work@example.com, Acme')
   await ui.input({ key: 'nickname', text: 'Job', kind: 'submit' })
   await ui.unmount()
@@ -951,6 +1028,43 @@ test('/accounts rename opens the dialog for this account, or for the one named, 
   // A name that matches no account says so, and opens nothing.
   const out = await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename nobody' } as never)
   expect(out.text).toBe('No account is called "nobody". Name one by its nickname or email.')
+})
+
+test('/accounts rename <name> with GitHub unreadable names the read that failed, not only that nothing matched (#758, L11)', withKit, async ($, on) => {
+  const { w, clock, opened } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  type Cmd = { command: { run: (e: never) => Promise<{ text?: string }> } }
+  w.ghDown = true
+  const out = await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename work' } as never)
+  expect(out.text).toMatch(/^No account that could be read is called "work"\. The other Macs' accounts could not be listed: gh api failed: error connecting to api\.github\.com/)
+  expect(opened).toEqual([])
+  // This session's own account is still found by name with GitHub down.
+  await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename home' } as never)
+  expect(opened).toEqual([PANE])
+})
+
+test('a nickname typed as an email address is refused with why, nothing is written, and the dialog stays (#758)', withKit, async ($, on) => {
+  const { w, clock, closed, toasts } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
+  await start($, clock)
+  const ui = await mountPane($)
+  await ui.input({ key: 'nickname', text: 'work@example.com', kind: 'submit' })
+  expect(w.files[NICKNAMES]).toBeUndefined()
+  expect(closed).toEqual([])
+  expect(toasts).toContain('The nickname could not be saved: it looks like an email address, and the nicknames file is published in a public repository. Use a name instead.')
+  await ui.input({ key: 'nickname', text: 'Work', kind: 'submit' })
+  expect(JSON.parse(w.files[NICKNAMES] as string).names[await accountKey('acct-work', 'org-1')].name).toBe('Work')
+  await ui.unmount()
+})
+
+test('on the mobile app, which draws no text field, the dialog says where to type the name and Skip still answers (#758)', withKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
+  await start($, clock)
+  const ui = await mountPane($, 'mobile')
+  expect(await shown(ui)).toContain('Type the name in the terminal or the desktop app.')
+  expect(await ui.find({ key: 'save' })).toBeUndefined()
+  await ui.press({ key: 'skip' })
+  expect(JSON.parse(w.files[NICKNAMES] as string).names).toEqual({ [await accountKey('acct-work', 'org-1')]: { name: null, at: T0 } })
+  await ui.unmount()
 })
 
 test('a nicknames file that cannot be read is named, and is never overwritten by a save', withKit, async ($, on) => {
@@ -965,7 +1079,7 @@ test('a nicknames file that cannot be read is named, and is never overwritten by
 // A nickname saved in the dialog: the write that holds this Mac's lock, now that readings are
 // guarded by GitHub's own sha check rather than a lock held across the network (#750).
 const saveNickname = async ($: { ui: { mount: (t: never) => Promise<unknown> } }, text: string) => {
-  const ui = (await $.ui.mount(pane)) as unknown as Ui
+  const ui = await mountPane($)
   await ui.input({ key: 'nickname', text, kind: 'submit' })
   await ui.unmount()
 }
@@ -1016,6 +1130,18 @@ test('a card the band refuses is said once, in the transcript, not only in the d
   await measure($, clock, limits(97, 50))
   const refused = transcript.filter(l => /the band refused the card, so it is not shown: a band row's slot "room"/.test(l))
   expect(refused).toHaveLength(1)
+})
+
+test("a session start that fails after this Mac's write began still waits for the write and draws its outcome (L73, L515)", withKit, async ($, on) => {
+  // Low at start, so the card shows. The nickname dialog cannot open, so the start fails after the
+  // write to GitHub was started; the write's failure must still reach the card, never left unawaited.
+  const { clock, transcript } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com'), [OTHER]: await otherMac() }, usage: limits(97, 50), openFails: true, ghWriteFails: 'down' })
+  await start($, clock)
+  await clock.settle()
+  const ui = await mountBand($ as never)
+  expect(await shown(ui)).toContain("Daniels-MacBook-Pro-2's readings could not be saved to GitHub")
+  expect(transcript.filter(l => /this session's account could not be set up: \S/.test(l))).toHaveLength(1)
+  await ui.unmount()
 })
 
 test('a failure in the work deferred past session start is said in the transcript, never dropped (L73)', withKit, async ($, on) => {
