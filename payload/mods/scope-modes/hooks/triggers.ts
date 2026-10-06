@@ -72,8 +72,16 @@ export const triggersIn = (text: string): Trigger[] =>
     // Two phrasings of one mode in a message switch it once.
     .filter((t, i, all) => all.findIndex(o => JSON.stringify(o) === JSON.stringify(t)) === i)
 
-// Words saying a mode should end, beside its name in one sentence.
-const OFF_WORD = /\b(?:stop(?:ped)?|off|end(?:ed)?|done|over|exit|out of|no more|cancel|quit|finish(?:ed)?|enough)\b/i
+// Saying a mode should end, bound to its name: "<name> (mode) is done/over/off", or "no more/out
+// of/done with/stop <name>", or the name called a mode. An end word elsewhere in the sentence ("the
+// project is winding down, we're done with the sprint") is not (second lessons review of #820).
+const askedOff = (name: string) =>
+  new RegExp(
+    `\\b${name}(?:\\s+mode)?\\s+(?:is\\s+|are\\s+|${APOS}s\\s+)?(?:now\\s+)?(?:done|over|off|finished|ended)\\b` +
+      `|\\b(?:no more|out of|done with|enough|end|stop|exit|quit|cancel|finish)\\s+(?:the\\s+)?${name}\\b` +
+      `|\\b${name}\\s+mode\\b`,
+    'i',
+  )
 
 /**
  * The scope modes a message asks to end in words the triggers do not read: a sentence, not a
@@ -87,10 +95,7 @@ export const scopesAskedOffIn = (text: string): Scope[] => {
   for (const m of text.matchAll(/[^.!?\n]+[.!?\n]?/g)) {
     const sentence = m[0]
     if (sentence.trim().endsWith('?')) continue
-    for (const s of Object.keys(NAME) as Scope[]) {
-      const named = new RegExp(`\\b${NAME[s]}\\b(\\s+mode\\b)?`, 'i').exec(sentence)
-      if (named && (named[1] || OFF_WORD.test(sentence)) && !out.includes(s)) out.push(s)
-    }
+    for (const s of Object.keys(NAME) as Scope[]) if (askedOff(NAME[s]).test(sentence) && !out.includes(s)) out.push(s)
   }
   return out
 }

@@ -54,6 +54,7 @@ describe('triggersIn', () => {
     expect(scopesAskedOffIn('run load 1')).toEqual([])
     // The name in passing, or asked about, is not a request to end the mode (lessons review of #820).
     for (const t of ['use a read-only connection', "there's no build step in this repo", 'the project is winding down',
+      "the project is winding down, we're done with the sprint", 'the no build step is over',
       'is winding down over?', 'Ok. Is no build done?'])
       expect(scopesAskedOffIn(t)).toEqual([])
   })
