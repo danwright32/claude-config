@@ -879,9 +879,21 @@ and the sync cannot tell a deliberate one from a stale one (L5, L509). Status na
 alone (#695, chosen 2026-10-04 without reopening the per Mac rule for anything else). The repo is
 its only source: it is never staged from a Mac's `settings.json`, so no three way merge is needed.
 A fixed allowlist in `claude-sync` decides which keys may be written, and a file carrying any other
-key is refused whole and by name, so it cannot carry model or effort by the back door. Off is
+key is refused whole and by name, so it cannot carry the model or anything else by the back door. Off is
 `false` rather than a deleted key, so the apply never infers a removal. Whether it is applied is
 judged by value in `payload_path_applied`, since the file never lands under its own name.
+
+On 2026-10-06 Dan turned ultracode off and chose to share the effort level too, at `high`. Effort
+travels PER MODEL, as `modelSettings.<full model name>.effortLevel`, because that is the field
+Claude Code reads and `/effort` writes: in user settings the top level `effortLevel` is a legacy key
+it applies only to older models (read from Claude Code 2.1.291), so a shared top level value would
+land and change nothing (L402, L644). The pull writes only that leaf, so the rest of a model's entry
+and every model the file does not name stay per Mac, and "applied" is one jq definition used by both
+the write and `payload_path_applied`: applying the file changes nothing. The file is refused whole
+for `max` (session only, never saved), any other per model key, the top level `effortLevel`, and a
+model named by an alias, since the full name is read first and an alias there would change nothing.
+The repo stays the only source: a `/effort` pick on one Mac is put back by its next pull. When a new
+model becomes the default, its entry has to be added here, or it runs at its own default.
 
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.

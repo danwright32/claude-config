@@ -3967,10 +3967,24 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
 # THE SHARED SETTINGS (#695). payload/settings.shared.json holds the settings Dan chose to have both
 # Macs share, edited in the repo and never published back from a Mac's settings.json, so there is no
 # merge to get wrong. Only keys on SHARED_SETTINGS_ALLOWED are ever written: a file holding any other
-# key is refused whole, naming it, so it cannot become a way to carry model or effort. Off is false,
-# never a deletion, so the apply never has to infer a removal.
+# key is refused whole, naming it, so it cannot become a way to carry the model or anything else
+# nobody chose to share. Off is false, never a deletion, so the apply never has to infer a removal.
+#
+# Effort is shared PER MODEL (2026-10-06): Claude Code reads a user's effort from
+# modelSettings.<full model name>.effortLevel, where /effort saves it, and applies the top level
+# effortLevel only to older models, so a shared top level value would land and change nothing (L402).
+# Only that one leaf is written; the rest of a model's entry, and every model the file does not
+# name, stay this Mac's own. A /effort pick on one Mac is put back to the shared value by the next
+# pull, the same as any shared setting: the repo is its only source.
 SHARED_SETTINGS_FILE="settings.shared.json"
-SHARED_SETTINGS_ALLOWED="ultracode"
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel"
+# The one definition of how the shared settings land in settings.json, used by the write and by the
+# question of whether it is applied, so the two cannot disagree: applied is "applying changes nothing".
+SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e (.;
+  if $e.key == "modelSettings" then
+    reduce ($e.value | to_entries[]) as $m (.; reduce ($m.value | to_entries[]) as $f (.; .modelSettings[$m.key][$f.key] = $f.value))
+  else .[$e.key] = $e.value end);'
 STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
 status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
 # -> "no-mod", "absent", "ours", "unreadable", or "other<TAB><what it runs>"
@@ -3992,19 +4006,34 @@ shared_settings_wanted(){
   local f="$PAYLOAD/$SHARED_SETTINGS_FILE" obj bad
   [ -f "$f" ] || { printf '{}'; return 0; }
   if ! obj="$(jq -c 'if type == "object" then . else error("not an object") end' "$f" 2>/dev/null)" || [ -z "$obj" ]; then
-    echo "claude-sync: $SHARED_SETTINGS_FILE in the payload is not a JSON object, so no shared setting (${SHARED_SETTINGS_ALLOWED// /, }) was written into settings.json. Fix it in the repo with 'jq . payload/$SHARED_SETTINGS_FILE'." >&2
+    echo "claude-sync: $SHARED_SETTINGS_FILE in the payload is not a JSON object, so no shared setting ($SHARED_SETTINGS_DESC) was written into settings.json. Fix it in the repo with 'jq . payload/$SHARED_SETTINGS_FILE'." >&2
     printf '{}'; return 0
   fi
   bad="$(jq -r --arg ok "$SHARED_SETTINGS_ALLOWED" 'keys - ($ok | split(" ")) | join(", ")' <<< "$obj" 2>/dev/null || true)"
   if [ -n "$bad" ]; then
-    echo "claude-sync: refused $SHARED_SETTINGS_FILE because it carries $bad, which is not a setting the sync shares (only ${SHARED_SETTINGS_ALLOWED// /, }), so nothing from it was written into settings.json. Every other setting stays per Mac: remove $bad from the file in the repo." >&2
+    echo "claude-sync: refused $SHARED_SETTINGS_FILE because it carries $bad, which is not a setting the sync shares (only $SHARED_SETTINGS_DESC), so nothing from it was written into settings.json. Every other setting stays per Mac: remove $bad from the file in the repo." >&2
     printf '{}'; return 0
   fi
-  # Every shared setting today is an on/off switch, so each value must be a boolean: "yes" or null
-  # written into settings.json is a value Claude Code may read either way (review of #775).
-  bad="$(jq -r '[to_entries[] | select((.value | type) != "boolean") | .key] | join(", ")' <<< "$obj" 2>/dev/null || true)"
+  # Each value must be one Claude Code reads one way only (review of #775): ultracode a boolean, since
+  # "yes" or null may be read either way, and an effort one of the four levels it saves. max lasts a
+  # session and is never saved, and a model named by an alias sits under the full name Claude Code
+  # reads first, so either would land and change nothing.
+  bad="$(jq -r '
+    def level: . == "low" or . == "medium" or . == "high" or . == "xhigh";
+    [ (if has("ultracode") and (.ultracode | type) != "boolean" then "ultracode is not a boolean (true or false)" else empty end),
+      (if has("modelSettings") then
+        (.modelSettings | if type != "object" then "modelSettings is not an object of model names" else
+          to_entries[] | .key as $m |
+          (if ($m | test("^claude-[a-z0-9]+(-[a-z0-9]+)*$")) then empty else "\($m) under modelSettings is not a full model name like claude-opus-5-5 (Claude Code reads the full name first, and an alias there changes nothing)" end),
+          (.value | if type != "object" then "modelSettings.\($m) is not an object" else
+            ((keys - ["effortLevel"])[] | "modelSettings.\($m).\(.) is not a setting the sync shares (only effortLevel)"),
+            (if has("effortLevel") and ((.effortLevel | level) | not) then "modelSettings.\($m).effortLevel is \(.effortLevel | tojson), not one of low, medium, high, xhigh (max lasts one session and is never saved)" else empty end)
+          end)
+        end)
+      else empty end)
+    ] | join("; ")' <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
-    echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad is not a boolean (true or false), so nothing from it was written into settings.json. Fix the value in the repo." >&2
+    echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad, so nothing from it was written into settings.json. Fix the value in the repo." >&2
     printf '{}'; return 0
   fi
   printf '%s' "$obj"
@@ -4015,18 +4044,20 @@ write_settings_extras(){
   sl_state="$(status_line_state)"
   [ "$sl_state" = absent ] && want_sl=1
   [ "$shared" = '{}' ] && [ -z "$want_sl" ] && [ "$sl_state" != unreadable ] && return 0
-  names="$(jq -r 'keys | join(", ")' <<< "$shared" 2>/dev/null || true)"
+  # Every leaf by its path. Not paths(scalars): that keeps a path only where the filter's OUTPUT is
+  # truthy, and for a false leaf the output is false, so a setting turned off went unnamed.
+  names="$(jq -r '[paths(type | . != "object" and . != "array") | map(tostring) | join(".")] | join(", ")' <<< "$shared" 2>/dev/null || true)"
   tmp="$(scratch_file)"
   # A Mac with no settings.json is written from an empty object, and the file appears only from the
   # finished write: a stub made first would be left behind by a write that then failed (review of #775).
   local cur="$settings" had=1
   if [ ! -f "$settings" ]; then had=""; cur="$(scratch_file)"; printf '{}\n' > "$cur"; fi
   if ! jq --argjson s "$shared" --arg sl "$want_sl" --arg cmd "$(status_line_command)" \
-       '. + $s | if $sl == "1" then .statusLine = {type: "command", command: $cmd, refreshInterval: 30} else . end' \
+       "$SHARED_SETTINGS_APPLY_JQ"' apply_shared($s) | if $sl == "1" then .statusLine = {type: "command", command: $cmd, refreshInterval: 30} else . end' \
        "$cur" > "$tmp" 2>/dev/null; then
     [ -n "$had" ] || rm -f "$cur"
     rm -f "$tmp"
-    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_ALLOWED}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
+    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_DESC}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
     # Said, not notified: an unreadable settings.json already raises the hooks block's notification on
     # the same apply, and a second one per run for the same fault is the alert people learn to
     # dismiss (review of #775, L36).
@@ -4038,7 +4069,7 @@ write_settings_extras(){
   if [ -n "$had" ] && jq -en --slurpfile a "$settings" --slurpfile b "$tmp" '$a == $b' >/dev/null 2>&1; then
     rm -f "$tmp"; return 0
   fi
-  jq -en --slurpfile a "$cur" --argjson s "$shared" '[$s | to_entries[] | . as $e | $a[0][$e.key] == $e.value] | all' >/dev/null 2>&1 || shared_changed=1
+  jq -en --slurpfile a "$cur" --argjson s "$shared" "$SHARED_SETTINGS_APPLY_JQ"' ($a[0] | apply_shared($s)) == $a[0]' >/dev/null 2>&1 || shared_changed=1
   if [ -n "$had" ]; then keep_prior_copy "$settings"; else rm -f "$cur"; fi
   mv "$tmp" "$settings"
   # Two records, because they are different facts: the shared settings arrived from the repo, while
@@ -5786,7 +5817,8 @@ payload_path_applied(){   # $1 = path relative to payload/
     settings.json) return 0 ;;   # never applied wholesale; the hooks block owns it
     "$SHARED_SETTINGS_FILE")
       # Merged INTO settings.json key by key, never landing under its own name, so it is applied
-      # when every allowed key it carries holds that value there (#695). A removed file has nothing
+      # when applying it would change nothing there, judged per leaf so a model entry holding other
+      # settings of its own still counts (#695). A removed file has nothing
       # left to apply: off is false, never a deletion.
       [ -f "$PAYLOAD/$p" ] || return 0
       command -v jq >/dev/null 2>&1 || return 0
@@ -5797,7 +5829,7 @@ payload_path_applied(){   # $1 = path relative to payload/
       [ "$want" = '{}' ] && return 0
       [ -f "$CLAUDE_HOME/settings.json" ] || return 1
       jq -en --slurpfile cur "$CLAUDE_HOME/settings.json" --argjson s "$want" \
-        '[ $s | to_entries[] | . as $e | $cur[0][$e.key] == $e.value ] | all' >/dev/null 2>&1
+        "$SHARED_SETTINGS_APPLY_JQ"' ($cur[0] | apply_shared($s)) == $cur[0]' >/dev/null 2>&1
       return $?
       ;;
   esac
