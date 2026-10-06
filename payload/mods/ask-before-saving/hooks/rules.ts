@@ -365,7 +365,7 @@ export const lessonAddition = (tool: string, input: Record<string, unknown>, old
 /**
  * Whether the added text is exactly that one lesson (lessons review of #869: anything else written
  * beside the rule reached every session unseen by Dan): one new entry, `- **L<n>.` then the rule as
- * he approved it (bold and wrapping aside), then at most its provenance in parentheses, then at most
+ * he approved it (bold and wrapping aside), then at most its provenance (repo#N, then a date), then at most
  * one SHORT line no longer than the index's cap. Blank lines around it are the file's spacing.
  */
 export const addsLesson = (added: string, rule: string): boolean => {
@@ -376,7 +376,9 @@ export const addsLesson = (added: string, rule: string): boolean => {
     if ((lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '').length > MAX_SHORT) return false
   }
   const body = ruleText((shortAt === -1 ? lines : lines.slice(0, shortAt)).join('\n'))
-  const provenance = String.raw`(?: \((?:[^()]|\([^()]*\))*\))?`
+  // Provenance is its shape and nothing more, one or more `repo#N` and an optional date (second
+  // lessons review of #869: any text in parentheses let a sentence Dan never read ride along).
+  const provenance = String.raw`(?: \([\w.-]+#\d+(?:, [\w.-]+#\d+)*(?:, \d{4}-\d{2}-\d{2})?\))?`
   return new RegExp(`^- L\\d+\\. ${escapeRe(ruleText(rule))}${provenance}$`).test(body)
 }
 

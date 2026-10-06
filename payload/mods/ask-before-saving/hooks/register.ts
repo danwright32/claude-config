@@ -251,14 +251,16 @@ const takeApproval = async ($: EngineInterface, key: string) => {
   return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
 }
 
-// The text a call adds to the lessons file, when it is an Edit or Write whose one lasting target is
-// that file and all it does is add (#867); undefined for anything else. A file that exists and cannot
+// The text a call adds to the lessons file, when it is an Edit or Write to that file and all it does
+// is add (#867); undefined for anything else. An Edit or Write writes its own file_path and nothing
+// else, so the path is the whole judgement of where it saves, and it is judged before anything is
+// read: a Bash call is never looked into here (second lessons review of #869, where a refused shell
+// call's target reads failed and replaced the refusal that stopped it). A file that exists and cannot
 // be read fails the hook, and the hook fails closed.
-const lessonAdded = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, files: string[]): Promise<string | undefined> => {
+const lessonAdded = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> => {
   if (tool !== 'Edit' && tool !== 'Write') return undefined
   const file = lessonsFile(at.home)
   if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return undefined
-  if (files.length !== 1 || files[0] !== display(file, at.home)) return undefined
   const old = tool === 'Write' && (await $.fs.exists(file)) ? await $.fs.read(file) : undefined
   return lessonAddition(tool, input, old)
 }
@@ -405,7 +407,7 @@ export const register: Register = on => {
       }
       // And a lesson Dan approved in the durable lesson picker, added by a call another guard refused
       // before the classic hook could take its approval (#867): said the same way.
-      const added = await lessonAdded($, tool, input, at, await lastingTargets($, tool, input, at))
+      const added = await lessonAdded($, tool, input, at)
       if (added === undefined) return r
       const now = await $.clock.now()
       let fit = undefined as AskBeforeSavingApproval | undefined
@@ -448,7 +450,7 @@ export const register: Register = on => {
     }
     // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
     // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
-    const added = await lessonAdded($, tool, input, at, files)
+    const added = await lessonAdded($, tool, input, at)
     const lesson = added === undefined ? undefined : await takeLesson($, added)
     if (lesson) {
       lessonUsed.set(String(raw.tool_use_id ?? ''), lesson)
@@ -507,7 +509,7 @@ export const register: Register = on => {
       lapseAfter($, APPROVAL_MS, made)
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file} that only adds one entry: "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance in parentheses and one SHORT line of at most ${MAX_SHORT} characters. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line of at most ${MAX_SHORT} characters. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {
