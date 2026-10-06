@@ -170,6 +170,15 @@ done
 mt_split_assignments 'X="$(a "b c")" gh pr merge 7'
 eq "$MT_ASSIGNS" 'X=$(a "b c")'$'\n' "a nested value kept as the shell sees it, outer quotes removed"
 eq "$MT_REST" 'gh pr merge 7' "and the merge after it"
+# A separator INSIDE a substitution or quotes does not end the command (lessons review of #795):
+# cut there, `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` was two halves, neither a merge.
+for w in 'GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7' \
+         'GH_TOKEN=$(gh auth token -u x || echo y) gh pr merge 7' \
+         'MSG="a; b && c" gh pr merge 7'; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge after an assignment holding a separator was not read as a merge: $w"; fi
+done
+eq "$(mt_pr_number 'GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7')" "7" "and it names its pull request"
+if mt_runs_merge 'echo "done; gh pr merge 7"'; then fail "a merge quoted after a separator inside an echo was read as a merge"; else pass; fi
 mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
 eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.

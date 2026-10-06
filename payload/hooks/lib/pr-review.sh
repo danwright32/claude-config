@@ -260,7 +260,10 @@ do_check() {
         return 0
       fi
       if [ -n "$fin" ] && ar_review_key_valid "$final" "${PR_REVIEW_READ:-}"; then
-        printf 'finished=%s\n' "$fin" > "$acknowledged" 2>/dev/null
+        # Braced, so a refused redirection is silenced too; a failed write is said, since the next
+        # attempt will then need the key again.
+        { printf 'finished=%s\n' "$fin" > "$acknowledged"; } 2>/dev/null \
+          || echo "(The read could not be recorded beside $final, so a later merge of this head will need the key again.)"
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this merge presented their key."
         return 0
       fi

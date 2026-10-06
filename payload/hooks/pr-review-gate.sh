@@ -84,10 +84,6 @@ args=(check --dir "$repo_dir" --sha "$head")
 # front of some other command, says nothing about this merge (L673). Segments are cut the way the
 # merge matcher cuts them, so the segment judged a merge here is the one mt_runs_merge judged.
 read_key=""
-read_key_body="$(mt_strip_heredocs "$command")"
-read_key_body="${read_key_body//&&/$'\n'}"
-read_key_body="${read_key_body//||/$'\n'}"
-read_key_body="${read_key_body//;/$'\n'}"
 while IFS= read -r rk_seg; do
   # The segment's leading assignments read as the shell reads them (mt_split_assignments, the same
   # reader the merge matcher uses), so a key before `GH_TOKEN=$(gh auth token -u x) gh pr merge`
@@ -99,7 +95,7 @@ while IFS= read -r rk_seg; do
     break
   fi
 done <<RKEOF
-$read_key_body
+$(mt_raw_segments "$command")
 RKEOF
 out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && { printf 'pr-review-gate: %s\n' "$out"; exit 0; }

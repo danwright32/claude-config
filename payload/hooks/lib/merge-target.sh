@@ -219,17 +219,52 @@ MTEOF
 # on them buys nothing while giving a quoted payload one more way to be cut into
 # a segment that starts with the phrase.
 mt_command_segments() {  # $1 = command
-  local body seg
-  body="$(mt_strip_heredocs "$1")"
-  body="${body//&&/$'\n'}"
-  body="${body//||/$'\n'}"
-  body="${body//;/$'\n'}"
+  local seg
   while IFS= read -r seg; do
     mt_split_assignments "$seg"
     printf '%s\n' "$MT_REST"
   done <<MTEOF
-$body
+$(mt_raw_segments "$1")
 MTEOF
+}
+
+# The command cut at `&&`, `||`, `;` and newlines, one segment per line, but only where those
+# sit OUTSIDE quotes and substitutions (lessons review of #795): cut inside them,
+# `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` became two halves, neither a merge, and
+# every merge gate stood down. Heredoc bodies are stripped first. The same context stack as
+# mt_split_assignments, so the two never disagree about what is quoted.
+mt_raw_segments() {  # $1 = command
+  local s c nx top stack="" i=0 n cur=""
+  s="$(mt_strip_heredocs "$1")"; n=${#s}
+  while [ "$i" -lt "$n" ]; do
+    c="${s:$i:1}"; nx="${s:$((i + 1)):1}"; top="${stack: -1}"
+    if [ "$top" = "'" ]; then
+      [ "$c" = "'" ] && stack="${stack%?}"
+      cur="$cur$c"; i=$((i + 1)); continue
+    fi
+    if [ "$c" = "\\" ] && [ $((i + 1)) -lt "$n" ]; then
+      cur="$cur$c$nx"; i=$((i + 2)); continue
+    fi
+    if [ -z "$stack" ]; then
+      case "$c$nx" in
+        "&&"|"||") printf '%s\n' "$cur"; cur=""; i=$((i + 2)); continue ;;
+      esac
+      case "$c" in
+        ";"|$'\n') printf '%s\n' "$cur"; cur=""; i=$((i + 1)); continue ;;
+      esac
+    fi
+    case "$c" in
+      \") if [ "$top" = '"' ]; then stack="${stack%?}"; else stack="$stack$c"; fi ;;
+      \') [ "$top" != '"' ] && stack="$stack$c" ;;
+      \`) if [ "$top" = '`' ]; then stack="${stack%?}"; else stack="$stack$c"; fi ;;
+      \$) if [ "$nx" = "(" ] || [ "$nx" = "{" ]; then stack="$stack$nx"; cur="$cur$c$nx"; i=$((i + 2)); continue; fi ;;
+      \() [ -n "$stack" ] && [ "$top" != '"' ] && stack="$stack$c" ;;
+      \)) [ "$top" = "(" ] && stack="${stack%?}" ;;
+      \}) [ "$top" = "{" ] && stack="${stack%?}" ;;
+    esac
+    cur="$cur$c"; i=$((i + 1))
+  done
+  printf '%s\n' "$cur"
 }
 
 # A segment's leading `NAME=value` assignments, read as the shell reads them: a value runs to the
@@ -397,7 +432,7 @@ mt_runs_merge() {  # $1 = command
 mt_pr_number() {  # $1 = command
   local direct seg prev tok
   local -a MT_TOKENS
-  direct="$(mt__merge_selector "$1")"
+  direct="$(mt__merge_selector "$(mt__selector_input "$1")")"
   direct="${direct#*$'\t'}"
   [ -n "$direct" ] && { printf '%s' "$direct"; return; }
 
@@ -497,6 +532,28 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
 #
 # IT NEEDS python3, and mt_reader_missing below is how a gate says so. See that comment before
 # reaching for a fallback reader.
+# What the selector below reads: the `gh pr merge` segment itself, its leading assignments
+# removed, when the shell reading finds one (lessons review of #795). The selector tokenizes the
+# whole command and cannot see inside $( ), so in `GH_TOKEN=$(gh auth token -u x; true) gh pr
+# merge 7` the merge did not sit at a command start and its number was lost. With no such segment
+# the whole command is read as before.
+mt__selector_input() {  # $1 = command
+  local seg a b c d
+  while IFS= read -r seg; do
+    mt_split_assignments "$seg"
+    read -r a b c d <<MTSEOF
+$MT_REST
+MTSEOF
+    [ "${a##*/}" = "rtk" ] && { a="$b"; b="$c"; c="${d%% *}"; }
+    if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+      printf '%s' "$MT_REST"; return 0
+    fi
+  done <<MTSEOF
+$(mt_raw_segments "$1")
+MTSEOF
+  printf '%s' "$1"
+}
+
 mt__merge_selector() {  # $1 = command
   MT_CMD="$(mt_strip_heredocs "$1")" python3 -c '
 import os, re, shlex
@@ -575,7 +632,7 @@ print((link_repo or repo) + "\t" + number, end="")
 # #470). The flag or the link, read by mt__merge_selector above, which holds the reasoning.
 mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
   local sel
-  sel="$(mt__merge_selector "$1")"
+  sel="$(mt__merge_selector "$(mt__selector_input "$1")")"
   printf '%s' "${sel%%$'\t'*}"
 }
 

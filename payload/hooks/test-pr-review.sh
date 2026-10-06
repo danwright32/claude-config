@@ -480,7 +480,7 @@ check_eq "a key that is only mentioned in another command does not count" "2" "$
 out="$(fire_gate "PR_REVIEW_READ=$gk true && gh pr merge 7 --squash")"; rc=$?
 check_eq "a key in front of a different command does not count" "2" "$rc"
 # Before an assignment holding a space (scoping the merge to one of Dan's accounts), still the key.
-out="$(fire_gate "PR_REVIEW_READ=$gk GH_TOKEN=\$(gh auth token -u x) gh pr merge 7 --squash")"; rc=$?
+out="$(fire_gate "PR_REVIEW_READ=$gk GH_TOKEN=\$(gh auth token -u x; true) gh pr merge 7 --squash")"; rc=$?
 check_eq "a key before an account scoped merge is read as the key" "0" "$rc"
 rm -f "$(final_of "$HEAD_SHA").acknowledged"
 # Quoted, as a shell would accept it, the key is the same key.
