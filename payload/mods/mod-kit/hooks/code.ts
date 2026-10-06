@@ -116,9 +116,20 @@ const pythonFileinput = (code: string): CodeVerdict | undefined => {
 // :=), is unproven and judged like any other receiver (lessons review of #818).
 const pandasNames = (code: string): Set<string> => {
   const assigned = new Map<string, (string | undefined)[]>()
-  for (const m of code.matchAll(/(?:^|[;\n])[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*([A-Za-z_]\w*)?/g)) {
+  // The whole right hand side must be one chain (a name, then attributes, calls and subscripts);
+  // anything else (`pd or Path('a')`, `x if y else z`, arithmetic) proves nothing. The contents of
+  // brackets are taken out first, so a call's arguments do not count against it.
+  const chainRoot = (rhs: string): string | undefined => {
+    let s = rhs.replace(/(['"])(?:\\.|(?!\1)[^\\])*\1/g, '""')
+    for (let prev = ''; prev !== s; ) {
+      prev = s
+      s = s.replace(/\([^()[\]]*\)|\[[^()[\]]*\]/g, '')
+    }
+    return /^\s*([A-Za-z_]\w*)(?:\s*\.\s*[A-Za-z_]\w*)*\s*(?:#.*)?$/.exec(s)?.[1]
+  }
+  for (const m of code.matchAll(/(?:^|[;\n])[ \t]*([A-Za-z_]\w*)\s*=(?!=)([^;\n]*)/g)) {
     const roots = assigned.get(m[1] as string) ?? []
-    roots.push(m[2])
+    roots.push(chainRoot(m[2] as string))
     assigned.set(m[1] as string, roots)
   }
   const reboundElsewhere = (name: string): boolean => {
@@ -127,6 +138,7 @@ const pandasNames = (code: string): Set<string> => {
       new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
       new RegExp(`\\bas\\s+${n}\\b`),
       new RegExp(`\\b${n}\\s*:=`),
+      new RegExp(`(?:^|[;\\n])[ \\t]*${n}\\s*:(?!=)[^=\\n]*=(?!=)`),
       new RegExp(`(?:^|[;\\n])[ \\t]*[\\w\\s,()[\\]*]*,\\s*\\(?\\s*${n}\\s*\\)?\\s*(?:,[^=\\n]*)?=(?!=)`),
       new RegExp(`(?:^|[;\\n])[ \\t]*\\(?\\s*${n}\\s*,[^=\\n]*=(?!=)`),
       new RegExp(`\\b(?:def\\s+\\w+\\s*\\([^)]*|lambda\\b[^:]*)\\b${n}\\b`),
@@ -149,7 +161,8 @@ const pandasNames = (code: string): Set<string> => {
 const pythonMoves = (code: string): CodeVerdict | undefined => {
   const pandas = pandasNames(code)
   for (const m of code.matchAll(/\.\s*(rename|replace)\s*\(/g)) {
-    const receiver = /([A-Za-z_]\w*)(?:\s*\[[^\]]*\])*\s*$/.exec(code.slice(0, m.index))?.[1]
+    // A bare name or a subscript of one; an attribute of something else (`obj.df`) is not it.
+    const receiver = /(?<![\w.])([A-Za-z_]\w*)(?:\s*\[[^\]]*\])*\s*$/.exec(code.slice(0, m.index))?.[1]
     if (receiver !== undefined && pandas.has(receiver)) continue
     const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
     if (args.length === 1 && !/^\w+\s*=|^[{[]|^lambda\b|^str\s*\./.test(args[0] as string)) return { does: 'write files', seen: m[1] as string }

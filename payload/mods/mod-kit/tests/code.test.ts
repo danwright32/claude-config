@@ -63,6 +63,13 @@ describe('codeVerdict after #760', () => {
     expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\ndef f(df):\n    df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nx, df = 1, p\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nif (df := p):\n    df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // An attribute of another object that shares a pandas name is not that name.
+    expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\nobj.df.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // A right hand side that is more than a pandas chain proves nothing.
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd or Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.read_csv(x) if y else Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
+    // An annotated assignment is a rebinding too.
+    expect(codeVerdict('python', "import pandas as pd\nfrom pathlib import Path\ndf = pd.DataFrame()\ndf: Path = Path('a')\ndf.rename('b')")).toEqual({ does: 'write files', seen: 'rename' })
     // Rebound only from pandas, it is still pandas.
     expect(codeVerdict('python', "import pandas as pd\ndf = pd.DataFrame()\ndf = df.dropna()\ndf.rename('t')")).toBeUndefined()
     // A chained call has no bound name to prove pandas by, so it is still read as a move (accepted,
