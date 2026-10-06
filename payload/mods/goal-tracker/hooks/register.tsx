@@ -101,6 +101,9 @@ const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() =>
 type Waiting = NonNullable<Progress['waiting']>
 let question: { id: string; mark: Waiting } | undefined
 let permission: { calls: Set<string>; mark: Waiting } | undefined
+// The calls of this conversation's own questions while they run, which the question path marks and
+// notifies; a permission request raised inside one of them is that question (#814).
+const heldQuestions = new Set<string>()
 const waitingNow = (): Waiting | undefined => {
   let latest: Waiting | undefined
   for (const m of [question?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
@@ -326,6 +329,7 @@ const beginAgain = async ($: EngineInterface) => {
   project = undefined
   question = undefined
   permission = undefined
+  heldQuestions.clear()
   if (unsent) dropUnsent(unsent.id)
   countedCalls.clear()
 }
@@ -462,11 +466,13 @@ export const register: Register = on => {
     // (a subagent's, lessons review of PR 816) is announced by this request alone, so it is marked
     // and notified here, once, as the question it is.
     const isQuestion = e.tool_name === 'AskUserQuestion'
-    const asked = isQuestion ? questionOf(e.tool_input) : undefined
-    if (asked !== undefined && (question?.mark.question === asked || [...asking.values()].includes(asked))) return next(e)
-    const what = asked ?? permissionFor(e.tool_name, e.tool_input)
+    // Matched by the call it was raised inside, never by the question's text (lessons review of PR
+    // 816): a subagent asking what this conversation asks is still its own question.
+    const calls = callsFor(e.tool_name, e.tool_input)
+    if (isQuestion && calls.length > 0 && calls.every(id => heldQuestions.has(id))) return next(e)
+    const what = isQuestion ? questionOf(e.tool_input) : permissionFor(e.tool_name, e.tool_input)
     const now = await nowOr($)
-    permission = { calls: new Set(callsFor(e.tool_name, e.tool_input)), mark: { question: what, since: now, kind: isQuestion ? 'question' : 'permission' } }
+    permission = { calls: new Set(calls), mark: { question: what, since: now, kind: isQuestion ? 'question' : 'permission' } }
     if (progress) {
       progress = withWaiting(progress)
       await publish($, now)
@@ -549,6 +555,7 @@ export const register: Register = on => {
       // Marked by the classic.PreToolUse hook below once the guards have let it through (#732).
       const key = askKey(e)
       asking.set(key, qs[0]?.question ?? 'a question')
+      heldQuestions.add(id)
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
@@ -562,6 +569,7 @@ export const register: Register = on => {
         // Only the question's own mark comes off: a permission prompt still open stands (#694). One
         // that ended before it was notified never reached Dan, and is not notified now (#706).
         asking.delete(key)
+        heldQuestions.delete(id)
         dropUnsent(key)
         question = undefined
         callEnded(id)

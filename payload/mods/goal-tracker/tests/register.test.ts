@@ -486,6 +486,27 @@ test("a subagent's question, which only its permission request announces, sends 
   expect(last(w)?.waiting).toBeUndefined()
 })
 
+// Lessons review of PR 816's second head: the request is matched to the question by its call, never
+// by its text, so a subagent asking the same thing as this conversation is still announced.
+test("a subagent's question worded like this conversation's open question is still announced, once each (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const mine = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  const theirs = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await Promise.all([mine, theirs])
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+  ])
+})
+
 // #706: the notification is for a question Dan sees. One refused at once (by picker manners
 // beneath the tracker, or anything else beneath it) never reached him, so it sends none.
 test('a question refused at once sends no notification', withDeps, async ($, on) => {
