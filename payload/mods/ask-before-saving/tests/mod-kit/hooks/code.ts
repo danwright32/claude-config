@@ -565,6 +565,10 @@ const pythonTargets = (code: string): string[] | undefined => {
   // pathlib's writers the judge has no rule for (Path.copy, copy_into, move and move_into, new in
   // 3.14; lchmod; link_to), whatever they are called on.
   if (/\.\s*(?:copy|copy_into|move|move_into|lchmod|link_to)\s*\(/.test(code)) return undefined
+  // A rename or replace given its target by name (`Path(p).rename(target=...)`), which the judge's
+  // move rule, reading one plain argument, does not see (lessons review of #846 at 97ea7f3).
+  for (const m of code.matchAll(/\.\s*(?:rename|replace)\s*\(/g))
+    if (argsAt(code, (m.index ?? 0) + m[0].length - 1).some(a => /^\w+\s*=/.test(a))) return undefined
   if (first(s.write.filter(r => r !== PY_PATH_METHODS), code)) return undefined
   const out: string[] = []
   const add = (expr: string | undefined) => {

@@ -515,6 +515,9 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom . import x\nopen('a.md','w')\nEOF")).toEqual(none)
     // Round 4: a dotted import binds its parent, so `import os.path` binds os.
     expect(targets("python3 - <<'EOF'\nimport os.path\nopen('a.md','w')\nos.chflags('b', 0)\nEOF")).toEqual(none)
+    // A move of a pathlib Path, by its one argument or by name.
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').rename('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace(target='/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
     // pathlib's own writers the judge has no rule for.
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').copy('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
     // Round 3: os taken apart by a from import is os too: only its path is quiet.

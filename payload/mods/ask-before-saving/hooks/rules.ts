@@ -99,15 +99,6 @@ const ALWAYS_SET: IsSet = async () => true
 // A word or mention rooted at a variable other than HOME: `$NAME/...`.
 const ROOTED = /^\$([A-Za-z_]\w*)/
 
-/**
- * Whether the variable `name` can hold a path when `text` runs: set in the environment, or given a
- * value in the text that can be one. A value it is given is followed: a literal, a path under home
- * or a command's output can be anything, so it counts; another variable counts as that one does; a
- * fresh temporary file or folder (`$(mktemp)`, `$(mktemp -d)`, FRESH_TEMP) is loaded into no session,
- * so it does not. Any other use
- * of the bare name (a loop, a read, a declare) counts. A variable named nowhere and set nowhere
- * expands to nothing in a fresh shell, so a path through it reaches no lasting memory.
- */
 // Variables a shell sets for itself, present in every fresh shell whatever the environment held
 // (lessons review of #783: `$PWD/CLAUDE.md` was judged unset and saved unasked).
 const SHELL_SET = new Set(['HOME', 'PWD', 'OLDPWD', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'HOSTNAME', 'HOST', 'PPID', 'SHLVL', 'ZDOTDIR', 'BASH', 'ZSH_NAME', 'MACHTYPE', 'OSTYPE'])
@@ -117,6 +108,15 @@ const SHELL_SET = new Set(['HOME', 'PWD', 'OLDPWD', 'TMPDIR', 'USER', 'LOGNAME',
 // the memory folder, so it can hold a path like any other output (#830).
 const FRESH_TEMP = /^\$\(mktemp(?:\s+-[dqu]+)*(?:\s+-t\s+[\w.-]+)?(?:\s+-[dqu]+)*\s*\)$/
 
+/**
+ * Whether the variable `name` can hold a path when `text` runs: set in the environment, or given a
+ * value in the text that can be one. A value it is given is followed: a literal, a path under home
+ * or a command's output can be anything, so it counts; another variable counts as that one does; a
+ * fresh temporary file or folder (`$(mktemp)`, `$(mktemp -d)`, FRESH_TEMP) is loaded into no session,
+ * so it does not. Any other use of the bare name (a loop, a read, a declare) counts. A variable named
+ * nowhere and set nowhere expands to nothing in a fresh shell, so a path through it reaches no
+ * lasting memory.
+ */
 export const settable = async (name: string, text: string, isSet: IsSet, seen: Set<string> = new Set()): Promise<boolean> => {
   if (SHELL_SET.has(name) || seen.has(name)) return true
   seen.add(name)
