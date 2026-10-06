@@ -201,6 +201,8 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   })
   on('ui.log', () => ({ value: undefined }) as never)
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
+  // The settings Stop hooks beneath the mods: they block nothing, unless STOP_BLOCK names a block.
+  on('classic.Stop', () => (env.STOP_BLOCK ? { block: env.STOP_BLOCK } : {}) as never)
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
@@ -307,7 +309,7 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -344,7 +346,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -355,7 +357,7 @@ test('steps found already done are marked so, and a card that is all done is not
   expect(await band($)).toBeUndefined()
   expect(w.opened).toEqual([])
   await hand($, [step({ checked: 'already-done', title: 'Made the token' }), step({ title: 'Second' })])
-  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF', '1. Made the token  already done', '2. Second  [done]'])
+  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done', '2. Second  [done]'])
 })
 
 test('a step that does not say it was checked first is refused', withKit, async ($, on) => {
@@ -848,4 +850,85 @@ test('the pane asks for a dock as wide as the open step\'s lines, so a click pat
   await pinFresh({ clicks: 'x'.repeat(200) })
   expect(w.opens[2]?.columns).toBe(80)
   expect(w.opens).toHaveLength(3)
+})
+
+// ---- #863: a step handed over in prose is put on the card ----
+
+// The turn's end as Claude Code raises it: Claude's final message, and whether a Stop hook already
+// blocked this chain of turn ends.
+const turnStop = async ($: Engine, said: string, isActive = false) =>
+  (await ($ as unknown as { classic: { Stop: (e: object) => Promise<unknown> } }).classic.Stop({
+    hook_event_name: 'Stop',
+    session_id: 's1',
+    transcript_path: '/t',
+    cwd: ROOT,
+    stop_hook_active: isActive,
+    last_assistant_message: said,
+  })) as { block?: string }
+const PROSE_STEP = "The one thing still waiting on you is the migration command from my earlier message. #3415 merges after that, and it's the last piece of the goal."
+
+test('a step left waiting on Dan in prose, with no card, blocks the turn end once and asks for the steps tool (#863)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const r = await turnStop($, PROSE_STEP)
+  expect(r.block).toMatch(/"waiting on you"/)
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+  expect(r.block).toMatch(/check it against the current state/i)
+  // The same chain's next turn end is never blocked again, so it cannot loop.
+  expect((await turnStop($, PROSE_STEP, true)).block).toBeUndefined()
+})
+
+test('with an unfinished step on the card, the same words pass (#863)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [step()])
+  expect((await turnStop($, PROSE_STEP)).block).toBeUndefined()
+  // Once every step is finished the card is gone, and the words block again.
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  expect((await turnStop($, PROSE_STEP)).block).toMatch(/steps tool/)
+})
+
+test('ordinary prose at the turn end passes (#863)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  expect((await turnStop($, 'Merged #812 and the deploy is live. Nothing else is waiting on you.')).block).toBeUndefined()
+  expect((await turnStop($, 'The tests pass and the PR is up.')).block).toBeUndefined()
+})
+
+test('steps carried from an earlier session and not yet re-checked are not a card Dan can see, so the words block (#863)', withKit, async ($, on) => {
+  const card: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  expect((await turnStop($, PROSE_STEP)).block).toMatch(/steps tool/)
+})
+
+test('a -p run or the SDK, where nobody is at the prompt and there is no steps tool, is never blocked (#863)', withKit, async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
+  expect((await turnStop($, PROSE_STEP)).block).toBeUndefined()
+})
+
+test('a block another Stop hook gives is kept beside this one (#863)', withKit, async ($, on) => {
+  world(on, {}, {}, { STOP_BLOCK: 'Winding down is not finished: PR #12 is not merged yet.' })
+  await start($)
+  const r = await turnStop($, PROSE_STEP)
+  expect(r.block).toMatch(/^Winding down is not finished: PR #12 is not merged yet\./)
+  expect(r.block).toMatch(/steps tool/)
+})
+
+test('the band says the open step is waiting on Dan while it is, and clears once it is done (#863)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Purge the cache' })])
+  expect((await bandText($)).slice(0, 2)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]'])
+  // Sent, it waits on Claude, not on Dan.
+  await press($, 'done')
+  expect(w.prompts).toEqual(['step 1 done'])
+  expect((await bandText($))[0]).toBe('Cloudflare WAF')
+  // The next step is Dan's again.
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
+  expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
+  await call($, VERDICT, { step: 2, checked: 'checked' })
+  expect(await band($)).toBeUndefined()
 })

@@ -2,6 +2,7 @@ import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, nextStep, paneColumns, sent } from './card.ts'
 import type { StepsVerdict } from './card.ts'
+import { waitingPhrase } from './waiting.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
 // rounds, docs/mods-design.md "Manual steps"). Claude hands steps over through the `steps` tool,
@@ -315,8 +316,16 @@ const STEP_SCHEMA = {
   required: ['title', 'checked'],
 }
 
+// #863: a step handed to Dan in prose scrolls away unseen, so Claude's final message saying one
+// waits on him, with no unfinished step on the card he can see, sends Claude back to pin it. Once a
+// chain of turn ends (stop_hook_active), so it can never loop, and only where the steps tool exists.
+let interactive = false
+const proseStep = (phrase: string) =>
+  `Your reply leaves Dan a step in prose ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or exact location, the clicks, and any value to paste. Then say in one line that it is on the card. If nothing is actually left for Dan to do, say so in one line instead.`
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    interactive = e.isInteractive === true
     // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
     if (!e.isInteractive) return next(e)
     await $.tool.register({
@@ -466,6 +475,28 @@ export const register: Register = on => {
     await $.state.set(placeRef, 'band')
     const failed = await publishBand($, card)
     return { text: failed ? `The steps card could not be shown: ${failed}.` : 'The steps card is in the band above the prompt.' }
+  })
+
+  // #863: the turn's end, judged on Claude's own final message. A step left waiting on Dan in prose,
+  // with no unfinished step on a card he can see (a carried card is held, not shown), is sent back
+  // to be pinned. A block from a hook beneath is kept beside this one.
+  on('classic.Stop', async ($, e, next) => {
+    const r = await next(e)
+    if (!interactive || e.stop_hook_active) return r
+    const phrase = typeof e.last_assistant_message === 'string' ? waitingPhrase(e.last_assistant_message) : null
+    if (!phrase) return r
+    let card: StepsCard | null
+    try {
+      card = (await $.state.get(cardRef)).value ?? null
+    } catch (err) {
+      // Unread, it is not taken as no card: blocking on a guess would send Claude to pin a card
+      // that may already be there. Said, so a check that stops working is seen (fail loud).
+      $.ui.log(`Manual steps could not read the steps card, so a step left in prose was not checked: ${message(err)}`)
+      return r
+    }
+    if (card && !card.isCarried && nextStep(card) !== undefined) return r
+    const ours = proseStep(phrase)
+    return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
   })
 
   // Dan closing either pane does not finish the steps: the card stays pinned, in the band. One hook
