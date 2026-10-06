@@ -283,6 +283,66 @@ export const saveIdOf = (source: unknown): string | undefined => {
   return source.slice(MOD.length + 1) || undefined
 }
 
+// The durable lesson check's picker (#867). payload/hooks/durable-lesson-check.sh tells Claude to ask
+// with this `metadata.source` and the rule in `metadata.rule`; its suite holds the two to these names.
+// Dan's "Add to LESSONS.md", read from the dialog's own result, approves the write that adds that rule
+// to the lessons file, so he is not asked For good about it a second time (Dan, 2026-10-06: "The
+// confirmation that I want to add the durable lesson should be enough to indicate that I want to add
+// it forever."). Nothing Claude writes approves it: the mod sets the answers, refuses a call carrying
+// its own, and reads only the answer the dialog hands back.
+export const LESSON_SOURCE = 'durable-lesson'
+export const LESSON_ADD = 'Add to LESSONS.md'
+export const LESSON_PROJECT = 'Project memory instead'
+export const LESSON_SKIP = 'Skip'
+export const LESSON_HEADER = 'Lesson'
+/** The lessons file the picker approves a write to, as a tool reaches it. */
+export const lessonsFile = (home: string): string => `${home.replace(/\/$/, '')}/.claude/LESSONS.md`
+
+export const lessonOptions = (file: string) => [
+  { label: LESSON_ADD, description: `Added to ${file}, with no second question` },
+  { label: LESSON_PROJECT, description: "Kept in this project's memory, not the lessons file" },
+  { label: LESSON_SKIP, description: 'Nothing is saved' },
+]
+
+/**
+ * A rule as text, the way it is compared: the lessons file sets a rule in bold and wraps it, so the
+ * bold marks go and every run of white space is one space.
+ */
+export const ruleText = (s: string): string => s.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * The shortest rule an approval is taken for. A rule of a word or two is contained in almost any
+ * entry, so it would approve writes Dan never saw; a lesson's rule is a sentence or two.
+ */
+export const MIN_RULE = 40
+
+// The start of a lesson entry in the lessons file: `- **L752. ...`.
+const ENTRY_START = /^\s*-\s+\*\*L\d+\./gm
+
+/**
+ * The text a write to the lessons file adds, when all it does is add: an Edit whose new text keeps
+ * the text it replaces, or a Write that keeps every line the file had. Anything that also removes or
+ * rewrites (replace_all included) is no lesson being added, and gets undefined.
+ */
+export const lessonAddition = (tool: string, input: Record<string, unknown>, old: string | undefined): string | undefined => {
+  if (tool === 'Edit') {
+    const from = String(input.old_string ?? '')
+    const to = String(input.new_string ?? '')
+    if (input.replace_all === true || !from || !to.includes(from)) return undefined
+    return to.replace(from, '')
+  }
+  if (tool !== 'Write') return undefined
+  const content = String(input.content ?? '')
+  if (old === undefined) return content
+  const kept = new Set(content.split('\n'))
+  if (old.split('\n').some(l => !kept.has(l))) return undefined
+  return addedText(content, old)
+}
+
+/** Whether the added text is that one lesson: it carries the rule, and starts no second entry. */
+export const addsLesson = (added: string, rule: string): boolean =>
+  ruleText(added).includes(ruleText(rule)) && (added.match(ENTRY_START) ?? []).length <= 1
+
 /**
  * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,
  * naming the file and stating the rule in plain words (#777, Dan: "I don't really know what it's

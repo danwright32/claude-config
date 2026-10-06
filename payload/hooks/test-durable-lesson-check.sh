@@ -167,6 +167,31 @@ else
   FAIL=$((FAIL+1)); echo "FAIL: instruction does not ask which digest projects the lesson likely applies to (lists=$_has_lists applies=$_has_applies)"
 fi
 
+# THE PICKER CARRIES WHAT ASK BEFORE SAVING READS (#867). Dan's answer to add the lesson approves
+# the write that adds it, so he is not asked For good about it a second time. Ask before saving
+# recognises the picker by its metadata source and the rule it carries, and reads back its own add
+# answer, so the instruction must name all three exactly as the mod defines them, read from the mod
+# rather than copied here (L41).
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create -t x -b y')" "$T")
+rules="$(dirname "${BASH_SOURCE[0]}")/../mods/ask-before-saving/hooks/rules.ts"
+src="$(sed -n "s/^export const LESSON_SOURCE = '\(.*\)'$/\1/p" "$rules" 2>/dev/null)"
+add="$(sed -n "s/^export const LESSON_ADD = '\(.*\)'$/\1/p" "$rules" 2>/dev/null)"
+reason="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])' 2>/dev/null)"
+if [ -z "$src" ] || [ -z "$add" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read LESSON_SOURCE and LESSON_ADD from $rules, so the picker's wording was compared against nothing"
+else
+  missing=""
+  case "$reason" in *"\"source\": \"$src\""*) ;; *) missing="$missing source:$src" ;; esac
+  case "$reason" in *'"rule": '*) ;; *) missing="$missing rule" ;; esac
+  case "$reason" in *"$add"*) ;; *) missing="$missing answer:$add" ;; esac
+  if [ -z "$missing" ]; then
+    PASS=$((PASS+1)); echo "PASS: the picker instruction carries the source, rule and answer ask before saving reads"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: the picker instruction lacks what ask before saving reads (${missing# }), so Dan is asked For good a second time"
+  fi
+fi
+
 echo "----"
 echo "passed $PASS, failed $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"

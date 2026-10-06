@@ -30,6 +30,12 @@ export type AskBeforeSavingApproval = {
    * the approval stood unused: its lapse says so rather than calling it unused (#764).
    */
   refused?: string
+  /**
+   * Set on an approval Dan gave in the durable lesson picker (#867), as the rule compared (rules.ts
+   * ruleText): a write that only adds this rule to the lessons file goes through. Its key is never a
+   * save's, so a call is never matched to it by key.
+   */
+  lesson?: string
 }
 
 declare module 'claude-code' {
