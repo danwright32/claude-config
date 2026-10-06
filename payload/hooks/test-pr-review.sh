@@ -247,10 +247,16 @@ out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOSHA" bash "$LIB" check --dir "$R
 check_not "a presented key is not blamed when no key can be checked at all" "not this review's key" "$out"
 check_not "and does not send it to re-run the review" "pr-review.sh restart --dir" "$out"
 chmod a-w "$AI_REVIEW_STATE_DIR"
-out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-chmod u+w "$AI_REVIEW_STATE_DIR"
-check_eq "with nowhere to write a key the merge is still refused" "1" "$rc"
-check "and the refusal says nothing could be written beside the review" "could not be written" "$out"
+if ( : > "$AI_REVIEW_STATE_DIR/.probe" ) 2>/dev/null; then
+  # Root, or a filesystem ignoring modes: the case cannot be produced here, so it is said, not failed (L411).
+  rm -f "$AI_REVIEW_STATE_DIR/.probe"; chmod u+w "$AI_REVIEW_STATE_DIR"
+  echo "  UNMEASURED: the state folder stayed writable after chmod a-w, so the no-write case was not produced"
+else
+  out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+  chmod u+w "$AI_REVIEW_STATE_DIR"
+  check_eq "with nowhere to write a key the merge is still refused" "1" "$rc"
+  check "and the refusal says nothing could be written beside the review" "could not be written" "$out"
+fi
 
 # 3b. finished clean: allowed at once.
 reset_state
@@ -534,7 +540,8 @@ out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$rc"
 
 # ===========================================================================================
-# 5. The nudge delivers a pr review under the 10,000 char hook cap, and marks it delivered.
+# 5. The nudge shows a pr review under the 10,000 char hook cap, with a read key; showing it there
+#    does not allow the merge (#788).
 # ===========================================================================================
 reset_state
 big="$WORKDIR/big.txt"; : > "$big"

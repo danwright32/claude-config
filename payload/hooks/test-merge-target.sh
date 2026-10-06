@@ -181,7 +181,8 @@ eq "$(mt_pr_number 'GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7')" "7" "a
 # Parentheses that are not a substitution never hold the cut open: arithmetic, a stray or quoted
 # bracket, a subshell inside a substitution, and a case pattern all leave the merge after && seen.
 for w in 'echo $((1+2)) && gh pr merge 7' 'echo ) && gh pr merge 7' 'echo "(" && gh pr merge 7' \
-         'x=$( (cd a; ls) ) && gh pr merge 7' 'case a in a) true ;; esac && gh pr merge 7'; do
+         'x=$( (cd a; ls) ) && gh pr merge 7' 'case a in a) true ;; esac && gh pr merge 7' \
+         "echo don't; gh pr merge 7" 'echo "unclosed && gh pr merge 7'; do
   if mt_runs_merge "$w"; then pass; else fail "a merge after a parenthesis that is not a substitution was not seen: $w"; fi
 done
 if mt_runs_merge 'echo "done; gh pr merge 7"'; then fail "a merge quoted after a separator inside an echo was read as a merge"; else pass; fi

@@ -234,7 +234,7 @@ MTEOF
 # every merge gate stood down. Heredoc bodies are stripped first. The same context stack as
 # mt_split_assignments, so the two never disagree about what is quoted.
 mt_raw_segments() {  # $1 = command
-  local s c nx top stack="" i=0 n cur=""
+  local s c nx top stack="" i=0 n cur="" out=""
   s="$(mt_strip_heredocs "$1")"; n=${#s}
   while [ "$i" -lt "$n" ]; do
     c="${s:$i:1}"; nx="${s:$((i + 1)):1}"; top="${stack: -1}"
@@ -247,10 +247,10 @@ mt_raw_segments() {  # $1 = command
     fi
     if [ -z "$stack" ]; then
       case "$c$nx" in
-        "&&"|"||") printf '%s\n' "$cur"; cur=""; i=$((i + 2)); continue ;;
+        "&&"|"||") out="$out$cur"$'\n'; cur=""; i=$((i + 2)); continue ;;
       esac
       case "$c" in
-        ";"|$'\n') printf '%s\n' "$cur"; cur=""; i=$((i + 1)); continue ;;
+        ";"|$'\n') out="$out$cur"$'\n'; cur=""; i=$((i + 1)); continue ;;
       esac
     fi
     case "$c" in
@@ -264,7 +264,15 @@ mt_raw_segments() {  # $1 = command
     esac
     cur="$cur$c"; i=$((i + 1))
   done
-  printf '%s\n' "$cur"
+  # Something left open (an unclosed quote, as in `echo don't; gh pr merge 7`) means the reading
+  # cannot be trusted, so the plain cut at every separator is used instead: a separator inside
+  # quotes then over cuts, which can only show the gates MORE merges, never hide one (L42).
+  if [ -n "$stack" ]; then
+    s="${s//&&/$'\n'}"; s="${s//||/$'\n'}"; s="${s//;/$'\n'}"
+    printf '%s\n' "$s"
+    return 0
+  fi
+  printf '%s%s\n' "$out" "$cur"
 }
 
 # A segment's leading `NAME=value` assignments, read as the shell reads them: a value runs to the
