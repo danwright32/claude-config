@@ -22,6 +22,29 @@ import sys
 
 MAX_DEFAULT = 40000
 
+# The task is capped so one enormous brief cannot crowd out what the agent SAID, which is the part
+# the harvest is reading for. 6000 rather than the old 1500, measured 2026-10-06 over 508 real
+# subagent transcripts on this Mac: the median brief was 1,564 characters, so 1500 trimmed more
+# than half of them, the 75th percentile was 3,325 and the 90th 5,801. The cost is bounded: at
+# most 4,500 more characters, roughly 1,100 tokens, against a harvest call measured at 29,663
+# input tokens (claude-config#538), and the body below is still capped on its own.
+TASK_MAX = 6000
+
+# What a trimmed task ends with. The harvest prompt names this exact opening so the model knows the
+# cut was made here and is not the brief being broken; without it a complete brief read as one cut
+# off mid sentence and was filed as a finding (claude-config#860). Imported by nothing, so the
+# harvest prompt carries its own copy, and test-subagent-issue-harvest.sh reads the marker out of a
+# real digest and checks the prompt names it, so the two cannot drift apart silently.
+TASK_TRIM_MARKER = "[task trimmed by the digest"
+
+
+def trim_task(text):
+    text = text.strip()
+    if len(text) <= TASK_MAX:
+        return text
+    return "%s\n%s at %d of %d characters; the brief itself was complete]" % (
+        text[:TASK_MAX], TASK_TRIM_MARKER, TASK_MAX, len(text))
+
 
 def main():
     if len(sys.argv) < 2:
@@ -49,11 +72,11 @@ def main():
         if obj.get("type") == "user" and task is None:
             content = (obj.get("message") or {}).get("content")
             if isinstance(content, str) and content.strip():
-                task = content.strip()[:1500]
+                task = trim_task(content)
             elif isinstance(content, list):
                 for it in content:
                     if isinstance(it, dict) and it.get("type") == "text" and (it.get("text") or "").strip():
-                        task = (it["text"] or "").strip()[:1500]
+                        task = trim_task(it["text"] or "")
                         break
 
         if obj.get("type") != "assistant":
