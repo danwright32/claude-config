@@ -3,12 +3,16 @@
 # target-guard.sh: decide whether a bug bash may run against a URL (claude-config#719).
 #
 #   bash ~/.claude/skills/bug-bash/target-guard.sh <url>
-#   bash ~/.claude/skills/bug-bash/target-guard.sh --read-only <url>
+#   bash ~/.claude/skills/bug-bash/target-guard.sh --read-only --proxy <proxy url> <url>
 #
 # Two rules from the skill, enforced here rather than left to a sentence:
 #   1. Never a deployed site with real users. A host that is not this machine is refused, before
 #      any request is made to it, unless read only is asked for, in which case the run is labelled
-#      READ-ONLY and the explorers may only look.
+#      READ-ONLY and the explorers may only look. A read only run starts only behind the read only
+#      proxy (read-only-proxy.js, #813), the guard that holds explorers to reading outside any
+#      browser: --proxy (or BUG_BASH_PROXY) must name it, it must answer as itself, and it must be
+#      seen to refuse a write, sent to a host that does not exist so a proxy that forwarded it
+#      reaches nothing. Only then is any request made to the target.
 #   2. A production build, never a dev server. A dev server compiles each route on its first visit
 #      and injects reload scripts, so explorers report its pauses as dead links. A local URL whose
 #      page carries a dev server's marks is refused. The marks recognised are Next.js's, Vite's
@@ -16,17 +20,25 @@
 #      server's; a dev server with none of them is not caught, so the skill's own step still says
 #      to serve a production build.
 #
-# Prints one line on success, `LOCAL <url>` or `READ-ONLY <url>`, and exits 0. Every refusal goes
+# Prints one line on success, `LOCAL <url>` or `READ-ONLY <url> via <proxy>`, and exits 0. Every refusal goes
 # to stderr with its reason and a distinct exit code: 2 usage, 3 remote without read only, 4 dev
-# server, 5 nothing answering, 6 a redirect chain longer than six hops.
+# server, 5 nothing answering, 6 a redirect chain longer than six hops, 7 a read only run with no
+# working read only proxy.
 # Text is matched through here strings, never `printf | grep -q`: under pipefail grep -q exiting on
 # its first match kills printf, and the pipeline then reads as no match (L183).
 set -uo pipefail
 
-usage() { echo "Usage: target-guard.sh [--read-only] <http(s) url>" >&2; }
+usage() { echo "Usage: target-guard.sh [--read-only [--proxy <proxy url>]] <http(s) url>" >&2; }
 
 read_only=0
-if [ "${1:-}" = "--read-only" ]; then read_only=1; shift; fi
+proxy="${BUG_BASH_PROXY:-}"
+while [ "$#" -gt 1 ]; do
+  case "$1" in
+    --read-only) read_only=1; shift ;;
+    --proxy) [ "$#" -ge 3 ] || { usage; exit 2; }; proxy="$2"; shift 2 ;;
+    *) usage; exit 2 ;;
+  esac
+done
 [ "$#" -eq 1 ] || { usage; exit 2; }
 url="$1"
 
@@ -58,13 +70,46 @@ is_local_host() {
     *) return 1 ;;
   esac
 }
+# A read only run needs the read only proxy up and refusing writes, checked before anything else so
+# that no request reaches the target without it (#813).
+if [ "$read_only" -eq 1 ]; then
+  no_proxy_fix="Start it with: node ~/.claude/skills/bug-bash/read-only-proxy.js --state <run dir>/proxy, then pass --proxy with the \"proxy\" value from its proxy.json."
+  if [ -z "$proxy" ]; then
+    echo "target-guard: refusing a read only run with no read only proxy: explorers are held to reading by that proxy, outside their browsers. $no_proxy_fix" >&2
+    exit 7
+  fi
+  case "$proxy" in
+    http://*) ;;
+    *) echo "target-guard: refusing $proxy as the read only proxy: it listens on a local http:// address. $no_proxy_fix" >&2; exit 7 ;;
+  esac
+  proxy="${proxy%/}"
+  # Which addresses may be the proxy, and what it answers as, are the launcher's to say, so the guard
+  # asks explorer-browser.js rather than keeping copies that could drift from it (L263, L370).
+  if ! command -v node >/dev/null 2>&1; then
+    echo "target-guard: refusing a read only run: node is not on PATH, and the read only proxy and its check both need it." >&2
+    exit 7
+  fi
+  launcher="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/explorer-browser.js"
+  if ! why="$(node -e 'require(process.argv[1]).proxyAnswers(process.argv[2]).then(() => process.exit(0), e => { console.log(e.message); process.exit(1) })' "$launcher" "$proxy" 2>&1)"; then
+    echo "target-guard: refusing a read only run: nothing at $proxy answers as the bug bash read only proxy (${why#explorer-browser: }). $no_proxy_fix" >&2
+    exit 7
+  fi
+  # A write sent through it, to a name that resolves nowhere (.invalid), must come back refused by
+  # the proxy itself: a proxy that forwarded it would reach nothing.
+  probe="$(curl -s --noproxy '' --max-time 5 -o /dev/null -D - -x "$proxy" -X POST --data probe "http://bug-bash-probe.invalid/write" 2>/dev/null)"
+  if ! grep -Eq '^HTTP/[0-9.]+ 405' <<< "$probe" || ! grep -qi '^x-bug-bash-proxy: refused' <<< "$probe"; then
+    echo "target-guard: refusing a read only run: the proxy at $proxy did not refuse a write sent through it. $no_proxy_fix" >&2
+    exit 7
+  fi
+fi
+
 host="$(host_of "$url")"
 is_local=0
 is_local_host "$host" && is_local=1
 
 if [ "$is_local" -eq 0 ]; then
   if [ "$read_only" -eq 1 ]; then
-    printf 'READ-ONLY %s\n' "$url"
+    printf 'READ-ONLY %s via %s\n' "$url" "$proxy"
     exit 0
   fi
   echo "target-guard: refusing $host: it is not this machine, so it may have real users and real data. Run the bug bash against a local production build, or pass --read-only to only look." >&2
@@ -137,4 +182,4 @@ if [ -n "$dev_reason" ]; then
 fi
 
 # Read only asked for is read only, wherever the build runs.
-if [ "$read_only" -eq 1 ]; then printf 'READ-ONLY %s\n' "$url"; else printf 'LOCAL %s\n' "$url"; fi
+if [ "$read_only" -eq 1 ]; then printf 'READ-ONLY %s via %s\n' "$url" "$proxy"; else printf 'LOCAL %s\n' "$url"; fi
