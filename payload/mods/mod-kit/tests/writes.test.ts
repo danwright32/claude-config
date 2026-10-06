@@ -431,6 +431,28 @@ describe('writes: a path held in a variable', () => {
     expect(read(`printf 'x\\n' >> "$OUT"`).files).toEqual([{ word: '$OUT' }])
     expect(read(`printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`).files).toEqual([{ word: '$(ls ~/.claude/projects/p/memory/MEMORY.md)' }])
   })
+  // #752: a copy into a folder held in a variable composed its word from the folder's value, so the
+  // $ that tells a reader the path came through a variable was lost.
+  test('a copy into a folder held in a variable keeps the variable in its word', () => {
+    expect(read('D=~/.claude/projects/p/memory; cp note.md "$D/"').files).toEqual([
+      { word: '$D/note.md', path: `${HOME}/.claude/projects/p/memory/note.md`, sources: [`${CWD}/note.md`] },
+    ])
+    expect(read('D=~/.claude/projects/p/memory; cp -t "$D" a.md b.md').files.map(f => f.word)).toEqual(['$D/a.md', '$D/b.md'])
+    // A folder no variable reached is spelled as written, as before.
+    expect(read('cp note.md ~/.claude/projects/p/memory/').files.map(f => f.word)).toEqual(['~/.claude/projects/p/memory/note.md'])
+  })
+  // #752: "as written" was matched by string, so a literal word equal to a variable's value in the
+  // same command was given as the variable. A redirect's target is now read by its own place.
+  test('a redirect target written literally is given as written, even when a variable holds the same path', () => {
+    expect(read('F=/opt/x.md; cat "$F" > /opt/x.md').files).toEqual([{ word: '/opt/x.md', path: '/opt/x.md' }])
+    expect(read('F=/opt/x.md; cat /opt/x.md >> "$F"').files).toEqual([{ word: '$F', path: '/opt/x.md' }])
+    // An operand is still matched by string, and where it is ambiguous it is given as the variable,
+    // the side that makes a reader ask rather than pass (the same path either way).
+    expect(read('F=/opt/x.md; cp "$F" /opt/x.md').files.map(f => f.word)).toEqual(['$F'])
+  })
+  test('a write its words do not name carries the command as written', () => {
+    expect(read('P=fix.patch; git apply "$P"').unnamed.map(u => u.words)).toEqual([['git', 'apply', '$P']])
+  })
   test('a value set inside a subshell ends with it', () => {
     expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual([`${CWD}/b.md`, `${CWD}/a.md`, '(as written) $G'])
   })
