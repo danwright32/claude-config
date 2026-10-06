@@ -169,7 +169,7 @@ const tell = async ($: EngineInterface, text: string) => {
 const lapsedFor = (x: AskBeforeSavingApproval) => {
   const where = x.files.join(', ')
   return x.refused !== undefined
-    ? `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not sent again in time.`
+    ? `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not saved within that time.`
     : `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes unused, so it no longer lets that save through.`
 }
 

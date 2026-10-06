@@ -713,6 +713,9 @@ test('an approval refused once and found past its time where it is used is said 
   expect(late).toContain('the save you sent before was refused (Blocked: another session is editing this file.)')
   expect(late).not.toContain('unused')
   expect(w.toasts.join('\n')).not.toContain('unused')
+  // Claude did send it again here, late: the lapse never says it was not sent (lessons review of #806).
+  expect(w.toasts.join('\n')).not.toContain('not sent again')
+  expect(w.toasts.join('\n')).toContain('and it was not saved within that time')
   expect(w.toasts.join('\n')).toContain('Claude sent the save, but it was refused before it was saved (Blocked: another session is editing this file.)')
   expect(w.ran).toEqual([])
 })
