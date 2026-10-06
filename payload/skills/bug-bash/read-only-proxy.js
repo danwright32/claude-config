@@ -28,6 +28,10 @@
 // fragment left out (they can carry tokens, L741).
 //
 // It runs until stopped: whoever starts it stops it when the run ends (kill the pid in proxy.json).
+// proxy.json exists only while the proxy does: a stale one is removed before it starts, and its own
+// is removed as it stops, so the file never names a dead process. A site that has not answered
+// within the upstream deadline (--upstream-timeout-ms, 30 s by default) is answered 504, and an
+// upstream request is dropped when the browser that asked for it goes away (L110).
 
 'use strict'
 const http = require('http')
@@ -56,6 +60,22 @@ if (!stateDir) {
 }
 fs.mkdirSync(path.join(stateDir, 'certs'), { recursive: true })
 const certDir = path.join(stateDir, 'certs')
+const stateFile = path.join(stateDir, 'proxy.json')
+let wroteState = false
+const removeState = () => {
+  try {
+    fs.rmSync(stateFile, { force: true })
+  } catch (e) {
+    console.error(`read-only-proxy: could not remove ${stateFile}: ${e.message}`)
+  }
+}
+// A proxy.json left by an earlier run names a process that is not this one.
+removeState()
+const UPSTREAM_MS = Number(argOf('--upstream-timeout-ms') || 30_000)
+if (!Number.isFinite(UPSTREAM_MS) || UPSTREAM_MS <= 0) {
+  console.error('read-only-proxy: --upstream-timeout-ms takes a positive number of milliseconds.')
+  process.exit(2)
+}
 const logFile = path.join(stateDir, 'requests.log')
 
 const log = (verdict, method, origin, rawPath) => {
@@ -123,11 +143,20 @@ function forward(req, res, target, reqPath) {
     res.writeHead(upRes.statusCode || 502, out)
     upRes.pipe(res)
   })
+  let timedOut = false
+  up.setTimeout(UPSTREAM_MS, () => {
+    timedOut = true
+    up.destroy(new Error(`no answer within ${UPSTREAM_MS} ms`))
+  })
   up.on('error', e => {
-    if (!res.headersSent) {
-      res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8', 'x-bug-bash-proxy': 'upstream-error' })
+    if (!res.headersSent && !res.destroyed) {
+      res.writeHead(timedOut ? 504 : 502, { 'content-type': 'text/plain; charset=utf-8', 'x-bug-bash-proxy': 'upstream-error' })
       res.end(`The bug bash read only proxy could not reach ${origin}: ${e.message}\n`)
     } else res.destroy()
+  })
+  // The browser went away before the answer finished: nothing is waiting for the rest of it.
+  res.on('close', () => {
+    if (!res.writableFinished) up.destroy()
   })
   req.pipe(up)
 }
@@ -208,9 +237,9 @@ makeAuthority().then(
     server.listen(Number(argOf('--port') || 0), '127.0.0.1', () => {
       const { port } = server.address()
       const state = { proxy: `http://127.0.0.1:${port}`, pid: process.pid, ca: path.join(certDir, 'ca.pem') }
-      const file = path.join(stateDir, 'proxy.json')
-      fs.writeFileSync(`${file}.tmp`, JSON.stringify(state) + '\n')
-      fs.renameSync(`${file}.tmp`, file)
+      fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify(state) + '\n')
+      fs.renameSync(`${stateFile}.tmp`, stateFile)
+      wroteState = true
       console.log(`read-only-proxy: listening on ${state.proxy}`)
     }),
   e => {
@@ -218,4 +247,7 @@ makeAuthority().then(
     process.exit(1)
   },
 )
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0))
+process.on('exit', () => {
+  if (wroteState) removeState()
+})
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0))

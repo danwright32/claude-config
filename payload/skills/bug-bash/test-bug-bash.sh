@@ -46,7 +46,7 @@ expect() { # expect <description> <want rc> <want words> <got rc> <got output>
 # that resolves nowhere.
 PROXY_JS="$DIR/read-only-proxy.js"
 cat > "$TMP/recorder.py" <<'PY'
-import http.server, socketserver, sys, os, ssl
+import http.server, socketserver, sys, os, ssl, time
 log, port_file = sys.argv[1], sys.argv[2]
 cert = sys.argv[3] if len(sys.argv) > 3 else None
 class Recorder(http.server.BaseHTTPRequestHandler):
@@ -57,6 +57,23 @@ class Recorder(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get('content-length') or 0)
         if n:
             self.rfile.read(n)
+        if self.path == '/stall':
+            time.sleep(60)
+            return
+        # A slow answer, a byte at a time: it records when its reader went away, which is when a
+        # write to the socket fails.
+        if self.path == '/drip':
+            self.send_response(200)
+            self.end_headers()
+            try:
+                for _ in range(200):
+                    self.wfile.write(b'.')
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except OSError:
+                with open(log, 'a') as f:
+                    f.write('DROPPED /drip\n')
+            return
         with open(log, 'a') as f:
             f.write('%s %s%s\n' % (self.command, self.path, ' upgrade' if self.headers.get('upgrade') else ''))
         body = b'fixture ok\n'
@@ -106,9 +123,15 @@ python3 "$TMP/recorder.py" "$TMP/tls.log" "$TMP/tls.port" "$TMP/site.pem" & BG_P
 python3 "$TMP/impostor.py" "$TMP/impostor.port" & BG_PIDS="$BG_PIDS $!"
 # The proxy verifies the real site's certificate as usual; here the fixture's is made trusted the
 # way Node itself offers, so no switch in the proxy turns verification off.
-NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" >"$TMP/proxy.out" 2>&1 & BG_PIDS="$BG_PIDS $!"
+# A stale proxy.json from an earlier run in the same directory, which the proxy must not leave
+# standing for a reader to take as its own.
+mkdir -p "$TMP/proxy"
+printf '{"proxy":"http://127.0.0.1:1","pid":1}\n' > "$TMP/proxy/proxy.json"
+# The upstream deadline is shortened so a stalled site is seen to time out within the suite.
+NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000 >"$TMP/proxy.out" 2>&1 & PROXY_PID=$!
+BG_PIDS="$BG_PIDS $PROXY_PID"
 for _ in $(seq 1 400); do
-  [ -s "$TMP/plain.port" ] && [ -s "$TMP/tls.port" ] && [ -s "$TMP/impostor.port" ] && [ -s "$TMP/proxy/proxy.json" ] && break
+  [ -s "$TMP/plain.port" ] && [ -s "$TMP/tls.port" ] && [ -s "$TMP/impostor.port" ] && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" 2>/dev/null && break
   sleep 0.05
 done
 PROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy/proxy.json" 2>/dev/null)"
@@ -153,6 +176,15 @@ else
   grep -q '^REFUSED POST http://127.0.0.1:[0-9]*/write-POST$' "$TMP/proxy/requests.log" && grep -q '^FORWARDED GET https://localhost:[0-9]*/secure-read$' "$TMP/proxy/requests.log" && ok \
     || bad "the proxy logs each request with its verdict" "$(cat "$TMP/proxy/requests.log" 2>/dev/null)"
   ! grep -q 'token=secret' "$TMP/proxy/requests.log" && ok || bad "the proxy's log leaves out query strings"
+
+  # A site that never answers is given up on with a 504, never held open for the whole run (L110).
+  got="$(code_of -x "$PROXY" "$PLAIN/stall")"
+  [ "$got" = 504 ] && ok || bad "a stalled site is answered 504 once the upstream deadline passes (got $got)"
+  # A browser that goes away mid answer takes the proxy's upstream request with it: the site sees
+  # its reader leave within seconds, not after the whole answer.
+  code_of -x "$PROXY" --max-time 1 "$PLAIN/drip" >/dev/null
+  for _ in $(seq 1 100); do grep -q '^DROPPED /drip' "$TMP/plain.log" && break; sleep 0.1; done
+  grep -q '^DROPPED /drip' "$TMP/plain.log" && ok || bad "a request the browser abandons is dropped upstream too"
 fi
 
 # ---------------------------------------------------------------- target-guard.sh
@@ -448,6 +480,21 @@ grep -q '^threw launched=0 .*not as the bug bash read only proxy' <<< "$out" && 
 out="$(proxied_launch "$PROXY")"
 grep -q '^launched=1$' <<< "$out" && ok || bad "a read only browser whose proxy answers as itself launches" "$out"
 grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the read only proxy for a read only run"
+
+# ---------------------------------------------------------------- the proxy's address does not outlive it
+# A proxy.json left behind names a dead process as the proxy, so the proxy removes it as it stops,
+# here on a hangup, the signal a closed terminal sends.
+if [ -n "${PROXY_PID:-}" ]; then
+  kill -HUP "$PROXY_PID" 2>/dev/null
+  for _ in $(seq 1 200); do kill -0 "$PROXY_PID" 2>/dev/null || break; sleep 0.05; done
+  [ ! -e "$TMP/proxy/proxy.json" ] && ok || bad "a stopped proxy removes its proxy.json" "$(cat "$TMP/proxy/proxy.json" 2>/dev/null)"
+fi
+# A proxy that cannot start (here, no openssl to make its certificates) refuses by name, and leaves
+# no stale proxy.json from an earlier run standing in its place.
+mkdir -p "$TMP/proxy2" "$TMP/no-openssl"
+printf '{"proxy":"http://127.0.0.1:1","pid":1}\n' > "$TMP/proxy2/proxy.json"
+out="$(PATH="$TMP/no-openssl" "$(command -v node)" "$PROXY_JS" --state "$TMP/proxy2" 2>&1)"; rc=$?
+[ "$rc" -eq 1 ] && grep -q 'will not start' <<< "$out" && [ ! -e "$TMP/proxy2/proxy.json" ] && ok   || bad "a proxy that cannot start refuses by name and removes a stale proxy.json (rc $rc)" "$out"
 
 # ---------------------------------------------------------------- SKILL.md wires both helpers
 SKILL="$DIR/SKILL.md"
