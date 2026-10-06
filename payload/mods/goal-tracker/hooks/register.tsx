@@ -104,6 +104,8 @@ let permission: { calls: Set<string>; mark: Waiting } | undefined
 // The calls of this conversation's own questions while they run, which the question path marks and
 // notifies; a permission request raised inside one of them is that question (#814).
 const heldQuestions = new Set<string>()
+// The question calls a permission request has already been matched to, until each returns.
+const claimedQuestions = new Set<string>()
 const waitingNow = (): Waiting | undefined => {
   let latest: Waiting | undefined
   for (const m of [question?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
@@ -140,6 +142,7 @@ const callsFor = (tool: string, asked: unknown): string[] => {
 // rejected. True when that took the permission mark off.
 const callEnded = (id: string): boolean => {
   running.delete(id)
+  claimedQuestions.delete(id)
   if (!permission?.calls.delete(id) || permission.calls.size) return false
   permission = undefined
   return true
@@ -330,6 +333,7 @@ const beginAgain = async ($: EngineInterface) => {
   question = undefined
   permission = undefined
   heldQuestions.clear()
+  claimedQuestions.clear()
   if (unsent) dropUnsent(unsent.id)
   countedCalls.clear()
 }
@@ -469,7 +473,17 @@ export const register: Register = on => {
     // Matched by the call it was raised inside, never by the question's text (lessons review of PR
     // 816): a subagent asking what this conversation asks is still its own question.
     const calls = callsFor(e.tool_name, e.tool_input)
-    if (isQuestion && calls.length > 0 && calls.every(id => heldQuestions.has(id))) return next(e)
+    if (isQuestion) {
+      // Each request belongs to one question's call: the first running one it matches that no
+      // request has claimed yet, so two identical questions (a subagent's beside this
+      // conversation's) are told apart by the order they asked in (lessons review of PR 816).
+      const own = calls.find(id => !claimedQuestions.has(id))
+      if (own !== undefined) {
+        claimedQuestions.add(own)
+        if (heldQuestions.has(own)) return next(e)
+        calls.splice(0, calls.length, own)
+      }
+    }
     const what = isQuestion ? questionOf(e.tool_input) : permissionFor(e.tool_name, e.tool_input)
     const now = await nowOr($)
     permission = { calls: new Set(calls), mark: { question: what, since: now, kind: isQuestion ? 'question' : 'permission' } }

@@ -507,6 +507,27 @@ test("a subagent's question worded like this conversation's open question is sti
   ])
 })
 
+// Lessons review of PR 816's third head: each request belongs to one call. With a subagent's question
+// already announced, this conversation's own identical question is still sent once, not twice.
+test("this conversation's question asked after a subagent's identical one is still sent once (#814)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { clock, questionOpenMs: OPEN_MS })
+  await start($)
+  const theirs = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-sub', agentId: 'a1' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  const mine = $.tool.call({ ...(ask('Ship it?') as object), tool_use_id: 'q-main' } as never)
+  await clock.advance(1)
+  await askPermission($, 'Ship it?')
+  await clock.advance(OPEN_MS)
+  await Promise.all([mine, theirs])
+  await clock.advance(2 * MIN)
+  expect(w.notified).toEqual([
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+    ['-title', 'Ovation is waiting on you', '-message', 'Ship it?'],
+  ])
+})
+
 // #706: the notification is for a question Dan sees. One refused at once (by picker manners
 // beneath the tracker, or anything else beneath it) never reached him, so it sends none.
 test('a question refused at once sends no notification', withDeps, async ($, on) => {
