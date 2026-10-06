@@ -201,12 +201,18 @@ printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeS
   || check "with types to borrow but no compiler, the compiler is what is named" "$out"
 # Types laid but the scratch copy fails (here, a scratch folder that cannot be written): that is the
 # cause named, never missing types.
+# A user who can write anyway (root, in the Linux container) cannot be refused this way, so there it
+# is said as unmeasured rather than read as a fault in the check (L411).
 RO="$TMPROOT/ro-tmp"; mkdir -p "$RO"; chmod 500 "$RO"
-out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+if [ -w "$RO" ]; then
+  echo "UNMEASURED: this user can write a mode 500 folder, so a scratch copy that fails cannot be staged here"
+else
+  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+  printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'could not copy it to scratch' \
+    && check "a mod whose scratch copy fails says so, not that no types were laid" ok \
+    || check "a mod whose scratch copy fails says so, not that no types were laid" "$out"
+fi
 chmod 700 "$RO"
-printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'could not copy it to scratch' \
-  && check "a mod whose scratch copy fails says so, not that no types were laid" ok \
-  || check "a mod whose scratch copy fails says so, not that no types were laid" "$out"
 # Nothing laid anywhere and no compiler: one UNMEASURED summary naming how many and the install command.
 rm -rf "$TSDIR/node_modules"
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TMPROOT/no-types" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
