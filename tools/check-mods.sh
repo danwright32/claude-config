@@ -188,7 +188,7 @@ for d in "${mods[@]}"; do
       if [ -z "$errs" ]; then
         # No error TS line: the compiler itself failed (a crash, a config it could not read), so no
         # type check was measured and none is claimed (L11).
-        echo "check-mods: $name could not be type checked: the compiler exited $trc without reporting a type error: $(printf '%s\n' "$out" | sed '/^ *$/d' | tail -n 3 | sed 's/^ *//' | paste -sd';' -)"
+        echo "check-mods: $name could not be type checked: the compiler exited $trc without reporting a type error: $(printf '%s\n' "$out" | sed '/^ *$/d' | tail -n 3 | sed 's/^ *//' | paste -sd';' -)$cc_note"
         failed=1
         continue
       fi

@@ -247,6 +247,14 @@ run4f env FAKE_CC_VERSION=2.1.300
   || check "a type failure on another Claude Code build names both builds on the mod's line, and still fails" "exit=$code out=$out"
 printf '%s\n' "$out" | grep -q 'types came from Claude Code 2.1.300, and the record .* was measured on 2.1.291' \
   && check "and the run ends naming the mismatch" ok || check "and the run ends naming the mismatch" "$out"
+# A compiler that dies on the newer types is the likeliest failure of all on another build, so it
+# names both builds too (review of #847).
+mkmod "$M4F" crashing-ver; laid "$TH4F/mods/crashing-ver"
+run4f env FAKE_CC_VERSION=2.1.300
+printf '%s\n' "$out" | grep 'crashing-ver could not be type checked' | grep -q 'Claude Code 2.1.300.*measured on 2.1.291' \
+  && check "a compiler that dies on another build's types names both builds" ok \
+  || check "a compiler that dies on another build's types names both builds" "$out"
+rm -rf "${M4F:?}/crashing-ver"
 rm -f "$TS4F/claude-code-version"
 run4f env FAKE_CC_VERSION=2.1.291
 printf '%s\n' "$out" | grep -q 'names no Claude Code build' \

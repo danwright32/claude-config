@@ -19281,7 +19281,11 @@ out_me7="$(me_status SYNC_CLAUDE_BIN="$ME_FAKE" ME_MAP='')"
 check "#828 an answer naming no model is said as that" \
   "line_has \"\$out_me7\" 'could not check' 'shared effort' 'named no model'"
 # Status itself still finishes after any of them.
-check "#828 and status carries on to its last report" "grep -q 'scratch\\|local config vs repo payload' <<< \"\$out_me6\""
+# Judged by status's exit code, since `status` runs under set -e: a report returning non zero stops
+# every report after it and exits non zero, while no heading is certain to print after this one.
+: > "$ME_LOG"
+env SYNC_CLAUDE_BIN="$ME_FAKE" ME_FAIL=1 ME_LOG="$ME_LOG" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status >/dev/null 2>&1; _me6_rc=$?
+check "#828 and status still finishes cleanly after a failed check" "[ '$_me6_rc' -eq 0 ] && [ -s '$ME_LOG' ]"
 
 # A shared file with no per model effort asks nothing at all.
 ME_R2="$WORK/me828-repo2"; me_repo "$ME_R2" '{"ultracode": false}'
