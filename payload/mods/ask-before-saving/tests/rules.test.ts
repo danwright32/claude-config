@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { APPROVAL_MS, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -356,4 +356,14 @@ test('an approval stands only while its time is a number still to come, and its 
   expect(lapseWait(1000, 400)).toBe(600)
   expect(lapseWait(1000, 1500)).toBe(0)
   for (const bad of [undefined, null, Number.NaN, '2000']) expect(lapseWait(bad, 0)).toBe(0)
+})
+
+// Lessons review of #869: the toast for a lapse that cannot be timed said For good for a lesson
+// approval too. It names the answer Dan pressed. ($.clock.after refuses through the engine, so only a
+// wait it rejects at once reaches this toast, and no session test can make it; the builder is tested.)
+test('a lapse that cannot be timed names the answer Dan pressed', () => {
+  const lesson = untimed({ id: 'l', key: 'lesson:x', files: ['~/.claude/LESSONS.md'], until: 1, lesson: 'x' }, 'the mod reloaded')
+  expect(lesson).toContain('The 10 minute limit on Add to LESSONS.md for saving to ~/.claude/LESSONS.md could not be timed (the mod reloaded)')
+  expect(lesson).not.toContain('For good')
+  expect(untimed({ id: 's', key: 'k', files: ['~/Apps/slate/AGENTS.md'], until: 1 }, 'x')).toContain('The 10 minute limit on For good for saving to ~/Apps/slate/AGENTS.md')
 })

@@ -1,6 +1,7 @@
 // Ask before saving (claude-config#618): what counts as lasting memory, when Dan's own words already
 // made a rule permanent, and what Claude is told to ask in Claude Code's own dialog (#777). Pure, so
 // each rule is tested on its own.
+import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 
 export const MOD = 'ask-before-saving'
 
@@ -298,6 +299,16 @@ export const LESSON_HEADER = 'Lesson'
 /** The lessons file the picker approves a write to, as a tool reaches it. */
 export const lessonsFile = (home: string): string => `${home.replace(/\/$/, '')}/.claude/LESSONS.md`
 
+/** The answer Dan gave that made an approval, as he pressed it: For good, or the lesson picker's add. */
+export const pressed = (x: AskBeforeSavingApproval): string => (x.lesson !== undefined ? LESSON_ADD : FOR_GOOD)
+
+/**
+ * What Dan reads when an approval's lapse cannot be timed, naming the answer he pressed (lessons
+ * review of #869: it said For good for a lesson approval too).
+ */
+export const untimed = (x: AskBeforeSavingApproval, why: string): string =>
+  `The ${APPROVAL_MS / 60_000} minute limit on ${pressed(x)} for saving to ${x.files.join(', ')} could not be timed (${why}), so nothing will say when it lapses; it still lapses then.`
+
 export const lessonOptions = (file: string) => [
   { label: LESSON_ADD, description: `Added to ${file}, with no second question` },
   { label: LESSON_PROJECT, description: "Kept in this project's memory, not the lessons file" },
@@ -316,13 +327,20 @@ export const ruleText = (s: string): string => s.replace(/\*\*/g, '').replace(/\
  */
 export const MIN_RULE = 40
 
-// The start of a lesson entry in the lessons file: `- **L752. ...`.
-const ENTRY_START = /^\s*-\s+\*\*L\d+\./gm
+/**
+ * The longest SHORT line an approved entry may carry: the index's own cap (ENTRY_CAP in
+ * hooks/test-rule-file-budget.sh, 160 today), so the short form is a short form and nothing more.
+ */
+export const MAX_SHORT = 160
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
  * The text a write to the lessons file adds, when all it does is add: an Edit whose new text keeps
- * the text it replaces, or a Write that keeps every line the file had. Anything that also removes or
- * rewrites (replace_all included) is no lesson being added, and gets undefined.
+ * the text it replaces, or a Write whose content is the old file with one block inserted in one place
+ * (lessons review of #869: a Write judged by whether each old line survived anywhere let a dropped
+ * duplicate or a reordering count as adding). Anything that also removes or rewrites (replace_all
+ * included) is no lesson being added, and gets undefined.
  */
 export const lessonAddition = (tool: string, input: Record<string, unknown>, old: string | undefined): string | undefined => {
   if (tool === 'Edit') {
@@ -334,14 +352,33 @@ export const lessonAddition = (tool: string, input: Record<string, unknown>, old
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
   if (old === undefined) return content
-  const kept = new Set(content.split('\n'))
-  if (old.split('\n').some(l => !kept.has(l))) return undefined
-  return addedText(content, old)
+  if (content.length < old.length) return undefined
+  // What the two share at the start, then at the end, never counting a character twice: the old
+  // file must be exactly those two pieces, so the rest of the new one is a single inserted block.
+  let head = 0
+  while (head < old.length && old[head] === content[head]) head++
+  let tail = 0
+  while (tail < old.length - head && old[old.length - 1 - tail] === content[content.length - 1 - tail]) tail++
+  return head + tail === old.length ? content.slice(head, content.length - tail) : undefined
 }
 
-/** Whether the added text is that one lesson: it carries the rule, and starts no second entry. */
-export const addsLesson = (added: string, rule: string): boolean =>
-  ruleText(added).includes(ruleText(rule)) && (added.match(ENTRY_START) ?? []).length <= 1
+/**
+ * Whether the added text is exactly that one lesson (lessons review of #869: anything else written
+ * beside the rule reached every session unseen by Dan): one new entry, `- **L<n>.` then the rule as
+ * he approved it (bold and wrapping aside), then at most its provenance in parentheses, then at most
+ * one SHORT line no longer than the index's cap. Blank lines around it are the file's spacing.
+ */
+export const addsLesson = (added: string, rule: string): boolean => {
+  const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
+  const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
+  if (shortAt !== -1) {
+    if (shortAt !== lines.length - 1 || shortAt === 0) return false
+    if ((lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '').length > MAX_SHORT) return false
+  }
+  const body = ruleText((shortAt === -1 ? lines : lines.slice(0, shortAt)).join('\n'))
+  const provenance = String.raw`(?: \((?:[^()]|\([^()]*\))*\))?`
+  return new RegExp(`^- L\\d+\\. ${escapeRe(ruleText(rule))}${provenance}$`).test(body)
+}
 
 /**
  * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,

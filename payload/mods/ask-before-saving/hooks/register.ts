@@ -11,12 +11,15 @@ import {
   LESSON_PROJECT,
   LESSON_SKIP,
   LESSON_SOURCE,
+  MAX_SHORT,
   MIN_RULE,
   addsLesson,
   lessonAddition,
   lessonOptions,
   lessonsFile,
+  pressed,
   ruleText,
+  untimed,
   type IsSet,
   NOT_AT_ALL,
   THIS_SESSION,
@@ -187,10 +190,6 @@ const tell = async ($: EngineInterface, text: string) => {
   if (why !== undefined) $.ui.toast(`Claude was not told: ${text} (${why})`, { timeoutMs: 10_000 })
 }
 
-// The answer Dan gave that made the approval, as he pressed it: For good, or the durable lesson
-// picker's add (#867).
-const pressed = (x: AskBeforeSavingApproval) => (x.lesson !== undefined ? LESSON_ADD : FOR_GOOD)
-
 // What Dan reads when an approval lapses: unused, or sent and refused by another guard before it
 // was saved, which is never called unused (#764, L11).
 const lapsedFor = (x: AskBeforeSavingApproval) => {
@@ -222,11 +221,12 @@ const lapse = async ($: EngineInterface) => {
 }
 // Times the lapse, never throwing: a timer that cannot be set is said. The approval is then refused
 // on its age where it is used, and said at session end, so only the announcement on time is lost.
-const lapseAfter = ($: EngineInterface, ms: number, where: string) => {
+// Named by the approval itself, so the toast says the answer Dan pressed (lessons review of #869).
+const lapseAfter = ($: EngineInterface, ms: number, x: AskBeforeSavingApproval) => {
   try {
     $.clock.after(Math.max(0, ms), () => void lapse($).catch(err => $.ui.toast(`Ask before saving could not take out an approval past its time: ${message(err)}`)))
   } catch (err) {
-    $.ui.toast(`The ${MINUTES} minute limit on For good for saving to ${where} could not be timed (${message(err)}), so nothing will say when it lapses; it still lapses then.`, { timeoutMs: 10_000 })
+    $.ui.toast(untimed(x, message(err)), { timeoutMs: 10_000 })
   }
 }
 
@@ -504,10 +504,10 @@ export const register: Register = on => {
         return say(`Dan did not choose ${LESSON_ADD}${typeof chosen === 'string' && chosen.trim() ? `, he answered in his own words: "${chosen}"` : ''}. The lesson is not approved; act on what he said.`)
       const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule }
       await update($, approvalsRef, a => [...(a ?? []), made])
-      lapseAfter($, APPROVAL_MS, file)
+      lapseAfter($, APPROVAL_MS, made)
       return say(
-        `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file} that only adds the entry, the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `and it is saved without asking him again. Any other write to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+        `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file} that only adds one entry: "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
+          `then nothing but its provenance in parentheses and one SHORT line of at most ${MAX_SHORT} characters. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {
@@ -566,7 +566,7 @@ export const register: Register = on => {
       const key: string = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
       const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS }
       await update($, approvalsRef, a => [...(a ?? []), made])
-      lapseAfter($, APPROVAL_MS, where)
+      lapseAfter($, APPROVAL_MS, made)
       return say(
         `Dan answered For good to saving this to ${where}. Send the same ${q.tool} call again now, unchanged, and it is saved without asking him again: ` +
           `${callShown(q.tool, q.input)}. If it is not sent within ${MINUTES} minutes, this lapses.`,
@@ -585,7 +585,7 @@ export const register: Register = on => {
     const waiting = (await $.state.get(approvalsRef)).value ?? []
     if (waiting.length) {
       const now = await $.clock.now()
-      for (const x of waiting) lapseAfter($, lapseWait(x.until, now), x.files.join(', '))
+      for (const x of waiting) lapseAfter($, lapseWait(x.until, now), x)
     }
     return r
   })

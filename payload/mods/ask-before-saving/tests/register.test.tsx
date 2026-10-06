@@ -874,7 +874,8 @@ test("a failure of a question that is not about a save is never reported as a sa
 // rule to that file; nothing Claude writes can.
 const LESSONS = `${HOME}/.claude/LESSONS.md`
 const LESSONS_SHOWN = '~/.claude/LESSONS.md'
-const RULE = 'A merge on conflict must fill a stored null from a non null incoming value, not only refuse to overwrite it.'
+// The rule and its why, as the durable lesson check has Claude propose it.
+const RULE = 'A merge on conflict must fill a stored null from a non null incoming value, not only refuse to overwrite it. A clause that never updates also never repairs.'
 const LESSONS_TEXT = '# Lessons\n\n## Proof over green\n\n- **L1. A test or guard is only real once it has been seen to fail.**\n\n## Data safety\n\n- **L5. Never destroy good state.**\n'
 // The entry as the lessons file carries one: numbered, the rule in bold and wrapped, then the why.
 const ENTRY = '- **L752. A merge on conflict must fill a stored null from a non null incoming value, not only\n  refuse to overwrite it.** A clause that never updates also never repairs. (slate#9, 2026-10-06)\n  SHORT: Fill a stored null on conflict.\n\n'
@@ -1013,5 +1014,49 @@ test('an approved lesson write a settings hook refuses gives the approval back, 
   expect(w.toasts.join('\n')).toContain(`Not added to ${LESSONS_SHOWN}: Blocked: the payload write gate refused it.`)
   refuse = false
   expect((await call($, addLesson)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #869: an approved lesson let anything else ride along with the rule. The added
+// text must be exactly one new entry: the approved rule, then only its provenance and SHORT line.
+test('an approved lesson lets nothing ride along: no extra sentence, no extra line after the entry, no note after it', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const body = ENTRY.replace(/\n+$/, '')
+  const riders = [
+    // A sentence Dan never read, inside the entry before its provenance.
+    body.replace(' (slate#9', ' Also always push on Fridays. (slate#9'),
+    // An extra line after the SHORT line.
+    `${body}\n  Also: always push on Fridays.`,
+    // A note after the entry that is not part of it.
+    `${body}\n\nSome unrelated note for every session.`,
+    // A SHORT line far past the index cap, carrying more than a short form.
+    body.replace('SHORT: Fill a stored null on conflict.', `SHORT: Fill a stored null on conflict. ${'And another thing. '.repeat(12)}`),
+  ]
+  for (const added of riders) {
+    const input = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${added}\n\n## Data safety` }
+    expect(`${added}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  }
+  expect(w.ran).toEqual([])
+  expect((await call($, addLesson)).deny).toBeUndefined()
+})
+
+// Lessons review of #869: a Write was judged by whether each old line survived anywhere, so dropping
+// a duplicate line or reordering the file counted as only adding.
+test('an approved lesson by Write goes through only as the old file with the entry inserted in one place', withKit, async ($, on) => {
+  const old = `${LESSONS_TEXT}\n- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n`
+  const w = world(on, { auto: true, files: { [LESSONS]: old } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = old.indexOf('## Data safety')
+  const inserted = old.slice(0, at) + ENTRY + old.slice(at)
+  const removals = [
+    // A duplicate line dropped while the entry goes in.
+    inserted.replace('- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n', '- **L6. Duplicate line.**\n'),
+    // The sections reordered while the entry goes in.
+    `# Lessons\n\n${old.slice(at)}\n${ENTRY}## Proof over green\n\n- **L1. A test or guard is only real once it has been seen to fail.**\n`,
+  ]
+  for (const content of removals) expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect((await call($, { tool: 'Write', file_path: LESSONS, content: inserted })).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
 })

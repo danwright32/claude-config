@@ -1169,8 +1169,10 @@ and the band question is removed rather than kept beside it (L29). Three defects
   approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write whose one lasting target is that file, which only adds (an Edit keeping the text it
-  replaces, a Write keeping every line), and whose added text carries the rule (bold marks and
-  wrapping ignored) and starts no second entry. Anything else, a shell append included, is asked
+  replaces, a Write that is the old file with one block inserted in one place), and whose added text
+  is exactly one entry: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then
+  only its provenance in parentheses and one SHORT line no longer than the index cap. Nothing Dan
+  did not read rides along with it (lessons review of #869). Anything else, a shell append included, is asked
   about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). Project memory instead and Skip
