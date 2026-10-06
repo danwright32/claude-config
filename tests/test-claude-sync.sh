@@ -6423,8 +6423,11 @@ check "#362 and leaves no half finished rebase behind" \
   "[ ! -d \"\$(git -C '$SN1R' rev-parse --absolute-git-dir)/rebase-merge\" ] && [ ! -d \"\$(git -C '$SN1R' rev-parse --absolute-git-dir)/rebase-apply\" ]"
 check "#362 and adds no commit: the clone ends level with the shared repo" \
   "[ \"\$(git -C '$SN1R' rev-list --count origin/main..HEAD 2>/dev/null)\" = 0 ]"
+# Two: the offline snapshot, and the live edit made after it, which this sync commits before it
+# compares. Until #855 that edit was held back, because the snapshot (this Mac's own commit) read as
+# the shared repo changing the file, so only one commit was ever there to drop.
 check "#362 and says what it dropped, rather than tidying it away in silence" \
-  "line_has \"\$out_sn1\" 'dropped 1 commit' 'had not sent' 'shared repo already holds'"
+  "line_has \"\$out_sn1\" 'dropped 2 commits' 'had not sent' 'shared repo already holds'"
 # On the SAME line as the drop, not merely somewhere in the output: every conflict message this
 # tool prints names the file too, so a loose grep passed against the code that had no drop at all
 # and was evidence of nothing (L178).
@@ -17066,9 +17069,11 @@ check "#845 and that the nicknames went to the mod that owns them" \
 check "#845 the apply names the nicknames copy as the mod's to merge, not as unmergeable" \
   "line_has \"\$out_ems\" 'mods/account-room-nicknames\.json' 'merges the two entry by entry at its next session start' && ! grep -q 'could NOT be merged.*account-room-nicknames' <<< \"\$out_ems\""
 
-# A send while diverged, holding back a file the repo has changed, names a command that can
-# actually receive: never pull, which refuses a diverged clone (L111). Measured again in the same
-# shape, on a fresh pair of clones.
+# A push while diverged names a command that can actually receive: never pull, which refuses a
+# diverged clone (L111). Measured again in the same shape, on a fresh pair of clones. Until #855 the
+# file was held back here, because this Mac's own offline commit read as the shared repo's change,
+# and that hold back message carried the remedy. Only the shared repo's commits count now, so
+# nothing is held back and the refused push itself says what happened and what to run.
 EMRC="$WORK/entrymerge-repoC"; git clone -q "$EMB" "$EMRC" 2>/dev/null
 EMHC="$WORK/entrymerge-homeC"; mkdir -p "$EMHC"; echo '{"hooks":{}}' > "$EMHC/settings.json"
 emrun "$EMHC" "$EMRC" pull >/dev/null
@@ -17080,10 +17085,12 @@ emrun "$EMHC" "$EMRC" sync >/dev/null
 git -C "$EMRC" remote set-url origin "$EMB"
 em_nick fromC 350 otherC 360 > "$EMHC/mods/account-room-nicknames.json"
 out_emh="$(emrun "$EMHC" "$EMRC" push)"
-dbg "#845 push on a diverged clone holding a file back said: $out_emh"
-check "#845 a push holding a file back on a diverged clone names sync, not pull" \
-  "line_has \"\$out_emh\" 'NOT publishing' 'claude-sync sync' && out_lacks \"\$out_emh\" \"claude-sync pull\""
-em_remedy2="$(grep 'NOT publishing' <<< "$out_emh" | grep -oE 'claude-sync [a-z-]+' | awk 'END { print $2 }')"
+dbg "#845 push on a diverged clone said: $out_emh"
+check "#845 a refused push on a diverged clone says it published nothing and names sync, not pull" \
+  "line_has \"\$out_emh\" 'NOT published' 'has not seen' 'claude-sync sync' && out_lacks \"\$out_emh\" \"claude-sync pull\""
+check "#855 and this Mac's own offline commit no longer holds the file back" \
+  "out_lacks \"\$out_emh\" 'NOT publishing'"
+em_remedy2="$(grep 'NOT published' <<< "$out_emh" | grep -oE 'claude-sync [a-z-]+' | awk 'END { print $2 }')"
 out_emh2="$(emrun "$EMHC" "$EMRC" "$em_remedy2")"; emh2_rc=$?
 dbg "#845 the push's remedy ($em_remedy2) said: $out_emh2"
 git -C "$EMRC" fetch -q origin
@@ -19715,6 +19722,77 @@ rm -f "$D81A/.trees-seen" "$D81H/commands/only.md"
 CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 CLAUDE_HOME="$D81H" SYNC_REPO="$D81A" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#781 a Mac with no .trees-seen yet still carries the deletion of a tree's last file" "! git -C '$D81B' show main:payload/commands/only.md >/dev/null 2>&1"
+
+section "== this Mac's own commit is not the shared repo's change after an offline sync (claude-config#855) =="
+# A sync that cannot reach the shared repo commits this Mac's edit into its clone and dies before
+# the apply, so the applied marker stays behind HEAD. Reading every commit between the two as the
+# shared repo's then held back the NEXT edit to the same file, with a message blaming the shared
+# repo for a change this Mac made (L111). Only commits that came from the shared repo count. The
+# control is a real change from the other Mac in the same run, which must still be held back.
+unset SYNC_NO_GIT
+UOB="$WORK/ownunapplied-bare.git"; git init -q --bare "$UOB"
+UORA="$WORK/ownunapplied-repoA"; git clone -q "$UOB" "$UORA" 2>/dev/null
+UOHA="$WORK/ownunapplied-homeA"; mkdir -p "$UOHA/hooks"
+echo '{"hooks":{}}' > "$UOHA/settings.json"
+printf '# rules\n' > "$UOHA/CLAUDE.md"
+printf '#!/bin/sh\necho own base\n' > "$UOHA/hooks/uo-own.sh"
+printf '#!/bin/sh\necho theirs base\n' > "$UOHA/hooks/uo-theirs.sh"
+# Executable from the start: the sync marks hooks executable, and a mode change published by the
+# other Mac is a real change to this file, which would make the check below measure the mode.
+chmod +x "$UOHA/hooks/uo-own.sh" "$UOHA/hooks/uo-theirs.sh"
+uorun(){ # uorun <home> <repo> <command>
+  env CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_HOSTNAME="$(basename "$1")" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" "$3" 2>&1
+}
+uorun "$UOHA" "$UORA" sync >/dev/null
+UORB="$WORK/ownunapplied-repoB"; git clone -q "$UOB" "$UORB" 2>/dev/null
+UOHB="$WORK/ownunapplied-homeB"; mkdir -p "$UOHB"; echo '{"hooks":{}}' > "$UOHB/settings.json"
+uorun "$UOHB" "$UORB" pull >/dev/null
+uo_branch="$(git -C "$UORA" symbolic-ref --short HEAD)"
+check "#855 the fixture: both Macs start from the same published hooks" \
+  "grep -q 'own base' '$UOHB/hooks/uo-own.sh' && grep -q 'theirs base' '$UOHB/hooks/uo-theirs.sh'"
+# Mac A edits its own hook while the shared repo cannot be reached, so the commit stays here.
+printf '#!/bin/sh\necho own first edit\n' > "$UOHA/hooks/uo-own.sh"
+git -C "$UORA" remote set-url origin "$WORK/ownunapplied-unreachable.git"
+uorun "$UOHA" "$UORA" sync >/dev/null
+git -C "$UORA" remote set-url origin "$UOB"
+check "#855 the fixture: the offline edit is committed here and the marker stayed behind it" \
+  "grep -q 'own first edit' <<< \"\$(git -C '$UORA' show HEAD:payload/hooks/uo-own.sh)\" && [ \"\$(cat '$UORA/.last-applied')\" != \"\$(git -C '$UORA' rev-parse HEAD)\" ]"
+# Mac B changes the other hook and publishes it: a genuine change from the shared repo.
+printf '#!/bin/sh\necho theirs from B\n' > "$UOHB/hooks/uo-theirs.sh"
+uorun "$UOHB" "$UORB" sync >/dev/null
+# Mac A's clone takes B's commit underneath its own, with no apply after it, which is the state a
+# sync interrupted between its rebase and its apply leaves.
+git -C "$UORA" fetch -q origin
+git -C "$UORA" -c user.name=t -c user.email=t@t rebase -q "origin/$uo_branch" >/dev/null 2>&1
+check "#855 the fixture: B's change is in A's clone and not applied on A" \
+  "grep -q 'theirs from B' <<< \"\$(git -C '$UORA' show HEAD:payload/hooks/uo-theirs.sh)\" && grep -q 'theirs base' '$UOHA/hooks/uo-theirs.sh'"
+# Mac A edits both hooks again, then publishes.
+printf '#!/bin/sh\necho own second edit\n' > "$UOHA/hooks/uo-own.sh"
+printf '#!/bin/sh\necho theirs edited on A\n' > "$UOHA/hooks/uo-theirs.sh"
+out_uo="$(uorun "$UOHA" "$UORA" push)"
+dbg "#855 publishing after an offline sync said: $out_uo"
+check "#855 this Mac's own offline commit does not hold back its next edit to that file" \
+  "out_lacks \"\$out_uo\" 'NOT publishing.*uo-own'"
+check "#855 and that edit reaches the shared repo" \
+  "grep -q 'own second edit' <<< \"\$(git -C '$UOB' show '$uo_branch:payload/hooks/uo-own.sh')\""
+# The control: the file the other Mac really changed is still held back, naming the pull.
+check "#855 a file the shared repo really changed is still held back" \
+  "line_has \"\$out_uo\" 'NOT publishing' 'uo-theirs'"
+check "#855 and the shared repo keeps the other Mac's version of it" \
+  "grep -q 'theirs from B' <<< \"\$(git -C '$UOB' show '$uo_branch:payload/hooks/uo-theirs.sh')\""
+# FAILS CLOSED (L42). With no copy of the shared branch to ask, nothing can say which commits came
+# from there, so every one counts as before and the file is held back rather than mirrored over.
+uorun "$UOHA" "$UORA" pull >/dev/null
+printf '#!/bin/sh\necho own third edit\n' > "$UOHA/hooks/uo-own.sh"
+git -C "$UORA" remote set-url origin "$WORK/ownunapplied-unreachable.git"
+uorun "$UOHA" "$UORA" sync >/dev/null
+git -C "$UORA" update-ref -d "refs/remotes/origin/$uo_branch"
+printf '#!/bin/sh\necho own fourth edit\n' > "$UOHA/hooks/uo-own.sh"
+out_uo2="$(uorun "$UOHA" "$UORA" push)"
+git -C "$UORA" remote set-url origin "$UOB"
+dbg "#855 with no tracking ref said: $out_uo2"
+check "#855 with no copy of the shared branch to ask, the file is held back as before" \
+  "line_has \"\$out_uo2\" 'NOT publishing' 'uo-own'"
 
 suite_profile
 echo ""

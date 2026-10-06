@@ -2902,12 +2902,23 @@ DERIVED_ADD
     # copy reaches the mod through the apply, not through this commit.
     rc=continue
     git -C "$SYNC_REPO" diff --cached --quiet 2>/dev/null && rc=skip
+    local stopped_on next_stop
+    stopped_on="$(git -C "$SYNC_REPO" rev-parse --verify -q REBASE_HEAD 2>/dev/null || true)"
     # GIT_EDITOR=true, or a continue that wants a commit message opens an editor nobody is sitting
     # at and the daemon hangs on it.
     if GIT_EDITOR=true git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" rebase "--$rc" >/dev/null 2>&1; then
       # Finished, unless it stopped again, which the next turn of the loop finds out.
       git -C "$SYNC_REPO" rev-parse --verify -q REBASE_HEAD >/dev/null 2>&1 || break
     else
+      # STOPPED ON THE NEXT COMMIT (claude-config#855). A continue that applies this commit and then
+      # stops on a conflict in the NEXT one exits non zero too, and that is the same situation the
+      # loop exists for, one commit further on. It shows as a different commit waiting with paths
+      # unmerged; a refused continue leaves the same commit waiting, and is still a failure below.
+      next_stop="$(git -C "$SYNC_REPO" rev-parse --verify -q REBASE_HEAD 2>/dev/null || true)"
+      if [ -n "$next_stop" ] && [ "$next_stop" != "$stopped_on" ] \
+        && [ -n "$(git -C "$SYNC_REPO" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+        continue
+      fi
       # A REFUSED continue is a failure, not something to go round again (claude-config#329). The
       # loop used to ignore the exit code and fall through to `any=1`, so a rebase that never
       # finished was reported as a recovery that worked, and the clone was left mid rebase while
@@ -4874,16 +4885,46 @@ ALLBAKS
 # still mirrors normally, so a genuine local edit (or a brand new file) still goes
 # up in the same run. Receiving first instead would be wrong: the apply mirrors
 # with --delete and would erase local files that have never been sent.
+#
+# ONLY WHAT CAME FROM THE SHARED REPO COUNTS (claude-config#855). A sync that cannot reach the
+# shared repo commits this Mac's edit into the clone and dies before its apply, so the marker stays
+# behind a commit made HERE. Every path in that commit then read as changed by the shared repo, and
+# the next send held back the next edit to it, blaming the shared repo for this Mac's own change
+# (L111). So a path counts only when a commit the shared repo also holds touched it: a commit
+# reachable from both HEAD and origin's copy of this branch, and not from the marker. Anything that
+# cannot be read (no branch, no tracking ref, a git failure) keeps the whole diff, which holds back
+# more rather than mirroring over the other Mac's work (L42).
 unapplied_paths(){
-  local last head
+  local last head changed branch upstream bases theirs
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
   head="$(repo_head)"
   [ -n "$head" ] || return 0
   [ "$head" != "$last" ] || return 0
-  git -C "$SYNC_REPO" diff --name-only "$last" "$head" -- payload 2>/dev/null \
-    | sed 's|^payload/||'
+  changed="$(git -C "$SYNC_REPO" diff --name-only "$last" "$head" -- payload 2>/dev/null || true)"
+  [ -n "$changed" ] || return 0
+  if branch="$(sync_branch)" \
+    && upstream="$(git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" 2>/dev/null)" \
+    && [ -n "$upstream" ]; then
+    # Exit 1 with no output means no common history, so nothing in HEAD came from the shared repo.
+    # Any other failure keeps the whole diff.
+    local mb_rc=0
+    bases="$(git -C "$SYNC_REPO" merge-base --all "$head" "$upstream" 2>/dev/null)" || mb_rc=$?
+    if [ "$mb_rc" -eq 1 ] && [ -z "$bases" ]; then
+      changed=""
+    elif [ "$mb_rc" -eq 0 ] && [ -n "$bases" ]; then
+      local base_list=()
+      while IFS= read -r _b; do [ -n "$_b" ] && base_list+=("$_b"); done <<< "$bases"
+      # -m so a merge commit the shared repo holds names what it changed too: over counting holds
+      # back more, which is the safe direction.
+      if theirs="$(git -C "$SYNC_REPO" log -m --format= --name-only "${base_list[@]}" --not "$last" -- payload 2>/dev/null)"; then
+        changed="$(printf '%s\n' "$changed" | awk 'NR == FNR { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$theirs") -)"
+      fi
+    fi
+  fi
+  [ -n "$changed" ] || return 0
+  printf '%s\n' "$changed" | sed 's|^payload/||'
   return 0
 }
 
@@ -6568,6 +6609,22 @@ do_push(){
       if git -C "$SYNC_REPO" push; then
         echo "Pushed."
         payload_fully_applied && repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true
+      else
+        # A REFUSED PUSH IS SAID, never left as git's own lines and a clean exit (claude-config#855).
+        # Until #855 a clone the shared repo had moved past usually had the moved files held back
+        # above, by a misreading of this Mac's own commits, and that message named the way out by
+        # accident. Now that only the shared repo's commits count, the refusal is where it shows.
+        local _pb _pbehind=0
+        git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
+        if _pb="$(sync_branch)" && git -C "$SYNC_REPO" rev-parse --verify -q "origin/$_pb" >/dev/null 2>&1; then
+          _pbehind="$(git -C "$SYNC_REPO" rev-list --count "HEAD..origin/$_pb" 2>/dev/null || echo 0)"
+        fi
+        if [ "${_pbehind:-0}" -gt 0 ] 2>/dev/null; then
+          echo "claude-sync: NOT published, because the shared repo holds $_pbehind commit(s) this clone has not seen, so git refused the push. This Mac's changes are committed in $SYNC_REPO and nothing was lost. Run 'claude-sync sync', which takes those commits in and sends this Mac's on top of them." >&2
+        else
+          echo "claude-sync: NOT published, because git refused the push (its reason is above). This Mac's changes are committed in $SYNC_REPO and nothing was lost; the next send tries again." >&2
+        fi
+        return 1
       fi
     else echo "Nothing changed — repo already up to date."; fi
   fi
