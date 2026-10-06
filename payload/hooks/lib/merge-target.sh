@@ -446,34 +446,7 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
   mt_checkout_dir "$d"
 }
 
-# WHICH pull request, and in WHICH repository, the gh merge invocation itself names. One
-# reading, because gh takes both from that one command and a gate that reads either without
-# the other asks one repository about another repository's pull request (claude-config#470).
-#
-# Prints "<repository>\t<number>", either side empty when the command does not name it.
-#
-# gh takes the repository from --repo or -R before anything about the directory it runs in,
-# so a gate asking gh about the directory is asking about a different repository whenever the
-# two differ. Measured 2026-09-19 merging danwright32/backstage#26 from an Ovation session:
-# refused as "gh returned nothing", because Ovation has no pull request 26.
-#
-# A pull request given as a LINK names both, and the link wins over a --repo beside it, which
-# is what gh does with the two together: measured 2026-09-19, gh pr view with the cli/cli
-# link and --repo danwright32/claude-config answered about cli/cli.
-#
-# Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is
-# about that view. Read with a shell tokenizer, in command position only, so a merge quoted
-# inside an echo names nothing, and the walk stops at the first token it cannot read, as
-# ps_cd_target's does. Heredoc bodies are removed first, so prose about merging names nothing
-# and a real merge written after a heredoc is still read (L673).
-#
-# The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
-# trailing .git) come back as one. A host other than github.com is kept whole, so it can never
-# compare equal to a github.com remote and is refused downstream rather than read as one.
-#
-# IT NEEDS python3, and mt_reader_missing below is how a gate says so. See that comment before
-# reaching for a fallback reader.
-# What the selector below reads: the `gh pr merge` segment itself, its leading assignments
+# What mt__merge_selector reads: the `gh pr merge` segment itself, its leading assignments
 # removed, when the shell reading finds one (lessons review of #795). The selector tokenizes the
 # whole command and cannot see inside $( ), so in `GH_TOKEN=$(gh auth token -u x; true) gh pr
 # merge 7` the merge did not sit at a command start and its number was lost. With no such segment
@@ -501,6 +474,33 @@ MTSEOF
   printf '%s' "$1"
 }
 
+# WHICH pull request, and in WHICH repository, the gh merge invocation itself names. One
+# reading, because gh takes both from that one command and a gate that reads either without
+# the other asks one repository about another repository's pull request (claude-config#470).
+#
+# Prints "<repository>\t<number>", either side empty when the command does not name it.
+#
+# gh takes the repository from --repo or -R before anything about the directory it runs in,
+# so a gate asking gh about the directory is asking about a different repository whenever the
+# two differ. Measured 2026-09-19 merging danwright32/backstage#26 from an Ovation session:
+# refused as "gh returned nothing", because Ovation has no pull request 26.
+#
+# A pull request given as a LINK names both, and the link wins over a --repo beside it, which
+# is what gh does with the two together: measured 2026-09-19, gh pr view with the cli/cli
+# link and --repo danwright32/claude-config answered about cli/cli.
+#
+# Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is
+# about that view. Read with a shell tokenizer, in command position only, so a merge quoted
+# inside an echo names nothing, and the walk stops at the first token it cannot read, as
+# ps_cd_target's does. Heredoc bodies are removed first, so prose about merging names nothing
+# and a real merge written after a heredoc is still read (L673).
+#
+# The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
+# trailing .git) come back as one. A host other than github.com is kept whole, so it can never
+# compare equal to a github.com remote and is refused downstream rather than read as one.
+#
+# IT NEEDS python3, and mt_reader_missing below is how a gate says so. See that comment before
+# reaching for a fallback reader.
 mt__merge_selector() {  # $1 = command
   MT_CMD="$(mt_strip_heredocs "$1")" python3 -c '
 import os, re, shlex

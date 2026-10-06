@@ -203,14 +203,22 @@ MT_SHELL_WORDS="$saved_sw"; rm -f "$BROKEN_SW"
 # rtk in front is the same merge, and its number and repository are read (lessons review of #795).
 eq "$(mt_pr_number 'rtk gh pr merge 7 --repo a/b')" "7" "an rtk merge names its pull request"
 eq "$(mt_repo_flag 'rtk gh pr merge 7 --repo a/b')" "a/b" "and its repository"
-# The shell reading runs on every command that mentions a merge, so its cost must not grow with
-# the text: the bash scan it replaced took 55 s on this 26 KB issue body (measured 2026-10-05),
-# past every hook's timeout. The ceiling is wide on purpose; it exists to catch that order.
-big="$(python3 -c 'q = chr(92) + chr(34); print(("we should merge the " + q + "branch" + q + " after review; ") * 600)')"
+# The shell reading runs on every command that mentions a merge, so its cost must not grow faster
+# than the text: the bash scan it replaced grew with the SQUARE of it, 13 s at 13 KB and 52 s at
+# 26 KB (measured 2026-10-05), past every hook's timeout. Judged against a yardstick from this
+# same run, never a fixed number of seconds (L224): doubling the text may at most roughly double
+# the time, and the slack covers python's start up, which dominates both readings when linear.
+now_s(){ python3 -c 'import time; print("%.3f" % time.time())'; }
+half="$(python3 -c 'q = chr(92) + chr(34); print(("we should merge the " + q + "branch" + q + " after review; ") * 300)')"
+big="$half$half"
 [ "${#big}" -gt 25000 ] && pass || fail "the 26 KB fixture was not built (${#big} bytes)"
-t0=$SECONDS
+t0="$(now_s)"
+mt_runs_merge "gh issue comment 5 --body \"$half\"" && fail "an issue body about a merge was read as a merge" || pass
+t1="$(now_s)"
 mt_runs_merge "gh issue comment 5 --body \"$big\"" && fail "an issue body about a merge was read as a merge" || pass
-[ $((SECONDS - t0)) -le 15 ] && pass || fail "reading a 26 KB command took $((SECONDS - t0)) s"
+t2="$(now_s)"
+if python3 -c 'import sys; a, b, c = map(float, sys.argv[1:]); sys.exit(0 if (c - b) <= 3 * (b - a) + 1.0 else 1)' "$t0" "$t1" "$t2"; then pass
+else fail "reading grows faster than the text: 13 KB took $(python3 -c "print(round($t1 - $t0, 2))") s, 26 KB took $(python3 -c "print(round($t2 - $t1, 2))") s"; fi
 mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
 eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.
