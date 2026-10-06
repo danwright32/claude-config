@@ -227,7 +227,7 @@ not recorded, so another session editing that same file is not judged against it
 | Facts always shown | Project, 5 hour limit, weekly limit, cache time left, model and effort, account and org (status round 2; the account room's nickname replaces the name and org when one is set, as Dan expected in the live check on 2026-10-05) |
 | Facts shown only when they need a look | Unpushed commits, PR and checks (failing or running), a running background job, context above 70% (status round 2) |
 | Hidden | Branch, uncommitted files, commits behind main (status round 2) |
-| Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). The account room's nickname for the account replaces the name and org when one is set (live check, 2026-10-05). |
+| Account | The session's own account, the one its limits belong to (#815, Dan 2026-10-05: "the status bar must always name the right account for the session"), superseding the picker's "whatever the login file names now". The mod reads the login file at session start into the facts file, as the account room reads it at its start, so the bar and the rename dialog name the same account; a Switch made in another session no longer changes this one's. A facts file written before #815 falls back to the login file as it stands; one whose start read failed says "account unknown". The account room's nickname for the account replaces the name and org when one is set (live check, 2026-10-05). |
 | Colour | The status line is all grey, but for a limit's share past its threshold: amber over 70% on the 5 hour limit or over 85% on the weekly, red at 100%, the number alone, judged on the share as shown (Dan, 2026-10-05, picked over amber alone and red alone); the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job, a job kept on purpose and a scope mode label are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round) and a mode changes what Claude will do; the scope mode label shows even when nothing else is in the band (scope mode round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look or a scope mode is on (picker, after the probe below; scope mode round). |
 | The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
@@ -238,13 +238,15 @@ Built (#610), with what the rounds left to the build, each taken from the rounds
 the spec rather than chosen afresh, and open to Dan changing:
 
 - The status line reads `claude-config | 5h 68% (1h 52m) | week 91% (4d 14h) | cache 41m |
-  Opus 5.5 (high) | Dan, Personal`, as every round drew it: the account is the login's display name
-  (its email when it has none) and the organisation, or the account room's nickname in their place
+  Opus 5.5 (high) | Dan, Personal`, as every round drew it: the account is the session's own, as
+  the login file named it at session start (#815), by its display name (its email when it has none)
+  and the organisation, or the account room's nickname in their place
   when the account has one. It is drawn by `statusline.sh` in the mod's
   folder, which the `statusLine` setting names; that setting lives in each Mac's own settings and
   does not travel, so it is set once per Mac. A fact that cannot be read says so ("cache unknown"
-  when the mod has written nothing for the session, "account unknown" when the login file cannot be
-  read), never a blank. The design rounds' shared terminal (`skills/design-rounds/screens/
+  when the mod has written nothing for the session, "account unknown" when the login file could not be
+  read at session start; only a facts file from before #815 reads the login file as it stands),
+  never a blank. The design rounds' shared terminal (`skills/design-rounds/screens/
   terminal.js`) draws this same line, all in its grey and divided by `|`, whenever a round names
   no status line, and refuses a coloured segment, since a scope mode leads the band; its tests
   read the line from here (#699).

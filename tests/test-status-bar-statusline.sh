@@ -98,8 +98,8 @@ mkdir -p "$H/.claude/state/x"; facts ../x/evil $(( (NOW + 600) * 1000 )) 2>/dev/
 runit "$(input '../x/evil')"
 case "$out" in *" | cache unknown | "*) check "a session id with a path in it is not read" ok ;; *) check "a session id with a path in it is not read" "$out" ;; esac
 
-# 5. The account is whatever the login file names now, read again on every refresh (picker, Dan
-#    switches the login in one window expecting every window to follow).
+# 5. With no account recorded for the session (a facts file written before #815, or none yet),
+#    the login file is read as it stands, on every refresh.
 login Dan Pennie; runit "$(input s1)"
 case "$out" in *"| Dan, Pennie") check "a login changed elsewhere shows at the next refresh" ok ;; *) check "a login changed elsewhere shows at the next refresh" "$out" ;; esac
 printf '{"oauthAccount":{"emailAddress":"dan@example.com","organizationName":"Pennie"}}\n' > "$H/.claude.json"; runit "$(input s1)"
@@ -108,6 +108,30 @@ printf '{}\n' > "$H/.claude.json"; runit "$(input s1)"
 case "$out" in *"| Opus 5.5 (high)") check "no login (an API key) shows no account" ok ;; *) check "no login (an API key) shows no account" "$out" ;; esac
 printf 'garbage' > "$H/.claude.json"; runit "$(input s1)"
 case "$out" in *"| account unknown") check "an unreadable login file is account unknown, never blank" ok ;; *) check "an unreadable login file is account unknown, never blank" "$out" ;; esac
+
+# 5a. The session's own account (#815, Dan 2026-10-05: "the status bar must always name the right
+#     account for the session"). The mod records the account the session started on in its facts
+#     file; the login file names whatever the Mac is logged in to NOW, which another session's
+#     Switch changes. The bar names the session's, through a login change mid session.
+sfacts(){   # $1 = session id  $2 = the account JSON, or null
+  printf '{"v":1,"sessionId":"%s","cacheExpiresAt":null,"account":%s}\n' "$1" "$2" > "$H/.claude/state/status-bar/$1.json"
+}
+sfacts s9 '{"accountUuid":"acct-1","organizationUuid":"org-1","displayName":"Dan","emailAddress":"dan@example.com","organizationName":"Pennie"}'
+login Dan Pennie; runit "$(input s9)"
+case "$out" in *"| Dan, Pennie") check "the session's own account is named" ok ;; *) check "the session's own account is named" "$out" ;; esac
+login Dan Personal; runit "$(input s9)"
+case "$out" in *"| Dan, Pennie") check "and still named after the Mac logs in to another account mid session" ok ;; *) check "and still named after the Mac logs in to another account mid session" "$out" ;; esac
+printf 'garbage' > "$H/.claude.json"; runit "$(input s9)"
+case "$out" in *"| Dan, Pennie") check "and the login file is not read at all while the session's account is known" ok ;; *) check "and the login file is not read at all while the session's account is known" "$out" ;; esac
+sfacts s10 null; login Dan Personal; runit "$(input s10)"
+case "$out" in *"| account unknown") check "an account the session could not read at its start is unknown, never the Mac's current one" ok ;; *) check "an account the session could not read at its start is unknown, never the Mac's current one" "$out" ;; esac
+sfacts s11 '{}'; runit "$(input s11)"
+case "$out" in *"| Opus 5.5 (high)") check "a session started with no claude.ai login shows no account" ok ;; *) check "a session started with no claude.ai login shows no account" "$out" ;; esac
+# The nickname follows the session's account too, keyed by its ids.
+mkdir -p "$H/.claude/mods"; printf '{"v":1,"names":{"58f60981898d32e8":"Work"}}\n' > "$H/.claude/mods/account-room-nicknames.json"
+runit "$(input s9)"
+case "$out" in *"| Opus 5.5 (high) | Work") check "the session's account takes its nickname" ok ;; *) check "the session's account takes its nickname" "$out" ;; esac
+rm -f "$H/.claude/mods/account-room-nicknames.json"
 
 # 5b. A nickname set in the account room (/accounts rename) replaces the name and org, as Dan
 #     expected in the live check on 2026-10-05. The account room keys it by the first 16 hex digits
