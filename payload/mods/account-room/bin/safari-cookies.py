@@ -63,8 +63,9 @@ try:
             expiry = struct.unpack("<d", c[40:48])[0]
             if cstring(c, domain_at).lstrip(".") != "claude.ai" or cstring(c, name_at) != "sessionKey":
                 continue
-            # An expired cookie is no session: a logout may leave one behind dated in the past.
-            if expiry + MAC_EPOCH > now:
+            # An expired cookie is no session: a logout may leave one behind dated in the past. One with
+            # no expiry of its own (stored as 0) lasts as long as Safari runs, so it is live.
+            if expiry <= 0 or expiry + MAC_EPOCH > now:
                 live += 1
 except (ValueError, struct.error, IndexError) as e:
     fail("could not parse Safari's cookies: %s" % e)

@@ -3,9 +3,10 @@
 # cookie store holds no live claude.ai session cookie (sessionKey). safari-cookies.py reads the store
 # and prints only a count, never a name or value.
 #
-# Safari, like Chrome, writes a cookie's removal to its store some time after the page that removed
-# it, so it looks again once a second, 50 times, inside the 60 seconds the mod allows the check. How
-# long Safari takes has not been measured yet: the live proof with Dan present is on #808.
+# Safari may, as Chrome does, write a cookie's removal to its store some time after the page that
+# removed it, so it looks again once a second, 50 times, inside the 60 seconds the mod allows the check. How
+# long Safari takes is not measured yet (the tries copy Chrome's): the live proof with Dan present
+# is on #808.
 # Exit 0 signed out, 1 still signed in, 2 could not tell (printing why).
 # Seams for the tests: ACCOUNT_ROOM_SAFARI_COOKIES, ACCOUNT_ROOM_NOW, ACCOUNT_ROOM_CHECK_TRIES and
 # ACCOUNT_ROOM_PAUSE.

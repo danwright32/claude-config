@@ -47,7 +47,9 @@ def cookie(domain, name, expiry):
         offs.append(base + len(strings))
         strings += s.encode() + b"\0"
     head = struct.pack("<iiii", 56 + len(strings), 0, 0, 0) + struct.pack("<iiii", *offs) + b"\0" * 8
-    return head + struct.pack("<dd", float(expiry) - MAC_EPOCH, 0.0) + strings
+    # "session" writes an expiry of 0, as a cookie with no expiry date of its own is stored.
+    when = 0.0 if expiry == "session" else float(expiry) - MAC_EPOCH
+    return head + struct.pack("<dd", when, 0.0) + strings
 def page(cookies):
     n = len(cookies)
     at = 4 + 4 + 4 * n + 4
@@ -94,6 +96,13 @@ signed_out "$S"
 out=$(ACCOUNT_ROOM_SAFARI_COOKIES="$S" ACCOUNT_ROOM_NOW="$((EARLIER - 60))" ACCOUNT_ROOM_CHECK_TRIES=1 /bin/sh "$BIN/safari-signed-out.sh" 2>&1); code=$?
 [ "$code" = 1 ] && check "while the same cookie before its expiry is still a session" ok \
   || check "while the same cookie before its expiry is still a session" "code=$code out=$out"
+
+# 3b. A session cookie with no expiry of its own (stored as 0) lasts as long as Safari does, so it
+# is a live session, never read as expired (lessons review of #808).
+S="$TMPROOT/s3b"; store "$S" ".claude.ai:sessionKey:session"
+TRIES=1 signed_out "$S"
+[ "$code" = 1 ] && check "a claude.ai session cookie with no expiry is still a session" ok \
+  || check "a claude.ai session cookie with no expiry is still a session" "code=$code out=$out"
 
 # 4. Safari writes the removal late, so a cookie gone by a later look is a sign out.
 S="$TMPROOT/s4"; store "$S" ".claude.ai:sessionKey:$LATER"
