@@ -45,6 +45,10 @@ and settles its own surfaces in rounds of its own before it is built.
    measured live on 2026-10-05 (2.1.289, #756), a noun whose only wait was
    `$.process.run(['/bin/sleep', '13'])` was rejected at 10,003 ms, like the 13 s timer control at
    10,002 ms. So `$.ui.ask` in a noun is always cut, and so is any other slow `$` call there.
+   Since #802 the check names those too: a noun's own `$.process.run` with no `timeoutMs` under
+   10 s (none given waits up to Claude Code's 30 s default) and a `$.model.complete` with none under
+   10 s (a completion can take a minute), unless the noun races it against a shorter timer. Its first run found two in session-registry's
+   engine.create code (a save's `mv` and the repository root lookup), now bounded at 5 s.
 
 ## Guard surfaces (#607, #608, #609)
 
@@ -384,7 +388,7 @@ measured facts ("it keeps repeating a pass of 2 lines"), never the text.
 | Row | Two lines per session: project and goal on top; state, steps, elapsed time and one detail (the question, the failure, how long quiet, or the step under way) as a dim sentence beneath (design round) |
 | Order | Waiting on you, failed, stalled, working, done (design round) |
 | State colour | On the state word only: waiting on you and stalled amber, failed red, working blue, done green. A deliberate exception to standing rule 1, so every state reads at a glance; red stays for something genuinely wrong (design round) |
-| Notification | One per waiting moment, naming the project: "<project> is waiting on you" with the question, or "<project> needs a permission" with what for. The mod sends all three, the idle "What's next?" only while nothing is being asked, and both notifying settings hooks are removed; if mods are ever off there are no notifications (pickers) |
+| Notification | One per waiting moment, naming the project: "<project> is waiting on you" with the question, or "<project> needs a permission" with what for. The permission request Claude Code raises for its own question dialog is that question, never "needs a permission" (#814): it sends nothing for a question the tracker already notified, and for one it does not hold (a subagent's) it is the one "is waiting on you" with the question. The mod sends all three, the idle "What's next?" only while nothing is being asked, and both notifying settings hooks are removed; if mods are ever off there are no notifications (pickers) |
 | Goal text | The /goal condition when one is set, otherwise the session's first request cut to a few words. No model call (picker) |
 
 Not settled with Dan, built in #634 as the plainest reading and open for a round: the pane's

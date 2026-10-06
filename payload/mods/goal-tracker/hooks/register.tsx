@@ -85,6 +85,13 @@ const notifySoon = ($: EngineInterface, title: () => Promise<string>, message: s
     .then(t => notify($, t, message, sound))
     .catch(err => $.ui.log(`goal-tracker: could not send a notification: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' }))
 }
+// The first question's text of an AskUserQuestion input: the one reading both the question path and
+// the permission path use.
+const questionOf = (input: unknown): string => {
+  const qs = (input as { questions?: { question?: unknown }[] } | null)?.questions
+  const q = Array.isArray(qs) ? qs[0]?.question : undefined
+  return typeof q === 'string' && q ? q : 'a question'
+}
 const waitingOnYou = ($: EngineInterface, text: string) => notifySoon($, async () => `${await projectName($)} is waiting on you`, text)
 // A clock that cannot be read stamps a goal or a request with the last activity's time instead.
 const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() => progress?.lastActivityAt ?? 0)
@@ -95,6 +102,11 @@ const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() =>
 type Waiting = NonNullable<Progress['waiting']>
 let question: { id: string; mark: Waiting } | undefined
 let permission: { calls: Set<string>; mark: Waiting } | undefined
+// The calls of this conversation's own questions while they run, which the question path marks and
+// notifies; a permission request raised inside one of them is that question (#814).
+const heldQuestions = new Set<string>()
+// The question calls a permission request has already been matched to, until each returns.
+const claimedQuestions = new Set<string>()
 const waitingNow = (): Waiting | undefined => {
   let latest: Waiting | undefined
   for (const m of [question?.mark, permission?.mark]) if (m && (!latest || m.since > latest.since)) latest = m
@@ -131,6 +143,7 @@ const callsFor = (tool: string, asked: unknown): string[] => {
 // rejected. True when that took the permission mark off.
 const callEnded = (id: string): boolean => {
   running.delete(id)
+  claimedQuestions.delete(id)
   if (!permission?.calls.delete(id) || permission.calls.size) return false
   permission = undefined
   return true
@@ -320,6 +333,8 @@ const beginAgain = async ($: EngineInterface) => {
   project = undefined
   question = undefined
   permission = undefined
+  // heldQuestions and claimedQuestions describe calls still in flight, as `running` does, so a
+  // /clear leaves them to each call's own end (lessons review of PR 816).
   if (unsent) dropUnsent(unsent.id)
   countedCalls.clear()
 }
@@ -449,14 +464,39 @@ export const register: Register = on => {
   // A permission prompt is the session waiting on Dan, as a question is (spec item 4): marked for the
   // pane until the call it belongs to returns, and notified.
   on('classic.PermissionRequest', async ($, e, next) => {
-    const what = permissionFor(e.tool_name, e.tool_input)
+    // Claude Code raises a permission request for its own question dialog. That request is the
+    // question, never a second thing waiting on Dan (#814: Dan got "is waiting on you" and "needs a
+    // permission: AskUserQuestion" for every question). A question the tracker holds (this
+    // conversation's, marked and notified by its own path) sends nothing more. One it does not hold
+    // (a subagent's, lessons review of PR 816) is announced by this request alone, so it is marked
+    // and notified here, once, as the question it is.
+    const isQuestion = e.tool_name === 'AskUserQuestion'
+    // Matched by the call it was raised inside, never by the question's text (lessons review of PR
+    // 816): a subagent asking what this conversation asks is still its own question.
+    const calls = callsFor(e.tool_name, e.tool_input)
+    if (isQuestion) {
+      // Each request belongs to one question's call: the first running one it matches that no
+      // request has claimed yet, so two identical questions (a subagent's beside this
+      // conversation's) are told apart by the order they asked in (lessons review of PR 816).
+      const own = calls.find(id => !claimedQuestions.has(id))
+      // Every running question it matches already claimed: a request raised again for a dialog
+      // already announced (a re-prompt), never a second question (lessons review of PR 816).
+      if (own === undefined && calls.length > 0) return next(e)
+      if (own !== undefined) {
+        claimedQuestions.add(own)
+        if (heldQuestions.has(own)) return next(e)
+        calls.splice(0, calls.length, own)
+      }
+    }
+    const what = isQuestion ? questionOf(e.tool_input) : permissionFor(e.tool_name, e.tool_input)
     const now = await nowOr($)
-    permission = { calls: new Set(callsFor(e.tool_name, e.tool_input)), mark: { question: what, since: now, kind: 'permission' } }
+    permission = { calls: new Set(calls), mark: { question: what, since: now, kind: isQuestion ? 'question' : 'permission' } }
     if (progress) {
       progress = withWaiting(progress)
       await publish($, now)
     }
-    notifySoon($, async () => `${await projectName($)} needs a permission`, what, 'Glass')
+    if (isQuestion) waitingOnYou($, what)
+    else notifySoon($, async () => `${await projectName($)} needs a permission`, what, 'Glass')
     return next(e)
   })
 
@@ -529,10 +569,10 @@ export const register: Register = on => {
     const fromSubagent = Boolean((e as { agentId?: string }).agentId)
 
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
-      const qs = (input.questions as { question?: string }[] | undefined) ?? []
       // Marked by the classic.PreToolUse hook below once the guards have let it through (#732).
       const key = askKey(e)
-      asking.set(key, qs[0]?.question ?? 'a question')
+      asking.set(key, questionOf(input))
+      heldQuestions.add(id)
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
@@ -546,6 +586,7 @@ export const register: Register = on => {
         // Only the question's own mark comes off: a permission prompt still open stands (#694). One
         // that ended before it was notified never reached Dan, and is not notified now (#706).
         asking.delete(key)
+        heldQuestions.delete(id)
         dropUnsent(key)
         question = undefined
         callEnded(id)

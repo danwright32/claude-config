@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# A whole tree scan: a send touching these paths runs this suite (claude-config#809).
+# send-gate: scans settings.hooks.json
 # Tests for the gate that keeps subagents off the shared Playwright browser (claude-config#384).
 #
 # The Playwright MCP server is ONE browser for the whole session. On 2026-09-14 five research
