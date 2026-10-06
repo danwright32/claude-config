@@ -19,7 +19,7 @@ const MAX_EDITS = 500
 let home: string | undefined
 let rec: SessionsRecord | undefined
 let chain: Promise<unknown> = Promise.resolve()
-// One beat per module load, however many times session.start fires on it (a /clear, a resume).
+// One beat per module load, however many times session.start fires on it (a hot reload).
 let beating = false
 
 const dirOf = (h: string) => `${h}/.claude/state/sessions`
@@ -42,13 +42,13 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 
 // After a /clear or a resume (session.end with that reason) the process goes on under a new session
 // id and no session.start fires (#735). From then on the next thing to touch the record makes the
-// new conversation's own, inside the queue: the classic SessionStart that announces it, a write, or
-// a read of the list. Never left to the next beat, which for up to a minute kept the new
+// new conversation's own, inside the queue: the /clear's (or the /resume's) own look once its
+// command has run, a write, or a read of the list. Never left to the next beat, which for up to a minute kept the new
 // conversation out of /goals and let the goal tracker and the job watcher write into the record
 // session.end had just closed. A write queued before the session ended stays on the old record. The
 // beat still makes it for an id that changed with no session.end seen.
 //
-// Only a look that comes whatever happened, the announced start's or the beat's, settles that a
+// Only a look that comes whatever happened, the command's or the beat's, settles that a
 // session end kept its id (a resume of this same session), after which writes stop asking (#739).
 // A write or a read of the list can come while the /clear is still under way and find the old id,
 // so its look never settles it. A look that cannot read the id fails no write: what the mods write
@@ -57,12 +57,14 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 // reads, other sessions do not see those writes, and if it never reads they never land, which the
 // debug log says once (lessons review of #739).
 //
-// Not yet measured (#751 item 1, L82): that Claude Code has switched the id by the time it announces
-// the start. Every announced start after a /clear or a resume says in the debug log which id it saw
-// against the id session.end closed, so a real /clear can settle it. Should the announcement come
-// first, it settles on the old id and reopens that record (as a resume would), the new
-// conversation's writes land there until the beat sees the new id, and the beat then closes the old
-// record and makes the new one: the #735 defect for that minute, never longer.
+// Not yet measured (#751 item 1, L82): that Claude Code has switched the id by the time the /clear's
+// command has run. The debug log of a real /clear (2026-10-06) points that way: session.end settled,
+// then the log moved to the new id's file, then the command settled. Every look once a /clear or a
+// /resume has run says in the debug log which id it saw against the id session.end closed, so a real
+// /clear can settle it. Should the command finish first, its look settles on the old id and reopens
+// that record (as a resume would), the new conversation's writes land there until the beat sees the
+// new id, and the beat then closes the old record and makes the new one: the #735 defect for that
+// minute, never longer.
 let expectNew = false
 // Whether a failed id lookup has been said in the debug log since the last one that worked.
 let toldNoId = false
@@ -88,10 +90,10 @@ const release = (r: SessionsRecord): boolean => {
 // Made inside engine.create with the built $. Runs inside the queue, and says what it found: 'new'
 // when it made the record for a new id, 'held' when the id kept and writes held for it went on the
 // record it has, 'same' when nothing changed, 'unread' when it looked and could not read the id.
-// 'held' also covers a record reopened (#751). `announced` is set by the announced start alone, so
-// its look can say in the debug log which id it saw.
+// 'held' also covers a record reopened (#751). `afterCommand` is set by the look once a /clear or a
+// /resume has run, alone, so that look can say in the debug log which id it saw.
 type Rolled = 'new' | 'held' | 'same' | 'unread'
-let roll: ((always: boolean, announced?: boolean) => Promise<Rolled>) | undefined
+let roll: ((always: boolean, afterCommand?: boolean) => Promise<Rolled>) | undefined
 // The id and the reason of the last session end that may keep or change the id, for that line.
 let ended: { id: string; reason: string } | undefined
 const save = (change?: Change): Promise<void> =>
@@ -105,11 +107,11 @@ const save = (change?: Change): Promise<void> =>
     await persist()
   })
 // The new conversation's record written as soon as its id is seen, with nothing else to write.
-// `always` looks whether or not a session end is still waiting on its new id (the announced start).
-const catchUp = (always: boolean, announced = false): Promise<void> =>
+// `always` looks whether or not a session end is still waiting on its new id (the command's look).
+const catchUp = (always: boolean, afterCommand = false): Promise<void> =>
   enqueue(async () => {
     if (!rec || !home || !persist) return
-    const rolled = await roll?.(always, announced)
+    const rolled = await roll?.(always, afterCommand)
     if (rolled === 'new' || rolled === 'held') await persist()
   })
 
@@ -213,9 +215,9 @@ export const register: Register = on => {
         .catch((err: unknown) => ({ exitCode: -1, stderr: err instanceof Error ? err.message : String(err) }))
       if (mv.exitCode !== 0) built.ui.log(`session-registry: could not save this session's record: ${mv.stderr.trim()}`, { to: 'debug' })
     }
-    // Runs inside the queue. `always` is the beat's and the announced start's, which look whether or
+    // Runs inside the queue. `always` is the beat's and the command's, which look whether or
     // not a session end was seen; any other caller looks only after a /clear or a resume (above).
-    roll = async (always, announced = false) => {
+    roll = async (always, afterCommand = false) => {
       if (!rec || (!always && !expectNew)) return 'same'
       let id: string
       try {
@@ -232,15 +234,15 @@ export const register: Register = on => {
       }
       toldNoId = false
       // What #751 item 1 needs measured on a real /clear: whether Claude Code has switched the id by
-      // the time it announces the start. Said in the debug log on every announced start after one.
-      if (announced && expectNew && ended) {
+      // the time the /clear's command has run. Said in the debug log on every such look.
+      if (afterCommand && expectNew && ended) {
         built.ui.log(
-          `session-registry: the announced start after a ${ended.reason} saw session id ${id}; session.end had closed ${ended.id}, so the id had ${id === ended.id ? 'not changed' : 'already switched'}.`,
+          `session-registry: once the /${ended.reason} had run, the session id read ${id}; session.end had closed ${ended.id}, so the id had ${id === ended.id ? 'not changed' : 'already switched'}.`,
           { to: 'debug' },
         )
       }
       if (id === rec.sessionId) {
-        // Only a settling look (the announced start's or the beat's) reopens a record a session end
+        // Only a settling look (the command's or the beat's) reopens a record a session end
         // closed and whose id kept (#751): a resume of this same session goes on under it, so every
         // reader must count it open. A read or a write during the /clear can see the old id before
         // the switch, so its look never does.
@@ -369,10 +371,16 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The new conversation a /clear started, announced: its record is made now (#735), looked for
-  // even when a read during the /clear already found the old id (#739).
-  on('classic.SessionStart', async ($, e, next) => {
-    await catchUp(true, true)
-    return next(e)
+  // Once a /clear or a /resume has run, the new conversation's record is made (#735), looked for
+  // even when a read during it already found the old id (#739). The look is the command's own, never
+  // the classic SessionStart that announces the new conversation: Claude Code's built-in security
+  // default, seated outermost on a Team or Enterprise organization (both Macs), sends every classic
+  // hook event past the plugins a person installs, so that hook never ran (#751, measured on a real
+  // /clear 2026-10-06). The session ends inside the command, so by the time it has run session.end
+  // has said whether a new id is on the way.
+  on('command.run', { command: ['clear', 'resume'] }, async ($, e, next) => {
+    const result = await next(e)
+    if (expectNew) await catchUp(true, true)
+    return result
   })
 }
