@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { isDans, triggersIn } from '../hooks/triggers.ts'
+import { isDans, scopesNamedIn, triggersIn } from '../hooks/triggers.ts'
 
 // Each phrase the specs name (#616, #621), and the ones mined from Dan's chats that they quote.
 describe('triggersIn', () => {
@@ -28,8 +28,30 @@ describe('triggersIn', () => {
     ['Away.', [{ kind: 'place', place: 'away' }]],
     ["I'm back at my computer, so you can stop doing artifacts", [{ kind: 'place', place: 'home' }]],
     ['back at my desk now', [{ kind: 'place', place: 'home' }]],
+    // Turning one mode off by its own name (#805): Dan's words on 2026-10-05 in Slate.
+    ['stop winding down mode. run load 1', [{ kind: 'off', scope: 'WINDING DOWN' }]],
+    ['ok, stop winding down', [{ kind: 'off', scope: 'WINDING DOWN' }]],
+    ['turn winding down off', [{ kind: 'off', scope: 'WINDING DOWN' }]],
+    ['turn off wind down mode please', [{ kind: 'off', scope: 'WINDING DOWN' }]],
+    ['exit no build mode', [{ kind: 'off', scope: 'NO BUILD' }]],
+    ['stop read only, fix the bug', [{ kind: 'off', scope: 'NO BUILD' }]],
+    ['switch no build off', [{ kind: 'off', scope: 'NO BUILD' }]],
   ]
   for (const [text, want] of cases) test(JSON.stringify(text), () => expect(triggersIn(text)).toEqual(want))
+
+  test('turning a mode off by name, used in passing or asked, switches nothing (#805)', () => {
+    for (const t of ['stop winding down the cluster', 'the job should stop winding down workers',
+      'did you stop winding down mode?', 'we never exit no build mode in prod', 'the guide says to turn off read only access'])
+      expect(triggersIn(t)).toEqual([])
+  })
+
+  test('the scope modes a message names, whether or not it switches them (#805)', () => {
+    expect(scopesNamedIn('winding down is done, thanks')).toEqual(['WINDING DOWN'])
+    expect(scopesNamedIn('no more wind-down please')).toEqual(['WINDING DOWN'])
+    expect(scopesNamedIn('get out of no build')).toEqual(['NO BUILD'])
+    expect(scopesNamedIn('read-only is over')).toEqual(['NO BUILD'])
+    expect(scopesNamedIn('run load 1')).toEqual([])
+  })
 
   test('ordinary sentences that share a word turn nothing on', () => {
     for (const t of ['build the invoice page', 'the away team won', 'is this file read by anything?', 'take it home', 'pause the video',

@@ -1,6 +1,7 @@
 import type { PromptOrigin } from 'claude-code'
 
-export type Trigger = { kind: 'scope'; scope: 'NO BUILD' | 'WINDING DOWN' } | { kind: 'build' } | { kind: 'place'; place: 'away' | 'home' }
+type Scope = 'NO BUILD' | 'WINDING DOWN'
+export type Trigger = { kind: 'scope'; scope: Scope } | { kind: 'build' } | { kind: 'off'; scope: Scope } | { kind: 'place'; place: 'away' | 'home' }
 
 // Dan's own phrases for each mode, from the specs (#616, #621) and the chats they were mined from.
 // Apostrophes may be straight or curly; read-only may be one word or two. Only phrasings aimed at
@@ -22,7 +23,18 @@ const ME = `(?:i${APOS}?m\\s+|i am\\s+)?`
 const own = (phrase: string, start = LEAD) => new RegExp(`${start}${phrase}`, 'i')
 // Ends the sentence or names when, so "let's wind down the Redis instance" stays prose.
 const WIND_END = `wind(?:ing)? (?:it )?down(?=\\s*(?:[.!,;]|$|now\\b|for (?:today|tonight|the (?:day|night))\\b|after\\b))`
+// Each scope mode's own name as Dan says it, and turning that one mode off by it (#805: "stop
+// winding down mode. run load 1" on 2026-10-05 matched nothing, so winding down stayed on). The
+// name must end the clause or be followed by "mode", so "stop winding down the cluster" is prose.
+const NAME: Record<Scope, string> = { 'WINDING DOWN': 'wind(?:ing)?[ -]?down', 'NO BUILD': '(?:no[ -]?build|read[ -]only)' }
+const NAME_END = '(?:\\s+mode\\b)?(?=\\s*(?:[.!,;:]|$|now\\b|please\\b|for (?:now|today|tonight)\\b))'
+const offPhrases = (scope: Scope): { re: RegExp; trigger: Trigger }[] => [
+  { re: own(`(?:stop|end|exit|quit|cancel|turn off|switch off|done with) (?:the )?${NAME[scope]}${NAME_END}`), trigger: { kind: 'off', scope } },
+  { re: own(`(?:turn|switch|take) (?:the )?${NAME[scope]}(?: mode)? off\\b`), trigger: { kind: 'off', scope } },
+]
 const PHRASES: { re: RegExp; trigger: Trigger }[] = [
+  ...offPhrases('WINDING DOWN'),
+  ...offPhrases('NO BUILD'),
   { re: own('pause after (?:this|the|that) (?:issue|one|pr)\\b'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: own('wind (?:it )?down (?:now|after (?:this|the|that))\\b'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: own(`(?:let${APOS}?s|please|start) ${WIND_END}`), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
@@ -59,6 +71,14 @@ export const triggersIn = (text: string): Trigger[] =>
     .map(m => m.trigger)
     // Two phrasings of one mode in a message switch it once.
     .filter((t, i, all) => all.findIndex(o => JSON.stringify(o) === JSON.stringify(t)) === i)
+
+/**
+ * The scope modes a message names at all, switching them or not: what lets the mod tell Claude that
+ * a message about the mode that is on did not switch it, rather than leave Claude to act as though
+ * it had (#805).
+ */
+export const scopesNamedIn = (text: string): Scope[] =>
+  (Object.keys(NAME) as Scope[]).filter(s => new RegExp(`\\b${NAME[s]}\\b`, 'i').test(text))
 
 /**
  * Whether a prompt is Dan's own words: his Enter at the terminal, or his phone through Remote

@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
-import { isDans, triggersIn, type Trigger } from './triggers.ts'
+import { isDans, scopesNamedIn, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
@@ -518,12 +518,15 @@ export const register: Register = on => {
     return { text: placeSentence('home', await tellOthers($, 'home')) }
   })
 
-  // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses.
+  // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
+  // message typed while a turn runs fires here too, at Enter, with that turn's id (the engine's
+  // PromptSubmitInput.turnId), and is read the same way, its notes reaching the model with it (#805).
   on('prompt.submit', async ($, e, next) => {
     lastOrigin = e.origin.kind
     const notes: string[] = []
     if (isDans(e.origin)) {
-      for (const t of triggersIn(e.text) as Trigger[]) {
+      const triggers = triggersIn(e.text) as Trigger[]
+      for (const t of triggers) {
         if (t.kind === 'scope') {
           await setScope($, t.scope)
           notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message. Say so in one line first.`)
@@ -533,12 +536,26 @@ export const register: Register = on => {
             await setScope($, null)
             notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message. Say so in one line first.`)
           }
+        } else if (t.kind === 'off') {
+          // Off by name turns off only the mode it names.
+          if ((await scopeOf($)) === t.scope) {
+            await setScope($, null)
+            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. Say so in one line first.`)
+          }
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
           notes.push(`Dan's message switched every session to ${t.place}. Say so in one line first: "${placeSentence(t.place, told)}"`)
         }
       }
+      // A message that names the mode still on, in words that did not switch it, is said rather than
+      // left for Claude to read as switched: the hook would go on enforcing a mode Claude thinks is off.
+      const stillOn = await scopeOf($)
+      if (stillOn && !triggers.some(t => t.kind !== 'place') && scopesNamedIn(e.text).includes(stillOn)) {
+        const name = SCOPE_NAME[stillOn].toLowerCase()
+        notes.push(`Dan's message names ${name}, but not in words that switch it, so ${name} is still on. If he meant to turn it off, say in one line first that ${name} is still on and /build turns it off; never act as though it were off.`)
+      }
+      if (e.turnId !== undefined && notes.length) $.ui.log(`scope-modes: a message sent mid turn was read: ${notes.length} note(s)`, { to: 'debug' })
     }
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
