@@ -7493,7 +7493,7 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       case "$rd_n" in ''|*[!0-9]*) rd_n=0 ;; esac
       rd_n=$(( rd_n + 1 ))
       rd_age=$(( rd_now - rd_since ))
-      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) FAILED its tests, so it was not applied here. Nothing is lost: it applies as soon as a green commit lands, or now if you run 'claude-sync pull' yourself." >&2
+      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) FAILED its tests, so it was not applied here. Nothing is lost: it applies as soon as a green commit lands, or now if you run '$(receive_command)' yourself." >&2
       # Past the window it is a different event and gets different words, because "it failed this
       # time" and "it has been failing all day" need different actions from the reader and one
       # sentence covering both hides whichever it did not name (L11). It is never applied anyway:
@@ -7522,7 +7522,7 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       echo "claude-sync: the shared repo's newest commit (${sha:0:8}) is still being tested, so it was not applied here yet. It applies once the tests finish." >&2
       send_outcome ci-pending ;;
     cancelled)
-      echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run 'claude-sync pull' yourself if you know it is good." >&2
+      echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run '$(receive_command)' yourself if you know it is good." >&2
       notify "not applied: the tests for the shared repo's head were cancelled"
       send_outcome ci-cancelled ;;
     none)
@@ -7597,9 +7597,9 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
         return 1
       fi
       if [ -n "$ci_why" ]; then
-        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests: $ci_why. So it was not applied here yet. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Nothing needs fixing on this Mac; run 'claude-sync pull' yourself to apply it now." >&2
+        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests: $ci_why. So it was not applied here yet. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Nothing needs fixing on this Mac; run '$(receive_command)' yourself to apply it now." >&2
       else
-        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
+        echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run '$(receive_command)' yourself, or check that gh is installed and logged in." >&2
       fi
       send_outcome ci-unreadable ;;
   esac
@@ -8964,7 +8964,7 @@ sync_stuck_records(){
     n="$(awk 'NR==1{print $1}' "$BEHIND_SKIPS_FILE" 2>/dev/null)"
     case "$n" in
       ''|*[!0-9]*)
-        printf 'sending-unreadable\t-\t-\t%s\n' "the record of skipped sends at $BEHIND_SKIPS_FILE could not be read, so whether sends are being skipped cannot be told from it. The next send that is skipped or gets through replaces it; if this keeps being said, run 'claude-sync pull' from $SYNC_REPO and read what it says." ;;
+        printf 'sending-unreadable\t-\t-\t%s\n' "the record of skipped sends at $BEHIND_SKIPS_FILE could not be read, so whether sends are being skipped cannot be told from it. The next send that is skipped or gets through replaces it; if this keeps being said, run '$(receive_command)' from $SYNC_REPO and read what it says." ;;
       *)
         if [ "$n" -gt 0 ] 2>/dev/null; then
           first="$(behind_skips_since || true)"
@@ -8980,7 +8980,7 @@ sync_stuck_records(){
     n="$(awk 'NR==1{print $2}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
     case "$n" in
       ''|*[!0-9]*)
-        printf 'receiving-unreadable\t-\t-\t%s\n' "the record of failed test verdicts at $CI_RED_SINCE_FILE could not be read, so whether config is being refused here cannot be told from it. The next automatic pull that reads a verdict replaces it; if this keeps being said, run 'claude-sync pull' from $SYNC_REPO and read what it says." ;;
+        printf 'receiving-unreadable\t-\t-\t%s\n' "the record of failed test verdicts at $CI_RED_SINCE_FILE could not be read, so whether config is being refused here cannot be told from it. The next automatic pull that reads a verdict replaces it; if this keeps being said, run '$(receive_command)' from $SYNC_REPO and read what it says." ;;
       *)
         if [ "$n" -gt 0 ] 2>/dev/null; then
           first="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
@@ -9392,7 +9392,7 @@ report_unapplied_payload(){
   done <<HELD
 $held
 HELD
-  echo "  Nothing is lost on either side: this Mac's copy is untouched and the repo keeps its own. 'claude-sync pull' merges the two copies entry by entry, and the next send publishes the result."
+  echo "  Nothing is lost on either side: this Mac's copy is untouched and the repo keeps its own. '$(receive_command)' merges the two copies entry by entry, and the next send publishes the result."
   return 0
 }
 

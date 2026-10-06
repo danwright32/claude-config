@@ -12300,8 +12300,10 @@ dbg "#221 red: $out_red"
 check "#221 a red head is NOT applied" "! ci_applied red"
 check "#221 and it says the tests failed" \
   "case \"\$out_red\" in *'FAILED its tests'*) true ;; *) false ;; esac"
+# `sync`, not `pull` (claude-config#845): the gate returns before this Mac's own commit is pushed,
+# so the clone is ahead and the red commit puts it behind too, and a pull refuses that divergence.
 check "#221 and it names the command that applies it anyway" \
-  "case \"\$out_red\" in *'claude-sync pull'*) true ;; *) false ;; esac"
+  "case \"\$out_red\" in *\"run 'claude-sync sync' yourself\"*) true ;; *) false ;; esac"
 check "#221 and the marker the watcher logs says which outcome it was" \
   "case \"\$out_red\" in *'SEND-OUTCOME ci-red'*) true ;; *) false ;; esac"
 
