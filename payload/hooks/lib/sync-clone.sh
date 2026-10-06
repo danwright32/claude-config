@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# sync-clone.sh: the four questions every hook about a config CHECKOUT has to answer
+# sync-clone.sh: the questions every hook about a config CHECKOUT has to answer
 # (claude-config#367).
 #
 # Sourced, never executed. payload-revert-warning.sh worked these out for itself, and the gate that
-# refuses a payload write without a hold needs the same four. Two copies of "is a hold in force"
+# refuses a payload write without a hold needs the same ones. Two copies of "is a hold in force"
 # would be two answers to one question, each reading as correct on its own, which is the shape this
 # repo keeps finding (L370).
 #
@@ -12,6 +12,7 @@
 #   sc_watcher_cmd     the command line of a LIVE watch daemon, or nothing
 #   sc_is_this_clone   does that watcher run from the clone in question
 #   sc_hold_live       is a hold in force right now
+#   sc_is_own_worktree is this clone a linked worktree on its own branch, which nothing mirrors into
 #
 # Env, honoured by every caller so a test can point all of them at a fixture:
 #   SYNC_WATCH_PID_FILE  the watcher's pid file (default ~/.claude-sync-watch.pid)
@@ -60,6 +61,35 @@ sc_watcher_cmd(){ # -> a live watcher's command line, or nothing
 sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
   case "${2:-}" in "$1/claude-sync"*|*" $1/claude-sync"*) return 0 ;; esac
   return 1
+}
+
+# Is this clone somewhere the daemon can NOT overwrite (claude-config#800)? The daemon mirrors
+# ~/.claude over payload/ in its OWN clone and pushes to main; it never writes into a linked
+# worktree, and a branch other than the default reaches main only by a reviewed merge. So a linked
+# worktree on such a branch is not at risk, and every other checkout still is: the primary checkout
+# (whatever branch it is on), a linked worktree on the default branch, and one on no branch at all.
+# Written as the reason for refusing rather than a list of exempt places (L615). Any question git
+# cannot answer counts as at risk (L42). The default branch is origin's, else main, else master.
+sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
+  local gd common cd br def
+  gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  # Read first and refused when empty: `cd ""` succeeds, so an unanswered lookup would otherwise
+  # resolve to the checkout itself and pass for a linked worktree.
+  common="$(cd "$1" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$common" ] || return 1
+  cd="$(cd "$1" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$gd" ] && [ -n "$cd" ] || return 1
+  [ "$(cd "$gd" 2>/dev/null && pwd -P)" != "$cd" ] || return 1      # the primary checkout
+  br="$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null)" || return 1
+  [ -n "$br" ] || return 1                                          # on no branch
+  def="$(git -C "$1" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+  def="${def#origin/}"
+  if [ -z "$def" ]; then
+    if git -C "$1" show-ref -q --verify refs/heads/main 2>/dev/null; then def=main
+    elif git -C "$1" show-ref -q --verify refs/heads/master 2>/dev/null; then def=master
+    else return 1; fi
+  fi
+  [ "$br" != "$def" ]
 }
 
 # Is a hold in force? Read only, and expiry is the only thing that makes a marker stop counting.
