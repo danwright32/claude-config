@@ -248,12 +248,21 @@ the spec rather than chosen afresh, and open to Dan changing:
   terminal.js`) draws this same line, all in its grey and divided by `|`, whenever a round names
   no status line, and refuses a coloured segment, since a scope mode leads the band; its tests
   read the line from here (#699).
-- The amber line's items read as drawn in the rounds: "PR #636 checks failing", "1 job running",
-  "dev server kept 2h 14m", "2 unpushed commits", divided by a dim `|` as the status line is.
-- A job the watcher measured as stuck (repeating itself, or silent ten minutes) is marked on the
-  bar, the spec's "marks the job stuck on the bar" (#706, words not put to Dan): "1 job stuck" ahead
-  of "1 job running", and a kept one as "dev server kept 2h 14m, stuck". Without it, a job that went
-  stuck while no turn ran showed nowhere.
+- The amber line's items read: "PR #636 checks failing", "1 job running", "dev server running 2h
+  14m", "2 unpushed commits", divided by a dim `|` as the status line is.
+- Jobs say whose they are, what state they are in, and who acts (#784, Dan on 2026-10-05: "I dont
+  really know how to read this" of "suite summary wait kept 1h 4m, stuck"). "Kept" and "stuck" are
+  gone as internal words. A job is running, waiting (a poll loop quiet or repeating a line that is no
+  error: it waits on something outside, a queued CI run, and is never stuck), or not progressing
+  (silent ten minutes or repeating, anything else), the last with who it is left to: "1 job not
+  progressing, left to Claude", "suite summary not progressing 1h 4m, left to Claude". Stalled first
+  within each owner. A background agent's jobs are one item under its task's name, so the line never
+  reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
+  waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
+  are both gone is dropped rather than shown.
+- A background agent listed as running whose tool calls have stopped for twenty minutes (#759) is
+  named ahead of the jobs: "agent fix CI quiet 34m, left to Claude"; Claude is told once on its next
+  tool result, with the agent, how long, and the last tool call it started and whether it returned.
 - A PR whose refresh failed keeps what was last read with its age: "PR #649 checks running, as of
   12m ago" (the spec's "stale with its age"). One that last read as passing stays hidden.
 - The Compact row reads "ctx 74%" in amber, then `[ Compact ]`, whether it showed for context or
@@ -291,7 +300,11 @@ classic status line command passes colour through, and the band above the prompt
 - A waiting loop is stopped by the watcher only when the line it keeps repeating reads as an error.
   A loop repeating "waiting" is reported to Claude and never stopped (picker).
 - A job kept on purpose, with a reason, still shows in amber in the band like any running job,
-  named with its run time ("dev server kept 2h 14m"): kept does not mean out of sight (design round).
+  named with its run time: kept does not mean out of sight (design round). Since #784 it reads by
+  its state ("dev server running 2h 14m"), not as "kept".
+- Whose job (#784): every loop's tool calls pass through the one watcher, so each job records the
+  background agent that started it, and its reminders and notices go to that agent while it runs,
+  to this conversation once it has ended ("left by agent fix CI").
 - Turn end with a running job that was not kept: never refused, because a mod cannot refuse a turn
   end without Claude Code drawing it ("Stop hook error" or "Stop hook feedback", read from the
   2.1.289 binary). Instead every tool result Claude reads names the unkept job and says to stop it
