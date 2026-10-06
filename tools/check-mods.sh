@@ -17,6 +17,7 @@
 #      words are printed (#740). A definite failure of another mod outranks it, as it outranks 3.
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
+# TSC_BIN names a TypeScript compiler for the strict type check; left unset it is tsc on PATH.
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   echo "check-mods: '${dir:-<none given>}' is not a folder, so nothing was checked." >&2
@@ -56,6 +57,12 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   [ "$failed" -eq 1 ] && exit 1
   exit 3
 fi
+
+# The TypeScript compiler for the strict type check (#758): TSC_BIN, else tsc on PATH. None is not
+# a failure: each mod's line says its types were not checked.
+tsc="${TSC_BIN:-}"
+[ -n "$tsc" ] || tsc="$(command -v tsc 2>/dev/null || true)"
+[ -n "$tsc" ] && [ -x "$tsc" ] || tsc=""
 
 # The engine's verdict lines: the item marks and the failure summary, a few at most. When there is
 # no such line, the exit code and the last lines of output instead, never an empty reason (#740).
@@ -102,7 +109,35 @@ for d in "${mods[@]}"; do
       continue
     fi
   fi
-  echo "check-mods: $name ok"
+  # Strict types (#758). Claude Code lays its declarations, and the tsconfig.json every mod's own
+  # extends, under .claude-plugin/types once it has loaded the mod; with those and a TypeScript
+  # compiler the mod is type checked as its tsconfig.json says (strict, noUncheckedIndexedAccess).
+  # Without either it is said on the mod's line, never claimed (L411, L440).
+  types="types not checked: no TypeScript compiler (looked for ${TSC_BIN:-tsc on PATH})"
+  if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ]; then
+    types="types not checked: Claude Code has not laid its types here"
+  elif [ -n "$tsc" ]; then
+    # Every mod imports its own files as ./x.ts, as the engine loads them, and the tsconfig Claude
+    # Code lays does not allow that, so it is allowed here for every mod rather than in each one's
+    # own tsconfig.json (lessons review of #797).
+    out="$("$tsc" -p "$d" --noEmit --allowImportingTsExtensions 2>&1)"; trc=$?
+    if [ "$trc" -ne 0 ]; then
+      errs="$(printf '%s\n' "$out" | grep 'error TS' || true)"
+      if [ -z "$errs" ]; then
+        # No error TS line: the compiler itself failed (a crash, a config it could not read), so no
+        # type check was measured and none is claimed (L11).
+        echo "check-mods: $name could not be type checked: the compiler exited $trc without reporting a type error: $(printf '%s\n' "$out" | sed '/^ *$/d' | tail -n 3 | sed 's/^ *//' | paste -sd';' -)"
+        failed=1
+        continue
+      fi
+      count="$(printf '%s\n' "$errs" | grep -c 'error TS' || true)"
+      echo "check-mods: $name fails a strict type check ($count errors): $(printf '%s\n' "$errs" | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -)"
+      failed=1
+      continue
+    fi
+    types="types checked"
+  fi
+  echo "check-mods: $name ok ($types)"
 done
 echo "check-mods: $n mods checked in $dir"
 [ "$failed" -eq 1 ] && exit 1
