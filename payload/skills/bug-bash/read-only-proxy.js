@@ -45,10 +45,9 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
-const { isRead } = require('./explorer-browser.js')
+// The read predicate, the health path and its answer are the launcher's, so the two cannot drift.
+const { isRead, MARK, HEALTH } = require('./explorer-browser.js')
 
-const MARK = 'bug-bash-read-only'
-const HEALTH = '/__bug-bash-proxy__/health'
 // Headers that describe one connection, never forwarded across the proxy.
 const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'proxy-authenticate', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
 
@@ -190,6 +189,9 @@ function forward(req, res, target, reqPath) {
 
 // An upgrade is refused whatever its method: once switched, the socket's messages are not requests.
 const refuseUpgrade = (req, socket, origin) => {
+  // Once a request upgrades, Node stops handling its socket's errors: a client that resets as it
+  // is refused would otherwise take the whole proxy down.
+  socket.on('error', () => {})
   log('REFUSED', `${req.method} upgrade:${String(req.headers.upgrade || '')}`, origin, req.url)
   socket.end(`HTTP/1.1 403 Forbidden\r\nx-bug-bash-proxy: refused\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\nRefused by the bug bash read only proxy: a ${req.headers.upgrade || 'protocol'} upgrade carries messages it cannot judge.\n`)
 }
@@ -221,6 +223,8 @@ server.on('upgrade', (req, socket) => refuseUpgrade(req, socket, ''))
 server.on('clientError', (_e, socket) => socket.destroy())
 
 server.on('connect', (req, client, head) => {
+  // Handled before anything is written, so a client resetting during any reply cannot crash it.
+  client.on('error', () => {})
   const m = /^\[?([^\]]+?)\]?:(\d+)$/.exec(req.url || '')
   if (!m) {
     log('REFUSED', 'CONNECT', String(req.url), '')
@@ -228,7 +232,6 @@ server.on('connect', (req, client, head) => {
   }
   const host = m[1]
   const port = Number(m[2])
-  client.on('error', () => {})
   client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
   if (head && head.length) client.unshift(head)
   // The first byte says what the tunnel carries: 0x16 opens a TLS handshake; anything else is

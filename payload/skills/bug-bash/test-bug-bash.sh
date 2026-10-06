@@ -217,6 +217,34 @@ except socket.timeout:
 PY
 )"
   [ "$out" = closed ] && ok || bad "an idle tunnel is closed after the deadline" "$out"
+  # Clients that reset the connection as they are refused (a WebSocket upgrade, a malformed
+  # CONNECT, and an upgrade inside a tunnel) never take the proxy down: it still answers after.
+  python3 - "${PROXY#http://}" "${PLAIN#http://}" <<'PY'
+import socket, struct, sys
+host, port = sys.argv[1].split(':')
+target = sys.argv[2]
+upgrade = 'GET http://%s/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n' % (target, target)
+bad_connect = 'CONNECT nonsense HTTP/1.1\r\nHost: nonsense\r\n\r\n'
+tunnel = 'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target)
+inner = 'GET /socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n' % target
+def reset(first, then=None):
+    s = socket.create_connection((host, int(port)), timeout=5)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+    s.sendall(first.encode())
+    if then:
+        got = b''
+        while b'\r\n\r\n' not in got:
+            got += s.recv(1024)
+        s.sendall(then.encode())
+    s.close()
+for _ in range(30):
+    reset(upgrade)
+    reset(bad_connect)
+    reset(tunnel, inner)
+PY
+  out="$(curl -s --noproxy '*' --max-time 5 "$PROXY/__bug-bash-proxy__/health")"
+  grep -q '"proxy":"bug-bash-read-only"' <<< "$out" && kill -0 "$PROXY_PID" 2>/dev/null && ok \
+    || bad "clients resetting refused connections never take the proxy down" "$(tail -5 "$TMP/proxy.out")"
   # The run's certificates outlive any run, so https does not stop working part way through one.
   openssl x509 -checkend $((7 * 86400)) -noout -in "$PROXY_CA" >/dev/null && ok || bad "the proxy's certificate authority is good for at least a week"
 fi
@@ -515,6 +543,9 @@ out="$(proxied_launch "$PLAIN")"
 grep -q '^threw launched=0 .*not as the bug bash read only proxy' <<< "$out" && ok || bad "a read only browser whose proxy is some other server is refused before it launches" "$out"
 out="$(proxied_launch "$PROXY")"
 grep -q '^launched=1$' <<< "$out" && ok || bad "a read only browser whose proxy answers as itself launches" "$out"
+out="$(node -e 'const m = require(process.argv[1]); console.log(typeof m.MARK, typeof m.HEALTH)' "$LAUNCHER" 2>&1)"
+[ "$out" = "string string" ] && ! grep -Eq "^const (MARK|HEALTH) =" "$PROXY_JS" && ok \
+  || bad "the proxy takes its health path and answer from explorer-browser.js, never a copy of its own" "$out"
 grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the read only proxy for a read only run"
 
 # ---------------------------------------------------------------- the proxy's address does not outlive it

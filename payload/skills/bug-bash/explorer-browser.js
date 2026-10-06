@@ -91,4 +91,4 @@ async function launch({ chromium, readOnly = false, headless = true, proxy = pro
   return { context, close: () => browser.close() }
 }
 
-module.exports = { launch, isRead, proxyAnswers }
+module.exports = { launch, isRead, proxyAnswers, MARK, HEALTH }
