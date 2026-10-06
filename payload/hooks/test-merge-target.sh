@@ -186,6 +186,24 @@ for w in 'echo $((1+2)) && gh pr merge 7' 'echo ) && gh pr merge 7' 'echo "(" &&
   if mt_runs_merge "$w"; then pass; else fail "a merge after a parenthesis that is not a substitution was not seen: $w"; fi
 done
 if mt_runs_merge 'echo "done; gh pr merge 7"'; then fail "a merge quoted after a separator inside an echo was read as a merge"; else pass; fi
+# lib/shell-words.py, the reader behind the two functions above, directly: its two modes, and a
+# refusal by exit code for anything else, so a typo in a caller is a failure, not an empty answer.
+SW="$HOOK_DIR/lib/shell-words.py"
+eq "$(printf '%s' 'a; b && c || d' | python3 "$SW" segments)" "a"$'\n'" b "$'\n'" c "$'\n'" d" "shell-words cuts at each separator outside quotes"
+eq "$(printf '%s' 'echo "a; b" && c' | python3 "$SW" segments)" 'echo "a; b" '$'\n'' c' "and not inside them"
+eq "$(printf '%s' 'A="x y" B=$(p q) cmd arg' | python3 "$SW" split)" "A=x y"$'\n'"B=\$(p q)"$'\n'$'\x1f'$'\n'"cmd arg" "shell-words splits leading assignments from the command"
+printf 'x' | python3 "$SW" nonsense >/dev/null 2>&1; eq "$?" "64" "shell-words refuses an unknown mode"
+# rtk in front is the same merge, and its number and repository are read (lessons review of #795).
+eq "$(mt_pr_number 'rtk gh pr merge 7 --repo a/b')" "7" "an rtk merge names its pull request"
+eq "$(mt_repo_flag 'rtk gh pr merge 7 --repo a/b')" "a/b" "and its repository"
+# The shell reading runs on every command that mentions a merge, so its cost must not grow with
+# the text: the bash scan it replaced took 55 s on this 26 KB issue body (measured 2026-10-05),
+# past every hook's timeout. The ceiling is wide on purpose; it exists to catch that order.
+big="$(python3 -c 'q = chr(92) + chr(34); print(("we should merge the " + q + "branch" + q + " after review; ") * 600)')"
+[ "${#big}" -gt 25000 ] && pass || fail "the 26 KB fixture was not built (${#big} bytes)"
+t0=$SECONDS
+mt_runs_merge "gh issue comment 5 --body \"$big\"" && fail "an issue body about a merge was read as a merge" || pass
+[ $((SECONDS - t0)) -le 15 ] && pass || fail "reading a 26 KB command took $((SECONDS - t0)) s"
 mt_split_assignments 'echo "GH_TOKEN=x gh pr merge 7"'
 eq "$MT_REST" 'echo "GH_TOKEN=x gh pr merge 7"' "a command with no leading assignment is left whole"
 # The variable spelling still needs the flag: without --merge it only waits.

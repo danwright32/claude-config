@@ -120,6 +120,12 @@ ar_review_issue_key() {   # $1 = finished review file -> prints a fresh key
   [ -n "$h" ] || return 3
   # Braced, so a refused redirection is silenced too: it fails before an inner 2> applies.
   { printf '%s\n' "$h" >> "$kf"; } 2>/dev/null || return 4
+  # Bounded: past 64 keys only the newest 32 are kept, so a head retried for days cannot grow the
+  # file without limit. A key dropped by a trim racing an append is refused, never wrongly allowed.
+  if [ "$(awk 'END { print NR }' "$kf" 2>/dev/null)" -gt 64 ] 2>/dev/null; then
+    { tail -n 32 "$kf" > "$kf.trim.$$" && mv -f "$kf.trim.$$" "$kf"; } 2>/dev/null || rm -f "$kf.trim.$$"
+    grep -qxF "$h" "$kf" 2>/dev/null || { printf '%s\n' "$h" >> "$kf"; } 2>/dev/null || return 4
+  fi
   printf '%s' "$k"
 }
 # The sentence for an ar_review_issue_key failure: what went wrong and the remedy that fits it.

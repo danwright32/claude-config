@@ -231,115 +231,43 @@ MTEOF
 # The command cut at `&&`, `||`, `;` and newlines, one segment per line, but only where those
 # sit OUTSIDE quotes and substitutions (lessons review of #795): cut inside them,
 # `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` became two halves, neither a merge, and
-# every merge gate stood down. Heredoc bodies are stripped first. The same context stack as
-# mt_split_assignments, so the two never disagree about what is quoted.
+# every merge gate stood down. Heredoc bodies are stripped first. Read by lib/shell-words.py, one
+# process for the whole command: the same scan in bash took 55 s on a 26 KB command. With no
+# python3 the plain cut at every separator is used, which can only over cut.
+MT_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
 mt_raw_segments() {  # $1 = command
-  local s c nx top stack="" i=0 n cur="" out=""
-  s="$(mt_strip_heredocs "$1")"; n=${#s}
-  while [ "$i" -lt "$n" ]; do
-    c="${s:$i:1}"; nx="${s:$((i + 1)):1}"; top="${stack: -1}"
-    if [ "$top" = "'" ]; then
-      [ "$c" = "'" ] && stack="${stack%?}"
-      cur="$cur$c"; i=$((i + 1)); continue
-    fi
-    if [ "$c" = "\\" ] && [ $((i + 1)) -lt "$n" ]; then
-      cur="$cur$c$nx"; i=$((i + 2)); continue
-    fi
-    if [ -z "$stack" ]; then
-      case "$c$nx" in
-        "&&"|"||") out="$out$cur"$'\n'; cur=""; i=$((i + 2)); continue ;;
-      esac
-      case "$c" in
-        ";"|$'\n') out="$out$cur"$'\n'; cur=""; i=$((i + 1)); continue ;;
-      esac
-    fi
-    case "$c" in
-      \") if [ "$top" = '"' ]; then stack="${stack%?}"; else stack="$stack$c"; fi ;;
-      \') [ "$top" != '"' ] && stack="$stack$c" ;;
-      \`) if [ "$top" = '`' ]; then stack="${stack%?}"; else stack="$stack$c"; fi ;;
-      \$) if [ "$nx" = "(" ] || [ "$nx" = "{" ]; then stack="$stack$nx"; cur="$cur$c$nx"; i=$((i + 2)); continue; fi ;;
-      \() [ -n "$stack" ] && [ "$top" != '"' ] && stack="$stack$c" ;;
-      \)) [ "$top" = "(" ] && stack="${stack%?}" ;;
-      \}) [ "$top" = "{" ] && stack="${stack%?}" ;;
-    esac
-    cur="$cur$c"; i=$((i + 1))
-  done
-  # Something left open (an unclosed quote, as in `echo don't; gh pr merge 7`) means the reading
-  # cannot be trusted, so the plain cut at every separator is used instead: a separator inside
-  # quotes then over cuts, which can only show the gates MORE merges, never hide one (L42).
-  if [ -n "$stack" ]; then
-    s="${s//&&/$'\n'}"; s="${s//||/$'\n'}"; s="${s//;/$'\n'}"
-    printf '%s\n' "$s"
+  local s out
+  s="$(mt_strip_heredocs "$1")"
+  if command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" segments 2>/dev/null)"; then
+    printf '%s\n' "$out"
     return 0
   fi
-  printf '%s%s\n' "$out" "$cur"
+  s="${s//&&/$'\n'}"; s="${s//||/$'\n'}"; s="${s//;/$'\n'}"
+  printf '%s\n' "$s"
 }
 
-# A segment's leading `NAME=value` assignments, read as the shell reads them: a value runs to the
-# first space OUTSIDE quotes and outside a $( ... ), so `GH_TOKEN=$(gh auth token -u x) gh pr merge`
-# is one assignment and then the merge. Cutting at the first space left `auth token -u x) gh pr
-# merge`, whose first word merges nothing, and every merge gate stood down on the form a session
-# uses to merge as one of Dan's accounts (found by the lessons review of #795).
-# Sets MT_ASSIGNS, one NAME=value per line with one layer of quotes removed from the value, and
-# MT_REST, the command that follows. A segment that is assignments only leaves MT_REST empty.
+# A segment's leading `NAME=value` assignments, read as the shell reads them (lib/shell-words.py
+# split): a value runs to the first space with nothing open, so `GH_TOKEN=$(gh auth token -u x) gh
+# pr merge` is one assignment and then the merge, and X="$(a "b c")" is one word. Cutting at the
+# first space left `auth token -u x) gh pr merge`, whose first word merges nothing, and every merge
+# gate stood down on the form a session uses to merge as one of Dan's accounts (lessons review of
+# #795). Sets MT_ASSIGNS, one NAME=value per line with one layer of outermost quotes removed, and
+# MT_REST, the command that follows. A segment that is assignments only leaves MT_REST empty. A
+# segment with no leading assignment is answered without starting python at all.
 mt_split_assignments() {  # $1 = one segment
-  # A value is read with a STACK of open contexts, the way the shell nests them: " and ' and `
-  # quotes, $( and ${ substitutions. Inside a substitution quotes open afresh, so
-  # X="$(a "b c")" is one word; a space ends the word only with nothing open. One layer of
-  # outermost quotes is removed, as the shell removes it; everything inside is kept as written.
-  local s="$1" name val c nx top stack i n
+  local s="$1" out
   MT_ASSIGNS=""
   s="${s#"${s%%[![:space:]]*}"}"
-  while [[ "$s" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; do
-    name="${BASH_REMATCH[1]}"
-    i=$(( ${#name} + 1 )); n=${#s}; val=""; stack=""
-    while [ "$i" -lt "$n" ]; do
-      c="${s:$i:1}"; nx="${s:$((i + 1)):1}"; top="${stack: -1}"
-      if [ "$top" = "'" ]; then
-        if [ "$c" = "'" ]; then
-          stack="${stack%?}"; [ -n "$stack" ] && val="$val$c"
-        else val="$val$c"; fi
-        i=$((i + 1)); continue
-      fi
-      if [ "$c" = "\\" ] && [ $((i + 1)) -lt "$n" ]; then
-        # Escaped: the next character never opens, closes or ends anything. At the top level, or
-        # directly inside the outermost double quote, the shell drops the backslash itself.
-        if [ -z "$stack" ] || [ "$stack" = '"' ]; then val="$val$nx"; else val="$val$c$nx"; fi
-        i=$((i + 2)); continue
-      fi
-      case "$c" in
-        \")
-          if [ "$top" = '"' ]; then
-            stack="${stack%?}"; [ -n "$stack" ] && val="$val$c"
-          else
-            [ -n "$stack" ] && val="$val$c"; stack="$stack$c"
-          fi ;;
-        \')
-          if [ "$top" = '"' ]; then val="$val$c"
-          else [ -n "$stack" ] && val="$val$c"; stack="$stack$c"; fi ;;
-        \`)
-          if [ "$top" = '`' ]; then stack="${stack%?}"; else stack="$stack$c"; fi
-          val="$val$c" ;;
-        \$)
-          if [ "$nx" = "(" ] || [ "$nx" = "{" ]; then
-            stack="$stack$nx"; val="$val$c$nx"; i=$((i + 2)); continue
-          fi
-          val="$val$c" ;;
-        \()
-          [ "$top" != '"' ] && stack="$stack$c"; val="$val$c" ;;
-        \))
-          [ "$top" = "(" ] && stack="${stack%?}"; val="$val$c" ;;
-        \})
-          [ "$top" = "{" ] && stack="${stack%?}"; val="$val$c" ;;
-        ' '|$'\t')
-          [ -z "$stack" ] && break; val="$val$c" ;;
-        *) val="$val$c" ;;
-      esac
-      i=$((i + 1))
-    done
-    MT_ASSIGNS="$MT_ASSIGNS$name=$val"$'\n'
-    s="${s:$i}"
-    s="${s#"${s%%[![:space:]]*}"}"
+  MT_REST="$s"
+  [[ "$s" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || return 0
+  if command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" split 2>/dev/null; printf x)"; then
+    out="${out%x}"
+    MT_ASSIGNS="${out%%$'\x1f'*}"
+    MT_REST="${out#*$'\x1f'}"; MT_REST="${MT_REST#$'\n'}"
+    return 0
+  fi
+  while [[ "$s" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+(.*)$ ]]; do
+    s="${BASH_REMATCH[1]}"
   done
   MT_REST="$s"
 }
@@ -552,8 +480,14 @@ mt__selector_input() {  # $1 = command
     read -r a b c d <<MTSEOF
 $MT_REST
 MTSEOF
-    [ "${a##*/}" = "rtk" ] && { a="$b"; b="$c"; c="${d%% *}"; }
-    if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+    # `rtk gh pr merge` is the same merge; the selector reads `gh` at a command start, so the rtk
+    # word is dropped from what it is handed.
+    if [ "${a##*/}" = "rtk" ]; then
+      a="$b"; b="$c"; c="${d%% *}"
+      if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+        printf '%s' "${MT_REST#*rtk}"; return 0
+      fi
+    elif [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
       printf '%s' "$MT_REST"; return 0
     fi
   done <<MTSEOF
