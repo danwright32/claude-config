@@ -1,0 +1,8 @@
+{
+  "name": "claude-config-typescript",
+  "private": true,
+  "description": "The TypeScript compiler tools/check-mods.sh type checks every mod with (#803), pinned here so both Macs and CI run the same one.",
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}
