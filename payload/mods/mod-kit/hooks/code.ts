@@ -517,6 +517,24 @@ const receiverBefore = (code: string, at: number): string | undefined => {
   }
   return undefined
 }
+// Modules with no way to write a file of their own, so a program importing only these writes only
+// through the routes read below (lessons review of #830: zipfile, sqlite3, tempfile and the rest
+// write files the judge has no rule for, and a list of writers would always miss one, L257). os
+// counts only where every use is os.path, which writes nothing.
+const PY_NO_WRITERS = new Set(['re', 'json', 'sys', 'pathlib', 'textwrap', 'string', 'collections', 'itertools', 'functools', 'math', 'datetime', 'difflib', 'typing', 'dataclasses', 'enum', 'unicodedata', 'pprint', 'fnmatch', 'glob', 'os.path', 'posixpath'])
+const onlyQuietModules = (inline: string): boolean => {
+  if (/\b(?:__import__|import_module|importlib|sys\s*\.\s*modules|getattr)\b/.test(inline)) return false
+  const mods: string[] = []
+  for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*import\s+([^;\n#]+)/g)) for (const part of (m[1] as string).split(',')) mods.push(part.trim().split(/\s+/)[0] as string)
+  for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*from\s+([\w.]+)\s+import\b/g)) mods.push(m[1] as string)
+  for (const mod of mods) {
+    if (mod === 'os') {
+      // Every use of os is os.path.
+      if (/\bos\s*\.\s*(?!path\b)\w/.test(inline)) return false
+    } else if (!PY_NO_WRITERS.has(mod)) return false
+  }
+  return true
+}
 const pythonTargets = (code: string): string[] | undefined => {
   const s = SURFACES.python
   if (first(s.process, code) || first(s.dynamic, code) || pythonFileinput(code) || pythonMoves(code)) return undefined
@@ -556,11 +574,12 @@ const pythonTargets = (code: string): string[] | undefined => {
 
 /**
  * The files inline code writes, where its text names every one, or undefined when it cannot (any
- * language but python, so far). Relative paths are as written: the caller resolves them against the
+ * language but python, so far, and a python program importing any module that can write a file). Relative paths are as written: the caller resolves them against the
  * folder the program runs in.
  */
 export const codeTargets = (lang: Lang, inline: string): string[] | undefined => {
   if (lang !== 'python') return undefined
+  if (!onlyQuietModules(inline)) return undefined
   return pythonTargets(SURFACES.python.canonical?.(inline) ?? inline)
 }
 

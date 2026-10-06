@@ -470,6 +470,8 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nPath('notes/a.md').write_text('x')\nq = Path('b.md')\nq.write_bytes(b'y')\nwith open('c.md', mode='w') as f:\n  f.write('z')\nEOF")).toEqual([
       [`${CWD}/notes/a.md`, `${CWD}/b.md`, `${CWD}/c.md`],
     ])
+    // Modules with no file writers of their own, and os used only for os.path, keep them named.
+    expect(targets("python3 - <<'EOF'\nimport json, re, sys\nimport os\nfrom pathlib import Path\nif os.path.exists('a.json'):\n  json.dump(re.sub('a', 'b', sys.argv[0]), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
     // A cd before it moves where a relative path lands.
     expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
   })
@@ -487,6 +489,13 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.remove('b.md')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport os\nos.chdir('/x')\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport subprocess\nopen('a.md','w')\nsubprocess.run(['ls'])\nEOF")).toEqual(none)
+    // A module the judge has no write rules for can write anywhere (lessons review of this change:
+    // zipfile, sqlite3), so only modules with no file writers leave the files named.
+    expect(targets("python3 - <<'EOF'\nimport zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sqlite3\nopen('a.md','w')\nsqlite3.connect('x.db')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom tempfile import mkstemp\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.makedirs('x')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nm = __import__('zip' + 'file')\nopen('a.md','w')\nEOF")).toEqual(none)
     // Only python's writes are named so far.
     expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })
