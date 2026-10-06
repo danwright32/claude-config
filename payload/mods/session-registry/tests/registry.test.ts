@@ -23,12 +23,14 @@ const consumer: { name: string; register: Register } = {
 const withConsumer = { plugins: [consumer] }
 
 // This Mac beneath the registry: a filesystem in memory, git, the session's id, the clock.
-const world = (on: On, opts: { files?: Record<string, string>; id?: () => string; mtimes?: Record<string, number> } = {}) => {
+const world = (on: On, opts: { files?: Record<string, string>; id?: () => string; mtimes?: Record<string, number>; mvThrows?: boolean } = {}) => {
   const files: Record<string, string> = { ...(opts.files ?? {}) }
   const logs: string[] = []
   const removed: string[] = []
   const writes: string[] = []
   const finds: string[] = []
+  // Each command run and the timeout it was given, so a bound can be asserted (#802).
+  const bounds: [string, number | undefined][] = []
   mock.env(on, { HOME: '/Users/x' })
   const clock = mock.clock(on, { now: 100 * MIN })
   on('fs.write', ($, e) => {
@@ -58,6 +60,9 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
   }
   on('process.run', async ($, e) => {
     if (e.argv[0] === 'mv' && gate.held) await gate.wait
+    bounds.push([e.argv[0] as string, (e.init as { timeoutMs?: number } | undefined)?.timeoutMs])
+    // Refused, which is how a run the engine cut off at its timeout reaches the mod.
+    if (e.argv[0] === 'mv' && opts.mvThrows) return { deny: 'mv did not answer within 5 seconds' } as never
     const [cmd, ...rest] = e.argv
     const [a, b] = rest.filter(x => !x.startsWith('-'))
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -92,7 +97,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     return { value: undefined }
   })
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
-  return { files, writes, finds, logs, removed, clock, own, hold, release: () => gate.release() }
+  return { files, writes, finds, logs, removed, bounds, clock, own, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -124,6 +129,35 @@ test('the record is written whole, never in place, so a reader cannot see half o
   await start($)
   expect(w.writes.length).toBeGreaterThan(0)
   expect(w.writes.every(p => p !== `${DIR}/s1.json`)).toBe(true)
+})
+
+test("the save's move and the repository lookup are bounded under a noun's 10 s (#802)", withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const of = (cmd: string) => w.bounds.filter(([c]) => c === cmd).map(([, t]) => t)
+  expect(of('mv').length).toBeGreaterThan(0)
+  expect(of('mv').every(t => t === 5_000)).toBe(true)
+  expect(of('git').length).toBeGreaterThan(0)
+  expect(of('git').every(t => t === 5_000)).toBe(true)
+})
+
+test('after a /clear, the new record\'s repository lookup is bounded too (#802)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  const before = w.bounds.length
+  id = 's2'
+  await ($ as unknown as { classic: { SessionStart: (e: never) => Promise<unknown> } }).classic.SessionStart({ source: 'clear' } as never)
+  const after = w.bounds.slice(before).filter(([c]) => c === 'git').map(([, t]) => t)
+  expect(after.length).toBeGreaterThan(0)
+  expect(after.every(t => t === 5_000)).toBe(true)
+})
+
+test('a save whose move throws is said in the debug log, and the session goes on (#802)', withConsumer, async ($, on) => {
+  const w = world(on, { mvThrows: true })
+  await start($)
+  expect(w.logs.some(l => /^session-registry: could not save this session's record: .*mv did not answer within 5 seconds/.test(l))).toBe(true)
 })
 
 test('it beats every minute while the session runs', withConsumer, async ($, on) => {
