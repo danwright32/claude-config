@@ -138,6 +138,8 @@ const pandasNames = (code: string): Set<string> => {
       new RegExp(`\\bfor\\s+[^:\\n]*\\b${n}\\b[^:\\n]*\\bin\\b`),
       new RegExp(`\\bas\\s+${n}\\b`),
       new RegExp(`\\b${n}\\s*:=`),
+      // A later target of a chained assignment (`x = df = Path('a')`).
+      new RegExp(`=(?!=)\\s*${n}\\s*=(?!=)`),
       new RegExp(`(?:^|[;\\n])[ \\t]*${n}\\s*:(?!=)[^=\\n]*=(?!=)`),
       new RegExp(`(?:^|[;\\n])[ \\t]*[\\w\\s,()[\\]*]*,\\s*\\(?\\s*${n}\\s*\\)?\\s*(?:,[^=\\n]*)?=(?!=)`),
       new RegExp(`(?:^|[;\\n])[ \\t]*\\(?\\s*${n}\\s*,[^=\\n]*=(?!=)`),
