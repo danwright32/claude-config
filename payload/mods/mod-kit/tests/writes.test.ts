@@ -472,7 +472,7 @@ describe('writes: the files an inline python program names as its writes (#830)'
     ])
     // Plain top level imports of modules with no file writers of their own keep them named, os's
     // path among them when it is all that is taken from os.
-    expect(targets("python3 - <<'EOF'\nimport json, re, sys\nfrom os import path\nfrom os.path import exists as there  # a comment\nfrom pathlib import Path\nif path.exists('a.json') and there('b'):\n  json.dump(re.sub('a', 'b', sys.argv[0]), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
+    expect(targets("python3 - <<'EOF'\nimport json, re\nfrom os import path\nfrom os.path import exists as there  # a comment\nfrom pathlib import Path\nif path.exists('a.json') and there('b'):\n  json.dump(re.sub('a', 'b', 'x'), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
     // A string's replace, with two arguments, on a name not taken from Path, is no move.
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nq = Path('b.md')\ns = open('a.md').read()\nq.write_text(s.replace('x', 'y'))\nEOF")).toEqual([[`${CWD}/b.md`]])
     // A cd before it moves where a relative path lands.
@@ -533,21 +533,27 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom os import remove\nopen('a.md','w')\nremove('b')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import *\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import path\nif path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
-    // sys holds every loaded module in sys.modules, os among them, so sys is quiet only while that
-    // table cannot be reached (follow up to #846, #830): not by name from a from import, not by a
-    // star import, not by an alias, and not through the module's own __dict__.
+    // sys holds every loaded module (sys.modules, os among them) and the import machinery itself, and
+    // each review of #859 found another route to them. So sys is never quiet (follow up to #846, #830):
+    // any import of sys, or of anything from it, leaves the program's files unnamed.
     expect(targets("python3 - <<'EOF'\nfrom sys import modules\nopen('a.md','w')\nmodules['os'].remove('b')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom sys import modules as m\nopen('a.md','w')\nm['os'].remove('b')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom sys import argv, modules\nopen('a.md','w')\nEOF")).toEqual(none)
-    // A star import binds modules whether or not the program spells the word. Every star import was
-    // already refused before this change (measured: `from json import *` names nothing either); this
-    // pins it for sys, where onlyQuietModules now refuses it by name as well.
+    // A star import was already refused for every module (measured: `from json import *` names
+    // nothing either); pinned here for sys.
     expect(targets("python3 - <<'EOF'\nfrom sys import *\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport sys as s\nopen('a.md','w')\ns.modules['os'].remove('b')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.__dict__['mod' + 'ules']['os'].remove('b')\nEOF")).toEqual(none)
-    // The control: sys with none of that is still quiet, so the files are still named.
-    expect(targets("python3 - <<'EOF'\nfrom sys import argv\nopen('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
-    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.stdout.write('done')\nEOF")).toEqual([[`${CWD}/a.md`]])
+    // The routes the lessons review of #859 at 954124a named: getattr with a built string, dir(sys),
+    // and sys.meta_path.
+    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\ngetattr(sys, 'mod' + 'ules')['os'].remove('b')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nfor n in dir(sys):\n  print(n)\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.meta_path[0].find_spec('os', None)\nEOF")).toEqual(none)
+    // And sys used plainly is not quiet either: its files are not named, so ask before saving asks.
+    expect(targets("python3 - <<'EOF'\nfrom sys import argv\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport sys\nopen('a.md','w')\nsys.stdout.write('done')\nEOF")).toEqual(none)
+    // The control: the same program with a quiet module instead still names its file.
+    expect(targets("python3 - <<'EOF'\nimport json\nopen('a.md','w')\nEOF")).toEqual([[`${CWD}/a.md`]])
     // Only python's writes are named so far.
     expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })
