@@ -470,8 +470,9 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nPath('notes/a.md').write_text('x')\nq = Path('b.md')\nq.write_bytes(b'y')\nwith open('c.md', mode='w') as f:\n  f.write('z')\nEOF")).toEqual([
       [`${CWD}/notes/a.md`, `${CWD}/b.md`, `${CWD}/c.md`],
     ])
-    // Modules with no file writers of their own, and os used only for os.path, keep them named.
-    expect(targets("python3 - <<'EOF'\nimport json, re, sys\nimport os\nfrom pathlib import Path\nif os.path.exists('a.json'):\n  json.dump(re.sub('a', 'b', sys.argv[0]), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
+    // Plain top level imports of modules with no file writers of their own keep them named, os's
+    // path among them when it is all that is taken from os.
+    expect(targets("python3 - <<'EOF'\nimport json, re, sys\nfrom os import path\nfrom os.path import exists as there  # a comment\nfrom pathlib import Path\nif path.exists('a.json') and there('b'):\n  json.dump(re.sub('a', 'b', sys.argv[0]), open('a.json','w'))\nEOF")).toEqual([[`${CWD}/a.json`]])
     // A cd before it moves where a relative path lands.
     expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
   })
@@ -489,14 +490,30 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.remove('b.md')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport os\nos.chdir('/x')\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport subprocess\nopen('a.md','w')\nsubprocess.run(['ls'])\nEOF")).toEqual(none)
-    // A module the judge has no write rules for can write anywhere (lessons review of this change:
-    // zipfile, sqlite3), so only modules with no file writers leave the files named.
+    // The import rule (lessons reviews of #846, four rounds of import shapes): the files are named
+    // only when every `import`, `__import__` and `importlib` in the text is a plain top level import
+    // line read whole, and every module it binds has no file writers. Anything else cannot be read.
+    // Round 1: a module the judge has no write rules for can write anywhere.
     expect(targets("python3 - <<'EOF'\nimport zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport sqlite3\nopen('a.md','w')\nsqlite3.connect('x.db')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom tempfile import mkstemp\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.makedirs('x')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nm = __import__('zip' + 'file')\nopen('a.md','w')\nEOF")).toEqual(none)
-    // os taken apart by a from import is os too: only its path is quiet.
+    expect(targets("python3 - <<'EOF'\nimport importlib\nopen('a.md','w')\nEOF")).toEqual(none)
+    // os itself is not quiet, however little of it is used.
+    expect(targets("python3 - <<'EOF'\nimport os\nif os.path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual(none)
+    // Round 4: an import after a colon, indented, or inside an expression is not a plain line.
+    expect(targets("python3 - <<'EOF'\nif 1: import zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\ntry: import sqlite3\nexcept Exception: pass\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nif True:\n    import zipfile\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nimport json; import zipfile\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom json import (\n  dumps,\n)\nopen('a.md','w')\nEOF")).toEqual(none)
+    expect(targets("python3 - <<'EOF'\nfrom . import x\nopen('a.md','w')\nEOF")).toEqual(none)
+    // Round 4: a dotted import binds its parent, so `import os.path` binds os.
+    expect(targets("python3 - <<'EOF'\nimport os.path\nopen('a.md','w')\nos.chflags('b', 0)\nEOF")).toEqual(none)
+    // pathlib's own writers the judge has no rule for.
+    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').copy('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    // Round 3: os taken apart by a from import is os too: only its path is quiet.
     expect(targets("python3 - <<'EOF'\nfrom os import chflags\nopen('a.md','w')\nchflags('b', 0)\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import remove\nopen('a.md','w')\nremove('b')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import *\nopen('a.md','w')\nEOF")).toEqual(none)

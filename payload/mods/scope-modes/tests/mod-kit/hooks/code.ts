@@ -519,32 +519,52 @@ const receiverBefore = (code: string, at: number): string | undefined => {
 }
 // Modules with no way to write a file of their own, so a program importing only these writes only
 // through the routes read below (lessons review of #830: zipfile, sqlite3, tempfile and the rest
-// write files the judge has no rule for, and a list of writers would always miss one, L257). os
-// counts only where every use is os.path, which writes nothing.
+// write files the judge has no rule for, and a list of writers would always miss one, L257). os is
+// not one of them; its path is, taken on its own.
 const PY_NO_WRITERS = new Set(['re', 'json', 'sys', 'pathlib', 'textwrap', 'string', 'collections', 'itertools', 'functools', 'math', 'datetime', 'difflib', 'typing', 'dataclasses', 'enum', 'unicodedata', 'pprint', 'fnmatch', 'glob', 'os.path', 'posixpath'])
+// A plain top level import line, read whole: at the start of a line, one statement, an optional
+// comment after it. `import a, b.c as d` and `from a.b import c, d as e` (or `*`).
+const PY_IMPORT_LINE = /^(?:import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)|from\s+([\w.]+)\s+import\s+(\*|\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*))[ \t]*(?:#[^\n]*)?$/
+/**
+ * Whether every module the program can reach is quiet (lessons reviews of #846, four rounds, each
+ * finding another import shape a pattern for imports missed). The default is flipped: the program
+ * passes only when every `import` word in its text sits in a plain top level import line read whole,
+ * nothing is imported at run time (`__import__`, `importlib`, `import_module`, `sys.modules`,
+ * `getattr`, `__builtins__`), and every module each line binds is quiet: a dotted `import a.b` binds
+ * `a` too, and `from os import` is quiet only for `path`. Any other `import` (after a colon,
+ * indented, after a `;`, inside an expression or a string, across lines) means it cannot be read.
+ */
 const onlyQuietModules = (inline: string): boolean => {
-  if (/\b(?:__import__|import_module|importlib|sys\s*\.\s*modules|getattr)\b/.test(inline)) return false
-  const mods: string[] = []
-  for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*import\s+([^;\n#]+)/g)) for (const part of (m[1] as string).split(',')) mods.push(part.trim().split(/\s+/)[0] as string)
-  // os taken apart is os only as its path (lessons review of #846: `from os import chflags` reaches
-  // a writer no rule names).
-  for (const m of inline.matchAll(/(?:^|[;\n])[ \t]*from\s+([\w.]+)\s+import\s*\(?\s*([^;\n#)]*)/g)) {
-    const mod = m[1] as string
-    const names = (m[2] as string).split(',').map(n => n.trim().split(/\s+/)[0])
-    mods.push(mod === 'os' && !names.every(n => n === 'path') ? 'os.*' : mod)
+  if (/\b(?:__import__|import_module|importlib|getattr|__builtins__)\b|\bsys\s*\.\s*modules\b/.test(inline)) return false
+  const words = (inline.match(/\bimport\b/g) ?? []).length
+  let read = 0
+  for (const line of inline.split('\n')) {
+    const m = PY_IMPORT_LINE.exec(line)
+    if (!m) continue
+    read++
+    if (m[1] !== undefined) {
+      for (const part of m[1].split(',')) {
+        const mod = part.trim().split(/\s+/)[0] as string
+        // `import a.b.c` binds a, so a must be quiet as well as a.b.c.
+        if (!PY_NO_WRITERS.has(mod) || !PY_NO_WRITERS.has(mod.split('.')[0] as string)) return false
+      }
+    } else {
+      const mod = m[2] as string
+      const names = (m[3] as string).split(',').map(n => n.trim().split(/\s+/)[0])
+      if (mod === 'os') {
+        if (!names.every(n => n === 'path')) return false
+      } else if (!PY_NO_WRITERS.has(mod)) return false
+    }
   }
-  for (const mod of mods) {
-    if (mod === 'os') {
-      // Every use of os is os.path.
-      if (/\bos\s*\.\s*(?!path\b)\w/.test(inline)) return false
-    } else if (!PY_NO_WRITERS.has(mod)) return false
-  }
-  return true
+  return read === words
 }
 const pythonTargets = (code: string): string[] | undefined => {
   const s = SURFACES.python
   if (first(s.process, code) || first(s.dynamic, code) || pythonFileinput(code) || pythonMoves(code)) return undefined
   if (/\bchdir\b|\b(?:globals|locals|vars|setattr)\s*\(/.test(code)) return undefined
+  // pathlib's writers the judge has no rule for (Path.copy, copy_into, move and move_into, new in
+  // 3.14; lchmod; link_to), whatever they are called on.
+  if (/\.\s*(?:copy|copy_into|move|move_into|lchmod|link_to)\s*\(/.test(code)) return undefined
   if (first(s.write.filter(r => r !== PY_PATH_METHODS), code)) return undefined
   const out: string[] = []
   const add = (expr: string | undefined) => {
