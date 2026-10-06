@@ -293,8 +293,10 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
       const own = opened.length ? await sessionSlug($) : undefined
       const ownLink = found?.url?.toLowerCase()
       for (const o of opened) {
-        if (ownLink && ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase()) continue
         const elsewhere = !own || own.toLowerCase() !== o.repo.toLowerCase()
+        // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
+        const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
+        if (isBranchPr) continue
         const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo, elsewhere)
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes

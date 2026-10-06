@@ -672,6 +672,18 @@ test('a session whose own PR is finished is not finished while a PR it opened is
   expect(w.runs.some(r => r.join(' ').startsWith('gh pr view 40 '))).toBe(false)
 })
 
+// The lessons review of #857: with no link from GitHub, the branch's own PR is matched by its number
+// in the session's own repository, so it is still read once.
+test("the branch's own PR GitHub gave no link for is still read once, not again as one the session opened (#856)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/12\n' })
+  w.o.gh = { ...merged(), pr: { number: 12, state: 'MERGED', closingIssuesReferences: [{ number: 616 }] } }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/GitHub gave no link for PR #12/)
+  expect(w.runs.some(r => r.join(' ').startsWith('gh pr view 12 '))).toBe(false)
+})
+
 test('winding down never refuses AskUserQuestion: Claude asks Dan rather than parking a PR (#856)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: merged('OPEN') })
   await start($ as never, clock)
