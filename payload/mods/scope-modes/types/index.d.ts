@@ -24,6 +24,18 @@ export type ScopeModes = {
    * id, and `deny` for Claude to read.
    */
   hold: (input: { label: string; prompt: string }) => Promise<ScopeModesHold>
+  /**
+   * Whether the Mac is asleep (sleep mode, #840), read from the sleep record now through the one
+   * predicate, readSleep. A record that cannot be read, or past its end, is awake. For a mod that
+   * would otherwise reach Dan (a notification, a question) and stays quiet while this is true (#841).
+   */
+  isAsleep: () => Promise<boolean>
+  /**
+   * Notes something for Dan's morning report while asleep (#841), in the night's notes beside the
+   * record, stamped with when and by which session. Answers whether it was noted: false while awake,
+   * when nothing is written. Throws when the note could not be written, so the caller can say so.
+   */
+  sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }>
 }
 
 /** What `hold` answers: not held (at home), or held with the refusal a held tool call is answered with. */
