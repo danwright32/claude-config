@@ -12,13 +12,17 @@ is tested on fixtures alone.
   entry  KIND SESSION AT [WHY]         one claim entry as JSON, for the shell to link into place
   slug   ORIGIN_URL                    owner/repo of a GitHub origin, lower case, or exit 1
   claims CLAIMS_DIR                    every claim of the night as JSON lines, for the report (phase 4)
+  note   KIND SESSION AT REPO ISSUE [EXTRA]  the night's note of a claim (EXTRA its attempt) or of
+                                       its end (EXTRA why), for sleep_note (#905)
 
 A claim is a directory per issue holding numbered entries, 1, 2, 3, each one JSON object written
 whole beside it and hard linked into place, which fails if the number is taken. So of two sessions
 reaching for one issue exactly one makes the next number, and nothing is ever deleted: the newest
 entry is the issue's state, and the entries before it are its history, which is where the attempts
 counter comes from. An entry is a claim (`kind: claim`, the session holding it) or an end
-(`free`, `done`, `parked`, `failed`) written by the session that held the claim before it.
+(`free`, `unstarted`, `done`, `parked`, `failed`) written by the session that held the claim before it;
+`unstarted` is written only by `next`, for a claim whose worktree could not be made just now. Each
+claim and each end is also written to the night's notes for the report, by sleep-queue.sh (#905).
 
 A claim's session is judged by the session registry (~/.claude/state/sessions, one file per
 session): closed, silent past five minutes, or never recorded means the session is gone and the
@@ -399,6 +403,24 @@ def main(argv):
             e["why"] = argv[5]
         print(json.dumps(e))
         return 0
+    if cmd == "note" and len(argv) in (7, 8):
+        # The night's note of a claim or its end (#844), built here so a reason with quotes is
+        # still one JSON object. A claim is noted as `claim` with its attempt; done, parked and
+        # failed as themselves, so the report pairs each claim with its end (#835); free and
+        # unstarted as `released`, since the issue was given back rather than ended.
+        kind, sid, at, repo, issue = argv[2], argv[3], int(argv[4]), argv[5], int(argv[6])
+        extra = argv[7] if len(argv) == 8 else ""
+        n = {"kind": "released" if kind in ("free", "unstarted") else kind, "by": sid, "repo": repo, "issue": issue}
+        if kind == "claim":
+            n["attempts"] = int(extra)
+        else:
+            if kind in ("free", "unstarted"):
+                n["state"] = kind
+            if extra:
+                n["text"] = extra
+        n["at"] = at
+        print(json.dumps(n))
+        return 0
     if cmd == "slug" and len(argv) == 3:
         # The one reading of an origin URL, for the shell too, so both sides agree on which count.
         s = slug_of(argv[2])
@@ -409,7 +431,7 @@ def main(argv):
     if cmd == "claims" and len(argv) == 3:
         all_claims(argv[2])
         return 0
-    print("usage: sleep-queue.py state ISSUE_DIR SELF REGISTRY NOW | queue key=value... | entry KIND SESSION AT [WHY] | claims CLAIMS_DIR", file=sys.stderr)
+    print("usage: sleep-queue.py state ISSUE_DIR SELF REGISTRY NOW | queue key=value... | entry KIND SESSION AT [WHY] | slug ORIGIN_URL | claims CLAIMS_DIR | note KIND SESSION AT REPO ISSUE [EXTRA]", file=sys.stderr)
     return 2
 
 
