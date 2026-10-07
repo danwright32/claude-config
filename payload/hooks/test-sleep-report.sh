@@ -149,6 +149,11 @@ out="$(note '{"text":"no kind"}' 2>&1)"; rc=$?
 check_eq "a note with no kind is refused" 1 "$rc"
 out="$(note '{"kind":"Bad Kind!"}' 2>&1)"; rc=$?
 check_eq "a kind that is not a plain word is refused" 1 "$rc"
+out="$(note '{"kind":"done","pr":"12","repo":"o/r"}' 2>&1)"; rc=$?
+check_eq "a PR that is not a number is refused at the writer" 1 "$rc"
+has "naming the field" "the note's pr must be a number" "$out"
+out="$(note '{"kind":"done","issue":3,"repo":["o","r"]}' 2>&1)"; rc=$?
+check_eq "a repo that is not text is refused at the writer" 1 "$rc"
 check_eq "no refused note was written" "$before" "$(notes_of g5 | wc -l | tr -d ' ')"
 out="$(HOME="$WORK/hm" sleep_note '{"kind":"finding","text":"late"}' "$CUR" "$((SINCE + 86400000))" 1759800000 2>&1)"; rc=$?
 check_eq "a note when the Mac is not asleep is refused" 1 "$rc"
@@ -178,6 +183,7 @@ mkdir -p "$SLEEPDIR/notes"
   echo '{"v":1,"kind":"done","at":1791443180000,"by":"aaaa1111","repo":"o/q","pr":5,"text":"Half read","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443182000,"by":"aaaa1111","repo":"o/r","pr":"--web","text":"A flag for a number","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443183000,"by":"aaaa1111","repo":"o/q","text":"Paired on a review","generation":"g6"}'
+  echo '{"v":1,"kind":"done","at":1791443184000,"by":"aaaa1111","repo":"o/r","pr":[1,2],"issue":{"n":3},"text":"Odd shapes","generation":"g6"}'
   echo '{"v":1,"kind":"question","at":1791443185000,"by":"aaaa1111","cwd":"/r/repo","questions":["Merge PR #31, the wording change?","Keep the old flag?"],"generation":"g6"}'
   echo '{"v":1,"kind":"save","at":1791443186000,"by":"aaaa1111","files":["~/.claude/CLAUDE.md"],"rule":"Always ask first.","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443190000,"by":"aaaa1111","text":"Tidied the scratch notes","generation":"g6"}'
@@ -250,6 +256,7 @@ has "failed work is listed" "Failed o/s#3: Classifier refused the push" "$r"
 has "a proposed issue is listed" "Cache misses on cold start" "$r"
 has "a PR that is not a number is flagged" 'o/r PR "--web" was noted done, but that is not a PR number, so GitHub was not asked' "$r"
 lacks "and never reaches gh" "[--web]" "$(cat "$FAKE/calls")"
+has "a PR held as a list in an old note is flagged, never breaking the report" 'o/r PR "[1, 2]" was noted done, but that is not a PR number' "$r"
 check_eq "a done note naming neither, in a repo whose issue list failed, is listed once" 1 "$(printf '%s\n' "$r" | grep -c 'Paired on a review')"
 has "a refused question scope modes noted is listed with its folder (#841)" "/r/repo: Merge PR #31, the wording change?" "$r"
 has "every question in it, not only the first" "/r/repo: Keep the old flag?" "$r"

@@ -357,6 +357,9 @@ const wake = async ($: EngineInterface): Promise<string | null> => {
   if (record?.report) {
     const problems = await finishReport($, moved.to, { kind: 'woke' })
     s += problems.length ? ` The night's report at ${record.report} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${record.report}.`
+  } else {
+    // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
+    s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
   }
   return s
 }

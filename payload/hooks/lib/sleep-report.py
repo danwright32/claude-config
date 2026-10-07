@@ -194,6 +194,11 @@ def read_notes(path):
             bad += 1
             continue
         if isinstance(j, dict) and isinstance(j.get("kind"), str):
+            # A number field holding a list or object (written before the writer refused one) is
+            # kept as its text, so it is flagged as not a number rather than breaking the report.
+            for k in ("pr", "issue", "repo"):
+                if isinstance(j.get(k), (list, dict)):
+                    j[k] = json.dumps(j[k])
             notes.append(j)
         else:
             bad += 1
@@ -210,6 +215,12 @@ def append_note(record_path, record, line):
     kind = note.get("kind")
     if not isinstance(kind, str) or not KIND.match(kind):
         raise Refused("the note's kind must be a plain lowercase word, got %s" % json.dumps(kind))
+    for k in ("pr", "issue"):
+        v = note.get(k)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+            raise Refused("the note's %s must be a number, got %s" % (k, json.dumps(v)))
+    if note.get("repo") is not None and not isinstance(note["repo"], str):
+        raise Refused("the note's repo must be owner/name text, got %s" % json.dumps(note["repo"]))
     note["v"] = 1
     note["generation"] = record["generation"]
     if note.get("at") is None:

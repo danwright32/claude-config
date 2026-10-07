@@ -1420,3 +1420,11 @@ test('a note the noun cannot write throws, so the caller can say so (#841)', { p
   await start($ as never, clock)
   expect(await call($ as never, { tool: 'NoteIt', tool_use_id: 'n' } as never)).toBe('threw: sh: notes: Permission denied')
 })
+
+test('a record that reads as asleep but cannot be read once moved aside says the report was not finished (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, replacedBeforeMove: '{"v":1,' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toBe(`Sleep mode is off. The night's report was not finished: the record moved aside to ${SLEEP}/ended/${T0}-woke-s1.json could not be read.`)
+  expect(w.reports).toEqual([])
+})
