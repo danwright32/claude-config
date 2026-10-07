@@ -43,9 +43,9 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 // After a /clear or a resume (session.end with that reason) the process goes on under a new session
 // id and no session.start fires (#735). From then on the next thing to touch the record makes the
 // new conversation's own, inside the queue: the /clear's (or the /resume's) own look once its
-// command has run, a write, or a read of the list. Never left to the next beat, which for up to a minute kept the new
-// conversation out of /goals and let the goal tracker and the job watcher write into the record
-// session.end had just closed. A write queued before the session ended stays on the old record. The
+// command has run, a write, or a read of the list. Never left to the next beat, which for up to a
+// minute kept the new conversation out of /goals and let the goal tracker and the job watcher write
+// into the record session.end had just closed. A write queued before the session ended stays on the old record. The
 // beat still makes it for an id that changed with no session.end seen.
 //
 // Only a look that comes whatever happened, the command's or the beat's, settles that a

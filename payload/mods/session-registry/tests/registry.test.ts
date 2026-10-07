@@ -110,7 +110,6 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
-  on('classic.SessionStart', () => ({}) as never)
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.log', ($, e) => {
     logs.push(e.text)
@@ -470,7 +469,7 @@ test('an end that keeps its id reopens the record once its command has run and f
   expect(l.open.map(s => s.sessionId)).toEqual(['s1'])
 })
 
-test('an end that keeps its id is reopened by the beat too, when no start is announced (#751)', withConsumer, async ($, on) => {
+test('an end that keeps its id is reopened by the beat too, when no command looks (#751)', withConsumer, async ($, on) => {
   const w = world(on)
   await start($)
   await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
