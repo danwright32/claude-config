@@ -123,6 +123,14 @@ else
   has "the lost note is said" "the night's note of this claim could not be written" "$out"
 fi
 
+# ---- a writer that fails without a word is said as that, never as a note that could not be built ----
+eval "real_$(declare -f sleep_note)"
+sleep_note(){ return 1; }
+out="$(sleep_claim "$ROOT" 27 s1 2>&1)"
+eval "$(declare -f real_sleep_note | sed '1s/real_sleep_note/sleep_note/')"
+has "a silent failure of the writer is said as such" "sleep_note failed and gave no reason" "$out"
+lacks "and never as a note that could not be built" "could not be built" "$out"
+
 [ -s "$WORK/gh-called" ] || { fail=$((fail + 1)); echo "FAIL: the wake render never asked the gh stand-in, so the report was never checked as at wake"; }
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"

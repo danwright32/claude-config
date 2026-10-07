@@ -54,9 +54,13 @@ _sq_refuse() { printf 'refused\t-\t%s\n' "$1"; return 3; }
 _sq_note() {
   local kind="$1" self="$2" slug="$3" issue="$4" what="$5" extra="${6:-}" line err now
   now="$(_sq_now)"
-  line="$(python3 "$_SQ_PY" note "$kind" "$self" "$now" "$slug" "$issue" "$extra")" &&
-    err="$(sleep_note "$line" "$(_sq_sleep_dir)/current.json" "$now" 2>&1 >/dev/null)" && return 0
-  printf "sleep-queue: the night's note of this %s could not be written, so the report will not show it (%s)\n" "$what" "${err:-the note could not be built}" >&2
+  # Each step's failure said as itself (L11): building the note, or the writer refusing it.
+  if ! line="$(python3 "$_SQ_PY" note "$kind" "$self" "$now" "$slug" "$issue" "$extra" 2>&1)"; then
+    printf "sleep-queue: the night's note of this %s could not be built, so the report will not show it (%s)\n" "$what" "${line:-sleep-queue.py gave no reason}" >&2
+    return 0
+  fi
+  err="$(sleep_note "$line" "$(_sq_sleep_dir)/current.json" "$now" 2>&1 >/dev/null)" && return 0
+  printf "sleep-queue: the night's note of this %s could not be written, so the report will not show it (%s)\n" "$what" "${err:-sleep_note failed and gave no reason}" >&2
   return 0
 }
 _sq_now() { if [ -n "${SLEEP_NOW_MS:-}" ]; then printf '%s\n' "$SLEEP_NOW_MS"; else printf '%s000\n' "$(date +%s)"; fi; }
