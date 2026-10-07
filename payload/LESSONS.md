@@ -9771,6 +9771,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   missing; the workflow's own comment on the `drive` job already stated the rule.)
   SHORT: A job that runs after an earlier failure does not pass that on: give every job that needs it its own if, or default success() skips it.
 
+- **L755. State a Durable Object keeps only in memory is discarded once it sits idle (after ten seconds when it holds no timers or pending work), so anything a later call depends on must be written to the object's storage, and tested by building a second object over the same storage.** (slate#3479, 2026-10-07)
+  SHORT: A Durable Object's memory is wiped after ten idle seconds; persist what a later call needs and test by rebuilding the object over its storage.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

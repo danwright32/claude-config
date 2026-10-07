@@ -92,3 +92,4 @@ which is NOT loaded into the session.
 - L748. Coordination in a serverless instance's memory spans one instance only; coordinate through a shared store and measure it under spread load.
 - L750. When two writers can create the same row, one a partial recovery copy, the merge on conflict must fill a stored null, not only refuse to overwrite.
 - L754. A job that runs after an earlier failure does not pass that on: give every job that needs it its own if, or default success() skips it.
+- L755. A Durable Object's memory is wiped after ten idle seconds; persist what a later call needs and test by rebuilding the object over its storage.
