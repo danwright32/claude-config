@@ -177,7 +177,12 @@ file. It checks only the block for the machine it runs on, so each Mac confirms 
 Paths use a tilde, never a real home directory: the sync rewrites this file for every Mac and
 `check-home-paths.sh` refuses an absolute one.
 
-On Daniels-MacBook-Pro-2:
+Name the Macs as Dan does (his words, 2026-10-07): Dans-MacBook-Pro is the work MacBook and
+Daniels-MacBook-Pro-2 the personal MacBook. In replies, steps cards and pickers say "the work
+MacBook" or "the personal MacBook", never "the other Mac" or a hostname; hostnames stay in code,
+issues and logs.
+
+On Daniels-MacBook-Pro-2 (personal MacBook):
 - `~/Non-icloudDocuments/Apps/Overture`: moved here 2026-09-08, from `Photography Assets/Dan Wright Photography/Marketing/Outreach/`, after that checkout was deleted while the disk was full and the repo was re-cloned. It no longer lives anywhere surprising.
 - `~/Non-icloudDocuments/Apps/Ovation`: the invoicing app. Absent from this list until 2026-09-17, so the check that reports a moved project did not cover it while it was the project being worked in.
 - `~/Non-icloudDocuments/Apps/backstage`: the shared Swift packages Ovation, Overture and Downbeat all consume, starting with Google sign in and Gmail sending. Public while building, for the Actions minutes, and private after.

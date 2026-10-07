@@ -102,6 +102,9 @@ while IFS= read -r line; do
   case "$line" in
     "On "*:)
       current="${line#On }"; current="${current%:}"
+      # The hostname is the first word; anything after it, like "(personal MacBook)", is the name
+      # Dan calls that machine and is for people, not for matching. A hostname has no spaces.
+      current="${current%% *}"
       blocks=$((blocks + 1))
       continue ;;
   esac
