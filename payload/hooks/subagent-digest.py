@@ -68,28 +68,39 @@ def main():
             obj = json.loads(ln)
         except Exception:
             continue
+        # Valid JSON that is not an object is skipped like an unparseable line. Before this, one
+        # such line raised here, the digest exited 1, and the harvest read that as "the agent said
+        # nothing" and spooled a clean empty record (claude-config#898).
+        if not isinstance(obj, dict):
+            continue
+        # The same for every level below it: a message, content or tool input of another shape is
+        # read as empty rather than raising.
+        msg = obj.get("message")
+        msg = msg if isinstance(msg, dict) else {}
 
         if obj.get("type") == "user" and task is None:
-            content = (obj.get("message") or {}).get("content")
+            content = msg.get("content")
             if isinstance(content, str) and content.strip():
                 task = trim_task(content)
             elif isinstance(content, list):
                 for it in content:
-                    if isinstance(it, dict) and it.get("type") == "text" and (it.get("text") or "").strip():
-                        task = trim_task(it["text"] or "")
+                    if isinstance(it, dict) and it.get("type") == "text" and isinstance(it.get("text"), str) and it["text"].strip():
+                        task = trim_task(it["text"])
                         break
 
         if obj.get("type") != "assistant":
             continue
-        for it in ((obj.get("message") or {}).get("content") or []):
+        content = msg.get("content")
+        for it in (content if isinstance(content, list) else []):
             if not isinstance(it, dict):
                 continue
-            if it.get("type") == "text" and (it.get("text") or "").strip():
-                said.append((it["text"] or "").strip())
+            if it.get("type") == "text" and isinstance(it.get("text"), str) and it["text"].strip():
+                said.append(it["text"].strip())
             elif it.get("type") == "tool_use":
-                inp = it.get("input") or {}
+                inp = it.get("input")
+                inp = inp if isinstance(inp, dict) else {}
                 path = inp.get("file_path") or inp.get("path")
-                if path and path not in touched:
+                if isinstance(path, str) and path and path not in touched:
                     touched.append(path)
 
     body = "\n\n".join(said).strip()
