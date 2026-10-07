@@ -93,6 +93,9 @@ rec = {
     "agent_id": "test-agent-id",
     "hook_event_name": "SubagentStop",
 }
+import os
+if os.environ.get("PAYLOAD_AGENT_ID"):
+    rec["agent_id"] = os.environ["PAYLOAD_AGENT_ID"]
 if sys.argv[2] != "OMIT":
     rec["agent_transcript_path"] = sys.argv[2]
 if sys.argv[3] != "OMIT":
@@ -533,7 +536,11 @@ lines = [
         {"type": "text", "text": "Waiting on the merge helper. The merge was not completed yet."}]}},
 ]
 with open(sys.argv[1], "w") as fh:
-    for rec in lines:
+    fh.write(json.dumps(lines[0]) + "\n")
+    # A line that is valid JSON but not an object. One such line must be skipped, never allowed to
+    # abort the scan and discard every receipt already found.
+    fh.write("[1, 2]\n")
+    for rec in lines[1:]:
         fh.write(json.dumps(rec) + "\n")
 PY_WAIT
 SELF_TASK='{"id":"test-agent-id","type":"subagent","status":"running","description":"Issue 892","agent_type":"general-purpose"}'
@@ -599,6 +606,86 @@ PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_SHELL]" payload "$REPO" "$WAITING_TRANSCRIPT"
 grep -q 'test-agent-id.*bwait0001' "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log" 2>/dev/null \
   && check "#898 a deferred harvest is logged with the agent and the work it waits on" ok \
   || check "#898 a deferred harvest is logged with the agent and the work it waits on" "log=$(cat "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log" 2>/dev/null)"
+
+# A DEFERRAL MUST NEVER BECOME A PERMANENT SKIP. Losing an agent's findings for good is worse than
+# the false "unfinished" findings the deferral removes, so each deferral is a PENDING HARVEST in the
+# spool's own state, and it is harvested anyway on the agent's next stop with no live work of its
+# own, at its third deferral, or two hours after its first, and swept by any later harvest once
+# overdue. The clock is SET, never waited on (L290, L524).
+PENDING_DIR="$CLAUDE_ISSUE_SPOOL_DIR/harvest-pending"
+T0=1800000000
+defer_stop(){ # defer_stop <epoch> [agent id] -> one stop of that agent with its own shell still live
+  PAYLOAD_AGENT_ID="${2:-test-agent-id}" PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_SHELL]" payload "$REPO" "$WAITING_TRANSCRIPT" \
+    | CLAUDE_ISSUE_HARVEST_NOW="$1" bash "$HARVEST" >/dev/null 2>&1
+}
+found_for(){ records | grep "\"agent_id\": *\"$1\"" | grep -c '"status": *"found"'; }
+
+reset_spool
+defer_stop "$T0"
+[ -f "$PENDING_DIR/test-agent-id.json" ] && [ -z "$(records)" ] \
+  && check "#898 a deferral is recorded as a pending harvest in the spool's own state" ok \
+  || check "#898 a deferral is recorded as a pending harvest in the spool's own state" "pending=$(ls "$PENDING_DIR" 2>&1) spool=$(records)"
+
+# The next stop with no live work of its own harvests it and clears the pending record.
+PAYLOAD_BG_TASKS="[$SELF_TASK,$SIBLING_TASK]" payload "$REPO" "$WAITING_TRANSCRIPT" \
+  | CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 60))" bash "$HARVEST" >/dev/null 2>&1
+[ "$(found_for test-agent-id)" = 1 ] && [ ! -e "$PENDING_DIR/test-agent-id.json" ] \
+  && check "#898 the next stop with no live work of its own harvests it and clears the pending record" ok \
+  || check "#898 the next stop with no live work of its own harvests it and clears the pending record" "found=$(found_for test-agent-id) pending=$(ls "$PENDING_DIR" 2>&1)"
+
+# The COUNT cap: two stops are deferred, the third is harvested though its work is still live.
+reset_spool
+defer_stop "$T0"; defer_stop "$((T0 + 60))"
+c2="$(found_for test-agent-id)"
+defer_stop "$((T0 + 120))"
+[ "$c2" = 0 ] && [ "$(found_for test-agent-id)" = 1 ] && [ ! -e "$PENDING_DIR/test-agent-id.json" ] \
+  && check "#898 the third deferral of one agent is harvested anyway" ok \
+  || check "#898 the third deferral of one agent is harvested anyway" "after two=$c2 after three=$(found_for test-agent-id) pending=$(ls "$PENDING_DIR" 2>&1)"
+
+# The AGE cap: a stop two hours after the first deferral is harvested though its work is still live.
+reset_spool
+defer_stop "$T0"
+defer_stop "$((T0 + 7200))"
+[ "$(found_for test-agent-id)" = 1 ] \
+  && check "#898 a stop two hours after the first deferral is harvested anyway" ok \
+  || check "#898 a stop two hours after the first deferral is harvested anyway" "spool=$(records)"
+
+# The case the caps exist for: an agent ends while its own Monitor is still running and never stops
+# again. Any later harvest sweeps it once it is overdue, and not before.
+reset_spool
+PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_MONITOR]" payload "$REPO" "$WAITING_TRANSCRIPT" \
+  | CLAUDE_ISSUE_HARVEST_NOW="$T0" bash "$HARVEST" >/dev/null 2>&1
+PAYLOAD_AGENT_ID=other-agent PAYLOAD_BG_TASKS="[]" payload "$REPO" \
+  | CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 600))" bash "$HARVEST" >/dev/null 2>&1
+early="$(found_for test-agent-id)"
+PAYLOAD_AGENT_ID=third-agent PAYLOAD_BG_TASKS="[]" payload "$REPO" \
+  | CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 7200))" bash "$HARVEST" >/dev/null 2>&1
+# The sweep starts the overdue harvest in the background, so this waits on its RECORD, bounded by a
+# count of checks rather than a fixed sleep (L290).
+for _ in $(seq 1 300); do [ "$(found_for test-agent-id)" -ge 1 ] && break; sleep 0.1; done
+[ "$early" = 0 ] && [ "$(found_for test-agent-id)" = 1 ] && [ -z "$(ls -A "$PENDING_DIR" 2>/dev/null)" ] \
+  && check "#898 an agent that ended with its own Monitor running is swept once overdue, and not before" ok \
+  || check "#898 an agent that ended with its own Monitor running is swept once overdue, and not before" "early=$early later=$(found_for test-agent-id) pending=$(ls -A "$PENDING_DIR" 2>&1)"
+
+# The non-object line in the fixture transcript is skipped rather than aborting the scan: the agent
+# whose receipts all come after it is still deferred.
+reset_spool
+defer_stop "$T0"
+[ -z "$(records)" ] \
+  && check "#898 a non-object transcript line is skipped, never allowed to abort the scan" ok \
+  || check "#898 a non-object transcript line is skipped, never allowed to abort the scan" "spool=$(records)"
+
+# The log is capped the way the archive is, keeping the newest lines.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+seq 1 5100 | sed 's/^/old line /' > "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log"
+defer_stop "$T0"
+log_lines="$(wc -l < "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log" | tr -d ' ')"
+log_last="$(tail -1 "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log")"
+log_newest=0; case "$log_last" in *test-agent-id*) log_newest=1 ;; esac
+[ "$log_lines" -le 5000 ] && [ "$log_newest" = 1 ] \
+  && check "#898 the deferral log is capped at 5000 lines, keeping the newest" ok \
+  || check "#898 the deferral log is capped at 5000 lines, keeping the newest" "lines=$log_lines last=$(tail -1 "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log")"
 
 # ---------------------------------------------------------------------------
 # WHICH transcript is read. The payload carries the parent session's transcript

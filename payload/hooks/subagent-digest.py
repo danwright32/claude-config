@@ -68,6 +68,11 @@ def main():
             obj = json.loads(ln)
         except Exception:
             continue
+        # Valid JSON that is not an object is skipped like an unparseable line. Before this, one
+        # such line raised here, the digest exited 1, and the harvest read that as "the agent said
+        # nothing" and spooled a clean empty record (claude-config#898).
+        if not isinstance(obj, dict):
+            continue
 
         if obj.get("type") == "user" and task is None:
             content = (obj.get("message") or {}).get("content")

@@ -71,6 +71,98 @@ session=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$cwd" ] || cwd="$PWD"
 [ -n "$agent" ] || agent="subagent"
 
+# DEFERRED HARVESTS (claude-config#898). A stop where the agent is only waiting on its own
+# background work is deferred, below, and a deferral must never become a permanent skip: losing an
+# agent's findings for good is worse than the false "unfinished" findings the deferral removes. So
+# each deferral is a PENDING HARVEST in the spool's own state, one file per agent, holding the
+# payload to harvest it from, and it is harvested anyway on the agent's next stop with no live work
+# of its own, at its third deferral, or two hours after its first. An agent that never stops again
+# (it ended while its own Monitor ran) is swept by any later harvest once overdue.
+#
+# The clock is a seam so the limits are tested by SETTING it, never by waiting (L290, L524).
+now="${CLAUDE_ISSUE_HARVEST_NOW:-}"
+case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
+max_deferrals="${CLAUDE_ISSUE_HARVEST_MAX_DEFERRALS:-3}"
+max_defer_seconds="${CLAUDE_ISSUE_HARVEST_MAX_DEFER_SECONDS:-7200}"
+pending_dir="$SPOOL_ROOT/harvest-pending"
+deferred_log="$SPOOL_ROOT/harvest-deferred.log"
+# Capped like the spool archive, keeping the newest lines, so it cannot grow without bound.
+deferred_log_max="${CLAUDE_ISSUE_HARVEST_LOG_MAX:-5000}"
+
+defer_log() { # defer_log <text>
+  mkdir -p "$SPOOL_ROOT" 2>/dev/null
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$deferred_log" 2>/dev/null || return 0
+  local n
+  n="$(wc -l < "$deferred_log" 2>/dev/null | tr -d ' ')"
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$n" -gt "$deferred_log_max" ]; then
+    tail -n "$deferred_log_max" "$deferred_log" > "$deferred_log.$$" 2>/dev/null \
+      && mv "$deferred_log.$$" "$deferred_log" 2>/dev/null
+    rm -f "$deferred_log.$$" 2>/dev/null
+  fi
+  return 0
+}
+
+# One file per agent, named from its id with anything outside a safe set replaced, so an id can
+# never name a path outside the directory.
+pending_file_for() { # pending_file_for <agent id>
+  printf '%s/%s.json' "$pending_dir" "$(printf '%s' "${1:-unknown}" | tr -c 'A-Za-z0-9_.-' '_')"
+}
+
+# The sweep: harvest every pending record that is overdue, by count or by age. A record is CLAIMED
+# by renaming it, which only one sweeper can do, and harvested in a background process of its own
+# group, because a harvest can take most of the hook's own time limit and this run has its own
+# agent to harvest. The claimed file is removed only once that harvest has finished; a claim whose
+# harvest died is claimed again once it is older than a harvest can take (L5, L617).
+self_path="$DIR/$(basename "${BASH_SOURCE[0]}")"
+sweep_overdue() {
+  local f state claimed
+  [ -d "$pending_dir" ] || return 0
+  for f in "$pending_dir"/*.json "$pending_dir"/*.json.claimed "$pending_dir"/*.json.claimed.*; do
+    [ -f "$f" ] || continue
+    [ "$f" = "$(pending_file_for "$agent_id")" ] && continue
+    state="$(python3 -c '
+import json, sys
+now, max_n, max_s = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+try:
+    rec = json.load(open(sys.argv[1]))
+    first, count = int(rec["first_deferred"]), int(rec["count"])
+    claimed = rec.get("claimed_at")
+except Exception:
+    print("overdue"); sys.exit(0)   # unreadable: harvest it rather than keep it for ever (L98)
+if ".claimed" in sys.argv[1]:
+    print("overdue" if claimed is None or now - int(claimed) >= 900 else "wait")
+else:
+    print("overdue" if count >= max_n or now - first >= max_s else "wait")
+' "$f" "$now" "$max_deferrals" "$max_defer_seconds" 2>/dev/null)"
+    [ "$state" = "overdue" ] || continue
+    claimed="${f%%.claimed*}.claimed.$$"
+    mv "$f" "$claimed" 2>/dev/null || continue
+    python3 -c '
+import json, os, sys
+p = sys.argv[1]
+try:
+    rec = json.load(open(p))
+except Exception:
+    rec = {}
+rec["claimed_at"] = int(sys.argv[2])
+with open(p + ".tmp", "w") as fh:
+    json.dump(rec, fh)
+os.replace(p + ".tmp", p)
+' "$claimed" "$now" 2>/dev/null
+    defer_log "swept the overdue pending harvest in $(basename "$f")"
+    perl -e 'setpgrp(0, 0); exec @ARGV' bash -c '
+      python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))[\"payload\"]))" "$1" \
+        | CLAUDE_ISSUE_HARVEST_FORCE=1 bash "$2" >/dev/null 2>&1
+      st=$?
+      # Released for the next sweep under the name it would look for, unless the harvest ran.
+      if [ "$st" -eq 0 ]; then rm -f "$1"; else mv "$1" "${1%.claimed.*}.claimed" 2>/dev/null; fi
+    ' sweep "$claimed" "$self_path" >/dev/null 2>&1 &
+  done
+  return 0
+}
+[ -n "${CLAUDE_ISSUE_HARVEST_FORCE:-}" ] || sweep_overdue
+
 # THE TRANSCRIPT TO READ IS `agent_transcript_path`, NOT `transcript_path`.
 # A SubagentStop payload carries both, and `transcript_path` is the transcript
 # of the SESSION THAT SPAWNED the agent. Reading that one does not fail: it
@@ -130,8 +222,9 @@ fi
 #
 # Anything that cannot be read here (no field, not a list, an unreadable line) harvests as before:
 # a skipped harvest leaves no record, so a doubt is resolved toward harvesting (L98). A deferral
-# writes one line outside the spool, so a harvest that never came back can still be found.
-waiting_on=$(printf '%s' "$input" | python3 -c '
+# is recorded as a pending harvest (see DEFERRED HARVESTS above), never only as a log line.
+waiting_on=""
+[ -n "${CLAUDE_ISSUE_HARVEST_FORCE:-}" ] || waiting_on=$(printf '%s' "$input" | python3 -c '
 import json, re, sys
 try:
     payload = json.load(sys.stdin)
@@ -156,6 +249,8 @@ try:
                 rec = json.loads(line)
             except Exception:
                 continue
+            if not isinstance(rec, dict):
+                continue   # valid JSON that is not an object is skipped, never fatal to the scan
             msg = rec.get("message")
             content = msg.get("content") if isinstance(msg, dict) else None
             if not isinstance(content, list):
@@ -181,12 +276,50 @@ except Exception:
     sys.exit(0)
 print(" ".join(sorted(own)))
 ' "$transcript" 2>/dev/null)
+pending_file="$(pending_file_for "$agent_id")"
 if [ -n "$waiting_on" ]; then
-  mkdir -p "$SPOOL_ROOT" 2>/dev/null
-  printf '%s deferred the harvest of agent %s (%s): it stopped with its own background work still running: %s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${agent_id:-unknown}" "$transcript" "$waiting_on" \
-    >> "$SPOOL_ROOT/harvest-deferred.log" 2>/dev/null
-  exit 0
+  # Read, count and write back the pending harvest. Anything unreadable starts a fresh count rather
+  # than blocking, and a write that fails harvests now: a deferral nothing recorded could be lost.
+  decision=$(printf '%s' "$input" | python3 -c '
+import json, os, sys
+path, now, max_n, max_s = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    print("harvest unreadable payload"); sys.exit(0)
+payload.pop("background_tasks", None)
+first, count = now, 0
+try:
+    old = json.load(open(path))
+    first, count = int(old["first_deferred"]), int(old["count"])
+except Exception:
+    pass
+count += 1
+if count >= max_n:
+    print("harvest its deferral count reached %d" % count); sys.exit(0)
+if now - first >= max_s:
+    print("harvest its first deferral was %d seconds ago" % (now - first)); sys.exit(0)
+rec = {"agent_id": payload.get("agent_id"), "transcript": payload.get("agent_transcript_path"),
+       "first_deferred": first, "count": count, "payload": payload}
+try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as fh:
+        json.dump(rec, fh)
+    os.replace(path + ".tmp", path)
+except Exception:
+    print("harvest the pending record could not be written"); sys.exit(0)
+print("defer %d" % count)
+' "$pending_file" "$now" "$max_deferrals" "$max_defer_seconds" 2>/dev/null)
+  case "$decision" in
+    defer*)
+      defer_log "deferred the harvest of agent ${agent_id:-unknown} (${decision#defer }) ($transcript): it stopped with its own background work still running: $waiting_on"
+      exit 0 ;;
+    *)
+      defer_log "harvested agent ${agent_id:-unknown} though its own background work is still running ($waiting_on): ${decision#harvest }"
+      rm -f "$pending_file" 2>/dev/null ;;
+  esac
+else
+  rm -f "$pending_file" 2>/dev/null
 fi
 
 # The digest's EXIT CODE is what tells an unreadable transcript from an agent
