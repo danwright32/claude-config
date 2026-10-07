@@ -399,6 +399,24 @@ def main(argv):
             e["why"] = argv[5]
         print(json.dumps(e))
         return 0
+    if cmd == "note" and len(argv) in (7, 8):
+        # The night's note of a claim or its end (#844), built here so a reason with quotes is
+        # still one JSON object. A claim is noted as `claim` with its attempt; done, parked and
+        # failed as themselves, so the report pairs each claim with its end (#835); free and
+        # unstarted as `released`, since the issue was given back rather than ended.
+        kind, sid, at, repo, issue = argv[2], argv[3], int(argv[4]), argv[5], int(argv[6])
+        extra = argv[7] if len(argv) == 8 else ""
+        n = {"kind": "released" if kind in ("free", "unstarted") else kind, "by": sid, "repo": repo, "issue": issue}
+        if kind == "claim":
+            n["attempts"] = int(extra)
+        else:
+            if kind in ("free", "unstarted"):
+                n["state"] = kind
+            if extra:
+                n["text"] = extra
+        n["at"] = at
+        print(json.dumps(n))
+        return 0
     if cmd == "slug" and len(argv) == 3:
         # The one reading of an origin URL, for the shell too, so both sides agree on which count.
         s = slug_of(argv[2])
