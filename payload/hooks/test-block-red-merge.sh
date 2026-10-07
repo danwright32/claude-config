@@ -1184,6 +1184,8 @@ if holds "$out" "3 commits behind trunk"; then pass; else fail "the refusal does
 if holds "$out" "gh pr update-branch 7 --repo acme/widget"; then pass; else fail "the refusal does not hand over the update command: $out"; fi
 if says "$out" "wait for the new checks"; then pass; else fail "the refusal does not say to wait for the new checks: $out"; fi
 if holds "$out" "ALLOW_BEHIND_MERGE=1"; then pass; else fail "the refusal does not name its own override: $out"; fi
+# #851: and the one step remedy, carrying this merge's own method so it merges the same way.
+if holds "$out" "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo acme/widget --squash ."; then pass; else fail "#851 the refusal does not hand over the one step update, wait and merge: $out"; fi
 rm -rf "$dir"
 
 # One commit behind reads in the singular.

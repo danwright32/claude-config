@@ -415,7 +415,26 @@ is shown, and the nudge reaches whichever session prompts next), so the gate's r
 presents it as `PR_REVIEW_READ=<key> <the merge command>`; until then every attempt is refused
 with the findings again. A head
 with no review gets one started by the gate. A repo whose own script merges inside it asks the same
-checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does.
+checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
+allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
+
+The review is the PULL REQUEST's, wherever the merge is run from (claude-config#852). The gate
+labels it with the pull request's own head branch (`--branch`, from `headRefName`), never the branch
+the merging checkout happens to be on, which on a shared primary checkout is another session's work;
+without a label the checkout's branch is used only when it stands on the reviewed commit, and the
+short commit otherwise. And the base it diffs from is fetched from origin first, never this
+checkout's copy, which can be far behind (a merge from a primary checkout 130 commits stale diffed
+305 KB against the 300 KB cap). When origin cannot be reached the review says its base may be stale.
+
+A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
+be updated, waited on and merged in one step, run in the background from a checkout of the
+repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
+(claude-config#851). It updates the branch, starts the new head's lessons review alongside its
+checks, waits for both, updates again if the base has moved meanwhile (three times at most), and
+then hands the exact pinned merge command to `block-red-merge.sh` and `pr-review-gate.sh` and merges
+only when both allow it, so it decides nothing either gate would refuse. It carries only the merge
+method and `--delete-branch`, and stops, in its own words, on a gate's refusal, on findings to read
+(come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its hour runs out.
 
 Every outcome is named and none reads as clean by accident: finished with findings, finished clean,
 still running (with elapsed time), did not finish, failed, came back empty, answered in some other
