@@ -190,7 +190,8 @@ const ghVerdict = (words: readonly string[]): GhVerdict => {
   // be read, so it reaches a repository that cannot be resolved.
   if (a.unreadable) return { write: null }
   if (sub === 'api') return apiVerdict(a)
-  if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || (!sub && a.flags.length)) return undefined
+  // gh with no subcommand only prints its help or version.
+  if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || !sub) return undefined
   // Changing or removing a comment is not posting one (decision 3 needs only that).
   if (act === 'comment' && hasFlag(a, '--delete-last', '--edit-last')) return { refuse: 'edit or delete a comment' }
   if (sub === 'pr') {
@@ -249,7 +250,7 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
 // do, else, elif, while, until, !) and any assignments (a GH_ one is refused above), as the shell
 // and mod-kit's reader both place it (#834 review of 98a40f1).
 const GH_DIRECT = /(?:^|[;&|(){}\n])(?:\s*(?:if|then|do|else|elif|while|until|!)(?=\s))*\s*(?:[A-Za-z_]\w*=\S*\s+)*gh(?=\s|$)/g
-const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate)\s(?:[^;&|\n]*\s)?gh(?=\s|$)/
+const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command(?!\s+-[vV]\b)|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate)\s(?:[^;&|\n]*\s)?gh(?=\s|$)/
 const unquoted = (raw: string): string => {
   const body = raw.replace(/(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?\n\s*\3[ \t]*(?=\n|$)/g, '$1')
   let out = ''
@@ -312,7 +313,8 @@ const mcpWrites = (tool: string): boolean => {
   return !words.some(w => READS.has(w)) || words.some(w => WRITES.has(w))
 }
 
-const DB_CLIENTS: ReadonlySet<string> = new Set(['psql', 'mysql', 'mariadb'])
+// The commands that name a program without running it: printing its name, or finding where it is.
+const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'type', 'whereis', 'man', 'brew'])
 const SYNC_REFUSED = (sub: string | undefined) => sub !== undefined && (sub === 'pull' || sub === 'sync' || sub === 'apply-only' || sub.startsWith('install'))
 
 /**
@@ -338,6 +340,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither
   // the call nor where it goes can be read, so it is refused (#834 review).
   if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && /\bgh\b/.test(call.raw)) return UNRESOLVED
+  // The words that stand outside quotes and heredocs, so gh named in a message is never a gh call.
+  const unquotedWords = new Set(unquoted(call.raw).split(/[\s;&|(){}<>]+/).filter(Boolean))
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
   for (const c of call.commands) {
@@ -368,10 +372,11 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
     if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && /\b(?:gh|git|psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text))
       return 'run code that runs gh, git or a database client, which cannot be judged'
-    // A command run by a wrapper the reader does not look past (setsid, stdbuf, chronic): its first
-    // argument that is no flag or assignment names gh, so a gh call is hidden behind it.
-    const first = words.slice(1).find(w => !w.startsWith('-') && !/^[A-Za-z_]\w*=/.test(w))
-    if (cmd !== 'gh' && !['echo', 'printf'].includes(cmd) && first !== undefined && name(first) === 'gh') return UNRESOLVED
+    // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
+    // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
+    // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
+    // running it are let through; a command missing from that list fails closed.
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some(w => name(w) === 'gh' && unquotedWords.has(w))) return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look)
       if (why) return why
@@ -389,7 +394,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     const syncSub = cmd === 'claude-sync' ? words[1] : SHELLS.has(cmd) && name(words[1]) === 'claude-sync' ? words[2] : undefined
     if (SYNC_REFUSED(syncSub)) return `run claude-sync ${syncSub}`
     if (cmd === 'supabase' && DEPLOYERS.supabase?.(words.slice(1))) return 'change a database with supabase'
-    const sql = databaseRefusal({ ...c, words }, DB_CLIENTS)
+    // The one list of database clients no build reads too (L370), sqlite3 included.
+    const sql = databaseRefusal({ ...c, words })
     if (sql) return sql.what
   }
   return undefined

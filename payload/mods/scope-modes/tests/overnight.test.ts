@@ -168,8 +168,13 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
     expect(await bash('stdbuf -o0 gh pr merge 5 --squash')).toBe(unresolved)
     expect(await bash('chronic /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
-    // Saying the word is not running it.
-    expect(await bash('echo gh is slow today')).toBeUndefined()
+    expect(await bash('timeout 30 gh pr merge 5')).toBe(unresolved)
+    expect(await bash('frobwrap --quiet gh issue comment 5 --body x')).toBe(unresolved)
+    expect(await bash('frobwrap 5 gh pr merge 5')).toBe(unresolved)
+    // Saying the word inside quotes is not running it.
+    expect(await bash('echo "gh is slow today"')).toBeUndefined()
+    // Finding where gh is runs nothing (#834 review of 00abaed).
+    expect(await bash('which gh && command -v gh && type gh')).toBeUndefined()
   })
   test('code the reader cannot read, or that runs gh, git or a database itself, is refused (#834 review of 46f07ff)', async () => {
     expect(await bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`)).toBe('run code that runs gh, git or a database client, which cannot be judged')
@@ -284,6 +289,9 @@ describe('outward tools: every write under claude.ai, Chrome and PostHog, and da
     expect(await tool('Skill', { skill: 'db-apply' })).toBe('run the db-apply skill')
     expect(await bash(`psql "$DATABASE_URL" -c 'update t set a = 1'`)).toMatch(/update|change/i)
     expect(await bash('supabase db push')).toBe('change a database with supabase')
+    // One list of database clients for no build and overnight (L370), sqlite3 included.
+    expect(await bash(`sqlite3 data.db 'delete from t'`)).toMatch(/delete|change/i)
+    expect(await bash(`sqlite3 data.db 'select 1'`)).toBeUndefined()
   })
 })
 
