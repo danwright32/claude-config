@@ -358,6 +358,20 @@ check_has "a claim lost after the queue is a skip line with its reason" "$(print
 # A repository whose git folder lives elsewhere still gets its worktree beside its checkout.
 git clone -q --separate-git-dir "$WORK/sep.git" "$WORK/demo.git" "$WORK/seprepo"
 check_eq "a separate git folder puts the worktree beside the checkout" "$WORK/seprepo/.claude/worktrees/sleep-31" "$(sleep_worktree "$WORK/seprepo" 31 2>&1)"
+# A fetch that hangs is stopped at its deadline and gives the issue back (L110). The remote is an
+# ssh one whose ssh is a script that only waits, so nothing leaves this machine.
+git clone -q "$WORK/demo.git" "$WORK/hangrepo"
+git -C "$WORK/hangrepo" config remote.origin.url git@github.com:danwright32/demo.git
+printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$WORK/hang.pid" > "$WORK/bin/hang-ssh"; chmod +x "$WORK/bin/hang-ssh"
+t0=$(date +%s)
+out="$(GIT_SSH_COMMAND="$WORK/bin/hang-ssh" SLEEP_FETCH_TIMEOUT=2 sleep_worktree "$WORK/hangrepo" 33 2>&1)"; rc=$?
+t1=$(date +%s)
+check_eq "a hung fetch gives the issue back" 2 "$rc"
+check_has "saying it was stopped at its deadline" "took longer than 2s and was stopped" "$out"
+check_eq "and returns well inside the hang" yes "$([ $((t1 - t0)) -lt 20 ] && echo yes || echo "no, $((t1 - t0))s")"
+hp="$(cat "$WORK/hang.pid" 2>/dev/null)"
+check_eq "the hung fetch's ssh really ran" yes "$([ -n "$hp" ] && echo yes || echo no)"
+check_eq "and is stopped with it, not left running" no "$([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo yes || echo no)"
 git init -q --bare "$WORK/bare.git"
 out="$(sleep_worktree "$WORK/bare.git" 32 2>&1)"; rc=$?
 check_eq "a bare repository is refused for good" 1 "$rc"

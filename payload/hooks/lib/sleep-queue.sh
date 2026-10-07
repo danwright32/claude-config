@@ -304,7 +304,19 @@ sleep_worktree() {
   if git -C "$primary" show-ref --verify -q "refs/heads/$branch"; then
     git -C "$primary" worktree add -q "$path" "$branch" >/dev/null 2>&1 || { echo "git worktree add $path $branch failed" >&2; return 2; }
   else
-    git -C "$primary" fetch -q origin 2>/dev/null || { echo "git fetch from origin failed in $primary" >&2; return 2; }
+    # Unattended, so the fetch has a deadline (L110): a hung network gives the issue back rather
+    # than holding the claim with no end. perl, since macOS has no timeout command; the fetch runs
+    # in a process group of its own and the whole group is stopped, so its ssh goes with it (L321).
+    local limit="${SLEEP_FETCH_TIMEOUT:-120}" frc
+    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4" \
+      perl -e 'my $t = shift; my $pid = fork; exit 127 unless defined $pid;
+        if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
+        $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 1; kill "KILL", -$pid; waitpid($pid, 0); exit 142 };
+        alarm $t; waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$limit" \
+      git -C "$primary" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch -q origin 2>/dev/null
+    frc=$?
+    if [ "$frc" = 142 ]; then echo "git fetch from origin in $primary took longer than ${limit}s and was stopped" >&2; return 2; fi
+    [ "$frc" = 0 ] || { echo "git fetch from origin failed in $primary" >&2; return 2; }
     base="$(git -C "$primary" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
     [ -n "$base" ] || base=origin/main
     if git -C "$primary" show-ref --verify -q "refs/remotes/origin/$branch"; then base="origin/$branch"; fi
