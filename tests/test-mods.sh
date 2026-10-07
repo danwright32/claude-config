@@ -1408,8 +1408,8 @@ export const register = on => {
 }
 TS
   python3 -c 'import sys; p=sys.argv[1]; t=open(p).read(); open(p, "w", newline="").write("\ufeff" + t.replace("\n", "\r\n"))' "$M12W/crlf-local/hooks/register.ts"
-  # A call the checker resolves to a symbol with no declarations (an import of a file that does not
-  # exist, or a bare global) is followed by name as before, never a crash of the resolver (#895).
+  # A call the checker resolves to nothing in the mod (an import of a file that does not exist, or a
+  # bare global) reaches no function of the mod, and never crashes the resolver (#895).
   mknounmod "$M12W" unresolved-import loose <<'TS'
 import { gone } from './missing.ts'
 export const register = on => {
@@ -1419,9 +1419,21 @@ export const register = on => {
   })
 }
 TS
+  # A race member named by a constant declared beside another in one statement is read as the timer
+  # it holds (#895, lessons review).
+  mknounmod "$M12W" multi-declarator paired <<'TS'
+const waiters = new Map()
+const quick = 1, held = new Promise(r => setTimeout(r, 1_000))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, paired: { wait: ({ id }) => Promise.race([new Promise(resolve => waiters.set(id, resolve)), held]) } }
+  })
+}
+TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"35 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"36 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1450,7 +1462,7 @@ TS
   ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
     && check "a local helper is judged by its own calls, never a same-named one's (#895)" ok \
     || check "a local helper is judged by its own calls, never a same-named one's (#895)" "$out"
-  for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl crlf-local unresolved-import; do
+  for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl crlf-local unresolved-import multi-declarator; do
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.

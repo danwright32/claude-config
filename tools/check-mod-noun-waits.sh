@@ -28,8 +28,9 @@
 # every function of the mod those call. A called name is resolved by the TypeScript compiler's own
 # checker (tools/lib/ts-resolve.mjs, run on the compiler pinned in tools/typescript), so scope,
 # shadowing, parameters and imports are the language's answer, never the first declaration of that
-# name anywhere in the mod (#895). A name the checker finds no symbol for is followed by name, as
-# before.
+# name anywhere in the mod (#895). A name it resolves to something outside the mod (a global, an
+# import of a missing file) reaches no function of the mod; only one it finds no symbol for at all
+# is followed by name, as before.
 #
 # Measured live on 2026-10-05 (2.1.289, a throwaway plugin in a headless `claude -p`, #756): a
 # noun's 10 s does NOT stop while its own `$` calls are in flight, unlike a hook's budget. A noun
@@ -218,8 +219,8 @@ def resolve_all(mods):
 def resolve(files, f, at, name):
     """The function the identifier name at position at in f reaches, as the compiler's checker
     resolves it (#895): (file, start, end), or None when it names a declaration, a parameter, or
-    anything else that is not a function the mod declares. One the checker finds no symbol for is
-    followed by name, as before."""
+    anything else that is not a function the mod declares, a global or an import of a missing file
+    among them. Only one the checker finds no symbol for at all is followed by name, as before."""
     role, target = f.refs.get(at, ("ref", None))
     if role == "decl":
         return None
@@ -534,7 +535,9 @@ def is_timer(f, a, b, files, consts):
         seen = declared_value(f, a + lead)
         if seen:
             g, d = seen
-            made = re.match(r"(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code[d:])
+            # The resolver gives a lone declarator's statement start, or a declarator's own name
+            # where a statement declares several.
+            made = re.match(r"(?:(?:const|let|var)\s+)?" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code[d:])
             if made:
                 return judge(g, d + made.end(), files, consts) is None
     return False
