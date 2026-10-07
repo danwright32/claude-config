@@ -1249,3 +1249,10 @@ test('sleep beginning takes the held card away until wake', withDeps, async ($, 
   await command($ as never, 'sleep')
   expect(w.cleared.slice(cleared)).toContain('held')
 })
+
+test('with this boot unreadable, a sound record is never called broken: /sleep says what it could not read', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { boot: null, files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe("Sleep mode did not start: this boot's start could not be read (sysctl: unknown oid).")
+  expect(w.files[CURRENT]).toBe(asleepRecord())
+})

@@ -209,6 +209,10 @@ const startedWhere = (r: SleepRecord) => `it started at ${etWhen(r.since)} in ${
 // /sleep (#840). Only the record and the workers here: the before bed questions (phase 6, #836),
 // paging (phase 2, #841) and the overnight driver (phase 8, #844) build on this record.
 const startSleep = async ($: EngineInterface): Promise<string> => {
+  // This boot first: without it no record can be judged, and one that is sound must never be
+  // called broken for it (L11), nor a new one written that could not be told from an old boot's.
+  const b = await thisBoot($)
+  if (!('boot' in b)) return `Sleep mode did not start: this boot's start could not be read (${b.why}).`
   let reading = await sleepNow($)
   if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
   if (reading.state === 'unreadable') {
@@ -223,8 +227,6 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   const p = await sleepPaths($)
   // Phase 6's before bed questions hold a preparing marker while they ask; a second /sleep waits on them.
   if (await $.fs.exists(p.preparing)) return 'Sleep mode is already being prepared in another session. Nothing changed.'
-  const b = await thisBoot($)
-  if (!('boot' in b)) return `Sleep mode did not start: this boot's start could not be read (${b.why}).`
   const now = await $.clock.now()
   const self = await $.session.id()
   const night = nightOf(now)
