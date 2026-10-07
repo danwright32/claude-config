@@ -43,6 +43,9 @@ describe('the repository a gh command names', () => {
     expect([a.sub, a.act, a.positionals, a.named]).toEqual(['pr', 'close', ['5'], 'other/x'])
     expect(gh('gh --repo=o/x pr merge 3').named).toBe('o/x')
     expect(gh('gh --repo o/x pr merge 3').sub).toBe('pr')
+    // Read once, as a global flag, whatever value flags the subcommand has (#834 review of 734e266).
+    const api = gh('gh -R o/x api repos/o/r/pulls')
+    expect([api.named, ghApi(api).endpoint]).toEqual(['o/x', 'repos/o/r/pulls'])
   })
   test('an unknown flag before the subcommand makes the repository unresolvable', () => {
     const a = gh('gh --frob x pr close 5')

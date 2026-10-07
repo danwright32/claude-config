@@ -78,8 +78,11 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
   for (; lead < rest.length; lead++) {
     const w = rest[lead] as string
     if (!w.startsWith('-')) break
-    if (w === '-R' || w === '--repo') lead++
-    else if (/^(?:-R.|--repo=)/.test(w) || GLOBAL_BOOLEANS.has(w)) continue
+    // Each read here, once, as the global flag it is, never again by the subcommand's own table.
+    if (w === '-R' || w === '--repo') flags.push({ name: w, value: (rest[++lead] as string | undefined) ?? true })
+    else if (w.startsWith('--repo=')) flags.push({ name: '--repo', value: w.slice('--repo='.length) })
+    else if (/^-R./.test(w)) flags.push({ name: '-R', value: w.slice(2) })
+    else if (GLOBAL_BOOLEANS.has(w)) flags.push({ name: w, value: true })
     else unreadable = true
   }
   // The subcommand and action are then the first two words that are not flags.
@@ -91,10 +94,8 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
   // value off as the action (`gh pr --body view close`), so the call cannot be read (#834 review).
   if (actAt > subAt + 1) unreadable = true
   const shortValues = shortValuesFor(sub, act)
-  let k = 0
-  // A flag's value taken from the next word. One that looks like a flag itself means this reader
-  // has a flag's arity wrong (`-yd -R other/x`), and a repository flag may be swallowed, so the
-  // call cannot be read (#834 review of af10401).
+  // The global flags before the subcommand are read above, so this reading starts past them.
+  let k = lead
   // A flag that takes a value takes the next word whatever it starts with, as gh does
   // (`--body "- fixed X"`, `--body-file -`).
   const takeNext = (): string => rest[++k] as string
