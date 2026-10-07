@@ -524,6 +524,34 @@ out_order="$(run "$ORDER" MacOne)"; code_order=$?
   || check "a project with no file anywhere outranks one whose file is empty" "exit=$code_order out=$out_order"
 
 # ---------------------------------------------------------------------------
+# A heading may carry the name Dan calls the machine beside its hostname, as in
+# "On MacOne (personal MacBook):". The hostname is still what the block is matched on. Without
+# that, every entry under such a heading belongs to no machine and the run ends in the quiet "no
+# entries for this Mac" pass (L98), so the control is a MISSING path under a named heading, which
+# must still be caught.
+# ---------------------------------------------------------------------------
+NAMED="$(mkfile named.md "## Projects
+
+On MacOne (personal MacBook):
+- \`$TMPROOT/here/AppOne\`
+- \`$TMPROOT/here/GoneUnderName\`
+
+On MacTwo (work MacBook):
+- \`$TMPROOT/nowhere/AppThree\`
+
+## Writing Style")"
+out_named="$(run "$NAMED" MacOne)"; code_named=$?
+[ "$code_named" -eq 1 ] \
+  && check "a heading carrying a friendly name is still matched on its hostname" ok \
+  || check "a heading carrying a friendly name is still matched on its hostname" "exit=$code_named out=$out_named"
+grep -q 'GoneUnderName' <<< "$out_named" \
+  && check "and the missing path under it is named" ok \
+  || check "and the missing path under it is named" "out=$out_named"
+grep -q 'AppThree' <<< "$out_named" \
+  && check "and the other named machine's entries are not checked here" "it complained about AppThree" \
+  || check "and the other named machine's entries are not checked here" ok
+
+# ---------------------------------------------------------------------------
 # The real file, last, by which point the checker has been watched failing several ways. On this
 # Mac it names real projects; on the CI runner it names neither Mac and says so.
 #

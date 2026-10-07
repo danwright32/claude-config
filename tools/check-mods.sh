@@ -50,11 +50,12 @@ for d in "${mods[@]}"; do
 done
 
 # No mod hooks an event Claude Code's built-in security default sends past the user tier every mod
-# loads in (#875). Seated outermost for a Team or Enterprise organization (both Macs), it routes each
-# of these straight to the tier beneath, so a mod's hook on one never runs, and nothing says so but a
-# debug log line. Its own code in 2.1.292: e("classic.*",(n,o,t)=>t.to(o,"append")), and the same for
-# each name below. A hook that cannot move yet is listed by mod and event in BYPASS_KNOWN with the
-# issue deciding it. Filesystem only, so it holds on CI's runner too; where a claude binary is found,
+# loads in (#875). Seated outermost for a Team or Enterprise organization, it routes each of these
+# straight to the tier beneath, so a mod's hook on one never runs, and nothing says so but a debug log
+# line. Its own code in 2.1.292: e("classic.*",(n,o,t)=>t.to(o,"append")), and the same for each name
+# below. Both Macs keep it out of first place with a managed settings file (#876), so these hooks run
+# there, but only while that file is in place: each is listed by mod and event in BYPASS_KNOWN with
+# the issue deciding it, so depending on the file is a decision, never an accident. Filesystem only, so it holds on CI's runner too; where a claude binary is found,
 # the list is compared with that build's own routes below.
 BYPASSED_ROUTES="attribution.text
 classic.*
@@ -112,7 +113,7 @@ for d in "${mods[@]}"; do
     [ -n "$ev" ] || continue
     is_bypassed "$ev" || continue
     if printf '%s\n' "$known_bypass" | grep -qxF "$name	$ev"; then continue; fi
-    echo "check-mods: $name hooks $ev, which Claude Code's built-in security default sends past the user tier mods load in, so it never runs (#875). Move it to an event that reaches a mod (tool.check for a PreToolUse check, turn.complete, command.run, session.end), or list it in $BYPASS_KNOWN with the issue deciding it."
+    echo "check-mods: $name hooks $ev, which Claude Code's built-in security default sends past the user tier mods load in wherever it sits first (#875), so it runs only while /Library/Application Support/ClaudeCode/managed-settings.json keeps it out of first place (#876). Move it to an event that reaches a mod (tool.check for a PreToolUse check, turn.complete, command.run, session.end), or list it in $BYPASS_KNOWN with the issue deciding it."
     failed=1
   done <<< "$(printf '%s\n' "$evs" | LC_ALL=C sort -u)"
   # A listed hook this mod no longer registers: the line comes down, or it would excuse the next one.
