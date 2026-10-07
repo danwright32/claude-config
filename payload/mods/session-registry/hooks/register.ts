@@ -57,10 +57,12 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 // reads, other sessions do not see those writes, and if it never reads they never land, which the
 // debug log says once (lessons review of #739).
 //
-// Measured (#751 item 1, L82): Claude Code has switched the id by the time the /clear's command has
-// run. A real /clear in an interactive `claude --debug` session on Claude Code 2.1.292, on
-// Daniels-MacBook-Pro-2 on 2026-10-07, with the managed settings file from #876 in place (so the
-// built in security default was not seated and did not bypass the mod), logged:
+// Measured once (#751 item 1, L82), and only for what follows: on Claude Code 2.1.292 the id had
+// switched by the time a /clear's command had run. One real /clear in an interactive
+// `claude --debug` session on Daniels-MacBook-Pro-2 on 2026-10-07, with the managed settings file
+// from #876 in place (so the built in security default was not seated and did not bypass the mod),
+// logged the line below. A /resume, another version, the other Mac, and a session where the
+// security default is seated were not measured:
 //   session-registry: once the /clear had run, the session id read 22710d14-5752-45bc-9bb6-51fd4f045c46;
 //   session.end had closed 28ec71a1-bfdd-470d-835f-6a7bc11c5f06, so the id had already switched.
 // Every look once a /clear or a /resume has run still says in the debug log which id it saw against
