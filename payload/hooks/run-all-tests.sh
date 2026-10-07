@@ -607,21 +607,26 @@ if [ "$ran" -gt 0 ]; then
   _live_spool="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
   _spool_before="$(ls -1 "$_live_spool" 2>/dev/null | sort)"
   _spool_before_bytes="$(cat "$_live_spool"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
-  # Each file's own size, so what was ADDED can be read back rather than only counted
+  # Every RECORD already there, so what was ADDED can be read back rather than only counted
   # (claude-config#230). The totals alone cannot say WHO wrote, and the spool is a machine wide
   # store with other legitimate writers: this Mac routinely has several Claude sessions going, and
   # a harvest firing in another project during a run reads here as a suite violating L2. Measured
   # 2026-08-30, a green run of all 44 suites was failed by 1,180 bytes written by a session working
   # in a different repository entirely.
-  # ONE `wc`, not one per file (claude-config#239). The loop forked once per spool file, and the
-  # real spool on this Mac holds 157 of them: measured 2026-09-03, that was 414ms of a 600ms
-  # launch, paid by every run of this runner and by 65 of the 69 launches its own suite makes.
-  # `wc -c` over the whole glob prints the same size and path per line, and the ordering does not
-  # matter because every reader looks a path up by name. It also prints a "total" line, which is
-  # dropped for clarity rather than for safety: a row keyed "total" cannot match a path, so leaving
-  # it in changes nothing, and a test was written expecting it to matter and did not discriminate.
-  _spool_sizes_before="$(wc -c "$_live_spool"/*.jsonl 2>/dev/null \
-    | awk '$2 != "total" && NF >= 2 { printf "%s\t%s\n", $1, $2 }')"
+  #
+  # Records, not each file's old SIZE (claude-config#880). Judging the bytes past a file's old size
+  # assumed every other writer only appends, and they do not: a clear moves records from a pending
+  # file into its archive, file-errors rewrites a file in place, compaction rewrites the lot. Any of
+  # those mid run put records nobody added, or the middle of one, past the old offset, and the run
+  # was failed with every suite passing; measured 2026-10-06, three full runs of 116 green suites,
+  # one of them while the spool SHRANK. A record that already existed anywhere in the spool is not
+  # new wherever it is moved to, and removing records adds none, so a drain can never fail a run.
+  # One `cat` of the whole glob, which costs about 10ms on the real 11MB spool (claude-config#239
+  # is why nothing here forks once per file). What it gives up: a suite appending a line
+  # byte-identical to one already in the spool is not seen, and a write under this run carries
+  # this run's id, so its record can never be identical to an older one.
+  _spool_before_records="$WORK/live-spool-before.jsonl"
+  cat "$_live_spool"/*.jsonl > "$_spool_before_records" 2>/dev/null || true
 
   # WHO wrote, answered positively (claude-config#275). Reading the directory off the record tells
   # a suite from another project's session, which is what #230 needed, and it cannot tell a suite
@@ -633,7 +638,11 @@ if [ "$ran" -gt 0 ]; then
   # every record it appends, and a record carrying one was written under a test run whatever
   # directory it names. A record carrying none was not. That is one fact rather than a heuristic on
   # top of a heuristic (L70).
-  CLAUDE_SUITE_RUN_ID="run-all-tests.$$.$(date +%s)"
+  #
+  # A run started UNDER another run extends that run's id rather than replacing it
+  # (claude-config#880), so the outer run can claim a record its nested run's suites wrote by
+  # prefix, and a stamp from some unrelated run elsewhere on this machine is not this run's.
+  CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:+$CLAUDE_SUITE_RUN_ID/}run-all-tests.$$.$(date +%s)"
   export CLAUDE_SUITE_RUN_ID
 
   # And the stamp is PROVED before an absence is read as evidence. A stamping that quietly stopped
@@ -653,7 +662,7 @@ if [ "$ran" -gt 0 ]; then
           "proving that a write made under a test run is stamped with the run id" run-all-tests \
           >/dev/null 2>&1
       )
-      grep -q -- "$CLAUDE_SUITE_RUN_ID" "$_sp_canary"/*.jsonl 2>/dev/null && _sp_marker_works=1
+      grep -q -F -- "$CLAUDE_SUITE_RUN_ID" "$_sp_canary"/*.jsonl 2>/dev/null && _sp_marker_works=1
       rm -rf "$_sp_canary" 2>/dev/null || true
     fi
   fi
@@ -1220,45 +1229,57 @@ if [ "${_spool_before:-}" != "$_spool_after" ] || [ "${_spool_before_bytes:-}" !
   # or runs a hook without setting CLAUDE_ISSUE_SPOOL_DIR first. A record naming another project's
   # checkout was written by somebody else's session and is not this run's business.
   _sp_mine=""; _sp_theirs=""; _sp_unknown=0
-  for _sp_f in "${_live_spool:-}"/*.jsonl; do
-    [ -e "$_sp_f" ] || continue
-    _sp_was="$(printf '%s\n' "${_spool_sizes_before:-}" | awk -F"$(printf '\t')" -v f="$_sp_f" '$2 == f { print $1; exit }')"
-    case "$_sp_was" in ''|*[!0-9]*) _sp_was=0 ;; esac
-    _sp_now="$(wc -c < "$_sp_f" | tr -d ' ')"
-    [ "$_sp_now" -gt "$_sp_was" ] || continue
-    # Only the bytes this run added, so an existing record cannot be re-reported for ever.
-    while IFS= read -r _sp_line; do
-      [ -n "$_sp_line" ] || continue
-      _sp_cwd="$(printf '%s' "$_sp_line" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-      _sp_run="$(printf '%s' "$_sp_line" | sed -n 's/.*"suite_run"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-      if [ -n "$_sp_run" ]; then
-        # Stamped, so a suite wrote it (claude-config#275). ANY run's id counts, not only this
-        # one's: a suite that launches a nested run replaces the id its own children carry, and a
-        # record from the inner run is still a test writing into Dan's real spool.
+  # The records present now that were present NOWHERE in the spool when the run started
+  # (claude-config#880), so a record another session moved, rewrote or reordered is not read as
+  # added, and nothing is ever read from the middle of a record. Matched on FILENAME rather than the
+  # usual NR == FNR, because that idiom treats the first spool file as the "before" set whenever the
+  # snapshot is empty, and an empty spool before the run is exactly when a suite's write would then
+  # be missed. A snapshot that could not be written compares against nothing, so every record reads
+  # as new: that fails closed rather than passing.
+  _sp_before_file="${_spool_before_records:-}"
+  [ -n "$_sp_before_file" ] && [ -r "$_sp_before_file" ] || _sp_before_file=/dev/null
+  _sp_added="$(LC_ALL=C awk -v before="$_sp_before_file" \
+    'FILENAME == before { seen[$0] = 1; next } !($0 in seen)' \
+    "$_sp_before_file" "${_live_spool:-}"/*.jsonl 2>/dev/null)"
+  while IFS= read -r _sp_line; do
+    [ -n "$_sp_line" ] || continue
+    _sp_cwd="$(printf '%s' "$_sp_line" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    _sp_run="$(printf '%s' "$_sp_line" | sed -n 's/.*"suite_run"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    case "$_sp_run" in
+      "${CLAUDE_SUITE_RUN_ID:-(none)}"|"${CLAUDE_SUITE_RUN_ID:-(none)}"/*)
+        # Stamped with THIS run's id, or with the id of a run nested inside it, which extends this
+        # one (claude-config#275, #880). A suite under this run wrote it, whatever directory it names.
         _sp_mine="$_sp_mine
     ${_sp_cwd:-(no directory recorded)} (written under this test run, id $_sp_run)"
-      elif [ -z "$_sp_cwd" ]; then
-        # No working directory to judge it by. Reported as unattributable and counted against the
-        # run, because that is also the shape a writer nobody expected would take, and a change
-        # this cannot explain must not read as a clean one (L98, L11).
-        _sp_unknown=$(( _sp_unknown + 1 ))
-      elif [ "$_sp_marker_works" -eq 0 ] && [ -n "$root" ] && [ "${_sp_cwd#"$root"}" != "$_sp_cwd" ]; then
-        # Only reached when the stamp could not be proved, and announced above when that happens.
-        # With the stamp working this branch is what produced the false red: a record naming this
-        # repo is far more often another session's than a suite's.
-        _sp_mine="$_sp_mine
-    $_sp_cwd (attributed by directory, because the run id could not be proved)"
-      elif [ "${_sp_cwd#"${TMPDIR:-/tmp}"}" != "$_sp_cwd" ] || [ "${_sp_cwd#/tmp}" != "$_sp_cwd" ]; then
-        _sp_mine="$_sp_mine
-    $_sp_cwd (a throwaway directory, so a suite wrote it)"
-      else
+        continue ;;
+      ?*)
+        # Another run's stamp: a test run elsewhere on this machine, which reports its own writes,
+        # or an old record another session's clear has just rewritten. Not this run's doing.
         _sp_theirs="$_sp_theirs
+    ${_sp_cwd:-(no directory recorded)} (stamped by another test run, id $_sp_run)"
+        continue ;;
+    esac
+    if [ -z "$_sp_cwd" ]; then
+      # No working directory to judge it by. Reported as unattributable and counted against the
+      # run, because that is also the shape a writer nobody expected would take, and a change
+      # this cannot explain must not read as a clean one (L98, L11).
+      _sp_unknown=$(( _sp_unknown + 1 ))
+    elif [ "$_sp_marker_works" -eq 0 ] && [ -n "$root" ] && [ "${_sp_cwd#"$root"}" != "$_sp_cwd" ]; then
+      # Only reached when the stamp could not be proved, and announced above when that happens.
+      # With the stamp working this branch is what produced the false red: a record naming this
+      # repo is far more often another session's than a suite's.
+      _sp_mine="$_sp_mine
+    $_sp_cwd (attributed by directory, because the run id could not be proved)"
+    elif [ "${_sp_cwd#"${TMPDIR:-/tmp}"}" != "$_sp_cwd" ] || [ "${_sp_cwd#/tmp}" != "$_sp_cwd" ]; then
+      _sp_mine="$_sp_mine
+    $_sp_cwd (a throwaway directory, so a suite wrote it)"
+    else
+      _sp_theirs="$_sp_theirs
     $_sp_cwd"
-      fi
-    done <<SPOOLADDED
-$(tail -c "+$(( _sp_was + 1 ))" "$_sp_f" 2>/dev/null)
+    fi
+  done <<SPOOLADDED
+$_sp_added
 SPOOLADDED
-  done
   if [ -n "$_sp_mine" ] || [ "$_sp_unknown" -gt 0 ]; then
     echo "SUITES WROTE INTO THE LIVE SPOOL at $_live_spool. A test must be structurally unable to"
     echo "  touch live data (L2). Bytes went from ${_spool_before_bytes:-?} to ${_spool_after_bytes:-?}."
