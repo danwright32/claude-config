@@ -32,7 +32,9 @@ report knows, and the fields each reads (every other field is kept, and shown no
   done       repo, issue?, pr?, text        finished; checked against GitHub at wake
   parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
   failed     repo, issue?, text             could not be done (a refusal, an error)
-  question   repo, issue, text              something only Dan can answer
+  question   repo, issue, text              something only Dan can answer; or cwd, questions (a
+                                            list), as scope modes notes a refused question (#841)
+  save       files, rule                    a save ask before saving held for Dan (#841)
   issue      repo, title, priority?, labels?, text    a proposed issue (nothing is filed overnight)
   lesson     text                           a proposed lesson
   finding    repo?, text                    anything else noticed
@@ -76,7 +78,7 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save") + ENDED
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -352,7 +354,13 @@ def build(record, notes, bad, final, now, github):
     if final or look:
         section("Needs a look", look, "Nothing needs a look.")
 
-    section("Questions for you", ["%s: %s" % (where(n), text_of(n)) for n in notes if n["kind"] == "question"])
+    qs = []
+    for n in [n for n in notes if n["kind"] == "question"]:
+        # Where it was asked: the repo and issue a worker named, else the folder the mod noted (#841).
+        at = where(n) if n.get("repo") else (n.get("cwd") or "a session that did not say where")
+        asked = [" ".join(str(q).split()) for q in n["questions"]] if isinstance(n.get("questions"), list) else []
+        qs.extend("%s: %s" % (at, q) for q in (asked or [text_of(n)]))
+    section("Questions for you", qs)
 
     if final:
         section("Done", github["done"], "Nothing was merged or closed in a repo worked tonight.")
@@ -379,6 +387,9 @@ def build(record, notes, bad, final, now, github):
                                        " (%s)" % ", ".join(extra) if extra else "", ". %s" % text_of(n) if text_of(n) else ""))
     section("Proposed issues", issues)
     section("Proposed lessons", [text_of(n) for n in notes if n["kind"] == "lesson"])
+    section("Saves waiting for you", ["%s, to %s" % (" ".join(str(n.get("rule") or text_of(n) or "(no rule given)").split()),
+                                                    ", ".join(str(f) for f in n["files"]) if isinstance(n.get("files"), list) and n["files"] else "a file not named")
+                                      for n in notes if n["kind"] == "save"])
     section("Findings", ["%s%s" % ("%s: " % n["repo"] if n.get("repo") else "", text_of(n)) for n in notes if n["kind"] == "finding"])
 
     limits = []

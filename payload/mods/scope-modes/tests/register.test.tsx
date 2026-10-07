@@ -164,6 +164,8 @@ type Opts = {
   mvFails?: string
   lnFails?: string
   notifyFails?: boolean
+  /** The night's notes file cannot be appended to (#841): the shell's own words. */
+  noteFails?: string
   /** A new record written over the old one just before the first move of it: a sleep begun between a read and a move. */
   replacedBeforeMove?: string
   /** The report script (#835) failing, by what it was asked to do (start, note, render), with its stderr. */
@@ -251,6 +253,7 @@ const world = (on: On, o: Opts = {}) => {
       const [, op, ...rest] = a as [string, string, ...string[]]
       const arg = (k: string) => rest[rest.indexOf(k) + 1] as string
       w.reports.push({ op, record: arg('--record'), ...(rest.includes('--final') ? { final: true } : {}) })
+      if (op === 'note' && o.noteFails) return fail(1, o.noteFails)
       if (o.reportFails?.[op]) return fail(1, o.reportFails[op])
       if (op === 'note') w.appended.push({ file: arg('--record'), line: arg('--line') })
       if (op === 'note' && o.homeGoneAfterNote) w.homeGone = true
@@ -1318,4 +1321,102 @@ test('a final render whose own setup throws is said with the rest, never escapin
   expect(r.text).toMatch(/is not complete: the report could not be finished \(HOME is not set\)\.$/)
   expect(w.reports.map(x => x.op)).toEqual(['note'])
   expect(w.files[CURRENT]).toBeUndefined()
+})
+
+// ---- Sleep mode phase 2 (#841): nothing asks Dan while he is asleep ----
+
+const MERGE_Q = { tool: 'AskUserQuestion', questions: [{ question: 'Merge PR #31, the wording change?', options: [{ label: 'Merge' }, { label: 'Close it' }] }], tool_use_id: 'q1' } as never
+
+test('while asleep a question to Dan is refused in every session, noted for the morning report, and Claude told to skip it (#841)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const r = await call($ as never, MERGE_Q)
+  expect(r).toBe(
+    'Not asked: Dan is asleep (sleep mode), so no question reaches him tonight. The question is noted for his morning report. Leave whatever needs his answer as it is, say in your final message what is waiting on him, and carry on with work that does not need him.',
+  )
+  expect(w.asked).toEqual([])
+  expect(w.appended.length).toBe(1)
+  // Through the one writer (#835), on the record it belongs to; the writer adds the version and generation.
+  expect(w.appended[0]?.file).toBe(CURRENT)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'question', at: T0, by: 's1', cwd: '/repo', questions: ['Merge PR #31, the wording change?'] })
+  expect(w.cards).toEqual([{ toolUseId: 'q1', guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' }])
+})
+
+test('awake, the same question is asked, and once woken it is asked again (#841)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, MERGE_Q)
+  await command($ as never, 'wake')
+  expect(await call($ as never, MERGE_Q)).toBe('answered Yes')
+  expect(w.asked).toEqual(['Merge PR #31, the wording change?'])
+})
+
+test('a question that cannot be noted is still not asked, and Claude is told to carry it in its final message (#841)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, noteFails: 'sh: notes: Permission denied' })
+  await start($ as never, clock)
+  const r = await call($ as never, MERGE_Q)
+  expect(r).toBe(
+    'Not asked: Dan is asleep (sleep mode), so no question reaches him tonight. It could not be noted for his morning report (sh: notes: Permission denied), so put the question in your final message. Leave whatever needs his answer as it is, say in your final message what is waiting on him, and carry on with work that does not need him.',
+  )
+  expect(w.asked).toEqual([])
+})
+
+test('while asleep no build is not switched by asking Dan (#841)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const r = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts', tool_use_id: 't1' } as never)
+  expect(r).toBe('Dan is asleep (sleep mode), so he was not asked: no build stays on. The request is noted for his morning report.')
+  expect(w.asked).toEqual([])
+  expect(lastModes(w)).toEqual(['ASLEEP', 'NO BUILD'])
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'question', questions: ['Claude wants to edit app.ts. Switch to build?'] })
+})
+
+// Another mod (the goal tracker, ask before saving) asking the noun whether the Mac is asleep, and
+// noting something for the morning report through it.
+const asker: { name: string; register: Register } = {
+  name: 'goal-tracker',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) === 'AskAsleep') {
+        const r = await $.scopeModes.isAsleep()
+        return { result: r, text: JSON.stringify(r) } as never
+      }
+      if (String(e.tool) === 'NoteIt') {
+        try {
+          const r = await $.scopeModes.sleepNote({ kind: 'save', files: ['~/.claude/CLAUDE.md'], rule: 'Always ask first.' })
+          return { result: r, text: JSON.stringify(r) } as never
+        } catch (err) {
+          return { result: 'threw', text: `threw: ${String((err as Error)?.message ?? err)}` } as never
+        }
+      }
+      return next(e)
+    })
+  },
+}
+
+test('another mod reads whether the Mac is asleep through the noun, live, and notes for the morning only while asleep (#841)', { plugins: [deps, isItLive, asker] }, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const ask = () => call($ as never, { tool: 'AskAsleep', tool_use_id: 'a' } as never)
+  const note = () => call($ as never, { tool: 'NoteIt', tool_use_id: 'n' } as never)
+  expect(await ask()).toBe('false')
+  expect(await note()).toBe('{"isNoted":false}')
+  expect(w.appended).toEqual([])
+  w.files[CURRENT] = asleepRecord()
+  expect(await ask()).toBe('true')
+  expect(await note()).toBe('{"isNoted":true}')
+  expect(w.appended[0]?.file).toBe(CURRENT)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'save', files: ['~/.claude/CLAUDE.md'], rule: 'Always ask first.', at: T0, by: 's1' })
+  // A record past its end, or one that cannot be read, is awake.
+  w.files[CURRENT] = asleepRecord({ until: T0 })
+  expect(await ask()).toBe('false')
+  w.files[CURRENT] = 'not json'
+  expect(await ask()).toBe('false')
+})
+
+test('a note the noun cannot write throws, so the caller can say so (#841)', { plugins: [deps, isItLive, asker] }, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, noteFails: 'sh: notes: Permission denied' })
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: 'NoteIt', tool_use_id: 'n' } as never)).toBe('threw: sh: notes: Permission denied')
 })

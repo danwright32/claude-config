@@ -25,6 +25,14 @@ input=$(cat)
 # thing: there is no reader on the other end.
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 
+# Asleep (sleep mode, claude-config#841): nobody is there to answer what this would raise, so it
+# stands down. Findings made overnight reach the morning report through the overnight driver's own
+# instruction, never through this hook, which exits on stop_hook_active and so would run once a
+# night. A sleep record that cannot be read counts as awake (lib/sleep.sh).
+if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null && sleep_active; then
+  exit 0
+fi
+
 # Loop guard: don't re-fire on our own (or another Stop hook's) continuation.
 stop_active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
 [ "$stop_active" = "true" ] && exit 0

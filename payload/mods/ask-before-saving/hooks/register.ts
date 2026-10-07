@@ -100,6 +100,35 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
 let saves = 0
 const message = (err: unknown) => String((err as Error)?.message ?? err)
 
+/** The scope modes mod's noun (#841) as its contract has it; it may not be loaded at all. */
+type ScopeModes = {
+  isAsleep: () => Promise<boolean>
+  sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }>
+}
+// A save while the Mac is asleep (sleep mode, #841): noted for Dan's morning report through scope
+// modes, which reads the one sleep record, and refused without asking him. Answers the refusal, or
+// null while awake. Scope modes not loaded, or a check that fails, is awake: the save is asked about
+// as usual, and a question while asleep is refused by scope modes itself.
+const whileAsleep = async ($: EngineInterface, files: string[], rule: string): Promise<string | null> => {
+  // The noun is spelled out at each call, as the engine requires.
+  try {
+    if (!(await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep())) return null
+  } catch {
+    return null
+  }
+  const where = files.join(', ')
+  const head = `Not saved: this writes lasting memory (${where}), and Dan is asleep (sleep mode), so he is not asked tonight.`
+  const tail = 'Do not write it any other way; carry on with the rest of the work.'
+  try {
+    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.sleepNote({ kind: 'save', files, rule })
+    // Woken between the two reads: asked as usual.
+    if (!r.isNoted) return null
+    return `${head} The save is noted for his morning report, where he decides. ${tail}`
+  } catch (err) {
+    return `${head} It could not be noted for his morning report (${message(err)}), so put the rule and ${where} in your final message. ${tail}`
+  }
+}
+
 type Where = { cwd: string; home: string }
 const whereOf = async ($: EngineInterface): Promise<Where> => {
   const home = (await $.env.get('HOME')) ?? ''
@@ -471,6 +500,11 @@ export const register: Register = on => {
     // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
+
+    // Dan is asleep (#841): he is not asked tonight. The save goes to his morning report instead,
+    // and nothing waits on an answer.
+    const asleep = await whileAsleep($, files, await savedText($, tool, input, at))
+    if (asleep !== null) return { decision: 'deny', reason: asleep }
 
     const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
     const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }

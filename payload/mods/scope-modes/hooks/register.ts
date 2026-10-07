@@ -113,6 +113,20 @@ const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<M
   return { to, text }
 }
 
+// The command appending one note through the one writer (#835), shared by this mod's own notes and
+// the noun's (#841), which runs it through its own engine handle, since the engine refuses handing
+// that handle to a helper. `record` is the record the note belongs to: current while asleep, or
+// the one just moved aside at the end of a night.
+const noteArgv = (home: string, record: string, note: Record<string, unknown>) => [
+  'python3',
+  `${home}/.claude/hooks/lib/sleep-report.py`,
+  'note',
+  '--record',
+  record,
+  '--line',
+  JSON.stringify(note),
+]
+const noteFailure = (r: { exitCode: number; stderr: string }) => r.stderr.trim() || `the note could not be written (exit ${r.exitCode})`
 // The night's report (#835) and the notes it is built from are written by one script,
 // hooks/lib/sleep-report.py, which every other writer reaches through sleep_note in
 // hooks/lib/sleep.sh. The mod hands it the record it means (current, or the one just moved aside),
@@ -125,8 +139,9 @@ const report = async ($: EngineInterface, args: string[], timeoutMs = RUN_MS): P
 
 // One line appended to the night's notes, then the report rendered again best effort.
 const sleepNote = async ($: EngineInterface, record: string, note: Record<string, unknown>) => {
-  const failed = await report($, ['note', '--record', record, '--line', JSON.stringify(note)])
-  if (failed) throw new Error(failed)
+  const p = await sleepPaths($)
+  const r = await run($, noteArgv(p.home, record, note))
+  if (r.exitCode !== 0) throw new Error(noteFailure(r))
 }
 
 // At the end of a night (wake or its limit): what this session reads of its own usage, then the
@@ -153,6 +168,22 @@ const finishReport = async ($: EngineInterface, record: string, ending: Record<s
   }
   return problems
 }
+
+// A question for Dan while he is asleep (#841): never asked, noted for his morning report. Answers
+// null once noted, or why it could not be.
+const noteQuestion = async ($: EngineInterface, record: SleepRecord, questions: string[]): Promise<string | null> => {
+  try {
+    await sleepNote($, (await sleepPaths($)).current, { kind: 'question', at: await $.clock.now(), by: await $.session.id(), cwd: await $.session.cwd(), questions })
+    return null
+  } catch (err) {
+    return msg(err)
+  }
+}
+const ASLEEP_SKIP = 'Leave whatever needs his answer as it is, say in your final message what is waiting on him, and carry on with work that does not need him.'
+const askedAsleep = (failed: string | null) =>
+  `Not asked: Dan is asleep (sleep mode), so no question reaches him tonight. ${
+    failed === null ? 'The question is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put the question in your final message.`
+  } ${ASLEEP_SKIP}`
 
 const notify = async ($: EngineInterface, message: string): Promise<string | null> => {
   const r = await run($, ['terminal-notifier', '-title', 'Sleep mode', '-message', message])
@@ -756,12 +787,12 @@ export const register: Register = on => {
     // Asleep (#840) keeps every session quiet as away, whatever its own place. The engine refuses
     // handing `built` to a helper, so the record is read here with its own calls, through the same
     // readSleep every other decision asks; a read that fails is awake, as readSleep's unreadable is.
-    const nounSeesAsleep = async (): Promise<boolean> => {
+    const nounReading = async (): Promise<{ home: string; reading: SleepReading } | null> => {
       try {
         const home = await built.env.get('HOME')
-        if (!home) return false
+        if (!home) return null
         const current = `${sleepDir(home)}/current.json`
-        if (!(await built.fs.exists(current))) return false
+        if (!(await built.fs.exists(current))) return { home, reading: { state: 'none' } }
         const text = await built.fs.read(current)
         if (boot === undefined) {
           // Under Claude Code's 10 s cut off for a noun call (#744); sysctl answers in milliseconds.
@@ -769,11 +800,12 @@ export const register: Register = on => {
           const b = r.exitCode === 0 ? bootOf(r.stdout) : null
           if (b !== null) boot = b
         }
-        return readSleep(text, await built.clock.now(), boot ?? null).state === 'asleep'
+        return { home, reading: readSleep(text, await built.clock.now(), boot ?? null) }
       } catch {
-        return false
+        return null
       }
     }
+    const nounSeesAsleep = async (): Promise<boolean> => (await nounReading())?.reading.state === 'asleep'
     const scopeModes: ScopeModes = {
       isAway: async () => ((await built.state.get(placeRef)).value ?? 'home') === 'away' || (await nounSeesAsleep()),
       hold: async ({ label, prompt }) => {
@@ -785,6 +817,16 @@ export const register: Register = on => {
           await built.state.set(heldRef, [...held, { id: String(seq), label, prompt }])
         }
         return { isHeld: true, ...heldRefusal(label) }
+      },
+      isAsleep: nounSeesAsleep,
+      sleepNote: async note => {
+        const seen = await nounReading()
+        if (seen?.reading.state !== 'asleep') return { isNoted: false }
+        const line = { ...note, at: await built.clock.now(), by: await built.session.id() }
+        // Under Claude Code's 10 s cut off for a noun call (#744); one appended line takes milliseconds.
+        const r = await built.process.run(noteArgv(seen.home, `${sleepDir(seen.home)}/current.json`, line), { timeoutMs: BOOT_MS })
+        if (r.exitCode !== 0) throw new Error(noteFailure(r))
+        return { isNoted: true }
       },
     }
     return { ...built, scopeModes }
@@ -962,9 +1004,19 @@ export const register: Register = on => {
       if (refused) return refused
       if ((await scopeOf($)) !== 'NO BUILD') return { result: 'No build is not on.', text: 'No build is not on.' }
       const change = String(input.change ?? '').trim().replace(/[.?]+$/, '') || 'make a change'
+      const question = `Claude wants to ${change}. Switch to build?`
+      // Dan is asked nothing while asleep (#841): the request waits for his morning report.
+      const sleeping = await sleepNow($)
+      if (sleeping.state === 'asleep') {
+        const failed = await noteQuestion($, sleeping.record, [question])
+        const text = `Dan is asleep (sleep mode), so he was not asked: no build stays on. ${
+          failed === null ? 'The request is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put it in your final message.`
+        }`
+        return { result: text, text }
+      }
       let answer: string
       try {
-        answer = await $.ui.ask(`Claude wants to ${change}. Switch to build?`, ['Yes', 'No'])
+        answer = await $.ui.ask(question, ['Yes', 'No'])
       } catch (err) {
         const text = `Dan was not asked (${msg(err)}): no build stays on.`
         return { result: text, text }
@@ -990,7 +1042,17 @@ export const register: Register = on => {
 
     const scope = await scopeOf($)
     // Asleep (#840), read live at each call, keeps every session quiet as away.
-    const away = (await placeOf($)) === 'away' || (await isAsleep($))
+    const sleeping = await sleepNow($)
+    // And asks Dan nothing (#841): a question is noted for his morning report and Claude skips it,
+    // in every session, a worker or not. A question any other mod or hook leads Claude to ask
+    // arrives here too, so this is the one place a question to Dan is stopped overnight.
+    if (tool === 'AskUserQuestion' && sleeping.state === 'asleep') {
+      const qs = Array.isArray(input.questions) ? (input.questions as { question?: unknown }[]).map(q => String(q?.question ?? '')) : []
+      const failed = await noteQuestion($, sleeping.record, qs)
+      await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' })
+      return { deny: askedAsleep(failed) }
+    }
+    const away = (await placeOf($)) === 'away' || sleeping.state === 'asleep'
     if (!scope && !away) return go()
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that

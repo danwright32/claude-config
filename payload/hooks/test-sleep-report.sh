@@ -176,6 +176,8 @@ mkdir -p "$SLEEPDIR/notes"
   echo '{"v":1,"kind":"done","at":1791443160000,"by":"aaaa1111","repo":"o/r","pr":39,"text":"Cannot be confirmed","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443170000,"by":"bbbb2222","repo":"o/r","pr":39,"text":"Noted twice","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443180000,"by":"aaaa1111","repo":"o/q","pr":5,"text":"Half read","generation":"g6"}'
+  echo '{"v":1,"kind":"question","at":1791443185000,"by":"aaaa1111","cwd":"/r/repo","questions":["Merge PR #31, the wording change?","Keep the old flag?"],"generation":"g6"}'
+  echo '{"v":1,"kind":"save","at":1791443186000,"by":"aaaa1111","files":["~/.claude/CLAUDE.md"],"rule":"Always ask first.","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443190000,"by":"aaaa1111","text":"Tidied the scratch notes","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791443195000,"by":"aaaa1111","repo":"o/r","text":"Answered a review","generation":"g6"}'
   echo '{"v":1,"kind":"claim","at":1791443200000,"by":"bbbb2222","repo":"o/r","issue":20,"generation":"g6"}'
@@ -244,6 +246,9 @@ lacks "a failed claim is not flagged" "o/s#3, claimed" "$r"
 has "parked work is listed with its branch" "Parked o/r#21 (branch fix-21): Two hours with no fix" "$r"
 has "failed work is listed" "Failed o/s#3: Classifier refused the push" "$r"
 has "a proposed issue is listed" "Cache misses on cold start" "$r"
+has "a refused question scope modes noted is listed with its folder (#841)" "/r/repo: Merge PR #31, the wording change?" "$r"
+has "every question in it, not only the first" "/r/repo: Keep the old flag?" "$r"
+has "a save held for Dan is listed (#841)" "Always ask first., to ~/.claude/CLAUDE.md" "$r"
 has "each wait is noted" "Waited 5 minutes from 3:20 AM ET (rate_limit)" "$r"
 has "every wait, not only the first" "Waited 10 minutes from 3:25 AM ET (server_error)" "$r"
 has "a whole number of minutes written as a float reads as a whole number" "Waited 20 minutes from 3:30 AM ET (rate_limit)" "$r"
