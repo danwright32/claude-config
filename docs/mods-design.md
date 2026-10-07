@@ -803,6 +803,36 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   the report (#835) and the overnight driver (#844) build on it; the wake report and summaries
   (#837) go where `wake` names the winner.
 
+### Sleep mode phase 4: the night's report (#835), built
+
+- One script writes the report and its notes, `payload/hooks/lib/sleep-report.py`; every phase
+  reaches it through `sleep_note '<json>'` in `hooks/lib/sleep.sh`, which writes only while that
+  file's own `sleep_active` says the Mac is asleep. Nothing else formats the report or touches the
+  notes file. The kinds the report reads (`claim`, `done`, `parked`, `failed`, `question`, `issue`,
+  `lesson`, `finding`, `heartbeat`, `wait`, `usage`, `stopped`) and their fields are listed at the
+  top of the script; a kind it does not know is still shown, under Other notes.
+- Notes are `notes/<generation>.jsonl`, one line per note, appended in one write in append mode,
+  so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
+  `report` path in the record (`~/Downloads/sleep-report-<night>.md`), is derived from the record
+  and the notes and replaced whole after each note, best effort: a note whose render fails is still
+  written, the failure said on stderr, and the call exits 0 so nobody writes it twice.
+- `/sleep` starts it at once with a header: start time ET, folder, power state read from `pmset`
+  (a failed read says `power unknown` and why), and the workers. A report that cannot be written is
+  said in the `/sleep` reply, and sleep still holds.
+- At the end (the session that wins `/wake`, or the first to see the limit) the mod notes `woke` or
+  `limit` with its own `$.session.usage()` reading on the record it moved aside, then renders once
+  more with `--final`: done is read from GitHub (merged PRs and closed issues since `since`, in
+  each repo any note names, `--limit 200` and a full page said as cut, the date predicate applied
+  again here) and cross checked against the notes both ways, a noted PR or issue the search did
+  not list read by its number before it is called wrong (L1014); a worker silent past 30 minutes that
+  never wrote `stopped`, a worker that never wrote a note, and a `claim` with no `done`, `parked` or
+  `failed` note are each flagged as ended unexpectedly. GitHub's reads are bounded at 15 s each and
+  60 s together (wake waits on them, so a GitHub outage costs Dan a minute at most); a repo not read is said, with what its sessions noted shown as unchecked.
+- Paid usage is the sum of each session's latest `usage.costUsd` (as /cost totals it), from
+  heartbeats and the end note; "not measurable" only when no note carried one. The 5 hour, weekly
+  and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
+  line under Limits and usage.
+
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
 No round: each follows from the spec and the settled surfaces above. The ones marked open were
