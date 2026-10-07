@@ -172,6 +172,14 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
           {p.href === undefined ? p.text : p.text === p.href ? <Link href={p.href} /> : <Link href={p.href}>{p.text}</Link>}
         </Text>
       )
+    // #872: a whole run, a label, never shrinks, so a long run beside it is cut or wrapped instead
+    // of taking the label with it ("Whe..." on Ink at 30 columns).
+    if (!('button' in p) && p.whole)
+      return (
+        <Box key={`whole:${i}`} flexShrink={0} paddingLeft={p.indent}>
+          {drawn}
+        </Box>
+      )
     return p.indent ? (
       <Box key={`indent:${i}`} paddingLeft={p.indent}>
         {drawn}

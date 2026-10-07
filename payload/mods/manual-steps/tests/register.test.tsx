@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
+import { STEPS_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
 
 // mod-kit, standing in: a mod cannot import another mod's files, and the kit loads this stand in as
@@ -309,7 +310,7 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -346,7 +347,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf  [copy-link]'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: https://dash.cloudflare.com/waf  [copy-link]'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -842,8 +843,8 @@ test('the pane asks for a dock as wide as the open step\'s lines, so a click pat
     await call($, VERDICT, { step: 1, checked: 'checked' })
   }
   await pinFresh({ clicks })
-  // The rule and its gap, the indent under the title, then the click path.
-  expect(w.opens[0]?.columns).toBe(2 + 3 + clicks.length)
+  // The rule and its gap, the indent under the title, the bold label (#872), then the click path.
+  expect(w.opens[0]?.columns).toBe(2 + 3 + 'What to do: '.length + clicks.length)
   // A link is not measured: it opens whole however much of it shows.
   await pinFresh({ url: `https://dash.cloudflare.com/${'a'.repeat(150)}` })
   expect(w.opens[1]?.columns).toBeLessThan(40)
@@ -930,5 +931,29 @@ test('the band says the open step is waiting on Dan while it is, and clears once
   expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
   expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
   await call($, VERDICT, { step: 2, checked: 'checked' })
+  expect(await band($)).toBeUndefined()
+})
+
+// #872, Dan: "step 5 can't be done right now. you should only show me what can be done". The steps
+// tool says a step goes on the card only when Dan can do it now, and a step pinned anyway comes off
+// through steps_done as withdrawn, shown as taken off rather than done.
+test('the steps tool asks only for steps Dan can do now; one waiting on something else stays in the issue', () => {
+  expect(STEPS_DESCRIPTION).toMatch(/only a step Dan can do now/)
+  expect(STEPS_DESCRIPTION).toMatch(/waiting on something else .*stays in the issue/)
+  expect((VERDICT_INPUT.properties.checked as { enum: string[] }).enum).toContain('withdrawn')
+})
+
+test('steps_done withdrawn takes a pinned step off the card as not done, and the card moves on', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Watch the next merge' })])
+  expect(await call($, VERDICT, { step: 2, checked: 'withdrawn' })).toMatch(/^Step 2 recorded/)
+  expect(await bandText($)).toEqual([
+    'Cloudflare WAF  waiting on you',
+    '1. Turn on the WAF rule  [done]',
+    'Where: https://dash.cloudflare.com/waf  [copy-link]',
+    '2. Watch the next merge  taken off, not done',
+  ])
+  expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
   expect(await band($)).toBeUndefined()
 })

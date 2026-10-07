@@ -35,6 +35,11 @@ const partRefusal = (p: ModKitBandPart): string | undefined => {
   const wrap = (p as { wrap?: unknown }).wrap
   if (wrap !== undefined && 'button' in p) return 'only a text run can wrap; a button is drawn whole'
   if (wrap !== undefined && wrap !== true) return `a text run's wrap must be true or left out, not ${JSON.stringify(wrap)}`
+  // #872: a label drawn whole beside a run that gives up the width; it cannot also be that run.
+  const whole = (p as { whole?: unknown }).whole
+  if (whole !== undefined && 'button' in p) return 'only a text run can be whole; a button is drawn whole already'
+  if (whole !== undefined && whole !== true) return `a text run's whole must be true or left out, not ${JSON.stringify(whole)}`
+  if (whole === true && wrap === true) return 'a text run cannot both wrap and be whole'
   // Refused rather than drawn as plain text: a link that cannot be followed is what #708 fixed.
   const href = (p as { href?: unknown }).href
   if (href !== undefined && 'button' in p) return 'only a text run can be a link; a button is pressed, not followed'

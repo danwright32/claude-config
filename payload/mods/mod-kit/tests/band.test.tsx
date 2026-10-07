@@ -144,6 +144,45 @@ test('wrap on a button, or wrap set to anything but true, is refused by name', w
   expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', lines: [[{ text: 'a', wrap: 'yes' }]] })).toMatch(/refused: .*wrap must be true/)
 })
 
+// #872: a label beside a long run ("Where: " before a link cut at the edge, "What to do: " before a
+// click path that wraps) shrank with it, measured on Ink at 30 columns as "Whe…". A run marked whole
+// is drawn in a box that never shrinks, so the run beside it gives up the width; any other run does
+// not get one.
+test('a text run marked whole is drawn in a box that never shrinks, its indent kept', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(
+    await show($, {
+      mod: 'publisher',
+      id: 'w',
+      slot: 'steps',
+      lines: [
+        [{ text: 'Where: ', bold: true, whole: true, indent: 3 }, { text: 'a long place that wraps', wrap: true }],
+        [{ text: 'cut' }, { text: 'Label: ', whole: true }],
+      ],
+    }),
+  ).toBe('done')
+  const ui = await $.ui.mount(band())
+  await ui.drawn()
+  const first = await ui.find({ type: 'Box', key: 'whole:0' })
+  expect(first?.props).toMatchObject({ flexShrink: 0, paddingLeft: 3 })
+  expect(JSON.stringify(first?.children)).toContain('Where: ')
+  expect((await ui.find({ type: 'Text', text: 'Where: ' }))?.props).toMatchObject({ bold: true, wrap: 'truncate-end' })
+  const second = await ui.find({ type: 'Box', key: 'whole:1' })
+  expect(second?.props).toMatchObject({ flexShrink: 0 })
+  expect(JSON.stringify(second?.children)).toContain('Label: ')
+  // Only the whole runs: the wrapping run and the plain one are drawn as they always were.
+  expect(await ui.find({ type: 'Box', key: 'indent:1' })).toBeUndefined()
+  expect(await ui.find({ type: 'Box', key: 'whole:2' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('whole on a button, beside wrap on the same run, or set to anything but true, is refused by name', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', lines: [[{ button: 'go', label: 'Go', whole: true }]] })).toMatch(/refused: .*only a text run can be whole/)
+  expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', lines: [[{ text: 'a', whole: true, wrap: true }]] })).toMatch(/refused: .*cannot both wrap and be whole/)
+  expect(await show($, { mod: 'publisher', id: 'w', slot: 'steps', lines: [[{ text: 'a', whole: 'yes' }]] })).toMatch(/refused: .*whole must be true/)
+})
+
 // #734: a run that wraps is taken inside a left rule, whose rule then spans every row the lines take
 // (the steps card's long click path was cut at the edge while the rule drew one mark per line). The
 // rule is one column laid over the row's whole height and clipped to it, with a mark for every row
