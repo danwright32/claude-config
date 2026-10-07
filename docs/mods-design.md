@@ -917,10 +917,13 @@ the ban list knowing that an action it does not name is approved.
   resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any `cd`; everything
   else, on any repository, is refused (repo delete, release, secret, a workflow run, `pr close`,
   any other API write, every GraphQL mutation). A write that cannot be resolved is refused (L75):
-  gh through a wrapper (`env`, `nohup`, `xargs`, a shell's `-c`, `eval`, `source`, `sudo`), any
-  `GH_` variable set, another `--hostname`, a flag before the subcommand or its action that gh does
-  not know, or a folder whose remotes name two repositories. Only text in command position is
-  judged, never what quotes or a heredoc hold. The lessons file by any write route; every
+  a gh whose operands xargs feeds, text `eval` or `source` runs, gh named with a gh subcommand
+  after it by any other command (a wrapper mod-kit's reader does not read past), any `GH_`
+  variable or GitHub token set, another `--hostname`, a flag before the subcommand or its action
+  that gh does not know, or a folder whose remotes name two repositories. A runner the reader
+  reads past (`env`, `nohup`, `sudo`, `timeout`, a shell's `-c`) changes nothing about where gh
+  goes, so the gh it runs meets the same lists. Every command is read by mod-kit's reader, never a
+  quote reader of the mod's own. The lessons file by any write route; every
   claude.ai, Chrome and PostHog MCP tool whose name does not say it only reads (a read only tool
   whose name has no read word is refused too, which fails closed);
   Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and

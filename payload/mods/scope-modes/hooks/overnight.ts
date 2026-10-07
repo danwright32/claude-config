@@ -239,53 +239,18 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
   return { refuse: `call the GitHub API to ${method} ${ep || 'an endpoint it does not name'}` }
 }
 
-// Whether a gh call in this command line reaches gh some way other than the words this reader
-// gives: a GH_ variable set anywhere (it changes the repository, host or account), or gh run
-// through a wrapper (env, command, nohup, xargs, a shell's -c, eval, time, sudo and the like), seen
-// as more gh commands read than stand in command position in the line itself (#834 review).
-// Only text in command position is judged: what quotes hold (a --body) and a heredoc's body are
-// blanked first, so a comment that mentions `env gh` is still a comment. A gh a shell's -c runs
-// sits inside quotes, so it is blanked here too, and is caught by the count below instead.
-// gh in command position: after a separator, any shell keywords that lead a command (if, then,
-// do, else, elif, while, until, !) and any assignments (a GH_ one is refused above), as the shell
-// and mod-kit's reader both place it (#834 review of 98a40f1).
-const GH_DIRECT = /(?:^|[;&|(){}\n])(?:\s*(?:if|then|do|else|elif|while|until|!)(?=\s))*\s*(?:[A-Za-z_]\w*=\S*\s+)*gh(?=\s|$)/g
-const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command(?!\s+-[vV]\b)|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate)\s(?:[^;&|\n]*\s)?gh(?=\s|$)/
-const unquoted = (raw: string): string => {
-  const body = raw.replace(/(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?\n\s*\3[ \t]*(?=\n|$)/g, '$1')
-  let out = ''
-  let q: string | null = null
-  for (let i = 0; i < body.length; i++) {
-    const ch = body[i] as string
-    if (q) {
-      if (q === '"' && ch === '\\') i++
-      else if (ch === q) {
-        q = null
-        out += ch
-      }
-      continue
-    }
-    if (ch === '\\') {
-      out += ' '
-      i++
-      continue
-    }
-    if (ch === '"' || ch === "'") q = ch
-    out += ch
-  }
-  return out
-}
+// Whether a gh call in this command line reaches gh some way its words do not show. mod-kit's
+// reader looks past the runners that change nothing about where gh goes (env, command, nohup,
+// time, sudo, timeout, a shell's -c), so a gh they run is judged by its own words like any other.
+// What it cannot show is refused: any GH_ variable or GitHub token set (it changes the repository,
+// host, account or config gh uses), a gh that xargs feeds its operands to, and eval or source
+// naming gh, which run text nobody reads. Read with mod-kit's reader only, never a quote reader of
+// our own (tools/check-mod-shared-parts.sh); the variable check reads the line as written, so a
+// quoted message that spells an assignment is refused too, which fails closed.
 const wrapped = (call: OvernightCall): boolean => {
-  const bare = unquoted(call.raw)
-  // Any GH_ variable set changes what gh does (its repository, host, account or config), as do
-  // gh's own config and token variables under other names.
-  if (/\b(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(bare)) return true
-  if (GH_WRAPPED.test(bare)) return true
-  // eval and source run text the reader does not open; one that names gh anywhere is a gh call
-  // nobody can read.
-  if (call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))) return true
-  const read = call.commands.filter(c => name(c.words[0]) === 'gh').length
-  return read > (bare.match(GH_DIRECT) ?? []).length
+  if (/(?:^|[\s;&|(])(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(call.raw)) return true
+  if (call.commands.some(c => name(c.words[0]) === 'gh' && c.xargs)) return true
+  return call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))
 }
 
 const UNRESOLVED ='write to GitHub where the repository it reaches could not be resolved'
@@ -345,8 +310,6 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither
   // the call nor where it goes can be read, so it is refused (#834 review).
   if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && /\bgh\b/.test(call.raw)) return UNRESOLVED
-  // The words that stand outside quotes and heredocs, so gh named in a message is never a gh call.
-  const unquotedWords = new Set(unquoted(call.raw).split(/[\s;&|(){}<>]+/).filter(Boolean))
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
   for (const c of call.commands) {
@@ -381,7 +344,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
     // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
     // running it are let through; a command missing from that list fails closed.
-    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && unquotedWords.has(w) && runsGh(words[i + 2]))) return UNRESOLVED
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && runsGh(words[i + 2]))) return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look)
       if (why) return why

@@ -136,21 +136,15 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     // GH_REPO set through env reaches gh too.
     expect(await bash('env GH_REPO=other/x gh issue comment 5 --body x')).toBe(unresolved)
   })
-  test('a gh write reached through a wrapper, or with a GH_ variable set, cannot be resolved; a read still can (#834 review of af10401)', async () => {
-    for (const c of [
-      'env gh pr merge 5',
-      'command gh pr merge 5',
-      'nohup gh pr merge 5',
-      'echo 5 | xargs gh pr merge',
-      `bash -c 'gh pr merge 5'`,
-      `sh -c "gh pr merge 5"`,
-      `eval "gh pr merge 5"`,
-      `source <(echo gh pr merge 5)`,
-      'time gh pr merge 5',
-      'sudo gh pr merge 5',
-      'GH_TOKEN=abc gh pr merge 5',
-      'GH_HOST=example.com gh pr merge 5',
-    ])
+  test('a runner the reader looks past is judged by the gh it runs; what it cannot show is refused (#834 review of af10401)', async () => {
+    // env, command, nohup, a shell's -c, time, sudo and timeout change nothing about where gh goes:
+    // mod-kit's reader reads past them, and the gh they run meets the same two lists.
+    for (const c of ['env gh pr merge 5', 'command gh pr merge 5', 'nohup gh pr merge 5', `bash -c 'gh pr merge 5'`, `sh -c "gh pr merge 5"`, 'time gh pr merge 5', 'sudo gh pr merge 5', 'timeout 30 gh pr merge 5'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+    for (const c of ['env gh pr merge 5 -R other/x', `bash -c 'gh pr merge 5 -R other/x'`, 'sudo gh pr close 5'])
+      expect({ c, r: await bash(c) }).not.toEqual({ c, r: undefined })
+    // What the words cannot show: the operands xargs feeds, text eval or source runs, a GH_ variable set.
+    for (const c of ['echo 5 | xargs gh pr merge', `eval "gh pr merge 5"`, `source <(echo gh pr merge 5)`, 'GH_TOKEN=abc gh pr merge 5', 'GH_HOST=example.com gh pr merge 5', 'env GH_REPO=other/x gh pr merge 5'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
     expect(await bash('env gh pr view 5')).toBeUndefined()
     expect(await bash(`bash -c 'gh issue list'`)).toBeUndefined()
@@ -166,9 +160,9 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
   })
   test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
     expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
-    expect(await bash('stdbuf -o0 gh pr merge 5 --squash')).toBe(unresolved)
+    // stdbuf is a runner mod-kit's reader reads past, so its gh meets the lists like any other.
+    expect(await bash('stdbuf -o0 gh pr merge 5 --squash')).toBeUndefined()
     expect(await bash('chronic /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
-    expect(await bash('timeout 30 gh pr merge 5')).toBe(unresolved)
     expect(await bash('frobwrap --quiet gh issue comment 5 --body x')).toBe(unresolved)
     expect(await bash('frobwrap 5 gh pr merge 5')).toBe(unresolved)
     // Saying the word inside quotes is not running it.
