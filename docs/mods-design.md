@@ -891,6 +891,48 @@ anything calls it. What the build decided, each open to Dan changing it:
   one is ignored, as the registry's own prune treats it.
 - `claims` prints every claim of the night as JSON lines, the seam the report (#835) reads; parking
   at two attempts or two hours is the driver's (#844), read from the `attempts=` the claim prints.
+- Every claim and every end also writes its note for the report (#905), from `sleep-queue.sh`
+  itself, the one writer of the claim: `claim` with its attempt, `done`, `parked` or `failed` with
+  the reason as text, and `released` for a claim given back (`free`, `unstarted`). The report says
+  a claim given back was given back, never that it ended unexpectedly, judging the order by each
+  note's `at`. A note that cannot be written is said on stderr and never undoes the claim.
+
+### Sleep mode phase 8: keeping enrolled sessions working, safely (#844), built
+
+The overnight driver, in the scope modes mod: its decisions in `hooks/driver.ts` (pure, tested in
+`tests/driver.test.ts`), carried out in `register.ts` on `classic.Stop`, `classic.StopFailure` and
+the minute's tick. Changed from the plan by the engine spike (#839) and Dan's decision of 2026-10-07.
+
+- It drives only a session the sleep record names in `workers`, while the record reads asleep; every
+  other Stop passes to winding down as before. Each block carries the whole overnight rules (claim
+  with `sleep-queue.sh next`, work in its worktree, end the claim with `release`, write to Dan only
+  through `sleep_note`, a `stopped` note when the queue is empty), so they survive compaction.
+- Its own loop counter, one file a night and session, `~/.claude/state/sleep/driver/GEN/SESSION.json`,
+  never `stop_hook_active` (true from the second Stop on). A counter that cannot be read or written
+  stops the session with a `stopped` note rather than loop on a count it cannot keep.
+- Progress is recorded state only: this session's notes that are not bookkeeping (heartbeat, wait,
+  usage, stopped) and the tips of the `sleep/` branches (`git for-each-ref`). A reading that cannot
+  be taken is no progress. The circuit breaker lets the session stop, with a `failed` note (the
+  claim ended as failed through the queue when one is held), after 3 blocks in a row or 20 minutes
+  of active time with nothing new; a session is also capped at 120 blocks a night. Each block writes
+  a heartbeat note with the usage reading.
+- Stuck work: a claim past 2 attempts is parked at once, and one held for 2 hours of active time is
+  parked, at Stop and by the minute's watchdog mid turn (said at the next Stop). Active time leaves
+  out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
+- API errors (`classic.StopFailure`): it carries no reset time and calls an overloaded server
+  `server_error` (#839), so a rate limit, overloaded or server error is waited out at 5, 10, 20 and
+  40 minutes, then an hour between tries, all night, each wait a `wait` note; the minute's tick
+  starts the session again with `$.prompt.submit` once the wait is over, clearing the wait first so
+  it starts once. Any other error (sign in, billing, a refused request, unknown) writes a `failed`
+  note and stops. A turn that ends well starts the waits over.
+- Weekly usage: at 95% the claim in hand is parked and the session stops; with no weekly reading
+  for 60 minutes it finishes the issue in hand, claims nothing new, and stops, with an "unmeasured"
+  finding once (L706).
+- Power: `/sleep` refuses on battery, and when `pmset` cannot say, and holds `caffeinate -i -t`
+  until the record's end, its process number kept in `caffeinate.pid` and let go at wake or at the
+  record's own end, only while that process is still `caffeinate`.
+- Unmeasured until the first real night (Dan, 2026-10-07: build now, measure on night one): a full
+  hour of work in an interactive session, and what a real usage limit looks like.
 
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
