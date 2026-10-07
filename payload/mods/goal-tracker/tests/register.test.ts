@@ -85,6 +85,8 @@ type WorldOpts = {
   clock?: { sleep: (ms: number) => Promise<void> }
   questionOpenMs?: number
   slowMs?: number
+  /** What scope modes' noun answers for whether the Mac is asleep (#841), read at each ask; 'throws' for a reader that breaks. */
+  asleep?: boolean | 'throws' | 'typeerror'
 }
 const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
   const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
@@ -93,6 +95,10 @@ const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
     if (e.argv[0] === 'terminal-notifier') {
       w.notified.push(e.argv.slice(1))
       if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (e.argv[0] === '__asleep') {
+      const code = opts.asleep === true ? 0 : opts.asleep === 'throws' ? 2 : opts.asleep === 'typeerror' ? 3 : 1
+      return { value: { exitCode: code, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const isWrite = e.argv[0] === '__extra'
     if (isWrite) writes += 1
@@ -1249,4 +1255,84 @@ test('a long tool call keeps the session from reading stalled while it runs, and
   await clock.advance(MIN)
   await call
   expect(last(w)?.lastActivityAt).toBe(12 * MIN)
+})
+
+// ---- Sleep mode phase 2 (#841): no notification while Dan is asleep ----
+
+// Scope modes, standing in: its noun answers whether the Mac is asleep, asking the world each time.
+const sleeper: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        scopeModes: {
+          isAsleep: async () => {
+            const r = await built.process.run(['__asleep'])
+            if (r.exitCode === 2) throw new Error('the sleep record reader broke')
+            if (r.exitCode === 3) throw new TypeError("undefined is not an object (evaluating 'record.until')")
+            return r.exitCode === 0
+          },
+        },
+      }
+    })
+  },
+}
+const withSleeper = { plugins: [deps, sleeper] }
+// A notification rides beside what it announces, never awaited, and the sleep check is one more hop.
+const settled = async () => {
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+}
+
+test('while asleep no notification is sent, a permission or an idle prompt alike, and once awake they are again (#841)', withSleeper, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const opts: WorldOpts = { asleep: true }
+  const w = world($, on, opts)
+  await start($)
+  await idle($)
+  await withPermission($, w)
+  await settled()
+  expect(w.notified).toEqual([])
+  expect(w.debug.some(d => /not sent: the Mac is asleep/.test(d))).toBe(true)
+  // The pane still shows what the session waited on: only the page to Dan is held back.
+  expect(w.duringPermission?.waiting).toMatchObject({ question: 'Run the test suite', kind: 'permission' })
+  opts.asleep = false
+  await idle($)
+  await settled()
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+})
+
+test('a sleep check that breaks counts as awake, so the notification is still sent (#841)', withSleeper, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: 'throws' })
+  await start($)
+  await idle($)
+  await settled()
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+  expect(w.debug.some(d => /could not tell whether the Mac is asleep \(the sleep record reader broke\)/.test(d))).toBe(true)
+})
+
+// A noun's error reaches the caller rewrapped by the engine (measured here: no longer a TypeError), so
+// this holds the behaviour, said and sent, rather than telling the two regexes apart.
+test('a sleep check that fails inside scope modes with a TypeError is still said, never taken for scope modes being absent (#841)', withSleeper, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: 'typeerror' })
+  await start($)
+  await idle($)
+  await settled()
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+  expect(w.debug.some(d => /could not tell whether the Mac is asleep \(undefined is not an object/.test(d))).toBe(true)
+})
+
+// Scope modes not loaded: $.scopeModes is undefined in this mod's own code, a TypeError naming it,
+// never rewrapped by a noun, so nothing is said and the notification goes (#841).
+test('without scope modes loaded the notification is sent and no failed sleep check is said (#841)', unseated, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  await start($)
+  await idle($)
+  await settled()
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+  expect(w.debug.filter(d => /could not tell whether the Mac is asleep/.test(d))).toEqual([])
 })

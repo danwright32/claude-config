@@ -49,6 +49,7 @@
 # Guards:
 #   - CLAUDE_DETACHED_RUN set: a headless run has no human to quiz. Skip. (Same guard as
 #     session-reflection.sh.)
+#   - Sleep mode on (lib/sleep.sh's sleep_active): Dan is asleep, so there is nobody to quiz. Skip.
 #   - SKIP_PR_QUIZ=1 as an inline prefix on the command: documented override, same style as
 #     SKIP_TEST_CHECK / SKIP_STYLE_CHECK / SKIP_CLOSING_CHECK.
 #   - A checked in .no-pr-quiz at the root of the repo being merged in: that repo has opted out
@@ -102,6 +103,11 @@ snooze_in_force() {  # $1 = session id
 
 # A headless / detached run has nobody to quiz. Skip before doing any work.
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
+# Nor does a Mac in sleep mode (claude-config#841): Dan is asleep, so the quiz stands down rather
+# than holding an overnight session on a question nobody can answer. Unreadable counts as awake.
+if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null && sleep_active; then
+  exit 0
+fi
 
 payload="$(cat)"
 

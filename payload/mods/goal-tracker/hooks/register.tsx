@@ -62,7 +62,28 @@ const projectName = async ($: EngineInterface): Promise<string> => {
   }
   return baseName(startCwd) || 'Claude Code'
 }
+/** The scope modes mod's noun (#841) as its contract has it; it may not be loaded at all. */
+type ScopeModes = { isAsleep: () => Promise<boolean> }
+// Whether the Mac is asleep (sleep mode, #841), asked of scope modes, which reads the one sleep
+// record through its one predicate at every ask. Not loaded, it is awake; a check that fails also
+// counts as awake, as a record that cannot be read does, so a page is sent rather than lost unseen.
+const isAsleep = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    return (await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep()) === true
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    // Only the noun itself missing (scope modes not loaded) goes unsaid, as the keystroke guard reads it.
+    if (!(err instanceof TypeError && /scopeModes/.test(why)))
+      $.ui.log(`goal-tracker: could not tell whether the Mac is asleep (${why}), so the notification is sent`, { to: 'debug' })
+    return false
+  }
+}
 const notify = async ($: EngineInterface, title: string, message: string, sound?: string) => {
+  // Dan is asleep: nothing pages him (#841). The pane still shows what the session waits on.
+  if (await isAsleep($)) {
+    $.ui.log(`goal-tracker: the notification "${title}" was not sent: the Mac is asleep (sleep mode)`, { to: 'debug' })
+    return
+  }
   let why: string | undefined
   try {
     // A value starting with a dash would be read as an option, so it is led by a space (lessons review).
