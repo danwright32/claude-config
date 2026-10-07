@@ -138,7 +138,7 @@ export const progressOf = (notesText: string | null, self: string, refsText: str
     if (!line.trim()) continue
     try {
       const n = JSON.parse(line) as { by?: unknown; kind?: unknown; driver?: unknown }
-      if (n.by === self && (n as { driver?: unknown }).driver !== true && typeof n.kind === 'string' && !BOOKKEEPING.has(n.kind)) notes++
+      if (n.by === self && n.driver !== true && typeof n.kind === 'string' && !BOOKKEEPING.has(n.kind)) notes++
     } catch {
       // A line that cannot be read is no progress of anybody's.
     }
@@ -158,10 +158,10 @@ export const saidStopped = (notesText: string | null, self: string, since: numbe
     }
   })
 
-/** The claim this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed tonight. */
 /** `since` is the claim entry's own time, null when it carries none: never judged stuck by time then. */
 export type Claim = { repo: string; issue: number; attempts: number; since: number | null }
 export type ClaimReading = { state: 'none' } | { state: 'held'; claim: Claim } | { state: 'unknown'; why: string }
+/** The claim this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed tonight. */
 export const heldClaim = (claimsText: string, self: string): ClaimReading => {
   let held: Claim | null = null
   for (const line of claimsText.split('\n')) {
@@ -296,12 +296,13 @@ export const decideStop = (i: StopInput): StopDecision => {
     d.finishing = true
     const why = `the weekly usage has had no reading for ${mins(now - measuredAt)}, so the night stops after the issue in hand (unmeasured)`
     const unmeasured: Note[] = first ? [{ kind: 'finding', ...where, text: why }] : []
-    if (!claim || release) return stop(why, release, unmeasured)
+    // Claims that cannot be read just now may still hold one: blocked on rather than stopped on it.
+    if ((!claim && i.claim.state !== 'unknown') || release) return stop(why, release, unmeasured)
     d.blocks++
     if (!progressed) d.idleBlocks++
     return {
       kind: 'block', record: d, notes: [...unmeasured, { kind: 'heartbeat', ...where }],
-      reason: `${told}Finish #${claim.issue} and release it, then claim nothing new: ${why}. ${i.rules}`,
+      reason: `${told}${unread}Finish ${claim ? `#${claim.issue}` : 'the issue in hand'} and release it, then claim nothing new: ${why}. ${i.rules}`,
     }
   }
 
@@ -366,13 +367,13 @@ const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace
 
 export const overnightRules = (self: string, rootPath: string) => {
   const root = shellWord(rootPath)
-  self = shellWord(self)
+  const me = shellWord(self)
   return [
     'Overnight rules (sleep mode): Dan is asleep and asks nothing tonight.',
-    `Claim work with \`bash ~/.claude/hooks/lib/sleep-queue.sh next ${root} ${self}\`; it prints the issue and a worktree of its own: work only there, never switch branches in the primary checkout.`,
-    'If it prints attempts=3 or more, release that issue as parked at once and claim the next.',
+    `Claim work with \`bash ~/.claude/hooks/lib/sleep-queue.sh next ${root} ${me}\`; it prints the issue and a worktree of its own: work only there, never switch branches in the primary checkout.`,
+    `If it prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
     'Work it test first, open a pull request, and follow the repository\'s own merge rules.',
-    `When it is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${self} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next.`,
+    `When it is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next.`,
     'Write anything for Dan with sleep_note from ~/.claude/hooks/lib/sleep.sh: a question (kind question), a proposed issue (kind issue), a lesson (kind lesson), or anything noticed (kind finding). Never file issues or ask him.',
     `When \`next\` prints none, write \`sleep_note '{"kind":"stopped","by":"${self}","text":"nothing left to claim"}'\` and stop.`,
     'What is done is judged from commits and notes, never from what you say, so commit and note as you go.',

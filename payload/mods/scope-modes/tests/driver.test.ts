@@ -154,11 +154,18 @@ describe('the circuit breaker (H3)', () => {
     // A good read in between starts the run over.
     const good = decideStop(input({ driver: d, claim: none, fingerprint: 'notes=50;refs=' }))
     expect(good.record?.claimFails).toBe(0)
-    let e: DriverReading = ok({ ...(d.state === 'ok' ? d.record : after()), claimFails: LIMITS.claimReadFails - 1 })
+    const e: DriverReading = ok({ ...(d.state === 'ok' ? d.record : after()), claimFails: LIMITS.claimReadFails - 1 })
     const r = decideStop(input({ driver: e, claim: unknown, fingerprint: 'notes=60;refs=' }))
     expect(r.kind).toBe('stop')
     expect(r.notes[0]).toEqual({ kind: 'failed', repo: 'o/r', text: `the claims could not be read ${LIMITS.claimReadFails} times in a row (a line of the claims could not be read)` })
-    e = ok(after())
+  })
+  test('with the usage unmeasured, claims that cannot be read just now never end the night on a claim that may still be held', () => {
+    const at = T0 + LIMITS.unmeasuredMs
+    const r = decideStop(input({ now: at, weekly: null, driver: ok(after({ progressAt: at })), fingerprint: 'notes=1;refs=', claim: { state: 'unknown', why: 'busy' } }))
+    expect(r.kind).toBe('block')
+  })
+  test('the rules name the attempt that is parked from the limit itself', () => {
+    expect(RULES).toContain(`attempts=${LIMITS.attempts + 1} or more`)
   })
   test('a claim entry with no time is never judged stuck by time, and reads as undated', () => {
     const line = JSON.stringify({ repo: 'o/r', issue: 4, attempts: 1, entries: [{ kind: 'claim', session: 's1' }] })
