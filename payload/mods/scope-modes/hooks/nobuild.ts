@@ -59,7 +59,7 @@ const gitRefusal = (g: { sub?: string; args: string[] }): boolean => {
 // and a mutation after it is run by naming the mutation in operationName. Strings and comments are
 // skipped, so a brace inside an argument's text is not read as structure.
 type Operation = { kind: string; fields: string[]; spreads: boolean }
-const operations = (doc: string): Operation[] => {
+export const operations = (doc: string): Operation[] => {
   const out: Operation[] = []
   let depth = 0
   let parens = 0
@@ -100,12 +100,13 @@ const operations = (doc: string): Operation[] => {
 }
 // Issue, milestone and label work is all allowed, through GraphQL too; a pull request is not.
 const ISSUE_WORK = (field: string) => /issue|label|milestone/i.test(field) && !/pullrequest/i.test(field)
-const graphqlRefusal = (words: string[]): string | undefined => {
+/** The GraphQL document a `gh api graphql` call sends, or null when it cannot be read: sent from a file, by --input, or not given. Shared with overnight.ts. */
+export const graphqlDocument = (words: string[]): string | null => {
   let query: string | undefined
   let fromFile = false
   for (let i = 2; i < words.length; i++) {
     const w = words[i] as string
-    if (w === '--input') return 'call the GitHub API with a query that could not be read'
+    if (w === '--input') return null
     if (['-f', '-F', '--field', '--raw-field'].includes(w) && (words[i + 1] ?? '').startsWith('query=')) {
       query = (words[++i] as string).slice('query='.length)
       // -F and --field read a value starting with @ from that file; -f takes it as written.
@@ -113,7 +114,11 @@ const graphqlRefusal = (words: string[]): string | undefined => {
     }
   }
   // A query read from a file (`-F query=@q.graphql`), or none at all, cannot be judged.
-  if (query === undefined || fromFile) return 'call the GitHub API with a query that could not be read'
+  return query === undefined || fromFile ? null : query
+}
+const graphqlRefusal = (words: string[]): string | undefined => {
+  const query = graphqlDocument(words)
+  if (query === null) return 'call the GitHub API with a query that could not be read'
   for (const op of operations(query)) {
     if (op.kind !== 'mutation') continue
     if (op.spreads || !op.fields.length) return 'call the GitHub API with a query that could not be read'
@@ -135,20 +140,25 @@ const GH_READS: Record<string, Set<string>> = {
 }
 const GH_API_VALUE_FLAGS = new Set(['-X', '--method', '-f', '-F', '--field', '--raw-field', '-H', '--header', '--input', '-q', '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview'])
 const GH_API_FIELD_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input'])
+/** A `gh api` call's method and endpoint as gh sends it: GET unless a method is named or a field is sent. Shared with sleep mode's overnight judge (overnight.ts). */
+export const ghApiCall = (words: string[]): { method: string; endpoint: string | undefined } => {
+  let method = 'GET'
+  let endpoint: string | undefined
+  for (let i = 2; i < words.length; i++) {
+    const w = words[i] as string
+    if (GH_API_VALUE_FLAGS.has(w)) {
+      if (w === '-X' || w === '--method') method = (words[i + 1] ?? 'GET').toUpperCase()
+      else if (GH_API_FIELD_FLAGS.has(w) && method === 'GET') method = 'POST'
+      i++
+    } else if (!isFlag(w) && endpoint === undefined) endpoint = w
+  }
+  return { method, endpoint }
+}
 const ghRefusal = (words: string[]): string | undefined => {
   const [, sub = '', act = ''] = words
   if (sub === 'issue') return act === 'develop' ? 'run gh issue develop' : undefined
   if (sub === 'api') {
-    let method = 'GET'
-    let endpoint: string | undefined
-    for (let i = 2; i < words.length; i++) {
-      const w = words[i] as string
-      if (GH_API_VALUE_FLAGS.has(w)) {
-        if (w === '-X' || w === '--method') method = (words[i + 1] ?? 'GET').toUpperCase()
-        else if (GH_API_FIELD_FLAGS.has(w) && method === 'GET') method = 'POST'
-        i++
-      } else if (!isFlag(w) && endpoint === undefined) endpoint = w
-    }
+    const { method, endpoint } = ghApiCall(words)
     // GraphQL is always a POST, so a read is told from a change by the document it sends (#702).
     if (endpoint === 'graphql') return graphqlRefusal(words)
     if (method === 'GET') return undefined
@@ -181,6 +191,32 @@ const DEPLOYERS: Record<string, (args: string[]) => boolean> = {
 }
 const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
 const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
+
+/** The package script a runner runs (`npm run build`, `yarn build`, `npm test`), or undefined when it runs none. */
+export const runnerScript = (words: string[]): string | undefined => {
+  if (!RUNNERS.has(name(words[0]))) return undefined
+  const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
+  return script && !isFlag(script) && script !== 'publish' ? script : undefined
+}
+
+/**
+ * What one command would deploy, by its words, as the action ("deploy with wrangler", "run npm
+ * run deploy"), or undefined. No build refuses it, and sleep mode's overnight judge refuses it in a
+ * repository not allowed to deploy (overnight.ts): one list of deploy tools for both (L613).
+ */
+export const deployWith = (words: string[]): string | undefined => {
+  // npx and bunx only fetch and run the tool named after them.
+  while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((w, i) => i > 0 || !isFlag(w))
+  const cmd = name(words[0])
+  const deployer = DEPLOYERS[cmd]
+  if (deployer && deployer(words.slice(1))) return `deploy with ${cmd}`
+  if (RUNNERS.has(cmd)) {
+    const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
+    if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return `run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`
+  }
+  if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return `run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`
+  return undefined
+}
 
 
 
@@ -242,13 +278,8 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
   const cmd = name(words[0])
   if (c.git && gitRefusal(c.git)) return why(`run git ${c.git.sub}`)
   if (cmd === 'gh') return why(ghRefusal(words))
-  const deployer = DEPLOYERS[cmd]
-  if (deployer && deployer(words.slice(1))) return why(`deploy with ${cmd}`)
-  if (RUNNERS.has(cmd)) {
-    const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
-    if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return why(`run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`)
-  }
-  if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return why(`run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`)
+  const deploys = deployWith(words)
+  if (deploys) return why(deploys)
   // A database client by every piece of SQL it runs and what it writes itself (sql.ts), MariaDB's
   // own name for its client included (#730). Without SQL given, it reads a file or stdin, which
   // cannot be read.

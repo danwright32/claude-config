@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "mergeOnly": [
+    { "repo": "Halo-lab-Trypennie/trypennie", "mergeDeploys": true },
+    { "repo": "Try-Pennie/bidspoke", "mergeDeploys": true },
+    { "repo": "Try-Pennie/slate", "mergeDeploys": true },
+    { "repo": "danwright32/claude-config", "mergeDeploys": true }
+  ],
+  "mayDeploy": []
+}
