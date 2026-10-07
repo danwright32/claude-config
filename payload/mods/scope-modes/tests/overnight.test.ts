@@ -110,6 +110,9 @@ describe('every gh write but a known read goes only to the repository the checko
     expect(await bash('gh -R other/x pr close 5')).toBe(other)
     expect(await bash('gh --repo=other/x pr merge 3')).toBe(other)
     expect(await bash('gh --frob x pr close 5')).toBe(unresolved)
+    // A flag between the subcommand and its action cannot pass its value off as a read action.
+    expect(await bash('gh pr --body view close 5 -R other/x')).toBe(unresolved)
+    expect(await bash('gh issue --title list create')).toBe(unresolved)
     expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
   })
   test('the same writes on this repository go ahead', async () => {

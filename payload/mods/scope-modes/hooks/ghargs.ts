@@ -87,6 +87,9 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
   const sub = subAt < 0 ? '' : (rest[subAt] as string)
   const actAt = sub === 'api' || subAt < 0 ? -1 : rest.findIndex((w, n) => n > subAt && !w.startsWith('-'))
   const act = actAt < 0 ? '' : (rest[actAt] as string)
+  // gh takes the action straight after the subcommand. A flag between them could pass its own
+  // value off as the action (`gh pr --body view close`), so the call cannot be read (#834 review).
+  if (actAt > subAt + 1) unreadable = true
   const shortValues = shortValuesFor(sub, act)
   for (let k = 0; k < rest.length; k++) {
     if (k === subAt || k === actAt) continue
