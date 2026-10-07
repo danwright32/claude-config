@@ -33,13 +33,13 @@ const SHORT_VALUES: Record<string, Record<string, string>> = {
   api: { '*': 'XfFHpqt' },
   pr: { merge: 'RbFtA', review: 'RbF', comment: 'RbF', create: 'RbFtlmapBHrTq', edit: 'RbFtmapBr', close: 'Rc', '*': 'RbFtlmapBHLqsSAT' },
   issue: { comment: 'RbF', create: 'RbFtlmapT', edit: 'RbFtmap', close: 'Rcr', '*': 'RbFtlmapLqsSAT' },
-  '*': { '*': 'RbFtlmapBHLqsSATnd' },
+  '*': { '*': 'RbFtlmapBHLqsSAT' },
 }
 const LONG_VALUES = new Set([
   '--repo', '--body', '--body-file', '--title', '--label', '--milestone', '--assignee', '--project', '--base', '--head', '--reviewer', '--template',
   '--add-label', '--remove-label', '--add-assignee', '--remove-assignee', '--add-project', '--remove-project', '--add-reviewer', '--remove-reviewer',
   '--method', '--field', '--raw-field', '--header', '--input', '--jq', '--preview', '--cache', '--hostname', '--json', '--limit', '--state', '--search',
-  '--author', '--subject', '--author-email', '--match-head-commit', '--comment', '--reason', '--branch', '--ref', '--workflow', '--notes', '--notes-file',
+  '--author', '--subject', '--author-email', '--match-head-commit', '--reason', '--branch', '--ref', '--workflow', '--notes', '--notes-file',
   '--target', '--description', '--color', '--name', '--event', '--user', '--status', '--commit',
 ])
 const shortValuesFor = (sub: string, act: string): string => {
@@ -91,7 +91,16 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
   // value off as the action (`gh pr --body view close`), so the call cannot be read (#834 review).
   if (actAt > subAt + 1) unreadable = true
   const shortValues = shortValuesFor(sub, act)
-  for (let k = 0; k < rest.length; k++) {
+  let k = 0
+  // A flag's value taken from the next word. One that looks like a flag itself means this reader
+  // has a flag's arity wrong (`-yd -R other/x`), and a repository flag may be swallowed, so the
+  // call cannot be read (#834 review of af10401).
+  const takeNext = (): string => {
+    const v = rest[++k] as string
+    if (v.startsWith('-')) unreadable = true
+    return v
+  }
+  for (; k < rest.length; k++) {
     if (k === subAt || k === actAt) continue
     const w = rest[k] as string
     if (w === '--') {
@@ -102,7 +111,7 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
       const eq = w.indexOf('=')
       const name = eq < 0 ? w : w.slice(0, eq)
       if (eq >= 0) flags.push({ name, value: w.slice(eq + 1) })
-      else if (LONG_VALUES.has(name) && k + 1 < rest.length) flags.push({ name, value: rest[++k] as string })
+      else if (LONG_VALUES.has(name) && k + 1 < rest.length) flags.push({ name, value: takeNext() })
       else flags.push({ name, value: true })
       continue
     }
@@ -115,7 +124,7 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
         if (shortValues.includes(letter)) {
           const attached = w.slice(j + 1)
           if (attached) flags.push({ name, value: attached })
-          else if (k + 1 < rest.length) flags.push({ name, value: rest[++k] as string })
+          else if (k + 1 < rest.length) flags.push({ name, value: takeNext() })
           else flags.push({ name, value: true })
           break
         }

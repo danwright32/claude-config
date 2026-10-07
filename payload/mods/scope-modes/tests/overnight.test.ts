@@ -113,6 +113,11 @@ describe('every gh write but a known read goes only to the repository the checko
     // A flag between the subcommand and its action cannot pass its value off as a read action.
     expect(await bash('gh pr --body view close 5 -R other/x')).toBe(unresolved)
     expect(await bash('gh issue --title list create')).toBe(unresolved)
+    // A value flag never swallows -R, whatever the subcommand (#834 review of af10401).
+    expect(await bash('gh release delete v1 -yd -R other/x')).toBe(other)
+    expect(await bash('gh gpg-key add -n -R other/x k.asc')).toBe(unresolved)
+    // GH_REPO set through env reaches gh too.
+    expect(await bash('env GH_REPO=other/x gh issue comment 5 --body x')).toBe(unresolved)
     expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
   })
   test('the same writes on this repository go ahead', async () => {
