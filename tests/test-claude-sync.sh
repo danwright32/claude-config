@@ -19837,6 +19837,18 @@ check "#849 and the same line carries the send's own reason" \
 out_wh3="$(CLAUDE_HOME="$WHH" SYNC_REPO="$WHR" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send 2>&1 || true)"
 check "#849 a send run by hand that holds a file back carries no marker" \
   "out_lacks \"\$out_wh3\" 'SEND-OUTCOME'"
+# Every hold, not only the lesson checks: the hooks block held back because this Mac's settings.json
+# cannot be read is a held file too (the review of #849 found the first cut covered only four holds).
+# The lesson fault is fixed first, so the hooks block is the only thing kept back.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body\n' > "$WHH/LESSONS.md"
+whrun >/dev/null
+cp "$WHH/settings.json" "$WORK/watchheld-settings-good"
+printf '{ not json\n' > "$WHH/settings.json"
+out_wh5="$(whrun)"
+cp "$WORK/watchheld-settings-good" "$WHH/settings.json"
+dbg "#849 a tick holding the hooks block: $out_wh5"
+check "#849 a tick that held the hooks block back logs it as held, naming it, never nothing to send" \
+  "line_has \"\$out_wh5\" 'claude-sync watch: NOT sent: ' 'settings\.hooks\.json' 'could not be read as JSON' && ! grep -q 'watch: nothing to send' <<< \"\$out_wh5\""
 # Any outcome, not only this one: what a send said beside its marker reaches the log with the tick.
 out_wh4="$(SYNC_FSWATCH="$WHFS" SYNC_WATCH_SEND="printf 'claude-sync: a sentence the send said\nSEND-OUTCOME sent\n'" \
   CLAUDE_HOME="$WHH" SYNC_REPO="$WHR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" watch 2>&1 || true)"
