@@ -376,7 +376,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
     // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
     // running it are let through; a command missing from that list fails closed.
-    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some(w => name(w) === 'gh' && unquotedWords.has(w))) return UNRESOLVED
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some(w => (w === 'gh' || w.endsWith('/bin/gh')) && unquotedWords.has(w))) return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look)
       if (why) return why

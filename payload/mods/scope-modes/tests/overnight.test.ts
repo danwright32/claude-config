@@ -175,6 +175,9 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('echo "gh is slow today"')).toBeUndefined()
     // Finding where gh is runs nothing (#834 review of 00abaed).
     expect(await bash('which gh && command -v gh && type gh')).toBeUndefined()
+    // A file that happens to be named gh is not the gh program.
+    expect(await bash('cat ./gh && ls bin/gh && chmod +x scripts/gh')).toBeUndefined()
+    expect(await bash('nohupish /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
   })
   test('code the reader cannot read, or that runs gh, git or a database itself, is refused (#834 review of 46f07ff)', async () => {
     expect(await bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`)).toBe('run code that runs gh, git or a database client, which cannot be judged')

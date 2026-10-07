@@ -1564,6 +1564,7 @@ test('a permission decision that throws reads as awake: nothing approved', withD
   await start($ as never, clock)
   w.idThrows = true
   expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  expect(w.logs.filter(l => /^scope-modes: whether this session is an overnight worker could not be read \(.+\), so this prompt was not approved$/.test(l)).length).toBe(1)
 })
 
 test('the wake check reads every repository the night notes named, private ones too', withDeps, async ($, on) => {

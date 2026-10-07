@@ -1192,7 +1192,9 @@ export const register: Register = on => {
     try {
       const reading = await sleepNow($)
       worker = reading.state === 'asleep' && (reading.record.workers?.includes(await $.session.id()) ?? false)
-    } catch {
+    } catch (err) {
+      // Said, never silent: a session that waits on Dan overnight leaves the reason in its log.
+      $.ui.log(`scope-modes: whether this session is an overnight worker could not be read (${msg(err)}), so this prompt was not approved`, { to: 'debug' })
       worker = false
     }
     if (!worker) return next(e)
