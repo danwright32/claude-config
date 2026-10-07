@@ -57,6 +57,7 @@ fi
 # record: it is how that split was found, and it is worth keeping.
 spool_append() { # spool_append <record>
   if bash "$SPOOL" append "$cwd" "$1" "${parent:-}" 2>/dev/null; then
+    recorded=1
     return 0
   fi
   printf '%s\n' "$1" >> "$lost_records" 2>/dev/null
@@ -316,11 +317,16 @@ print("defer %d" % count)
       exit 0 ;;
     *)
       defer_log "harvested agent ${agent_id:-unknown} though its own background work is still running ($waiting_on): ${decision#harvest }"
-      rm -f "$pending_file" 2>/dev/null ;;
+      clear_pending=1 ;;
   esac
-else
-  rm -f "$pending_file" 2>/dev/null
+elif [ -z "${CLAUDE_ISSUE_HARVEST_FORCE:-}" ]; then
+  clear_pending=1
 fi
+# The pending record is cleared on the way OUT, and only once this run has written a record to the
+# spool (a finding, a none or an error). Cleared before that, a harvest killed at the hook's time
+# limit, or one whose record could not be written, would lose the agent for good, which is the one
+# thing the record exists to prevent; left in place, a later sweep harvests it.
+trap '[ "${clear_pending:-0}" = 1 ] && [ "${recorded:-0}" = 1 ] && rm -f "$pending_file" 2>/dev/null' EXIT
 
 # The digest's EXIT CODE is what tells an unreadable transcript from an agent
 # that said nothing, because both print nothing. Consulting only its output

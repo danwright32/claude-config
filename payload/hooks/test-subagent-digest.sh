@@ -181,6 +181,22 @@ grep -q '^\[task trimmed' <<< "$out_nt" \
   && check "and carries no trim marker" "marker present on a whole brief" \
   || check "and carries no trim marker" ok
 
+# ODD SHAPES ARE SKIPPED, NEVER FATAL (claude-config#898). An uncaught exception exits 1, which is
+# the code for "the agent said nothing", so one oddly shaped line used to turn a transcript full of
+# findings into a clean empty harvest. Each shape is valid JSON a reader could meet: a line that is
+# not an object, a message that is not an object, content that is neither text nor a list, and a
+# tool input that is not an object.
+ODD="$TMPROOT/odd.jsonl"
+{ asked "Audit the queue"
+  printf '%s\n' '[1, 2]' '{"type":"user","message":"a string message"}' \
+    '{"type":"assistant","message":"a string message"}' '{"type":"assistant","message":{"content":7}}' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":"not an object"}]}}'
+  say "ODD-SHAPES-SURVIVED: the queue has no retry cap."; } > "$ODD"
+out_odd="$(python3 "$D" "$ODD" 2>&1)"; code_odd=$?
+[ "$code_odd" -eq 0 ] && grep -q 'ODD-SHAPES-SURVIVED' <<< "$out_odd" \
+  && check "#898 oddly shaped lines are skipped and the rest of the transcript is still digested" ok \
+  || check "#898 oddly shaped lines are skipped and the rest of the transcript is still digested" "exit=$code_odd out=${out_odd:0:300}"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

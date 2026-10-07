@@ -73,9 +73,13 @@ def main():
         # nothing" and spooled a clean empty record (claude-config#898).
         if not isinstance(obj, dict):
             continue
+        # The same for every level below it: a message, content or tool input of another shape is
+        # read as empty rather than raising.
+        msg = obj.get("message")
+        msg = msg if isinstance(msg, dict) else {}
 
         if obj.get("type") == "user" and task is None:
-            content = (obj.get("message") or {}).get("content")
+            content = msg.get("content")
             if isinstance(content, str) and content.strip():
                 task = trim_task(content)
             elif isinstance(content, list):
@@ -86,13 +90,15 @@ def main():
 
         if obj.get("type") != "assistant":
             continue
-        for it in ((obj.get("message") or {}).get("content") or []):
+        content = msg.get("content")
+        for it in (content if isinstance(content, list) else []):
             if not isinstance(it, dict):
                 continue
             if it.get("type") == "text" and (it.get("text") or "").strip():
                 said.append((it["text"] or "").strip())
             elif it.get("type") == "tool_use":
-                inp = it.get("input") or {}
+                inp = it.get("input")
+                inp = inp if isinstance(inp, dict) else {}
                 path = inp.get("file_path") or inp.get("path")
                 if path and path not in touched:
                     touched.append(path)

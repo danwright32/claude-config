@@ -85,7 +85,7 @@ JSONL
 
 payload() { # payload <cwd> [agent-transcript] [parent-transcript]
   python3 - "$1" "${2:-$FAKE_TRANSCRIPT}" "${3:-$PARENT_TRANSCRIPT}" <<'PY'
-import json, sys
+import json, os, sys
 rec = {
     "session_id": "test-session",
     "cwd": sys.argv[1],
@@ -93,7 +93,6 @@ rec = {
     "agent_id": "test-agent-id",
     "hook_event_name": "SubagentStop",
 }
-import os
 if os.environ.get("PAYLOAD_AGENT_ID"):
     rec["agent_id"] = os.environ["PAYLOAD_AGENT_ID"]
 if sys.argv[2] != "OMIT":
@@ -102,7 +101,6 @@ if sys.argv[3] != "OMIT":
     rec["transcript_path"] = sys.argv[3]
 # The session's in flight background work, as Claude Code sends it (claude-config#898). Only a case
 # that means something by it sets it; every other case is a payload without the field.
-import os
 if os.environ.get("PAYLOAD_BG_TASKS"):
     rec["background_tasks"] = json.loads(os.environ["PAYLOAD_BG_TASKS"])
 print(json.dumps(rec))
@@ -633,6 +631,20 @@ PAYLOAD_BG_TASKS="[$SELF_TASK,$SIBLING_TASK]" payload "$REPO" "$WAITING_TRANSCRI
   && check "#898 the next stop with no live work of its own harvests it and clears the pending record" ok \
   || check "#898 the next stop with no live work of its own harvests it and clears the pending record" "found=$(found_for test-agent-id) pending=$(ls "$PENDING_DIR" 2>&1)"
 
+# The pending record outlives a harvest that RECORDED nothing. Cleared before its harvest had
+# written anything, a harvest killed at the hook's limit, or one whose record could not be written,
+# would have lost the agent for good, which is what the record exists to prevent.
+reset_spool
+defer_stop "$T0"
+FAILING_SPOOL_LIB="$TMPROOT/failing-spool-lib.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FAILING_SPOOL_LIB"
+PAYLOAD_BG_TASKS="[$SELF_TASK,$SIBLING_TASK]" payload "$REPO" "$WAITING_TRANSCRIPT" \
+  | CLAUDE_ISSUE_SPOOL_LIB="$FAILING_SPOOL_LIB" CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 60))" bash "$HARVEST" >/dev/null 2>&1
+[ -f "$PENDING_DIR/test-agent-id.json" ] \
+  && check "#898 a pending harvest survives a final stop whose record could not be written" ok \
+  || check "#898 a pending harvest survives a final stop whose record could not be written" "pending=$(ls -A "$PENDING_DIR" 2>&1)"
+rm -f "$LOST_RECORDS"
+
 # The COUNT cap: two stops are deferred, the third is harvested though its work is still live.
 reset_spool
 defer_stop "$T0"; defer_stop "$((T0 + 60))"
@@ -671,9 +683,9 @@ for _ in $(seq 1 300); do [ "$(found_for test-agent-id)" -ge 1 ] && break; sleep
 # whose receipts all come after it is still deferred.
 reset_spool
 defer_stop "$T0"
-[ -z "$(records)" ] \
+[ -z "$(records)" ] && [ -f "$PENDING_DIR/test-agent-id.json" ] \
   && check "#898 a non-object transcript line is skipped, never allowed to abort the scan" ok \
-  || check "#898 a non-object transcript line is skipped, never allowed to abort the scan" "spool=$(records)"
+  || check "#898 a non-object transcript line is skipped, never allowed to abort the scan" "spool=$(records) pending=$(ls -A "$PENDING_DIR" 2>&1)"
 
 # The log is capped the way the archive is, keeping the newest lines.
 reset_spool
