@@ -479,7 +479,7 @@ test('a question to Dan sends one notification naming the project, with the ques
 const askPermission = ($: { classic: { PermissionRequest: (e: never) => Promise<unknown> } }, question: string) =>
   $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question, header: 'Format', options: [], multiSelect: false }] } } as never)
 
-test('a question whose dialog Claude Code also raises as a permission sends one notification, the question (#814)', withDeps, async ($, on) => {
+test('a question whose dialog Claude Code also raises as a permission sends one notification, the question (#814)', unseated, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world($, on, { clock, questionOpenMs: OPEN_MS })
   await start($)
@@ -572,7 +572,7 @@ test('a permission request raised twice for one question still sends one notific
 
 // A /clear while this conversation's question dialog is open leaves that question this
 // conversation's: its permission request is still no second notification.
-test("a /clear while this conversation's question is open never makes its request a second notification (#814)", withDeps, async ($, on) => {
+test("a /clear while this conversation's question is open never makes its request a second notification (#814)", unseated, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world($, on, { clock, questionOpenMs: OPEN_MS })
   await start($)
@@ -933,7 +933,7 @@ test("an idle prompt with nothing being asked says What's next?", unseated, asyn
   expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
 })
 
-test("an idle prompt while a question is open sends nothing more: the question's notification stands", withDeps, async ($, on) => {
+test("an idle prompt while a question is open sends nothing more: the question's notification stands", unseated, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   let during: Promise<unknown> | undefined
   const w = world($, on, { duringAsk: () => (during = idle($)), clock, questionOpenMs: OPEN_MS })
