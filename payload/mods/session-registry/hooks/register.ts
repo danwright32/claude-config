@@ -236,8 +236,9 @@ export const register: Register = on => {
         return 'unread'
       }
       toldNoId = false
-      // What #751 item 1 needs measured on a real /clear: whether Claude Code has switched the id by
-      // the time the /clear's command has run. Said in the debug log on every such look.
+      // Whether Claude Code had switched the id by the time the /clear's (or /resume's) command had
+      // run, said in the debug log on every such look. This line is the measurement cited above
+      // expectNew (#751 item 1), and keeps showing should a later Claude Code reverse the order.
       if (afterCommand && expectNew && ended) {
         built.ui.log(
           `session-registry: once the /${ended.reason} had run, the session id read ${id}; session.end had closed ${ended.id}, so the id had ${id === ended.id ? 'not changed' : 'already switched'}.`,
