@@ -658,7 +658,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     }
     if (d.stopped || d.resumeAt !== null) return false
     const c = await claimNow($, en)
-    if (c.state !== 'held') return false
+    if (c.state !== 'held' || c.claim.since === null) return false
     const active = activeMs(d.waits, c.claim.since, en.now)
     if (active < LIMITS.stuckMs) return false
     const where = await repoOf($)

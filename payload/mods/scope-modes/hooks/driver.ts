@@ -33,6 +33,8 @@ export const LIMITS = {
   unmeasuredMs: 60 * MIN,
   /** The waits after a rate limit or a server error, in minutes: then an hour each, all night (Dan, 2026-10-07). */
   waitsMin: [5, 10, 20, 40, 60] as readonly number[],
+  /** Reads of the claims in a row that may fail before the night stops: one failed read never does. */
+  claimReadFails: 3,
 }
 
 /** The errors worth waiting out: a usage limit, and the server being busy or failing (overloaded arrives as server_error, #839). */
@@ -68,6 +70,8 @@ export type DriverRecord = {
   weeklyAt: number | null
   /** Set once the usage went unmeasured: finish the issue in hand, claim nothing new. */
   finishing: boolean
+  /** Failed reads of the claims in a row; a good read starts it over. */
+  claimFails: number
   /** An issue the watchdog parked between Stops, said at the next one. */
   parked: string | null
   /** Why the driver let this session stop for the night; once set, it never blocks again. */
@@ -80,7 +84,7 @@ const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFin
 
 export const freshDriver = (generation: string, session: string, now: number): DriverRecord => ({
   v: 1, generation, session, since: now, blocks: 0, idleBlocks: 0, progressAt: now, fingerprint: null,
-  waitStep: 0, resumeAt: null, waits: [], weeklyAt: null, finishing: false, parked: null, stopped: null,
+  waitStep: 0, resumeAt: null, waits: [], weeklyAt: null, finishing: false, claimFails: 0, parked: null, stopped: null,
 })
 
 /** The counter as stored. Anything but a whole record for this night and session is unreadable, never a fresh start (L105). */
@@ -95,7 +99,7 @@ export const readDriver = (text: string | null, generation: string, session: str
   const r = j as Partial<DriverRecord> | null
   if (!r || typeof r !== 'object' || r.v !== 1) return { state: 'unreadable', why: "the driver's counter has no version this reader knows" }
   if (r.generation !== generation || r.session !== session) return { state: 'unreadable', why: "the driver's counter belongs to another night or session" }
-  const nums = [r.since, r.blocks, r.idleBlocks, r.progressAt, r.waitStep]
+  const nums = [r.since, r.blocks, r.idleBlocks, r.progressAt, r.waitStep, r.claimFails]
   const numOrNull = (x: unknown) => x === null || isNum(x)
   const strOrNull = (x: unknown) => x === null || typeof x === 'string'
   if (!nums.every(isNum) || !Array.isArray(r.waits) || !numOrNull(r.resumeAt) || !numOrNull(r.weeklyAt)) {
@@ -155,7 +159,8 @@ export const saidStopped = (notesText: string | null, self: string, since: numbe
   })
 
 /** The claim this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed tonight. */
-export type Claim = { repo: string; issue: number; attempts: number; since: number }
+/** `since` is the claim entry's own time, null when it carries none: never judged stuck by time then. */
+export type Claim = { repo: string; issue: number; attempts: number; since: number | null }
 export type ClaimReading = { state: 'none' } | { state: 'held'; claim: Claim } | { state: 'unknown'; why: string }
 export const heldClaim = (claimsText: string, self: string): ClaimReading => {
   let held: Claim | null = null
@@ -171,8 +176,8 @@ export const heldClaim = (claimsText: string, self: string): ClaimReading => {
     const last = es[es.length - 1]
     if (last?.kind === 'claim' && last.session === self && typeof c.repo === 'string' && isNum(c.issue)) {
       // Two held at once would be a fault in the queue; the newest is the one being worked.
-      const since = isNum(last.at) ? last.at : 0
-      if (!held || since >= held.since) held = { repo: c.repo, issue: c.issue, attempts: isNum(c.attempts) ? c.attempts : 1, since }
+      const since = isNum(last.at) ? last.at : null
+      if (!held || (since ?? -1) >= (held.since ?? -1)) held = { repo: c.repo, issue: c.issue, attempts: isNum(c.attempts) ? c.attempts : 1, since }
     }
   }
   return held ? { state: 'held', claim: held } : { state: 'none' }
@@ -251,9 +256,19 @@ export const decideStop = (i: StopInput): StopDecision => {
     const why = `this session reached the night's cap of ${LIMITS.nightCap} blocks`
     return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
+  // Claims that cannot be read just now judge nothing stuck and park nothing, and the work goes on:
+  // one failed read never stops the night. A run of them does, said, since a claim nobody can read
+  // cannot be ended either (the breaker and the night's cap still bound the run).
+  let unread = ''
   if (i.claim.state === 'unknown') {
-    // Whose claim is whose cannot be read, so nothing can be parked or judged stuck: stop, said.
-    return stop(`the claims could not be read (${i.claim.why})`, undefined, [{ kind: 'failed', ...where, text: `the claims could not be read (${i.claim.why})` }])
+    d.claimFails++
+    if (d.claimFails >= LIMITS.claimReadFails) {
+      const why = `the claims could not be read ${d.claimFails} times in a row (${i.claim.why})`
+      return stop(why, undefined, [{ kind: 'failed', ...where, text: why }])
+    }
+    unread = `The claims could not be read just now (${i.claim.why}); carry on with the issue in hand. `
+  } else {
+    d.claimFails = 0
   }
   const idleMs = activeMs(d.waits, d.progressAt, now)
   const idle = progressed ? 0 : d.idleBlocks
@@ -266,7 +281,7 @@ export const decideStop = (i: StopInput): StopDecision => {
   let told = ''
   if (claim && claim.attempts > LIMITS.attempts) {
     release = { issue: claim.issue, state: 'parked', why: `attempt ${claim.attempts}: an issue is parked after ${LIMITS.attempts} attempts in a night` }
-  } else if (claim && activeMs(d.waits, claim.since, now) >= LIMITS.stuckMs) {
+  } else if (claim && claim.since !== null && activeMs(d.waits, claim.since, now) >= LIMITS.stuckMs) {
     release = { issue: claim.issue, state: 'parked', why: `${mins(activeMs(d.waits, claim.since, now))} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` }
   }
   if (release) told = `The driver parked #${release.issue} (${release.why}); its claim is ended, so leave it and claim the next issue. `
@@ -292,7 +307,7 @@ export const decideStop = (i: StopInput): StopDecision => {
 
   d.blocks++
   if (!progressed) d.idleBlocks++
-  const status = claim && !release ? `You hold #${claim.issue} in ${claim.repo} (attempt ${claim.attempts}): carry on with it. ` : 'You hold no issue: claim the next one. '
+  const status = unread ? unread : claim && !release ? `You hold #${claim.issue} in ${claim.repo} (attempt ${claim.attempts}): carry on with it. ` : 'You hold no issue: claim the next one. '
   return { kind: 'block', record: d, ...(release ? { release } : {}), notes: [{ kind: 'heartbeat', ...where }], reason: `${told}${status}${i.rules}` }
 }
 

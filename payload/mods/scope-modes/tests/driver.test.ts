@@ -141,10 +141,30 @@ describe('the circuit breaker (H3)', () => {
     const r = decideStop(input({ driver: ok(after()), notesText: mine, claim: held() }))
     expect(r.kind === 'stop' && r.release).toEqual({ issue: 7, state: 'parked', why: 'the session said it stopped while still holding this issue' })
   })
-  test('claims that cannot be read stop the session, said, rather than judge a claim it cannot see', () => {
-    const r = decideStop(input({ claim: { state: 'unknown', why: 'a line of the claims could not be read' } }))
+  test('one failed read of the claims never stops the night: it blocks on, judging nothing stuck, and stops only after a run of them', () => {
+    const unknown: ClaimReading = { state: 'unknown', why: 'a line of the claims could not be read' }
+    let d: DriverReading = ok(after())
+    for (let n = 1; n < LIMITS.claimReadFails; n++) {
+      const r = decideStop(input({ driver: d, claim: unknown, fingerprint: `notes=${n};refs=` }))
+      expect(r.kind).toBe('block')
+      expect(r.kind === 'block' && r.reason).toMatch(/^The claims could not be read just now \(a line of the claims could not be read\); carry on with the issue in hand\. /)
+      expect(r.record?.claimFails).toBe(n)
+      d = ok(r.record as DriverRecord)
+    }
+    // A good read in between starts the run over.
+    const good = decideStop(input({ driver: d, claim: none, fingerprint: 'notes=50;refs=' }))
+    expect(good.record?.claimFails).toBe(0)
+    let e: DriverReading = ok({ ...(d.state === 'ok' ? d.record : after()), claimFails: LIMITS.claimReadFails - 1 })
+    const r = decideStop(input({ driver: e, claim: unknown, fingerprint: 'notes=60;refs=' }))
     expect(r.kind).toBe('stop')
-    expect(r.notes[0]).toEqual({ kind: 'failed', repo: 'o/r', text: 'the claims could not be read (a line of the claims could not be read)' })
+    expect(r.notes[0]).toEqual({ kind: 'failed', repo: 'o/r', text: `the claims could not be read ${LIMITS.claimReadFails} times in a row (a line of the claims could not be read)` })
+    e = ok(after())
+  })
+  test('a claim entry with no time is never judged stuck by time, and reads as undated', () => {
+    const line = JSON.stringify({ repo: 'o/r', issue: 4, attempts: 1, entries: [{ kind: 'claim', session: 's1' }] })
+    expect(heldClaim(line, 's1')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null } })
+    const r = decideStop(input({ now: T0 + 10 * LIMITS.stuckMs, driver: ok(after({ progressAt: T0 + 10 * LIMITS.stuckMs, weeklyAt: T0 + 10 * LIMITS.stuckMs })), claim: { state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null } } }))
+    expect('release' in r).toBe(false)
   })
 })
 

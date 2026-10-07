@@ -927,6 +927,10 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
 - Stuck work: a claim past 2 attempts is parked at once, and one held for 2 hours of active time is
   parked, at Stop and by the minute's watchdog mid turn (said at the next Stop). Active time leaves
   out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
+  A claim entry with no time of its own is never judged stuck by time.
+- Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
+  blocked on with the reason said: one failed read never stops the night. Three in a row stop it
+  with a `failed` note. The rules carry the repository path shell quoted where it needs to be.
 - API errors (`classic.StopFailure`): it carries no reset time and calls an overloaded server
   `server_error` (#839), so a rate limit, overloaded or server error is waited out at 5, 10, 20 and
   40 minutes, then an hour between tries, all night, each wait a `wait` note; the minute's tick
