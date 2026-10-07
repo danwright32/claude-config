@@ -935,7 +935,14 @@ request, whose CI runs every suite on Linux. The pre push Linux run cannot stand
 2026-10-05 its record on Daniels-MacBook-Pro-2 read 0 judged of the 15 pushes it had a section to
 check, because Docker's daemon was not running, and it only ever covers sections of the sync suite
 (#596). The automatic `sync from <host>` commits are pushed by claude-sync, not by a session, so
-the refusal never sees them.
+the refusal never sees them. The refusal is judged by where the push goes (#892): the directory it
+runs in (a `git -C`, a `cd` in the same command, or the session's) and the URL of the remote it
+reaches, so a scratch copy of this repository pushing to a local bare remote is left alone, while
+claude-config under any remote name is still refused. A push that names `main`, or whose branch
+cannot be read (a bare `git push`, `HEAD`), from a directory that cannot be resolved (a variable,
+or a directory the same command creates) is refused rather than guessed at. A remote is judged by its
+push URL's repository path (owner and name, any host or port), and the refusal stands down only when
+that path is positively another repository: one it cannot read is refused too.
 
 CI's environment step is the list the container is built from, and
 `tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
