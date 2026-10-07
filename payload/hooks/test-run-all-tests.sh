@@ -1498,11 +1498,16 @@ esac
 # Every record carries the working directory it came from, so the added lines are read and judged
 # one at a time. This is the same shape as #159, where a global watchdog count was made specific by
 # tagging so it could only ever include the run's own.
+#
+# Records a fixture suite WRITES during a run carry a timestamp in 2099. Since #880 an unstamped
+# record dated before the run started is an older record another session rewrote, not a write, so
+# a record standing for a write has to be dated after the start, and a fixed future instant says so
+# without depending on the clock.
 SPOOL="$TMPROOT/live-spool"
 SP="$TMPROOT/spooltest"
 mkdir -p "$SPOOL" "$SP/suites"
 sp_record(){   # sp_record <cwd> -> one spool line
-  printf '{"ts":"2026-08-30T12:00:00Z","status":"found","agent":"","session":"s","cwd":"%s","findings":["x"]}\n' "$1"
+  printf '{"ts":"2099-01-01T00:00:00Z","status":"found","agent":"","session":"s","cwd":"%s","findings":["x"]}\n' "$1"
 }
 # A suite that writes into the live spool from ELSEWHERE, standing in for another session's
 # harvest firing mid-run. It is a suite only so that something writes while the runner is watching.
@@ -1563,7 +1568,7 @@ esac
 rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-inside.sh
 {
   printf '#!/usr/bin/env bash\n'
-  printf 'printf %s >> "%s/other.jsonl"\n' "'{\"ts\":\"2026-08-30T12:00:00Z\",\"status\":\"found\"}'" "$SPOOL"
+  printf 'printf %s >> "%s/other.jsonl"\n' "'{\"ts\":\"2099-01-01T00:00:00Z\",\"status\":\"found\"}'" "$SPOOL"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$SP/suites/test-anon.sh"
 chmod +x "$SP/suites/test-anon.sh"
@@ -1702,7 +1707,7 @@ sp2_run(){ # sp2_run [extra env assignments...]   -> one runner run over the #27
 {
   printf '#!/usr/bin/env bash\n'
   printf 'printf %s >> "%s/other.jsonl"\n' \
-    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2_REPO/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
+    "'{\"ts\":\"2099-01-01T00:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2_REPO/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$SP2/suites/test-othersession.sh"
 chmod +x "$SP2/suites/test-othersession.sh"
@@ -1761,7 +1766,7 @@ STUBLIB="$SP2/stub-issue-spool.sh"
 {
   printf '#!/usr/bin/env bash\n'
   printf 'printf %s >> "%s/other.jsonl"\n' \
-    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2_REPO/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
+    "'{\"ts\":\"2099-01-01T00:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2_REPO/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$SP2/suites/test-othersession.sh"
 chmod +x "$SP2/suites/test-othersession.sh"
@@ -1905,6 +1910,21 @@ out_d4="$(sp880_run)"; code_d4=$?
 grep -q '"seen_by"' "$SPOOL880/pending.jsonl" \
   && check "#880 and the fixture really did rewrite the stamped record" ok \
   || check "#880 and the fixture really did rewrite the stamped record" "spool=$(cat "$SPOOL880/pending.jsonl")"
+
+# An UNSTAMPED record rewritten with changed content: the no-directory and throwaway-directory
+# records, each given the field a clear adds. The lines are new to the comparison, and either one
+# read as a write fails the run. Each is dated before the run started, which a record written
+# during it cannot be, so it is an older record somebody rewrote.
+sp880_seed
+sp880_suite rewriteplain "sed 's/\"status\"/\"seen_by\":[\"s2\"],\"status\"/' \"\$S/pending.jsonl\" > \"\$S/pending.next\"
+mv \"\$S/pending.next\" \"\$S/pending.jsonl\""
+out_d7="$(sp880_run)"; code_d7=$?
+[ "$code_d7" -eq 0 ] \
+  && check "#880 an unstamped older record rewritten mid run does not fail the run" ok \
+  || check "#880 an unstamped older record rewritten mid run does not fail the run" "exit=$code_d7 out=$out_d7"
+[ "$(grep -c '"seen_by"' "$SPOOL880/pending.jsonl")" -eq 3 ] \
+  && check "#880 and the fixture really did rewrite every record" ok \
+  || check "#880 and the fixture really did rewrite every record" "spool=$(cat "$SPOOL880/pending.jsonl")"
 
 # The half that must still fire, through the same fixtures: a suite writing a record that carries
 # THIS run's stamp goes red even while another session drains around it.

@@ -625,6 +625,10 @@ if [ "$ran" -gt 0 ]; then
   # is why nothing here forks once per file). What it gives up: a suite appending a line
   # byte-identical to one already in the spool is not seen, and a write under this run carries
   # this run's id, so its record can never be identical to an older one.
+  # And the moment it was taken, in the spool's own `ts` format (UTC, second resolution, so it
+  # compares as text), because a record whose CONTENT another session changes mid run (a clear
+  # adding seen_by, file-errors editing it) is a new line all the same. Read below.
+  _spool_run_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   _spool_before_records="$WORK/live-spool-before.jsonl"
   cat "$_live_spool"/*.jsonl > "$_spool_before_records" 2>/dev/null || true
 
@@ -1259,6 +1263,16 @@ if [ "${_spool_before:-}" != "$_spool_after" ] || [ "${_spool_before_bytes:-}" !
     ${_sp_cwd:-(no directory recorded)} (stamped by another test run, id $_sp_run)"
         continue ;;
     esac
+    # Unstamped and dated BEFORE this run started, so not written during it: an older record whose
+    # content another session rewrote, which makes it a new line without making it a new record
+    # (claude-config#880). Only a well formed date is trusted this way, so a record with none, or
+    # with anything else there, is still judged below and fails closed.
+    _sp_ts="$(printf '%s' "$_sp_line" | sed -n 's/^{[[:space:]]*"ts"[[:space:]]*:[[:space:]]*"\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\)".*/\1/p')"
+    if [ -n "$_sp_ts" ] && [ -n "${_spool_run_start:-}" ] && [[ "$_sp_ts" < "$_spool_run_start" ]]; then
+      _sp_theirs="$_sp_theirs
+    ${_sp_cwd:-(no directory recorded)} (an older record, rewritten while this ran)"
+      continue
+    fi
     if [ -z "$_sp_cwd" ]; then
       # No working directory to judge it by. Reported as unattributable and counted against the
       # run, because that is also the shape a writer nobody expected would take, and a change
