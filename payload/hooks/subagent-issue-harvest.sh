@@ -113,6 +113,82 @@ if [ ! -f "$transcript" ]; then
   spool_error "the named agent transcript does not exist"
 fi
 
+# AN AGENT THAT STOPPED ONLY TO WAIT is not finished (claude-config#898). SubagentStop fires on
+# every stop, including one where the agent waits on its own background work and resumes when it
+# reports. Harvested then, the transcript reads as finished, and the model files "the merge was not
+# completed" about an agent that merged minutes later. Its final stop harvests it.
+#
+# The payload's background_tasks is the whole SESSION's in flight work, not the agent's: Claude
+# Code 2.1.293 builds it from the parent's task registry, so it lists the agent itself and every
+# sibling. What makes an entry this agent's OWN is its transcript showing it LAUNCHED: the id
+# follows the launch receipt ("with ID: ", "(ID: ", "(task ", "agentId: ") near the start of the
+# Bash, Monitor or Agent call's own result, and a Bash result must open with that receipt. An id
+# merely SEEN is not a launch: measured on a real agent transcript on 2026-10-07, a sibling's id
+# turned up in an ls of the subagents directory and in a test log, and matching any mention there
+# deferred the harvest for a sibling's work. If a later Claude Code words its receipts differently,
+# nothing matches and the harvest runs as it did before this check existed.
+#
+# Anything that cannot be read here (no field, not a list, an unreadable line) harvests as before:
+# a skipped harvest leaves no record, so a doubt is resolved toward harvesting (L98). A deferral
+# writes one line outside the spool, so a harvest that never came back can still be found.
+waiting_on=$(printf '%s' "$input" | python3 -c '
+import json, re, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+tasks = payload.get("background_tasks")
+if not isinstance(tasks, list):
+    sys.exit(0)
+me = payload.get("agent_id") or ""
+live = {t["id"] for t in tasks
+        if isinstance(t, dict) and isinstance(t.get("id"), str) and t["id"] and t["id"] != me}
+if not live:
+    sys.exit(0)
+launchers = {"Bash", "Monitor", "Agent", "Task"}
+receipt = re.compile(r"(?:with ID: |\(ID: |\(task |agentId: )([A-Za-z0-9_-]+)")
+launched_by = {}
+own = set()
+try:
+    with open(sys.argv[1], errors="replace") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            msg = rec.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    launched_by[block.get("id")] = block.get("name")
+                elif (block.get("type") == "tool_result" and not block.get("is_error")
+                      and launched_by.get(block.get("tool_use_id")) in launchers):
+                    body = block.get("content")
+                    if isinstance(body, list):
+                        body = "\n".join(b.get("text", "") for b in body
+                                         if isinstance(b, dict) and isinstance(b.get("text"), str))
+                    if not isinstance(body, str):
+                        continue
+                    head = body.lstrip()[:400]
+                    if launched_by.get(block.get("tool_use_id")) == "Bash" and not head.startswith("Command "):
+                        continue
+                    own.update(m.group(1) for m in receipt.finditer(head) if m.group(1) in live)
+except Exception:
+    sys.exit(0)
+print(" ".join(sorted(own)))
+' "$transcript" 2>/dev/null)
+if [ -n "$waiting_on" ]; then
+  mkdir -p "$SPOOL_ROOT" 2>/dev/null
+  printf '%s deferred the harvest of agent %s (%s): it stopped with its own background work still running: %s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${agent_id:-unknown}" "$transcript" "$waiting_on" \
+    >> "$SPOOL_ROOT/harvest-deferred.log" 2>/dev/null
+  exit 0
+fi
+
 # The digest's EXIT CODE is what tells an unreadable transcript from an agent
 # that said nothing, because both print nothing. Consulting only its output
 # files a corrupt file, a permissions failure or a payload schema change as a

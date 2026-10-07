@@ -97,6 +97,11 @@ if sys.argv[2] != "OMIT":
     rec["agent_transcript_path"] = sys.argv[2]
 if sys.argv[3] != "OMIT":
     rec["transcript_path"] = sys.argv[3]
+# The session's in flight background work, as Claude Code sends it (claude-config#898). Only a case
+# that means something by it sets it; every other case is a payload without the field.
+import os
+if os.environ.get("PAYLOAD_BG_TASKS"):
+    rec["background_tasks"] = json.loads(os.environ["PAYLOAD_BG_TASKS"])
 print(json.dumps(rec))
 PY
 }
@@ -474,6 +479,126 @@ got="$(records)"
 [ -z "$got" ] \
   && check "a detached run does not harvest" ok \
   || check "a detached run does not harvest" "spool=$got"
+
+# ---------------------------------------------------------------------------
+# An agent that stopped only to WAIT on its own background work (claude-config#898).
+#
+# SubagentStop fires every time an agent stops, including when it stops to wait on its own
+# background work and will resume when that finishes. Harvested then, the transcript reads as
+# finished and the model files "the merge was not completed" about an agent that merged minutes
+# later (five such findings about one agent on 2026-10-07). The payload's background_tasks is the
+# whole SESSION's in flight work (Claude Code 2.1.293 builds it from the parent's task registry),
+# so it carries the agent itself and every sibling; what makes an entry this agent's own is that
+# the agent's own transcript shows it being launched, by the id the launching tool handed back.
+# The transcript and payload shapes are copied from real ones (L48, L52).
+# ---------------------------------------------------------------------------
+WAITING_TRANSCRIPT="$TMPROOT/waiting-agent.jsonl"
+python3 - "$WAITING_TRANSCRIPT" <<'PY_WAIT'
+import json, sys
+lines = [
+    {"type": "user", "message": {"role": "user", "content": "Work issue 892 and merge it."}},
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "Opened PR 897; the merge helper runs in the background."},
+        {"type": "tool_use", "id": "toolu_bg1", "name": "Bash",
+         "input": {"command": "bash merge-when-ready.sh 897", "run_in_background": True}}]}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_bg1",
+         "content": "Command running in background with ID: bwait0001. Output is being written to: /tmp/tasks/bwait0001.output"}]}},
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_mon1", "name": "Monitor", "input": {"command": "until false; do sleep 5; done"}}]}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_mon1",
+         "content": "Monitor started (task bmonit001, expires in 30m unless the source ends first)."}]}},
+    # A sibling's id seen by this agent in a tool ERROR that lists the session's jobs. Seeing an id
+    # is not launching it, so this must never make the sibling count as this agent's own.
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_kj", "name": "mcp__job-watcher__keep_job", "input": {}}]}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_kj", "is_error": True,
+         "content": "<tool_use_error>No running background job (no task_id given) is known to the watcher. Running: bsibling1, bwait0001.</tool_use_error>"}]}},
+    # And in ordinary command OUTPUT, the shape that fooled the first version on a real transcript
+    # (an ls of the subagents directory named a sibling): a Bash result that is not a launch receipt.
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_ls", "name": "Bash", "input": {"command": "ls subagents"}}]}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_ls",
+         "content": "agent-bsibling1.jsonl\nnote: Command running in background with ID: bsibling1 was seen in a log"}]}},
+    # A background Agent of its own, receipted the way the Agent tool receipts one.
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_ag", "name": "Agent", "input": {"prompt": "help", "run_in_background": True}}]}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_ag",
+         "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: a0123456789abcdef (internal ID, do not mention to user.)"}]}]}},
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "Waiting on the merge helper. The merge was not completed yet."}]}},
+]
+with open(sys.argv[1], "w") as fh:
+    for rec in lines:
+        fh.write(json.dumps(rec) + "\n")
+PY_WAIT
+SELF_TASK='{"id":"test-agent-id","type":"subagent","status":"running","description":"Issue 892","agent_type":"general-purpose"}'
+SIBLING_TASK='{"id":"bsibling1","type":"shell","status":"running","description":"another agent suite","command":"bash run-all-tests.sh"}'
+OWN_SHELL='{"id":"bwait0001","type":"shell","status":"running","description":"Merge helper","command":"bash merge-when-ready.sh 897"}'
+OWN_MONITOR='{"id":"bmonit001","type":"monitor","status":"running","description":"watch"}'
+OWN_AGENT='{"id":"a0123456789abcdef","type":"subagent","status":"running","description":"help","agent_type":"general-purpose"}'
+
+reset_spool
+stub 'echo "FINDING: the merge was not completed."'
+rm -f "$MODEL_INPUT"
+PAYLOAD_BG_TASKS="[$SELF_TASK,$SIBLING_TASK,$OWN_SHELL]" payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+[ -z "$got" ] && [ ! -f "$MODEL_INPUT" ] \
+  && check "#898 an agent stopped while its own background shell runs spools nothing and calls no model" ok \
+  || check "#898 an agent stopped while its own background shell runs spools nothing and calls no model" "spool=$got model_called=$([ -f "$MODEL_INPUT" ] && echo yes || echo no)"
+
+reset_spool
+rm -f "$MODEL_INPUT"
+PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_MONITOR]" payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+[ -z "$got" ] \
+  && check "#898 a live monitor of its own defers the harvest too" ok \
+  || check "#898 a live monitor of its own defers the harvest too" "spool=$got"
+
+reset_spool
+PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_AGENT]" payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+[ -z "$got" ] \
+  && check "#898 a live background agent of its own defers the harvest too" ok \
+  || check "#898 a live background agent of its own defers the harvest too" "spool=$got"
+
+# The FINAL stop: its own work is done, so only itself and a sibling are in flight. It is harvested
+# exactly as before. Without this the deferral could be swallowing every harvest (L159).
+reset_spool
+PAYLOAD_BG_TASKS="[$SELF_TASK,$SIBLING_TASK]" payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+grep -q '"status": *"found"' <<< "$got" \
+  && check "#898 its final stop, with only a sibling's work in flight, is harvested as now" ok \
+  || check "#898 its final stop, with only a sibling's work in flight, is harvested as now" "spool=$got"
+
+reset_spool
+PAYLOAD_BG_TASKS="[]" payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+grep -q '"status": *"found"' <<< "$got" \
+  && check "#898 an empty background_tasks is harvested as now" ok \
+  || check "#898 an empty background_tasks is harvested as now" "spool=$got"
+
+# A payload the deferral cannot read is harvested, never skipped: skipping is the direction that
+# leaves no record at all (L98).
+reset_spool
+PAYLOAD_BG_TASKS='"not a list"' payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+grep -q '"status": *"found"' <<< "$got" \
+  && check "#898 a background_tasks that is not a list is harvested as now" ok \
+  || check "#898 a background_tasks that is not a list is harvested as now" "spool=$got"
+
+# A deferral leaves a line saying so outside the spool, so a harvest that never came back (the
+# session ended while the agent waited) can still be found.
+reset_spool
+rm -f "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log"
+PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_SHELL]" payload "$REPO" "$WAITING_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+grep -q 'test-agent-id.*bwait0001' "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log" 2>/dev/null \
+  && check "#898 a deferred harvest is logged with the agent and the work it waits on" ok \
+  || check "#898 a deferred harvest is logged with the agent and the work it waits on" "log=$(cat "$CLAUDE_ISSUE_SPOOL_DIR/harvest-deferred.log" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
 # WHICH transcript is read. The payload carries the parent session's transcript
