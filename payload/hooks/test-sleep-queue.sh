@@ -335,8 +335,11 @@ out="$(sleep_next "$ROOT" s9)"; rc=$?
 mv "$WORK/demo.git.aside" "$WORK/demo.git"
 check_eq "with no fetch possible, nothing is started" 1 "$rc"
 check_has "the issue is given back, saying so" "$(printf 'skip\t5\tclaimed but could not start (given back for a later pass): git fetch')" "$out"
-check_has "its claim ends free" '"kind": "free"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/2" 2>/dev/null)"
-check_has "so a later pass claims it again" "$(printf 'next\t5\tp2\tattempts=1\tfree')" "$(sleep_queue "$ROOT" s9)"
+check_has "its claim ends unstarted" '"kind": "unstarted"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/2" 2>/dev/null)"
+check_has "so a later pass claims it again, with no attempt spent" "$(printf 'next\t5\tp2\tattempts=0\tfree')" "$(sleep_queue "$ROOT" s9)"
+# A claim lost between the queue and the claim is said on a skip line, never dropped.
+out="$( sleep_claim(){ printf 'not-claimed\t%s\theld: session zz holds it\n' "$2"; return 1; }; sleep_next "$ROOT" s9 )"
+check_has "a claim lost after the queue is a skip line with its reason" "$(printf 'skip\t5\tnot claimed: held: session zz holds it')" "$out"
 # A repository whose git folder lives elsewhere still gets its worktree beside its checkout.
 git clone -q --separate-git-dir "$WORK/sep.git" "$WORK/demo.git" "$WORK/seprepo"
 check_eq "a separate git folder puts the worktree beside the checkout" "$WORK/seprepo/.claude/worktrees/sleep-31" "$(sleep_worktree "$WORK/seprepo" 31 2>&1)"

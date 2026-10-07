@@ -220,7 +220,8 @@ sleep_claim() {
 # own claim. free puts the issue back for anyone; the others end it for the night.
 sleep_release() {
   local root="${1:-}" issue="${2:-}" self="${3:-}" state="${4:-}" why="${5:-}" gen slug dir line st nxt attempts reason bad entry err
-  case "$state" in free|done|parked|failed) ;; *) printf 'refused\t-\ta claim ends as free, done, parked or failed, never %s\n' "$state"; return 2 ;; esac
+  # unstarted is next's own: a claim given back because its worktree could not be made just now.
+  case "$state" in free|unstarted|done|parked|failed) ;; *) printf 'refused\t-\ta claim ends as free, done, parked or failed, never %s\n' "$state"; return 2 ;; esac
   bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
@@ -317,7 +318,11 @@ sleep_next() {
   while IFS=$'\t' read -r n title; do
     [ -n "$n" ] || continue
     got="$(sleep_claim "$root" "$n" "$self")"; crc=$?
-    [ "$crc" = 1 ] && continue
+    if [ "$crc" = 1 ]; then
+      # Taken or ended between the queue and the claim: said, never dropped from every line.
+      failed="$failed$(printf 'skip\t%s\tnot claimed: %s' "$n" "$(printf '%s' "$got" | cut -f3-)")"$'\n'
+      continue
+    fi
     if [ "$crc" != 0 ]; then printf '%s\n' "$got"; return 3; fi
     attempts="$(printf '%s\n' "$got" | awk -F'\t' '{ print $3 }')"
     wt="$(sleep_worktree "$root" "$n" 2>"${TMPDIR:-/tmp}/sleep-wt.$$")"; crc=$?
@@ -326,11 +331,11 @@ sleep_next() {
       rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
       # Never here (exit 1) ends it for the night; not just now (exit 2) gives it back.
       local end=failed
-      [ "$crc" = 2 ] && end=free
+      [ "$crc" = 2 ] && end=unstarted
       if ! got="$(sleep_release "$root" "$n" "$self" "$end" "no worktree: $err")"; then
         err="$err; and the claim could not be ended as $end, so it is still held ($(printf '%s' "$got" | cut -f3-))"
       fi
-      failed="$failed$(printf 'skip\t%s\tclaimed but could not start (%s): %s' "$n" "$([ "$end" = free ] && echo 'given back for a later pass' || echo 'ended for tonight')" "$err")"$'\n'
+      failed="$failed$(printf 'skip\t%s\tclaimed but could not start (%s): %s' "$n" "$([ "$end" = unstarted ] && echo 'given back for a later pass' || echo 'ended for tonight')" "$err")"$'\n'
       continue
     fi
     rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"

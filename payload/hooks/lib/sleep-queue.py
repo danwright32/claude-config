@@ -34,7 +34,8 @@ import sys
 DEAD_MS = 5 * 60_000  # the session registry's own rule for a session that has gone quiet
 SESSION_ID = re.compile(r"^[A-Za-z0-9-]+$")
 PRIORITIES = ["priority-p0", "priority-p1", "priority-p2", "priority-p3"]
-ENDS = ("free", "done", "parked", "failed")
+# unstarted: given back because its worktree could not be made just now; free again, and no attempt.
+ENDS = ("free", "unstarted", "done", "parked", "failed")
 
 
 def num(x):
@@ -135,6 +136,20 @@ def entries(issue_dir):
     return out
 
 
+def count_attempts(es):
+    """Claims that could have done work: a claim ended `unstarted` (its worktree could not be made
+    just now, so nothing ran) is no attempt, or two network drops would park an untouched issue."""
+    n = 0
+    for i, (_, e, _) in enumerate(es):
+        if not e or e.get("kind") != "claim":
+            continue
+        after = es[i + 1][1] if i + 1 < len(es) else None
+        if after and after.get("kind") == "unstarted":
+            continue
+        n += 1
+    return n
+
+
 def claim_state(issue_dir, registry, self_id):
     """One line: STATE NEXT ATTEMPTS then a reason.
 
@@ -144,7 +159,7 @@ def claim_state(issue_dir, registry, self_id):
     over from a session that died is an attempt of its own.
     """
     es = entries(issue_dir)
-    attempts = sum(1 for _, e, _ in es if e and e.get("kind") == "claim")
+    attempts = count_attempts(es)
     nxt = es[-1][0] + 1 if es else 1
     if not es:
         return "free", nxt, attempts, "no claim yet"
@@ -152,8 +167,8 @@ def claim_state(issue_dir, registry, self_id):
     if last is None:
         return "unknown", nxt, attempts, "claim entry %d cannot be read" % n
     kind = last.get("kind")
-    if kind == "free":
-        return "free", nxt, attempts, "released"
+    if kind in ("free", "unstarted"):
+        return "free", nxt, attempts, "released" if kind == "free" else "given back unstarted"
     if kind in ENDS:
         return "ended", nxt, attempts, kind + ((": " + str(last["why"])) if last.get("why") else "")
     if kind != "claim":
@@ -353,7 +368,7 @@ def all_claims(claims_dir):
             print(json.dumps({
                 "repo": repo.replace("__", "/", 1),
                 "issue": int(issue),
-                "attempts": sum(1 for _, e, _ in es if e and e.get("kind") == "claim"),
+                "attempts": count_attempts(es),
                 "entries": [e if e is not None else {"kind": "unreadable", "n": n} for n, e, _ in es],
             }))
 
