@@ -133,7 +133,63 @@ for i in $(seq 1 20); do note "{\"kind\":\"finding\",\"by\":\"w$i\",\"text\":\"f
 wait
 check_eq "twenty notes at once all land" 22 "$(notes_of g5 | wc -l | tr -d ' ')"
 check_eq "and every line is whole JSON" 22 "$(notes_of g5 | python3 -c 'import json,sys; print(sum(1 for l in sys.stdin if json.loads(l)))')"
-has "the report after them carries every finding" "finding 20" "$(report_of g5)"
+r="$(report_of g5)"
+missing=""; for i in $(seq 1 20); do [[ "$r" == *"finding $i"$'\n'* || "$r" == *"finding $i" ]] || missing="$missing $i"; done
+check_eq "the report after them carries every finding (#909)" "" "$missing"
+
+# Two renders out of order, made to happen every time (#909): the first note's render reads the
+# notes and is then held before it replaces the report; a second note lands and renders. The held
+# render must never put back a report that is missing the second note. Each wait is on a marker
+# the render drops, with a deadline, never a fixed sleep.
+PAUSE="$WORK/pause"; MARKS="$WORK/marks"; mkdir -p "$PAUSE" "$MARKS"
+upto(){ local end=$((SECONDS + 20)); while [ "$SECONDS" -lt "$end" ]; do eval "$1" && return 0; sleep 0.05; done; return 1; }
+SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render A"}' >/dev/null 2>&1 &
+held=$!
+upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
+SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"b","text":"late note B"}' >/dev/null 2>&1 &
+late=$!
+# The late note either finishes its render, or waits for the held one's: either way it has acted.
+upto '! kill -0 "$late" 2>/dev/null || ls "$MARKS"/waiting.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the late note neither rendered nor waited"; }
+touch "$PAUSE/go"
+wait "$held" "$late"
+has "a render held after reading never replaces a newer one (#909)" "late note B" "$(report_of g5)"
+has "and the held note is there too" "held render A" "$(report_of g5)"
+
+# A note whose render gives up is still in the report: the render holding the lock looks again
+# once it has written, and renders again while the notes have grown since it read them (#909).
+rm -f "$PAUSE/go" "$MARKS"/paused.* "$MARKS"/waiting.*
+SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render C"}' >/dev/null 2>&1 &
+held=$!
+upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
+out="$(SLEEP_REPORT_LOCK_S=1 note '{"kind":"finding","by":"b","text":"gave up note D"}' 2>&1)"
+has "the note behind the held render gave up its own render" "so this one gave up" "$out"
+touch "$PAUSE/go"
+wait "$held"
+has "and the held render, looking again, put it in the report" "gave up note D" "$(report_of g5)"
+
+# A render that cannot take its turn within the deadline gives up and says so; its note is written.
+LOCKF="$SLEEPDIR/notes/g5.render.lock"
+python3 -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+time.sleep(60)' "$LOCKF" "$MARKS/holder" &
+holder=$!
+upto '[ -e "$MARKS/holder" ]' || { fail=$((fail + 1)); echo "FAIL: the stand in holder never took the lock"; }
+before="$(notes_of g5 | wc -l | tr -d ' ')"
+out="$(SLEEP_REPORT_LOCK_S=1 note '{"kind":"finding","by":"c","text":"behind a held lock"}' 2>&1)"; rc=$?
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+check_eq "a note whose render cannot take its turn is still written" 0 "$rc"
+check_eq "and its line is there" "$((before + 1))" "$(notes_of g5 | wc -l | tr -d ' ')"
+has "and the render that gave up says so" "held it for 1 seconds, so this one gave up" "$out"
+
+# A lock that cannot even be opened is a refusal said in words, never a traceback.
+rm -f "$LOCKF"; mkdir "$LOCKF"
+out="$(py render --record "$CUR" 2>&1)"; rc=$?
+rmdir "$LOCKF"
+check_eq "a render whose lock cannot be opened fails" 1 "$rc"
+has "and says why" "the report's render lock could not be opened" "$out"
+lacks "never as a traceback" "Traceback" "$out"
 
 # A garbled bound setting never costs a note: it falls back to its default.
 out="$(SLEEP_REPORT_GH_TOTAL_S=abc note '{"kind":"finding","by":"aaaa1111","text":"garbled bound"}' 2>&1)"; rc=$?
