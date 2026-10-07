@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {} from '../types/index.d.ts'
 import { accountKey, parseNicknames } from '../hooks/store.ts'
 
@@ -19,7 +20,7 @@ const modKit: { name: string; register: Register } = {
       const built = await next(e)
       const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])
       const modkit = {
-        bandRow: async (row: Row) => {
+        bandRow: async (row: ModKitBandRow) => {
           if (!['needs-a-look', 'compact', 'room', 'handoff', 'held', 'steps', 'message'].includes(row.slot)) throw new Error(`a band row's slot "${row.slot}" is not one of them`)
           const now = (await rows()).filter(r => !(r.mod === row.mod && r.id === row.id))
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...now, row] as never)
@@ -27,8 +28,19 @@ const modKit: { name: string; register: Register } = {
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
+        // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
+        card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+        commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
+        writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+        git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+        workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+        pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+        clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+        screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
       }
-      return { ...built, modkit } as never
+      return { ...built, modkit }
     })
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const rows = ((await $.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? []
@@ -72,8 +84,19 @@ const modKitToday: { name: string; register: Register } = {
           if (!slots.includes(row.slot)) throw new Error(`a band row's slot "${row.slot}" is not one of ${slots.join(', ')}`)
         },
         clearBandRow: async () => undefined,
+        // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
+        card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+        commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
+        writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+        git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+        workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+        pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+        clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+        screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
       }
-      return { ...built, modkit } as never
+      return { ...built, modkit }
     })
   },
 }

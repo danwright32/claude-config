@@ -90,6 +90,54 @@ printf '%s\n' "$out" | grep 'bare-mod' | grep -q 'tsconfig.json' \
 grep -q "plugin validate $M3B/dressed" "$LOG" && check "and the other mod was still checked" ok \
   || check "and the other mod was still checked" "$(cat "$LOG")"
 
+# 3b2. An engine.create stand-in returns what it builds uncast (#833). A cast to never on the
+#     returned object passes any shape, so a stand-in short of a member, or with a parameter the
+#     real one does not accept, type checked clean until a newer Claude Code checked the return.
+#     Both spellings fail, by file and line; a cast anywhere else in the hook does not.
+M3S="$TMPROOT/m3s"; mkmod "$M3S" cast-one-line; mkmod "$M3S" cast-multi-line; mkmod "$M3S" uncast
+mkdir -p "$M3S/cast-one-line/tests" "$M3S/cast-multi-line/tests" "$M3S/uncast/tests"
+cat > "$M3S/cast-one-line/tests/register.test.ts" <<'TS'
+const kit = { name: 'k', register: (on: any) => {
+  on('engine.create', async ($: any, e: any, next: any) => {
+    const built = await next(e)
+    return { ...built, modkit: { blocked: async () => undefined } } as never
+  })
+} }
+TS
+cat > "$M3S/cast-multi-line/tests/register.test.ts" <<'TS'
+const kit = { name: 'k', register: (on: any) => {
+  on('engine.create', async ($: any, e: any, next: any) => {
+    const built = await next(e)
+    return {
+      ...built,
+      modkit: { blocked: async () => { await built.state.set({ a: { b: 1 } }, [] as never) } },
+    } as never
+  })
+} }
+TS
+cat > "$M3S/uncast/tests/register.test.ts" <<'TS'
+const kit = { name: 'k', register: (on: any) => {
+  on('engine.create', async ($: any, e: any, next: any) => {
+    const built = await next(e)
+    return {
+      ...built,
+      modkit: { blocked: async () => { await built.state.set({ a: { b: 1 } }, [] as never) } },
+    }
+  })
+  on('tool.call', () => ({ result: 'ran' }) as never)
+} }
+TS
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin bash "$CHECK" "$M3S" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a stand-in casting what engine.create returns fails the run, with no claude command" ok \
+  || check "a stand-in casting what engine.create returns fails the run, with no claude command" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'cast-one-line/tests/register.test.ts:4:.*as never' \
+  && check "naming the one line cast by file and line" ok || check "naming the one line cast by file and line" "$out"
+printf '%s\n' "$out" | grep -q 'cast-multi-line/tests/register.test.ts:4:.*as never' \
+  && check "and the cast closing an object over several lines, at its return" ok \
+  || check "and the cast closing an object over several lines, at its return" "$out"
+! printf '%s\n' "$out" | grep -q 'uncast/' && check "while an uncast return and casts elsewhere in a hook pass" ok \
+  || check "while an uncast return and casts elsewhere in a hook pass" "$out"
+
 # 3c. The tsconfig.json rule needs only the filesystem, so it holds where no claude command exists
 #     (CI's Linux runner) instead of hiding behind UNMEASURED (lessons review of #645).
 out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin bash "$CHECK" "$M3B" 2>&1)"; code=$?
