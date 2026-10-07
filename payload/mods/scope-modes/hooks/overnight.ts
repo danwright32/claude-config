@@ -169,6 +169,10 @@ const ghVerdict = (words: readonly string[]): GhVerdict => {
   if (a.unreadable) return { write: null }
   if (sub === 'api') return apiVerdict(a)
   if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || (!sub && a.flags.length)) return undefined
+  // A write in a subcommand whose flags this reader does not know cannot be placed (#834 review).
+  if (a.unknownFlags) return { write: null }
+  // Posting a comment is the one issue write overnight work needs (decision 3); changing one is not.
+  if (act === 'comment' && hasFlag(a, '--delete-last', '--edit-last')) return { refuse: 'edit or delete a comment' }
   if (sub === 'issue' && act !== 'comment') return { refuse: `run gh issue ${act}`.trim() }
   if (sub === 'label') return { refuse: `run gh label ${act}`.trim() }
   if (sub === 'pr') {
@@ -213,12 +217,25 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
   return { write: PLACEHOLDER.test(r[1] as string) || PLACEHOLDER.test(r[2] as string) ? undefined : normRepo(`${r[1]}/${r[2]}`) }
 }
 
-const UNRESOLVED = 'write to GitHub where the repository it reaches could not be resolved'
+// Whether a gh call in this command line reaches gh some way other than the words this reader
+// gives: a GH_ variable set anywhere (it changes the repository, host or account), or gh run
+// through a wrapper (env, command, nohup, xargs, a shell's -c, eval, time, sudo and the like), seen
+// as more gh commands read than stand in command position in the line itself (#834 review).
+const GH_DIRECT = /(?:^|[;&|(){}\n])\s*gh(?=\s|$)/g
+const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate|eval|source|\.)\s(?:[^;&|\n]*\s)?['"]?gh(?=\s|$)/
+const wrapped = (call: OvernightCall): boolean => {
+  if (/\bGH_(?:REPO|HOST|TOKEN|ENTERPRISE_TOKEN)\b/.test(call.raw)) return true
+  if (GH_WRAPPED.test(call.raw)) return true
+  const read = call.commands.filter(c => name(c.words[0]) === 'gh').length
+  return read > (call.raw.match(GH_DIRECT) ?? []).length
+}
+
+const UNRESOLVED ='write to GitHub where the repository it reaches could not be resolved'
 // A GitHub write goes only to the repository the checkout it runs in is. `target` is the one the
 // call names (undefined: none, so gh takes GH_REPO, else the checkout's; null: none can be said).
 const writeRefusal = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<string | undefined> => {
   // GH_REPO set inline in the command reaches gh past every word the reader gives.
-  if (/\bGH_(?:REPO|HOST)=/.test(call.raw)) return UNRESOLVED
+  if (wrapped(call)) return UNRESOLVED
   if (target === null) return UNRESOLVED
   const here = dir === null ? null : await look.repoOf(dir)
   const to = target === undefined ? (call.ghRepo ? normRepo(call.ghRepo) : here) : target
@@ -261,6 +278,9 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   if (w.unnamed.some(u => [...u.words, ...u.inputs, ...(u.targets ?? []), ...(u.into ? [u.into] : [])].some(isLessons))) return 'write to LESSONS.md'
 
   // Each command in order, in the folder it runs in: a cd moves it, a subshell keeps its own.
+  // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither
+  // the call nor where it goes can be read, so it is refused (#834 review).
+  if (GH_WRAPPED.test(call.raw) && !call.commands.some(c => name(c.words[0]) === 'gh')) return UNRESOLVED
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
   for (const c of call.commands) {

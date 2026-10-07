@@ -109,6 +109,12 @@ describe('the wake check', () => {
     })
     expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'more than 100 runs in o/r since sleep began, so only the newest 100 were read'])
   })
+  test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
+    const world: World = { ...QUIET, 'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'Secret', updated_at: AFTER }])), 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]') }
+    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, repos: ['O/Private'] })
+    expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret"'])
+    expect(r.unmeasured).toEqual([])
+  })
   test('without the GitHub login nothing on GitHub can be read, and that is said', async () => {
     const r = await check({ 'gh api user --jq .login': fail('not logged in') })
     expect(r.unmeasured[0]).toBe('GitHub was not checked at all: the gh login could not be read (not logged in)')

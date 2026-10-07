@@ -211,6 +211,8 @@ const world = (on: On, o: Opts = {}) => {
     homeGone: false,
     /** What reached the screen and GitHub, in order: each modes change, and the wake check's first read (#834). */
     order: [] as string[],
+    /** Reading this session's id throws from now on (#834: a permission decision that throws). */
+    idThrows: false,
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
@@ -335,7 +337,10 @@ const world = (on: On, o: Opts = {}) => {
     }
     return fail(1, `unexpected: ${argv.join(' ')}`)
   })
-  on('session.id', () => ({ value: 's1' }) as never)
+  on('session.id', () => {
+    if (w.idThrows) throw new Error('the session id could not be read')
+    return { value: 's1' } as never
+  })
   on('session.usage', () => {
     const u = o.usage ?? { cost: { usd: 1.5 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] }
     if ('throws' in u) throw new Error(u.throws)
@@ -1552,6 +1557,21 @@ test('a worker is told its prompts approve themselves and a refusal is final; a 
   expect((await say($ as never, 'hello')).context?.join('\n')).toMatch(/enrolled to work overnight\. Its permission prompts are approved by themselves.*A refusal.*is final/s)
   w.files[CURRENT] = asleepRecord({ workers: ['s9'] })
   expect((await say($ as never, 'hello')).context?.join('\n')).not.toMatch(/approved by themselves/)
+})
+
+test('a permission decision that throws reads as awake: nothing approved', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  w.idThrows = true
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+})
+
+test('the wake check reads every repository the night notes named, private ones too', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [`${SLEEP}/notes/g0.jsonl`]: '{"v":1,"kind":"claim","repo":"o/private","issue":3}\n{"v":1,"kind":"start"}\nnot json\n' } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  expect(w.runs.some(r => r.join(' ') === 'gh api repos/o/private/milestones?state=all&per_page=100')).toBe(true)
+  expect(w.runs.some(r => r.join(' ') === 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100')).toBe(true)
 })
 
 test('/wake puts what the overnight check found first, in the reply and the notes', withDeps, async ($, on) => {

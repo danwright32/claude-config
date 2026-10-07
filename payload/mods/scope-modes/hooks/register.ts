@@ -208,12 +208,33 @@ const parseRecord = (text: string | null): SleepRecord | null => {
 const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, recordPath: string): Promise<string> => {
   if (!record || typeof record.since !== 'number') return ''
   const home = (await $.env.get('HOME')) ?? ''
+  // Every repository the night's notes name is read, so a private one the events feed leaves out
+  // is still checked (#834 review). No notes file is no repositories; one that cannot be read is said.
+  const repos: string[] = []
+  const unread: string[] = []
+  if (typeof record.generation === 'string') {
+    const notes = `${sleepDir(home)}/notes/${record.generation.replace(/[^\w.-]/g, '_')}.jsonl`
+    try {
+      if (await $.fs.exists(notes))
+        for (const line of (await $.fs.read(notes)).split('\n')) {
+          try {
+            const repo = (JSON.parse(line) as { repo?: unknown }).repo
+            if (typeof repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo)) repos.push(repo)
+          } catch {
+            // A line that is not JSON names no repository; the report says it could not read it.
+          }
+        }
+    } catch (err) {
+      unread.push(`the repositories the night's notes name were not read (${msg(err)})`)
+    }
+  }
   let found
   try {
-    found = await wakeCheck(argv => run($, argv), { since: record.since, home })
+    found = await wakeCheck(argv => run($, argv), { since: record.since, home, repos })
   } catch (err) {
     found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`] }
   }
+  found.unmeasured.unshift(...unread)
   const at = await $.clock.now()
   const by = await $.session.id()
   try {
@@ -1166,8 +1187,15 @@ export const register: Register = on => {
   // record is read live, and one that cannot be read is awake: no approval (L42). A session that is
   // not a worker is only kept quiet, so its prompts wait for Dan as always.
   on('classic.PermissionRequest', async ($, e, next) => {
-    const reading = await sleepNow($)
-    if (reading.state !== 'asleep' || !reading.record.workers?.includes(await $.session.id())) return next(e)
+    // Any throw in deciding whether this session is an asleep worker reads as awake: no approval.
+    let worker = false
+    try {
+      const reading = await sleepNow($)
+      worker = reading.state === 'asleep' && (reading.record.workers?.includes(await $.session.id()) ?? false)
+    } catch {
+      worker = false
+    }
+    if (!worker) return next(e)
     const tool = String(e.tool_name)
     if (NEVER_ASKED.has(tool))
       return { decision: { behavior: 'deny', message: `Refused: Dan is asleep, so ${tool === 'ExitPlanMode' ? 'no plan is approved' : 'nothing is asked'} overnight. Leave the question on the issue for the morning and skip this issue.` } }

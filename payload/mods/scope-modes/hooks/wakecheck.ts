@@ -20,8 +20,12 @@ const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 const firstLine = (s: string) => s.trim().split('\n')[0]?.trim() ?? ''
 const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
 
-/** What GitHub and the disk say happened since `since` (ms), read through `run`. */
-export const wakeCheck = async (run: Runner, o: { since: number; home: string }): Promise<WakeFindings> => {
+/**
+ * What GitHub and the disk say happened since `since` (ms), read through `run`. `repos` are the
+ * repositories the night's notes name, each read whatever the events feed shows (#834 review: a
+ * private repository the feed leaves out is still read).
+ */
+export const wakeCheck = async (run: Runner, o: { since: number; home: string; repos?: string[] }): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
   const since = iso(o.since)
@@ -52,6 +56,7 @@ export const wakeCheck = async (run: Runner, o: { since: number; home: string })
   const addRepo = (r: string | undefined) => {
     if (r && !repos.includes(r.toLowerCase())) repos.push(r.toLowerCase())
   }
+  for (const r of o.repos ?? []) addRepo(r)
   const issueKeys = new Set<string>()
   const issue = (repo: string, n: number, title: string) => {
     const key = `${repo.toLowerCase()}#${n}`

@@ -104,7 +104,9 @@ describe('every gh write but a known read goes only to the repository the checko
     expect(await bash('gh pr close 5 -R my.org/x')).toBe('write to my.org/x from a checkout of o/r')
     expect(await bash('gh pr merge 5 -sd')).toBe('delete a branch')
     expect(await bash('gh pr close 5 -d')).toBe('delete a branch')
-    expect(await bash('gh repo delete other/x --yes')).toBe(other)
+    // gh repo is not in the flag table, so a flag there leaves it unresolvable; with none, the owner/name names it.
+    expect(await bash('gh repo delete other/x --yes')).toBe(unresolved)
+    expect(await bash('gh repo archive other/x')).toBe(other)
     expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
     // Global flags before the subcommand (#834 review of 8bbd403).
     expect(await bash('gh -R other/x pr close 5')).toBe(other)
@@ -114,10 +116,40 @@ describe('every gh write but a known read goes only to the repository the checko
     expect(await bash('gh pr --body view close 5 -R other/x')).toBe(unresolved)
     expect(await bash('gh issue --title list create')).toBe(unresolved)
     // A value flag never swallows -R, whatever the subcommand (#834 review of af10401).
-    expect(await bash('gh release delete v1 -yd -R other/x')).toBe(other)
+    expect(await bash('gh release delete v1 -yd -R other/x')).toBe(unresolved)
     expect(await bash('gh gpg-key add -n -R other/x k.asc')).toBe(unresolved)
     // GH_REPO set through env reaches gh too.
     expect(await bash('env GH_REPO=other/x gh issue comment 5 --body x')).toBe(unresolved)
+  })
+  test('a gh write reached through a wrapper, or with a GH_ variable set, cannot be resolved; a read still can (#834 review of af10401)', async () => {
+    for (const c of [
+      'env gh pr close 5',
+      'command gh pr close 5',
+      'nohup gh pr close 5',
+      'echo 5 | xargs gh pr close',
+      `bash -c 'gh pr close 5'`,
+      `sh -c "gh pr close 5"`,
+      `eval "gh pr close 5"`,
+      'time gh pr close 5',
+      'sudo gh pr close 5',
+      'GH_TOKEN=abc gh pr close 5',
+      'GH_HOST=example.com gh pr close 5',
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
+    expect(await bash('env gh pr view 5')).toBeUndefined()
+    expect(await bash(`bash -c 'gh issue list'`)).toBeUndefined()
+    // gh named only inside a message is no gh call.
+    expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
+  })
+  test('in a subcommand the flag table does not know, any flag makes a write unresolvable; a read goes ahead', async () => {
+    expect(await bash('gh release delete v1 -y')).toBe(unresolved)
+    expect(await bash('gh secret set TOKEN --body x')).toBe(unresolved)
+    expect(await bash('gh release delete v1')).toBeUndefined()
+    expect(await bash('gh run view 5 --log')).toBeUndefined()
+  })
+  test('editing or deleting a comment is refused outright', async () => {
+    expect(await bash('gh issue comment 5 --delete-last --yes')).toBe('edit or delete a comment')
+    expect(await bash('gh pr comment 5 --edit-last --body x')).toBe('edit or delete a comment')
     expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
   })
   test('the same writes on this repository go ahead', async () => {
