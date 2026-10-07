@@ -72,6 +72,14 @@ until the next pull, so a notification here is one per keystroke for a condition
 clears. The suite already held that line: the #25 control asserting an ordinary sync fires nothing
 went red the moment this notified, which is the check doing its job.
 
+The watcher has to say it too (#849). #511 made the send speak, but the watcher, which runs almost
+every send, kept only the outcome marker out of what the send printed and logged "nothing to send"
+whenever nothing was committed. Twice on 2026-10-06 a lesson sat held back behind that line with
+the reason thrown away. A send that commits nothing because files were held now reports its own
+outcome, `SEND-OUTCOME withheld <files>`, which the watcher logs as `NOT sent: <files> held back,`
+followed by the send's own sentence, so "nothing to send" means only that nothing differs. Every
+other line a send prints beside its marker goes into the log too, indented under the tick's summary.
+
 ### Designing the spill state out rather than refusing it
 
 Considered for #513 and not done. Two refusals on the lesson minting path had no caller that could

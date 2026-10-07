@@ -19794,6 +19794,58 @@ dbg "#855 with no tracking ref said: $out_uo2"
 check "#855 with no copy of the shared branch to ask, the file is held back as before" \
   "line_has \"\$out_uo2\" 'NOT publishing' 'uo-own'"
 
+
+section "== the watch log names a file a send held back, and why (claude-config#849) =="
+# Twice on 2026-10-06 the watcher held a lesson back and logged only "nothing to send". The send
+# had said why, in its NOT publishing sentence (claude-config#511), but the loop kept only the
+# outcome marker and threw the sentence away, so the log could not say which file waited or why
+# (L98, L11). A held file is now its own outcome, and whatever a send said beside its marker
+# reaches the log with the tick.
+WHB="$WORK/watchheld-bare.git"; git init -q --bare -b main "$WHB"
+WHR="$WORK/watchheld-repo"; git clone -q "$WHB" "$WHR" 2>/dev/null
+WHH="$WORK/watchheld-home"; mkdir -p "$WHH/hooks"
+echo '{"hooks":{}}' > "$WHH/settings.json"
+printf '# rules\n@LESSONS.md\n' > "$WHH/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body\n' > "$WHH/LESSONS.md"
+WHFS="$WORK/watchheld-fswatch"
+printf '#!/usr/bin/env bash\necho one\n' > "$WHFS"; chmod +x "$WHFS"
+whrun(){ CLAUDE_HOME="$WHH" SYNC_REPO="$WHR" SYNC_FSWATCH="$WHFS" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" watch 2>&1 || true; }
+out_wh0="$(whrun)"
+dbg "#849 first tick: $out_wh0"
+check "#849 the fixture: the first tick publishes the lessons" \
+  "grep -q 'watch: sent' <<< \"\$out_wh0\" && grep -q 'L1\. one' '$WHR/payload/LESSONS.md'"
+# The positive first, in this same fixture (L159): a tick with genuinely nothing different still
+# says exactly that, so the absence asserted further down is not a wording that appears nowhere.
+out_wh1="$(whrun)"
+dbg "#849 clean tick: $out_wh1"
+check "#849 a tick with nothing different is still logged as nothing to send" \
+  "grep -q 'watch: nothing to send' <<< \"\$out_wh1\""
+# Now a lesson the send must hold back: the same number twice is a publish fault, so LESSONS.md
+# waits here while every other file goes out, and nothing else differs.
+printf -- '- **L1. the same number again.** body\n' >> "$WHH/LESSONS.md"
+out_wh2="$(whrun)"
+dbg "#849 held tick: $out_wh2"
+check "#849 the fixture: the lesson really was held back" \
+  "! grep -q 'the same number again' '$WHR/payload/LESSONS.md'"
+check "#849 a tick that held a file back never logs nothing to send" \
+  "! grep -q 'watch: nothing to send' <<< \"\$out_wh2\""
+check "#849 it logs NOT sent, naming the file held back" \
+  "line_has \"\$out_wh2\" 'claude-sync watch: NOT sent: ' 'LESSONS\.md' 'held back'"
+check "#849 and the same line carries the send's own reason" \
+  "line_has \"\$out_wh2\" 'claude-sync watch: NOT sent: ' 'the same lesson number is used twice'"
+# A send run by hand still carries no marker, withheld or otherwise (#196's control).
+out_wh3="$(CLAUDE_HOME="$WHH" SYNC_REPO="$WHR" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send 2>&1 || true)"
+check "#849 a send run by hand that holds a file back carries no marker" \
+  "out_lacks \"\$out_wh3\" 'SEND-OUTCOME'"
+# Any outcome, not only this one: what a send said beside its marker reaches the log with the tick.
+out_wh4="$(SYNC_FSWATCH="$WHFS" SYNC_WATCH_SEND="printf 'claude-sync: a sentence the send said\nSEND-OUTCOME sent\n'" \
+  CLAUDE_HOME="$WHH" SYNC_REPO="$WHR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" watch 2>&1 || true)"
+dbg "#849 a sent tick with something said: $out_wh4"
+check "#849 a sent tick still logs sent" \
+  "grep -q 'claude-sync watch: sent' <<< \"\$out_wh4\""
+check "#849 and what the send said beside its marker is in the log too" \
+  "grep -q 'a sentence the send said' <<< \"\$out_wh4\""
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

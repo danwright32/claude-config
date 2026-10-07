@@ -3695,6 +3695,16 @@ comma_list(){    # $1 = a newline separated list -> "first.md, second.md, third.
   return 0
 }
 
+# Every file THIS send kept back, whichever check kept it (claude-config#849). Each hold says so in
+# its own NOT publishing sentence; this is the same fact kept where do_send can read it, so a send
+# that committed nothing because files were held reports that as its outcome rather than as
+# "nothing", which the watcher logged as "nothing to send" while a lesson sat unsent (L98, L11).
+SEND_HELD_BACK=""
+note_held_back(){   # $1 = a newline separated list of paths relative to the payload
+  SEND_HELD_BACK="$(union_lines "$SEND_HELD_BACK" "$1")"
+  return 0
+}
+
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
@@ -3739,6 +3749,7 @@ SWPROT
     else
       _sw_next="Run '$(receive_command)', which receives the repo's version and settles the two copies on this Mac, and the next send publishes the result."
     fi
+    note_held_back "$_sw_held"
     echo "claude-sync: NOT publishing $(comma_list "$_sw_held") because the shared repo has changed $([ "$(printf '%s\n' "$_sw_held" | wc -l | tr -d ' ')" = 1 ] && printf 'it' || printf 'them') since this Mac last applied, and mirroring this Mac's copy upward would revert what is there. Nothing here was altered and nothing was lost. $_sw_next" >&2
     # SAID, NOT NOTIFIED. The watcher sends on every save, and this state lasts until the next pull,
     # so a desktop notification here is one per keystroke for a condition the very next pull clears:
@@ -3753,6 +3764,7 @@ SWPROT
   if [ -n "$_sw_stale" ]; then
     protected="${protected:+$protected
 }$_sw_stale"
+    note_held_back "$_sw_stale"
     echo "claude-sync: NOT publishing $(comma_list "$_sw_stale") because this Mac's copy is an earlier version the shared repo has since replaced, so sending it would undo that change there. Nothing here was altered. $(if [ "${SYNC_RECEIVES_NEXT:-0}" = "1" ]; then printf 'This sync goes on to bring the current version onto this Mac.'; else printf "Run '%s' to bring the current version onto this Mac." "$(receive_command)"; fi)" >&2
   fi
   for d in "${MIRROR_DIRS[@]}" skills; do
@@ -3892,6 +3904,7 @@ $LESSONS_FILE"*) lessons_held=1 ;; esac
         withnote=" and what is rendered from it"
       fi
       heldfiles="$(union_lines "$heldsrc" "$rendered")"
+      note_held_back "$heldfiles"
       echo "claude-sync: NOT publishing $(comma_list "$heldfiles") because $(lesson_fault_cause "$kind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$kind") and it publishes on the next send.${withheld} Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
       notify "held back $(comma_list "$heldsrc")${withnote}: $(lesson_fault_notice "$kind")"
     done
@@ -8173,6 +8186,7 @@ $timed_out_suites" in
 $suite
 "*) why="$name did not finish within SYNC_SEND_TESTS_TIMEOUT (${limit}s) here and was stopped with everything it had started" ;;
       esac
+      note_held_back "$(printf '%s\n' "$files" | sed 's|^payload/||')"
       echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: $rerun. The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
       notify "held back $(printf '%s' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' '): $why"
     done <<FAILED
@@ -8252,7 +8266,7 @@ do_release(){
 # direction. Printed only under the watcher, because a person running `claude-sync send` by hand
 # has the sentences and does not need the token; the watcher sets SYNC_IN_WATCH itself, and a
 # reader that finds no marker says so rather than assuming success.
-send_outcome(){   # $1 = sent|nothing|behind|held|failed
+send_outcome(){   # $1 = sent|nothing|withheld <files>|behind|held|failed
   [ "${SYNC_IN_WATCH:-0}" = "1" ] || return 0
   printf 'SEND-OUTCOME %s\n' "$1"
   return 0
@@ -8422,7 +8436,17 @@ do_send(){
   stage_local_to_payload
   have_git || return 0
   send_hook_tests                        # holds back the hooks a red suite covers; the rest sends (#269)
-  commit_if_changed || { send_outcome nothing; return 0; }   # nothing changed -> nothing to send
+  # Nothing committed is two different states (claude-config#849): nothing differs, or something
+  # differs and every such file was held back. Only the first is "nothing"; the second names the
+  # files on its marker, and the sentence saying why has already been printed above.
+  if ! commit_if_changed; then
+    if [ -n "$SEND_HELD_BACK" ]; then
+      send_outcome "withheld $(comma_list "$SEND_HELD_BACK")"
+    else
+      send_outcome nothing
+    fi
+    return 0
+  fi
   # A commit we just made from our OWN ~/.claude is applied here by construction:
   # stage_local_to_payload mirrored this Mac's files into it moments ago. Record it
   # as applied, or .last-applied stays at the previous commit and the guard above
@@ -10388,7 +10412,22 @@ do_watch(){
       if [ "$rc" -ne 0 ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sync FAILED (exit $rc): ${out:-<no output>}"
       else
+        # What the send SAID beside its marker (claude-config#849). The arms below turn the marker
+        # into one summary line, and before this everything else was dropped, including the NOT
+        # publishing sentence that names a held file and says why. Kept for every outcome, because
+        # the log is where an automatic send is read afterwards and nobody saw its output live.
+        # "Sent." is left out: it is the marker's own news in words, and repeating it is noise.
+        said="$(printf '%s\n' "$out" | awk 'NF && !/^SEND-OUTCOME / && $0 != "Sent."')"
+        said_logged=0
         case "$out" in
+          # BEFORE every other arm, and it carries the reason on the SAME line as the files: a held
+          # file is the one outcome where the summary alone cannot be acted on (L80). Not the held
+          # arm's prefix: "SEND-OUTCOME held" does not occur inside "SEND-OUTCOME withheld".
+          *"SEND-OUTCOME withheld "*)
+            held_files="$(printf '%s\n' "$out" | sed -n 's/^SEND-OUTCOME withheld //p' | head -1)"
+            held_why="$(printf '%s\n' "$said" | sed 's/^claude-sync: //' | tr '\n' ' ' | sed 's/ *$//')"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent: $held_files held back, ${held_why:-and the send gave no reason}"
+            said_logged=1 ;;
           *"SEND-OUTCOME sent"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sent" ;;
           *"SEND-OUTCOME nothing"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: nothing to send" ;;
           *"SEND-OUTCOME behind"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: skipped, this Mac is behind the shared repo" ;;
@@ -10416,12 +10455,19 @@ do_watch(){
             stale_said="${out//SEND-OUTCOME stale-daemon/}"
             stale_said="${stale_said//$'\n'/ }"
             while [ "${stale_said# }" != "$stale_said" ]; do stale_said="${stale_said# }"; done
-            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk. $stale_said" ;;
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk. $stale_said"
+            said_logged=1 ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible
           # (L98), and it is what a version too old to print the marker looks like.
-          *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}" ;;
+          *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}"
+             said_logged=1 ;;
         esac
+        # Beneath the summary, indented, so each tick still starts with one dated line a reader can
+        # scan, and a held file or a skipped send is named in the send's own words under it.
+        if [ "$said_logged" -eq 0 ] && [ -n "$said" ]; then
+          printf '%s\n' "$said" | sed 's/^/    /'
+        fi
       fi
       # Scratch used to be reclaimed HERE, by the watcher, on a clock this loop held in memory
       # (claude-config#251). It never fired: the clock was set to "now" when the loop started, and
