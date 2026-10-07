@@ -209,6 +209,14 @@ check_eq "and one entry was made" "1 " "$(claims_of 21)"
 check_eq "eight claimers at once: exactly one owns it" 1 "$(race 22 8)"
 check_eq "and still one entry" "1 " "$(claims_of 22)"
 check_eq "every loser says the issue is held" 7 "$(cat "$WORK"/race-22-* | grep -c "^not-claimed.*held" | tr -d ' ')"
+# The control: the same library with the link swapped for a copy must let several claimers own one
+# issue, or the race above proves nothing about the link (L1).
+CTRL="$WORK/control"; mkdir -p "$CTRL"
+cp "$DIR/lib/sleep.sh" "$DIR/lib/sleep-queue.py" "$CTRL/"
+awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(cp "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
+check_eq "the control swapped the link for a copy" 1 "$(grep -c 'if err="$(cp "$tmp"' "$CTRL/sleep-queue.sh" | tr -d ' ')"
+owners="$( . "$CTRL/sleep-queue.sh" && race 41 8 )"
+check_eq "without the link, eight claimers at once make more than one owner" yes "$([ "${owners:-0}" -gt 1 ] && echo yes || echo "no, $owners")"
 
 out="$(sleep_claim "$ROOT" 9 s1)"; rc=$?
 check_eq "a free issue is claimed" 0 "$rc"
@@ -260,6 +268,12 @@ session s4 "$((NOW - 1000))" null
 mkdir -p "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26"
 printf '{"kind":"claim","session":"dead"}' > "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/.tmp.dead"
 check_has "a claimer killed mid claim blocks nobody" "$(printf 'claimed\t26\tattempts=1')" "$(sleep_claim "$ROOT" 26 s2)"
+# Its leftover is cleared once it is ten minutes old; a fresh one may be a live writer's.
+printf x > "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/.tmp.old"
+touch -t 202001010000 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/.tmp.old"
+sleep_claim "$ROOT" 26 s2 >/dev/null
+check_eq "a temp file ten minutes old is cleared by the next claim" no "$([ -e "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/.tmp.old" ] && echo yes || echo no)"
+check_eq "a fresh one is left" yes "$([ -e "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/.tmp.dead" ] && echo yes || echo no)"
 # An entry written without its start time falls back to the file's own time (L409).
 printf '{"kind":"claim","session":"s4"}' > "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/2"
 touch -t 202610071200 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/26/2"
@@ -274,6 +288,7 @@ check_eq "the holder parks it" 0 "$rc"
 check_has "the queue leaves a parked issue out, with why" "$(printf 'skip\t9\tclaim ended: parked: two hours with no progress')" "$(sleep_queue "$ROOT" s1)"
 check_eq "nobody can claim a parked issue" 1 "$(sleep_claim "$ROOT" 9 s1 >/dev/null; echo $?)"
 check_eq "a release with a state nobody knows is refused" 2 "$(sleep_release "$ROOT" 26 s2 maybe >/dev/null 2>&1; echo $?)"
+check_eq "nor may a caller end a claim unstarted, which would erase an attempt" 2 "$(sleep_release "$ROOT" 26 s2 unstarted >/dev/null 2>&1; echo $?)"
 sleep_claim "$ROOT" 27 s2 >/dev/null
 sleep_release "$ROOT" 27 s2 free >/dev/null
 out="$(sleep_claim "$ROOT" 27 s1)"

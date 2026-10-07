@@ -196,6 +196,9 @@ sleep_claim() {
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
   dir="$(_sq_issue_dir "$gen" "$slug" "$issue")"
   mkdir -p "$dir" || { _sq_refuse "the claim folder $dir could not be made"; return 3; }
+  # A claimer killed between writing its temp file and linking it leaves the file behind. A live
+  # writer links within milliseconds, so one ten minutes old is a dead one's, and goes.
+  find "$dir" -maxdepth 1 -name '.tmp.*' -type f -mmin +10 -exec rm -f {} + 2>/dev/null
   # A lost race means another entry landed first: judge again from what is there now.
   for try in 1 2 3 4 5; do
     line="$(python3 "$_SQ_PY" state "$dir" "$self" "$(_sq_registry)" "$(_sq_now)")" || { _sq_refuse "the claim on #$issue could not be judged"; return 3; }
@@ -219,9 +222,15 @@ sleep_claim() {
 # sleep_release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]: only the holder ends its
 # own claim. free puts the issue back for anyone; the others end it for the night.
 sleep_release() {
+  case "${4:-}" in free|done|parked|failed) ;; *) printf 'refused\t-\ta claim ends as free, done, parked or failed, never %s\n' "${4:-}"; return 2 ;; esac
+  _sq_end "$@"
+}
+
+# The one writer of a claim's end. `unstarted` (given back because its worktree could not be made
+# just now, which count_attempts does not count) is written only by sleep_next, through here, and
+# sleep_release refuses it, so no caller can erase an attempt the driver parks on.
+_sq_end() {
   local root="${1:-}" issue="${2:-}" self="${3:-}" state="${4:-}" why="${5:-}" gen slug dir line st nxt attempts reason bad entry err
-  # unstarted is next's own: a claim given back because its worktree could not be made just now.
-  case "$state" in free|unstarted|done|parked|failed) ;; *) printf 'refused\t-\ta claim ends as free, done, parked or failed, never %s\n' "$state"; return 2 ;; esac
   bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
@@ -332,7 +341,7 @@ sleep_next() {
       # Never here (exit 1) ends it for the night; not just now (exit 2) gives it back.
       local end=failed
       [ "$crc" = 2 ] && end=unstarted
-      if ! got="$(sleep_release "$root" "$n" "$self" "$end" "no worktree: $err")"; then
+      if ! got="$(_sq_end "$root" "$n" "$self" "$end" "no worktree: $err")"; then
         err="$err; and the claim could not be ended as $end, so it is still held ($(printf '%s' "$got" | cut -f3-))"
       fi
       failed="$failed$(printf 'skip\t%s\tclaimed but could not start (%s): %s' "$n" "$([ "$end" = unstarted ] && echo 'given back for a later pass' || echo 'ended for tonight')" "$err")"$'\n'
