@@ -145,11 +145,11 @@ PAUSE="$WORK/pause"; MARKS="$WORK/marks"; mkdir -p "$PAUSE" "$MARKS"
 upto(){ local end=$((SECONDS + 20)); while [ "$SECONDS" -lt "$end" ]; do eval "$1" && return 0; sleep 0.05; done; return 1; }
 SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render A"}' >/dev/null 2>&1 &
 held=$!
-upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || echo "FAIL: the held render never reached its pause"
+upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
 SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"b","text":"late note B"}' >/dev/null 2>&1 &
 late=$!
 # The late note either finishes its render, or waits for the held one's: either way it has acted.
-upto '! kill -0 "$late" 2>/dev/null || ls "$MARKS"/waiting.* >/dev/null 2>&1' || echo "FAIL: the late note neither rendered nor waited"
+upto '! kill -0 "$late" 2>/dev/null || ls "$MARKS"/waiting.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the late note neither rendered nor waited"; }
 touch "$PAUSE/go"
 wait "$held" "$late"
 has "a render held after reading never replaces a newer one (#909)" "late note B" "$(report_of g5)"
@@ -163,13 +163,21 @@ fcntl.flock(fd, fcntl.LOCK_EX)
 open(sys.argv[2], "w").close()
 time.sleep(60)' "$LOCKF" "$MARKS/holder" &
 holder=$!
-upto '[ -e "$MARKS/holder" ]' || echo "FAIL: the stand in holder never took the lock"
+upto '[ -e "$MARKS/holder" ]' || { fail=$((fail + 1)); echo "FAIL: the stand in holder never took the lock"; }
 before="$(notes_of g5 | wc -l | tr -d ' ')"
 out="$(SLEEP_REPORT_LOCK_S=1 note '{"kind":"finding","by":"c","text":"behind a held lock"}' 2>&1)"; rc=$?
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
 check_eq "a note whose render cannot take its turn is still written" 0 "$rc"
 check_eq "and its line is there" "$((before + 1))" "$(notes_of g5 | wc -l | tr -d ' ')"
 has "and the render that gave up says so" "held it for 1 seconds, so this one gave up" "$out"
+
+# A lock that cannot even be opened is a refusal said in words, never a traceback.
+rm -f "$LOCKF"; mkdir "$LOCKF"
+out="$(py render --record "$CUR" 2>&1)"; rc=$?
+rmdir "$LOCKF"
+check_eq "a render whose lock cannot be opened fails" 1 "$rc"
+has "and says why" "the report's render lock could not be opened" "$out"
+lacks "never as a traceback" "Traceback" "$out"
 
 # A garbled bound setting never costs a note: it falls back to its default.
 out="$(SLEEP_REPORT_GH_TOTAL_S=abc note '{"kind":"finding","by":"aaaa1111","text":"garbled bound"}' 2>&1)"; rc=$?

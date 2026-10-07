@@ -613,8 +613,11 @@ class RenderLock:
 
     def __enter__(self):
         import fcntl
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
+        except OSError as e:
+            raise Refused("the report's render lock could not be opened at %s (%s)" % (self.path, e.strerror or e))
         deadline = time.monotonic() + RENDER_LOCK_S
         waited = False
         while True:
