@@ -18,7 +18,9 @@ whole beside it and hard linked into place, which fails if the number is taken. 
 reaching for one issue exactly one makes the next number, and nothing is ever deleted: the newest
 entry is the issue's state, and the entries before it are its history, which is where the attempts
 counter comes from. An entry is a claim (`kind: claim`, the session holding it) or an end
-(`free`, `done`, `parked`, `failed`) written by the session that held the claim before it.
+(`free`, `unstarted`, `done`, `parked`, `failed`) written by the session that held the claim before it;
+`unstarted` is written only by `next`, for a claim whose worktree could not be made just now. Each
+claim and each end is also written to the night's notes for the report, by sleep-queue.sh (#905).
 
 A claim's session is judged by the session registry (~/.claude/state/sessions, one file per
 session): closed, silent past five minutes, or never recorded means the session is gone and the
