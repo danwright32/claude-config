@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Cmd } from '../hooks/nobuild.ts'
-import { actsOf, addAnswer, MAY_DEPLOY, MERGE_ONLY, nightRepos, policyOf, readRepoLists, refusalOf, type Scripts, type Where } from '../hooks/overnight.ts'
+import { actsOf, addAnswer, HOLD_MERGES, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Scripts, type Where } from '../hooks/overnight.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 
 // Sleep mode phase 7 (#843). Commands are read by mod-kit's own reader (its byte for byte copy
@@ -21,12 +21,12 @@ const LISTS = JSON.stringify({
 })
 
 describe('the shared lists, read', () => {
-  test('a good file reads as both lists; a mergeOnly entry that does not say is taken to deploy on merge (L72)', () => {
+  test('a good file reads as both lists; a mergeOnly entry that does not say whether a merge deploys reads as unknown, never as safe (L72)', () => {
     const r = readRepoLists(LISTS)
     expect('lists' in r && r.lists.mergeOnly).toEqual([
       { repo: 'Try-Pennie/slate', mergeDeploys: true },
       { repo: 'o/merges-quietly', mergeDeploys: false },
-      { repo: 'o/unsaid', mergeDeploys: true },
+      { repo: 'o/unsaid', mergeDeploys: 'unknown' },
     ])
   })
   test('a missing file, one that does not parse, a wrong shape and a bad entry each say why, never a partial list', () => {
@@ -46,18 +46,27 @@ describe('the shared lists, read', () => {
 
 describe('a bedtime answer, added to the shared file', () => {
   const empty = '{"v":1,"mergeOnly":[],"mayDeploy":[]}'
-  test('merge only is added with mergeDeploys unsaid, so its merges wait until the file says a merge does not deploy (L72)', () => {
-    const r = addAnswer(empty, 'o/new', MERGE_ONLY)
-    expect('text' in r && JSON.parse(r.text)).toEqual({ v: 1, mergeOnly: [{ repo: 'o/new' }], mayDeploy: [] })
-    const lists = readRepoLists('text' in r ? r.text : null)
-    expect('lists' in lists && lists.lists.mergeOnly).toEqual([{ repo: 'o/new', mergeDeploys: true }])
+  test('each option means exactly what it says: merge never deploy only where a merge does not deploy, hold merges where it does or is unknown', () => {
+    expect(repoQuestion('o/new')).toMatch(/only if a merge there does not itself deploy/)
+    const merge = addAnswer(empty, 'o/new', MERGE_NO_DEPLOY)
+    expect('text' in merge && JSON.parse(merge.text).mergeOnly).toEqual([{ repo: 'o/new', mergeDeploys: false }])
+    const hold = addAnswer(empty, 'o/new', HOLD_MERGES)
+    expect('text' in hold && JSON.parse(hold.text).mergeOnly).toEqual([{ repo: 'o/new', mergeDeploys: true }])
+    const deploy = addAnswer(empty, 'o/new', MAY_DEPLOY)
+    expect('text' in deploy && JSON.parse(deploy.text).mayDeploy).toEqual(['o/new'])
   })
-  test('allowed to deploy goes on mayDeploy; anything else, a repository already listed, and a broken file are refused', () => {
-    const r = addAnswer(empty, 'o/new', MAY_DEPLOY)
-    expect('text' in r && JSON.parse(r.text).mayDeploy).toEqual(['o/new'])
-    expect(addAnswer(empty, 'o/new', 'maybe')).toEqual({ why: 'the answer was neither choice ("maybe")' })
-    expect(addAnswer('{"v":1,"mergeOnly":[],"mayDeploy":["O/New"]}', 'o/new', MERGE_ONLY)).toEqual({ why: 'o/new is already listed' })
-    expect(addAnswer('{"v":1,', 'o/new', MERGE_ONLY)).toEqual({ why: 'mods/sleep-repos.json is not JSON' })
+  test('anything else, a repository already listed, and a broken file are refused', () => {
+    expect(addAnswer(empty, 'o/new', 'maybe')).toEqual({ why: 'the answer was none of the choices ("maybe")' })
+    expect(addAnswer('{"v":1,"mergeOnly":[],"mayDeploy":["O/New"]}', 'o/new', MERGE_NO_DEPLOY)).toEqual({ why: 'o/new is already listed' })
+    expect(addAnswer('{"v":1,', 'o/new', HOLD_MERGES)).toEqual({ why: 'mods/sleep-repos.json is not JSON' })
+  })
+})
+
+describe('a marker, read', () => {
+  test('owner, time and nonce come back; anything else says why it cannot be read', () => {
+    expect(readMarker('{"owner":"s1","at":5,"nonce":"n"}')).toEqual({ owner: 's1', at: 5, nonce: 'n' })
+    expect(readMarker('g7')).toEqual({ unreadable: 'it is not JSON' })
+    expect(readMarker('{"owner":"s1"}')).toEqual({ unreadable: 'it names no owner, time and nonce' })
   })
 })
 
@@ -67,6 +76,9 @@ describe('what each repository may do tonight', () => {
     expect(policyOf(night, 'O/Deploys')).toEqual({ kind: 'deploy', repo: 'O/Deploys' })
     expect(policyOf(night, 'o/merges-quietly')).toEqual({ kind: 'merge-only', repo: 'o/merges-quietly', mergeDeploys: false })
     expect(policyOf(night, 'try-pennie/slate')).toEqual({ kind: 'merge-only', repo: 'try-pennie/slate', mergeDeploys: true })
+    expect(policyOf(night, 'o/unsaid')).toEqual({ kind: 'merge-only', repo: 'o/unsaid', mergeDeploys: 'unknown' })
+    // Not known not to deploy: the merge waits for the morning, and the refusal says why.
+    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, policyOf(night, 'o/unsaid'))).toBe('whether a merge in o/unsaid deploys is not recorded in mods/sleep-repos.json, so it is never merged overnight')
   })
   test('a repository on neither list fails closed, with no merge and no deploy', () => {
     const p = policyOf(night, 'o/new')

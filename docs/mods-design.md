@@ -815,7 +815,9 @@ let through.
   file under `mods/` is mirrored both ways, so an answer one Mac writes into the installed copy
   reaches the repository and the other Mac, and each repository is asked once. (The issue had the
   answer committed to the development checkout instead; a file the sync carries both ways needs no
-  second writer.) `mergeDeploys` left unsaid reads as true, the strict answer (L72). trypennie
+  second writer.) Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
+  unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
+  record whether a merge there deploys (L72). trypennie
   (`Halo-lab-Trypennie/trypennie`), Bidspoke and Slate (`Try-Pennie/...`) and claude-config are all
   `mergeDeploys: true`: Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
   main, trypennie's deploy could not be read so it takes the strict answer, and a claude-config merge
@@ -823,19 +825,24 @@ let through.
   and to that decision.
 - At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
-  neither list is asked about, one picker at a time ("Merge only, never deploy" or "Allowed to
-  deploy"), each waiting 10 minutes; an answer is written into the installed file (whole beside it,
-  then moved), and an answer given after the 10 minutes is still written, for later nights. "Merge
-  only" is written with `mergeDeploys` unsaid, so that repository's merges also wait for the morning
-  until the file says a merge there does not deploy: the question cannot tell. A question dismissed
-  or not shown closes the repository with its own reason, never as unanswered. Every
+  neither list is asked about, one picker at a time, each waiting 10 minutes. Each option means
+  exactly what it says: "Merge, never deploy" (chosen only where a merge does not itself deploy, as
+  the question says; `mergeDeploys: false`), "Hold merges, never deploy" (`mergeDeploys: true`) and
+  "Allowed to deploy". An answer is written into the installed file under the answers lock
+  (`state/sleep/repos.lock`, the marker below), whole beside it and then moved, so a late answer and
+  another never write over each other; an answer given after the 10 minutes is still written, for
+  later nights. A writer waits up to 30 seconds on a live holder, then refuses, naming it. A
+  question dismissed or not shown closes the repository with its own reason, never as unanswered. Every
   listed entry is then checked with `gh repo view`, under the active account and then each other
   account gh is logged in to (the work repositories are seen only by the work account). The result
   goes into the record as `repos` (`mayDeploy`, `mergeOnly`, `closed` with a reason each, and
   `listWhy` when the file could not be trusted at all), so the night is judged by what was settled
-  at bedtime, never a later edit. The `preparing` marker carries its generation (`<ms>-<session>`);
-  one more than two hours old (a chosen limit) is taken as left by a session that died mid question
-  and cleared, and `/wake` clears one at any age. `/sleep` says which repositories are closed and why, and each
+  at bedtime, never a later edit. The `preparing` marker is a file placed whole (written beside
+  itself with its owner, time and nonce, then linked into place, so of two at once one is placed).
+  One whose owner is no open session, or older than two hours (a chosen limit), is taken over by
+  moving it aside in one rename and linking a new one, never removed and made again; one held by a
+  live session refuses `/sleep` naming it and since when; one that cannot be read or written is said
+  as such. `/wake` clears one at any age. `/sleep` says which repositories are closed and why, and each
   closed one is noted (`repo-closed`, with the question still to answer) for the morning report.
 - Closed for the night, no merge and no deploy: a file that is missing or does not read, a
   repository on both lists, an entry GitHub does not know, a question unanswered in 10 minutes or

@@ -6,7 +6,7 @@ import { deployWith, ghApiCall, graphqlDocument, operations, runnerScript, type 
 // writes reaches the other through the sync, as the account room's nicknames do), holds two lists:
 // `mergeOnly`, repositories that may merge overnight but never deploy, and `mayDeploy`, those that
 // may merge and run their own deploy step as in the daytime. A mergeOnly entry whose merge itself
-// deploys (`mergeDeploys`, the default when unsaid, L72) is refused the merge too, leaving the
+// deploys (`mergeDeploys: true`), or whose file does not say (`unknown`, L72), is refused the merge too, leaving the
 // green PR open for the morning (Dan's decision 6, 2026-10-06).
 //
 // Everything without an answer fails closed, no merge and no deploy for the night (L42): a file
@@ -19,8 +19,11 @@ import { deployWith, ghApiCall, graphqlDocument, operations, runnerScript, type 
 // Pure: the shell is read by mod-kit's one reader and handed in, and the deploy tools are no build's
 // own list (nobuild.ts), so a tool added there is refused here too (L613).
 
-/** One mergeOnly entry: `mergeDeploys` true when a merge itself deploys, so the merge is refused too. */
-export type RepoEntry = { repo: string; mergeDeploys: boolean }
+/**
+ * One mergeOnly entry: `mergeDeploys` true when a merge itself deploys, `unknown` when the file does
+ * not say. Only false lets a merge run overnight.
+ */
+export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown' }
 /** The shared file, as read. */
 export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[] }
 /** A repository closed for the night, and why, for the refusal and the morning report. */
@@ -29,7 +32,7 @@ export type ClosedRepo = { repo: string; why: string }
 export type NightRepos = { mayDeploy: string[]; mergeOnly: RepoEntry[]; closed: ClosedRepo[]; listWhy?: string }
 
 /** What a repository may do tonight. */
-export type Policy = { kind: 'deploy'; repo: string } | { kind: 'merge-only'; repo: string; mergeDeploys: boolean } | { kind: 'closed'; repo?: string; why: string }
+export type Policy = { kind: 'deploy'; repo: string } | { kind: 'merge-only'; repo: string; mergeDeploys: boolean | 'unknown' } | { kind: 'closed'; repo?: string; why: string }
 
 export const REPO_LIST_FILE = 'mods/sleep-repos.json'
 const SLUG = /^[\w.-]+\/[\w.-]+$/
@@ -59,7 +62,7 @@ export const readRepoLists = (text: string | null): { lists: RepoLists } | { why
     if (!o || typeof o !== 'object' || typeof o.repo !== 'string' || !SLUG.test(o.repo)) return { why: `${REPO_LIST_FILE} has a mergeOnly entry with no owner/name: ${JSON.stringify(e)}` }
     if (o.mergeDeploys !== undefined && typeof o.mergeDeploys !== 'boolean') return { why: `${REPO_LIST_FILE} gives ${o.repo} a mergeDeploys that is not true or false` }
     // Unsaid is the strict answer: a merge is taken to deploy until the file says it does not (L72).
-    mergeOnly.push({ repo: o.repo, mergeDeploys: o.mergeDeploys !== false })
+    mergeOnly.push({ repo: o.repo, mergeDeploys: o.mergeDeploys === undefined ? 'unknown' : o.mergeDeploys })
   }
   return { lists: { mayDeploy, mergeOnly } }
 }
@@ -231,8 +234,31 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
 
 /** How long a bedtime question waits for Dan before its repository is closed for the night. */
 export const QUESTION_MS = 10 * 60_000
-export const MERGE_ONLY = 'Merge only, never deploy'
+/** A merge there does not itself deploy: merge overnight, never deploy. */
+export const MERGE_NO_DEPLOY = 'Merge, never deploy'
+/** A merge there deploys, or Dan is not sure: the green PR waits for the morning, and nothing deploys. */
+export const HOLD_MERGES = 'Hold merges, never deploy'
 export const MAY_DEPLOY = 'Allowed to deploy'
+export const REPO_ANSWERS = [MERGE_NO_DEPLOY, HOLD_MERGES, MAY_DEPLOY] as const
+
+/** The bedtime question about a repository on neither list. */
+export const repoQuestion = (repo: string) =>
+  `Choose "${MERGE_NO_DEPLOY}" only if a merge there does not itself deploy. Overnight in ${repo}, what may Claude do?`
+
+/** A marker file's text (the preparing marker, the answers lock): who holds it, since when, and its own nonce. */
+export type Marker = { owner: string; at: number; nonce: string }
+export const markerText = (m: Marker) => JSON.stringify(m)
+export const readMarker = (text: string): Marker | { unreadable: string } => {
+  let j: unknown
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return { unreadable: 'it is not JSON' }
+  }
+  const m = j as Partial<Marker> | null
+  if (!m || typeof m.owner !== 'string' || typeof m.at !== 'number' || !Number.isFinite(m.at) || typeof m.nonce !== 'string') return { unreadable: 'it names no owner, time and nonce' }
+  return { owner: m.owner, at: m.at, nonce: m.nonce }
+}
 
 /** The shared file as installed with the rest of the payload on both Macs. */
 export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.claude/${REPO_LIST_FILE}`
@@ -240,19 +266,15 @@ export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.clau
 /** owner/name from an origin remote, ssh or https, or undefined. */
 export const slugOf = (remote: string | undefined | null) => /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec((remote ?? '').trim())?.[1]
 
-/**
- * The shared file with one bedtime answer added, or why it cannot be. "Merge only" adds the
- * repository with `mergeDeploys` unsaid, which reads as true (L72): the question cannot tell
- * whether a merge there deploys, so its merges wait for the morning until the file says
- * `mergeDeploys: false` (decision 6: where a merge deploys, the green PR stays open).
- */
+/** The shared file with one bedtime answer added, or why it cannot be. */
 export const addAnswer = (text: string | null, repo: string, answer: string): { text: string } | { why: string } => {
-  if (answer !== MERGE_ONLY && answer !== MAY_DEPLOY) return { why: `the answer was neither choice ("${answer}")` }
+  if (!(REPO_ANSWERS as readonly string[]).includes(answer)) return { why: `the answer was none of the choices ("${answer}")` }
   const read = readRepoLists(text)
   if ('why' in read) return read
   if (isListed(read.lists, repo)) return { why: `${repo} is already listed` }
   const j = JSON.parse(text as string) as Record<string, unknown> & { mergeOnly: unknown[]; mayDeploy: unknown[] }
-  if (answer === MERGE_ONLY) j.mergeOnly.push({ repo })
+  if (answer === MERGE_NO_DEPLOY) j.mergeOnly.push({ repo, mergeDeploys: false })
+  else if (answer === HOLD_MERGES) j.mergeOnly.push({ repo, mergeDeploys: true })
   else j.mayDeploy.push(repo)
   return { text: `${JSON.stringify(j, null, 2)}\n` }
 }
@@ -314,6 +336,8 @@ export const refusalOf = (act: Act, policy: Policy): string | undefined => {
   if (act.kind === 'push-default') return 'a direct push to a default branch is never made overnight; push a branch and open a PR'
   if (policy.kind === 'closed') return `${policy.why}, so tonight it neither merges nor deploys`
   if (act.kind === 'deploy' && policy.kind === 'merge-only') return `${policy.repo} may merge overnight but never deploy`
-  if (act.kind === 'merge' && policy.kind === 'merge-only' && policy.mergeDeploys) return `a merge in ${policy.repo} deploys, so it is never merged overnight`
+  if (act.kind === 'merge' && policy.kind === 'merge-only' && policy.mergeDeploys === true) return `a merge in ${policy.repo} deploys, so it is never merged overnight`
+  if (act.kind === 'merge' && policy.kind === 'merge-only' && policy.mergeDeploys !== false)
+    return `whether a merge in ${policy.repo} deploys is not recorded in ${REPO_LIST_FILE}, so it is never merged overnight`
   return undefined
 }

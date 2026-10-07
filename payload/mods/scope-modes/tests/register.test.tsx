@@ -174,6 +174,8 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** A link of the preparing marker or the answers lock that fails (#843). */
+  markerFails?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -192,6 +194,8 @@ const world = (on: On, o: Opts = {}) => {
     sent: [] as { to: unknown; text: string }[],
     prompts: [] as string[],
     runs: [] as string[][],
+    /** Every mv, ln and rm, in order, as the Mac saw them (#843). */
+    fileOps: [] as string[][],
     asked: [] as string[],
     tools: [] as string[],
     logs: [] as string[],
@@ -218,6 +222,7 @@ const world = (on: On, o: Opts = {}) => {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
     const ops = a.filter(x => !x.startsWith('-'))
+    if (cmd === 'mv' || cmd === 'ln' || cmd === 'rm') w.fileOps.push(argv)
     if (cmd === 'sysctl') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
     if (cmd === 'mkdir') return ok()
     if (cmd === 'mv') {
@@ -235,7 +240,8 @@ const world = (on: On, o: Opts = {}) => {
     }
     if (cmd === 'ln') {
       const [from, to] = ops as [string, string]
-      if (o.lnFails) return fail(1, `ln: ${to}: ${o.lnFails}`)
+      if (o.lnFails && to.endsWith('/current.json')) return fail(1, `ln: ${to}: ${o.lnFails}`)
+      if (o.markerFails && !to.endsWith('/current.json')) return fail(1, `ln: ${to}: ${o.markerFails}`)
       if (to in w.files) return fail(1, `ln: ${to}: File exists`)
       if (!(from in w.files)) return fail(1, `ln: ${from}: No such file or directory`)
       w.files[to] = w.files[from] as string
@@ -351,9 +357,9 @@ const world = (on: On, o: Opts = {}) => {
     if (e.tool === 'AskUserQuestion') {
       const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
       w.asked.push(q)
-      if (q.startsWith('Overnight, may Claude deploy') && o.repoAnswer === null) return new Promise(() => undefined) as never
-      if (q.startsWith('Overnight, may Claude deploy') && o.repoAnswer === '__dismissed') throw new Error('the dialog was dismissed')
-      if (q.startsWith('Overnight, may Claude deploy') && o.repoAnswer !== undefined) {
+      if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return new Promise(() => undefined) as never
+      if (q.endsWith('what may Claude do?') && o.repoAnswer === '__dismissed') throw new Error('the dialog was dismissed')
+      if (q.endsWith('what may Claude do?') && o.repoAnswer !== undefined) {
         const a = o.repoAnswer
         return { result: { questions: (e as unknown as { questions: unknown[] }).questions, answers: { [q]: a } }, text: `answered ${a}` } as never
       }
@@ -1090,8 +1096,8 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     repos: { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] },
   })
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
-  expect(w.fsWrites.filter(f => !f.includes('/preparing/')).length).toBe(1)
-  expect(w.fsWrites.filter(f => !f.includes('/preparing/'))[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
+  expect(w.fsWrites.filter(f => !f.includes('/preparing')).length).toBe(1)
+  expect(w.fsWrites.filter(f => !f.includes('/preparing'))[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   expect(Object.keys(w.files).sort()).toEqual([LISTS_PATH, CURRENT].sort())
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(r.text).toBe('Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said.')
@@ -1106,7 +1112,7 @@ test('/sleep run twice says when and where sleep started, and changes nothing', 
   const r = await command($ as never, 'sleep')
   expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at 12:00 PM ET on Thu Jan 1. Nothing changed.')
   expect(w.files[CURRENT]).toBe(first)
-  expect(w.fsWrites.filter(f => !f.includes('/preparing/')).length).toBe(1)
+  expect(w.fsWrites.filter(f => !f.includes('/preparing')).length).toBe(1)
 })
 
 test('/sleep started by another session, or being prepared, changes nothing', withDeps, async ($, on) => {
@@ -1114,9 +1120,11 @@ test('/sleep started by another session, or being prepared, changes nothing', wi
   await start($ as never, clock)
   expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on: it started at 7:11 PM ET on Wed Dec 31 in \/other/)
   delete w.files[CURRENT]
-  w.files[`${SLEEP}/preparing/generation`] = 'g7'
-  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in another session. Nothing changed; if that session has gone, /wake clears it.')
-  expect(w.fsWrites).toEqual([])
+  w.files[`${SLEEP}/preparing`] = JSON.stringify({ owner: 's1', at: T0, nonce: 'n7' })
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in session s1 since 7:16 PM ET on Wed Dec 31. Nothing changed; if that session has gone, /wake clears it.')
+  // Only a marker of its own was tried, and it is gone again.
+  expect(w.fsWrites.filter(f => !f.includes('/preparing'))).toEqual([])
+  expect(Object.keys(w.files).filter(f => f.includes('/preparing.'))).toEqual([])
 })
 
 test('two /sleep at once: one record, and the second says it is already on', withDeps, async ($, on) => {
@@ -1125,11 +1133,12 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   const [a, b] = await Promise.all([command($ as never, 'sleep'), command($ as never, 'sleep')])
   const texts = [a.text, b.text]
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
-  expect(texts.filter(t => t?.startsWith('Sleep mode is already on')).length).toBe(1)
+  // The other finds the first one's record, or its preparing marker while it is still settling the night.
+  expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
   // Beside the record only the night's notes: no lists file here, so every repository is closed and noted (#843).
   expect(Object.keys(w.files).filter(f => !f.startsWith(`${SLEEP}/notes/`))).toEqual([CURRENT])
   // Each attempt writes its own temp file, so one attempt's cleanup never removes the other's.
-  expect(new Set(w.fsWrites.filter(f => !f.includes('/preparing/'))).size).toBe(2)
+  expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
 })
 
 test('a record that cannot be written is said, and nothing is left behind', withDeps, async ($, on) => {
@@ -1401,7 +1410,7 @@ test('a worker repository on neither list is asked about at bedtime, and the ans
   const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'Try-Pennie/slate', mergeDeploys: true }]) }, githubRepos: { default: ['o/r'], work: ['Try-Pennie/slate'] }, repoAnswer: 'Allowed to deploy' })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(w.asked).toEqual(['Overnight, may Claude deploy in o/r?'])
+  expect(w.asked).toEqual(['Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do?'])
   expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }], mayDeploy: ['o/r'] })
   // Slate is seen only by the work account, and is found there rather than closed.
   expect(recordOf(w).repos).toEqual({ mayDeploy: ['o/r'], mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }], closed: [] })
@@ -1419,7 +1428,7 @@ test('a question left unanswered for 10 minutes closes that repository for the n
   expect(r.text).toMatch(/No merge and no deploy tonight in o\/r \(the question about o\/r was not answered in 10 minutes\)\.$/)
   expect(recordOf(w).repos).toEqual({ mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'the question about o/r was not answered in 10 minutes' }] })
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
-  expect(closedNotes(w)[0]?.question).toBe('Merge only, or allowed to deploy, in o/r?')
+  expect(closedNotes(w)[0]?.question).toBe('Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do?')
   // The shared file is untouched: the question is asked again next time.
   expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [], mayDeploy: [] })
   expect(await call($ as never, bash('gh pr merge 12 --squash'))).toMatch(
@@ -1513,22 +1522,71 @@ test('awake, none of this applies', withDeps, async ($, on) => {
   expect(await call($ as never, bash('git push origin main'))).toBe('ran')
 })
 
-test('a preparing marker left by a session that died is cleared once it is stale, and /wake clears one at any age', withDeps, async ($, on) => {
-  const PREP = `${SLEEP}/preparing/generation`
-  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]), [PREP]: `${T0}-s7` }, githubRepos: { default: ['o/r'] } })
+const PREP = `${SLEEP}/preparing`
+const LOCK = `${SLEEP}/repos.lock`
+const marker = (owner: string, at: number, nonce = 'old') => JSON.stringify({ owner, at, nonce })
+
+test('the preparing marker is placed whole, naming its owner and time, and is gone once /sleep is done', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]) }, githubRepos: { default: ['o/r'] } })
   await start($ as never, clock)
-  // Just written: taken as a session asking its questions.
-  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already being prepared in another session/)
-  // /wake clears it, and /sleep can start.
+  await command($ as never, 'sleep')
+  // Written beside it and linked into place: never a half written marker.
+  const written = w.fsWrites.filter(f => f.startsWith(`${PREP}.`))
+  expect(written.length).toBe(1)
+  expect(PREP in w.files).toBe(false)
+  expect(w.fileOps.some(r => r[0] === 'ln' && r[2] === PREP)).toBe(true)
+})
+
+test('a preparing marker held by a live session refuses /sleep naming it; one whose session has gone is taken over by one rename and said', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]), [PREP]: marker('s2', T0) }, githubRepos: { default: ['o/r'] } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in session s2 since 7:16 PM ET on Wed Dec 31. Nothing changed; if that session has gone, /wake clears it.')
+  // s9 is in no open session: its marker is stale, moved aside in one rename, never removed then made again.
+  w.files[PREP] = marker('s9', T0)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(r.text).toMatch(/A sleep left half prepared by session s9 since 7:16 PM ET on Wed Dec 31 was taken over\./)
+  const moved = w.fileOps.findIndex(r => r[0] === 'mv' && r[1] === PREP)
+  const linked = w.fileOps.findIndex((r, i) => i > moved && r[0] === 'ln' && r[2] === PREP)
+  const removed = w.fileOps.findIndex(r => r[0] === 'rm' && r.includes(PREP))
+  expect(moved).toBeGreaterThan(-1)
+  expect(linked).toBeGreaterThan(moved)
+  // The marker is only ever removed as this /sleep's own release, after it was linked: never rm then make.
+  expect(removed).toBeGreaterThan(linked)
+})
+
+test('a preparing marker that cannot be written, or cannot be read, is said as itself', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { markerFails: 'Permission denied', files: { [LISTS_PATH]: listsFile([]) } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe(`Sleep mode did not start: its preparing marker could not be written (ln: ${PREP}: Permission denied).`)
+  expect(CURRENT in w.files).toBe(false)
+  w.o.markerFails = undefined
+  w.files[PREP] = 'g7'
+  expect((await command($ as never, 'sleep')).text).toBe('A preparing marker is there but cannot be read (it is not JSON). Nothing changed; /wake clears it.')
   expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on. A sleep left half prepared was cleared, so /sleep can start again.')
   expect(PREP in w.files).toBe(false)
-  w.files[PREP] = `${T0}-s7`
-  await clock.advance(60 * MIN)
-  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already being prepared in another session/)
-  await clock.advance(2 * 60 * MIN)
-  // Three hours old: left by a session that died, cleared, and sleep starts.
-  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is on until/)
-  expect(Object.keys(w.files).some(f => f.includes('/preparing'))).toBe(false)
+})
+
+test('a bedtime answer is written under the answers lock: a live holder is waited on, then refused rather than written over (#843)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [LISTS_PATH]: listsFile([]), [LOCK]: marker('s2', T0) }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Merge, never deploy' })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(MIN)
+  const r = await pending
+  expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [], mayDeploy: [] })
+  expect(r.text).toMatch(/the answer about o\/r was not saved: the lists are being written by session s2/)
+  // The holder's lock is left as it was.
+  expect(w.files[LOCK]).toBe(marker('s2', T0))
+})
+
+test('an answers lock left by a session that has gone is taken over, and the answer saved', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [LOCK]: marker('s9', T0) }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Hold merges, never deploy' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(JSON.parse(w.files[LISTS_PATH] as string).mergeOnly).toEqual([{ repo: 'o/r', mergeDeploys: true }])
+  expect(LOCK in w.files).toBe(false)
+  // Held merges: tonight a merge in o/r waits for the morning.
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/a merge in o\/r deploys, so it is never merged overnight/)
 })
 
 test('a bedtime question that is dismissed or cannot be shown closes the repository and says so, never as unanswered (L11)', withDeps, async ($, on) => {
