@@ -33,6 +33,7 @@ describe('ordinary overnight work is not on the list, so it goes ahead', () => {
   test('building, testing, committing, pushing a branch and opening a PR', async () => {
     for (const c of [
       'npm test 2>&1 | tail -20',
+      'source .venv/bin/activate && npm test',
       'git status && git log --oneline -5 && git branch --show-current',
       'git add payload/a.ts && git commit -F /tmp/m.txt',
       'git push -u origin sleep-834',
@@ -53,6 +54,9 @@ describe('ordinary overnight work is not on the list, so it goes ahead', () => {
     expect(await bash('git checkout -b sleep-834', { cwd: '/Users/x/wt' })).toBeUndefined()
     expect(await bash('git switch main', { cwd: '/Users/x/wt' })).toBeUndefined()
     expect(await bash('git checkout -- payload/a.ts')).toBeUndefined()
+  })
+  test('a Bash call with no command is refused, never approved as empty (#834 review of edeb682)', async () => {
+    expect(await overnightRefusal({ tool: 'Bash', input: {}, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME }, look)).toBe('run a Bash call with no command')
   })
   test('editing code, and tools nobody listed', async () => {
     expect(await tool('Edit', { file_path: '/Users/x/repo/payload/a.ts' })).toBeUndefined()
@@ -144,6 +148,9 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     for (const c of ['env gh pr merge 5 -R other/x', `bash -c 'gh pr merge 5 -R other/x'`, 'sudo gh pr close 5'])
       expect({ c, r: await bash(c) }).not.toEqual({ c, r: undefined })
     // What the words cannot show: the operands xargs feeds, text eval or source runs, a GH_ variable set.
+    // env -S and a sourced file can set where gh goes without the words showing it (#834 review of edeb682).
+    for (const c of [`env -S 'GH_REPO=other/x gh pr merge 5'`, 'source ~/.ghenv && gh pr merge 5', '. ./env.sh; gh issue comment 5 --body x'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
     for (const c of ['echo 5 | xargs gh pr merge', `eval "gh pr merge 5"`, `source <(echo gh pr merge 5)`, 'GH_TOKEN=abc gh pr merge 5', 'GH_HOST=example.com gh pr merge 5', 'env GH_REPO=other/x gh pr merge 5'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
     expect(await bash('env gh pr view 5')).toBeUndefined()

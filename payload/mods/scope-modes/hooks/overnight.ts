@@ -248,12 +248,15 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
 // our own (tools/check-mod-shared-parts.sh); the variable check reads the line as written, so a
 // quoted message that spells an assignment is refused too, which fails closed.
 const wrapped = (call: OvernightCall): boolean => {
-  if (/(?:^|[\s;&|(])(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(call.raw)) return true
+  // Anywhere in the line, quotes included, so `env -S 'GH_REPO=x gh ...'` is seen too.
+  if (/\b(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(call.raw)) return true
   if (call.commands.some(c => name(c.words[0]) === 'gh' && c.xargs)) return true
+  // A file sourced in the same line can set any of those without the line showing it.
+  if (call.commands.some(c => ['source', '.'].includes(name(c.words[0])))) return true
   return call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))
 }
 
-const UNRESOLVED ='write to GitHub where the repository it reaches could not be resolved'
+const UNRESOLVED = 'write to GitHub where the repository it reaches could not be resolved'
 // A GitHub write goes only to the repository the checkout it runs in is. `target` is the one the
 // call names (undefined: none, so gh takes GH_REPO, else the checkout's; null: none can be said).
 const writeRefusal = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<string | undefined> => {
@@ -300,6 +303,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   if (db === 'reads') return undefined
   if (LISTED.some(p => tool.startsWith(p))) return mcpWrites(tool) ? `use ${tool}` : undefined
   if (tool !== 'Bash') return undefined
+  // A Bash call whose command cannot be read is refused, never approved as an empty one.
+  if (!call.raw.trim()) return 'run a Bash call with no command'
 
   // LESSONS.md by what the call changes on the disk, as mod-kit's write reader finds it.
   const w = call.writes

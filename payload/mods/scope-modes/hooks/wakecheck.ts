@@ -66,7 +66,7 @@ export const wakeCheck = async (
   const json = async <T>(argv: string[], what: string): Promise<T | null> => {
     const r = await run(argv)
     if (r.exitCode === SKIPPED) return null
-    const tool =`${argv[0]} ${argv[1]}${argv[0] === 'gh' && argv[1] === 'search' ? ` ${argv[2]}` : argv[0] === 'gh' && argv[1] === 'run' ? ` ${argv[2]}` : ''}`
+    const tool = `${argv[0]} ${argv[1]}${argv[0] === 'gh' && argv[1] === 'search' ? ` ${argv[2]}` : argv[0] === 'gh' && argv[1] === 'run' ? ` ${argv[2]}` : ''}`
     if (r.exitCode !== 0) {
       unmeasured.push(`${what} were not checked (${tool}: ${firstLine(r.stderr) || `exit ${r.exitCode}`})`)
       return null

@@ -60,7 +60,7 @@ const gitRefusal = (g: { sub?: string; args: string[] }): boolean => {
 // and a mutation after it is run by naming the mutation in operationName. Strings and comments are
 // skipped, so a brace inside an argument's text is not read as structure.
 type Operation = { kind: string; fields: string[]; spreads: boolean }
-export const operations =(doc: string): Operation[] => {
+export const operations = (doc: string): Operation[] => {
   const out: Operation[] = []
   let depth = 0
   let parens = 0
