@@ -1169,7 +1169,8 @@ and the band question is removed rather than kept beside it (L29). Three defects
   approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write whose one lasting target is that file, which only adds (an Edit keeping the text it
-  replaces, a Write that is the old file with one block inserted in one place), and whose added text
+  replaces with one block before or after it, a Write that is the old file with one block inserted
+  in one place), and whose added text
   is exactly one entry: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then
   only its provenance as `(repo#N, YYYY-MM-DD)` and one SHORT line no longer than the index cap. Nothing Dan
   did not read rides along with it (lessons review of #869). Anything else, a shell append included, is asked

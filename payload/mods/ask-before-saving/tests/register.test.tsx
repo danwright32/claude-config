@@ -1111,3 +1111,18 @@ test('a lesson approval found past its time where it is used is told to Claude i
   expect(late).toContain(`Dan's earlier Add to LESSONS.md on this save lapsed after 10 minutes`)
   expect(w.ran).toEqual([])
 })
+
+// Fourth lessons review of #869: an Edit whose new text kept the old text anywhere counted as adding,
+// so the entry could be split around it, a section heading landing inside the entry. An Edit adds
+// only before or after the text it keeps.
+test('an approved lesson split around the text an Edit keeps is asked about', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = ENTRY.indexOf(' (slate#9')
+  const split = `${ENTRY.slice(0, at)}## Data safety${ENTRY.slice(at)}`
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: split }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // After the kept text is an addition too.
+  expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: `- **L5. Never destroy good state.**\n\n${ENTRY}` })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})

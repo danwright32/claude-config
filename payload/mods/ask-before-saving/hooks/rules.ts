@@ -347,8 +347,12 @@ export const lessonAddition = (tool: string, input: Record<string, unknown>, old
   if (tool === 'Edit') {
     const from = String(input.old_string ?? '')
     const to = String(input.new_string ?? '')
-    if (input.replace_all === true || !from || !to.includes(from)) return undefined
-    return to.replace(from, '')
+    if (input.replace_all === true || !from) return undefined
+    // One block before or after the kept text, never around it (fourth lessons review of #869: an
+    // entry split around a kept heading read as one entry once the heading was cut out).
+    if (to.endsWith(from)) return to.slice(0, to.length - from.length)
+    if (to.startsWith(from)) return to.slice(from.length)
+    return undefined
   }
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
