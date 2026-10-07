@@ -192,6 +192,16 @@ else
   fi
 fi
 
+# ONE PROVENANCE WORDING (#867). The mod accepts an approved entry only with its provenance shaped as
+# (repo#issue, YYYY-MM-DD), so every mention of provenance in the instruction carries that shape; a
+# second wording without the date reads as permission to leave it out.
+loose="$(printf '%s' "$reason" | grep -o 'provenance[^.]*' | grep -v 'repo#issue, YYYY-MM-DD' | grep 'repo#issue')"
+if [ -z "$loose" ]; then
+  PASS=$((PASS+1)); echo "PASS: every provenance in the instruction carries the shape the mod accepts"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the instruction names a provenance without the date the mod requires: $loose"
+fi
+
 # AND THE MOD HOLDS AN APPROVED SHORT LINE TO THE SAME CAP (#867). Ask before saving lets an approved
 # lesson's SHORT line through only within the index cap, so its MAX_SHORT is that cap, compared here
 # rather than trusted as a copy (L41).

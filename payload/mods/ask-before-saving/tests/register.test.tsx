@@ -1126,3 +1126,37 @@ test('an approved lesson split around the text an Edit keeps is asked about', wi
   expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: `- **L5. Never destroy good state.**\n\n${ENTRY}` })).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
 })
+
+// Fifth lessons review of #869, and the fail-safe rule that answers every shape: an Edit adds an
+// approved lesson only when its old text is whole lines of the file, found once, and its new text is
+// that old text, a newline and the entry block, or the entry block, a newline and the old text.
+// Anything else asks.
+test('an approved lesson Edit whose kept text is not whole lines of the file, or not found once, is asked about', withKit, async ($, on) => {
+  const old = `${LESSONS_TEXT}- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n`
+  const w = world(on, { auto: true, files: { [LESSONS]: old } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const edits = [
+    // Mid line: the entry spliced into the middle of another lesson.
+    { old_string: 'Never destroy', new_string: `Never destroy\n${ENTRY}` },
+    { old_string: 'Never destroy', new_string: `${ENTRY}Never destroy` },
+    // A line the file holds twice, so where the entry lands is not one place.
+    { old_string: '- **L6. Duplicate line.**', new_string: `- **L6. Duplicate line.**\n${ENTRY}` },
+    // Text the file does not hold.
+    { old_string: '## Not a heading here', new_string: `${ENTRY}## Not a heading here` },
+    // The entry run straight onto the kept line, with no line break between.
+    { old_string: '## Data safety', new_string: `${ENTRY.replace(/\n+$/, '')}## Data safety` },
+  ]
+  for (const e of edits) expect(`${JSON.stringify(e)}: ${refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, ...e }))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect((await call($, addLesson)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('an approved lesson Write must insert the entry at a line boundary', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = LESSONS_TEXT.indexOf('Never destroy')
+  const midLine = LESSONS_TEXT.slice(0, at) + ENTRY + LESSONS_TEXT.slice(at)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content: midLine }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})

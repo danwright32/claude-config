@@ -44,7 +44,8 @@ declare module 'claude-code' {
      * In $.state so a reload of the mod keeps them, and dropped at session end: the refused saves
      * waiting for Claude to ask Dan in the dialog, the rules he gave for this session only, his
      * latest message, read for the words that already make a rule permanent, and the saves he
-     * answered For good that Claude has yet to send again.
+     * answered For good that Claude has yet to send again, beside the lessons he answered Add to
+     * LESSONS.md in the durable lesson picker (#867, `lesson` set) that Claude has yet to add.
      */
     'ask-before-saving': { pending: AskBeforeSavingQuestion[]; rules: string[]; lastPrompt: string | null; approvals: AskBeforeSavingApproval[] }
   }

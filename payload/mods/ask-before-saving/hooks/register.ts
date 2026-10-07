@@ -261,7 +261,8 @@ const lessonAdded = async ($: EngineInterface, tool: string, input: Record<strin
   if (tool !== 'Edit' && tool !== 'Write') return undefined
   const file = lessonsFile(at.home)
   if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return undefined
-  const old = tool === 'Write' && (await $.fs.exists(file)) ? await $.fs.read(file) : undefined
+  // The file as it is now: an Edit's kept text is judged against it as well as a Write's content.
+  const old = (await $.fs.exists(file)) ? await $.fs.read(file) : undefined
   return lessonAddition(tool, input, old)
 }
 
@@ -509,8 +510,9 @@ export const register: Register = on => {
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
       return say(
-        `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file} that only adds one entry: "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+        `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
+          `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {

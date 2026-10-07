@@ -1179,13 +1179,15 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the label read back is its own. Only Add to LESSONS.md, read from the dialog's result, records an
   approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
-  Edit or Write whose one lasting target is that file, which only adds (an Edit keeping the text it
-  replaces with one block before or after it, a Write that is the old file with one block inserted
-  in one place), and whose added text
-  is exactly one entry: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then
-  only its provenance as `(repo#N, YYYY-MM-DD)` and one SHORT line no longer than the index cap. Nothing Dan
-  did not read rides along with it (lessons review of #869). Anything else, a shell append included, is asked
-  about as before. It is used once; a write that does not land gives it back for the rest of its
+  Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
+  lessons reviews of #869 found a new shape each round). An Edit's old text must be one or more
+  whole lines of the file as it is now, found exactly once, and its new text that old text, a newline
+  and the entry block, or the entry block, a newline and the old text. A Write must be the file with
+  exactly the entry block inserted at one line boundary. The entry block is one entry in a fixed
+  shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
+  provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
+  is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
+  Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). Project memory instead and Skip
   approve nothing, and a subagent's picker records nothing.

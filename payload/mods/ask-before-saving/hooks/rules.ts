@@ -337,34 +337,53 @@ export const MAX_SHORT = 160
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
- * The text a write to the lessons file adds, when all it does is add: an Edit whose new text keeps
- * the text it replaces, or a Write whose content is the old file with one block inserted in one place
- * (lessons review of #869: a Write judged by whether each old line survived anywhere let a dropped
- * duplicate or a reordering count as adding). Anything that also removes or rewrites (replace_all
- * included) is no lesson being added, and gets undefined.
+ * The entry an inserted block carries, when the block is one entry in its fixed shape: blank lines,
+ * then lines starting at `- **L<n>.` with no blank line among them, then blank lines. Anything else
+ * is undefined. Whether the entry is the approved rule is addsLesson's question.
  */
-export const lessonAddition = (tool: string, input: Record<string, unknown>, old: string | undefined): string | undefined => {
+const entryBlock = (block: string): string | undefined => {
+  const m = /^\n*(- \*\*L\d+\.[\s\S]*?\S)\n*$/.exec(block)
+  return m && !m[1]?.includes('\n\n') ? m[1] : undefined
+}
+
+/**
+ * The entry a write to the lessons file adds, under one fail-safe rule rather than a list of shapes
+ * refused (the lessons reviews of #869 found a new shape each round: an entry split around kept text,
+ * spliced mid line, beside a removal). `file` is the lessons file as it is now. Anything else is
+ * undefined, and is asked about.
+ * - An Edit (never replace_all) whose old text is whole lines of the file, found exactly once, and
+ *   whose new text is that old text, a newline and the entry block, or the entry block, a newline and
+ *   the old text.
+ * - A Write whose content is the file with exactly the entry block inserted at one line boundary
+ *   (before the end, the block ends at a line end too).
+ */
+export const lessonAddition = (tool: string, input: Record<string, unknown>, file: string | undefined): string | undefined => {
   if (tool === 'Edit') {
     const from = String(input.old_string ?? '')
     const to = String(input.new_string ?? '')
-    if (input.replace_all === true || !from) return undefined
-    // One block before or after the kept text, never around it (fourth lessons review of #869: an
-    // entry split around a kept heading read as one entry once the heading was cut out).
-    if (to.endsWith(from)) return to.slice(0, to.length - from.length)
-    if (to.startsWith(from)) return to.slice(from.length)
+    if (file === undefined || input.replace_all === true || !from || from.startsWith('\n') || from.endsWith('\n')) return undefined
+    const at = file.indexOf(from)
+    if (at === -1 || file.indexOf(from, at + 1) !== -1) return undefined
+    const end = at + from.length
+    if ((at !== 0 && file[at - 1] !== '\n') || (end !== file.length && file[end] !== '\n')) return undefined
+    if (to.startsWith(`${from}\n`)) return entryBlock(to.slice(from.length + 1))
+    if (to.endsWith(`\n${from}`)) return entryBlock(to.slice(0, to.length - from.length - 1))
     return undefined
   }
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
-  if (old === undefined) return content
-  if (content.length < old.length) return undefined
-  // What the two share at the start, then at the end, never counting a character twice: the old
-  // file must be exactly those two pieces, so the rest of the new one is a single inserted block.
-  let head = 0
-  while (head < old.length && old[head] === content[head]) head++
-  let tail = 0
-  while (tail < old.length - head && old[old.length - 1 - tail] === content[content.length - 1 - tail]) tail++
-  return head + tail === old.length ? content.slice(head, content.length - tail) : undefined
+  if (file === undefined) return entryBlock(content)
+  const size = content.length - file.length
+  if (size <= 0) return undefined
+  // Every line boundary of the file where the content could hold the block, each tried in turn.
+  for (let b = 0; b <= file.length; b = file.indexOf('\n', b) === -1 ? file.length + 1 : file.indexOf('\n', b) + 1) {
+    if (content.slice(0, b) !== file.slice(0, b) || content.slice(b + size) !== file.slice(b)) continue
+    const block = content.slice(b, b + size)
+    if (b !== file.length && !block.endsWith('\n')) continue
+    const entry = entryBlock(block)
+    if (entry !== undefined) return entry
+  }
+  return undefined
 }
 
 /**
