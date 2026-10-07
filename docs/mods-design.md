@@ -816,6 +816,12 @@ anything calls it. What the build decided, each open to Dan changing it:
   claim the first issue nobody holds, and give it a worktree, `PRIMARY/.claude/worktrees/sleep-N` on
   branch `sleep/N`, never a checkout in the primary checkout. A folder already at that path that is
   not this repository's worktree is never adopted (L421); the claim ends `failed` and `next` goes on.
+  A worktree that could not be made just now (a fetch or `git worktree add` failing) gives the
+  issue back as `free` instead, so a network drop never costs it the night. The primary checkout
+  is the first one `git worktree list` names, or the checkout asked about when its git folder lives
+  elsewhere; a bare repository is refused.
+- Dates and versions in a branch name (`release-2026-10-07`, `v10`, `1.5.7`) name no issue; every
+  other run of digits does, which errs toward leaving an issue out, with the branch named.
 - Only while asleep, judged by `sleep_active`, the one predicate; the claims live under the night's
   `generation`, so nothing carries from one night to the next.
 - The queue is the goal's issues in the goal's order when given, else open p0 to p3 issues fetched

@@ -174,7 +174,14 @@ def claim_state(issue_dir, registry, self_id):
 # ---- the queue ----
 
 def digits(text):
-    return set(re.findall(r"\d+", text or ""))
+    """The issue numbers a branch name can mean: every run of digits, once dates (2026-10-07,
+    20261007) and versions (v10, 1.2.3) are taken out, since those name no issue. What is left
+    still errs toward leaving an issue out, the harmless side, and the skip line names the branch."""
+    t = text or ""
+    t = re.sub(r"(?<![0-9])\d{4}[-_.]?\d{2}[-_.]?\d{2}(?![0-9])", " ", t)
+    t = re.sub(r"(?i)(?<![a-z0-9])v\d+(?:\.\d+)*", " ", t)
+    t = re.sub(r"\d+(?:\.\d+)+", " ", t)
+    return set(re.findall(r"\d+", t))
 
 
 def mentions(text, n):

@@ -110,7 +110,8 @@ printf 'danwright32\ndwright-pennie\n' > "$FX/accounts"
   printf ']'
 } > "$FX/issues.json"
 printf '[{"number":40,"title":"Fix the thing","body":"Closes #13","headRefName":"fix-thing"}]' > "$FX/prs.json"
-printf 'main\nfix-14-thing\n' > "$FX/branches"
+# A date or a version in a branch name names no issue: 7 and 5 stay in the queue beside these.
+printf 'main\nfix-14-thing\nrelease-2026-10-07\nv5-hotfix\nbump-1.5.7\n' > "$FX/branches"
 mkdir -p "$HOME/.claude/state/sleep/unanswered"
 printf 'danwright32/demo#15\n' > "$HOME/.claude/state/sleep/unanswered/g1"
 # An open session on issue 16: its own checkout of the same repository, on a branch naming it.
@@ -327,6 +328,22 @@ check_eq "in a worktree of its own, on its own branch" "sleep/9" "$(git -C "$ROO
 check_eq "the primary checkout is left on its branch" "main" "$(git -C "$ROOT" branch --show-current)"
 out="$(sleep_next "$ROOT" s2)"
 check_has "a second worker gets the next issue" "$(printf 'claimed\t3\t')" "$out"
+# A fetch that fails just now gives the issue back for a later pass, never ends it for the night.
+mv "$WORK/demo.git" "$WORK/demo.git.aside"
+session s9 "$((NOW - 1000))" null
+out="$(sleep_next "$ROOT" s9)"; rc=$?
+mv "$WORK/demo.git.aside" "$WORK/demo.git"
+check_eq "with no fetch possible, nothing is started" 1 "$rc"
+check_has "the issue is given back, saying so" "$(printf 'skip\t5\tclaimed but could not start (given back for a later pass): git fetch')" "$out"
+check_has "its claim ends free" '"kind": "free"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/2" 2>/dev/null)"
+check_has "so a later pass claims it again" "$(printf 'next\t5\tp2\tattempts=1\tfree')" "$(sleep_queue "$ROOT" s9)"
+# A repository whose git folder lives elsewhere still gets its worktree beside its checkout.
+git clone -q --separate-git-dir "$WORK/sep.git" "$WORK/demo.git" "$WORK/seprepo"
+check_eq "a separate git folder puts the worktree beside the checkout" "$WORK/seprepo/.claude/worktrees/sleep-31" "$(sleep_worktree "$WORK/seprepo" 31 2>&1)"
+git init -q --bare "$WORK/bare.git"
+out="$(sleep_worktree "$WORK/bare.git" 32 2>&1)"; rc=$?
+check_eq "a bare repository is refused for good" 1 "$rc"
+check_has "saying why" "is a bare repository" "$out"
 out="$(sleep_next "$ROOT" s1)"
 check_has "next for a holder carries on with its own issue" "$(printf 'claimed\t9\tattempts=1')" "$out"
 check_has "in the worktree it already has" "worktree=$ROOT/.claude/worktrees/sleep-9" "$out"
@@ -343,11 +360,11 @@ mkdir -p "$ROOT/.claude/worktrees/sleep-5"; echo stranger > "$ROOT/.claude/workt
 session s6 "$((NOW - 1000))" null
 out="$(sleep_next "$ROOT" s6)"
 check_has "a folder that is not this issue's worktree is refused" "is not a worktree of" "$out"
-check_has "the claim is ended as failed, never left held" "failed" "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/2" 2>/dev/null)"
+check_has "the claim is ended as failed, never left held" '"kind": "failed"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/4" 2>/dev/null)"
 check_has "and next goes on to the issue after it" "$(printf 'claimed\t16\t')" "$out"
 first="${out%%$'\n'*}"
 check_eq "its one result line comes first" claimed "${first%%$'\t'*}"
-check_has "the issue it could not start follows as a skip line" "$(printf 'skip\t5\tclaimed but could not start:')" "$out"
+check_has "the issue it could not start follows as a skip line" "$(printf 'skip\t5\tclaimed but could not start (ended for tonight):')" "$out"
 session s7 "$((NOW - 1000))" null
 check_has "the last one goes to the next worker" "$(printf 'claimed\t7\t')" "$(sleep_next "$ROOT" s7)"
 session s8 "$((NOW - 1000))" null

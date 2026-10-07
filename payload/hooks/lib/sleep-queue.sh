@@ -254,10 +254,31 @@ sleep_claims_json() {
 # sleep_worktree REPO_ROOT ISSUE: the issue's own worktree, PRIMARY/.claude/worktrees/sleep-ISSUE on
 # branch sleep/ISSUE, made from the remote default branch, or the one already there when it is this
 # repository's worktree. Anything else at that path is never adopted (L421).
+#
+# Exit 1 when it never can be made here (something else at the path, a bare repository), which
+# ends the issue for the night; exit 2 when it could not be made just now (a fetch or git worktree
+# add failing), which gives the issue back for a later pass rather than losing it to a network drop.
 sleep_worktree() {
-  local root="$1" issue="$2" common primary path branch base have
+  local root="$1" issue="$2" common primary path branch base have list
   common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || { echo "$root is not a git checkout" >&2; return 1; }
-  primary="$(dirname "$common")"
+  # The primary checkout is the first worktree git lists, wherever its git folder lives.
+  list="$(git -C "$root" worktree list --porcelain 2>/dev/null)" || { echo "git worktree list failed in $root" >&2; return 2; }
+  primary="${list%%$'\n'*}"
+  primary="${primary#worktree }"
+  case "$list" in
+    *$'\nbare'*|bare*) echo "$primary is a bare repository, with no checkout to put a worktree beside" >&2; return 1 ;;
+  esac
+  # With a separate git folder git lists that folder, not the checkout; then the checkout asked
+  # about is the primary one when its own git folder is the common one. Anything else is refused.
+  if [ "$(git -C "$primary" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" != "$common" ] ||
+     [ "$(git -C "$primary" rev-parse --show-toplevel 2>/dev/null)" != "$primary" ]; then
+    if [ "$(git -C "$root" rev-parse --path-format=absolute --git-dir 2>/dev/null)" = "$common" ]; then
+      primary="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)"
+    else
+      echo "the primary checkout of $root could not be found (git names $primary)" >&2
+      return 1
+    fi
+  fi
   path="$primary/.claude/worktrees/sleep-$issue"
   branch="sleep/$issue"
   if [ -e "$path" ]; then
@@ -269,14 +290,15 @@ sleep_worktree() {
     echo "$path is there already and is not a worktree of $primary, so it was left alone" >&2
     return 1
   fi
-  git -C "$primary" fetch -q origin 2>/dev/null || { echo "git fetch from origin failed in $primary" >&2; return 1; }
+  # A branch already here (a session that died before its worktree was made) needs no fetch.
   if git -C "$primary" show-ref --verify -q "refs/heads/$branch"; then
-    git -C "$primary" worktree add -q "$path" "$branch" >/dev/null 2>&1 || { echo "git worktree add $path $branch failed" >&2; return 1; }
+    git -C "$primary" worktree add -q "$path" "$branch" >/dev/null 2>&1 || { echo "git worktree add $path $branch failed" >&2; return 2; }
   else
+    git -C "$primary" fetch -q origin 2>/dev/null || { echo "git fetch from origin failed in $primary" >&2; return 2; }
     base="$(git -C "$primary" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
     [ -n "$base" ] || base=origin/main
     if git -C "$primary" show-ref --verify -q "refs/remotes/origin/$branch"; then base="origin/$branch"; fi
-    git -C "$primary" worktree add -q -b "$branch" "$path" "$base" >/dev/null 2>&1 || { echo "git worktree add $path from $base failed" >&2; return 1; }
+    git -C "$primary" worktree add -q -b "$branch" "$path" "$base" >/dev/null 2>&1 || { echo "git worktree add $path from $base failed" >&2; return 2; }
   fi
   printf '%s\n' "$path"
 }
@@ -298,13 +320,17 @@ sleep_next() {
     [ "$crc" = 1 ] && continue
     if [ "$crc" != 0 ]; then printf '%s\n' "$got"; return 3; fi
     attempts="$(printf '%s\n' "$got" | awk -F'\t' '{ print $3 }')"
-    if ! wt="$(sleep_worktree "$root" "$n" 2>"${TMPDIR:-/tmp}/sleep-wt.$$")"; then
+    wt="$(sleep_worktree "$root" "$n" 2>"${TMPDIR:-/tmp}/sleep-wt.$$")"; crc=$?
+    if [ "$crc" != 0 ]; then
       err="$(cat "${TMPDIR:-/tmp}/sleep-wt.$$" 2>/dev/null)"
       rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
-      if ! got="$(sleep_release "$root" "$n" "$self" failed "no worktree: $err")"; then
-        err="$err; and the claim could not be ended as failed, so it is still held ($(printf '%s' "$got" | cut -f3-))"
+      # Never here (exit 1) ends it for the night; not just now (exit 2) gives it back.
+      local end=failed
+      [ "$crc" = 2 ] && end=free
+      if ! got="$(sleep_release "$root" "$n" "$self" "$end" "no worktree: $err")"; then
+        err="$err; and the claim could not be ended as $end, so it is still held ($(printf '%s' "$got" | cut -f3-))"
       fi
-      failed="$failed$(printf 'skip\t%s\tclaimed but could not start: %s' "$n" "$err")"$'\n'
+      failed="$failed$(printf 'skip\t%s\tclaimed but could not start (%s): %s' "$n" "$([ "$end" = free ] && echo 'given back for a later pass' || echo 'ended for tonight')" "$err")"$'\n'
       continue
     fi
     rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
