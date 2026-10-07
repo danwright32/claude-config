@@ -1559,6 +1559,19 @@ test('a worker is told its prompts approve themselves and a refusal is final; a 
   expect((await say($ as never, 'hello')).context?.join('\n')).not.toMatch(/approved by themselves/)
 })
 
+test('a Bash prompt with no command, or one that cannot be judged, is left to Dan and noted, never approved (#834 review of edeb682)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  expect((await permission($ as never, 'Bash', {})).decision).toBeUndefined()
+  expect((await permission($ as never, 'Bash', { command: '   ' })).decision).toBeUndefined()
+  // A judge that throws (mod-kit's reader breaking) is left to Dan too.
+  expect((await permission($ as never, 'Bash', { command: 'gh pr merge 5 __reader_fails' })).decision).toBeUndefined()
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
+  expect(notes.map(n => n.kind)).toEqual(['unmeasured', 'unmeasured', 'unmeasured'])
+  expect(notes[0]?.text).toMatch(/^a Bash permission prompt with no command was left for Dan/)
+  expect(notes[2]?.text).toMatch(/^a permission prompt for Bash could not be judged overnight \(.+\), so it was left for Dan/)
+})
+
 test('a permission decision that throws reads as awake: nothing approved', withDeps, async ($, on) => {
   const { w, clock } = world(on, worker)
   await start($ as never, clock)

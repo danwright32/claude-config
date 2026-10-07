@@ -1201,11 +1201,23 @@ export const register: Register = on => {
     const tool = String(e.tool_name)
     if (NEVER_ASKED.has(tool))
       return { decision: { behavior: 'deny', message: `Refused: Dan is asleep, so ${tool === 'ExitPlanMode' ? 'no plan is approved' : 'nothing is asked'} overnight. Leave the question on the issue for the morning and skip this issue.` } }
+    // A call that cannot be judged is never approved: it is left to the prompt, as when Dan is
+    // awake, and one `unmeasured` note says so in the morning report (#834 review of edeb682).
+    const leave = async (text: string) => {
+      try {
+        await sleepNote($, (await sleepPaths($)).current, { kind: 'unmeasured', at: await $.clock.now(), by: await $.session.id(), tool, text })
+      } catch (err) {
+        $.ui.log(`scope-modes: ${text}, and the note could not be written (${msg(err)})`, { to: 'debug' })
+      }
+      return next(e)
+    }
+    const input = (e.tool_input ?? {}) as Record<string, unknown>
+    if (tool === 'Bash' && !String(input.command ?? '').trim()) return leave('a Bash permission prompt with no command was left for Dan')
     let what: string | undefined
     try {
-      what = await overnightWhy($, tool, (e.tool_input ?? {}) as Record<string, unknown>)
+      what = await overnightWhy($, tool, input)
     } catch (err) {
-      return { decision: { behavior: 'deny', message: `Refused: sleep mode is on and this call could not be checked against what Dan bans while he sleeps (${msg(err)}), so it was not approved. Skip it; it waits for the morning.` } }
+      return leave(`a permission prompt for ${tool} could not be judged overnight (${msg(err)}), so it was left for Dan`)
     }
     if (what) return { decision: { behavior: 'deny', message: overnightDeny(what) } }
     const beneath = await next(e)

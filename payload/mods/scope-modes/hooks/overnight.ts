@@ -251,8 +251,10 @@ const wrapped = (call: OvernightCall): boolean => {
   // Anywhere in the line, quotes included, so `env -S 'GH_REPO=x gh ...'` is seen too.
   if (/\b(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(call.raw)) return true
   if (call.commands.some(c => name(c.words[0]) === 'gh' && c.xargs)) return true
-  // A file sourced in the same line can set any of those without the line showing it.
+  // A file sourced in the same line can set any of those without the line showing it, and so can
+  // a string env -S splits into a command.
   if (call.commands.some(c => ['source', '.'].includes(name(c.words[0])))) return true
+  if (/(?:^|[\s;&|(])env\s+(?:\S+\s+)*?(?:-S|--split-string)\b/.test(call.raw)) return true
   return call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))
 }
 

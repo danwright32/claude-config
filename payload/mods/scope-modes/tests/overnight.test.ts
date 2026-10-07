@@ -149,7 +149,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
       expect({ c, r: await bash(c) }).not.toEqual({ c, r: undefined })
     // What the words cannot show: the operands xargs feeds, text eval or source runs, a GH_ variable set.
     // env -S and a sourced file can set where gh goes without the words showing it (#834 review of edeb682).
-    for (const c of [`env -S 'GH_REPO=other/x gh pr merge 5'`, 'source ~/.ghenv && gh pr merge 5', '. ./env.sh; gh issue comment 5 --body x'])
+    for (const c of [`env -S 'gh pr merge 5'`, `env --split-string='gh pr merge 5'`, `env -S 'GH_REPO=other/x gh pr merge 5'`, 'source ~/.ghenv && gh pr merge 5', '. ./env.sh; gh issue comment 5 --body x'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
     for (const c of ['echo 5 | xargs gh pr merge', `eval "gh pr merge 5"`, `source <(echo gh pr merge 5)`, 'GH_TOKEN=abc gh pr merge 5', 'GH_HOST=example.com gh pr merge 5', 'env GH_REPO=other/x gh pr merge 5'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
