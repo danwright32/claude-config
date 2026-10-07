@@ -147,8 +147,8 @@ export const progressOf = (notesText: string | null, self: string, refsText: str
 export const saidStopped = (notesText: string | null, self: string, since: number): boolean =>
   (notesText ?? '').split('\n').some(line => {
     try {
-      const n = JSON.parse(line) as { by?: unknown; kind?: unknown; at?: unknown }
-      return n.by === self && n.kind === 'stopped' && (!isNum(n.at) || n.at >= since)
+      const n = JSON.parse(line) as { by?: unknown; kind?: unknown; at?: unknown; driver?: unknown }
+      return n.by === self && n.driver !== true && n.kind === 'stopped' && (!isNum(n.at) || n.at >= since)
     } catch {
       return false
     }

@@ -118,6 +118,9 @@ describe('the circuit breaker (H3)', () => {
   test('a stopped note from the session itself (nothing left to claim) lets it stop, and only its own', () => {
     const mine = JSON.stringify({ kind: 'stopped', by: 's1', at: T0 + 1 })
     expect(decideStop(input({ driver: ok(after()), notesText: mine })).kind).toBe('stop')
+    // The driver's own stopped note is not the session saying it stopped.
+    const driverOwn = JSON.stringify({ kind: 'stopped', by: 's1', driver: true, at: T0 + 1 })
+    expect(decideStop(input({ driver: ok(after()), notesText: driverOwn })).kind).toBe('block')
     const theirs = JSON.stringify({ kind: 'stopped', by: 's2', at: T0 + 1 })
     expect(decideStop(input({ driver: ok(after()), notesText: theirs })).kind).toBe('block')
   })
