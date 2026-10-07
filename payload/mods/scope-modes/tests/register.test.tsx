@@ -174,6 +174,14 @@ type Opts = {
   homeGoneAfterNote?: boolean
   /** What this session's usage reads, or a read that throws. */
   usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
+  /** /repo is a linked worktree rather than a primary checkout (#834). */
+  linkedWorktree?: boolean
+  /** The wake check's reads (#834), each command line's own answer: its output, or a failure. */
+  night?: Record<string, string | { fails: string }>
+  /** What the permission step beneath answers a permission request with (#834). */
+  beneathDecision?: { behavior: 'deny'; message: string }
+  /** Whether the step beneath a classifier refusal asks for a retry (#834). */
+  beneathRetries?: boolean
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -201,6 +209,8 @@ const world = (on: On, o: Opts = {}) => {
     appended: [] as { file: string; line: string }[],
     reports: [] as { op: string; record: string; final?: boolean }[],
     homeGone: false,
+    /** What reached the screen and GitHub, in order: each modes change, and the wake check's first read (#834). */
+    order: [] as string[],
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
@@ -288,6 +298,28 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a.includes('ls-remote')) return o.branchOnGitHub === false ? fail(2) : ok(`abc\trefs/heads/${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('worktree')) return ok(o.worktrees ?? `worktree /repo\nbranch refs/heads/main\n`)
     if (cmd === 'git' && a.includes('status')) return ok('')
+    // What the overnight rules ask of the disk (#834): /repo is a primary checkout of o/r unless a
+    // test says otherwise, and every other folder is in no repository.
+    if (cmd === 'git' && a.includes('remote')) {
+      const dir = a[a.indexOf('-C') + 1] as string
+      if (dir === '/Users/x/claude-config-sync') return ok('origin\tgit@github.com:o/claude-config.git (fetch)\n')
+      return dir === '/repo' ? ok('origin\tgit@github.com:o/r.git (fetch)\n') : fail(128, 'fatal: not a git repository')
+    }
+    if (cmd === 'git' && a.includes('--git-common-dir')) {
+      const dir = a[a.indexOf('-C') + 1] as string
+      if (dir !== '/repo') return fail(128, 'fatal: not a git repository')
+      return ok(o.linkedWorktree ? '/main/.git/worktrees/repo\n/main/.git\n' : '/repo/.git\n/repo/.git\n')
+    }
+    // The wake check's reads (#834): a quiet night unless a test gives one of them its own answer.
+    const said = o.night?.[argv.join(' ')]
+    if (said !== undefined) return typeof said === 'string' ? ok(said) : fail(1, said.fails)
+    if (cmd === 'gh' && a[0] === 'api' && a[1] === 'user') {
+      w.order.push('github')
+      return ok('dan\n')
+    }
+    if (cmd === 'gh' && a[0] === 'api' && /^(?:users\/dan\/events|repos\/[^/]+\/[^/]+\/(?:milestones|commits))/.test(a[1] ?? '')) return ok('[]')
+    if (cmd === 'gh' && (a[0] === 'search' || (a[0] === 'run' && a[1] === 'list'))) return ok('[]')
+    if (cmd === 'stat') return ok('1\n')
     if (cmd === 'gh') {
       const gh = o.gh ?? { pr: null, issues: {} }
       if (gh.fails) return fail(1, gh.fails)
@@ -331,6 +363,8 @@ const world = (on: On, o: Opts = {}) => {
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   on('classic.Stop', () => ({}) as never)
+  on('classic.PermissionRequest', () => (o.beneathDecision ? { decision: o.beneathDecision } : {}) as never)
+  on('classic.PermissionDenied', () => (o.beneathRetries ? { retry: true } : {}) as never)
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -342,7 +376,10 @@ const world = (on: On, o: Opts = {}) => {
     if (tag === 'CARD') w.cards.push(JSON.parse(body))
     if (tag === 'BAND') w.bands.push(JSON.parse(body))
     if (tag === 'CLEAR') w.cleared.push(body)
-    if (tag === 'MODES') w.modes.push(JSON.parse(body))
+    if (tag === 'MODES') {
+      w.modes.push(JSON.parse(body))
+      w.order.push(`modes ${body}`)
+    }
     return { value: undefined }
   })
   on('tool.call', ($, e) => {
@@ -370,7 +407,7 @@ type $T = {
   command: { run: (e: never) => Promise<unknown> }
   prompt: { submit: (e: never) => Promise<unknown> }
   turn: { complete: (e: never) => Promise<unknown> }
-  classic: { Stop: (e: never) => Promise<unknown> }
+  classic: { Stop: (e: never) => Promise<unknown>; PermissionRequest: (e: never) => Promise<unknown>; PermissionDenied: (e: never) => Promise<unknown> }
 }
 const start = async ($: $T, clock: { settle: () => Promise<void> }) => {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
@@ -1236,6 +1273,11 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
   // Every session put back where it was before sleep.
   expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
+  // The band is cleared before the overnight check reads GitHub, which may be slow (#834).
+  const after = w.order.slice(w.order.lastIndexOf('modes ["ASLEEP"]') + 1)
+  expect(after[0]).toBe('modes []')
+  expect(after.filter(x => x === 'github')).toEqual(['github'])
+  expect(after[after.length - 1]).toBe('github')
   await clock.advance(5 * MIN)
   expect(w.notified.length).toBe(1)
 })
@@ -1427,4 +1469,105 @@ test('a record that reads as asleep but cannot be read once moved aside says the
   const r = await command($ as never, 'wake')
   expect(r.text).toBe(`Sleep mode is off. The night's report was not finished: the record moved aside to ${SLEEP}/ended/${T0}-woke-s1.json could not be read.`)
   expect(w.reports).toEqual([])
+})
+
+// ---- Sleep mode phase 3 (#834): permissions and outward actions ----
+
+type Decided = { decision?: { behavior: string; message?: string } }
+const permission = async ($: $T, tool_name: string, tool_input: Record<string, unknown>) =>
+  (await $.classic.PermissionRequest({ tool_name, tool_input } as never)) as Decided
+const PUSH = { command: 'git push -u origin sleep-834' }
+const worker = { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } }
+
+test('asleep, a worker session has its permission prompts approved by themselves', withDeps, async ($, on) => {
+  const { clock } = world(on, worker)
+  await start($ as never, clock)
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toEqual({ behavior: 'allow' })
+  expect((await permission($ as never, 'Edit', { file_path: '/repo/a.ts' })).decision).toEqual({ behavior: 'allow' })
+})
+
+test('awake, a session that is not a worker, or a record that cannot be read: nothing is approved', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  w.files[CURRENT] = asleepRecord({ workers: ['s9'] })
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  w.files[CURRENT] = '{"v":1'
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  w.files[CURRENT] = asleepRecord({ workers: ['s1'], until: T0 - 1 })
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+})
+
+test('a question, the plan approval and what Dan bans are never approved, and a decision beneath stands', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...worker, beneathDecision: { behavior: 'deny', message: 'a rule said no' } })
+  await start($ as never, clock)
+  const q = await permission($ as never, 'AskUserQuestion', { questions: [] })
+  expect(q.decision?.behavior).toBe('deny')
+  expect(q.decision?.message).toMatch(/nothing is asked overnight/)
+  expect((await permission($ as never, 'ExitPlanMode', {})).decision?.message).toMatch(/no plan is approved overnight/)
+  const banned = await permission($ as never, 'Bash', { command: 'gh issue create --title x --body y' })
+  expect(banned.decision?.behavior).toBe('deny')
+  expect(banned.decision?.message).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run gh issue create\./)
+  // Never an allow over a refusal beneath (Dan's own checks stay on).
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toEqual({ behavior: 'deny', message: 'a rule said no' })
+})
+
+test('asleep, what Dan bans is refused at the call in every session, worker or not, with the card', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s9'] }) } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git push --force origin x'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not force push\./)
+  expect(w.cards[w.cards.length - 1]).toMatchObject({ guard: 'Sleep mode', reason: 'Dan is asleep, so this would not force push.' })
+  expect(await call($ as never, bash('git checkout main'))).toMatch(/did not run git checkout in a primary checkout/)
+  expect(await call($ as never, bash('gh issue comment 5 -R other/x --body hi'))).toMatch(/did not write to other\/x from a checkout of o\/r/)
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toBe('ran')
+  expect(await call($ as never, edit('/repo/payload/LESSONS.md'))).toMatch(/did not write to LESSONS\.md/)
+  // Awake, the same calls run.
+  delete w.files[CURRENT]
+  expect(await call($ as never, bash('git push --force origin x'))).toBe('ran')
+})
+
+test('in a linked worktree a branch checkout goes ahead overnight', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...worker, linkedWorktree: true })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git checkout -b sleep-834'))).toBe('ran')
+})
+
+test('a classifier refusal while asleep is noted as failed and never retried; awake it is left alone', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...worker, beneathRetries: true })
+  await start($ as never, clock)
+  const r = (await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: { command: 'git clean -fd' }, tool_use_id: 't1', reason: '[Irreversible Local Destruction]' } as never)) as { retry?: boolean }
+  expect(r.retry).toBeUndefined()
+  const last = w.appended[w.appended.length - 1]
+  // Through the one writer (#835), on the night's record, as the report's failed kind reads it.
+  expect(last?.file).toBe(CURRENT)
+  expect(JSON.parse(last?.line as string)).toMatchObject({ kind: 'failed', by: 's1', cwd: '/repo', tool: 'Bash', text: 'the auto mode classifier refused Bash: [Irreversible Local Destruction]' })
+  delete w.files[CURRENT]
+  const awake = (await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: 't2', reason: 'x' } as never)) as { retry?: boolean }
+  expect(awake.retry).toBe(true)
+})
+
+test('a worker is told its prompts approve themselves and a refusal is final; a session that is not is not', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  expect((await say($ as never, 'hello')).context?.join('\n')).toMatch(/enrolled to work overnight\. Its permission prompts are approved by themselves.*A refusal.*is final/s)
+  w.files[CURRENT] = asleepRecord({ workers: ['s9'] })
+  expect((await say($ as never, 'hello')).context?.join('\n')).not.toMatch(/approved by themselves/)
+})
+
+test('/wake puts what the overnight check found first, in the reply and the notes', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    ...worker,
+    night: {
+      'gh api users/dan/events?per_page=100': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
+      'stat -f %m /Users/x/.claude/LESSONS.md': { fails: 'stat: No such file or directory' },
+    },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(stat: stat: No such file or directory\)\. The night's report is at /)
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
+  // Written before the night's end note, so the final render puts them at the top of the report.
+  expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'woke'])
+  expect(w.appended.every(a => a.file === `${SLEEP}/ended/${T0}-woke-s1.json`)).toBe(true)
+  expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight"')
 })

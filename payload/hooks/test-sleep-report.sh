@@ -337,6 +337,16 @@ record g8 '[]' "$SLEEPDIR/ended/g8.json"
 echo '{"v":1,"kind":"limit","at":1791475200000,"by":"aaaa1111","reason":"it was past noon ET","generation":"g8"}' > "$SLEEPDIR/notes/g8.jsonl"
 NOW=1791475200000 py render --record "$SLEEPDIR/ended/g8.json" --final >/dev/null 2>&1
 has "a sleep that ended by itself says when and why" "Ended by itself at 12:00 PM ET on Thu Oct 8: it was past noon ET." "$(report_of g8)"
+# The overnight check (#834): what GitHub and the disk show happened overnight, and what it could
+# not read, lead the report under Needs a look, never under Other notes.
+echo '{"v":1,"kind":"outward","at":1791475100000,"by":"aaaa1111","text":"Issue created overnight: o/r#9 \"Filed\"","generation":"g8"}' >> "$SLEEPDIR/notes/g8.jsonl"
+echo '{"v":1,"kind":"unmeasured","at":1791475100000,"by":"aaaa1111","text":"deploy runs in o/r were not checked (gh run list: HTTP 502)","generation":"g8"}' >> "$SLEEPDIR/notes/g8.jsonl"
+NOW=1791475200000 py render --record "$SLEEPDIR/ended/g8.json" --final >/dev/null 2>&1
+r="$(report_of g8)"
+look="$(printf '%s\n' "$r" | sed -n '/^## Needs a look/,/^## /p')"
+has "an overnight check hit is under Needs a look" "Done overnight, check it: Issue created overnight: o/r#9" "$look"
+has "a read it could not make is under Needs a look too" "Not checked overnight: deploy runs in o/r were not checked" "$look"
+lacks "neither is left for Other notes" "## Other notes" "$r"
 
 # ---- where the writes landed ----
 real_downloads_after="$(ls "$HOME/Downloads" 2>/dev/null | grep -c '^sleep-report-' || true)"

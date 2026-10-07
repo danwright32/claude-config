@@ -892,6 +892,41 @@ anything calls it. What the build decided, each open to Dan changing it:
 - `claims` prints every claim of the night as JSON lines, the seam the report (#835) reads; parking
   at two attempts or two hours is the driver's (#844), read from the `attempts=` the claim prints.
 
+### Sleep mode phase 3: permissions and outward actions (#834), built
+
+Dan's decision 7 and the plan-lite picker of 2026-10-06, "Everything not banned": overnight,
+Claude Code's own permission prompts are approved, Dan's own automatic checks stay on, and what
+the ban list names is refused. The lessons audit recommended an allow list (L42, L615); Dan chose
+the ban list knowing that an action it does not name is approved.
+
+- `classic.PermissionRequest`: while the record reads asleep and this session is one of its
+  `workers`, a prompt is approved, unless it is AskUserQuestion or ExitPlanMode (H8) or on the ban
+  list, which are denied with the reason. The settings hooks and every mod's `tool.call` refusal
+  run before this step, and a decision beneath is never overridden. Awake, a record that cannot be
+  read, or a session that is not a worker: the prompt waits for Dan as always.
+- `classic.PermissionDenied`: while asleep, a `failed` line naming the classifier's reason goes in
+  `notes/<generation>.jsonl`, and `retry` is taken off whatever beneath answered.
+- The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
+  repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
+  label and milestone writes by gh or gh api; every other gh call but a known read (view, list,
+  status, diff, checks, watch, search, a GET to the API) is a write, allowed only on the repository
+  the checkout is, resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any
+  `cd` (unresolved, a folder whose remotes name two repositories, a subcommand that reaches no one
+  repository, or any GraphQL mutation, whose target is an opaque id, is refused, L75; GraphQL
+  issue and label mutations are matched by exact name); LESSONS.md by any write route; every
+  claude.ai, Chrome and PostHog MCP tool whose name does not say it only reads (a read only tool
+  whose name has no read word is refused too, which fails closed);
+  Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
+  branch deletes (a merge with `--delete-branch` included); `claude-sync` pull, sync and install.
+  Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
+  managed settings file (#876) nothing is approved overnight.
+- The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
+  created (events and search, since either can lag), milestones touched and deploy runs in each
+  repository with an event overnight and the config repository, and LESSONS.md changed on GitHub
+  and installed. Each hit is an `outward` note and each read that failed an `unmeasured` one,
+  written before the final render, which puts both under Needs a look at the top of the report
+  (#835), and both are said in the wake reply or the notification.
+
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
 No round: each follows from the spec and the settled surfaces above. The ones marked open were

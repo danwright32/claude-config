@@ -43,6 +43,9 @@ report knows, and the fields each reads (every other field is kept, and shown no
   usage      usage                          a reading taken at report time
   stopped    text                           a worker that stopped on purpose (queue empty, cap)
   woke, limit  reason?                      how the night ended (written by the scope modes mod)
+  outward    text                           the overnight check (#834): something done overnight
+                                            that the ban list exists to stop, read from GitHub
+  unmeasured text                           the overnight check: a read it could not make
 
 `by` is the session id that wrote it. `usage` is {costUsd?, rateLimits?: [{kind, percentUsed,
 resetsAt?}]}, as $.session.usage() reads it. A note of a kind not listed is shown under Other notes.
@@ -78,7 +81,7 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped", "save") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured") + ENDED
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -360,6 +363,9 @@ def build(record, notes, bad, final, now, github):
             if not any(n["kind"] in TERMINAL and (n.get("repo"), n.get("issue")) == key for n in notes):
                 look.append("%s, claimed by %s at %s, ended unexpectedly: no done, parked or failed note." % (where(c), short(c.get("by")), et_time(c["at"]) if num(c.get("at")) else "an unknown time"))
         look.extend(github["flags"])
+    # The overnight check (#834) leads: what a text match could not stop, read from the real state.
+    look[:0] = ["Done overnight, check it: %s" % text_of(n) for n in notes if n["kind"] == "outward"] + \
+               ["Not checked overnight: %s" % text_of(n) for n in notes if n["kind"] == "unmeasured"]
     if bad:
         look.append("%d line%s of the notes could not be read." % (bad, "" if bad == 1 else "s"))
     if final or look:

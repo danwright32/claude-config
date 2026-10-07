@@ -14,7 +14,7 @@ import { clientRefusal, sqlRefusal } from './sql.ts'
 // what no word names) is not what it is for.
 
 /** One simple command, as `$.modkit.pipeline` gives it, with `$.modkit.git`'s reading when it is git. */
-export type Cmd = ModKitCommand & { git?: { sub?: string; args: string[] } }
+export type Cmd = ModKitCommand & { git?: { sub?: string; args: string[]; dir?: string } }
 /** What the refused call would have done, and, where there is one, how what no build allows can still be done. */
 export type Refusal = { what: string; hint?: string }
 
@@ -59,7 +59,7 @@ const gitRefusal = (g: { sub?: string; args: string[] }): boolean => {
 // and a mutation after it is run by naming the mutation in operationName. Strings and comments are
 // skipped, so a brace inside an argument's text is not read as structure.
 type Operation = { kind: string; fields: string[]; spreads: boolean }
-const operations = (doc: string): Operation[] => {
+export const operations =(doc: string): Operation[] => {
   const out: Operation[] = []
   let depth = 0
   let parens = 0
@@ -135,20 +135,31 @@ const GH_READS: Record<string, Set<string>> = {
 }
 const GH_API_VALUE_FLAGS = new Set(['-X', '--method', '-f', '-F', '--field', '--raw-field', '-H', '--header', '--input', '-q', '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview'])
 const GH_API_FIELD_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input'])
+/**
+ * A `gh api` call's method and endpoint as gh reads them: GET unless -X says otherwise or a field
+ * is sent, which makes it a POST. `fields` are the values its -f and -F fields send (`force=true`).
+ * The one reading of gh api in this mod, for no build and for the overnight rules (overnight.ts).
+ */
+export const ghApiOf = (words: readonly string[]): { method: string; endpoint: string | undefined; fields: string[] } => {
+  let method = 'GET'
+  let endpoint: string | undefined
+  const fields: string[] = []
+  for (let i = 2; i < words.length; i++) {
+    const w = words[i] as string
+    if (GH_API_VALUE_FLAGS.has(w)) {
+      if (w === '-X' || w === '--method') method = (words[i + 1] ?? 'GET').toUpperCase()
+      else if (GH_API_FIELD_FLAGS.has(w) && method === 'GET') method = 'POST'
+      if (GH_API_FIELD_FLAGS.has(w) && w !== '--input') fields.push(words[i + 1] ?? '')
+      i++
+    } else if (!isFlag(w) && endpoint === undefined) endpoint = w
+  }
+  return { method, endpoint, fields }
+}
 const ghRefusal = (words: string[]): string | undefined => {
   const [, sub = '', act = ''] = words
   if (sub === 'issue') return act === 'develop' ? 'run gh issue develop' : undefined
   if (sub === 'api') {
-    let method = 'GET'
-    let endpoint: string | undefined
-    for (let i = 2; i < words.length; i++) {
-      const w = words[i] as string
-      if (GH_API_VALUE_FLAGS.has(w)) {
-        if (w === '-X' || w === '--method') method = (words[i + 1] ?? 'GET').toUpperCase()
-        else if (GH_API_FIELD_FLAGS.has(w) && method === 'GET') method = 'POST'
-        i++
-      } else if (!isFlag(w) && endpoint === undefined) endpoint = w
-    }
+    const { method, endpoint } = ghApiOf(words)
     // GraphQL is always a POST, so a read is told from a change by the document it sends (#702).
     if (endpoint === 'graphql') return graphqlRefusal(words)
     if (method === 'GET') return undefined
@@ -162,7 +173,7 @@ const ghRefusal = (words: string[]): string | undefined => {
 }
 
 // Deploy tools, each with the subcommands that only read or run locally.
-const DEPLOYERS: Record<string, (args: string[]) => boolean> = {
+export const DEPLOYERS: Record<string, (args: string[]) => boolean> = {
   wrangler: a => !['dev', 'tail', 'whoami', 'login', 'logout', 'types', 'init', 'docs', '--version', '-v'].includes(a[0] ?? ''),
   vercel: a => !['dev', 'ls', 'list', 'logs', 'inspect', 'whoami', 'login', 'pull', 'env'].includes(a[0] ?? ''),
   netlify: a => ['deploy', 'build'].includes(a[0] ?? ''),
@@ -234,6 +245,19 @@ const heredocSql = (c: Cmd): string | undefined | null => {
   if (last.replaced) return null
   return !last.quoted && /[$`]/.test(last.body) ? null : last.body
 }
+/**
+ * A database client by every piece of SQL it runs and what it writes itself (sql.ts), MariaDB's own
+ * name for its client included (#730). Without SQL given, it reads a file or stdin, which cannot be
+ * read. Undefined for a command that is none of `clients`, or one that only reads.
+ */
+export const databaseRefusal = (c: Cmd, clients: ReadonlySet<string> = DB_CLIENTS): Refusal | undefined => {
+  const cmd = name(c.words[0])
+  if (!clients.has(cmd)) return undefined
+  const body = heredocSql(c)
+  if (body === null) return { what: 'run SQL that could not be read' }
+  const what = clientRefusal(cmd, c.words.slice(1), harmless, body)
+  return what === undefined ? undefined : { what }
+}
 const commandRefusal = (c: Cmd): Refusal | undefined => {
   let words = c.words
   // npx and bunx only fetch and run the tool named after them.
@@ -249,20 +273,30 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
     if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return why(`run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`)
   }
   if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return why(`run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`)
-  // A database client by every piece of SQL it runs and what it writes itself (sql.ts), MariaDB's
-  // own name for its client included (#730). Without SQL given, it reads a file or stdin, which
-  // cannot be read.
-  if (DB_CLIENTS.has(cmd)) {
-    const body = heredocSql(c)
-    if (body === null) return { what: 'run SQL that could not be read' }
-    return why(clientRefusal(cmd, words.slice(1), harmless, body))
-  }
+  if (DB_CLIENTS.has(cmd)) return databaseRefusal({ ...c, words })
   return programRefusal({ ...c, words })
 }
 
 const SQL_TOOL = /__(?:execute_sql|run_sql|query)$/
 const DB_WRITE_TOOL = /__(apply_migration|deploy_edge_function|create_branch|delete_branch|merge_branch|reset_branch|rebase_branch|create_project|pause_project|restore_project)$/
-const EDITORS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+export const EDITORS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+/**
+ * A call that changes a database through a tool: the db-apply skill, an MCP tool that applies a
+ * migration, deploys or branches, and an MCP SQL tool judged by its SQL. `reads` for an SQL tool
+ * whose SQL only reads; undefined for any other call. Shared by no build and the overnight rules.
+ */
+export const dbToolRefusal = (tool: string, input: Record<string, unknown>): Refusal | 'reads' | undefined => {
+  if (tool === 'Skill' && String(input.skill ?? '').replace(/^.*:/, '') === 'db-apply') return { what: 'run the db-apply skill' }
+  const dbWrite = DB_WRITE_TOOL.exec(tool)
+  if (tool.startsWith('mcp__') && dbWrite) return { what: dbWrite[1] as string }
+  if (tool.startsWith('mcp__') && SQL_TOOL.test(tool)) {
+    const sql = input.query ?? input.sql
+    const why = sqlRefusal(typeof sql === 'string' ? sql : undefined, 'the SQL tool', harmless)
+    return why ? { what: why } : 'reads'
+  }
+  return undefined
+}
 
 /**
  * Why no build refuses this call, as the action it would have taken ("edit app.ts", "run git
@@ -275,14 +309,8 @@ export const noBuildRefusal = (call: { tool: string; input: Record<string, unkno
     return inNotes(path) ? undefined : { what: `edit ${base(path)}` }
   }
   if (tool === 'EnterWorktree') return { what: 'enter a new worktree' }
-  if (tool === 'Skill' && String(input.skill ?? '').replace(/^.*:/, '') === 'db-apply') return { what: 'run the db-apply skill' }
-  const dbWrite = DB_WRITE_TOOL.exec(tool)
-  if (tool.startsWith('mcp__') && dbWrite) return { what: dbWrite[1] as string }
-  if (tool.startsWith('mcp__') && SQL_TOOL.test(tool)) {
-    const sql = input.query ?? input.sql
-    const why = sqlRefusal(typeof sql === 'string' ? sql : undefined, 'the SQL tool', harmless)
-    return why ? { what: why } : undefined
-  }
+  const db = dbToolRefusal(tool, input)
+  if (db) return db === 'reads' ? undefined : db
   if (tool !== 'Bash') return undefined
   for (const c of call.commands) {
     const why = commandRefusal(c)
