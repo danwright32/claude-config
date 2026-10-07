@@ -184,13 +184,15 @@ grep -q '^\[task trimmed' <<< "$out_nt" \
 # ODD SHAPES ARE SKIPPED, NEVER FATAL (claude-config#898). An uncaught exception exits 1, which is
 # the code for "the agent said nothing", so one oddly shaped line used to turn a transcript full of
 # findings into a clean empty harvest. Each shape is valid JSON a reader could meet: a line that is
-# not an object, a message that is not an object, content that is neither text nor a list, and a
-# tool input that is not an object.
+# not an object, a message that is not an object, content that is neither text nor a list, a tool
+# input that is not an object, and text or a file path that is not a string.
 ODD="$TMPROOT/odd.jsonl"
 { asked "Audit the queue"
   printf '%s\n' '[1, 2]' '{"type":"user","message":"a string message"}' \
     '{"type":"assistant","message":"a string message"}' '{"type":"assistant","message":{"content":7}}' \
-    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":"not an object"}]}}'
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":"not an object"}]}}' \
+    '{"type":"assistant","message":{"content":[{"type":"text","text":7}]}}' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":7}}]}}'
   say "ODD-SHAPES-SURVIVED: the queue has no retry cap."; } > "$ODD"
 out_odd="$(python3 "$D" "$ODD" 2>&1)"; code_odd=$?
 [ "$code_odd" -eq 0 ] && grep -q 'ODD-SHAPES-SURVIVED' <<< "$out_odd" \

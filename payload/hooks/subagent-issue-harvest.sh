@@ -325,8 +325,16 @@ fi
 # The pending record is cleared on the way OUT, and only once this run has written a record to the
 # spool (a finding, a none or an error). Cleared before that, a harvest killed at the hook's time
 # limit, or one whose record could not be written, would lose the agent for good, which is the one
-# thing the record exists to prevent; left in place, a later sweep harvests it.
-trap '[ "${clear_pending:-0}" = 1 ] && [ "${recorded:-0}" = 1 ] && rm -f "$pending_file" 2>/dev/null' EXIT
+# thing the record exists to prevent; left in place, a later sweep harvests it. A SWEPT run says
+# the same thing to its sweeper by its exit status, since the harvest otherwise exits 0 on nearly
+# every path: non-zero unless a record landed, so the claim is released for a later sweep.
+on_exit() {
+  [ "${clear_pending:-0}" = 1 ] && [ "${recorded:-0}" = 1 ] && rm -f "$pending_file" 2>/dev/null
+  if [ -n "${CLAUDE_ISSUE_HARVEST_FORCE:-}" ] && [ "${recorded:-0}" != 1 ]; then
+    exit 3
+  fi
+}
+trap on_exit EXIT
 
 # The digest's EXIT CODE is what tells an unreadable transcript from an agent
 # that said nothing, because both print nothing. Consulting only its output

@@ -84,8 +84,8 @@ def main():
                 task = trim_task(content)
             elif isinstance(content, list):
                 for it in content:
-                    if isinstance(it, dict) and it.get("type") == "text" and (it.get("text") or "").strip():
-                        task = trim_task(it["text"] or "")
+                    if isinstance(it, dict) and it.get("type") == "text" and isinstance(it.get("text"), str) and it["text"].strip():
+                        task = trim_task(it["text"])
                         break
 
         if obj.get("type") != "assistant":
@@ -94,13 +94,13 @@ def main():
         for it in (content if isinstance(content, list) else []):
             if not isinstance(it, dict):
                 continue
-            if it.get("type") == "text" and (it.get("text") or "").strip():
-                said.append((it["text"] or "").strip())
+            if it.get("type") == "text" and isinstance(it.get("text"), str) and it["text"].strip():
+                said.append(it["text"].strip())
             elif it.get("type") == "tool_use":
                 inp = it.get("input")
                 inp = inp if isinstance(inp, dict) else {}
                 path = inp.get("file_path") or inp.get("path")
-                if path and path not in touched:
+                if isinstance(path, str) and path and path not in touched:
                     touched.append(path)
 
     body = "\n\n".join(said).strip()

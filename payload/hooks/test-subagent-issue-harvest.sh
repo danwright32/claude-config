@@ -679,6 +679,24 @@ for _ in $(seq 1 300); do [ "$(found_for test-agent-id)" -ge 1 ] && break; sleep
   && check "#898 an agent that ended with its own Monitor running is swept once overdue, and not before" ok \
   || check "#898 an agent that ended with its own Monitor running is swept once overdue, and not before" "early=$early later=$(found_for test-agent-id) pending=$(ls -A "$PENDING_DIR" 2>&1)"
 
+# A swept harvest that could not WRITE its record must not release the claim as done: the harvest
+# exits 0 on nearly every path, so its exit alone said nothing about whether a record landed. The
+# claim goes back under its released name for a later sweep.
+reset_spool
+PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_MONITOR]" payload "$REPO" "$WAITING_TRANSCRIPT" \
+  | CLAUDE_ISSUE_HARVEST_NOW="$T0" bash "$HARVEST" >/dev/null 2>&1
+PAYLOAD_AGENT_ID=third-agent PAYLOAD_BG_TASKS="[]" payload "$REPO" \
+  | CLAUDE_ISSUE_SPOOL_LIB="$FAILING_SPOOL_LIB" CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 7200))" bash "$HARVEST" >/dev/null 2>&1
+# Waits on the swept harvest FINISHING, which is its claim leaving the name it holds while it runs.
+for _ in $(seq 1 300); do
+  held="$(ls "$PENDING_DIR" 2>/dev/null | grep -c '\.claimed\.[0-9]')"
+  [ "$held" = 0 ] && break; sleep 0.1
+done
+[ -f "$PENDING_DIR/test-agent-id.json.claimed" ] \
+  && check "#898 a swept harvest that could not write its record keeps the claim for a later sweep" ok \
+  || check "#898 a swept harvest that could not write its record keeps the claim for a later sweep" "pending=$(ls -A "$PENDING_DIR" 2>&1)"
+rm -f "$LOST_RECORDS"
+
 # The non-object line in the fixture transcript is skipped rather than aborting the scan: the agent
 # whose receipts all come after it is still deferred.
 reset_spool
