@@ -174,6 +174,8 @@ TSC="$TMPROOT/tsc"; TSC_LOG="$TMPROOT/tsc-calls"
 cat > "$TSC" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$TSC_LOG"
+# What a dependency's types said where the compiler read them (#840).
+for f in "$2"/.claude-plugin/types/*/index.d.ts; do [ -f "$f" ] && echo "DEP $(basename "$(dirname "$f")"): $(cat "$f")" >> "$TSC_LOG"; done
 case "$2" in *crashing*) printf 'node:internal/modules/cjs/loader:1228\n  throw err;\nError: Cannot find module typescript\n'; exit 1 ;; esac
 case "$2" in *illtyped*) printf 'hooks/register.tsx(3,1): error TS2339: no such thing\nhooks/register.tsx(9,1): error TS2604: not a component\n'; exit 2 ;; esac
 # Every mod imports its own files as ./x.ts, which the tsconfig Claude Code lays does not allow, so
@@ -242,6 +244,30 @@ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HO
 [ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q 'fewer than recorded' \
   && check "a mod under its record passes and says the record can come down" ok \
   || check "a mod under its record passes and says the record can come down" "exit=$code out=$out"
+# A dependency's types are the copy under review, never the installed one the laid types copied
+# (#840): a mod checked against its dependency's old contract fails a change made to both in one
+# PR, and passes one that breaks it, until the next install. A dependency the folder does not hold
+# keeps its laid types, and Claude Code's own are never touched.
+M4G="$TMPROOT/m4g"; mkmod "$M4G" dependent; mkmod "$M4G" provider
+mkdir -p "$M4G/provider/types"; printf 'export type P = "new"\n' > "$M4G/provider/types/index.d.ts"
+TH4G="$TMPROOT/types-home-4g"; laid "$TH4G/mods/dependent"; laid "$TH4G/mods/provider"
+# Laid as Claude Code lays them: each dependency's index.d.ts a symbolic link to the INSTALLED
+# dependency's own types file, so a copy written through it would rewrite the installed mod, which the
+# sync then pushes to main (it did, 2026-10-07, while #840 was built).
+for dep in provider elsewhere claude-code; do
+  mkdir -p "$TH4G/mods/dependent/.claude-plugin/types/$dep" "$TH4G/mods/$dep/types"
+  printf 'export type P = "installed %s"\n' "$dep" > "$TH4G/mods/$dep/types/index.d.ts"
+  ln -s "$TH4G/mods/$dep/types/index.d.ts" "$TH4G/mods/dependent/.claude-plugin/types/$dep/index.d.ts"
+done
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4G" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4G" 2>&1)"; code=$?
+grep -q 'DEP provider: export type P = "new"' "$TSC_LOG" \
+  && check "a dependency's types are read from the folder under review" ok || check "a dependency's types are read from the folder under review" "$(cat "$TSC_LOG")"
+grep -q 'DEP elsewhere: export type P = "installed elsewhere"' "$TSC_LOG" && grep -q 'DEP claude-code: export type P = "installed claude-code"' "$TSC_LOG" \
+  && check "one the folder does not hold, and Claude Code's own, keep their laid types" ok || check "one the folder does not hold, and Claude Code's own, keep their laid types" "$(cat "$TSC_LOG")"
+[ "$(cat "$TH4G/mods/provider/types/index.d.ts")" = 'export type P = "installed provider"' ] && [ -L "$TH4G/mods/dependent/.claude-plugin/types/provider/index.d.ts" ] \
+  && check "and the installed copy is never written, through the laid link or otherwise" ok \
+  || check "and the installed copy is never written, through the laid link or otherwise" "$(cat "$TH4G/mods/provider/types/index.d.ts")"
 # Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \

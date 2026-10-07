@@ -1,7 +1,7 @@
 import type { PromptOrigin } from 'claude-code'
 
 type Scope = 'NO BUILD' | 'WINDING DOWN'
-export type Trigger = { kind: 'scope'; scope: Scope } | { kind: 'build' } | { kind: 'off'; scope: Scope } | { kind: 'place'; place: 'away' | 'home' }
+export type Trigger = { kind: 'scope'; scope: Scope } | { kind: 'build' } | { kind: 'off'; scope: Scope } | { kind: 'place'; place: 'away' | 'home' } | { kind: 'wake' }
 
 // Dan's own phrases for each mode, from the specs (#616, #621) and the chats they were mined from.
 // Apostrophes may be straight or curly; read-only may be one word or two. Only phrasings aimed at
@@ -50,6 +50,8 @@ const PHRASES: { re: RegExp; trigger: Trigger }[] = [
   { re: own(`${ME}stepping away\\b`), trigger: { kind: 'place', place: 'away' } },
   { re: /^\s*away[.!]?\s*$/i, trigger: { kind: 'place', place: 'away' } },
   { re: own(`${ME}back at (?:my|the) (?:computer|desk|mac)\\b`), trigger: { kind: 'place', place: 'home' } },
+  // Waking sleep mode (#840): "I'm up" ending its clause, so "I'm up for a look" stays prose.
+  { re: own(`(?:i${APOS}?m|i am)\\s+up(?=\\s*(?:[.!,;]|$|now\\b))`), trigger: { kind: 'wake' } },
 ]
 
 // Where the first match of `re` in `text` stands, skipping any inside a question: a match whose

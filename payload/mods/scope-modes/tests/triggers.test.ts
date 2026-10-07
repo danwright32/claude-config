@@ -28,6 +28,14 @@ describe('triggersIn', () => {
     ['Away.', [{ kind: 'place', place: 'away' }]],
     ["I'm back at my computer, so you can stop doing artifacts", [{ kind: 'place', place: 'home' }]],
     ['back at my desk now', [{ kind: 'place', place: 'home' }]],
+    // Waking sleep mode (#840): "I'm up" ending its clause, never "I'm up for" or a question.
+    ["I'm up", [{ kind: 'wake' }]],
+    ['ok im up.', [{ kind: 'wake' }]],
+    ['I am up now, what happened overnight', [{ kind: 'wake' }]],
+    ['I’m up!', [{ kind: 'wake' }]],
+    ["I'm up for a quick look at the logs", []],
+    ["Are you sure I'm up to date?", []],
+    ["I'm up?", []],
     // Turning one mode off by its own name (#805): Dan's words on 2026-10-05 in Slate.
     ['stop winding down mode. run load 1', [{ kind: 'off', scope: 'WINDING DOWN' }]],
     ['ok, stop winding down', [{ kind: 'off', scope: 'WINDING DOWN' }]],
