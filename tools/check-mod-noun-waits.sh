@@ -25,7 +25,8 @@
 # whose promise a timer settles is judged at every call a noun makes of it (#756).
 # A noun's code is each `engine.create` hook's (where the nouns' methods are written), each hook on
 # a noun's own event (`on('modkit.screen', ...)`, any noun any mod's contract declares on $), and
-# every function of the mod those call, followed by name through every source file of the mod.
+# every function of the mod those call, each call followed to the function its name reaches by scope:
+# the nearest enclosing declaration, then the module's top level, then another file's (#895).
 #
 # Measured live on 2026-10-05 (2.1.289, a throwaway plugin in a headless `claude -p`, #756): a
 # noun's 10 s does NOT stop while its own `$` calls are in flight, unlike a hook's budget. A noun
@@ -157,6 +158,72 @@ def definition(files, name):
         if span:
             return f, span[0], span[1]
     return None
+
+
+def _blocks(f):
+    """Each brace pair in f's code, (open, close), cached on f."""
+    if not hasattr(f, "blocks"):
+        f.blocks, stack = [], []
+        for i, c in enumerate(f.code):
+            if c == "{":
+                stack.append(i)
+            elif c == "}" and stack:
+                f.blocks.append((stack.pop(), i))
+    return f.blocks
+
+
+def _scope(f, at):
+    """The innermost block holding position at in f, or None at the module's top level."""
+    inside = [b for b in _blocks(f) if b[0] < at < b[1]]
+    return max(inside, key=lambda b: b[0]) if inside else None
+
+
+def _declared_function(f, at, name):
+    """The span of the function a declaration of name at at defines, or None when its value is not a
+    function (a shadowing `const pause = built.pause` resolves to no function of the mod)."""
+    rest = f.code[at:]
+    if rest.startswith("function"):
+        span = function_span(rest, name, f.kinds[at:])
+    else:
+        value = re.match(r"(?:const|let|var)\s+" + re.escape(name) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?:async\s+)?", rest)
+        if not value:
+            return None
+        v = rest[value.end() :]
+        if v.startswith("("):
+            end = closing(v, 0)
+            is_fn = end is not None and re.match(r"\s*(?::[^=;\n]+)?=>", v[end:]) is not None
+        else:
+            is_fn = re.match(r"function\b|<|" + IDENT + r"\s*=>", v) is not None
+        span = function_span(rest, name, f.kinds[at:]) if is_fn else None
+    return None if span is None else (f, at + span[0], at + span[1])
+
+
+def resolve(files, f, at, name):
+    """The function a call of name at position at in f reaches, by scope as the language reads it
+    (#895): the nearest declaration of name in a block enclosing the call, then one at the top level
+    of f, then one at the top level of another of the mod's files. (file, start, end), or None when
+    the declaration found is not a function. A name with no declaration in scope at all is resolved
+    as before, by its first definition anywhere in the mod."""
+    decl = re.compile(r"(?<![\w$.])(?:(?:const|let|var)\s+" + re.escape(name) + r"|function\s*\*?\s*" + re.escape(name) + r")(?![\w$])")
+    best = None
+    for m in decl.finditer(f.code):
+        if f.kinds[m.start()] != CODE:
+            continue
+        scope = _scope(f, m.start())
+        if scope is not None and not (scope[0] < at < scope[1]):
+            continue
+        depth = -1 if scope is None else scope[0]
+        if best is None or depth > best[0]:
+            best = (depth, m.start())
+    if best is not None:
+        return _declared_function(f, best[1], name)
+    for g in files:
+        if g is f:
+            continue
+        for m in decl.finditer(g.code):
+            if g.kinds[m.start()] == CODE and _scope(g, m.start()) is None:
+                return _declared_function(g, m.start(), name)
+    return definition(files, name)
 
 
 def constants(files):
@@ -350,7 +417,7 @@ def judge(f, at, files, consts):
     executor = code[k + 1 : (end or len(code)) - 1].strip()
     named = re.fullmatch(IDENT, executor)
     if named:
-        found = definition(files, executor)
+        found = resolve(files, f, at, executor)
         if not found:
             return f"check-mod-noun-waits: {f.where(at)}: {f.mod}'s noun code makes a promise whose executor {executor} cannot be found in {f.mod}, so whether it waits past 10 s cannot be read."
         df, start, stop = found
@@ -423,9 +490,10 @@ def with_args(consts, params, args):
     return out
 
 
-def helper_timer(files, name, args, consts):
-    """Whether calling the mod's function name with args makes a promise a timer under 10 s settles."""
-    found = definition(files, name)
+def helper_timer(files, f, at, name, args, consts):
+    """Whether calling the mod's function name at position at in f, with args, makes a promise a timer
+    under 10 s settles."""
+    found = resolve(files, f, at, name)
     if not found:
         return False
     df, start, stop = found
@@ -447,7 +515,7 @@ def is_timer(f, a, b, files, consts):
     m = re.fullmatch(r"(" + IDENT + r")\s*\(", expr[: expr.find("(") + 1]) if "(" in expr else None
     if m and expr.endswith(")"):
         args = call_args(f.code, a + lead + expr.find("("))
-        return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, m.group(1), args, consts)
+        return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, f, a + lead, m.group(1), args, consts)
     if re.fullmatch(IDENT, expr):
         for g in files:
             d = re.search(r"(?<![\w$.])(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code)
@@ -480,7 +548,7 @@ for entry, folder, man, files in mods:
             todo.append((f, start, end, None))
             handler = re.search(r",\s*(" + IDENT + r")\s*\)$", f.code[start:end])
             if handler:
-                found = definition(files, handler.group(1))
+                found = resolve(files, f, start + handler.start(1), handler.group(1))
                 if found:
                     todo.append((*found, handler.group(1)))
     regions = []
@@ -492,7 +560,7 @@ for entry, folder, man, files in mods:
         regions.append((f, start, end, name))
         for m in re.finditer(r"(?<![\w$.])(" + IDENT + r")\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
             if m.group(1) not in KEYWORDS:
-                found = definition(files, m.group(1))
+                found = resolve(files, f, start + m.start(), m.group(1))
                 if found:
                     todo.append((*found, m.group(1)))
 

@@ -1224,10 +1224,49 @@ export const register = on => {
   })
 }
 TS
+# A called helper is resolved by scope, as the language does: the nearest enclosing declaration of
+# its name, then the module's top level, never the first declaration of that name anywhere in the
+# file (#895). Two functions each keep a local `pause`, and only one of them waits. The noun calling
+# the one that does not wait is not accused, though the waiting `pause` is declared first ...
+mknounmod "$M12W" same-local-calm brisk <<'TS'
+const waiters = new Map()
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+function hasty() {
+  const pause = () => Promise.resolve('now')
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, brisk: { go: () => hasty() } }
+  })
+}
+TS
+# ... and the noun calling the one that does wait is, though the quiet `pause` is declared first.
+mknounmod "$M12W" same-local-waits slow <<'TS'
+const waiters = new Map()
+function hasty() {
+  const pause = () => Promise.resolve('now')
+  return pause()
+}
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, slow: { go: ({ id }) => patient(id) } }
+  })
+}
+TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"25 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
-for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
+case "$out" in *"27 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
     || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
@@ -1252,11 +1291,11 @@ printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model
 for m in short-process process-in-hook shorthand-timeout model-timed; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
 done
-for m in bounded commented outside-any-noun raced-short kept-unread; do
+for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call; do rm -rf "${M12W:?}/$m"; done
+for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call same-local-waits; do rm -rf "${M12W:?}/$m"; done
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
   || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
