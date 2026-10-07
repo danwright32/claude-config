@@ -5,9 +5,13 @@ Called only by sleep-queue.sh, which does every outside call (gh, git worktree, 
 into place) and hands this the answers as files. Nothing here writes anything, so every rule below
 is tested on fixtures alone.
 
-  state  ISSUE_DIR SELF          what one issue's claim says now (one line, see claim_state)
-  queue  ARGS...                 the night's queue for one repository, as tab separated lines
-  claims CLAIMS_DIR              every claim of the night as JSON lines, for the report (phase 4)
+  state  ISSUE_DIR SELF REGISTRY NOW   what one issue's claim says now (one line, see claim_state)
+  queue  key=value...                  the night's queue for one repository, as tab separated
+                                       lines; keys: repo limit issues prs branches accounts
+                                       unanswered claims registry now self, and goal (optional)
+  entry  KIND SESSION AT [WHY]         one claim entry as JSON, for the shell to link into place
+  slug   ORIGIN_URL                    owner/repo of a GitHub origin, lower case, or exit 1
+  claims CLAIMS_DIR                    every claim of the night as JSON lines, for the report (phase 4)
 
 A claim is a directory per issue holding numbered entries, 1, 2, 3, each one JSON object written
 whole beside it and hard linked into place, which fails if the number is taken. So of two sessions
