@@ -1090,6 +1090,48 @@ report_user_scope_plugins(){
   return 0
 }
 
+# ---- the managed settings file that keeps the security default out of first place (#876) ----
+# On a Team or Enterprise account, or any Mac with managed settings, Claude Code's built-in security
+# default seats itself ahead of every plugin and routes each classic.* and prompt.* hook past the
+# user tier our mods load in, so those hooks never run and only a debug log says so (#875). A
+# managed prependPlugins list that leaves it out moves it to last, and both Macs hold one:
+# {"prependPlugins": []}, measured on both on 2026-10-07 ("not seated: managed prependPlugins does
+# not list it"). The file lives outside ~/.claude, so the sync cannot carry it and a new Mac needs it
+# made by hand; this says when it is missing or wrong. It reads the file only, never runs claude.
+# Managed settings with no prependPlugins at all is the state that SEATS it, so that is named too.
+SYNC_MANAGED_SETTINGS_DEFAULT="/Library/Application Support/ClaudeCode/managed-settings.json"
+report_managed_settings(){
+  local f="${SYNC_MANAGED_SETTINGS:-}" what="" fix="" new="\$HOME/managed-settings.json.new"
+  if [ -z "$f" ]; then
+    # The path is the macOS one; elsewhere (CI's Linux runner) there is nothing of ours to check.
+    [ "$(uname -s)" = Darwin ] || return 0
+    f="$SYNC_MANAGED_SETTINGS_DEFAULT"
+  fi
+  local create="sudo mkdir -p \"$(dirname "$f")\" && echo '{\"prependPlugins\": []}' | sudo tee \"$f\""
+  if [ ! -e "$f" ]; then
+    what="$f is missing"; fix="$create"
+  elif ! command -v jq >/dev/null 2>&1; then
+    echo "--- managed settings (this Mac only, the sync cannot carry it) ---"
+    echo "  $f could not be checked, because jq is not installed, so this says nothing about whether the security default is kept out of first place."
+    return 0
+  elif ! jq -e . "$f" >/dev/null 2>&1; then
+    what="$f is not valid JSON, or could not be read"; fix="$create"
+  elif ! jq -e '.prependPlugins | type == "array"' "$f" >/dev/null 2>&1; then
+    what="$f has no prependPlugins list"
+    fix="jq '.prependPlugins = []' \"$f\" > \"$new\" && sudo cp \"$new\" \"$f\" && rm \"$new\""
+  else
+    local listed
+    listed="$(jq -r '[.prependPlugins[] | tostring | select(test("sec-default"))] | join(", ")' "$f" 2>/dev/null || true)"
+    [ -n "$listed" ] || return 0
+    what="$f lists $listed in prependPlugins, which seats it ahead of every mod"
+    fix="jq '.prependPlugins |= map(select(tostring | test(\"sec-default\") | not))' \"$f\" > \"$new\" && sudo cp \"$new\" \"$f\" && rm \"$new\""
+  fi
+  echo "--- managed settings (this Mac only, the sync cannot carry it) ---"
+  echo "  $what, so on a Team or Enterprise account Claude Code's built-in security default sits first and every mod hook on a classic or prompt event (tools/sec-default-bypassed-hooks.tsv) never runs (#876). Fix it with: $fix"
+  echo "  Then start a new session: the file is read once, at startup."
+  return 0
+}
+
 # ---- a skill provided twice (#49) ----
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
 # cloudflare plugin, so each was listed twice in every session and both were paid for. Nothing
@@ -9693,6 +9735,7 @@ payload/$rel
     echo "$text"
   done <<< "$RECORDS"
   report_user_scope_plugins
+  report_managed_settings
   report_settings_extras
   report_duplicate_plugin_skills || true
   report_duplicate_skill_jobs || true
