@@ -22,7 +22,13 @@ const after = (o: Partial<DriverRecord> = {}): DriverRecord => ({ ...freshDriver
 
 describe('the counter', () => {
   test('a counter that cannot be read stops the driver, never a fresh start (L105)', () => {
-    for (const text of ['{"v":1', '[]', '{"v":2}', JSON.stringify({ ...after(), generation: 'g0' }), JSON.stringify({ ...after(), blocks: 'x' })]) {
+    // Every field is checked, a wait's two ends included, or a damaged one reads as sound and its NaN
+    // never trips the time breaker (L50).
+    const damaged = [
+      { waits: [{}] }, { waits: [{ from: 1, until: 'x' }] }, { finishing: 'yes' }, { stopped: 3 }, { parked: false }, { fingerprint: 7 },
+      { resumeAt: 'soon' }, { weeklyAt: {} },
+    ].map(o => JSON.stringify({ ...after(), ...o }))
+    for (const text of ['{"v":1', '[]', '{"v":2}', JSON.stringify({ ...after(), generation: 'g0' }), JSON.stringify({ ...after(), blocks: 'x' }), ...damaged]) {
       const r = readDriver(text, 'g1', 's1')
       expect(r.state).toBe('unreadable')
       const d = decideStop(input({ driver: r }))

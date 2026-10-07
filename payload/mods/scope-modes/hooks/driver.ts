@@ -96,8 +96,17 @@ export const readDriver = (text: string | null, generation: string, session: str
   if (!r || typeof r !== 'object' || r.v !== 1) return { state: 'unreadable', why: "the driver's counter has no version this reader knows" }
   if (r.generation !== generation || r.session !== session) return { state: 'unreadable', why: "the driver's counter belongs to another night or session" }
   const nums = [r.since, r.blocks, r.idleBlocks, r.progressAt, r.waitStep]
-  if (!nums.every(isNum) || !Array.isArray(r.waits) || !(r.resumeAt === null || isNum(r.resumeAt)) || !(r.weeklyAt === null || isNum(r.weeklyAt))) {
+  const numOrNull = (x: unknown) => x === null || isNum(x)
+  const strOrNull = (x: unknown) => x === null || typeof x === 'string'
+  if (!nums.every(isNum) || !Array.isArray(r.waits) || !numOrNull(r.resumeAt) || !numOrNull(r.weeklyAt)) {
     return { state: 'unreadable', why: "the driver's counter is missing a count" }
+  }
+  // Each wait's two ends, and every other field, so a damaged one never reads as sound (L50).
+  if (!r.waits.every(w => !!w && typeof w === 'object' && isNum((w as Wait).from) && isNum((w as Wait).until))) {
+    return { state: 'unreadable', why: "the driver's counter has a wait it cannot read" }
+  }
+  if (typeof r.finishing !== 'boolean' || !strOrNull(r.stopped) || !strOrNull(r.parked) || !strOrNull(r.fingerprint)) {
+    return { state: 'unreadable', why: "the driver's counter has a field it cannot read" }
   }
   return { state: 'ok', record: r as DriverRecord }
 }
