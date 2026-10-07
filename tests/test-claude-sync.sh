@@ -19795,7 +19795,7 @@ check "#855 with no copy of the shared branch to ask, the file is held back as b
   "line_has \"\$out_uo2\" 'NOT publishing' 'uo-own'"
 
 
-section "== the watch log names a file a send held back, and why (claude-config#849) =="
+section "== the watch log names a file a send held back, and why (#849) =="
 # Twice on 2026-10-06 the watcher held a lesson back and logged only "nothing to send". The send
 # had said why, in its NOT publishing sentence (claude-config#511), but the loop kept only the
 # outcome marker and threw the sentence away, so the log could not say which file waited or why
@@ -19845,6 +19845,87 @@ check "#849 a sent tick still logs sent" \
   "grep -q 'claude-sync watch: sent' <<< \"\$out_wh4\""
 check "#849 and what the send said beside its marker is in the log too" \
   "grep -q 'a sentence the send said' <<< \"\$out_wh4\""
+
+
+section "== a typed receive waits its turn for the sync lock (#850) =="
+# On 2026-10-06 a pull typed by hand stopped at once with "another claude-sync run is already
+# running", because the watcher on the same Mac was six minutes into a send. Nothing was wrong; the
+# pull just refused, and the session had to poll the lock by hand. A pull now waits for a live
+# holder on this Mac, saying whose lock it is, that it is still waiting, and for how long, and
+# refuses in its own words only at a named deadline (L110). While it waits it holds the place at
+# the front, so a watcher tick that starts in between cannot take the lock first every time (L1012).
+QWB="$WORK/qwait-bare.git"; git init -q --bare -b main "$QWB"
+QWR="$WORK/qwait-repo"; git clone -q "$QWB" "$QWR" 2>/dev/null
+QWH="$WORK/qwait-home"; mkdir -p "$QWH/skills/q"
+mkskill "$QWH/skills/q/SKILL.md" 'Q'; echo '{"hooks":{}}' > "$QWH/settings.json"
+QWLOCK="$WORK/qwait-lock"
+qwenv(){ echo "CLAUDE_HOME=$QWH SYNC_REPO=$QWR SYNC_LOCK=$QWLOCK SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(qwenv) bash "$SCRIPT" sync >/dev/null 2>&1
+check "#850 the fixture: the clone has published once and holds no lock" \
+  "git -C '$QWB' rev-parse -q --verify main >/dev/null && [ ! -d '$QWLOCK' ]"
+# The watcher's send, as a lock a live process on THIS Mac holds and records itself in.
+sleep 300 & QW_HOLDER=$!
+qw_hold(){
+  mkdir -p "$QWLOCK"
+  printf '%s\n' "$QW_HOLDER" > "$QWLOCK/pid"
+  printf '%s\n' "$(hostname -s)" > "$QWLOCK/host"
+  printf '%s\n' "the change watcher's send" > "$QWLOCK/command"
+}
+# Waits on a CONDITION with a deadline of its own, never a fixed sleep (L290).
+qw_until(){   # $1 = a command that succeeds once the state is reached
+  local t0; t0="$(date +%s)"
+  until eval "$1"; do
+    [ "$(( $(date +%s) - t0 ))" -ge 60 ] && return 1
+    sleep 0.1
+  done
+  return 0
+}
+# AT THE DEADLINE: refused, in words that name the holder, the wait and the setting.
+qw_hold
+out_qw1="$(env $(qwenv) SYNC_PULL_LOCK_WAIT=1 bash "$SCRIPT" pull 2>&1)"; rc_qw1=$?
+dbg "#850 a pull that ran out of time: $out_qw1"
+check "#850 a pull still refused at its deadline fails" "[ $rc_qw1 -ne 0 ]"
+check "#850 it said, before waiting, whose lock it was waiting on" \
+  "line_has \"\$out_qw1\" 'waiting' 'change watcher' \"process \$QW_HOLDER\""
+check "#850 the refusal names the holder and how long it waited" \
+  "line_has \"\$out_qw1\" 'waited' \"process \$QW_HOLDER\" 'SYNC_PULL_LOCK_WAIT'"
+check "#850 the holder's lock is left alone" \
+  "[ \"\$(cat '$QWLOCK/pid' 2>/dev/null)\" = '$QW_HOLDER' ]"
+check "#850 and a pull that gave up leaves no place held" \
+  "[ ! -e '$QWLOCK.next' ]"
+# THE WAIT ITSELF: the pull holds the place, says it is still waiting, and goes ahead the moment
+# the lock comes free, with the holder still alive throughout so nothing breaks the lock for it.
+QWOUT="$WORK/qwait-out"; : > "$QWOUT"
+env $(qwenv) SYNC_PULL_LOCK_WAIT=120 SYNC_LOCK_WAIT_REPORT=1 bash "$SCRIPT" pull > "$QWOUT" 2>&1 &
+QW_PULL=$!
+qw_until "grep -q 'still waiting' '$QWOUT'"
+check "#850 while it waits it says it is still waiting, and how long so far" \
+  "line_has \"\$(cat '$QWOUT')\" 'still waiting' '[0-9]+ seconds?|less than a minute|[0-9]+ minutes?'"
+check "#850 and it holds the place at the front for itself" \
+  "[ \"\$(cat '$QWLOCK.next' 2>/dev/null)\" = '$QW_PULL' ]"
+rm -rf "$QWLOCK"
+rc_qw2=0; wait "$QW_PULL" || rc_qw2=$?
+dbg "#850 a pull that waited: $(cat "$QWOUT")"
+check "#850 once the lock comes free the pull goes ahead and succeeds" "[ $rc_qw2 -eq 0 ]"
+check "#850 and says how long it waited" \
+  "grep -q 'came free after' '$QWOUT'"
+check "#850 and leaves neither the lock nor its place behind" \
+  "[ ! -d '$QWLOCK' ] && [ ! -e '$QWLOCK.next' ]"
+# THE PLACE IS HONOURED: a run arriving while a live pull holds the place does not take a free
+# lock in front of it, and says why in its own words rather than as a lock that is held.
+printf '%s\n' "$QW_HOLDER" > "$QWLOCK.next"
+out_qw3="$(env $(qwenv) SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_qw3=$?
+dbg "#850 a sync behind a waiting pull: $out_qw3"
+check "#850 a run behind a live waiting place does not jump ahead of it" "[ $rc_qw3 -ne 0 ]"
+check "#850 and says it is behind a waiting run, naming its process" \
+  "line_has \"\$out_qw3\" 'waiting its turn' \"process \$QW_HOLDER\""
+# The control: a place held by a process that has gone is no place at all, or one crashed pull
+# would stop every later sync for good.
+printf '%s\n' "$(bash -c 'echo $$')" > "$QWLOCK.next"
+rc_qw4=0; env $(qwenv) SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync >/dev/null 2>&1 || rc_qw4=$?
+check "#850 a place held by a process that has gone is ignored" "[ $rc_qw4 -eq 0 ]"
+check "#850 and removed" "[ ! -e '$QWLOCK.next' ]"
+kill "$QW_HOLDER" 2>/dev/null; wait "$QW_HOLDER" 2>/dev/null
 
 suite_profile
 echo ""

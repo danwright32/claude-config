@@ -233,6 +233,18 @@ reconcile by hand.
 Both reports go quiet on their own: as soon as the content is back in the live file, or the copy is
 deleted, there is nothing outstanding to report. A copy whose content is already in the live file is
 still listed by `status`, named as safe to delete, because only you can decide to remove it.
+## A typed pull waits its turn for the sync lock
+
+Only one run that changes things works at a time, guarded by `.sync-lock`. A `claude-sync pull`
+that finds the lock held by a live run on this Mac, most often the change watcher part way through
+a send, waits for it rather than refusing (#850). It says whose lock it is (the change watcher's
+send, or which command, with its process and how long it has held the lock), says it is still
+waiting every `SYNC_LOCK_WAIT_REPORT` seconds (30), and says how long it waited once it goes ahead.
+It waits at most `SYNC_PULL_LOCK_WAIT` seconds (720, twelve minutes, set on 2026-10-06 against the longest send it can wait behind) and then stops without
+changing anything, naming the run that still holds the lock. While it waits it holds the place at
+the front in `.sync-lock.next`, so a watcher send starting in between does not take the lock ahead
+of it. Every other command keeps the shorter `SYNC_LOCK_WAIT` (90 seconds) and waits silently.
+
 ## Receiving config checks what it just installed
 
 A run that lands anything under `hooks/` runs `~/.claude/hooks/run-all-tests.sh` before it reports,
@@ -1189,6 +1201,7 @@ defined answer for being absent or untrustworthy.
 | `.claude-sync-hold` (in your home, not in a clone) | `claude-sync hold` | the watcher's send, and `claude-sync status` | absent means no hold, which is the normal state. It carries an expiry and fails OPEN: once that passes it is cleared and the watcher says the hold expired, because a hold that outlives the session that took it silently stops the sync. A marker that will not parse is cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the sync until somebody found the file and ignoring it silently would discard a decision somebody made |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
+| `.sync-lock.next` | a typed `claude-sync pull` that finds the lock held, while it waits for it (#850) | every mutating run, before it takes the lock, so a run arriving while a pull waits does not take the lock in front of it | absent means nobody is waiting, which is the normal state. It names the waiting pull's process and is created by a hard link, so two waiters cannot both hold it. The pull removes it on taking the lock or at its deadline; one left by a process that has gone, or older than any wait could last, is removed by the next run rather than honoured |
 | `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |
 | `refs/claude-sync-state` | every apply, pushed per Mac | `claude-sync verify` | nothing published means "cannot be answered", never agreement; a Mac silent for 60 days is reported as retired |
 
