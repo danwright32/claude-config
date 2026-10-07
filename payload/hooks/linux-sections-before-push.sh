@@ -22,9 +22,12 @@
 # a push over it, and the audit says UNMEASURED so that a run nobody made is never mistaken for a
 # clean one.
 #
-# Separately, in a repository it applies to, it refuses a push straight to the default branch
+# Separately, it refuses a push straight to the default branch of the shared claude-config repository
 # (claude-config#596), because the Linux run here cannot be relied on to happen and a pull request's
-# CI can. The reasons, with the measurements, are beside that rule below.
+# CI can. The reasons, with the measurements, are beside that rule below. That rule judges where the
+# push GOES, the URL of the remote it reaches from the directory it runs in, never the checkout's
+# shape (claude-config#892), and it fails CLOSED: a push to main whose directory cannot be resolved is
+# refused rather than judged in the session's place.
 #
 # Overrides, each for one push, explained to the user first and never silently:
 #   SKIP_LINUX_CHECK=1 git push ...        do not run the changed sections on Linux
@@ -42,13 +45,13 @@ cwd="${parsed#*$'\x1f'}"
 
 ps_is_git_push "$cmd" || exit 0
 
-repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
-[ -n "$repo_dir" ] || exit 0
-cd "$repo_dir" 2>/dev/null || exit 0
-
-# Not this repository, so there is nothing here to run and nothing to say about it.
-[ -x tests/run-on-linux.sh ] || exit 0
-[ -x tests/audit-changed-sections.sh ] || exit 0
+# The repository the push runs in: a `git -C`, a `cd` in the same command, or the session's directory
+# (claude-config#892). Empty when none of those resolves to a work tree, which the default branch
+# rule below treats as a target it cannot see, never as somewhere else, and never as the session's
+# directory in its place. Nothing below calls git while it is empty: the hook's own directory is not
+# the push's.
+repo_dir="$(ps_repo_dir "$cmd" "$cwd" 2>/dev/null)" || repo_dir=""
+if [ -n "$repo_dir" ]; then cd "$repo_dir" 2>/dev/null || repo_dir=""; fi
 
 _ls_state_dir="${LINUX_SECTIONS_STATE_DIR:-$HOME/.claude/state/linux-sections}"
 _ls_key(){   # -> this repository's record file, keyed on the origin remote
@@ -77,11 +80,33 @@ _ls_key(){   # -> this repository's record file, keyed on the origin remote
 # behind an existing override widens every use of it (L448).
 _ls_cur_branch(){ git symbolic-ref --quiet --short HEAD 2>/dev/null; }
 _ls_unquote(){ local t="$1"; t="${t#[\"\']}"; t="${t%[\"\']}"; printf '%s' "$t"; }
-# The branch names a push command would update on origin, one per line, or ALL for --all, --mirror
-# and --branches. Read from the push segment's own words: explicit refspecs first, then where a
-# bare `git push` goes (@{push}), then the current branch.
-_ls_push_dests(){   # $1 = command
-  local segs seg
+# The shared repository, judged by the URL a push goes to (claude-config#892). Its SHAPE (a Linux
+# runner beside an audit) said "this repository" for any copy of it, so a scratch clone whose origin
+# was a local bare repository had its push to main refused. GitHub reads owner and name without case.
+_ls_is_shared_url(){   # $1 = a remote URL
+  local u
+  u="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  [[ "$u" =~ github\.com[:/]+danwright32/claude-config(\.git)?/*$ ]]
+}
+# Whether a remote word names a URL or a path rather than a configured remote's name.
+_ls_is_location(){ case "$1" in */*|*:*|.*|'~'*) return 0 ;; esac; return 1; }
+# The remote a push with no remote word goes to, as git chooses it.
+_ls_default_remote(){
+  local b r
+  b="$(_ls_cur_branch)"
+  [ -n "$b" ] && r="$(git config --get "branch.$b.pushRemote" 2>/dev/null)"
+  [ -n "$r" ] || r="$(git config --get remote.pushDefault 2>/dev/null)"
+  [ -n "$r" ] || { [ -n "$b" ] && r="$(git config --get "branch.$b.remote" 2>/dev/null)"; }
+  printf '%s' "${r:-origin}"
+}
+# What a push command updates, one line per destination: "<remote as written><US><branch>" (a unit separator,
+# never a tab: read splits on whitespace by collapsing it, so an empty remote vanished), the
+# branch being ALL for --all, --mirror, --branches and a pattern refspec. Read from the push
+# segment's own words: explicit refspecs first, then where a bare `git push` goes (@{push}), then the
+# current branch. $2 = words: read the words alone and call no git at all, for a push whose
+# repository could not be resolved, so a destination only git could answer is left out.
+_ls_push_dests(){   # $1 = command  $2 = repo | words
+  local segs seg mode="${2:-repo}"
   segs="$(ps__shell_segments "$1")" || segs="$(printf '%s' "$1" | sed -E 's/(&&|\|\||;|\|)/\n/g' | tr '\n' '\036')"
   while IFS= read -r -d $'\x1e' seg; do
     ps__segment_is_push "$seg" || continue
@@ -91,7 +116,7 @@ _ls_push_dests(){   # $1 = command
     # heads/* expanded unquoted is matched against files in the working directory (claude-config#776
     # review). A tag only push (--tags with no refspec) updates no branch, so it names none.
     local -a specs=()
-    local i=0 n=${#tok[@]} seen=0 remote="" skip=0 tags=0 t d
+    local i=0 n=${#tok[@]} seen=0 remote="" skip=0 tags=0 all=0 t d
     while [ "$i" -lt "$n" ]; do
       t="${tok[$i]}"; i=$((i + 1))
       if [ "$seen" -eq 0 ]; then
@@ -102,44 +127,85 @@ _ls_push_dests(){   # $1 = command
       [ -n "$t" ] || continue
       if [ "$skip" -eq 1 ]; then skip=0; continue; fi
       case "$t" in
-        --all|--mirror|--branches) printf 'ALL\n' ;;
+        --all|--mirror|--branches) all=1 ;;
         --tags) tags=1 ;;
         -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
         -*) ;;
         *) if [ -z "$remote" ]; then remote="$t"; else specs+=("$t"); fi ;;
       esac
     done
-    # A push to another remote does not reach the shared repository's default branch.
-    case "$remote" in ''|origin) ;; *) continue ;; esac
+    [ "$all" -eq 1 ] && printf '%s\037ALL\n' "$remote"
     if [ "${#specs[@]}" -gt 0 ]; then
       for t in "${specs[@]}"; do
         t="${t#+}"
         case "$t" in *:*) d="${t#*:}" ;; *) d="$t" ;; esac
-        if [ -z "$d" ] || [ "$d" = "HEAD" ]; then d="$(_ls_cur_branch)"; fi
+        if [ -z "$d" ] || [ "$d" = "HEAD" ]; then
+          [ "$mode" = words ] && continue
+          d="$(_ls_cur_branch)"
+        fi
         d="${d#refs/heads/}"
         # A pattern refspec reaches every branch it matches, the default one included.
         case "$d" in *'*'*) d="ALL" ;; esac
-        printf '%s\n' "$d"
+        printf '%s\037%s\n' "$remote" "$d"
       done
-    elif [ "$tags" -eq 1 ]; then
+    elif [ "$tags" -eq 1 ] || [ "$all" -eq 1 ] || [ "$mode" = words ]; then
       :
     else
       d="$(git rev-parse --abbrev-ref --symbolic-full-name '@{push}' 2>/dev/null)"
       if [ -n "$d" ]; then d="${d#*/}"; else d="$(_ls_cur_branch)"; fi
-      [ -n "$d" ] && printf '%s\n' "$d"
+      [ -n "$d" ] && printf '%s\037%s\n' "$remote" "$d"
     fi
   done < <(printf '%s' "$segs")
 }
 if ! ps_has_override "$cmd" ALLOW_DIRECT_MAIN_PUSH; then
-  _ls_def="$(ps__default_ref 2>/dev/null)"; _ls_def="${_ls_def#*/}"; _ls_def="${_ls_def:-main}"
-  _ls_hit=""
-  while IFS= read -r _ls_d; do
-    case "$_ls_d" in ALL|"$_ls_def") _ls_hit=1 ;; esac
-  done <<DESTS
-$(_ls_push_dests "$cmd")
+  _ls_hit=""; _ls_blind=""
+  if [ -n "$repo_dir" ]; then
+    # Resolved: the push is judged by where it actually goes. Only a destination on the shared
+    # repository counts, whatever the remote is called, and whatever this checkout looks like.
+    _ls_def="$(ps__default_ref 2>/dev/null)"; _ls_def="${_ls_def#*/}"; _ls_def="${_ls_def:-main}"
+    while IFS=$'\x1f' read -r _ls_r _ls_d; do
+      [ -n "$_ls_d" ] || continue
+      case "$_ls_d" in ALL|"$_ls_def") ;; *) continue ;; esac
+      [ -n "$_ls_r" ] || _ls_r="$(_ls_default_remote)"
+      _ls_url="$(git ls-remote --get-url "$_ls_r" 2>/dev/null)"
+      _ls_is_shared_url "${_ls_url:-$_ls_r}" && _ls_hit=1
+    done <<DESTS
+$(_ls_push_dests "$cmd" repo)
 DESTS
+  else
+    # Unresolved: the command moves somewhere this cannot see (a variable, a directory the same
+    # command creates). The words still say main; only a remote written as a location that is
+    # plainly not the shared repository lets the push through (L75: an unidentified target is
+    # refused, never replaced by a nearby one).
+    _ls_def="main"
+    while IFS=$'\x1f' read -r _ls_r _ls_d; do
+      case "$_ls_d" in ALL|main|master) ;; *) continue ;; esac
+      if _ls_is_location "$_ls_r"; then _ls_is_shared_url "$_ls_r" && _ls_hit=1
+      else _ls_hit=1; _ls_blind=1; fi
+    done <<DESTS
+$(_ls_push_dests "$cmd" words)
+DESTS
+  fi
+  if [ -n "$_ls_hit" ] && [ -n "$_ls_blind" ]; then
+    {
+      echo "PUSH BLOCKED: this pushes to $_ls_def, and the hook could not tell which repository it pushes from."
+      echo ""
+      echo "The command runs the push somewhere that is not a git work tree yet, or names it through"
+      echo "a variable, so it cannot be checked against the shared claude-config repository, where a"
+      echo "change reaches $_ls_def only through a pull request. Unknown is refused, not assumed elsewhere."
+      echo ""
+      echo "Instead, run the push as its own command once the directory exists, with the path written"
+      echo "out (git -C <path> push ...), and it is judged by the repository it actually reaches."
+      echo ""
+      echo "OVERRIDE, this one push: ALLOW_DIRECT_MAIN_PUSH=1 <your original git push command>"
+      echo "BEFORE overriding you MUST explain to the user, in plain non-technical language, why"
+      echo "this push is safe. Never override silently."
+    } >&2
+    exit 2
+  fi
   if [ -n "$_ls_hit" ]; then
-    _ls_file="$(_ls_key 2>/dev/null)"
+    _ls_file=""
+    [ -n "$repo_dir" ] && _ls_file="$(_ls_key 2>/dev/null)"
     _ls_j="$(awk -F': ' '/^judged:/ { print $2 }' "$_ls_file" 2>/dev/null)"
     _ls_t="$(awk -F': ' '/^with_sections:/ { print $2 }' "$_ls_file" 2>/dev/null)"
     case "$_ls_j:$_ls_t" in
@@ -166,6 +232,11 @@ DESTS
     exit 2
   fi
 fi
+
+# Nowhere to run the Linux sections from, or not this repository: nothing to run and nothing to say.
+[ -n "$repo_dir" ] || exit 0
+[ -x tests/run-on-linux.sh ] || exit 0
+[ -x tests/audit-changed-sections.sh ] || exit 0
 
 ps_has_override "$cmd" SKIP_LINUX_CHECK && exit 0
 

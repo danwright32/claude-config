@@ -227,7 +227,11 @@ case "$o12" in *'unchanged base'*) check "and names how to tell a broken base fr
 # --- A PUSH STRAIGHT TO THE DEFAULT BRANCH (claude-config#596). The Linux run above judged none of
 #     the 15 pushes recorded on this Mac by 2026-10-05, and it only covers one suite's sections, so
 #     a change reaches main through a pull request whose CI runs everything on Linux.
+# The refusal is about the SHARED repository (claude-config#892), so these fixtures say they are it:
+# an origin naming it, which nothing here ever contacts.
+SHARED_URL="https://github.com/danwright32/claude-config.git"
 R13="$(mkrepo direct 0)"
+git -C "$R13" remote add origin "$SHARED_URL" 2>/dev/null
 git -C "$R13" checkout -q main 2>/dev/null
 run "$R13" 'git push'; o13="$OUT"
 [ "$RC" -eq 2 ] && check "a bare push from the default branch is refused" ok \
@@ -246,6 +250,7 @@ run "$R13" 'SKIP_LINUX_CHECK=1 git push'; o13c="$OUT"
                 || check "the Linux check's override does not also open the default branch (L448)" "rc=$RC out=$o13c"
 
 R14="$(mkrepo refspec 0)"
+git -C "$R14" remote add origin "$SHARED_URL" 2>/dev/null
 run "$R14" 'git push origin HEAD:main'; o14="$OUT"
 [ "$RC" -eq 2 ] && check "a refspec naming the default branch from a feature branch is refused" ok \
                 || check "a refspec naming the default branch from a feature branch is refused" "rc=$RC out=$o14"
@@ -292,6 +297,72 @@ git -C "$R15" checkout -q main 2>/dev/null
 run "$R15" 'git push'; o15="$OUT"
 [ "$RC" -eq 0 ] && [ -z "$o15" ] && check "another repository's default branch push is left alone" ok \
   || check "another repository's default branch push is left alone" "rc=$RC out=$o15"
+
+# --- JUDGE THE REPOSITORY THE PUSH TARGETS, NOT THE WORDS (claude-config#892). On 2026-10-07 a push
+#     to main in a scratch repository whose origin was a local bare repository was refused here.
+#     What decides it now is where the push GOES: the directory it runs in (a -C, a cd in the same
+#     command, or the session's), and the URL of the remote it pushes to. A target that cannot be
+#     resolved is still refused.
+BARE="$TMPROOT/scratch-remote.git"
+git init -q --bare "$BARE" 2>/dev/null
+# A scratch copy shaped exactly like this repository (runner and audit present), on main, whose
+# origin is the local bare repository: its shape says claude-config, its target does not.
+R16="$(mkrepo scratch-clone 0)"
+git -C "$R16" remote add origin "$BARE" 2>/dev/null
+git -C "$R16" checkout -q main 2>/dev/null
+run "$R16" 'git push origin main'; o16="$OUT"
+[ "$RC" -eq 0 ] && check "a scratch repo whose origin is a local bare repo may push to main" ok \
+                || check "a scratch repo whose origin is a local bare repo may push to main" "rc=$RC out=$o16"
+run "$R13" "cd '$R16' && git push origin main"; o16b="$OUT"
+[ "$RC" -eq 0 ] && check "a cd into the scratch repo from a claude-config session judges the scratch repo" ok \
+                || check "a cd into the scratch repo from a claude-config session judges the scratch repo" "rc=$RC out=$o16b"
+run "$R13" "git -C '$R16' push"; o16c="$OUT"
+[ "$RC" -eq 0 ] && check "a git -C at the scratch repo from a claude-config session judges the scratch repo" ok \
+                || check "a git -C at the scratch repo from a claude-config session judges the scratch repo" "rc=$RC out=$o16c"
+# A plain unrelated repository, no runner at all, with the same local bare remote.
+R17="$TMPROOT/plain-scratch"
+git init -q "$R17" 2>/dev/null
+git -C "$R17" -c user.email=p@l -c user.name=p commit -q --allow-empty -m seed 2>/dev/null
+git -C "$R17" branch -M main 2>/dev/null
+git -C "$R17" remote add origin "$BARE" 2>/dev/null
+run "$R13" "cd '$R17' && git push origin main"; o17="$OUT"
+[ "$RC" -eq 0 ] && check "an unrelated scratch repo with a local bare remote passes" ok \
+                || check "an unrelated scratch repo with a local bare remote passes" "rc=$RC out=$o17"
+
+# A claude-config push is still judged, whichever way the command reaches it.
+run "$R17" "cd '$R13' && git push origin main"; o18="$OUT"
+[ "$RC" -eq 2 ] && check "a cd into a claude-config checkout pushing main is still refused" ok \
+                || check "a cd into a claude-config checkout pushing main is still refused" "rc=$RC out=$o18"
+run "$R17" "git -C '$R13' push origin main"; o18b="$OUT"
+[ "$RC" -eq 2 ] && check "a git -C at a claude-config checkout pushing main is still refused" ok \
+                || check "a git -C at a claude-config checkout pushing main is still refused" "rc=$RC out=$o18b"
+# The remote is judged by its URL, not its name: claude-config under another name is still it.
+git -C "$R16" remote add shared "$SHARED_URL" 2>/dev/null
+run "$R16" 'git push shared main'; o18c="$OUT"
+[ "$RC" -eq 2 ] && check "claude-config reached under another remote name is still refused" ok \
+                || check "claude-config reached under another remote name is still refused" "rc=$RC out=$o18c"
+run "$R16" "git push $SHARED_URL HEAD:main"; o18d="$OUT"
+[ "$RC" -eq 2 ] && check "claude-config named by URL in the command is still refused" ok \
+                || check "claude-config named by URL in the command is still refused" "rc=$RC out=$o18d"
+
+# A target that cannot be resolved is still refused when the words name the default branch.
+run "$R13" 'cd "$SCRATCH_NOT_EXPANDED" && git push origin main'; o19="$OUT"
+[ "$RC" -eq 2 ] && check "a cd to a variable the hook cannot resolve, pushing main, is refused" ok \
+                || check "a cd to a variable the hook cannot resolve, pushing main, is refused" "rc=$RC out=$o19"
+case "$o19" in *'could not tell which repository'*) check "and says the target could not be resolved" ok ;;
+  *) check "and says the target could not be resolved" "out=$o19" ;; esac
+run "$R17" "mkdir -p '$TMPROOT/not-yet' && cd '$TMPROOT/not-yet' && git push origin main"; o19b="$OUT"
+[ "$RC" -eq 2 ] && check "a cd to a directory that does not exist yet, pushing main, is refused" ok \
+                || check "a cd to a directory that does not exist yet, pushing main, is refused" "rc=$RC out=$o19b"
+run "$R13" 'ALLOW_DIRECT_MAIN_PUSH=1 git -C "$X" push origin main'; o19c="$OUT"
+[ "$RC" -eq 0 ] && check "the override still lets an unresolvable push through" ok \
+                || check "the override still lets an unresolvable push through" "rc=$RC out=$o19c"
+run "$R13" 'cd "$X" && git push origin feature'; o19d="$OUT"
+[ "$RC" -eq 0 ] && check "an unresolvable push to a feature branch is not a push to main" ok \
+                || check "an unresolvable push to a feature branch is not a push to main" "rc=$RC out=$o19d"
+run "$R13" "cd \"\$X\" && git push '$BARE' main"; o19e="$OUT"
+[ "$RC" -eq 0 ] && check "an unresolvable directory pushing to a local path is not the shared repo" ok \
+                || check "an unresolvable directory pushing to a local path is not the shared repo" "rc=$RC out=$o19e"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
