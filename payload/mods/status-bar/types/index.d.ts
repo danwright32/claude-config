@@ -1,5 +1,5 @@
-/** A scope mode, which leads the amber line in bold while it is on (docs/mods-design.md, scope mode round). */
-export type StatusBarMode = 'NO BUILD' | 'WINDING DOWN' | 'AWAY'
+/** A mode that leads the amber line in bold while it is on (docs/mods-design.md, scope mode round): a scope mode, away, or ASLEEP while the Mac's sleep record holds (#840). */
+export type StatusBarMode = 'ASLEEP' | 'NO BUILD' | 'WINDING DOWN' | 'AWAY'
 
 /** Called from another mod (the scope modes mod, #616, and away and home, #621): await it. */
 export type StatusBar = {
