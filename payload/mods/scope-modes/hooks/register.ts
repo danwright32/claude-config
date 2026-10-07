@@ -238,17 +238,21 @@ const resolves = async ($: EngineInterface, repo: string): Promise<string | null
   const view = ['gh', 'repo', 'view', repo, '--json', 'nameWithOwner']
   const first = await run($, view)
   if (first.exitCode === 0) return null
+  // The first answer that was not gh's own not found: then the check could not be made (L11).
+  let other = /Could not resolve to a Repository/i.test(first.stderr) ? undefined : first
   const status = await run($, ['gh', 'auth', 'status'])
   for (const a of new Set([...`${status.stdout}\n${status.stderr}`.matchAll(/account (\S+)/g)].map(m => m[1] as string))) {
     const tok = await run($, ['gh', 'auth', 'token', '-u', a])
     if (tok.exitCode !== 0 || !tok.stdout.trim()) continue
-    if ((await run($, view, RUN_MS, { GH_TOKEN: tok.stdout.trim() })).exitCode === 0) return null
+    const r = await run($, view, RUN_MS, { GH_TOKEN: tok.stdout.trim() })
+    if (r.exitCode === 0) return null
+    if (!other && !/Could not resolve to a Repository/i.test(r.stderr)) other = r
   }
   // Only gh's own not found answer says GitHub does not know it; anything else (no network, a rate
   // limit, a token gh could not use) is a check that could not be made, said as such (L11).
-  const said = first.stderr.trim().split('\n')[0] || `gh exited ${first.exitCode}`
-  if (!/Could not resolve to a Repository/i.test(first.stderr)) return `${repo} could not be checked with GitHub (${said})`
-  return `GitHub does not know ${repo} under any account gh is logged in to (${said})`
+  const said = (r: { stderr: string; exitCode: number }) => r.stderr.trim().split('\n')[0] || `gh exited ${r.exitCode}`
+  if (other) return `${repo} could not be checked with GitHub (${said(other)})`
+  return `GitHub does not know ${repo} under any account gh is logged in to (${said(first)})`
 }
 
 // A marker file (the preparing marker, the answers lock), placed whole: written beside itself
@@ -719,9 +723,12 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   if ('unreadable' in claim) return `A preparing marker is there but cannot be read (${claim.unreadable}). Nothing changed; /wake clears it.`
   if ('failed' in claim) return `Sleep mode did not start: its preparing marker could not be written (${claim.failed}).`
   const tookOver = claim.tookOver ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
-  // Everything from here to the record is under the marker, and it is released however this ends.
+  // Everything from here until the record is in place is under the marker, so a second /sleep never
+  // asks the questions again in between, and it is released however this ends.
   let e: Awaited<ReturnType<typeof enrol>>
   let repos: NightRepos
+  let startedIn: string
+  let placeBefore: ScopeModesPlace
   try {
     e = await enrol($, self)
     // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
@@ -733,8 +740,11 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
       ownRoot = undefined
     }
     repos = await settleNight($, p.home, await workerRepos($, [...(ownRoot ? [ownRoot] : []), ...e.roots]))
-  } finally {
+    startedIn = await $.session.cwd()
+    placeBefore = await placeOf($)
+  } catch (err) {
     await releaseMarker($, p.preparing, claim.claimed)
+    throw err
   }
   const record: SleepRecord = {
     v: 1,
@@ -744,9 +754,9 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     night,
     bootTime: b.boot,
     report: `${p.home}/Downloads/sleep-report-${night}.md`,
-    startedBy: { sessionId: self, cwd: await $.session.cwd() },
+    startedBy: { sessionId: self, cwd: startedIn },
     workers: e.workers,
-    placeBefore: await placeOf($),
+    placeBefore,
     repos,
   }
   // Written whole beside it, read back, then linked into place: a link fails when a record is
@@ -768,19 +778,24 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     return `Sleep mode did not start: ${msg(err)}.`
   } finally {
     await run($, ['rm', '-f', tmp])
+    await releaseMarker($, p.preparing, claim.claimed)
   }
   await showModes($)
   await showHeld($)
   // Each repository closed for the night is noted, so the morning report lists it with the question
   // still to answer (#843); a note that cannot be written is said.
-  let unnoted = ''
-  for (const c of [...repos.closed, ...(repos.listWhy ? [{ repo: undefined, why: repos.listWhy }] : [])]) {
+  const closedAll = [...repos.closed, ...(repos.listWhy ? [{ repo: undefined, why: repos.listWhy }] : [])]
+  const noteFailed: string[] = []
+  for (const c of closedAll) {
     try {
       await sleepNote($, p.current, closedNote(c.repo, c.why, now, self))
     } catch (err) {
-      unnoted = ` The morning report may miss these: ${msg(err)}.`
+      noteFailed.push(msg(err))
     }
   }
+  const unnoted = noteFailed.length
+    ? ` The morning report may miss ${noteFailed.length} of these ${closedAll.length}: ${[...new Set(noteFailed)].join('; ')}.`
+    : ''
   const awake = await holdAwake($, p.dir, record.until, now)
   const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
   const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'

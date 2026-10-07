@@ -136,7 +136,7 @@ const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 const helperRepo = (words: string[]): string | null | undefined => {
   for (let i = 0; i < words.length; i++) {
     const w = words[i] as string
-    const v = w === '-R' || w === '--repo' ? words[i + 1] : w.startsWith('--repo=') ? w.slice('--repo='.length) : undefined
+    const v = w === '-R' || w === '--repo' ? words[i + 1] : w.startsWith('--repo=') ? w.slice('--repo='.length) : /^-R./.test(w) ? w.slice(2) : undefined
     if (v !== undefined || w === '-R' || w === '--repo') return v === undefined ? null : normRepo(v)
   }
   return undefined
@@ -145,7 +145,9 @@ const repoOfEndpoint = (endpoint: string | undefined) => {
   const m = /^\/?(?:https:\/\/api\.github\.com\/)?\/?repos\/([^/]+\/[^/?#]+)/.exec(endpoint ?? '')
   return m ? normRepo(m[1] as string) : undefined
 }
-const MERGE_MUTATION = /^(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)$/
+const MERGE_MUTATION = /^(?:mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)$/
+// Mutations that write a branch directly, which can be the default branch: refused everywhere, as a push to it is.
+const BRANCH_MUTATION = /^(?:createCommitOnBranch|updateRef|updateRefs|createRef|deleteRef)$/
 
 // A deploy a package script's body runs, one level deep: each command mod-kit's reader found in
 // it, and a script it runs by name judged by that name.
@@ -217,7 +219,10 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
         const doc = graphqlQuery(a)
         const fields = doc === null ? null : operations(doc).filter(o => o.kind === 'mutation').flatMap(o => (o.spreads ? ['...'] : o.fields))
         if (fields === null) out.push({ kind: 'merge', what: 'call the GitHub API with a query that could not be read', repo: at })
-        else if (fields.some(f => f === '...' || MERGE_MUTATION.test(f))) out.push({ kind: 'merge', what: 'merge a PR through the GitHub API', repo: at })
+        else {
+          if (fields.some(f => f === '...' || MERGE_MUTATION.test(f))) out.push({ kind: 'merge', what: 'merge a PR through the GitHub API', repo: at })
+          if (fields.some(f => BRANCH_MUTATION.test(f))) out.push({ kind: 'push-default', what: 'write a branch through the GitHub API, which can be the default branch', repo: at })
+        }
       } else if (method !== 'GET' && endpoint) {
         if (/\/pulls\/\d+\/merge\/?$/.test(endpoint) || /\/merges\/?$/.test(endpoint)) out.push({ kind: 'merge', what: `merge through the GitHub API (${endpoint})`, repo: at })
         if (/\/dispatches\/?$/.test(endpoint)) out.push({ kind: 'deploy', what: `start a workflow through the GitHub API (${endpoint})`, repo: at })

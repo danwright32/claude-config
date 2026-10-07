@@ -174,6 +174,8 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** gh repo view under another account's token fails for a reason other than not found (#843). */
+  ghRepoViewFailsWithToken?: string
   /** gh repo view fails for a reason other than the repository being unknown (#843): its stderr. */
   ghRepoViewFails?: string
   /** The session registry answers with no lists at all (#843). */
@@ -362,6 +364,7 @@ const world = (on: On, o: Opts = {}) => {
     }
     // Sleep mode phase 7 (#843): each folder's origin, GitHub's answer to a repo view by account, and gh's accounts.
     if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view' && o.ghRepoViewFails) return fail(1, o.ghRepoViewFails)
+    if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view' && o.ghRepoViewFailsWithToken && e.init?.env?.GH_TOKEN) return fail(1, o.ghRepoViewFailsWithToken)
     if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view') {
       const token = e.init?.env?.GH_TOKEN
       const seen = token ? (o.githubRepos?.[token] ?? []) : (o.githubRepos?.default ?? [])
@@ -1635,6 +1638,31 @@ test('an entry that could not be checked with GitHub is closed, and said as not 
   await command($ as never, 'sleep')
   const closed = (recordOf(w).repos as { closed: { repo: string; why: string }[] }).closed
   expect(closed).toEqual([{ repo: 'o/r', why: 'o/r could not be checked with GitHub (error connecting to api.github.com)' }])
+})
+
+test('an entry the active account does not see, and another account could not check, is said as not checked (L11)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/work', mergeDeploys: true }]) }, githubRepos: { default: ['o/r'], work: [] }, ghRepoViewFailsWithToken: 'API rate limit exceeded' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  const closed = (recordOf(w).repos as { closed: { repo: string; why: string }[] }).closed
+  expect(closed).toEqual([{ repo: 'o/work', why: 'o/work could not be checked with GitHub (API rate limit exceeded)' }])
+})
+
+test('the preparing marker is held until the record is in place, so no second /sleep asks again in between', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]) }, githubRepos: { default: ['o/r'] } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  const placed = w.fileOps.findIndex(r => r[0] === 'ln' && r[2] === CURRENT)
+  const released = w.fileOps.findIndex(r => r[0] === 'rm' && r.includes(`${SLEEP}/preparing`))
+  expect(placed).toBeGreaterThan(-1)
+  expect(released).toBeGreaterThan(placed)
+})
+
+test('every closed repository note that could not be written is counted, never only the last', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/a', mergeDeploys: false }, { repo: 'o/b', mergeDeploys: false }]) }, githubRepos: { default: ['o/r'] }, noteFails: 'sh: notes: Permission denied' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/The morning report may miss 3 of these 3: sh: notes: Permission denied\./)
 })
 
 test('an entry GitHub does not know under any account is closed for the night', withDeps, async ($, on) => {

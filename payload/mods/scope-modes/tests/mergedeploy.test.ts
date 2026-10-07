@@ -133,6 +133,12 @@ describe('what a command does, by effect', () => {
     // judged as a merge into a repository that cannot be told.
     expect(acts('gh --weird pr merge 12')[0]).toMatchObject({ kind: 'merge', repo: null })
     expect(kinds('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r --squash')).toEqual(['merge'])
+    // The helper's joined -R names its repository as gh's does.
+    expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 -Ro/x --squash')[0]?.repo).toBe('o/x')
+    // The merge queue merges too; a mutation writing a branch directly can reach the default one.
+    expect(kinds(`gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`)).toEqual(['merge'])
+    expect(kinds(`gh api graphql -f query='mutation { createCommitOnBranch(input: {}) { clientMutationId } }'`)).toEqual(['push-default'])
+    expect(kinds(`gh api graphql -f query='mutation { updateRef(input: {}) { clientMutationId } }'`)).toEqual(['push-default'])
     expect(acts('gh api -X PUT repos/o/r/pulls/12/merge')).toEqual([{ kind: 'merge', what: 'merge through the GitHub API (repos/o/r/pulls/12/merge)', repo: 'o/r' }])
     expect(kinds('gh api repos/o/r/merges -f base=main -f head=x')).toEqual(['merge'])
     expect(kinds(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`)).toEqual(['merge'])
