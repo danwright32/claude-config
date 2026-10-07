@@ -1478,7 +1478,8 @@ Not settled by any round, built so the spec holds, and each an open question for
   choice, not pasted, so its exact wording and how many seconds it took are not recorded. Dan then
   signed back in.
 - **Whether Chrome's last used profile follows the focused window is not tested** (#786, item 2).
-  It matters only with a second Chrome profile, and Dans-MacBook-Pro has one (2026-10-07).
+  It matters only with a second Chrome profile, and Dans-MacBook-Pro has only the one, Default
+  (2026-10-07).
 - **The browser is chosen per Mac** (#808, Dan 2026-10-05: "the sign out prompt ... open in safari
   on this mac and chrome on my other mac"). The defaults run `bin/browser.sh logout` and
   `bin/browser.sh signed-out`, which read the Mac's LocalHostName and run Safari's pair on
