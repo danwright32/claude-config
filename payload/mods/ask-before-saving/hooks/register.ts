@@ -45,7 +45,7 @@ import {
 // edit in the wrong checkout. Claude Code's own background loops (the memory writer) carry an id no
 // agent list names; their refusal is also told to the main session, which may save it itself.
 //
-// The question is refused for from classic.PreToolUse, which the engine raises beneath every mod's
+// The question is refused for from tool.check (#875), which the engine raises beneath every mod's
 // tool.call hook (#705): a write another guard or a settings hook refuses is refused before Dan is
 // asked about it (#707). The skip for Dan's own permanent words stays a tool.call hook, the one place
 // the saved result can be read, as does what Claude is told of a save sent again after For good.
@@ -60,16 +60,16 @@ const TOOLS: ReadonlySet<string> = new Set(TOOL_NAMES)
 const MINUTES = APPROVAL_MS / 60_000
 
 // The saves Dan's own words made permanent, by what they write (saveKey): added by the tool.call
-// hook and taken by the classic.PreToolUse hook beneath it as the call reaches it, so the call passes
+// hook and taken by the tool.check hook beneath it as the call reaches it, so the call passes
 // and nothing else does. In memory: both are one dispatch, which a reload cannot come between.
 const approved = new Set<string>()
-// A subagent's calls the tool.call hook judged and let through, by what they write: the classic hook
+// A subagent's calls the tool.call hook judged and let through, by what they write: the tool.check hook
 // beneath, which cannot see which loop a call runs in, never asks the main session about them. A main
 // session call with the same key meanwhile is no hole: the key is everything the judgement reads, so
 // it writes no lasting memory either. Counted per key, so one of two identical calls finishing never
 // clears the other's mark while it is still on its way down (lessons review of #783).
 const fromAgent = new Map<string, number>()
-// The calls the classic hook let through on a For good approval, by tool_use_id, with where each
+// The calls the tool.check hook let through on a For good approval, by tool_use_id, with where each
 // saves to: read back by the tool.call hook above it in the same dispatch, to say what became of it.
 const reissued = new Map<string, string>()
 
@@ -264,7 +264,7 @@ export const register: Register = on => {
     const input = argsOf(raw)
 
     // A subagent's call (#777): judged here, where the loop is known, refused when it would save
-    // lasting memory, and never asked about. One the classic hook beneath must let through.
+    // lasting memory, and never asked about. One the tool.check hook beneath must let through.
     if (e.agentId !== undefined) {
       const at = await whereOf($)
       const files = await lastingTargets($, tool, input, at)
@@ -306,12 +306,12 @@ export const register: Register = on => {
     try {
       r = await next(e)
     } finally {
-      // Taken by the classic hook when the call reached it; dropped here when a guard refused first.
+      // Taken by the tool.check hook when the call reached it; dropped here when a guard refused first.
       if (key !== undefined) approved.delete(key)
       forGood = reissued.get(id)
       reissued.delete(id)
     }
-    // A save Dan answered For good, sent again, refused by another guard before the classic hook
+    // A save Dan answered For good, sent again, refused by another guard before the tool.check hook
     // could take its approval (#764): Dan is told now that it did not go through, and the approval,
     // which still stands for a later send, records why, so its lapse never calls it unused.
     if (forGood === undefined && r.deny !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
@@ -338,12 +338,19 @@ export const register: Register = on => {
     return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
   }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
-  // Refused here, beneath every mod's tool.call hook and after the settings hooks beneath this one, so
-  // Claude is told to ask only about a write every guard lets through.
-  on('classic.PreToolUse', async ($, e, next) => {
-    const tool = String(e.tool)
+  // Refused at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
+  // hook and the settings PreToolUse hooks have passed the call on, so Claude is told to ask only
+  // about a write every guard lets through. It was classic.PreToolUse, which never ran: Claude Code's
+  // built-in security default sends every classic event past the user tier this mod loads in, for a
+  // Team or Enterprise organization (a headless debug run, 2026-10-06), and the built-in's own
+  // tool.check hook runs this tier first and keeps a refusal.
+  on('tool.check', async ($, e, next) => {
+    const tool = e.tool
     if (!TOOLS.has(tool)) return next(e)
-    const raw = e as unknown as Record<string, unknown>
+    // A query ($.tool.check) carries no call id and runs nothing: no question waits on a save that is
+    // only being looked at, and the real call is judged when it is made.
+    if (e.tool_use_id === undefined) return next(e)
+    const raw: Record<string, unknown> = { ...((e.input ?? {}) as Record<string, unknown>), tool, tool_use_id: e.tool_use_id }
     const input = argsOf(raw)
     const at = await whereOf($)
     const key = saveKey(tool, input, at.cwd, at.home)
@@ -360,15 +367,15 @@ export const register: Register = on => {
     // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
     // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
     const decided = await next(e)
-    if (decided.deny !== undefined) return decided
+    if (decided.decision === 'deny') return decided
 
     const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
     const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
     const ask = askInstruction(id, files)
-    return { deny: lapsed ? `${lapsedNote(lapsed)} ${ask}` : ask }
-  }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
+    return { decision: 'deny', reason: lapsed ? `${lapsedNote(lapsed)} ${ask}` : ask }
+  }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(next.error) }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.

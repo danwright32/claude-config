@@ -156,15 +156,15 @@ const callEnded = (id: string): boolean => {
 
 // Every question is asked by Claude Code's own dialog (picker manners only refuses some, #744), so a
 // question is notified once Dan can see it (#706): marked only once every refusing guard and settings
-// hook has let it through (#732), from this mod's classic.PreToolUse hook, which the engine raises
+// hook has let it through (#732), from this mod's tool.check hook (#875), which the engine raises
 // beneath every tool.call hook, never from its tool.call hook, which runs before the guards beneath it
 // decide. A secret scan can take seconds, and a question it refuses must not put its text into a
 // notification or the shared registry. It is then notified QUESTION_SHOWN_MS later if still open,
 // since a refusal by Claude Code itself comes after the hooks.
 const QUESTION_SHOWN_MS = 1_000
 // The session's own questions this mod's tool.call hook has seen, by call, with their text, until
-// the classic.PreToolUse hook marks them or the call ends. A subagent's are never held: the classic
-// hook's input does not say whose a call is.
+// the tool.check hook marks them or the call ends. A subagent's are never held, so the tool.check
+// hook, which keys on the call alone, never marks one.
 const asking = new Map<string, string>()
 // The one spelling of its key, for the hook that holds a question and the one that marks it (lessons
 // review of #737): the call's id, which the engine gives every call and lets no mod strip.
@@ -553,13 +553,17 @@ export const register: Register = on => {
   })
 
   // A question Claude Code shows itself, marked and notified only once everything beneath has let it
-  // through (#732, above): every mod's tool.call hook has decided by now, and next(e) runs the
-  // settings hooks, never the question.
-  on('classic.PreToolUse', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+  // through (#732, above): every mod's tool.call hook and the settings PreToolUse hooks have decided
+  // by the time the engine raises tool.check, and next(e) runs only the verdict beneath, never the
+  // question. It was classic.PreToolUse, which never ran (#875): Claude Code's built-in security
+  // default sends every classic event past the user tier this mod loads in, for a Team or Enterprise
+  // organization (a headless debug run, 2026-10-06). A query ($.tool.check) carries no call id, so
+  // it matches no question asked.
+  on('tool.check', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const decided = await next(e)
     const key = askKey(e)
     const text = asking.get(key)
-    if (decided.deny !== undefined || text === undefined) return decided
+    if (decided.decision === 'deny' || text === undefined) return decided
     asking.delete(key)
     await questionOpened($, key, text, await nowOr($))
     return decided
@@ -597,7 +601,7 @@ export const register: Register = on => {
     const fromSubagent = Boolean((e as { agentId?: string }).agentId)
 
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
-      // Marked by the classic.PreToolUse hook below once the guards have let it through (#732).
+      // Marked by the tool.check hook below once the guards have let it through (#732).
       const key = askKey(e)
       asking.set(key, questionOf(input))
       heldQuestions.add(id)

@@ -1,0 +1,13 @@
+# Mod hooks on an event Claude Code's built-in security default sends past the user tier (#875),
+# which tools/check-mods.sh lets stand only because they are listed here. Each line: the mod, the
+# event, and why it stays, beginning with the issue deciding it. Every one is dead on both Macs until
+# that issue moves it, retires the feature, or deletes the hook. Columns are separated by one tab.
+scope-modes	classic.Stop	#876: no event a user tier mod receives can refuse a turn end
+manual-steps	classic.Stop	#876: no event a user tier mod receives can refuse a turn end
+manual-steps	prompt.context	#876: prompt content is what the security default keeps from a person's plugins
+ask-before-saving	prompt.section	#876: prompt content is what the security default keeps from a person's plugins
+picker-manners	prompt.section	#876: prompt content is what the security default keeps from a person's plugins
+goal-tracker	classic.PermissionRequest	#876: no event a user tier mod receives marks the permission dialog being shown
+goal-tracker	classic.Notification	#876: no event a user tier mod receives carries Claude Code's idle notification
+auto-session-name	classic.SessionStart	#876: the session title reaches a mod only in this classic payload
+auto-session-name	classic.UserPromptSubmit	#876: the session title and sessionTitle reach a mod only in this classic hook
