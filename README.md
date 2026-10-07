@@ -81,6 +81,45 @@ sync does not send. Edit that file to change them.
 ./claude-sync install-autosync  # background auto-sync (see below)
 ```
 
+## Setting up a new Mac
+
+Besides cloning this repository and running `./claude-sync install-autosync`, every Mac needs one
+file the sync cannot carry: `/Library/Application Support/ClaudeCode/managed-settings.json`
+holding `{"prependPlugins": []}`. It lives outside `~/.claude`, and writing it needs the Mac's admin
+password, so it is made by hand once per Mac. Both Macs have had it since 2026-10-07 (#876).
+
+Why it is needed: on a Team or Enterprise account (Dan's is one), or on any Mac with managed
+settings, Claude Code's built-in security default seats itself ahead of every plugin and sends
+every `classic.*`, `prompt.section` and `prompt.context` hook past the user tier our mods load in,
+so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
+that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
+in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
+prompt text of ask-before-saving, picker-manners and manual-steps, goal-tracker's permission and
+idle notices, auto-session-name) silently do nothing. The cost Dan accepted: any installed plugin
+can then also sit ahead of the security default's checks.
+
+Create it:
+
+```bash
+sudo mkdir -p "/Library/Application Support/ClaudeCode" && echo '{"prependPlugins": []}' | sudo tee "/Library/Application Support/ClaudeCode/managed-settings.json"
+```
+
+Check it works, from a new session (the file is read once, at startup), in any folder:
+
+```bash
+claude -p --debug --model haiku "run echo hi with Bash"
+```
+
+```bash
+grep -h "sec-default@builtin not seated\|bypassed by cc-plugin-sec-default" $(ls -t ~/.claude/debug/*.txt | head -1)
+```
+
+It must print `cc-plugin-sec-default@builtin not seated: managed prependPlugins does not list it`
+and no `bypassed by cc-plugin-sec-default` line. `claude-sync status` reads the file (never running
+claude) and names it, with the command that fixes it, when it is missing, is not valid JSON, has no
+`prependPlugins` list (any managed settings without one are what seat the security default), or
+lists the security default in it. Set `SYNC_MANAGED_SETTINGS` to check another path.
+
 ## Automatic sync
 
 `install-autosync` sets up two launchd agents (and retires older ones), and installs
@@ -1147,12 +1186,14 @@ exit code and the last lines of output instead of an empty reason.
 It also fails a mod whose hook is on an event Claude Code's built-in security default sends past
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`. Seated outermost for a
-Team or Enterprise organization, as on both Macs, it routes each of those straight past our mods, so
-such a hook never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). A
-check that must run beneath every mod's `tool.call` hook and the settings hooks belongs in
-`tool.check` instead. The hooks no event a mod receives can replace yet are listed by mod and event
-in `tools/sec-default-bypassed-hooks.tsv`, each with the issue deciding it (#876), and a listing
-for a hook that has gone fails too. This part reads only the files, so it holds on CI. Where a
+Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
+never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
+it out of first place with the managed settings file in "Setting up a new Mac" above, so these
+hooks do run there, but only while that file is in place (#876). A check that must run beneath
+every mod's `tool.call` hook and the settings hooks still belongs in `tool.check`. The hooks on
+these events are listed by mod and event in `tools/sec-default-bypassed-hooks.tsv`, each with the
+issue deciding it (#876), so a new one is a decision to depend on that file rather than an
+accident, and a listing for a hook that has gone fails too. This part reads only the files, so it holds on CI. Where a
 `claude` binary is found, the list is compared with that build's own routes, and a difference fails.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed once per checkout

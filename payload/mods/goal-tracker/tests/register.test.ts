@@ -44,9 +44,9 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 }
 const withDeps = { plugins: [secDefault, deps] }
 // Without the stand-in: the tests that drive this mod's classic PermissionRequest or Notification
-// hook. The security default sends both past this mod on both Macs, and no event a user tier mod
-// receives replaces either yet (#876), so what these tests prove does not run there today. They hold
-// the logic until #876 decides where it moves.
+// hook. Where the security default is seated it sends both past this mod, and no event a user tier
+// mod receives replaces either. Both Macs keep it unseated with a managed settings file (#876, README
+// "Setting up a new Mac"), so these hooks run there, and only while that file is in place.
 const unseated = { plugins: [deps] }
 const MIN = 60_000
 
