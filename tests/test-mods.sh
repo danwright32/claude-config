@@ -308,6 +308,64 @@ case "$line" in *"exit 7"*"something odd happened"*) check "naming the exit code
 out="$(CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused" ok || check "a missing mods folder is refused" "exit=$code out=$out"
 
+# 7b. A hook on an event Claude Code's built-in security default sends past the user tier is a hook
+#     that never runs (#875): the run fails naming the mod and the event, unless the hook is listed
+#     with the issue deciding it. Filesystem only, so it holds where there is no claude (CI).
+M7B="$TMPROOT/m7b"; KNOWN7B="$TMPROOT/known7b.tsv"; : > "$KNOWN7B"
+mkmod "$M7B" stops
+printf "export const register = on => {\n  on('classic.Stop', async (\$, e, next) => next(e))\n}\n" > "$M7B/stops/hooks/register.ts"
+mkmod "$M7B" sections
+printf "export const register = on => {\n  on(\n    'prompt.section', { name: 'memory' }, async (\$, e, next) => next(e))\n}\n" > "$M7B/sections/hooks/register.ts"
+# The control: an event that reaches a mod, a comment naming a bypassed one, a method of something
+# else called on, and a bypassed one in a test file, none of which is a hook of the mod's.
+mkmod "$M7B" checks
+printf "// was on('classic.PreToolUse', ...)\nexport const register = on => {\n  on('tool.check', async (\$, e, next) => next(e))\n  emitter.on('classic.Stop', () => {})\n}\n" > "$M7B/checks/hooks/register.ts"
+printf "on('classic.Stop', () => ({}))\n" > "$M7B/checks/hooks/register.test.ts"
+runbp(){ : > "$LOG"; out="$(STUB_LOG="$LOG" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" bash "$CHECK" "$M7B" 2>&1)"; code=$?; }
+runbp
+[ "$code" -eq 1 ] && check "a mod hooking a bypassed event fails the run" ok || check "a mod hooking a bypassed event fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'stops hooks classic.Stop, which' && check "naming the mod and the classic event" ok || check "naming the mod and the classic event" "$out"
+printf '%s\n' "$out" | grep -q 'sections hooks prompt.section, which' && check "and a prompt event registered across lines" ok || check "and a prompt event registered across lines" "$out"
+! printf '%s\n' "$out" | grep -q 'checks hooks' && check "while tool.check, a comment, another object's on and a test file are not hooks" ok \
+  || check "while tool.check, a comment, another object's on and a test file are not hooks" "$out"
+# The same check where no claude command exists: still a definite failure, never UNMEASURED.
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" PATH=/usr/bin:/bin bash "$CHECK" "$M7B" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "with no claude command, a hook on a bypassed event still fails" ok \
+  || check "with no claude command, a hook on a bypassed event still fails" "exit=$code out=$out"
+# Listed with the issue deciding it: the run passes.
+printf '# mod\tevent\twhy\nstops\tclassic.Stop\t#1: no event can refuse a turn end\nsections\tprompt.section\t#1: prompt content is kept from mods\n' > "$KNOWN7B"
+runbp
+[ "$code" -eq 0 ] && check "a bypassed hook listed with its issue passes" ok || check "a bypassed hook listed with its issue passes" "exit=$code out=$out"
+# A listing for a hook the mod no longer has must come down, or it would excuse the next one.
+printf 'checks\tclassic.PreToolUse\t#1: moved since\n' >> "$KNOWN7B"
+runbp
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'checks no longer hooks classic.PreToolUse' \
+  && check "a listing for a hook that is gone fails, naming it" ok || check "a listing for a hook that is gone fails, naming it" "exit=$code out=$out"
+# A listing with no reason, or one that does not begin with its issue, is refused (L675).
+printf 'stops\tclassic.Stop\nsections\tprompt.section\tbecause\n' > "$KNOWN7B"
+runbp
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'line(s) 1,2 need a mod, an event and a reason' \
+  && check "a listing without a reason beginning with its issue is refused" ok || check "a listing without a reason beginning with its issue is refused" "exit=$code out=$out"
+# The list against the build's own routes: a stub holding the same seven passes, one holding another
+# fails naming it, and one holding none is said as unmeasured rather than passed.
+printf 'stops\tclassic.Stop\t#1: x\nsections\tprompt.section\t#1: x\n' > "$KNOWN7B"
+ROUTES7B=""
+for ev in attribution.text 'classic.*' prompt.compose prompt.context prompt.section settings.read skill.prompt; do
+  ROUTES7B="$ROUTES7B# e(\"$ev\",(n,o,t)=>t.to(o,\"append\"))
+"
+done
+{ cat "$FAKE"; printf '%s' "$ROUTES7B"; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
+{ cat "$FAKE"; printf '%s' "$ROUTES7B"; printf '# e("prompt.attachment",(a,b,c)=>c.to(b,"append"))\n'; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
+runbp "$TMPROOT/claude-same"
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "a build routing the listed events passes" ok \
+  || check "a build routing the listed events passes" "exit=$code out=$out"
+runbp "$TMPROOT/claude-more"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'not listed: prompt.attachment' && check "a build routing another event fails, naming it" ok \
+  || check "a build routing another event fails, naming it" "exit=$code out=$out"
+runbp "$FAKE"
+printf '%s\n' "$out" | grep -q 'UNMEASURED: no security default route was found' && check "a build with no routes found is said as unmeasured" ok \
+  || check "a build with no routes found is said as unmeasured" "$out"
+
 # 8. The real tree, with the real binary where this machine has one.
 REAL_BIN="$(command -v claude 2>/dev/null || true)"
 [ -n "$REAL_BIN" ] || { [ -x "$HOME/.local/bin/claude" ] && REAL_BIN="$HOME/.local/bin/claude"; }
