@@ -159,6 +159,10 @@ describe('what a command does, by effect', () => {
     expect(kinds('npx wrangler deploy')).toEqual(['deploy'])
     expect(kinds('supabase db push')).toEqual(['deploy'])
     expect(kinds('npm run deploy')).toEqual(['deploy'])
+    // A script named publish is a deploy script by name; bare `npm publish` is npm's own publish.
+    expect(kinds('npm run publish')).toEqual(['deploy'])
+    expect(kinds('pnpm run publish')).toEqual(['deploy'])
+    expect(kinds('npm publish')).toEqual(['deploy'])
     expect(kinds('gh workflow run deploy.yml')).toEqual(['deploy'])
     expect(kinds('gh api -X POST repos/o/r/actions/workflows/deploy.yml/dispatches -f ref=main')).toEqual(['deploy'])
     const scripts: Scripts = { ship: cmds('next build && wrangler deploy'), test: cmds('vitest run'), build: cmds('next build') }

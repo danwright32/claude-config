@@ -174,6 +174,8 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** origin/HEAD's branch, main unless said (#843). */
+  defaultBranch?: string
   /** gh repo view under another account's token fails for a reason other than not found (#843). */
   ghRepoViewFailsWithToken?: string
   /** gh repo view fails for a reason other than the repository being unknown (#843): its stderr. */
@@ -375,7 +377,7 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a.includes('--show-current') && o.branch === '__fails') return fail(128, 'fatal: not a git repository')
     if (cmd === 'git' && a.includes('--show-current') && o.branches?.[a[1] as string] !== undefined) return ok(`${o.branches[a[1] as string]}\n`)
     if (cmd === 'git' && a.includes('--show-current')) return ok(`${o.branch ?? 'scope-modes-616'}\n`)
-    if (cmd === 'git' && a.includes('symbolic-ref')) return ok('origin/main\n')
+    if (cmd === 'git' && a.includes('symbolic-ref')) return ok(`origin/${o.defaultBranch ?? 'main'}\n`)
     if (cmd === 'git' && a.includes('--list')) return ok(o.branchHere === false ? '' : `  ${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('ls-remote')) return o.branchOnGitHub === false ? fail(2) : ok(`abc\trefs/heads/${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('worktree')) return ok(o.worktrees ?? `worktree /repo\nbranch refs/heads/main\n`)
@@ -2212,4 +2214,11 @@ test('an enrolled session in no repository has nothing to claim: it stops at onc
   expect(kinds(w)).toEqual(['stopped'])
   expect(JSON.parse(w.appended[0]?.line as string).text).toBe('this session is in no repository, so it has nothing to claim tonight')
   expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('asleep, a push to a default branch named neither main nor master is refused too', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night({ mayDeploy: ['o/r'], mergeOnly: [], closed: [] }), defaultBranch: 'develop' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git push origin develop'))).toMatch(/^Blocked overnight: this would push develop straight to GitHub/)
+  expect(await call($ as never, bash('git push origin fix-843'))).toBe('ran')
 })

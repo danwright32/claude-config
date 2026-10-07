@@ -448,7 +448,9 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[]): P
 const mergeDeployRefusal = async ($: EngineInterface, night: unknown, commands: Cmd[]) => {
   // A call with nothing to refuse even judged at its strictest (no folder, branch or scripts known)
   // is most calls, and needs nothing read.
-  if (!judgeNight(night, commands, commands.map(() => null))) return undefined
+  // A push or a gh call is never let through on that pass: which branch is the default is only
+  // known once the folder is read (`develop` is neither main nor master).
+  if (!needsOf(commands).branch && !judgeNight(night, commands, commands.map(() => null))) return undefined
   const needs = needsOf(commands)
   const dirs = dirsOf(commands, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
   // What each folder a command runs in says: its origin, branches and package scripts, read once.

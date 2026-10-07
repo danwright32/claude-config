@@ -168,7 +168,8 @@ const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
 export const runnerScript = (words: string[]): string | undefined => {
   if (!RUNNERS.has(name(words[0]))) return undefined
   const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
-  return script && !isFlag(script) && script !== 'publish' ? script : undefined
+  // Bare `npm publish` is npm's own publish, not a script; `npm run publish` runs the script named publish.
+  return script && !isFlag(script) && !(words[1] === 'publish') ? script : undefined
 }
 
 /**
