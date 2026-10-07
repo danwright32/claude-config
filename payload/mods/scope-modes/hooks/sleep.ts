@@ -49,7 +49,7 @@ const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFin
 
 /**
  * The one predicate (#840). `text` is the record file's content, null when there is no file; `now`
- * in ms; `boot` this boot's start in seconds, null when it could not be read. The checks run in
+ * in ms; `boot` this boot's start in seconds, null when it could not be read (then only the end decides). The checks run in
  * the order the shell reader runs them, so the two answer alike on a record wrong in two ways.
  */
 export const readSleep = (text: string | null, now: number, boot: number | null): SleepReading => {
@@ -65,9 +65,10 @@ export const readSleep = (text: string | null, now: number, boot: number | null)
   if (!isNum(r.v) || r.v < 1) return { state: 'unreadable', why: 'the sleep record has no version this reader knows' }
   if (!isNum(r.until)) return { state: 'unreadable', why: 'the sleep record names no end' }
   if (!isNum(r.bootTime)) return { state: 'unreadable', why: 'the sleep record names no boot' }
-  if (boot === null) return { state: 'unreadable', why: "this boot's start could not be read, so the record cannot be told to be this boot's" }
   const record = r as unknown as SleepRecord
-  if (r.bootTime !== boot) return { state: 'other-boot', record }
+  // This boot unknown (sysctl failed) only skips the boot check: a sound record still holds until
+  // its end, which bounds it either way, and is never called broken for what this side could not read.
+  if (boot !== null && r.bootTime !== boot) return { state: 'other-boot', record }
   if (now >= r.until) return { state: 'expired', record }
   return { state: 'asleep', record }
 }

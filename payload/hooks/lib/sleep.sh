@@ -17,7 +17,8 @@
 # it ends must never hold (L523): a page that should not have come beats a silence nobody can see.
 #
 # Arguments, each optional, for a caller that already has them and for the tests: the record's path,
-# now in ms since the epoch, and this boot's start in seconds (`none` when it is not known). Every
+# now in ms since the epoch, and this boot's start in seconds (`none` when it is not known, when only
+# the record's end decides). Every
 # answer comes back on stdout, never through a variable, since a caller reads it in a subshell.
 
 # The state on the first line and why on the second (empty but for unreadable).
@@ -62,9 +63,9 @@ if not num(r.get("until")):
     say("unreadable", "the sleep record names no end")
 if not num(r.get("bootTime")):
     say("unreadable", "the sleep record names no boot")
-if not boot.isdigit():
-    say("unreadable", "this boot's start could not be read, so the record cannot be told to be this boot's")
-if r["bootTime"] != int(boot):
+# This boot unknown (sysctl failed) only skips the boot check: the end of the record still bounds it.
+# (No apostrophe in this program: macOS bash 3.2 reads quotes inside a heredoc in a command substitution.)
+if boot.isdigit() and r["bootTime"] != int(boot):
     say("other-boot")
 if now >= r["until"]:
     say("expired")

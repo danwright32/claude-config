@@ -21,8 +21,8 @@ describe('readSleep, against the fixture set the shell reader shares', () => {
     expect(r.state === 'asleep' && r.record.generation).toBe('g1')
     const bad = readSleep('{"v":1', f.now, f.boot)
     expect(bad.state === 'unreadable' && bad.why).toMatch(/not JSON/)
-    const noBoot = readSleep(f.text, f.now, null)
-    expect(noBoot.state === 'unreadable' && noBoot.why).toMatch(/boot/)
+    // An unknown boot never makes a sound record read as broken: its end still bounds it.
+    expect(readSleep(f.text, f.now, null).state).toBe('asleep')
   })
 })
 

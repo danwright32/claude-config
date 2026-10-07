@@ -771,8 +771,10 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   (`hooks/test-sleep-state.sh`) reads the same cases: asleep, none, expired, other-boot, unreadable.
   The version gate is `v >= 1`, so a later writer's added field still reads as asleep.
 - Only asleep is asleep. Past `until`, from another boot, or a record that cannot be read (not JSON,
-  no version, no end or boot, or this boot's start unreadable) reads as awake: a mute that cannot
-  say when it ends must not hold (L523), and a stray page is better than a silence nobody sees.
+  no version, no end or boot) reads as awake: a mute that cannot say when it ends must not hold
+  (L523), and a stray page is better than a silence nobody sees. When this boot's start cannot be
+  read (sysctl failing), only the boot check is skipped: a sound record still holds until its end,
+  and is never called broken for what this side could not read.
 - The night is the ET date of the evening: before noon ET counts as the night before, and `until` is
   noon ET the next day, found in America/New_York whatever zone the Mac is set to, so a change to
   or from daylight time moves it an hour in UTC and never in ET. Tested at both edges and across

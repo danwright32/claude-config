@@ -2,7 +2,7 @@
 // mod's readSleep (hooks/sleep.ts, tests/sleep.test.ts) and the shell's sleep_state
 // (payload/hooks/lib/sleep.sh, payload/hooks/test-sleep-state.sh). Each case is the record file's
 // text exactly as it would sit on disk (null: no file), the time now in ms, this boot's start in
-// seconds (null: it could not be read), and the state both must answer.
+// seconds (null: it could not be read, when only the end decides), and the state both must answer.
 //
 // Everything after the `=` below is plain JSON, which is what lets the shell suite read it too:
 // keep it JSON (double quotes, no trailing commas, no comments inside), or that suite fails.
@@ -13,7 +13,9 @@ export const SLEEP_FIXTURES = [
   { "name": "expired", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791400000000, "boot": 1759800000, "state": "expired" },
   { "name": "other boot", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759700000}", "now": 1791360000000, "boot": 1759800000, "state": "other-boot" },
   { "name": "other boot and expired", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759700000}", "now": 1791400000000, "boot": 1759800000, "state": "other-boot" },
-  { "name": "boot not readable", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791360000000, "boot": null, "state": "unreadable" },
+  { "name": "boot not readable: the record still holds until its end", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791360000000, "boot": null, "state": "asleep" },
+  { "name": "boot not readable and past its end", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791400000000, "boot": null, "state": "expired" },
+  { "name": "boot not readable and the record broken", "text": "{\"v\":1,\"until\":1791388800000}", "now": 1791360000000, "boot": null, "state": "unreadable" },
   { "name": "malformed", "text": "{\"v\":1,\"until\":17913888", "now": 1791360000000, "boot": 1759800000, "state": "unreadable" },
   { "name": "v 2, a later writer with a field this reader does not know", "text": "{\"v\":2,\"generation\":\"g2\",\"until\":1791388800000,\"bootTime\":1759800000,\"later\":{\"x\":1}}", "now": 1791360000000, "boot": 1759800000, "state": "asleep" },
   { "name": "v 0", "text": "{\"v\":0,\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791360000000, "boot": 1759800000, "state": "unreadable" },
