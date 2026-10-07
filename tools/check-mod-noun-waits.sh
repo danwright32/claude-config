@@ -25,7 +25,12 @@
 # whose promise a timer settles is judged at every call a noun makes of it (#756).
 # A noun's code is each `engine.create` hook's (where the nouns' methods are written), each hook on
 # a noun's own event (`on('modkit.screen', ...)`, any noun any mod's contract declares on $), and
-# every function of the mod those call, followed by name through every source file of the mod.
+# every function of the mod those call. A called name is resolved by the TypeScript compiler's own
+# checker (tools/lib/ts-resolve.mjs, run on the compiler pinned in tools/typescript), so scope,
+# shadowing, parameters and imports are the language's answer, never the first declaration of that
+# name anywhere in the mod (#895). A name it resolves to something outside the mod (a global, an
+# import of a missing file) reaches no function of the mod; only one it finds no symbol for at all
+# is followed by name, as before.
 #
 # Measured live on 2026-10-05 (2.1.289, a throwaway plugin in a headless `claude -p`, #756): a
 # noun's 10 s does NOT stop while its own `$` calls are in flight, unlike a hook's budget. A noun
@@ -47,7 +52,9 @@
 #
 # Exit codes, each distinct (L11): 0 none found (the count of mods is printed, L98), 1 a wait found
 # or a noun's code that cannot be read, each named with its file and line, 2 the mods folder does
-# not exist, 3 no python3 to read the source with (L490: never a pass over nothing read).
+# not exist, 3 no python3 to read the source with, 4 the pinned TypeScript compiler cannot be
+# loaded, so no call could be resolved (L490: never a pass over nothing read). CHECK_MODS_TS_DIR
+# names another folder holding it, as check-mods.sh reads it.
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   echo "check-mod-noun-waits: '${dir:-<none given>}' is not a folder, so nothing was checked." >&2
@@ -57,8 +64,9 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "check-mod-noun-waits: python3 is not installed, so no mod's source was read." >&2
   exit 3
 fi
-python3 - "${dir%/}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" <<'PY'
-import ast, json, os, re, sys
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 - "${dir%/}" "$here/lib" "${CHECK_MODS_TS_DIR:-$here/typescript}" <<'PY'
+import ast, json, os, re, subprocess, sys
 
 root = sys.argv[1]
 sys.path.insert(0, sys.argv[2])
@@ -115,7 +123,9 @@ for entry in sorted(os.listdir(root)):
                 continue
             path = os.path.join(base, name)
             try:
-                with open(path) as f:
+                # Read as written (CRLF kept, a byte order mark kept), so positions match the
+                # compiler's (#895).
+                with open(path, encoding="utf-8", newline="") as f:
                     files.append(File(entry, os.path.relpath(path, folder), f.read()))
             except (OSError, UnicodeDecodeError) as e:
                 report(f"check-mod-noun-waits: {entry}/{os.path.relpath(path, folder)} cannot be read ({e}), so its nouns were not checked.")
@@ -157,6 +167,76 @@ def definition(files, name):
         if span:
             return f, span[0], span[1]
     return None
+
+
+def resolve_all(mods):
+    """Every identifier in every mod's source, resolved by the TypeScript compiler's checker (#895):
+    each File gets refs, its position (in code points) to (role, target), as ts-resolve.mjs describes
+    them. Exits 4, naming why, when the pinned compiler cannot be loaded or read a mod (L490)."""
+    ts_dir = sys.argv[3]
+    script = os.path.join(sys.argv[2], "ts-resolve.mjs")
+    why = None
+    if not os.path.isdir(os.path.join(ts_dir, "node_modules", "typescript")):
+        why = f"it is not installed in {ts_dir}"
+    else:
+        payload = json.dumps({"mods": [{"files": [os.path.abspath(os.path.join(folder, f.rel)) for f in files]} for _, folder, _, files in mods if files]})
+        try:
+            run = subprocess.run(["node", script, ts_dir], input=payload, capture_output=True, text=True, timeout=120)
+            if run.returncode != 0:
+                lines = run.stderr.strip().splitlines()
+                # The error itself, not the runtime's closing version line.
+                why = next((l.strip() for l in lines if re.match(r"\s*(?:\w*Error\b|ts-resolve:)", l)), lines[-1] if lines else f"ts-resolve.mjs exited {run.returncode}")
+            else:
+                found = json.loads(run.stdout)
+                # A file the resolver answered nothing for would be followed by name throughout, a
+                # pass over nothing resolved (L490).
+                missing = [os.path.abspath(os.path.join(folder, f.rel)) for _, folder, _, files in mods for f in files if os.path.abspath(os.path.join(folder, f.rel)) not in found]
+                if missing:
+                    why = f"it answered nothing for {missing[0]}" + (f" and {len(missing) - 1} other file(s)" if len(missing) > 1 else "")
+        except FileNotFoundError:
+            why = "node is not installed"
+        except subprocess.TimeoutExpired:
+            why = "it did not answer within 120 s"
+        except ValueError as e:
+            why = f"its answer could not be read ({e})"
+    if why:
+        print(
+            f"check-mod-noun-waits: the pinned TypeScript compiler cannot be loaded ({why}), so no noun's calls "
+            f"could be resolved and nothing was checked. Install it with: npm ci --prefix tools/typescript",
+            file=sys.stderr,
+        )
+        sys.exit(4)
+    by_path = {}
+    for _, folder, _, files in mods:
+        for f in files:
+            by_path[os.path.abspath(os.path.join(folder, f.rel))] = f
+    for _, folder, _, files in mods:
+        for f in files:
+            f.refs = {at: (role, target) for at, role, target in found.get(os.path.abspath(os.path.join(folder, f.rel)), [])}
+    return by_path
+
+
+def resolve(files, f, at, name):
+    """The function the identifier name at position at in f reaches, as the compiler's checker
+    resolves it (#895): (file, start, end), or None when it names a declaration, a parameter, or
+    anything else that is not a function the mod declares, a global or an import of a missing file
+    among them. Only one the checker finds no symbol for at all is followed by name, as before."""
+    role, target = f.refs.get(at, ("ref", None))
+    if role == "decl":
+        return None
+    if target is None:
+        return definition(files, name)
+    if target[0] != "fn":
+        return None
+    return BY_PATH[target[1]], target[2], target[3]
+
+
+def declared_value(f, at):
+    """Where the variable the identifier at position at in f names is declared: (file, start), or None."""
+    role, target = f.refs.get(at, ("ref", None))
+    if target is None or target[0] not in ("fn", "value"):
+        return None
+    return BY_PATH[target[1]], target[2]
 
 
 def constants(files):
@@ -350,7 +430,8 @@ def judge(f, at, files, consts):
     executor = code[k + 1 : (end or len(code)) - 1].strip()
     named = re.fullmatch(IDENT, executor)
     if named:
-        found = definition(files, executor)
+        raw = code[k + 1 : (end or len(code)) - 1]
+        found = resolve(files, f, k + 1 + len(raw) - len(raw.lstrip()), executor)
         if not found:
             return f"check-mod-noun-waits: {f.where(at)}: {f.mod}'s noun code makes a promise whose executor {executor} cannot be found in {f.mod}, so whether it waits past 10 s cannot be read."
         df, start, stop = found
@@ -423,9 +504,10 @@ def with_args(consts, params, args):
     return out
 
 
-def helper_timer(files, name, args, consts):
-    """Whether calling the mod's function name with args makes a promise a timer under 10 s settles."""
-    found = definition(files, name)
+def helper_timer(files, f, at, name, args, consts):
+    """Whether the call of the mod's function name at position at in f, with args, makes a promise a
+    timer under 10 s settles."""
+    found = resolve(files, f, at, name)
     if not found:
         return False
     df, start, stop = found
@@ -447,12 +529,17 @@ def is_timer(f, a, b, files, consts):
     m = re.fullmatch(r"(" + IDENT + r")\s*\(", expr[: expr.find("(") + 1]) if "(" in expr else None
     if m and expr.endswith(")"):
         args = call_args(f.code, a + lead + expr.find("("))
-        return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, m.group(1), args, consts)
+        return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, f, a + lead, m.group(1), args, consts)
     if re.fullmatch(IDENT, expr):
-        for g in files:
-            d = re.search(r"(?<![\w$.])(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code)
-            if d:
-                return judge(g, d.end(), files, consts) is None
+        # The variable this member reads, as the compiler resolves it (#895).
+        seen = declared_value(f, a + lead)
+        if seen:
+            g, d = seen
+            # The resolver gives a lone declarator's statement start, or a declarator's own name
+            # where a statement declares several.
+            made = re.match(r"(?:(?:const|let|var)\s+)?" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code[d:])
+            if made:
+                return judge(g, d + made.end(), files, consts) is None
     return False
 
 
@@ -467,6 +554,7 @@ def stored_in(code, at):
     return m.group(1) if m and m.group(1) not in KEYWORDS else None
 
 
+BY_PATH = resolve_all(mods)
 for entry, folder, man, files in mods:
     consts = constants(files)
     # The noun code: the engine.create hooks and hooks on a noun's event, then every function of the
@@ -480,7 +568,7 @@ for entry, folder, man, files in mods:
             todo.append((f, start, end, None))
             handler = re.search(r",\s*(" + IDENT + r")\s*\)$", f.code[start:end])
             if handler:
-                found = definition(files, handler.group(1))
+                found = resolve(files, f, start + handler.start(1), handler.group(1))
                 if found:
                     todo.append((*found, handler.group(1)))
     regions = []
@@ -492,9 +580,17 @@ for entry, folder, man, files in mods:
         regions.append((f, start, end, name))
         for m in re.finditer(r"(?<![\w$.])(" + IDENT + r")\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
             if m.group(1) not in KEYWORDS:
-                found = definition(files, m.group(1))
+                found = resolve(files, f, start + m.start(), m.group(1))
                 if found:
                     todo.append((*found, m.group(1)))
+        # A function handed over as a shorthand property (`{ wait }`, a noun's method) is that
+        # function's code too, as the compiler resolves the name (#895).
+        for at, (role, _) in f.refs.items():
+            if role == "short" and start <= at < end:
+                short = re.match(IDENT, f.code[at:])
+                found = resolve(files, f, at, short.group(0)) if short else None
+                if found:
+                    todo.append((*found, short.group(0)))
 
     # Each member of a Promise.race a noun's code writes, raced against a timer under 10 s (the limit
     # measured on 2026-10-05).
@@ -525,13 +621,18 @@ for entry, folder, man, files in mods:
                 out.append((f, start + m.start()))
         return out
 
-    def calls_in_nouns(name):
-        """Each call a noun's code makes of the mod's function name: (file, position, its arguments)."""
+    def calls_in_nouns(df, dstart, name):
+        """Each call a noun's code makes of the mod's function name declared at dstart in df: (file,
+        position, its arguments). A call the compiler resolves to another function of that name, and
+        a declaration of one, are not calls of this one (#895)."""
         out = []
         for f, start, end, own in regions:
-            if own == name:
+            if own == name and f is df and start == dstart:
                 continue
             for m in re.finditer(r"(?<![\w$.])" + re.escape(name) + r"\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
+                reached = resolve(files, f, start + m.start(), name)
+                if not reached or reached[0] is not df or reached[1] != dstart:
+                    continue
                 args = call_args(f.code, start + m.end() - 1)
                 out.append((f, start + m.start(), args or []))
         return out
@@ -541,10 +642,14 @@ for entry, folder, man, files in mods:
         for at in promises_in(f.code, start, end):
             if (f.rel, at) in judged:
                 continue
+            # A promise inside a helper written within this region is judged as that helper's, by
+            # the calls reaching it, never by this outer one's (#895).
+            if any(g is f and start <= a and b <= end and (a, b) != (start, end) and a <= at < b for g, a, b, _ in regions):
+                continue
             judged.add((f.rel, at))
             if is_raced(f, at):
                 continue
-            calls = calls_in_nouns(name) if name else []
+            calls = calls_in_nouns(f, start, name) if name else []
             fn = function_of(f.code[start:end]) if calls else None
             if calls and fn is not None:
                 # A helper: judged at each call a noun makes, with that call's arguments, and a call
