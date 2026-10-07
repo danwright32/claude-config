@@ -15,17 +15,21 @@
 // stderr: the caller refuses rather than resolving nothing (L490).
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const tsDir = process.argv[2];
 if (!tsDir) {
   console.error("ts-resolve: no TypeScript folder given");
   process.exit(2);
 }
-const base = join(tsDir, "node_modules", "typescript", "dist");
-const { API } = await import(join(base, "api", "sync", "api.js"));
-const { SyntaxKind } = await import(join(base, "ast", "index.js"));
-const { SymbolFlags } = await import(join(base, "enums", "symbolFlags.js"));
+// Imported by file URL from an absolute path: a relative folder would otherwise be read as a package
+// name, and a folder with a space or a % in it as a broken URL (L740).
+const base = resolve(tsDir, "node_modules", "typescript", "dist");
+const load = (...parts) => import(pathToFileURL(join(base, ...parts)).href);
+const { API } = await load("api", "sync", "api.js");
+const { SyntaxKind } = await load("ast", "index.js");
+const { SymbolFlags } = await load("enums", "symbolFlags.js");
 
 const input = JSON.parse(readFileSync(0, "utf8"));
 const real = (p) => {
@@ -97,7 +101,7 @@ try {
     const target = (symbol) => {
       if (!symbol) return null;
       if (symbol.flags & SymbolFlags.Alias) symbol = project.checker.getAliasedSymbol(symbol);
-      for (const handle of symbol.declarations) {
+      for (const handle of symbol.declarations ?? []) {
         const d = handle.resolve(project);
         if (!d) continue;
         const file = own.get(real(d.getSourceFile().fileName));
