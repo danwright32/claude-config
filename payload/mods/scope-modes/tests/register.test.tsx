@@ -215,6 +215,7 @@ const world = (on: On, o: Opts = {}) => {
     reports: [] as { op: string; record: string; final?: boolean }[],
     homeGone: false,
     released: [] as string[][],
+    releasedBy: [] as string[],
     caffeinated: [] as string[],
     killed: [] as string[],
   }
@@ -300,6 +301,7 @@ const world = (on: On, o: Opts = {}) => {
       if (a[1] === 'claims') return ok(o.claims ?? '')
       if (a[1] === 'release') {
         w.released.push(a.slice(2))
+        w.releasedBy.push(String(e.init?.env?.SLEEP_NOTE_BY_DRIVER))
         return ok(`released\t${a[3]}\t${a[5]}\n`)
       }
     }
@@ -1573,6 +1575,8 @@ test('the watchdog parks a claim held past two hours of active work mid turn, th
   expect((await stop($ as never)).block).toMatch(/^You hold #7 in o\/r \(attempt 1\)/)
   await clock.advance(MIN)
   expect(w.released).toEqual([['/repo', '7', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+  // Marked as the driver's own, so the queue's parked note is never read back as the session's progress.
+  expect(w.releasedBy).toEqual(['1'])
   w.o.claims = ''
   expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 \(120 minutes of active work on it, past the 2 hours an issue gets\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
 })

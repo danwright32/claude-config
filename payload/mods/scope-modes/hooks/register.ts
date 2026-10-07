@@ -538,7 +538,13 @@ const refsNow = async ($: EngineInterface, root: string | null, claim: ClaimRead
 // Ends a claim through the queue, which writes the matching note (#905): null when ended, else why not.
 const endClaim = async ($: EngineInterface, en: Enrolled, root: string | null, rel: Release): Promise<string | null> => {
   if (!root) return 'this session is not in a repository, so the queue cannot name the claim'
-  const r = await run($, ['bash', queueScript(en.home), 'release', root, String(rel.issue), en.self, rel.state, rel.why])
+  // Marked as the driver's, so the queue's note of this end is never read back as the session's progress.
+  let r
+  try {
+    r = await $.process.run(['bash', queueScript(en.home), 'release', root, String(rel.issue), en.self, rel.state, rel.why], { timeoutMs: RUN_MS, env: { SLEEP_NOTE_BY_DRIVER: '1' } })
+  } catch (err) {
+    return `sleep-queue.sh release could not be run (${msg(err)})`
+  }
   if (r.exitCode === 0 && r.stdout.startsWith('released')) return null
   return (r.stdout + r.stderr).trim().split('\n')[0] || `sleep-queue.sh release exited ${r.exitCode}`
 }
