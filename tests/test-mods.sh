@@ -933,15 +933,21 @@ fi
 #     asked every question twice that way. Each fixture is one form of that reason, never one named
 #     case (L362).
 WAITS="$ROOT/tools/check-mod-noun-waits.sh"
-M12W="$TMPROOT/m12w"
-mknounmod(){   # $1 = mods dir  $2 = name  $3 = the noun its contract declares; the hooks module's source on stdin
-  mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks" "$1/$2/types"
-  printf '{ "name": "%s", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' "$2" > "$1/$2/.claude-plugin/plugin.json"
-  printf 'declare module "claude-code" {\n  interface EngineInterface {\n    %s: Record<string, (input?: unknown) => Promise<unknown>>\n  }\n}\n' "$3" > "$1/$2/types/index.d.ts"
-  cat > "$1/$2/hooks/register.ts"
-}
-# The shape picker manners had: the noun's promise is settled by a press, through a map of waiters.
-mknounmod "$M12W" waits-in-map pickers <<'TS'
+# The checks below need the TypeScript compiler pinned in tools/typescript, which the noun wait check
+# resolves every call with (#895) and refuses without (exit 4). A machine where it does not start
+# (not installed, or a Mac's native build copied to Linux) reports them UNMEASURED with the install
+# command, as check-mods.sh does for its type check, rather than failing (L411); under CI=true, where
+# the workflow installs it, one that does not start is a failure.
+noun_wait_checks(){
+  M12W="$TMPROOT/m12w"
+  mknounmod(){   # $1 = mods dir  $2 = name  $3 = the noun its contract declares; the hooks module's source on stdin
+    mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks" "$1/$2/types"
+    printf '{ "name": "%s", "version": "0.1.0", "description": "t", "types": "./types/index.d.ts" }\n' "$2" > "$1/$2/.claude-plugin/plugin.json"
+    printf 'declare module "claude-code" {\n  interface EngineInterface {\n    %s: Record<string, (input?: unknown) => Promise<unknown>>\n  }\n}\n' "$3" > "$1/$2/types/index.d.ts"
+    cat > "$1/$2/hooks/register.ts"
+  }
+  # The shape picker manners had: the noun's promise is settled by a press, through a map of waiters.
+  mknounmod "$M12W" waits-in-map pickers <<'TS'
 const waiters = new Map<string, (o: string) => void>()
 const early = new Map<string, string>()
 export const register = on => {
@@ -963,8 +969,8 @@ export const register = on => {
   })
 }
 TS
-# Handed to something that calls it later, kept in a variable, or reached through a helper.
-mknounmod "$M12W" passed-to-listener presses <<'TS'
+  # Handed to something that calls it later, kept in a variable, or reached through a helper.
+  mknounmod "$M12W" passed-to-listener presses <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -972,7 +978,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" called-back-later gate <<'TS'
+  mknounmod "$M12W" called-back-later gate <<'TS'
 let release: (() => void) | undefined
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -981,7 +987,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" through-helper helped <<'TS'
+  mknounmod "$M12W" through-helper helped <<'TS'
 const waiters = new Map<string, (v: string) => void>()
 const waitFor = (id: string): Promise<string> =>
   new Promise(resolve => {
@@ -994,9 +1000,9 @@ export const register = on => {
   })
 }
 TS
-# A timer bounds the wait only when it settles the promise, and only under the 10 s limit measured
-# on 2026-10-05.
-mknounmod "$M12W" long-timer pause <<'TS'
+  # A timer bounds the wait only when it settles the promise, and only under the 10 s limit measured
+  # on 2026-10-05.
+  mknounmod "$M12W" long-timer pause <<'TS'
 const WAIT_MS = 15 * 1_000
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -1005,7 +1011,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" unrelated-timer beat <<'TS'
+  mknounmod "$M12W" unrelated-timer beat <<'TS'
 const waiters = new Map()
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -1014,8 +1020,8 @@ export const register = on => {
   })
 }
 TS
-# A person, asked through Claude Code's own dialog, has no bound either.
-mknounmod "$M12W" asks-a-person confirm <<'TS'
+  # A person, asked through Claude Code's own dialog, has no bound either.
+  mknounmod "$M12W" asks-a-person confirm <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -1023,8 +1029,8 @@ export const register = on => {
   })
 }
 TS
-# A noun answered by a hook on its own event (as mod-kit's screen is) is that noun's code too.
-mknounmod "$M12W" on-noun-event relay <<'TS'
+  # A noun answered by a hook on its own event (as mod-kit's screen is) is that noun's code too.
+  mknounmod "$M12W" on-noun-event relay <<'TS'
 const pending: ((v: string) => void)[] = []
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -1034,9 +1040,9 @@ export const register = on => {
   on('relay.get', async ($, e) => ({ value: await new Promise<string>(r => pending.push(r)) }))
 }
 TS
-# An executor named rather than written in place is read where it is defined; one that cannot be
-# found is reported as unreadable, never passed.
-mknounmod "$M12W" named-executor parked <<'TS'
+  # An executor named rather than written in place is read where it is defined; one that cannot be
+  # found is reported as unreadable, never passed.
+  mknounmod "$M12W" named-executor parked <<'TS'
 const parked: ((v: string) => void)[] = []
 function park(resolve: (v: string) => void) {
   parked.push(resolve)
@@ -1048,7 +1054,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" lost-executor lost <<'TS'
+  mknounmod "$M12W" lost-executor lost <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -1056,9 +1062,9 @@ export const register = on => {
   })
 }
 TS
-# A promise made outside a noun's code (in another hook), kept in a map or a variable, and returned
-# by a noun later is that noun's wait too (#756): it is named where it is made.
-mknounmod "$M12W" made-in-hook held <<'TS'
+  # A promise made outside a noun's code (in another hook), kept in a map or a variable, and returned
+  # by a noun later is that noun's wait too (#756): it is named where it is made.
+  mknounmod "$M12W" made-in-hook held <<'TS'
 const held = new Map<string, Promise<string>>()
 const waiters = new Map<string, (v: string) => void>()
 export const register = on => {
@@ -1072,7 +1078,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" kept-in-variable ready <<'TS'
+  mknounmod "$M12W" kept-in-variable ready <<'TS'
 let release: (() => void) | undefined
 let ready: Promise<void> = Promise.resolve()
 export const register = on => {
@@ -1086,8 +1092,8 @@ export const register = on => {
   })
 }
 TS
-# A race bounds a wait only when the timer it races settles under 10 s (the limit measured on 2026-10-05).
-mknounmod "$M12W" raced-long slow <<'TS'
+  # A race bounds a wait only when the timer it races settles under 10 s (the limit measured on 2026-10-05).
+  mknounmod "$M12W" raced-long slow <<'TS'
 const waiters = new Map()
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 export const register = on => {
@@ -1097,11 +1103,11 @@ export const register = on => {
   })
 }
 TS
-# What must pass: a wait a timer under 10 s settles, one settled at once, a comment or a string
-# naming the forbidden shape, and a wait outside every noun's code, which is not this check's to
-# judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun). The
-# 10 s is the limit measured on 2026-10-05.
-mknounmod "$M12W" bounded short <<'TS'
+  # What must pass: a wait a timer under 10 s settles, one settled at once, a comment or a string
+  # naming the forbidden shape, and a wait outside every noun's code, which is not this check's to
+  # judge (the job watcher gives up a look after ten minutes, from a timer, never from a noun). The
+  # 10 s is the limit measured on 2026-10-05.
+  mknounmod "$M12W" bounded short <<'TS'
 const waiters = new Map()
 const ANSWER_MS = 5_000
 export const register = on => {
@@ -1122,7 +1128,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" commented quiet <<'TS'
+  mknounmod "$M12W" commented quiet <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -1131,7 +1137,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" outside-any-noun quick <<'TS'
+  mknounmod "$M12W" outside-any-noun quick <<'TS'
 const waiters = new Map()
 const later = (id: string) => new Promise(resolve => waiters.set(id, resolve))
 export const register = on => {
@@ -1145,10 +1151,10 @@ export const register = on => {
   })
 }
 TS
-# A race against a timer made in another executor, a helper's or one written in place, bounds the
-# wait, for a promise made in place and for one made in another hook (#756). A promise another hook
-# keeps that no noun reads is not this check's to judge.
-mknounmod "$M12W" raced-short race <<'TS'
+  # A race against a timer made in another executor, a helper's or one written in place, bounds the
+  # wait, for a promise made in place and for one made in another hook (#756). A promise another hook
+  # keeps that no noun reads is not this check's to judge.
+  mknounmod "$M12W" raced-short race <<'TS'
 const waiters = new Map()
 const held = new Map()
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -1169,7 +1175,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" kept-unread calm <<'TS'
+  mknounmod "$M12W" kept-unread calm <<'TS'
 let parked: Promise<void> = Promise.resolve()
 const waiters: (() => void)[] = []
 export const register = on => {
@@ -1183,11 +1189,11 @@ export const register = on => {
   })
 }
 TS
-# A noun's own slow engine calls count too (#802): the 10 s is not paused while a noun's $ calls
-# run (measured live on 2026-10-05 for #756: a noun whose only wait was `process.run` of `sleep 13`
-# was cut at 10,003 ms). process.run waits up to its timeoutMs, 30 s when none is given, and
-# model.complete has no bound under 10 s at all.
-mknounmod "$M12W" slow-process shell <<'TS'
+  # A noun's own slow engine calls count too (#802): the 10 s is not paused while a noun's $ calls
+  # run (measured live on 2026-10-05 for #756: a noun whose only wait was `process.run` of `sleep 13`
+  # was cut at 10,003 ms). process.run waits up to its timeoutMs, 30 s when none is given, and
+  # model.complete has no bound under 10 s at all.
+  mknounmod "$M12W" slow-process shell <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -1195,7 +1201,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" long-process-timeout fetcher <<'TS'
+  mknounmod "$M12W" long-process-timeout fetcher <<'TS'
 const RUN_MS = 30 * 1_000
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -1204,7 +1210,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" model-call namer <<'TS'
+  mknounmod "$M12W" model-call namer <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -1212,7 +1218,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" model-timed quicknamer <<'TS'
+  mknounmod "$M12W" model-timed quicknamer <<'TS'
 export const register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -1220,7 +1226,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" short-process quickshell <<'TS'
+  mknounmod "$M12W" short-process quickshell <<'TS'
 const QUICK_MS = 5_000
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -1229,7 +1235,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" shorthand-timeout tersely <<'TS'
+  mknounmod "$M12W" shorthand-timeout tersely <<'TS'
 const timeoutMs = 5_000
 export const register = on => {
   on('engine.create', async ($, e, next) => {
@@ -1238,7 +1244,7 @@ export const register = on => {
   })
 }
 TS
-mknounmod "$M12W" process-in-hook hooked <<'TS'
+  mknounmod "$M12W" process-in-hook hooked <<'TS'
 export const register = on => {
   on('session.start', async ($, e, next) => {
     await $.process.run(['/bin/sleep', '13'])
@@ -1250,49 +1256,309 @@ export const register = on => {
   })
 }
 TS
-out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
-[ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"25 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
-for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6; do
-  printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
-    && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
-    || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
+  # A called helper is resolved by scope, as the language does: the nearest enclosing declaration of
+  # its name, then the module's top level, never the first declaration of that name anywhere in the
+  # file (#895). Two functions each keep a local `pause`, and only one of them waits. The noun calling
+  # the one that does not wait is not accused, though the waiting `pause` is declared first ...
+  mknounmod "$M12W" same-local-calm brisk <<'TS'
+const waiters = new Map()
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+function hasty() {
+  const pause = () => Promise.resolve('now')
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, brisk: { go: () => hasty() } }
+  })
+}
+TS
+  # ... and the noun calling the one that does wait is, though the quiet `pause` is declared first.
+  mknounmod "$M12W" same-local-waits slow <<'TS'
+const waiters = new Map()
+function hasty() {
+  const pause = () => Promise.resolve('now')
+  return pause()
+}
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, slow: { go: ({ id }) => patient(id) } }
+  })
+}
+TS
+  # A name declared only in a block that does not enclose the call reaches nothing there (here the
+  # call is to a parameter), never that other function's local (#895, lessons review).
+  mknounmod "$M12W" out-of-scope-local handed <<'TS'
+const waiters = new Map()
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+function hasty(pause: () => Promise<string>) {
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, handed: { go: () => hasty(() => Promise.resolve('now')) } }
+  })
+}
+TS
+  # A parameter shadows a top-level helper of its name, in a function and in an arrow alike, so a call
+  # to it reaches nothing in the mod (#895, lessons review).
+  mknounmod "$M12W" param-shadows-top shadowed <<'TS'
+const waiters = new Map()
+const wait = () => new Promise(resolve => waiters.set('x', resolve))
+function hasty(wait: () => Promise<string>) {
+  return wait()
+}
+const brief = (wait: () => Promise<string>): Promise<string> => wait()
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, shadowed: { go: () => hasty(() => Promise.resolve('now')), also: () => brief(() => Promise.resolve('now')) } }
+  })
+}
+TS
+  # An arrow's expression body ends with its line, as the language reads code with no semicolons, so its
+  # parameter shadows nothing past it: the noun's own call of the waiting helper is still named.
+  mknounmod "$M12W" param-scope-ends ends <<'TS'
+const waiters = new Map()
+const wait = () => new Promise(resolve => waiters.set('x', resolve))
+const brief = (wait: () => Promise<string>): Promise<string> => wait()
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, ends: { go: () => wait() } }
+  })
+}
+TS
+  # A parameter shadows a helper however its function's return type is written, a type literal or one
+  # inside angle brackets included (#895, lessons review).
+  mknounmod "$M12W" param-typed-return typedret <<'TS'
+const waiters = new Map()
+const wait = () => new Promise(resolve => waiters.set('x', resolve))
+function hasty(wait: () => Promise<string>): { result: Promise<string> } {
+  return { result: wait() }
+}
+const brief = (wait: () => Promise<string>): Promise<{ a: string }> => wait().then(a => ({ a }))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, typedret: { go: () => hasty(() => Promise.resolve('now')), also: () => brief(() => Promise.resolve('now')) } }
+  })
+}
+TS
+  # A local function's own declaration is not a call of it, so its parameter list is never read as the
+  # arguments of one (#895, lessons review).
+  mknounmod "$M12W" local-function-decl declared <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    function wait(ms: number) {
+      return new Promise(r => setTimeout(r, ms))
+    }
+    return { ...built, declared: { go: () => wait(1_000) } }
+  })
+}
+TS
+  # Two same-named local helpers are each judged by the calls that reach that one, never by the other's:
+  # the short call bounds its own helper and the long one is named at its own (#895, lessons review).
+  mknounmod "$M12W" same-local-args timed <<'TS'
+function quick() {
+  const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
+  return wait(1_000)
+}
+function slow() {
+  const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
+  return wait(20_000)
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, timed: { quick: () => quick(), slow: () => slow() } }
+  })
+}
+TS
+  # A file saved with CRLF line endings and a byte order mark is resolved at the same positions the
+  # compiler reports, so its same-named locals are told apart as in any other file (#895).
+  mknounmod "$M12W" crlf-local crlfed <<'TS'
+const waiters = new Map()
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+function hasty() {
+  const pause = () => Promise.resolve('now')
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, crlfed: { go: () => hasty() } }
+  })
+}
+TS
+  python3 -c 'import sys; p=sys.argv[1]; t=open(p).read(); open(p, "w", newline="").write("\ufeff" + t.replace("\n", "\r\n"))' "$M12W/crlf-local/hooks/register.ts"
+  # A call the checker resolves to nothing in the mod (an import of a file that does not exist, or a
+  # bare global) reaches no function of the mod, and never crashes the resolver (#895).
+  mknounmod "$M12W" unresolved-import loose <<'TS'
+import { gone } from './missing.ts'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, loose: { go: () => gone(), also: () => undefined } }
+  })
+}
+TS
+  # A race member named by a constant declared beside another in one statement is read as the timer
+  # it holds (#895, lessons review).
+  mknounmod "$M12W" multi-declarator paired <<'TS'
+const waiters = new Map()
+const quick = 1, held = new Promise(r => setTimeout(r, 1_000))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, paired: { wait: ({ id }) => Promise.race([new Promise(resolve => waiters.set(id, resolve)), held]) } }
+  })
+}
+TS
+  # A noun method given as a shorthand property (`{ wait }`) is the function of that name, followed
+  # like a call (#895, lessons review).
+  mknounmod "$M12W" shorthand-method short <<'TS'
+const waiters = new Map()
+function wait({ id }: { id: string }) {
+  return new Promise(resolve => waiters.set(id, resolve))
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, short: { wait } }
+  })
+}
+TS
+  out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
+  [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
+  case "$out" in *"37 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
+    printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
+      && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
+      || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
+  done
+  printf '%s\n' "$out" | grep -F 'asks-a-person/hooks/register.ts:4' | grep -q 'waits on a person' \
+    && check "a noun asking a person through \$.ui.ask is named" ok || check "a noun asking a person through \$.ui.ask is named" "$out"
+  printf '%s\n' "$out" | grep -F 'lost-executor/hooks/register.ts:4' | grep -q 'cannot be read' \
+    && check "an executor that cannot be found is reported as unreadable, never passed" ok \
+    || check "an executor that cannot be found is reported as unreadable, never passed" "$out"
+  for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5; do
+    printf '%s\n' "$out" | grep -F "$at" | grep -q 'which a noun returns' \
+      && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
+      || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
+  done
+  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5; do
+    printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
+      && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
+      || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
+  done
+  printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
+    && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
+  for m in short-process process-in-hook shorthand-timeout model-timed; do
+    ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
+  done
+  ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
+    && check "a local helper is judged by its own calls, never a same-named one's (#895)" ok \
+    || check "a local helper is judged by its own calls, never a same-named one's (#895)" "$out"
+  for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl crlf-local unresolved-import multi-declarator; do
+    ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
+  done
+  # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method; do rm -rf "${M12W:?}/$m"; done
+  out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
+    || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
+  # A mods folder named relative to where the check runs is resolved too: the compiler's project is
+  # written in a folder of its own, so each file is handed to it by its absolute path (#895).
+  out="$(cd "$(dirname "$M12W")" && bash "$WAITS" "$(basename "$M12W")" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "a mods folder given by a relative path is checked the same (#895)" ok \
+    || check "a mods folder given by a relative path is checked the same (#895)" "exit=$code out=$out"
+  out="$(cd "$ROOT" && CHECK_MODS_TS_DIR=tools/typescript bash "$WAITS" "$M12W" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "a compiler folder given by a relative path is loaded (#895)" ok \
+    || check "a compiler folder given by a relative path is loaded (#895)" "exit=$code out=$out"
+  out="$(bash "$WAITS" "$TMPROOT/not-there" 2>&1)"; code=$?
+  [ "$code" -eq 2 ] && check "a missing mods folder is refused by the noun wait check" ok \
+    || check "a missing mods folder is refused by the noun wait check" "exit=$code out=$out"
+  # Calls are resolved by the pinned TypeScript compiler (#895), so without it nothing is checked and
+  # the run refuses by name rather than passing over nothing resolved (L490).
+  out="$(CHECK_MODS_TS_DIR="$TMPROOT/no-typescript" bash "$WAITS" "$M12W" 2>&1)"; code=$?
+  [ "$code" -eq 4 ] && printf '%s\n' "$out" | grep -q 'pinned TypeScript compiler cannot be loaded' \
+    && check "a missing TypeScript compiler is refused by name by the noun wait check (#895)" ok \
+    || check "a missing TypeScript compiler is refused by name by the noun wait check (#895)" "exit=$code out=$out"
+  if [ -d "$ROOT/payload/mods" ]; then
+    out="$(bash "$WAITS" "$ROOT/payload/mods" 2>&1)"; code=$?
+    [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \
+      || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
+  fi
+}
+# Whether the compiler in $1 STARTS, judged by running the resolver once on a one line fixture,
+# never by its folder existing: TypeScript 7 is a native binary, so a Mac's install copied to Linux
+# (tests/run-on-linux.sh copies the checkout) is there and cannot run (lessons review of #896).
+ts_starts(){   # $1 = the folder the pinned TypeScript compiler is looked for in
+  mkdir -p "$TMPROOT/ts-probe"
+  printf 'const probe = () => 1\nprobe()\n' > "$TMPROOT/ts-probe/probe.ts"
+  printf '{"mods":[{"files":["%s"]}]}' "$TMPROOT/ts-probe/probe.ts" \
+    | node "$ROOT/tools/lib/ts-resolve.mjs" "$1" > "$TMPROOT/ts-probe/out.json" 2> "$TMPROOT/ts-probe/err.txt" \
+    && grep -q '"call"' "$TMPROOT/ts-probe/out.json"
+}
+noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looked for in; $2 = "required" where it must start
+  if ts_starts "$1"; then
+    CHECK_MODS_TS_DIR="$1" noun_wait_checks
+  elif [ "${2:-}" = required ]; then
+    # CI installs the compiler, so one that does not start there is a broken step, never a machine
+    # that has not installed it, and every check below would otherwise go quietly unmeasured.
+    check "the pinned TypeScript compiler starts where CI runs the noun wait checks (#895)" "it did not start from $1: $(tail -1 "$TMPROOT/ts-probe/err.txt" 2>/dev/null)"
+  else
+    echo "UNMEASURED: the noun wait checks (section 12) did not run: no TypeScript compiler that starts in $1. Install it with: npm ci --prefix tools/typescript"
+  fi
+}
+# A stand-in compiler that is installed but exits non zero as it loads, as a Mac's copy does on Linux.
+mkdir -p "$TMPROOT/broken-typescript/node_modules/typescript/dist/api/sync"
+printf 'process.exit(3)\n' > "$TMPROOT/broken-typescript/node_modules/typescript/dist/api/sync/api.js"
+for ts in no-typescript-here broken-typescript; do
+  # Where it is required, a compiler missing or not starting is one failure, never UNMEASURED.
+  # Counted here and then taken back, since the failure is the fixture's.
+  before=$fail
+  noun_wait_section "$TMPROOT/$ts" required > "$TMPROOT/noun-waits-required.out" 2>&1
+  got=$((fail - before)); fail=$before
+  [ "$got" -eq 1 ] && ! grep -q '^UNMEASURED' "$TMPROOT/noun-waits-required.out" \
+    && check "under CI a compiler that does not start ($ts) fails the noun wait checks, never UNMEASURED (#895)" ok \
+    || check "under CI a compiler that does not start ($ts) fails the noun wait checks, never UNMEASURED (#895)" "failures=$got out=$(cat "$TMPROOT/noun-waits-required.out")"
+  # Elsewhere the section is UNMEASURED, never a failure, and runs nothing. Run in this shell, never a
+  # $(...) subshell, so a check it ran would move these very counters (lessons review of #896).
+  before=$fail; ran=$pass
+  noun_wait_section "$TMPROOT/$ts" > "$TMPROOT/noun-waits-unmeasured.out" 2>&1
+  out="$(cat "$TMPROOT/noun-waits-unmeasured.out")"
+  [ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
+    && ! printf '%s\n' "$out" | grep -q "^FAIL" \
+    && check "with a compiler that does not start ($ts) the noun wait checks are UNMEASURED, never failed (#895)" ok \
+    || check "with a compiler that does not start ($ts) the noun wait checks are UNMEASURED, never failed (#895)" "$out"
 done
-printf '%s\n' "$out" | grep -F 'asks-a-person/hooks/register.ts:4' | grep -q 'waits on a person' \
-  && check "a noun asking a person through \$.ui.ask is named" ok || check "a noun asking a person through \$.ui.ask is named" "$out"
-printf '%s\n' "$out" | grep -F 'lost-executor/hooks/register.ts:4' | grep -q 'cannot be read' \
-  && check "an executor that cannot be found is reported as unreadable, never passed" ok \
-  || check "an executor that cannot be found is reported as unreadable, never passed" "$out"
-for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5; do
-  printf '%s\n' "$out" | grep -F "$at" | grep -q 'which a noun returns' \
-    && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
-    || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
-done
-for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5; do
-  printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
-    && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
-    || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
-done
-printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
-  && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
-for m in short-process process-in-hook shorthand-timeout model-timed; do
-  ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
-done
-for m in bounded commented outside-any-noun raced-short kept-unread; do
-  ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
-done
-# Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call; do rm -rf "${M12W:?}/$m"; done
-out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
-[ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
-  || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
-out="$(bash "$WAITS" "$TMPROOT/not-there" 2>&1)"; code=$?
-[ "$code" -eq 2 ] && check "a missing mods folder is refused by the noun wait check" ok \
-  || check "a missing mods folder is refused by the noun wait check" "exit=$code out=$out"
-if [ -d "$ROOT/payload/mods" ]; then
-  out="$(bash "$WAITS" "$ROOT/payload/mods" 2>&1)"; code=$?
-  [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \
-    || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
+# ... and with one that starts they run, here, counted like any other check. Required under CI,
+# where the workflow installs it.
+TS_FOR_WAITS="${CHECK_MODS_TS_DIR:-$ROOT/tools/typescript}"
+ran=$pass
+noun_wait_section "$TS_FOR_WAITS" $([ "${CI:-}" = true ] && echo required)
+if ts_starts "$TS_FOR_WAITS"; then
+  [ "$pass" -gt "$ran" ] && check "with a TypeScript compiler that starts the noun wait checks run (#895)" ok \
+    || check "with a TypeScript compiler that starts the noun wait checks run (#895)" "none ran"
 fi
 # Each mod scan depends on the shared source reader only through names it documents as public, never
 # a private _helper whose signature can move under it (#756: #739 changed _definition's while #744's
