@@ -155,6 +155,18 @@ wait "$held" "$late"
 has "a render held after reading never replaces a newer one (#909)" "late note B" "$(report_of g5)"
 has "and the held note is there too" "held render A" "$(report_of g5)"
 
+# A note whose render gives up is still in the report: the render holding the lock looks again
+# once it has written, and renders again while the notes have grown since it read them (#909).
+rm -f "$PAUSE/go" "$MARKS"/paused.* "$MARKS"/waiting.*
+SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render C"}' >/dev/null 2>&1 &
+held=$!
+upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
+out="$(SLEEP_REPORT_LOCK_S=1 note '{"kind":"finding","by":"b","text":"gave up note D"}' 2>&1)"
+has "the note behind the held render gave up its own render" "so this one gave up" "$out"
+touch "$PAUSE/go"
+wait "$held"
+has "and the held render, looking again, put it in the report" "gave up note D" "$(report_of g5)"
+
 # A render that cannot take its turn within the deadline gives up and says so; its note is written.
 LOCKF="$SLEEPDIR/notes/g5.render.lock"
 python3 -c 'import fcntl, os, sys, time

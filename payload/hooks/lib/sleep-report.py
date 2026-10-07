@@ -50,7 +50,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
 resetsAt?}]}, as $.session.usage() reads it. A note of a kind not listed is shown under Other notes.
 
 Seams for tests: SLEEP_REPORT_NOW_MS stands in for the clock, SLEEP_REPORT_GH_TOTAL_S for the
-time GitHub's reads may take together; pmset and gh are found on PATH.
+time GitHub's reads may take together, SLEEP_REPORT_LOCK_S for how long a render waits its turn;
+SLEEP_REPORT_PAUSE holds a render between reading the notes and replacing the report until a `go`
+file is in that folder, and SLEEP_REPORT_MARKS names a folder each render drops a marker in as it
+pauses or waits (#909); pmset and gh are found on PATH.
 """
 
 import argparse
@@ -651,7 +654,28 @@ def render(record_path, record, final):
         return _render_locked(path, record, final, github)
 
 
+def _notes_size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return -1
+
+
+RERENDERS = 5
+
+
 def _render_locked(path, record, final, github):
+    # Rendered again while the notes have grown since they were read, so a note whose own render
+    # gave up waiting for this one is in the report all the same (#909); a few times at most.
+    for _ in range(RERENDERS):
+        size = _notes_size(path)
+        dest = _render_once(path, record, final, github)
+        if _notes_size(path) == size:
+            break
+    return dest
+
+
+def _render_once(path, record, final, github):
     notes, bad = read_notes(path)
     now = now_ms()
     text = build(record, notes, bad, final, now, github)
