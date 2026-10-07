@@ -316,7 +316,7 @@ const scopeModes: { name: string; register: Register } = {
           deny: `Held: Dan is away from the Mac, so "${h.label}" waits for him to come back.`,
         }
       }
-      return { ...built, scopeModes: { isAway, hold } } as never
+      return { ...built, scopeModes: { isAway, hold } }
     })
   },
 }
@@ -352,7 +352,7 @@ const brokenScopeModes: { name: string; register: Register } = {
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      return { ...built, scopeModes: { isAway: async () => false, hold: async () => { throw new Error('the state could not be read') } } } as never
+      return { ...built, scopeModes: { isAway: async () => false, hold: async () => { throw new Error('the state could not be read') } } }
     })
   },
 }
@@ -365,7 +365,7 @@ const typeErrorScopeModes: { name: string; register: Register } = {
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      return { ...built, scopeModes: { isAway: async () => false, hold: async () => { throw new TypeError("undefined is not an object (evaluating 'held.length')") } } } as never
+      return { ...built, scopeModes: { isAway: async () => false, hold: async () => { throw new TypeError("undefined is not an object (evaluating 'held.length')") } } }
     })
   },
 }
@@ -458,6 +458,17 @@ const brokenKit: { name: string; register: Register } = {
           commands: async () => {
             throw new Error('the command reader is down')
           },
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
+          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
         },
       }
     })

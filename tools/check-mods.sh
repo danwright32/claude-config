@@ -125,6 +125,43 @@ for d in "${mods[@]}"; do
   done <<< "$(printf '%s\n' "$known_bypass" | awk -F'\t' -v m="$name" '$1 == m { print $2 }')"
 done
 
+# What an engine.create hook returns, the built $ spread with what the mod adds, is never cast
+# (#833). A cast to never passes any shape, so a test's stand-in for another mod's noun that lacked a
+# member, or took a parameter narrower than the real one, type checked clean: removing the casts on
+# 2.1.292 found eight such stand-ins in seven mods. A stand-in is typed with
+# the real noun's types instead (import type from ../.claude-plugin/types/<mod>/index.d.ts), and each
+# member a test never reaches refuses by name. The returned object is matched with its braces
+# balanced, so a cast inside it (a state.set argument) is not one, and the line named is the return's.
+# Filesystem only, so it holds on CI's runner too.
+casts_of(){   # $1 = mod dir
+  perl -MFile::Find -e '
+    my @f;
+    find({ wanted => sub { push @f, $File::Find::name if -f $_ && /\.tsx?$/ },
+           preprocess => sub { grep { $_ ne "node_modules" && $_ ne ".claude-plugin" } @_ } }, $ARGV[0]);
+    for my $f (sort @f) {
+      open(my $h, "<", $f) or die "cannot read $f: $!\n";
+      local $/; my $s = <$h>; close $h;
+      while ($s =~ /\breturn\s*(\{\s*\.\.\.built\b(?:[^{}]|(\{(?:[^{}]|(?2))*\}))*\})\s*as\s+(never|unknown|any)\b/g) {
+        my $line = 1 + (substr($s, 0, $-[0]) =~ tr/\n//);
+        my $rel = substr($f, length($ARGV[0]) + 1);
+        print "$rel:$line: as $3\n";
+      }
+    }' "$1"
+}
+for d in "${mods[@]}"; do
+  name="$(basename "$d")"
+  if ! cs="$(casts_of "$d")"; then
+    echo "check-mods: $name: could not read its files to see whether an engine.create return is cast (the reason is above), so it was stopped"
+    failed=1
+    continue
+  fi
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    echo "check-mods: $name/$c: an engine.create hook casts the object it returns, which passes any shape, so the strict type check cannot see a member it lacks or a parameter the real one refuses (#833). Return it uncast, typed with the real types."
+    failed=1
+  done <<< "$cs"
+done
+
 bin="${CLAUDE_BIN:-}"
 if [ -z "$bin" ]; then
   bin="$(command -v claude 2>/dev/null || true)"
