@@ -131,11 +131,12 @@ const withoutIsItLive = { plugins: [deps] }
 
 const MIN = 60_000
 const T0 = 1_000_000
+const BOOT = 1759800000
 const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/s1/scratchpad'
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
-type Session = { sessionId: string }
+type Session = { sessionId: string; extra?: Record<string, unknown> }
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
 // unless headRefName says otherwise) and by `gh pr view` only by its own number.
 type GhPr = { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] }
@@ -155,6 +156,16 @@ type Opts = {
   branchOnGitHub?: boolean
   worktrees?: string
   ask?: string
+  /** The Mac's files beneath the sleep record (#840), by path; mv, ln and rm act on them. */
+  files?: Record<string, string>
+  /** This boot's start, as sysctl gives it; null when sysctl fails. */
+  boot?: number | null
+  /** A move or link of the sleep record that fails for a reason other than the file being gone. */
+  mvFails?: string
+  lnFails?: string
+  notifyFails?: boolean
+  /** A new record written over the old one just before the first move of it: a sleep begun between a read and a move. */
+  replacedBeforeMove?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -176,12 +187,68 @@ const world = (on: On, o: Opts = {}) => {
     asked: [] as string[],
     tools: [] as string[],
     logs: [] as string[],
+    files: { ...o.files } as Record<string, string>,
+    fsWrites: [] as string[],
+    notified: [] as string[],
+    appended: [] as { file: string; line: string }[],
   }
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/Users/x' })
+  // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
+  // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
+  on('fs.write', ($, e) => {
+    w.fsWrites.push(e.path)
+    w.files[e.path] = e.text
+    return { value: undefined }
+  })
+  on('fs.read', ($, e) => {
+    if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
+    return { value: w.files[e.path] as string } as never
+  })
+  on('fs.exists', ($, e) => ({ value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
   on('process.run', ($, e) => {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
+    const ops = a.filter(x => !x.startsWith('-'))
+    if (cmd === 'sysctl') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
+    if (cmd === 'mkdir') return ok()
+    if (cmd === 'mv') {
+      const [from, to] = ops as [string, string]
+      if (!(from in w.files)) return fail(1, `mv: rename ${from} to ${to}: No such file or directory`)
+      if (o.mvFails) return fail(1, `mv: rename ${from} to ${to}: ${o.mvFails}`)
+      if (o.replacedBeforeMove && from.endsWith('/current.json')) {
+        w.files[from] = o.replacedBeforeMove
+        o.replacedBeforeMove = undefined
+      }
+      if (a.includes('-n') && to in w.files) return ok()
+      w.files[to] = w.files[from] as string
+      delete w.files[from]
+      return ok()
+    }
+    if (cmd === 'ln') {
+      const [from, to] = ops as [string, string]
+      if (o.lnFails) return fail(1, `ln: ${to}: ${o.lnFails}`)
+      if (to in w.files) return fail(1, `ln: ${to}: File exists`)
+      if (!(from in w.files)) return fail(1, `ln: ${from}: No such file or directory`)
+      w.files[to] = w.files[from] as string
+      return ok()
+    }
+    if (cmd === 'rm') {
+      for (const f of ops) delete w.files[f]
+      return ok()
+    }
+    if (cmd === 'sh' && a[0] === '-c' && String(a[1]).includes('>>')) {
+      // The note appended to the night's notes file: sh -c '...' sh <dir> <line> <file>
+      const [, , , , line, file] = a as string[]
+      w.appended.push({ file: file as string, line: line as string })
+      w.files[file as string] = `${w.files[file as string] ?? ''}${line}\n`
+      return ok()
+    }
+    if (cmd === 'terminal-notifier') {
+      if (o.notifyFails) return fail(1, 'terminal-notifier: no permission to notify')
+      w.notified.push(a[a.indexOf('-message') + 1] as string)
+      return ok()
+    }
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
     if (cmd === '__modkit') {
@@ -956,4 +1023,204 @@ test('another mod holds its own item while away, and is told nothing was held at
   })
   await command($ as never, 'home')
   expect((w.bands[w.bands.length - 1] as Row).lines[1]).toEqual([{ text: 'Paste the key into Stripe ' }, { button: 'held-1', label: 'Do it' }])
+})
+
+// ---- Sleep mode phase 1 (#840): the machine wide sleep record ----
+
+const SLEEP = '/Users/x/.claude/state/sleep'
+const CURRENT = `${SLEEP}/current.json`
+// T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
+// 17:00 UTC (EST).
+const UNTIL = Date.UTC(1970, 0, 1, 17)
+const recordOf = (w: { files: Record<string, string> }) => JSON.parse(w.files[CURRENT] as string) as Record<string, unknown>
+const asleepRecord = (extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ v: 1, generation: 'g0', since: T0 - 5 * MIN, until: UNTIL, night: '1969-12-31', bootTime: BOOT, report: '/Users/x/Downloads/sleep-report-1969-12-31.md', startedBy: { sessionId: 's9', cwd: '/other' }, workers: ['s9'], placeBefore: 'home', ...extra })
+const interactive = (sessionId: string): Session => ({ sessionId, extra: { 'scope-modes': { isInteractive: true } } })
+
+test('/sleep writes the record whole, enrols the interactive sessions, and the band shows ASLEEP', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [interactive('s2'), { sessionId: 's3', extra: { 'scope-modes': { isInteractive: false } } }, { sessionId: 's4' }] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(recordOf(w)).toEqual({
+    v: 1,
+    generation: `${T0}-s1`,
+    since: T0,
+    until: UNTIL,
+    night: '1969-12-31',
+    bootTime: BOOT,
+    report: '/Users/x/Downloads/sleep-report-1969-12-31.md',
+    startedBy: { sessionId: 's1', cwd: '/repo' },
+    workers: ['s1', 's2'],
+    placeBefore: 'home',
+  })
+  // Written beside it and linked into place, never written straight over it; the temp file is gone.
+  expect(w.fsWrites).toEqual([`${SLEEP}/.current-${T0}-s1.tmp`])
+  expect(Object.keys(w.files)).toEqual([CURRENT])
+  expect(lastModes(w)).toEqual(['ASLEEP'])
+  expect(r.text).toBe('Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said.')
+})
+
+test('/sleep run twice says when and where sleep started, and changes nothing', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  const first = w.files[CURRENT]
+  await clock.advance(10 * MIN)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at 12:00 PM ET on Thu Jan 1. Nothing changed.')
+  expect(w.files[CURRENT]).toBe(first)
+  expect(w.fsWrites.length).toBe(1)
+})
+
+test('/sleep started by another session, or being prepared, changes nothing', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on: it started at 7:11 PM ET on Wed Dec 31 in \/other/)
+  delete w.files[CURRENT]
+  w.files[`${SLEEP}/preparing/generation`] = 'g7'
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in another session. Nothing changed.')
+  expect(w.fsWrites).toEqual([])
+})
+
+test('two /sleep at once: one record, and the second says it is already on', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const [a, b] = await Promise.all([command($ as never, 'sleep'), command($ as never, 'sleep')])
+  const texts = [a.text, b.text]
+  expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
+  expect(texts.filter(t => t?.startsWith('Sleep mode is already on')).length).toBe(1)
+  expect(Object.keys(w.files)).toEqual([CURRENT])
+})
+
+test('a record that cannot be written is said, and nothing is left behind', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { lnFails: 'Permission denied' })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode did not start: the record could not be put in place (ln: /Users/x/.claude/state/sleep/current.json: Permission denied).')
+  expect(Object.keys(w.files)).toEqual([])
+  expect(w.modes.some(m => m.includes('ASLEEP'))).toBe(false)
+})
+
+test('/sleep refuses when this boot cannot be read, since the record could never be told apart from an old one', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { boot: null })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe("Sleep mode did not start: this boot's start could not be read (sysctl: unknown oid).")
+  expect(Object.keys(w.files)).toEqual([])
+})
+
+test('a record that cannot be read reads as awake, /sleep leaves it, and /wake clears it', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: '{"v":1,' } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('A sleep record is already there but cannot be read (the sleep record is not JSON). Nothing changed; /wake clears it.')
+  expect(w.modes.some(m => m.includes('ASLEEP'))).toBe(false)
+  expect((await command($ as never, 'wake')).text).toBe('Sleep mode is off. Its record could not be read (the sleep record is not JSON), so where each session delivers is left as it is.')
+  expect(Object.keys(w.files).filter(f => f.startsWith(`${SLEEP}/ended/`)).length).toBe(1)
+  expect(w.files[CURRENT]).toBeUndefined()
+})
+
+test('/wake moves the record aside, puts every session back where it was, and a second /wake does nothing', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [CURRENT]: asleepRecord({ placeBefore: 'away' }) } })
+  await start($ as never, clock)
+  await clock.settle()
+  const r = await command($ as never, 'wake')
+  expect(r.text).toBe('Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other.')
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(Object.keys(w.files)).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`])
+  expect(lastModes(w)).toEqual(['AWAY'])
+  expect(w.sent).toEqual([{ to: 's2', text: AWAY_TEXT }])
+  expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on.')
+  expect(w.sent.length).toBe(1)
+})
+
+test('two /wake calls at once: only the one whose move succeeds acts', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const [a, b] = await Promise.all([command($ as never, 'wake'), command($ as never, 'wake')])
+  const texts = [a.text, b.text].sort()
+  expect(texts[0]).toMatch(/^Sleep mode is off\./)
+  expect(texts[1]).toBe('Sleep mode was already woken by another session.')
+  // Every other session told once, never twice.
+  expect(w.sent.length).toBe(1)
+  expect(Object.keys(w.files).filter(f => f.startsWith(`${SLEEP}/ended/`)).length).toBe(1)
+})
+
+test('a move that fails for another reason leaves sleep on and says so', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, mvFails: 'Operation not permitted' })
+  await start($ as never, clock)
+  expect((await command($ as never, 'wake')).text).toBe(`Sleep mode could not be turned off (mv: rename ${CURRENT} to ${SLEEP}/ended/${T0}-woke-s1.json: Operation not permitted). It is still on.`)
+  expect(w.files[CURRENT]).toBeDefined()
+})
+
+test("Dan's own \"I'm up\" wakes it; the same words from another session do not", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await say($ as never, "I'm up", 'peer')
+  expect(w.files[CURRENT]).toBeDefined()
+  await say($ as never, "I'm up for a quick look at the logs")
+  expect(w.files[CURRENT]).toBeDefined()
+  const r = await say($ as never, "ok I'm up.")
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(r.context?.join('\n')).toMatch(/Dan's message woke sleep mode\. Say so in one line first: "Sleep mode is off\./)
+})
+
+test('while asleep every session is quiet as away: opening on the Mac is held, though place was home', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(w.reached).toEqual([])
+  const r = await say($ as never, 'how is it going')
+  expect(r.context?.join('\n')).toMatch(/Sleep mode is on until 12:00 PM ET on Thu Jan 1\. This session is not one of the overnight workers\./)
+  await command($ as never, 'wake')
+  expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
+})
+
+test('the record ends by itself at noon ET: asleep a ms before, awake at noon, and the first to see it notes it and notifies once', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [CURRENT]: asleepRecord({ placeBefore: 'home' }) } })
+  await start($ as never, clock)
+  await clock.set(UNTIL - 1)
+  expect(lastModes(w)).toEqual(['ASLEEP'])
+  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(w.notified).toEqual([])
+  // At noon exactly the record no longer holds for any decision, before the minute's check moves it.
+  await clock.set(UNTIL)
+  expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
+  // The minute's check, counted from the session's start, is the first to see it.
+  const tick = T0 + Math.ceil((UNTIL - T0) / MIN) * MIN
+  await clock.set(tick)
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(lastModes(w)).toEqual([])
+  expect(w.notified).toEqual(['Sleep mode ended by itself at 12:00 PM ET on Thu Jan 1: it was past noon ET.'])
+  expect(w.appended.length).toBe(1)
+  expect(w.appended[0]?.file).toBe(`${SLEEP}/notes/g0.jsonl`)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ v: 1, kind: 'limit', at: tick, generation: 'g0', reason: 'it was past noon ET', by: 's1' })
+  // Every session put back where it was before sleep.
+  expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
+  await clock.advance(5 * MIN)
+  expect(w.notified.length).toBe(1)
+})
+
+test('a record from another boot reads as awake, and is ended with that reason', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootTime: BOOT - 1000 }) } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  await clock.advance(MIN)
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
+})
+
+test('a notification that cannot be sent is said in the session', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: T0 }) }, notifyFails: true })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.toasts).toContain('Sleep mode ended by itself (it was past noon ET), but the notification could not be sent: terminal-notifier: no permission to notify')
+})
+
+test('a new sleep begun between reading the old record and moving it is put back, never ended as expired', withDeps, async ($, on) => {
+  const fresh = asleepRecord({ generation: 'g1', until: UNTIL })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: T0 + 30_000 }) }, replacedBeforeMove: fresh })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.files[CURRENT]).toBe(fresh)
+  expect(Object.keys(w.files)).toEqual([CURRENT])
+  expect(w.notified).toEqual([])
+  expect(w.appended).toEqual([])
 })

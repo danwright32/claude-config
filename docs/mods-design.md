@@ -500,7 +500,7 @@ Each in a rendered design round unless marked picker.
 | --- | --- | --- |
 | Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line). Picker manners stopped drawing questions in #744, and ask before saving in #777; mod-kit's question builder went in #796 |
 | Ask before saving (#618) | The question | Superseded by #777: Claude asks in Claude Code's own dialog, naming the file and stating the rule in plain words. Was: the rule's exact text and the file it would go to between the question and the three answers, set off by a grey rule |
-| Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
+| Scope modes (#616), away and home (#621), sleep (#840) | ASLEEP, NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
 | Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
 | Handoff (#613) | Something it names that changed | Its own line under the handoff, one per change: "changed since: #615 closed" (over a list on the same line, and a count), in grey under the amber lead line (handoff colour round, over amber, which made three amber lines) |
 | Manual steps (#614) | Where | As the issue says: a side pane, the band when the terminal is narrow. A pane opened unasked needs 144 columns, so at laptop width it is the band (no round: settled in the spec) |
@@ -755,6 +755,50 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   asks Claude to do that one thing, so it still passes every guard (the keystroke guard's heads up
   included). The same thing held twice is one row. A /clear ends the session and every mode with it.
 - The phone line ends every reply to a phone message while home, not only the first.
+
+### Sleep mode phase 1: the sleep record (#840), built
+
+Part of the Sleep mode milestone, after the engine spike (#839). Built in the scope modes mod,
+because sleep shares away's holding, the band's mode line and Dan's own words read off the prompt.
+What the plan settled is in #840; what the build decided, each open to Dan changing it:
+
+- The record is the whole Mac's, `~/.claude/state/sleep/current.json`, never in `$.state`: no
+  session caches whether the Mac is asleep. `readSleep` (`hooks/sleep.ts`) is the one predicate,
+  asked with the file read afresh at each decision (a tool call, a prompt, the minute's tick, the
+  commands, and `isAway` and `hold` for other mods), and the shell's `sleep_state` and
+  `sleep_active` (`payload/hooks/lib/sleep.sh`) answer the same, checked in the same order. Both are
+  held to `tests/sleep-fixtures.ts`, plain JSON after its `=` so the shell suite
+  (`hooks/test-sleep-state.sh`) reads the same cases: asleep, none, expired, other-boot, unreadable.
+  The version gate is `v >= 1`, so a later writer's added field still reads as asleep.
+- Only asleep is asleep. Past `until`, from another boot, or a record that cannot be read (not JSON,
+  no version, no end or boot, or this boot's start unreadable) reads as awake: a mute that cannot
+  say when it ends must not hold (L523), and a stray page is better than a silence nobody sees.
+- The night is the ET date of the evening: before noon ET counts as the night before, and `until` is
+  noon ET the next day, found in America/New_York whatever zone the Mac is set to, so a change to
+  or from daylight time moves it an hour in UTC and never in ET. Tested at both edges and across
+  both changes, with the clock injected.
+- `bootTime` is `sysctl kern.boottime`'s seconds, read once per session (a session lives inside one
+  boot; a failed read is not kept). `/sleep` refuses when it cannot be read, since such a record
+  could never be told apart from an old boot's.
+- Written whole to a temp file beside it, read back, then `ln`ed into place: a link fails when a
+  record is there, so two `/sleep` at once place one, and the other says sleep is already on. A
+  second `/sleep` says when (ET) and in which folder sleep started and changes nothing; so does one
+  while phase 6's `preparing` marker exists. An unreadable record is left for `/wake` to clear.
+- Workers: this session, and every open session whose scope modes told the session registry at its
+  start (and again at its first prompt) that a person is at its prompt. A `-p` or detached run, or
+  a session that has not said, is not enrolled, and `/sleep` counts them.
+- Asleep keeps every session quiet as away: away's holds apply whatever the session's own place,
+  the band shows ASLEEP rather than AWAY beside it, and each prompt tells Claude sleep is on, until
+  when, and whether this session is a worker. Wake puts `placeBefore` back on every session, as
+  `/away` or `/home` would.
+- Ending moves the record aside with `mv` to `ended/<time>-<woke|limit>-<session>.json`, the one
+  step that claims it: only the session whose move succeeds acts. At the limit, the first session's
+  minute tick moves it, appends a `limit` line to `notes/<generation>.jsonl` (phase 4 builds the
+  report on this file) and sends one notification; if the record moved is not the one judged over
+  (a new sleep began between the read and the move) it is put back with `mv -n`.
+- `/sleep` writes only the record and its workers. The before bed questions (#836), paging (#841),
+  the report (#835) and the overnight driver (#844) build on it; the wake report and summaries
+  (#837) go where `wake` names the winner.
 
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 

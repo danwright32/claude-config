@@ -19,7 +19,7 @@ const HOUR = 60 * MIN
 const CACHE_MS = HOUR
 // How often git, the PR and the jobs are read again, and the cache warning is checked.
 const TICK_MS = MIN
-const MODES: readonly StatusBarMode[] = ['NO BUILD', 'WINDING DOWN', 'AWAY']
+const MODES: readonly StatusBarMode[] = ['ASLEEP', 'NO BUILD', 'WINDING DOWN', 'AWAY']
 const SESSION_ID = /^[A-Za-z0-9-]+$/
 const MOD = 'status-bar'
 

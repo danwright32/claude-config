@@ -303,6 +303,20 @@ for d in "${mods[@]}"; do
     checked="$scratch/$name"
     rm -rf "$checked"; cp -R "$d" "$checked" && rm -rf "$checked/.claude-plugin/types" \
       && cp -R "$TYPES_HOME/mods/$name/.claude-plugin/types" "$checked/.claude-plugin/types" || { checked=""; copy_failed="the copy failed"; }
+    # The laid types hold each dependency's types/index.d.ts as INSTALLED, so a mod would be checked
+    # against its dependency's old contract: a change made to both in one PR fails, and one that
+    # breaks a dependent passes, until the next install (#840, L398). A dependency this folder holds
+    # is read from here instead; any other, and Claude Code's own, keep what was laid. Claude Code
+    # lays each one as a symbolic link to the installed mod's own file, so the link is removed
+    # before the copy: a copy through it rewrote the installed mod, which the sync pushed to main.
+    if [ -n "$checked" ]; then
+      for dep in "$checked/.claude-plugin/types"/*/; do
+        dep="${dep%/}"; dn="$(basename "$dep")"
+        if [ -f "$dep/index.d.ts" ] && [ -f "$dir/$dn/types/index.d.ts" ]; then
+          { rm -f "$dep/index.d.ts" && cp "$dir/$dn/types/index.d.ts" "$dep/index.d.ts"; } || { checked=""; copy_failed="the copy of $dn's types failed"; break; }
+        fi
+      done
+    fi
   fi
   if [ -n "$copy_failed" ]; then
     # Types were laid; what failed is the scratch copy, which is the cause said (L11).
