@@ -180,7 +180,12 @@ _sq_valid() {
 # stdout: a full disk or a folder that cannot be written to is never reported as a lost race (L11).
 _sq_link() {
   local dir="$1" n="$2" json="$3" tmp err
-  tmp="$dir/.tmp.$$.$RANDOM$RANDOM"
+  # mktemp makes the file itself, exclusively, so two writers never share one, even forked ones
+  # that share $$ and RANDOM state: a shared name would let one link the other's entry as its own.
+  if ! tmp="$(mktemp "$dir/.tmp.XXXXXXXX" 2>&1)"; then
+    printf 'the entry could not be written in %s (%s)\n' "$dir" "${tmp:-no reason given}"
+    return 2
+  fi
   if ! err="$( { printf '%s\n' "$json" > "$tmp"; } 2>&1)"; then
     rm -f "$tmp"
     printf 'the entry could not be written in %s (%s)\n' "$dir" "${err:-no reason given}"

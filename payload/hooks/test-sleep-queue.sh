@@ -214,6 +214,25 @@ check_eq "and one entry was made" "1 " "$(claims_of 21)"
 check_eq "eight claimers at once: exactly one owns it" 1 "$(race 22 8)"
 check_eq "and still one entry" "1 " "$(claims_of 22)"
 check_eq "every loser says the issue is held" 7 "$(cat "$WORK"/race-22-* | grep -c "^not-claimed.*held" | tr -d ' ')"
+# Racers sharing $$ and RANDOM state (forked subshells, here seeded alike) still make exactly one
+# owner, and the one that says it won is the session its entry names: a shared temp name would let
+# one racer link another's entry and believe the claim its own.
+same_race(){ # issue count
+  local i
+  for i in $(seq 1 "$2"); do
+    session "q$1-$i" "$((NOW - 1000))" null
+    ( RANDOM=7; sleep_claim "$ROOT" "$1" "q$1-$i" > "$WORK/same-$1-$i" 2>&1 ) &
+  done
+  wait
+}
+for r in 51 52 53 54 55; do
+  same_race "$r" 8
+  won="$(grep -l '^claimed' "$WORK"/same-"$r"-* 2>/dev/null | wc -l | tr -d ' ')"
+  check_eq "racers sharing RANDOM on #$r: exactly one says it won" 1 "$won"
+  winner="$(grep -l '^claimed' "$WORK"/same-"$r"-* 2>/dev/null | sed 's#.*/same-##')"
+  check_has "and #$r's entry names that racer" "\"session\": \"q$winner\"" "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/$r/1" 2>/dev/null)"
+done
+
 # The control: the same library with the link swapped for a copy must let several claimers own one
 # issue, or the race above proves nothing about the link (L1).
 CTRL="$WORK/control"; mkdir -p "$CTRL"
