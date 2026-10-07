@@ -1578,23 +1578,23 @@ case "$out_sp3" in
     check "#230 and it says so, rather than asserting a suite wrote it" "out=$out_sp3" ;;
 esac
 
-# The sizes are read for EVERY file in one `wc` rather than one per file, because the real spool
+# The spool is read in ONE pass over every file rather than once per file, because the real spool
 # holds 157 of them and forking per file was 414ms of a 600ms launch, measured 2026-09-03
-# (claude-config#239). What has
-# to survive that is reading the size of EACH file: only the bytes a run ADDED are judged, and a
-# reader that lost the per file sizes would treat every existing record as new.
+# (claude-config#239). Since #880 that pass snapshots every RECORD before the run, and only records
+# present nowhere at the start are judged. What has to survive is the snapshot covering EACH file:
+# a reader that lost part of it would treat every existing record in that file as new.
 #
 # So the fixture puts a record that would be blamed on a suite into a file NOTHING touches, and has
 # the run append to a DIFFERENT file from elsewhere. Read correctly the run passes, because the only
-# added bytes came from elsewhere. Read without the sizes the untouched file is re-read from the
-# start and its record fails the run. Two files, because one cannot tell the two readings apart.
+# added record came from elsewhere. Read without the snapshot of the untouched file its record is
+# judged as new and fails the run. Two files, because one cannot tell the two readings apart.
 rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-quiet.sh "$SP/suites"/test-anon.sh
 printf '%s\n' "$(sp_record "$SP/a/b")" > "$SPOOL/untouched.jsonl"
 mk_spool_writer beside "/opt/another-project/checkout"
 out_sp5="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp5=$?
 [ "$code_sp5" -eq 0 ] \
-  && check "#239 only the bytes this run added are judged, across several spool files" ok \
-  || check "#239 only the bytes this run added are judged, across several spool files" "exit=$code_sp5 out=$out_sp5"
+  && check "#239 only the records this run added are judged, across several spool files" ok \
+  || check "#239 only the records this run added are judged, across several spool files" "exit=$code_sp5 out=$out_sp5"
 case "$out_sp5" in
   *"SUITES WROTE INTO THE LIVE SPOOL"*)
     check "#239 and a record nothing touched is not blamed on this run" "out=$out_sp5" ;;
