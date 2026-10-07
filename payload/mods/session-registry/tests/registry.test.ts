@@ -20,9 +20,10 @@ const consumer: { name: string; register: Register } = {
     })
   },
 }
-// Claude Code's built-in security default, as it sits on both Macs (#751). It seats itself
-// outermost for a Team or Enterprise organization and sends every classic hook event past the
-// tier a person's own plugins load in, so no mod of ours ever sees one. This is its own code for
+// Claude Code's built-in security default, as it sat on both Macs until each was given a managed
+// settings file (#751, #876). It seats itself outermost for a Team or Enterprise organization and
+// sends every classic hook event past the tier a person's own plugins load in, so no mod of ours
+// sees one wherever that file is missing. This is its own code for
 // that event, copied from the 2.1.292 binary: `e("classic.*",(n,o,t)=>t.to(o,"append"))`. The
 // debug log of a real /clear on 2026-10-06 said the same of this mod: "classic.SessionStart
 // bypassed by cc-plugin-sec-default (tier user); beneath runs".
@@ -289,7 +290,7 @@ test("the security default's stand-in sends that hook past, as the real one does
   expect(await probeRan($, on)).toBe(false)
 })
 
-// #751: on both Macs no classic hook of ours ever runs (the security default above), so the look that
+// #751: where the security default above is seated no classic hook of ours runs, so the look that
 // settles a /clear comes from the /clear itself: once its command has run, the session has ended and
 // its id has switched, and the new conversation has its record before any beat. No clock moves.
 // What happens inside a /clear or a /resume: the session ends under the id it has, then takes `to`.

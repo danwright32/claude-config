@@ -329,6 +329,13 @@ runbp(){ : > "$LOG"; out="$(STUB_LOG="$LOG" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_
 runbp
 [ "$code" -eq 1 ] && check "a mod hooking a bypassed event fails the run" ok || check "a mod hooking a bypassed event fails the run" "exit=$code out=$out"
 printf '%s\n' "$out" | grep -q 'stops hooks classic.Stop, which' && check "naming the mod and the classic event" ok || check "naming the mod and the classic event" "$out"
+# Since #876 both Macs keep the security default out of first place with a managed settings file, so
+# such a hook runs, but only while that file is there: the message says so, not that it never runs.
+printf '%s\n' "$out" | grep 'stops hooks classic.Stop, which' | grep -q 'only while' \
+  && printf '%s\n' "$out" | grep 'stops hooks classic.Stop, which' | grep -q 'managed-settings.json' \
+  && ! printf '%s\n' "$out" | grep 'stops hooks classic.Stop, which' | grep -q 'never runs' \
+  && check "saying it runs only while the managed settings file is in place" ok \
+  || check "saying it runs only while the managed settings file is in place" "$out"
 printf '%s\n' "$out" | grep -q 'sections hooks prompt.section, which' && check "and a prompt event registered across lines" ok || check "and a prompt event registered across lines" "$out"
 printf '%s\n' "$out" | grep -q 'urls hooks classic.Notification, which' && check "and a hook after a URL on the same line" ok || check "and a hook after a URL on the same line" "$out"
 ! printf '%s\n' "$out" | grep -q 'checks hooks' && check "while tool.check, a comment, another object's on and a test file are not hooks" ok \
