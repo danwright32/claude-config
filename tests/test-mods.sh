@@ -934,9 +934,10 @@ fi
 #     case (L362).
 WAITS="$ROOT/tools/check-mod-noun-waits.sh"
 # The checks below need the TypeScript compiler pinned in tools/typescript, which the noun wait check
-# resolves every call with (#895) and refuses without (exit 4). A machine that has not installed it
-# reports them UNMEASURED with the install command, as check-mods.sh does for its type check, rather
-# than failing (L411); CI installs it, so there they always run.
+# resolves every call with (#895) and refuses without (exit 4). A machine where it does not start
+# (not installed, or a Mac's native build copied to Linux) reports them UNMEASURED with the install
+# command, as check-mods.sh does for its type check, rather than failing (L411); under CI=true, where
+# the workflow installs it, one that does not start is a failure.
 noun_wait_checks(){
   M12W="$TMPROOT/m12w"
   mknounmod(){   # $1 = mods dir  $2 = name  $3 = the noun its contract declares; the hooks module's source on stdin
@@ -1507,42 +1508,57 @@ TS
       || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
   fi
 }
-noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looked for in; $2 = "required" where it must be there
-  if [ -d "$1/node_modules/typescript" ]; then
+# Whether the compiler in $1 STARTS, judged by running the resolver once on a one line fixture,
+# never by its folder existing: TypeScript 7 is a native binary, so a Mac's install copied to Linux
+# (tests/run-on-linux.sh copies the checkout) is there and cannot run (lessons review of #896).
+ts_starts(){   # $1 = the folder the pinned TypeScript compiler is looked for in
+  mkdir -p "$TMPROOT/ts-probe"
+  printf 'const probe = () => 1\nprobe()\n' > "$TMPROOT/ts-probe/probe.ts"
+  printf '{"mods":[{"files":["%s"]}]}' "$TMPROOT/ts-probe/probe.ts" \
+    | node "$ROOT/tools/lib/ts-resolve.mjs" "$1" > "$TMPROOT/ts-probe/out.json" 2> "$TMPROOT/ts-probe/err.txt" \
+    && grep -q '"call"' "$TMPROOT/ts-probe/out.json"
+}
+noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looked for in; $2 = "required" where it must start
+  if ts_starts "$1"; then
     CHECK_MODS_TS_DIR="$1" noun_wait_checks
   elif [ "${2:-}" = required ]; then
-    # CI installs the compiler, so its absence there is a broken step, never a machine that has
-    # not installed it, and every check below would otherwise go quietly unmeasured.
-    check "the pinned TypeScript compiler is installed where CI runs the noun wait checks (#895)" "no compiler in $1"
+    # CI installs the compiler, so one that does not start there is a broken step, never a machine
+    # that has not installed it, and every check below would otherwise go quietly unmeasured.
+    check "the pinned TypeScript compiler starts where CI runs the noun wait checks (#895)" "it did not start from $1: $(tail -1 "$TMPROOT/ts-probe/err.txt" 2>/dev/null)"
   else
-    echo "UNMEASURED: the noun wait checks (section 12) did not run: no TypeScript compiler in $1. Install it with: npm ci --prefix tools/typescript"
+    echo "UNMEASURED: the noun wait checks (section 12) did not run: no TypeScript compiler that starts in $1. Install it with: npm ci --prefix tools/typescript"
   fi
 }
-# Where it is required, a missing compiler is one failure, never UNMEASURED. Counted here and then
-# taken back, since the failure is the fixture's.
-before=$fail
-noun_wait_section "$TMPROOT/no-typescript-here" required > "$TMPROOT/noun-waits-required.out" 2>&1
-got=$((fail - before)); fail=$before
-[ "$got" -eq 1 ] && ! grep -q '^UNMEASURED' "$TMPROOT/noun-waits-required.out" \
-  && check "in CI a missing TypeScript compiler fails the noun wait checks, never UNMEASURED (#895)" ok \
-  || check "in CI a missing TypeScript compiler fails the noun wait checks, never UNMEASURED (#895)" "failures=$got out=$(cat "$TMPROOT/noun-waits-required.out")"
-# Without the compiler the section is UNMEASURED, never a failure, and runs nothing ...
-# Run in this shell, never a $(...) subshell, so a check it ran would move these very counters (lessons
-# review of #896); its output goes to a file to be read.
-before=$fail; ran=$pass
-noun_wait_section "$TMPROOT/no-typescript-here" > "$TMPROOT/noun-waits-unmeasured.out" 2>&1
-out="$(cat "$TMPROOT/noun-waits-unmeasured.out")"
-[ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
-  && ! printf '%s\n' "$out" | grep -q "^FAIL" \
-  && check "with no TypeScript compiler the noun wait checks are UNMEASURED, never failed (#895)" ok \
-  || check "with no TypeScript compiler the noun wait checks are UNMEASURED, never failed (#895)" "$out"
-# ... and with it they run, here, counted like any other check.
+# A stand-in compiler that is installed but exits non zero as it loads, as a Mac's copy does on Linux.
+mkdir -p "$TMPROOT/broken-typescript/node_modules/typescript/dist/api/sync"
+printf 'process.exit(3)\n' > "$TMPROOT/broken-typescript/node_modules/typescript/dist/api/sync/api.js"
+for ts in no-typescript-here broken-typescript; do
+  # Where it is required, a compiler missing or not starting is one failure, never UNMEASURED.
+  # Counted here and then taken back, since the failure is the fixture's.
+  before=$fail
+  noun_wait_section "$TMPROOT/$ts" required > "$TMPROOT/noun-waits-required.out" 2>&1
+  got=$((fail - before)); fail=$before
+  [ "$got" -eq 1 ] && ! grep -q '^UNMEASURED' "$TMPROOT/noun-waits-required.out" \
+    && check "under CI a compiler that does not start ($ts) fails the noun wait checks, never UNMEASURED (#895)" ok \
+    || check "under CI a compiler that does not start ($ts) fails the noun wait checks, never UNMEASURED (#895)" "failures=$got out=$(cat "$TMPROOT/noun-waits-required.out")"
+  # Elsewhere the section is UNMEASURED, never a failure, and runs nothing. Run in this shell, never a
+  # $(...) subshell, so a check it ran would move these very counters (lessons review of #896).
+  before=$fail; ran=$pass
+  noun_wait_section "$TMPROOT/$ts" > "$TMPROOT/noun-waits-unmeasured.out" 2>&1
+  out="$(cat "$TMPROOT/noun-waits-unmeasured.out")"
+  [ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
+    && ! printf '%s\n' "$out" | grep -q "^FAIL" \
+    && check "with a compiler that does not start ($ts) the noun wait checks are UNMEASURED, never failed (#895)" ok \
+    || check "with a compiler that does not start ($ts) the noun wait checks are UNMEASURED, never failed (#895)" "$out"
+done
+# ... and with one that starts they run, here, counted like any other check. Required under CI,
+# where the workflow installs it.
 TS_FOR_WAITS="${CHECK_MODS_TS_DIR:-$ROOT/tools/typescript}"
 ran=$pass
-noun_wait_section "$TS_FOR_WAITS" ${GITHUB_ACTIONS:+required}
-if [ -d "$TS_FOR_WAITS/node_modules/typescript" ]; then
-  [ "$pass" -gt "$ran" ] && check "with the TypeScript compiler installed the noun wait checks run (#895)" ok \
-    || check "with the TypeScript compiler installed the noun wait checks run (#895)" "none ran"
+noun_wait_section "$TS_FOR_WAITS" $([ "${CI:-}" = true ] && echo required)
+if ts_starts "$TS_FOR_WAITS"; then
+  [ "$pass" -gt "$ran" ] && check "with a TypeScript compiler that starts the noun wait checks run (#895)" ok \
+    || check "with a TypeScript compiler that starts the noun wait checks run (#895)" "none ran"
 fi
 # Each mod scan depends on the shared source reader only through names it documents as public, never
 # a private _helper whose signature can move under it (#756: #739 changed _definition's while #744's
