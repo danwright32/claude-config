@@ -1537,79 +1537,10 @@ case "$out_sp" in
     check "#230 and it does not accuse a suite of writing it" ok ;;
 esac
 
-# The half that must still work, and the reason none of this may be loosened: a suite writing from
-# inside the repo under test is the real violation and still fails the run (L1, L159).
+# Unstamped records are no longer judged by their directory, or by having none (claude-config#880):
+# every such rule red healthy runs when another session drained or rewrote the spool. The one rule
+# left, a line stamped with this run's id, is tested in the #275 and #880 sections below.
 rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-elsewhere.sh
-mk_spool_writer inside "$SP/a/b"
-out_sp2="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp2=$?
-[ "$code_sp2" -ne 0 ] \
-  && check "#230 a suite writing from inside the repo still fails the run" ok \
-  || check "#230 a suite writing from inside the repo still fails the run" "exit=$code_sp2 out=$out_sp2"
-case "$out_sp2" in
-  *"SUITES WROTE INTO THE LIVE SPOOL"*)
-    check "#230 and it is named as the L2 violation it is" ok ;;
-  *)
-    check "#230 and it is named as the L2 violation it is" "out=$out_sp2" ;;
-esac
-case "$out_sp2" in
-  *"$SP/a/b"*)
-    check "#230 and the directory the record came from is printed" ok ;;
-  *)
-    check "#230 and the directory the record came from is printed" "out=$out_sp2" ;;
-esac
-
-# A record with no working directory at all cannot be attributed, and an unattributable change must
-# not read as a clean one (L98, L11).
-rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-inside.sh
-{
-  printf '#!/usr/bin/env bash\n'
-  printf 'printf %s >> "%s/other.jsonl"\n' "'{\"ts\":\"2026-08-30T12:00:00Z\",\"status\":\"found\"}'" "$SPOOL"
-  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
-} > "$SP/suites/test-anon.sh"
-chmod +x "$SP/suites/test-anon.sh"
-out_sp3="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp3=$?
-[ "$code_sp3" -ne 0 ] \
-  && check "#230 a record that cannot be attributed fails the run" ok \
-  || check "#230 a record that cannot be attributed fails the run" "exit=$code_sp3 out=$out_sp3"
-case "$out_sp3" in
-  *"could not be attributed"*)
-    check "#230 and it says so, rather than asserting a suite wrote it" ok ;;
-  *)
-    check "#230 and it says so, rather than asserting a suite wrote it" "out=$out_sp3" ;;
-esac
-
-# The sizes are read for EVERY file in one `wc` rather than one per file, because the real spool
-# holds 157 of them and forking per file was 414ms of a 600ms launch, measured 2026-09-03
-# (claude-config#239). What has
-# to survive that is reading the size of EACH file: only the bytes a run ADDED are judged, and a
-# reader that lost the per file sizes would treat every existing record as new.
-#
-# So the fixture puts a record that would be blamed on a suite into a file NOTHING touches, and has
-# the run append to a DIFFERENT file from elsewhere. Read correctly the run passes, because the only
-# added bytes came from elsewhere. Read without the sizes the untouched file is re-read from the
-# start and its record fails the run. Two files, because one cannot tell the two readings apart.
-rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-quiet.sh "$SP/suites"/test-anon.sh
-printf '%s\n' "$(sp_record "$SP/a/b")" > "$SPOOL/untouched.jsonl"
-mk_spool_writer beside "/opt/another-project/checkout"
-out_sp5="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp5=$?
-[ "$code_sp5" -eq 0 ] \
-  && check "#239 only the bytes this run added are judged, across several spool files" ok \
-  || check "#239 only the bytes this run added are judged, across several spool files" "exit=$code_sp5 out=$out_sp5"
-case "$out_sp5" in
-  *"SUITES WROTE INTO THE LIVE SPOOL"*)
-    check "#239 and a record nothing touched is not blamed on this run" "out=$out_sp5" ;;
-  *)
-    check "#239 and a record nothing touched is not blamed on this run" ok ;;
-esac
-# The positive control, from the same fixture: the run DID grow a file, so this is not a case where
-# the bracket had nothing to look at (L159, L100).
-case "$out_sp5" in
-  *"from work in other directories"*)
-    check "#239 and the file that did grow was seen" ok ;;
-  *)
-    check "#239 and the file that did grow was seen" "out=$out_sp5" ;;
-esac
-rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-beside.sh
 
 # And the control for all of it: a run that touched the spool not at all says nothing about it.
 rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-anon.sh
@@ -1717,13 +1648,41 @@ case "$out_m1" in
     check "#275 and the run says the spool grew without blaming itself" "out=$out_m1" ;;
 esac
 
-# The half that must still fire, and the reason the loosening above is safe: a suite that writes
-# through the spool library, which is what the defect actually looks like, carries the marker and
-# still fails the run. This one goes through the REAL library rather than a hand written record, so
-# it is the stamping itself that is under test and not a fixture's imitation of it (L52).
+# THE SEAM (claude-config#880): the runner hands every suite a throwaway spool of its own, so a
+# suite that writes through the library WITHOUT setting the override, which is what the original
+# defect looked like, lands there and never in the live store. The run passes and the live spool is
+# untouched; the record is found in the throwaway, which proves the write happened at all (L159).
 rm -f "$SPOOL2"/*.jsonl "$SP2/suites"/test-othersession.sh
 {
   printf '#!/usr/bin/env bash\n'
+  printf '. "%s/lib/issue-spool.sh"\n' "$DIR"
+  printf 'issue_spool_note "$PWD" "a finding no suite may leave in the live spool" suite-fixture >/dev/null 2>&1\n'
+  printf 'cat "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl > "%s/seam-copy" 2>/dev/null\n' "$SP2"
+  printf 'printf "%%s\\n" "$CLAUDE_ISSUE_SPOOL_DIR" > "%s/seam-dir"\n' "$SP2"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$SP2/suites/test-seamwriter.sh"
+chmod +x "$SP2/suites/test-seamwriter.sh"
+rm -f "$SP2/seam-copy" "$SP2/seam-dir"
+out_s1="$(sp2_run)"; code_s1=$?
+[ "$code_s1" -eq 0 ] \
+  && check "#880 a suite writing through the library with no override does not fail the run" ok \
+  || check "#880 a suite writing through the library with no override does not fail the run" "exit=$code_s1 out=$out_s1"
+[ -z "$(cat "$SPOOL2"/*.jsonl 2>/dev/null)" ] \
+  && check "#880 and nothing reached the live spool" ok \
+  || check "#880 and nothing reached the live spool" "live=$(cat "$SPOOL2"/*.jsonl 2>/dev/null)"
+if grep -q "suite_run" "$SP2/seam-copy" 2>/dev/null && [ "$(cat "$SP2/seam-dir" 2>/dev/null)" != "$SPOOL2" ]; then
+  check "#880 and the record landed, stamped, in the throwaway spool the runner handed it" ok
+else
+  check "#880 and the record landed, stamped, in the throwaway spool the runner handed it" "dir=$(cat "$SP2/seam-dir" 2>/dev/null) copy=$(cat "$SP2/seam-copy" 2>/dev/null)"
+fi
+rm -f "$SP2/suites"/test-seamwriter.sh
+
+# The half that must still fire: a suite that points the library at the LIVE spool itself, past the
+# seam, carries the run's stamp and fails the run. Through the REAL library rather than a hand
+# written record, so it is the stamping itself under test and not a fixture's imitation (L52).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'export CLAUDE_ISSUE_SPOOL_DIR="%s"\n' "$SPOOL2"
   printf '. "%s/lib/issue-spool.sh"\n' "$DIR"
   printf 'issue_spool_note "$PWD" "a finding no suite may leave in the live spool" suite-fixture >/dev/null 2>&1\n'
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
@@ -1786,6 +1745,178 @@ case "$out_m4" in
     check "#275 and a run whose marker works says nothing about proving it" ok ;;
 esac
 
+
+# ---------------------------------------------------------------------------
+# Another session DRAINING or rewriting the spool mid run is not a suite writing it
+# (claude-config#880).
+# ---------------------------------------------------------------------------
+# The bracket used to judge the bytes past each file's old size. The spool has writers that do not
+# append: a clear moves records out of a pending file into its archive, file-errors rewrites a file
+# in place, compaction rewrites the lot. Any of those during a run made the old offset land on
+# records nobody added, or in the middle of one, and the run was failed with every suite passing.
+# Measured 2026-10-06, at least three full runs of 116 green suites were failed that way, one of
+# them while the spool SHRANK, from 11035050 bytes to 11032745.
+#
+# So the fixtures below seed the live spool with records that WOULD be blamed if they were read as
+# new (no working directory, a throwaway directory, an old run's stamp), and then a suite moves,
+# rewrites, truncates or re-stamps them the way another session's drain does. None of that is a
+# suite writing: each run must pass. Where the same suite also appends a record from elsewhere, the
+# run must still SEE that, so the bracket is shown to be looking (L159).
+SP880="$TMPROOT/spool880"
+SPOOL880="$TMPROOT/live-spool-880"
+mkdir -p "$SPOOL880" "$SP880/suites" "$SP880/nottmp"
+sp880_run(){ # sp880_run [extra env assignments...]   -> one runner run over the #880 fixtures
+  env TMPDIR="$SP880/nottmp" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL880" HOOK_TESTS_ROOT="$SP2_REPO" \
+      HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 "$@" bash "$RUNNER" "$SP880/suites" 2>&1
+}
+sp880_seed(){ # three records already in the live spool, each blamed by the old reading
+  rm -f "$SPOOL880"/*.jsonl "$SP880/suites"/*.sh
+  {
+    printf '{"ts":"2026-10-06T10:00:00Z","status":"found","findings":["no directory recorded"]}\n'
+    printf '{"ts":"2026-10-06T10:00:01Z","status":"found","cwd":"%s/scratch","findings":["a throwaway directory"]}\n' "$SP880/nottmp"
+    printf '{"ts":"2026-10-06T10:00:02Z","status":"found","cwd":"/opt/elsewhere","suite_run":"run-all-tests.1.1","findings":["an old run"]}\n'
+  } > "$SPOOL880/pending.jsonl"
+  printf '{"ts":"2026-10-01T09:00:00Z","status":"found","cwd":"/opt/elsewhere","findings":["filed long ago"]}\n' \
+    > "$SPOOL880/pending.filed.jsonl"
+}
+sp880_suite(){ # sp880_suite <name> <shell body>   -> a suite that does <body> to the live spool, then passes
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'S="%s"\n' "$SPOOL880"
+    printf '%s\n' "$2"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$SP880/suites/test-$1.sh"
+  chmod +x "$SP880/suites/test-$1.sh"
+}
+SP880_ELSEWHERE='{"ts":"2099-01-01T00:00:00Z","status":"found","cwd":"/opt/another-project/checkout","findings":["written by another session"]}'
+
+# A drain: the pending records are appended to the archive and the pending file is emptied. The
+# archive GROWS by exactly the records that were already there.
+sp880_seed
+sp880_suite drain "cat \"\$S/pending.jsonl\" >> \"\$S/pending.filed.jsonl\"; : > \"\$S/pending.jsonl\"
+printf '%s\\n' '$SP880_ELSEWHERE' >> \"\$S/pending.jsonl\""
+out_d1="$(sp880_run)"; code_d1=$?
+[ "$code_d1" -eq 0 ] \
+  && check "#880 another session draining the spool mid run does not fail the run" ok \
+  || check "#880 another session draining the spool mid run does not fail the run" "exit=$code_d1 out=$out_d1"
+case "$out_d1" in
+  *"SUITES WROTE INTO THE LIVE SPOOL"*)
+    check "#880 and the moved records are not blamed on a suite" "out=$out_d1" ;;
+  *)
+    check "#880 and the moved records are not blamed on a suite" ok ;;
+esac
+case "$out_d1" in
+  *"from work in other directories"*"/opt/another-project/checkout"*)
+    check "#880 and the record that really was added during the drain is still seen" ok ;;
+  *)
+    check "#880 and the record that really was added during the drain is still seen" "out=$out_d1" ;;
+esac
+case "$out_d1" in
+  *"/opt/elsewhere"*)
+    check "#880 and a record that only moved is not reported as added" "out=$out_d1" ;;
+  *)
+    check "#880 and a record that only moved is not reported as added" ok ;;
+esac
+
+# A rewrite in place that leaves the file LARGER: one more record at the FRONT, then the same
+# records in another order. Past the old size now sits the middle of a record nobody added, which
+# the old reading counted as a record with no working directory.
+sp880_seed
+sp880_suite rewrite "{ printf '%s\\n' '$SP880_ELSEWHERE'; sort -r \"\$S/pending.jsonl\"; } > \"\$S/pending.next\"
+mv \"\$S/pending.next\" \"\$S/pending.jsonl\""
+out_d2="$(sp880_run)"; code_d2=$?
+[ "$code_d2" -eq 0 ] \
+  && check "#880 a file rewritten in place and grown mid run does not fail the run" ok \
+  || check "#880 a file rewritten in place and grown mid run does not fail the run" "exit=$code_d2 out=$out_d2"
+case "$out_d2" in
+  *"could not be attributed"*|*"SUITES WROTE INTO THE LIVE SPOOL"*)
+    check "#880 and no fragment of a record is read as one" "out=$out_d2" ;;
+  *)
+    check "#880 and no fragment of a record is read as one" ok ;;
+esac
+
+# A shrink and nothing else. Removing records can never be a suite polluting the store, so it can
+# never fail the run, and there is nothing to report either.
+sp880_seed
+sp880_suite shrink ": > \"\$S/pending.jsonl\"; rm -f \"\$S/pending.filed.jsonl\""
+out_d3="$(sp880_run)"; code_d3=$?
+[ "$code_d3" -eq 0 ] \
+  && check "#880 a spool that only shrank does not fail the run" ok \
+  || check "#880 a spool that only shrank does not fail the run" "exit=$code_d3 out=$out_d3"
+case "$out_d3" in
+  *"LIVE SPOOL"*|*"other directories"*)
+    check "#880 and it says nothing about the spool" "out=$out_d3" ;;
+  *)
+    check "#880 and it says nothing about the spool" ok ;;
+esac
+
+# A record an EARLIER run stamped, re-stamped by another session's clear (which adds the session
+# it left the record for). The line is new, and its stamp is not this run's: an old pollution
+# being tidied is not this run polluting.
+sp880_seed
+sp880_suite restamp "sed 's/\"suite_run\"/\"seen_by\":[\"s2\"],\"suite_run\"/' \"\$S/pending.jsonl\" > \"\$S/pending.next\"
+mv \"\$S/pending.next\" \"\$S/pending.jsonl\""
+out_d4="$(sp880_run)"; code_d4=$?
+[ "$code_d4" -eq 0 ] \
+  && check "#880 another run's old stamp, rewritten mid run, does not fail this run" ok \
+  || check "#880 another run's old stamp, rewritten mid run, does not fail this run" "exit=$code_d4 out=$out_d4"
+# The fixture has to have actually changed the line, or this passes for having done nothing.
+grep -q '"seen_by"' "$SPOOL880/pending.jsonl" \
+  && check "#880 and the fixture really did rewrite the stamped record" ok \
+  || check "#880 and the fixture really did rewrite the stamped record" "spool=$(cat "$SPOOL880/pending.jsonl")"
+
+# An UNSTAMPED record rewritten with changed content: the no-directory and throwaway-directory
+# records, each given the field a clear adds. The lines are new to the comparison, and either one
+# read as a write fails the run. The new field goes FIRST, so the keys are reordered too. None of
+# them carries this run's stamp, so none is this run's doing.
+sp880_seed
+sp880_suite rewriteplain "sed 's/^{/{\"seen_by\":[\"s2\"],/' \"\$S/pending.jsonl\" > \"\$S/pending.next\"
+mv \"\$S/pending.next\" \"\$S/pending.jsonl\""
+out_d7="$(sp880_run)"; code_d7=$?
+[ "$code_d7" -eq 0 ] \
+  && check "#880 an unstamped existing record rewritten mid run does not fail the run" ok \
+  || check "#880 an unstamped existing record rewritten mid run does not fail the run" "exit=$code_d7 out=$out_d7"
+[ "$(grep -c '^{"seen_by"' "$SPOOL880/pending.jsonl")" -eq 3 ] \
+  && check "#880 and the fixture really did rewrite every record, ts no longer first" ok \
+  || check "#880 and the fixture really did rewrite every record, ts no longer first" "spool=$(cat "$SPOOL880/pending.jsonl")"
+
+# The half that must still fire, through the same fixtures: a suite writing a record that carries
+# THIS run's stamp goes red even while another session drains around it.
+sp880_seed
+sp880_suite drainplus "cat \"\$S/pending.jsonl\" >> \"\$S/pending.filed.jsonl\"; : > \"\$S/pending.jsonl\"
+printf '{\"ts\":\"2026-10-06T11:00:00Z\",\"status\":\"found\",\"cwd\":\"/opt/elsewhere\",\"suite_run\":\"%s\",\"findings\":[\"x\"]}\\n' \"\$CLAUDE_SUITE_RUN_ID\" >> \"\$S/pending.jsonl\""
+out_d5="$(sp880_run)"; code_d5=$?
+[ "$code_d5" -ne 0 ] \
+  && check "#880 a suite writing the live spool during a drain still fails the run" ok \
+  || check "#880 a suite writing the live spool during a drain still fails the run" "exit=$code_d5 out=$out_d5"
+case "$out_d5" in
+  *"SUITES WROTE INTO THE LIVE SPOOL"*"written under this test run"*)
+    check "#880 and it is named as this run's write" ok ;;
+  *)
+    check "#880 and it is named as this run's write" "out=$out_d5" ;;
+esac
+
+# A NESTED run: a suite that starts a runner of its own hands its children a different id, and a
+# record from one of them is still a test writing the live store. The inner id therefore carries
+# the outer one as its prefix, and the outer run claims it by that prefix.
+sp880_seed
+sp880_suite nested "printf '{\"ts\":\"2026-10-06T11:00:00Z\",\"status\":\"found\",\"cwd\":\"/opt/elsewhere\",\"suite_run\":\"%s/run-all-tests.99.99\",\"findings\":[\"x\"]}\\n' \"\$CLAUDE_SUITE_RUN_ID\" >> \"\$S/pending.jsonl\""
+out_d6="$(sp880_run)"; code_d6=$?
+[ "$code_d6" -ne 0 ] \
+  && check "#880 a record from a run nested inside this one fails this run" ok \
+  || check "#880 a record from a run nested inside this one fails this run" "exit=$code_d6 out=$out_d6"
+# And the runner really does build the inner id that way, or the prefix above is a fixture's guess.
+sp880_seed
+sp880_suite showid "printf '%s\\n' \"\$CLAUDE_SUITE_RUN_ID\" > \"$SP880/seen-id\""
+rm -f "$SP880/seen-id"
+sp880_run CLAUDE_SUITE_RUN_ID=outer-run-880 >/dev/null
+case "$(cat "$SP880/seen-id" 2>/dev/null)" in
+  outer-run-880/run-all-tests.*)
+    check "#880 a runner started under another run extends that run's id" ok ;;
+  *)
+    check "#880 a runner started under another run extends that run's id" "id=$(cat "$SP880/seen-id" 2>/dev/null)" ;;
+esac
+rm -f "$SPOOL880"/*.jsonl "$SP880/suites"/*.sh
 
 # ---------------------------------------------------------------------------
 # One layer under the bracket: the library REFUSES the write (claude-config#278).
