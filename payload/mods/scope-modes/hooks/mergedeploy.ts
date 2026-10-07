@@ -132,14 +132,13 @@ export type Where = { defaultBranch: string | null; currentBranch: string | null
 
 const isFlag = (w: string) => w.startsWith('-') && w !== '-'
 const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
-// The merge helper's own --repo (or -R), as it passes it to gh: null when given but not a repository.
+// The merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them, by
+// ghargs.ts (one reader, L613): the repository it names, undefined for none, null for one that
+// cannot be read.
 const helperRepo = (words: string[]): string | null | undefined => {
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i] as string
-    const v = w === '-R' || w === '--repo' ? words[i + 1] : w.startsWith('--repo=') ? w.slice('--repo='.length) : /^-R./.test(w) ? w.slice(2) : undefined
-    if (v !== undefined || w === '-R' || w === '--repo') return v === undefined ? null : normRepo(v)
-  }
-  return undefined
+  const at = words.findIndex(w => /(?:^|\/)merge-when-ready\.sh$/.test(w))
+  const a = ghArgs(['gh', 'pr', 'merge', ...words.slice(at + 1)])
+  return a.unreadable ? null : a.named
 }
 const repoOfEndpoint = (endpoint: string | undefined) => {
   const m = /^\/?(?:https:\/\/api\.github\.com\/)?\/?repos\/([^/]+\/[^/?#]+)/.exec(endpoint ?? '')

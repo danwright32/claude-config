@@ -135,6 +135,9 @@ describe('what a command does, by effect', () => {
     expect(kinds('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r --squash')).toEqual(['merge'])
     // The helper's joined -R names its repository as gh's does.
     expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 -Ro/x --squash')[0]?.repo).toBe('o/x')
+    // Read by ghargs, as gh pr merge reads what the helper hands it: a PR link names its repository.
+    expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh https://github.com/o/z/pull/3 --squash')[0]?.repo).toBe('o/z')
+    expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo=o/w')[0]?.repo).toBe('o/w')
     // The merge queue merges too; a mutation writing a branch directly can reach the default one.
     expect(kinds(`gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`)).toEqual(['merge'])
     expect(kinds(`gh api graphql -f query='mutation { createCommitOnBranch(input: {}) { clientMutationId } }'`)).toEqual(['push-default'])
