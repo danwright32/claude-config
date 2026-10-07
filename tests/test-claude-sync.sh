@@ -2624,6 +2624,11 @@ export SYNC_CLAUDE_BIN="$WORK/no-such-claude-here"
 # rather than a write, and the effect is the same: a verdict decided by what happens to be on the
 # machine (L2). The two sections that are ABOUT clone discovery override it with their own.
 export SYNC_LAUNCHAGENTS="$WORK/launchagents-guard"
+# The managed settings file status reads (#876) lives outside ~/.claude, so left at its default every
+# status call here would report on the operator's machine instead of its fixture (L2). A good one,
+# once, here; the section ABOUT the check points it at its own.
+export SYNC_MANAGED_SETTINGS="$WORK/managed-settings-guard.json"
+printf '{"prependPlugins": []}\n' > "$SYNC_MANAGED_SETTINGS"
 # The desktop notifier, for the whole suite rather than at 379 of 397 call sites. terminal-notifier
 # is installed on this Mac, so any failure-path call among the 65 that carried no seam would post a
 # real notification on whoever's machine runs this. Measured 2026-08-29 those particular sections
@@ -19501,6 +19506,46 @@ check "#833 the pinned version installed says nothing" "! grep -q 'pinned TypeSc
 rm -rf "$TC_R/tools"
 out_tc4="$(tc_status)"
 check "#833 a repository with no pin says nothing" "! grep -q 'pinned TypeScript' <<< \"\$out_tc4\""
+
+section "== status names a managed settings file that lets the security default sit first (#876) =="
+# Both Macs hold /Library/Application Support/ClaudeCode/managed-settings.json with an empty
+# prependPlugins, which keeps Claude Code's built-in security default from seating itself ahead of
+# every mod and routing their classic and prompt hooks past them (#875). The sync cannot carry it,
+# since it lives outside ~/.claude, so a new Mac, or one where it was lost, says so here. Reads the
+# file only: no claude run.
+MS="$WORK/ms876"; MS_H="$MS/home"; MS_R="$MS/repo"; mkdir -p "$MS_H" "$MS_R"
+MS_F="$MS/managed settings.json"
+printf '{"hooks":{}}\n' > "$MS_H/settings.json"
+ms_status(){ SYNC_MANAGED_SETTINGS="$MS_F" CLAUDE_HOME="$MS_H" SYNC_REPO="$MS_R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true; }
+rm -f "$MS_F"
+out_ms1="$(ms_status)"
+dbg "#876 status with no managed file: $out_ms1"
+check "#876 a missing managed settings file is named, by its path" \
+  "line_has \"\$out_ms1\" 'missing' 'ms876/managed settings.json'"
+check "#876 with the exact command that creates it" \
+  "line_has \"\$out_ms1\" 'sudo' 'prependPlugins\": \[\]' 'ms876/managed settings.json'"
+check "#876 and what goes wrong without it" "line_has \"\$out_ms1\" 'security default' 'mod'"
+printf '{"prependPlugins": []}\n' > "$MS_F"
+out_ms2="$(ms_status)"
+check "#876 a good managed settings file says nothing" "! grep -qi 'managed settings' <<< \"\$out_ms2\""
+# The positive control for that silence: the same run reached the report beside it.
+check "#876 fixture: the quiet run is a real status run" "line_has \"\$out_ms2\" 'plugin' 'per Mac'"
+printf '{"prependPlugins": ["sec-default@builtin", "superpowers@superpowers-dev"]}\n' > "$MS_F"
+out_ms3="$(ms_status)"
+dbg "#876 status with sec-default listed: $out_ms3"
+check "#876 a file listing the security default in prependPlugins is named" \
+  "line_has \"\$out_ms3\" 'sec-default@builtin' 'ms876/managed settings.json'"
+check "#876 with the command that takes it out and keeps the rest" \
+  "line_has \"\$out_ms3\" 'sudo' 'jq' 'sec-default' 'ms876/managed settings.json'"
+# Managed settings with no prependPlugins at all is the state that SEATS it (any managed settings do).
+printf '{"permissions": {}}\n' > "$MS_F"
+out_ms4="$(ms_status)"
+check "#876 a file with no prependPlugins list is named too" \
+  "line_has \"\$out_ms4\" 'prependPlugins' 'ms876/managed settings.json' 'sudo'"
+printf '{"prependPlugins": [\n' > "$MS_F"
+out_ms5="$(ms_status)"
+check "#876 and a file that is not valid JSON" \
+  "line_has \"\$out_ms5\" 'not valid JSON' 'ms876/managed settings.json'"
 
 section "== an apply leaves no expanded copy of the payload behind (#641) =="
 # apply_source_dir set EXPANDED_ROOT inside a command substitution at every call site, so the parent
