@@ -95,6 +95,18 @@ describe('every gh write but a known read goes only to the repository the checko
     expect(await bash('gh api -X POST repos/other/x/pulls -f title=x')).toBe(other)
     expect(await bash('gh release create v1 -R other/x')).toBe(other)
   })
+  test('every spelling gh accepts is read the same (ghargs.ts)', async () => {
+    expect(await bash('gh api --method=DELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
+    expect(await bash('gh api -XDELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
+    expect(await bash('gh api -XPOST repos/other/x/pulls -ftitle=x')).toBe(other)
+    expect(await bash('gh pr close 5 -Rother/x')).toBe(other)
+    expect(await bash('gh pr close 5 --repo=other/x')).toBe(other)
+    expect(await bash('gh pr close 5 -R my.org/x')).toBe('write to my.org/x from a checkout of o/r')
+    expect(await bash('gh pr merge 5 -sd')).toBe('delete a branch')
+    expect(await bash('gh pr close 5 -d')).toBe('delete a branch')
+    expect(await bash('gh repo delete other/x --yes')).toBe(other)
+    expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
+  })
   test('the same writes on this repository go ahead', async () => {
     expect(await bash('gh pr review 5 --comment --body x')).toBeUndefined()
     expect(await bash('gh pr close 5')).toBeUndefined()

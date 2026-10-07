@@ -1,5 +1,6 @@
 import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, ghApiOf, operations, type Cmd } from './nobuild.ts'
+import { ghApi, ghArgs, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
+import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, operations, type Cmd } from './nobuild.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
 // by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
@@ -52,18 +53,7 @@ const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 const isLessons = (p: string | undefined) => p !== undefined && base(p) === 'lessons.md'
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
-/** A GitHub repository in any spelling (owner/name, a URL, an ssh remote) as owner/name in lower case; null when it is none. */
-export const normRepo = (s: string): string | null => {
-  let t = s.trim().replace(/\.git$/, '').replace(/\/+$/, '')
-  const host = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+\.[^/:]+)[:/](.*)$/i.exec(t)
-  if (host) {
-    if ((host[1] as string).toLowerCase() !== 'github.com') return null
-    t = host[2] as string
-  }
-  const parts = t.split('/').filter(Boolean)
-  if (parts.length !== 2 || parts.some(p => !/^[\w.-]+$/.test(p))) return null
-  return parts.join('/').toLowerCase()
-}
+export { normRepo }
 
 /** `git remote -v`'s answer as the one GitHub repository it names; null for none or more than one (a fork's upstream is where gh may send a call). */
 export const repoFromRemotes = (text: string): string | null => {
@@ -148,21 +138,12 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
 
 // ---- gh ----
 
-const flagValue = (words: readonly string[], long: string, short?: string): string | undefined => {
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i] as string
-    if (w === long || (short && w === short)) return words[i + 1]
-    if (w.startsWith(`${long}=`)) return w.slice(long.length + 1)
-    if (short && w.startsWith(short) && w.length > short.length && !w.startsWith('--')) return w.slice(short.length)
-  }
-  return undefined
-}
-const hasFlag = (words: readonly string[], flags: readonly string[]) => words.some(w => flags.some(f => w === f || w.startsWith(`${f}=`)))
+// Every gh call is read by ghargs.ts, the one reading of gh's arguments here.
 // What gh only reads, wherever it points: these actions under any subcommand, and these
 // subcommands whole. Everything else gh does is a write, and goes only to the checkout's own
 // repository: a list of writes would always be missing the next one (#834 review).
 const GH_READ_ACTS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch'])
-const GH_READ_SUBS = new Set(['search', 'help', 'version', '--version', '--help', '-h', 'completion'])
+const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion'])
 // The subcommands that act on one repository, named by -R or taken from the checkout. A write by
 // any other (a gist, a key, auth, an org) reaches no repository this checkout is.
 const REPO_SCOPED = new Set(['issue', 'pr', 'release', 'run', 'workflow', 'secret', 'variable', 'label', 'cache', 'ruleset', 'attestation', 'repo'])
@@ -174,60 +155,35 @@ const LABELS_ON_PR: Record<string, string[]> = {
   edit: ['--add-label', '--remove-label', '--milestone', '-m', '--remove-milestone'],
   create: ['--label', '-l', '--milestone', '-m'],
 }
-// A repository named in a URL operand (an issue's or a PR's link).
-const urlRepo = (words: readonly string[]): string | null | undefined => {
-  for (const w of words) {
-    const m = /^(?:https?:\/\/)?github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/\d+/i.exec(w)
-    if (m) return normRepo(m[1] as string)
-  }
-  return undefined
-}
 const COMMENT_ENDPOINT = /^repos\/([^/]+)\/([^/]+)\/(?:issues|pulls)\/\d+\/(?:comments|reviews)$/
 const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/
-
-// The repository a gh write names: -R or --repo, else a link operand, else `repo`'s own operand;
-// undefined when it names none (gh takes GH_REPO, else the checkout's), null when it cannot be read.
-const ghTarget = (sub: string, words: readonly string[]): string | null | undefined => {
-  if (!REPO_SCOPED.has(sub)) return null
-  const flag = flagValue(words, '--repo', '-R')
-  if (flag !== undefined) return normRepo(flag)
-  const url = urlRepo(words)
-  if (url !== undefined) return url
-  const operand = sub === 'repo' ? words.slice(3).find(w => !w.startsWith('-')) : undefined
-  return operand === undefined ? undefined : normRepo(operand)
-}
 
 // What gh is asked to do: refused outright, a write to judge by the repository it reaches, or a
 // read (undefined). REST and GraphQL reach the same decision through the same two outcomes.
 type GhVerdict = { refuse: string } | { write: string | null | undefined } | undefined
 const ghVerdict = (words: readonly string[]): GhVerdict => {
-  const [, sub = '', act = ''] = words
-  if (sub === 'api') return apiVerdict(words)
-  if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act)) return undefined
+  const a = ghArgs(words)
+  const { sub, act } = a
+  if (sub === 'api') return apiVerdict(a)
+  if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || (!sub && a.flags.length)) return undefined
   if (sub === 'issue' && act !== 'comment') return { refuse: `run gh issue ${act}`.trim() }
   if (sub === 'label') return { refuse: `run gh label ${act}`.trim() }
   if (sub === 'pr') {
     const labels = LABELS_ON_PR[act]
-    if (labels && hasFlag(words, labels)) return { refuse: 'set labels or a milestone on a PR' }
-    if (act === 'merge' && (words.includes('--delete-branch') || shortFlags(words.slice(3)).includes('d'))) return { refuse: 'delete a branch' }
+    if (labels && hasFlag(a, ...labels)) return { refuse: 'set labels or a milestone on a PR' }
+    if ((act === 'merge' || act === 'close') && hasFlag(a, '-d', '--delete-branch')) return { refuse: 'delete a branch' }
   }
-  return { write: ghTarget(sub, words) }
+  return { write: REPO_SCOPED.has(sub) ? a.named : null }
 }
 
-const apiVerdict = (words: readonly string[]): GhVerdict => {
-  const { method, endpoint, fields } = ghApiOf(words)
+const apiVerdict = (a: GhArgs): GhVerdict => {
+  const { method, endpoint, fields, input } = ghApi(a)
   const ep = (endpoint ?? '').replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '').replace(/[?#].*$/, '')
   if (ep === 'graphql') {
     // A GraphQL document is always a POST: read it, and refuse one that cannot be read.
-    let query: string | undefined
-    let fromFile = words.includes('--input')
-    for (let i = 2; i < words.length; i++) {
-      const w = words[i] as string
-      if (['-f', '-F', '--field', '--raw-field'].includes(w) && (words[i + 1] ?? '').startsWith('query=')) {
-        query = (words[++i] as string).slice('query='.length)
-        if ((w === '-F' || w === '--field') && query.startsWith('@')) fromFile = true
-      }
-    }
+    const q = a.flags.filter(f => ['-f', '-F', '--field', '--raw-field'].includes(f.name) && typeof f.value === 'string' && f.value.startsWith('query=')).pop()
+    const query = q ? (q.value as string).slice('query='.length) : undefined
+    const fromFile = input || (q !== undefined && (q.name === '-F' || q.name === '--field') && (query ?? '').startsWith('@'))
     if (fromFile || query === undefined) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
     let writes = false
     for (const op of operations(query)) {

@@ -911,7 +911,9 @@ the ban list knowing that an action it does not name is approved.
   label and milestone writes by gh or gh api; every other gh call but a known read (view, list,
   status, diff, checks, watch, search, a GET to the API) is a write, allowed only on the repository
   the checkout is, resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any
-  `cd` (unresolved, a folder whose remotes name two repositories, a subcommand that reaches no one
+  `cd`, every gh call read by one parser, `hooks/ghargs.ts`, as gh reads it (`--flag=value`,
+  `-XDELETE`, `-Rowner/x`, clustered `-sd`, a dotted owner) (unresolved, a folder whose remotes
+  name two repositories, a subcommand that reaches no one
   repository, or any GraphQL mutation, whose target is an opaque id, is refused, L75; GraphQL
   issue and label mutations are matched by exact name); LESSONS.md by any write route; every
   claude.ai, Chrome and PostHog MCP tool whose name does not say it only reads (a read only tool

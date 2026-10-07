@@ -1,4 +1,5 @@
 import type { ModKitCommand, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { ghApi, ghArgs } from './ghargs.ts'
 import { clientRefusal, sqlRefusal } from './sql.ts'
 
 // No build (#616): what Claude may and may not do while it is on, as the spec agreed with Dan.
@@ -133,33 +134,12 @@ const GH_READS: Record<string, Set<string>> = {
   secret: new Set(['list']),
   variable: new Set(['list', 'get']),
 }
-const GH_API_VALUE_FLAGS = new Set(['-X', '--method', '-f', '-F', '--field', '--raw-field', '-H', '--header', '--input', '-q', '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview'])
-const GH_API_FIELD_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input'])
-/**
- * A `gh api` call's method and endpoint as gh reads them: GET unless -X says otherwise or a field
- * is sent, which makes it a POST. `fields` are the values its -f and -F fields send (`force=true`).
- * The one reading of gh api in this mod, for no build and for the overnight rules (overnight.ts).
- */
-export const ghApiOf = (words: readonly string[]): { method: string; endpoint: string | undefined; fields: string[] } => {
-  let method = 'GET'
-  let endpoint: string | undefined
-  const fields: string[] = []
-  for (let i = 2; i < words.length; i++) {
-    const w = words[i] as string
-    if (GH_API_VALUE_FLAGS.has(w)) {
-      if (w === '-X' || w === '--method') method = (words[i + 1] ?? 'GET').toUpperCase()
-      else if (GH_API_FIELD_FLAGS.has(w) && method === 'GET') method = 'POST'
-      if (GH_API_FIELD_FLAGS.has(w) && w !== '--input') fields.push(words[i + 1] ?? '')
-      i++
-    } else if (!isFlag(w) && endpoint === undefined) endpoint = w
-  }
-  return { method, endpoint, fields }
-}
 const ghRefusal = (words: string[]): string | undefined => {
   const [, sub = '', act = ''] = words
   if (sub === 'issue') return act === 'develop' ? 'run gh issue develop' : undefined
   if (sub === 'api') {
-    const { method, endpoint } = ghApiOf(words)
+    // Read by ghargs.ts, the one reading of gh's arguments in this mod (#834).
+    const { method, endpoint } = ghApi(ghArgs(words))
     // GraphQL is always a POST, so a read is told from a change by the document it sends (#702).
     if (endpoint === 'graphql') return graphqlRefusal(words)
     if (method === 'GET') return undefined
