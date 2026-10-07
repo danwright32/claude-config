@@ -375,7 +375,19 @@ const askRepo = async ($: EngineInterface, repo: string, path: string, waitMs: n
   let late = false
   const asking: Promise<Asked> = $.ui.ask(repoQuestion(repo), { options: [MERGE_NO_DEPLOY, HOLD_MERGES, MAY_DEPLOY], header: 'Overnight' }).then(
     async (a: string) => {
-      if (late) await recordAnswer($, path, repo, a).catch(() => null)
+      // A late answer that cannot be saved is never dropped (L11): it is noted for the morning
+      // report as a question still to answer, and said in the session when even that fails.
+      if (late) {
+        const failed = await recordAnswer($, path, repo, a).catch(err => msg(err))
+        if (failed) {
+          const question = `Your answer about ${repo} ("${a}") was not saved: ${failed}. Choose again at the next /sleep.`
+          try {
+            await sleepNote($, (await sleepPaths($)).current, { kind: 'question', at: await $.clock.now(), by: await $.session.id(), repo, questions: [question] })
+          } catch (err) {
+            $.ui.toast(`${question} It could not be noted for the morning report either (${msg(err)}).`)
+          }
+        }
+      }
       return { answer: a }
     },
     // Dismissed, or the dialog could not be shown: never read as a question left unanswered (L11).

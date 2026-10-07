@@ -174,6 +174,8 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** Dan's bedtime answer, given only when this settles (#843). */
+  repoAnswerLate?: Promise<string>
   /** origin/HEAD's branch, main unless said (#843). */
   defaultBranch?: string
   /** gh repo view under another account's token fails for a reason other than not found (#843). */
@@ -479,6 +481,11 @@ const world = (on: On, o: Opts = {}) => {
       const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
       w.asked.push(q)
       if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return new Promise(() => undefined) as never
+      // An answer Dan gives only when the test lets it go: after the wait, as late as it likes (#843).
+      if (q.endsWith('what may Claude do?') && o.repoAnswerLate) {
+        const qs = (e as unknown as { questions: unknown[] }).questions
+        return o.repoAnswerLate.then(a => ({ result: { questions: qs, answers: { [q]: a } }, text: `answered ${a}` })) as never
+      }
       if (q.endsWith('what may Claude do?') && o.repoAnswer === '__dismissed') throw new Error('the dialog was dismissed')
       if (q.endsWith('what may Claude do?') && o.repoAnswer !== undefined) {
         const a = o.repoAnswer
@@ -2221,4 +2228,22 @@ test('asleep, a push to a default branch named neither main nor master is refuse
   await start($ as never, clock)
   expect(await call($ as never, bash('git push origin develop'))).toMatch(/^Blocked overnight: this would push develop straight to GitHub/)
   expect(await call($ as never, bash('git push origin fix-843'))).toBe('ran')
+})
+
+test('a bedtime answer given after the wait that cannot be saved is noted for the morning, never dropped', withDeps, async ($, on) => {
+  let answer = (_: string) => undefined as void
+  const late = new Promise<string>(r => {
+    answer = r
+  })
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, githubRepos: { default: ['o/r'] }, repoAnswerLate: late })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(10 * MIN)
+  await pending
+  // The shared file goes before Dan answers, so the save has nothing to add to.
+  delete w.files[LISTS_PATH]
+  answer('Allowed to deploy')
+  await clock.settle()
+  const lost = w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && /was not saved/.test(String((n.questions as string[])[0])))
+  expect(lost.map(n => (n.questions as string[])[0])).toEqual(['Your answer about o/r ("Allowed to deploy") was not saved: mods/sleep-repos.json is missing. Choose again at the next /sleep.'])
 })
