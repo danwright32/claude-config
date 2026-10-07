@@ -37,7 +37,7 @@ which is NOT loaded into the session.
 - L499. A framework's error message names the case its author imagined, not the condition it tests, so read the throw site before believing it.
 - L726. Gmail's send API drops quoted-printable and hard wraps plain text at ~72; send an HTML part, and judge only the delivered raw.
 - L728. Two callers of one external endpoint build different bodies, so diff them against what the receiver REQUIRES; the pass-through one lacks the field.
-- L1014. A list API filtered on two fields at once can answer from a stale index; request the broader list and apply the narrower predicate yourself.
+- L1014. A list API behind any filter, even one, can answer from a stale index; read the unfiltered list too and apply the predicate yourself before accusing.
 - L742. On a rejected token reply, refresh the token and retry that call once; evicting and failing loses every in-flight request.
 - L745. An existence check must treat a record marked deleted, such as Google's status cancelled or a trash label, as absent, never only a 404.
 - L746. Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
