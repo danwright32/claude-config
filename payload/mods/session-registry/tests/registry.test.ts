@@ -13,7 +13,13 @@ const consumer: { name: string; register: Register } = {
   register: on => {
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
       const [verb, arg] = String((e as { command?: string }).command).split(' ')
-      if (verb === 'list') return { deny: JSON.stringify(await $.sessions.list()) }
+      if (verb === 'list') {
+        try {
+          return { deny: JSON.stringify(await $.sessions.list()) }
+        } catch (err) {
+          return { deny: `list failed: ${err instanceof Error ? err.message : String(err)}` }
+        }
+      }
       if (verb === 'edit') await $.sessions.noteEdit({ path: arg as string })
       if (verb === 'extra') await $.sessions.setExtra({ key: 'jobs', value: [arg] })
       return { deny: 'done' }
@@ -36,36 +42,82 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 }
 const withConsumer = { plugins: [secDefault, consumer] }
 
-// This Mac beneath the registry: a filesystem in memory, git, the session's id, the clock.
-const world = (on: On, opts: { files?: Record<string, string>; id?: () => string; mtimes?: Record<string, number>; mvThrows?: boolean; during?: (command: string) => Promise<void> } = {}) => {
+// This Mac beneath the registry: a filesystem in memory, git, the session's id, the clock. A file's
+// modification time is the one opts.mtimes gives it, else a stamp moved on by every write and carried
+// by a move, as a real file's is; the folder listing answers it, as Claude Code's does.
+type WorldOpts = {
+  files?: Record<string, string>
+  id?: () => string
+  mtimes?: Record<string, number>
+  mvThrows?: boolean
+  during?: (command: string) => Promise<void>
+  // A listing with no modification times in it.
+  noMtimes?: boolean
+  // Runs as each mv starts, before anything moves, so an owner's write can land in between.
+  beforeMv?: (argv: string[]) => void
+}
+const world = (on: On, opts: WorldOpts = {}) => {
   const files: Record<string, string> = { ...(opts.files ?? {}) }
+  const stamps: Record<string, number> = {}
+  let tick = 0
+  const stampOf = (p: string) => opts.mtimes?.[p] ?? stamps[p] ?? 100 * MIN
   const logs: string[] = []
   const removed: string[] = []
   const writes: string[] = []
+  const reads: string[] = []
   const finds: string[] = []
   // Each command run and the timeout it was given, so a bound can be asserted (#802).
   const bounds: [string, number | undefined][] = []
   mock.env(on, { HOME: '/Users/x' })
   const clock = mock.clock(on, { now: 100 * MIN })
+  const put = (p: string, text: string) => {
+    files[p] = text
+    stamps[p] = 100 * MIN + ++tick / 1000
+  }
   on('fs.write', ($, e) => {
     writes.push(e.path)
-    files[e.path] = e.text
+    put(e.path, e.text)
     return { value: undefined }
   })
-  on('fs.read', ($, e) => {
+  // A read of the path given to hang() does not answer until unhang().
+  let hangs: string | undefined
+  // A read of the path given to vanish() finds it moved away just after the listing named it.
+  let vanishing: string | undefined
+  let unhang = () => undefined as void
+  const hung = new Promise<void>(r => (unhang = r))
+  let reached = () => undefined as void
+  const hangReached = new Promise<void>(r => (reached = r))
+  on('fs.read', async ($, e) => {
+    reads.push(e.path)
+    if (e.path === hangs) {
+      reached()
+      await hung
+    }
+    if (e.path === vanishing) delete files[e.path]
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: files[e.path] as string }
   })
   on('fs.exists', ($, e) => ({ value: e.path in files }) as never)
   on('fs.stat', ($, e) => {
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
-    return { value: { kind: 'file', size: 1, mtimeMs: opts.mtimes?.[e.path] ?? 100 * MIN, isLink: false } } as never
+    return { value: { kind: 'file', size: 1, mtimeMs: stampOf(e.path), isLink: false } } as never
   })
-  on('fs.list', ($, e) => ({
-    value: Object.keys(files)
-      .filter(p => p.startsWith(e.path + '/') && !p.slice(e.path.length + 1).includes('/'))
-      .map(p => ({ name: p.slice(e.path.length + 1), kind: 'file' as const })),
-  }) as never)
+  on('fs.list', ($, e) => {
+    const names = new Map<string, 'file' | 'dir'>()
+    for (const p of Object.keys(files)) {
+      if (!p.startsWith(e.path + '/')) continue
+      const rest = p.slice(e.path.length + 1)
+      const cut = rest.indexOf('/')
+      names.set(cut < 0 ? rest : rest.slice(0, cut), cut < 0 ? 'file' : 'dir')
+    }
+    return {
+      value: [...names].map(([name, kind]) => {
+        const p = `${e.path}/${name}`
+        const isFile = kind === 'file'
+        return { name, kind, size: isFile ? (files[p] as string).length : 0, mtimeMs: isFile && !opts.noMtimes ? stampOf(p) : 0, isLink: false }
+      }),
+    } as never
+  })
   // A gate the test can close to hold every move into place, so a save can be caught part way.
   const gate = { held: false, release: () => undefined as void, wait: Promise.resolve() }
   const hold = () => {
@@ -82,16 +134,32 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (cmd === 'mkdir') return ok()
     if (cmd === 'rm') {
+      const tree = rest.some(x => /^-[a-z]*r/.test(x))
       for (const f of rest.filter(x => !x.startsWith('-'))) {
         removed.push(f)
-        delete files[f]
+        for (const p of Object.keys(files)) if (p === f || (tree && p.startsWith(f + '/'))) delete files[p]
       }
       return ok()
     }
+    // mv [-f|-n] SOURCE... DEST, where a DEST ending in / is a folder the sources go into, by name.
     if (cmd === 'mv' && a && b) {
-      files[b] = files[a] as string
-      delete files[a]
-      return ok()
+      opts.beforeMv?.(e.argv as string[])
+      const args = rest.filter(x => !x.startsWith('-'))
+      const dest = args[args.length - 1] as string
+      let missing = ''
+      for (const src of args.slice(0, -1)) {
+        const to = dest.endsWith('/') ? dest + src.split('/').pop() : dest
+        if (!(src in files)) {
+          missing += `mv: ${src}: No such file or directory\n`
+          continue
+        }
+        if (rest.includes('-n') && to in files) continue
+        files[to] = files[src] as string
+        stamps[to] = stampOf(src)
+        delete files[src]
+        delete stamps[src]
+      }
+      return missing ? { value: { exitCode: 1, stdout: '', stderr: missing, isStdoutTruncated: false, isStderrTruncated: false } } : ok()
     }
     if (cmd === 'git') return ok('/repo\n')
     if (cmd === 'find' && a) {
@@ -117,7 +185,9 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     return { value: undefined }
   })
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
-  return { files, writes, finds, logs, removed, bounds, clock, own, hold, release: () => gate.release() }
+  // A file written by someone other than the registry (its owner in another session, or the test).
+  const touch = put
+  return { files, writes, reads, finds, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -589,28 +659,34 @@ test('a session id that is not an id is never put into a path or a search', with
 
 // Decided with Dan (2026-10-04, #633): a closed session's record is kept 7 days, then deleted at
 // session start; a damaged record older than that is deleted too, with one grey line naming it.
+// Since #911 a record that ended over an hour ago waits out those 7 days in the archive beside the
+// sessions folder, in a folder for the day it ended (UTC), which goes once that whole day is 7 days
+// past. The mock clock stands at 01:40 on 1970-01-01, so 6 days back is 1969-12-26.
 const DAY = 24 * 60 * MIN
+const HOUR = 60 * MIN
 const NOW = 100 * MIN
+const ARCH = '/Users/x/.claude/state/sessions-archive'
 const recOf = (id: string, over: Record<string, unknown>) =>
   JSON.stringify({ v: 1, sessionId: id, cwd: '/repo', repoRoot: '/repo', startedAt: NOW - 9 * DAY, lastSeen: NOW, closedAt: null, transcriptPath: null, edits: [], extra: {}, ...over })
 
-test('a record closed more than 7 days ago is deleted at session start, a newer one is kept', withConsumer, async ($, on) => {
+test('a record closed more than 7 days ago is gone after session start, a newer one is kept', withConsumer, async ($, on) => {
+  const recent = recOf('recent', { closedAt: NOW - 6 * DAY, lastSeen: NOW - 6 * DAY })
   const w = world(on, {
     files: {
       [`${DIR}/old.json`]: recOf('old', { closedAt: NOW - 8 * DAY, lastSeen: NOW - 8 * DAY }),
-      [`${DIR}/recent.json`]: recOf('recent', { closedAt: NOW - 6 * DAY, lastSeen: NOW - 6 * DAY }),
+      [`${DIR}/recent.json`]: recent,
     },
   })
   await start($)
-  expect(w.removed).toEqual([`${DIR}/old.json`])
-  expect(`${DIR}/recent.json` in w.files).toBe(true)
+  expect(Object.keys(w.files).filter(p => p.endsWith('/old.json'))).toEqual([])
+  expect(w.files[`${ARCH}/1969-12-26/recent.json`]).toBe(recent)
   expect(w.logs.filter(l => l.includes('old.json'))).toEqual([])
 })
 
-test('a crashed session, never closed and silent more than 7 days, is deleted too', withConsumer, async ($, on) => {
+test('a crashed session, never closed and silent more than 7 days, is gone too', withConsumer, async ($, on) => {
   const w = world(on, { files: { [`${DIR}/crashed.json`]: recOf('crashed', { lastSeen: NOW - 8 * DAY }) } })
   await start($)
-  expect(w.removed).toEqual([`${DIR}/crashed.json`])
+  expect(Object.keys(w.files).filter(p => p.endsWith('/crashed.json'))).toEqual([])
 })
 
 test('a damaged record older than 7 days is deleted and named in one line; a newer one is left to block', withConsumer, async ($, on) => {
@@ -625,10 +701,11 @@ test('a damaged record older than 7 days is deleted and named in one line; a new
   expect(list.unreadable).toEqual(['broken-new.json'])
 })
 
-test('an open session is never deleted however long ago it started', withConsumer, async ($, on) => {
+test('an open session is never deleted or archived however long ago it started', withConsumer, async ($, on) => {
   const w = world(on, { files: { [`${DIR}/live.json`]: recOf('live', { startedAt: NOW - 30 * DAY, lastSeen: NOW - MIN }) } })
   await start($)
   expect(w.removed).toEqual([])
+  expect(`${DIR}/live.json` in w.files).toBe(true)
 })
 
 test('a record whose closed time is not a number counts as damaged, so a recent one is kept', withConsumer, async ($, on) => {
@@ -645,4 +722,204 @@ test('the list and the cleanup agree on what is damaged: a non-number closed tim
   await start($)
   const list = JSON.parse(await call($, 'list')) as { unreadable: string[] }
   expect(list.unreadable).toEqual(['odd.json'])
+})
+
+// #911: on 2026-10-07 the folder held 1,337 records, 2 of them open, and the list read every one on
+// every call; under a load near 200 it passed the collision guard's 10 second budget every time, and
+// the guard, failing closed as it must, refused every file write for over an hour.
+type SessionLike = { sessionId: string; lastSeen: number; edits: string[]; extra: Record<string, unknown> }
+type Listed = { open: SessionLike[]; closed: SessionLike[]; unreadable: string[]; selfId: string | null }
+const listed = async ($: Parameters<typeof call>[0]) => {
+  const text = await call($, 'list')
+  if (!text.startsWith('{')) throw new Error(text)
+  return JSON.parse(text) as Listed
+}
+const ids = (rs: SessionLike[]) => rs.map(r => r.sessionId).sort()
+const timed = async (f: () => Promise<unknown>) => {
+  const t = performance.now()
+  await f()
+  return performance.now() - t
+}
+const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] as number
+const job = { id: 'b1', command: 'npm run dev', outputPath: '/tmp/b1.output', pgid: 4242, startedAt: NOW - 3 * HOUR }
+
+test('2,000 closed records and 2 open ones are listed in a tenth of what reading every record costs in the same run (#911)', withConsumer, async ($, on) => {
+  const ended = NOW - 2 * HOUR
+  const open = { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }), [`${DIR}/o2.json`]: recOf('o2', { lastSeen: NOW - MIN }) }
+  const w = world(on, { files: { ...open } })
+  const pile = (tag: string) => {
+    for (const p of Object.keys(w.files)) if (p.startsWith(`${DIR}/`) && !(p in open)) delete w.files[p]
+    for (let i = 0; i < 2000; i++) w.files[`${DIR}/${tag}${i}.json`] = recOf(`${tag}${i}`, { closedAt: ended, lastSeen: ended })
+  }
+  // The yardstick, taken in this run on this machine as loaded as it is (L224): a list that must read
+  // all 2,002 records, the work every list did before #911. Three piles under names never seen, so
+  // nothing one list remembers can serve the next, and the median of the three (L656).
+  const yard: number[] = []
+  for (const tag of ['a', 'b', 'c']) {
+    pile(tag)
+    yard.push(await timed(() => listed($)))
+  }
+  // Pile c, closed two hours ago, is what a session finds when it starts, as on 2026-10-07.
+  await start($)
+  const after: number[] = []
+  for (let i = 0; i < 5; i++) after.push(await timed(() => listed($)))
+  expect(median(after) * 10).toBeLessThan(median(yard))
+  const l = await listed($)
+  expect(ids(l.open)).toEqual(['o1', 'o2', 's1'])
+  expect(l.unreadable).toEqual([])
+  // Moved, never deleted: every one of the 2,000 is in the archive.
+  expect(Object.keys(w.files).filter(p => p.startsWith(`${ARCH}/1969-12-31/c`)).length).toBe(2000)
+})
+
+test('a record that ended over an hour ago is moved to the archive, never deleted; a newer one stays (#911)', withConsumer, async ($, on) => {
+  const gone = recOf('gone', { closedAt: NOW - 2 * HOUR, lastSeen: NOW - 2 * HOUR })
+  const quiet = recOf('quiet', { lastSeen: NOW - 2 * HOUR })
+  const w = world(on, {
+    files: { [`${DIR}/gone.json`]: gone, [`${DIR}/quiet.json`]: quiet, [`${DIR}/fresh.json`]: recOf('fresh', { closedAt: NOW - 30 * MIN, lastSeen: NOW - 30 * MIN }) },
+  })
+  await start($)
+  expect(w.files[`${ARCH}/1969-12-31/gone.json`]).toBe(gone)
+  expect(w.files[`${ARCH}/1969-12-31/quiet.json`]).toBe(quiet)
+  expect(`${DIR}/gone.json` in w.files).toBe(false)
+  expect(`${DIR}/quiet.json` in w.files).toBe(false)
+  expect(`${DIR}/fresh.json` in w.files).toBe(true)
+  expect(ids((await listed($)).closed)).toEqual(['fresh'])
+})
+
+test('a closed record still naming background jobs stays for the job watcher until its 7 days are up (#911)', withConsumer, async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/j1.json`]: recOf('j1', { closedAt: NOW - 2 * HOUR, lastSeen: NOW - 2 * HOUR, extra: { jobs: [job] } }),
+      [`${DIR}/j8.json`]: recOf('j8', { closedAt: NOW - 8 * DAY, lastSeen: NOW - 8 * DAY, extra: { jobs: [job] } }),
+    },
+  })
+  await start($)
+  expect(`${DIR}/j1.json` in w.files).toBe(true)
+  expect(Object.keys(w.files).filter(p => p.endsWith('/j8.json'))).toEqual([])
+  expect(ids((await listed($)).closed)).toEqual(['j1'])
+})
+
+// Every reader of the list, read 2026-10-07: the collision guard and scope modes read only the open
+// sessions and the records that cannot be read; the goal tracker reads this session's own record,
+// open or closed; the job watcher reads the closed records for the jobs they name. The sleep queue
+// reads the folder itself, and judges a session whose record is absent gone, as it judges one that
+// has ended (test-sleep-queue.sh: "a claim by a session the registry never saw is free"), so a record
+// moved out changes none of its answers. The handoff and account room mods read no session record.
+test('archiving changes nothing a reader reads: the open sessions, the unreadable, this session, and the closed records with jobs (#911)', withConsumer, async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }),
+      [`${DIR}/r1.json`]: recOf('r1', { closedAt: NOW - 10 * MIN, lastSeen: NOW - 10 * MIN }),
+      [`${DIR}/c1.json`]: recOf('c1', { closedAt: NOW - 2 * HOUR, lastSeen: NOW - 2 * HOUR }),
+      [`${DIR}/k1.json`]: recOf('k1', { lastSeen: NOW - 3 * HOUR }),
+      [`${DIR}/j1.json`]: recOf('j1', { closedAt: NOW - 2 * HOUR, lastSeen: NOW - 2 * HOUR, extra: { jobs: [job] } }),
+      [`${DIR}/b1.json`]: '{ half a rec',
+    },
+    mtimes: { [`${DIR}/b1.json`]: NOW - MIN },
+  })
+  const withJobs = (l: Listed) => ids(l.closed.filter(r => Array.isArray(r.extra.jobs) && r.extra.jobs.length > 0))
+  const before = await listed($)
+  await start($)
+  const after = await listed($)
+  // Something was archived, so the comparison below is over a real change (L159).
+  expect(`${ARCH}/1969-12-31/c1.json` in w.files && `${ARCH}/1969-12-31/k1.json` in w.files).toBe(true)
+  expect(ids(after.open).filter(id => id !== 's1')).toEqual(ids(before.open))
+  expect(after.unreadable).toEqual(before.unreadable)
+  expect(withJobs(after)).toEqual(withJobs(before))
+  expect(withJobs(after)).toEqual(['j1'])
+  expect([...after.open, ...after.closed].some(r => r.sessionId === after.selfId)).toBe(true)
+})
+
+test('a record its owner wrote again just as it was archived is put back, so a live session is never hidden (#911)', withConsumer, async ($, on) => {
+  let wrote = false
+  const w = world(on, {
+    files: { [`${DIR}/k1.json`]: recOf('k1', { lastSeen: NOW - 2 * HOUR }) },
+    beforeMv: argv => {
+      if (wrote || !argv.includes(`${DIR}/k1.json`)) return
+      wrote = true
+      w.touch(`${DIR}/k1.json`, recOf('k1', { lastSeen: NOW }))
+    },
+  })
+  await start($)
+  expect(wrote).toBe(true)
+  expect(JSON.parse(w.files[`${DIR}/k1.json`] ?? 'null')?.lastSeen).toBe(NOW)
+  expect(ids((await listed($)).open)).toEqual(['k1', 's1'])
+})
+
+// Lessons review of #913: the read back after the move was unbounded, so on the first start after
+// this shipped a loaded Mac would read all 1,337 moved records again inside session.start.
+test('the read back of records just archived is bounded like the first read: one that never answers holds the start no longer than the limit (#911)', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/k1.json`]: recOf('k1', { lastSeen: NOW - 2 * HOUR }) } })
+  w.hang(`${ARCH}/1969-12-31/k1.json`)
+  let started = false
+  const starting = start($).then(() => (started = true))
+  await w.hangReached
+  await w.clock.advance(9_000)
+  await starting
+  w.unhang()
+  expect(started).toBe(true)
+  expect(`${ARCH}/1969-12-31/k1.json` in w.files).toBe(true)
+  expect(w.own()).toMatchObject({ sessionId: 's1', closedAt: null })
+})
+
+test("an archive folder for a day 7 days past is removed; a later day's, and anything not named for a day, are kept (#911)", withConsumer, async ($, on) => {
+  const w = world(on, {
+    files: { [`${ARCH}/1969-12-24/a.json`]: recOf('a', {}), [`${ARCH}/1969-12-26/b.json`]: recOf('b', {}), [`${ARCH}/notes/c.json`]: 'mine' },
+  })
+  await start($)
+  expect(`${ARCH}/1969-12-24/a.json` in w.files).toBe(false)
+  expect(`${ARCH}/1969-12-26/b.json` in w.files).toBe(true)
+  expect(`${ARCH}/notes/c.json` in w.files).toBe(true)
+})
+
+test('a list reads again only the records whose file changed since the last, by the time the folder listing gives (#911)', withConsumer, async ($, on) => {
+  const files: Record<string, string> = { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }) }
+  for (let i = 0; i < 50; i++) files[`${DIR}/c${i}.json`] = recOf(`c${i}`, { closedAt: NOW - 10 * MIN, lastSeen: NOW - 10 * MIN })
+  const w = world(on, { files })
+  await start($)
+  await listed($)
+  const first = w.reads.length
+  await listed($)
+  // The open sessions are read every time; a closed record whose file is as it was is not.
+  expect(w.reads.slice(first).sort()).toEqual([`${DIR}/o1.json`, `${DIR}/s1.json`])
+  w.touch(`${DIR}/c7.json`, recOf('c7', { closedAt: NOW - 5 * MIN, lastSeen: NOW - 5 * MIN, edits: ['/repo/x.ts'] }))
+  const second = w.reads.length
+  const l = await listed($)
+  expect(w.reads.slice(second).sort()).toEqual([`${DIR}/c7.json`, `${DIR}/o1.json`, `${DIR}/s1.json`])
+  expect(l.closed.find(r => r.sessionId === 'c7')?.edits).toEqual(['/repo/x.ts'])
+  expect(l.closed.length).toBe(50)
+})
+
+test('a folder listing with no modification times has every record read on every list, said once in the debug log (#911, L289)', withConsumer, async ($, on) => {
+  const files: Record<string, string> = {}
+  for (let i = 0; i < 3; i++) files[`${DIR}/c${i}.json`] = recOf(`c${i}`, { closedAt: NOW - 10 * MIN, lastSeen: NOW - 10 * MIN })
+  const w = world(on, { files, noMtimes: true })
+  await start($)
+  const first = w.reads.length
+  await listed($)
+  await listed($)
+  expect(w.reads.slice(first).filter(p => p === `${DIR}/c0.json`).length).toBe(2)
+  expect(w.logs.filter(l => l.includes('no modification times')).length).toBe(1)
+})
+
+test('a list that cannot read every record within its own time refuses, naming how many it read, before the 10 second budget (#911)', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }), [`${DIR}/slow.json`]: recOf('slow', { lastSeen: NOW - MIN }) } })
+  await start($)
+  w.hang(`${DIR}/slow.json`)
+  const pending = call($, 'list')
+  // Waits on the read having started, never on a fixed time (L290).
+  await w.hangReached
+  await w.clock.advance(9_000)
+  const said = await pending
+  w.unhang()
+  expect(said).toMatch(/^list failed: session-registry read 2 of 3 session records within 8 seconds/)
+})
+
+test('a record moved away between the listing and its read is left out, never named unreadable (#911)', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }), [`${DIR}/moved.json`]: recOf('moved', { lastSeen: NOW - MIN }) } })
+  await start($)
+  w.vanish(`${DIR}/moved.json`)
+  const l = await listed($)
+  expect(l.unreadable).toEqual([])
+  expect(ids(l.open)).toEqual(['o1', 's1'])
 })
