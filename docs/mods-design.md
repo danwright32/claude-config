@@ -815,7 +815,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   "checked at 3:41 PM" in green, "done, you pressed Done at 3:41 PM" when Dan pressed its Done,
   and "done, per you, recorded at 3:41 PM" when Claude recorded it on his word with nothing
   pressed. A step pinned again as already done keeps how and when it finished on the card it
-  replaces. A withdrawn step keeps #872's dimmed, unstruck "taken off, not done", with its time.
+  replaces. A withdrawn step keeps #872's dimmed, unstruck "taken off, not done", the time going
+  with being taken off ("taken off at 3:41 PM, not done"). A not-done verdict forgets the press,
+  so a later verdict on Dan's words never says he pressed Done.
 - **Only what Dan can do now** (#872). The tool asks for a step only when Dan can do it now; one
   waiting on something else (a merge, a deploy) stays in its issue. A step pinned anyway comes off
   through `steps_done` as `withdrawn`, at any time: dimmed, not struck through, and "taken off, not

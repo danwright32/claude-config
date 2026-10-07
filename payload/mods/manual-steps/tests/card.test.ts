@@ -112,6 +112,8 @@ describe('finish', () => {
     if ('refusal' in r) throw new Error(r.refusal)
     expect(r.card.steps[0]).toMatchObject({ isSent: false })
     expect(r.card.steps[0]?.finished).toBeUndefined()
+    // That Done was answered (#886 review): a later verdict on his words must not say he pressed it.
+    expect(r.card.steps[0]?.isPressed).toBeUndefined()
   })
 })
 
@@ -251,6 +253,20 @@ describe('cardLines', () => {
     expect(l[3]).toEqual([{ text: '3. C', strikethrough: true }, { text: '  done, you pressed Done at 3:41 PM' }])
     expect(l[4]).toEqual([{ text: '4. D', strikethrough: true }, { text: '  done, per you, recorded at 3:41 PM' }])
     expect(l[5]?.[0]).toMatchObject({ text: '5. E', bold: true })
+  })
+
+  // #886 review: the time goes with being taken off, never with "not done", which read as the step
+  // not being done at that moment.
+  test('a withdrawn step says when it was taken off, in this session and an earlier one', () => {
+    const T = Date.UTC(2026, 9, 7, 19, 41)
+    const r = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn', T)
+    if ('refusal' in r) throw new Error(r.refusal)
+    const at = { now: T, timeZone: 'America/New_York' }
+    expect((cardLines(r.card, at) as P[][])[1]).toEqual([{ text: '1. A', dim: true }, { text: '  taken off at 3:41 PM, not done', dim: true }])
+    expect((cardLines({ ...r.card, isCarried: true }, { ...at, now: T + 3 * 86_400_000 }) as P[][])[1]?.[1]).toEqual({
+      text: '  taken off in an earlier session on Oct 7 at 3:41 PM, not done',
+      dim: true,
+    })
   })
 
   test('a step finished in an earlier session is grey, says so, and shows when it finished', () => {

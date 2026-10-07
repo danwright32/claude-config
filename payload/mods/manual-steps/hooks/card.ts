@@ -198,7 +198,11 @@ export const finish = (card: StepsCard, n: number, verdict: StepsVerdict, at?: n
     }
   }
   const next: StepsStep =
-    verdict === 'not-done' ? { ...step, isSent: false } : { ...step, isSent: false, finished: verdict, ...(at === undefined ? {} : { finishedAt: at }) }
+    // not-done answers the press, so it is forgotten: a later verdict on Dan's words never says he
+    // pressed Done, and a new press marks it again.
+    verdict === 'not-done'
+      ? (({ isPressed: _pressed, ...rest }) => ({ ...rest, isSent: false }))(step)
+      : { ...step, isSent: false, finished: verdict, ...(at === undefined ? {} : { finishedAt: at }) }
   return { card: { ...card, steps: card.steps.map((s, k) => (k === n - 1 ? next : s)) } }
 }
 
@@ -233,7 +237,11 @@ const finishedLine = (s: StepsStep, label: string, isCarried: boolean, drawn: Dr
   const when = s.finishedAt === undefined ? '' : ` ${finishedWhen(s.finishedAt, drawn)}`
   const isOld = s.finished === 'already' || s.isEarlier === true || isCarried
   // Taken off, it reads as removed rather than done in either session: dimmed, never struck (#872).
-  if (f.isUndone) return [{ text: label, dim: true }, { text: `  ${isOld ? `${f.earlier} in an earlier session` : f.text}${when}`, dim: true }]
+  // The time goes with being taken off, never after "not done", which would read as not done then.
+  if (f.isUndone) {
+    if (!isOld && !when) return [{ text: label, dim: true }, { text: `  ${f.text}`, dim: true }]
+    return [{ text: label, dim: true }, { text: `  taken off${isOld ? ' in an earlier session' : ''}${when}, not done`, dim: true }]
+  }
   const title: CardPart = { text: label, ...(isOld ? { dim: true } : {}), strikethrough: true }
   if (s.finished === 'already' && !s.isEarlier && !isCarried) return [title, { text: `  ${f.text}`, dim: true }]
   if (isOld) return [title, { text: `  ${f.earlier} in an earlier session${when}`, dim: true }]

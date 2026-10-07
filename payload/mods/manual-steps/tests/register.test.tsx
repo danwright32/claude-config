@@ -952,7 +952,7 @@ test('steps_done withdrawn takes a pinned step off the card as not done, and the
     'Cloudflare WAF  waiting on you',
     '1. Turn on the WAF rule  [done]',
     'Where: https://dash.cloudflare.com/waf  [copy-link]',
-    expect.stringMatching(/^2\. Watch the next merge  taken off, not done at \d{1,2}:\d{2} [AP]M$/),
+    expect.stringMatching(/^2\. Watch the next merge  taken off at \d{1,2}:\d{2} [AP]M, not done$/),
   ])
   expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
   expect(await band($)).toBeUndefined()
