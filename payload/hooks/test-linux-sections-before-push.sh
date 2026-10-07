@@ -366,10 +366,21 @@ run "$R13" 'cd "$X" && git push'; o19f="$OUT"
 run "$R13" 'cd "$X" && git push origin HEAD'; o19g="$OUT"
 [ "$RC" -eq 2 ] && check "an unresolvable push of HEAD, whose branch cannot be read, is refused" ok \
                 || check "an unresolvable push of HEAD, whose branch cannot be read, is refused" "rc=$RC out=$o19g"
-# Only a URL that IS GitHub's claude-config counts: one merely containing that text is elsewhere.
+# The check stands down only on a target POSITIVELY known to be another repository. A destination is
+# judged by its repository path (owner/name, without case, .git or a trailing slash), whatever the
+# host or port, so any path naming danwright32/claude-config is judged, as is one it cannot parse.
 run "$R13" 'cd "$X" && git push https://mirror.example/github.com/danwright32/claude-config main'; o19h="$OUT"
-[ "$RC" -eq 0 ] && check "a URL that only contains the shared path is not the shared repo" ok \
-                || check "a URL that only contains the shared path is not the shared repo" "rc=$RC out=$o19h"
+[ "$RC" -eq 2 ] && check "any host serving the path danwright32/claude-config is judged" ok \
+                || check "any host serving the path danwright32/claude-config is judged" "rc=$RC out=$o19h"
+run "$R16" 'git push https://github.com/DanWright32/Claude-Config.git/ HEAD:main'; o19o="$OUT"
+[ "$RC" -eq 2 ] && check "the path is compared without case, .git or a trailing slash" ok \
+                || check "the path is compared without case, .git or a trailing slash" "rc=$RC out=$o19o"
+run "$R16" 'git push ssh://github.com HEAD:main'; o19p="$OUT"
+[ "$RC" -eq 2 ] && check "a URL with no repository path cannot be placed, so it is judged" ok \
+                || check "a URL with no repository path cannot be placed, so it is judged" "rc=$RC out=$o19p"
+run "$R16" 'git push https://github.com/danwright32/other-repo.git HEAD:main'; o19q="$OUT"
+[ "$RC" -eq 0 ] && check "a GitHub URL for another repository stands down" ok \
+                || check "a GitHub URL for another repository stands down" "rc=$RC out=$o19q"
 # A remote that fetches from a local mirror and PUSHES to claude-config is judged by where it pushes.
 git -C "$R16" remote add mirrored "$BARE" 2>/dev/null
 git -C "$R16" remote set-url --push mirrored "$SHARED_URL" 2>/dev/null
@@ -387,10 +398,13 @@ run "$R16" "git push --repo $SHARED_URL"; o19k="$OUT"
 run "$R13" "git push --repo '$BARE'"; o19l="$OUT"
 [ "$RC" -eq 0 ] && check "--repo naming a local bare repo from a claude-config checkout passes" ok \
                 || check "--repo naming a local bare repo from a claude-config checkout passes" "rc=$RC out=$o19l"
-# claude-config through an ssh host alias for a second account, or an ssh URL with a port.
+# claude-config through an ssh host alias (any name, not only github.com-<x>), or with a port.
 run "$R16" 'git push git@github.com-work:danwright32/claude-config.git HEAD:main'; o19m="$OUT"
 [ "$RC" -eq 2 ] && check "claude-config through a github.com-<alias> ssh host is refused" ok \
                 || check "claude-config through a github.com-<alias> ssh host is refused" "rc=$RC out=$o19m"
+run "$R16" 'git push gh-work:danwright32/claude-config HEAD:main'; o19r="$OUT"
+[ "$RC" -eq 2 ] && check "claude-config through an ssh alias of any name is refused" ok \
+                || check "claude-config through an ssh alias of any name is refused" "rc=$RC out=$o19r"
 run "$R16" 'git push ssh://git@github.com:22/danwright32/claude-config.git HEAD:main'; o19n="$OUT"
 [ "$RC" -eq 2 ] && check "claude-config through an ssh URL with a port is refused" ok \
                 || check "claude-config through an ssh URL with a port is refused" "rc=$RC out=$o19n"

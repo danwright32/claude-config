@@ -12,23 +12,23 @@
 # shared repo stayed red for seven hours. Each attempt to understand either one cost a push and a
 # five minute wait, and one of them could not be reproduced on a Mac at all.
 #
-# It is repo-agnostic by construction: a repository with no tests/run-on-linux.sh is not this one,
-# and the hook does nothing at all there rather than guessing what to run.
+# It does two separate things, and they fail in opposite directions.
 #
-# The Linux run fails OPEN in every direction it cannot see: no docker, no base to diff against, a
-# parse error, a repository this does not apply to. (The default branch rule below is the one
-# exception: it fails closed on a push it cannot place.) Of the Linux run it blocks on one thing only, something that
-# actually ran on Linux and failed: a changed section's own checks, or the prelude they run after,
-# each named as what it is (claude-config#625). A machine that cannot ask the question must not stop
-# a push over it, and the audit says UNMEASURED so that a run nobody made is never mistaken for a
-# clean one.
+# 1. THE LINUX RUN fails OPEN. It runs only where tests/run-on-linux.sh exists, and does nothing at
+#    all elsewhere rather than guess what to run. In every direction it cannot see (no docker, no base
+#    to diff against, a parse error) it lets the push through, and blocks on one thing only, something
+#    that actually ran on Linux and failed: a changed section's own checks, or the prelude they run
+#    after, each named as what it is (claude-config#625). The audit says UNMEASURED so that a run
+#    nobody made is never mistaken for a clean one.
 #
-# Separately, it refuses a push straight to the default branch of the shared claude-config repository
-# (claude-config#596), because the Linux run here cannot be relied on to happen and a pull request's
-# CI can. The reasons, with the measurements, are beside that rule below. That rule judges where the
-# push GOES, the URL of the remote it reaches from the directory it runs in, never the checkout's
-# shape (claude-config#892), and it fails CLOSED: a push to main whose directory cannot be resolved is
-# refused rather than judged in the session's place.
+# 2. THE DEFAULT BRANCH RULE fails CLOSED. It refuses a push straight to main of the shared
+#    claude-config repository (claude-config#596), because the Linux run cannot be relied on to
+#    happen and a pull request's CI can; the measurements are beside the rule below. It judges where
+#    the push GOES (claude-config#892): the directory it runs in (git -C, a cd in the same command,
+#    or the session's), then the repository path of the remote it reaches, whatever the host. It
+#    stands down only when that target is positively some other repository. A push that may reach
+#    main from a directory it cannot resolve, or to a destination whose path it cannot read, is
+#    refused, never judged in another repository's place.
 #
 # Overrides, each for one push, explained to the user first and never silently:
 #   SKIP_LINUX_CHECK=1 git push ...        do not run the changed sections on Linux
@@ -81,16 +81,39 @@ _ls_key(){   # -> this repository's record file, keyed on the origin remote
 # behind an existing override widens every use of it (L448).
 _ls_cur_branch(){ git symbolic-ref --quiet --short HEAD 2>/dev/null; }
 _ls_unquote(){ local t="$1"; t="${t#[\"\']}"; t="${t%[\"\']}"; printf '%s' "$t"; }
-# The shared repository, judged by the URL a push goes to (claude-config#892). Its SHAPE (a Linux
-# runner beside an audit) said "this repository" for any copy of it, so a scratch clone whose origin
-# was a local bare repository had its push to main refused. GitHub reads owner and name without case.
-_ls_is_shared_url(){   # $1 = a remote URL
-  local u
+# The shared repository, judged by WHERE a push goes (claude-config#892). Its SHAPE (a Linux runner
+# beside an audit) said "this repository" for any copy of it, so a scratch clone whose origin was a
+# local bare repository had its push to main refused.
+#
+# The rule stands down only on a target POSITIVELY known to be another repository, and judges by the
+# repository PATH, never the host: matching host spellings missed an ssh alias of any name and a
+# port, each a way to reach claude-config, and every miss let a push to main through (L75, L42).
+# The repository path of a URL, scp-like address or local path: its last two components, without
+# case, a trailing slash or .git. Fails when there is no path to read.
+_ls_repo_path(){   # $1 = a URL or path
+  local u p rest owner name
   u="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  # Anchored at BOTH ends: a URL that merely contains the path (a mirror's) is somewhere else. The
-  # host may carry a port, or a github.com-<name> ssh alias, the usual way a second GitHub account
-  # is reached; an alias not starting github.com would need ssh's own config read, and is not.
-  [[ "$u" =~ ^((https?|ssh|git)://([^/@]+@)?|[^/@:]+@)?github\.com(-[a-z0-9._-]+)?(:[0-9]+)?[:/]+danwright32/claude-config(\.git)?/*$ ]]
+  case "$u" in
+    *://*) p="${u#*://}"; case "$p" in */*) p="${p#*/}" ;; *) return 1 ;; esac ;;   # drop the host
+    /*|.*|'~'*) p="$u" ;;                                                            # a local path
+    *:*) p="${u#*:}" ;;                                                              # [user@]host:path
+    *) p="$u" ;;                                       # a bare word, which git reads as a relative path
+  esac
+  while [[ "$p" == */ ]]; do p="${p%/}"; done
+  p="${p%.git}"
+  while [[ "$p" == */ ]]; do p="${p%/}"; done
+  name="${p##*/}"
+  [ -n "$name" ] || return 1
+  rest="${p%/*}"
+  if [ "$rest" = "$p" ]; then owner=""; else owner="${rest##*/}"; fi
+  printf '%s/%s' "$owner" "$name"
+}
+# True unless the destination is positively some other repository: its path names claude-config,
+# or it has no path to read.
+_ls_targets_shared(){   # $1 = a URL or path
+  local p
+  p="$(_ls_repo_path "$1")" || return 0
+  [ "$p" = "danwright32/claude-config" ]
 }
 # Whether a remote word names a URL or a path rather than a configured remote's name.
 _ls_is_location(){ case "$1" in */*|*:*|.*|'~'*) return 0 ;; esac; return 1; }
@@ -186,7 +209,7 @@ if ! ps_has_override "$cmd" ALLOW_DIRECT_MAIN_PUSH; then
       else
         _ls_url="$(git ls-remote --get-url "$_ls_r" 2>/dev/null)"
       fi
-      _ls_is_shared_url "${_ls_url:-$_ls_r}" && _ls_hit=1
+      _ls_targets_shared "${_ls_url:-$_ls_r}" && _ls_hit=1
     done <<DESTS
 $(_ls_push_dests "$cmd" repo)
 DESTS
@@ -198,7 +221,7 @@ DESTS
     _ls_def="main"
     while IFS=$'\x1f' read -r _ls_r _ls_d; do
       case "$_ls_d" in ALL|main|master|'?') ;; *) continue ;; esac
-      if _ls_is_location "$_ls_r"; then _ls_is_shared_url "$_ls_r" && _ls_hit=1
+      if _ls_is_location "$_ls_r"; then _ls_targets_shared "$_ls_r" && _ls_hit=1
       else _ls_hit=1; _ls_blind=1; fi
     done <<DESTS
 $(_ls_push_dests "$cmd" words)
