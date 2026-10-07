@@ -164,6 +164,9 @@ type GhVerdict = { refuse: string } | { write: string | null | undefined } | und
 const ghVerdict = (words: readonly string[]): GhVerdict => {
   const a = ghArgs(words)
   const { sub, act } = a
+  // An unknown flag before the subcommand: what the call does cannot be read, so it reaches a
+  // repository that cannot be resolved.
+  if (a.unreadable) return { write: null }
   if (sub === 'api') return apiVerdict(a)
   if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || (!sub && a.flags.length)) return undefined
   if (sub === 'issue' && act !== 'comment') return { refuse: `run gh issue ${act}`.trim() }

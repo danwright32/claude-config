@@ -21,7 +21,12 @@ export type GhArgs = {
    * that cannot be read.
    */
   named: string | null | undefined
+  /** A flag before the subcommand that is not one of gh's known global flags: nothing it does can be said. */
+  unreadable: boolean
 }
+
+// gh's global flags that take no value, allowed before the subcommand.
+const GLOBAL_BOOLEANS = new Set(['--help', '-h', '--version'])
 
 // The short flags that take a value, by subcommand and action; `*` is any action.
 const SHORT_VALUES: Record<string, Record<string, string>> = {
@@ -64,11 +69,21 @@ const LINK = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)(?:[/?
 export const ghArgs = (words: readonly string[]): GhArgs => {
   const flags: GhArgs['flags'] = []
   const plain: string[] = []
-  // The subcommand and action are the first two words that are not flags, as gh puts them first.
-  // A flag given before them (rare) has its value read as one, which can only make the call
-  // unresolvable, never another repository's.
+  // Global flags may come before the subcommand (`gh -R other/x pr close 5`): the known ones are
+  // read with their values, so a value is never taken for the subcommand; any other flag there
+  // makes the call unreadable, so the repository it reaches cannot be said (L75).
   const rest = words.slice(1) as string[]
-  const subAt = rest.findIndex(w => !w.startsWith('-'))
+  let unreadable = false
+  let lead = 0
+  for (; lead < rest.length; lead++) {
+    const w = rest[lead] as string
+    if (!w.startsWith('-')) break
+    if (w === '-R' || w === '--repo') lead++
+    else if (/^(?:-R.|--repo=)/.test(w) || GLOBAL_BOOLEANS.has(w)) continue
+    else unreadable = true
+  }
+  // The subcommand and action are then the first two words that are not flags.
+  const subAt = rest.findIndex((w, n) => n >= lead && !w.startsWith('-'))
   const sub = subAt < 0 ? '' : (rest[subAt] as string)
   const actAt = sub === 'api' || subAt < 0 ? -1 : rest.findIndex((w, n) => n > subAt && !w.startsWith('-'))
   const act = actAt < 0 ? '' : (rest[actAt] as string)
@@ -107,7 +122,7 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
     }
     plain.push(w)
   }
-  return { sub, act, flags, positionals: plain, named: namedRepo(sub, flags, plain) }
+  return { sub, act, flags, positionals: plain, named: unreadable ? null : namedRepo(sub, flags, plain), unreadable }
 }
 
 const namedRepo = (sub: string, flags: GhArgs['flags'], positionals: string[]): string | null | undefined => {

@@ -38,6 +38,17 @@ describe('the repository a gh command names', () => {
     expect(gh('gh pr close 5 -R my.org/x').named).toBe('my.org/x')
     expect(gh('gh pr close 5 -R https://github.com/Other/X').named).toBe('other/x')
   })
+  test('a global flag before the subcommand is read, its value never taken for the subcommand', () => {
+    const a = gh('gh -R other/x pr close 5')
+    expect([a.sub, a.act, a.positionals, a.named]).toEqual(['pr', 'close', ['5'], 'other/x'])
+    expect(gh('gh --repo=o/x pr merge 3').named).toBe('o/x')
+    expect(gh('gh --repo o/x pr merge 3').sub).toBe('pr')
+  })
+  test('an unknown flag before the subcommand makes the repository unresolvable', () => {
+    const a = gh('gh --frob x pr close 5')
+    expect(a.named).toBeNull()
+    expect(a.unreadable).toBe(true)
+  })
   test('then a github.com link among the positionals', () => {
     expect(gh('gh pr ready https://github.com/other/x/pull/5').named).toBe('other/x')
     expect(gh('gh issue comment https://github.com/my.org/x/issues/9 -b hi').named).toBe('my.org/x')

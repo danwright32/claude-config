@@ -106,6 +106,11 @@ describe('every gh write but a known read goes only to the repository the checko
     expect(await bash('gh pr close 5 -d')).toBe('delete a branch')
     expect(await bash('gh repo delete other/x --yes')).toBe(other)
     expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
+    // Global flags before the subcommand (#834 review of 8bbd403).
+    expect(await bash('gh -R other/x pr close 5')).toBe(other)
+    expect(await bash('gh --repo=other/x pr merge 3')).toBe(other)
+    expect(await bash('gh --frob x pr close 5')).toBe(unresolved)
+    expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
   })
   test('the same writes on this repository go ahead', async () => {
     expect(await bash('gh pr review 5 --comment --body x')).toBeUndefined()
