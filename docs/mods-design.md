@@ -864,8 +864,13 @@ anything calls it. What the build decided, each open to Dan changing it:
   issue someone else's.
 - An open session "names" an issue when its checkout of the same repository is on a branch whose
   digits include the number, or its current request says `#N`. A pull request names it by `#N` in
-  its title or body or the number in its branch. A branch or pull request is ignored for an issue
-  tonight's own claims have touched, so a dead worker's branch is carried on, not skipped.
+  its title or body or the number in its branch. A branch or pull request is ignored only while
+  tonight's work on the issue is still to be carried on: this session's own claim, a claim whose
+  session died, or one given back `unstarted`. So a dead worker's branch is carried on, while an
+  issue released `free` on purpose is judged against its branch and pull request afresh.
+- Every wait on GitHub (each `gh` call, or the injected source) has a deadline,
+  `SLEEP_GH_TIMEOUT` (60 seconds), and the worktree's fetch has `SLEEP_FETCH_TIMEOUT` (120): a hung
+  read refuses the queue or gives the issue back, and its whole process group is stopped.
 - Unanswered before bed questions are read from `~/.claude/state/sleep/unanswered/GENERATION`, one
   `owner/repo#N` a line, which phase 6 (#836) writes.
 - Claims differ from the plan's wording in one way: the plan said a directory holding the session

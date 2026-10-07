@@ -48,6 +48,7 @@ cat > "$WORK/source.sh" <<EOF
 #!/bin/sh
 echo "\$*" >> "$WORK/source.log"
 [ -f "$FX/fail-\$1" ] && { cat "$FX/fail-\$1" >&2; exit 1; }
+[ -f "$FX/hang-\$1" ] && { echo \$\$ > "$FX/hang.pid"; exec sleep 30; }
 case "\$1" in
   accounts) cat "$FX/accounts" ;;
   issues) cat "$FX/issues.json" ;;
@@ -175,6 +176,31 @@ out="$(sleep_queue "$ROOT" s1)"; rc=$?
 check_eq "a failed fetch refuses" 3 "$rc"
 check_has "with what the source said" "HTTP 502 from api.github.com" "$out"
 rm -f "$FX/fail-issues"
+
+# A read from GitHub that hangs is stopped at its deadline and refuses the queue, saying so (L110).
+touch "$FX/hang-prs"
+t0=$(date +%s)
+out="$(SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
+t1=$(date +%s)
+rm -f "$FX/hang-prs"
+check_eq "a hung GitHub read refuses the queue" 3 "$rc"
+check_has "saying it was stopped at its deadline" "took longer than 2s and was stopped" "$out"
+check_eq "well inside the hang" yes "$([ $((t1 - t0)) -lt 20 ] && echo yes || echo "no, $((t1 - t0))s")"
+hp="$(cat "$FX/hang.pid" 2>/dev/null)"
+check_eq "the hung read really ran, and is stopped with it" "ran stopped" "$([ -n "$hp" ] && echo ran || echo never) $([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo running || echo stopped)"
+
+# The real gh path (no injected source) with a stand-in gh that hangs: the very first call is
+# stopped at the deadline and named as that, never read as no account seeing the repository.
+mkdir -p "$WORK/hangbin"
+printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$WORK/hanggh.pid" > "$WORK/hangbin/gh"; chmod +x "$WORK/hangbin/gh"
+t0=$(date +%s)
+out="$(PATH="$WORK/hangbin:$PATH" SLEEP_QUEUE_SOURCE= SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
+t1=$(date +%s)
+check_eq "a hung gh refuses the queue" 3 "$rc"
+check_has "named as GitHub not answering in time" "GitHub did not answer within 2s" "$out"
+check_eq "within one deadline, not the hang" yes "$([ $((t1 - t0)) -lt 15 ] && echo yes || echo "no, $((t1 - t0))s")"
+hp="$(cat "$WORK/hanggh.pid" 2>/dev/null)"
+check_eq "the stand-in gh really ran, and is stopped" "ran stopped" "$([ -n "$hp" ] && echo ran || echo never) $([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo running || echo stopped)"
 
 # The goal's issues, in the goal's order, still judged by every exclusion but priority.
 printf '{"number":12,"title":"Theirs","labels":[],"author":{"login":"somebody-else"},"state":"OPEN"}' > "$FX/issue-12.json"

@@ -72,27 +72,57 @@ _sq_slug() {
   python3 "$_SQ_PY" slug "$url"
 }
 
+# ---- deadlines ----
+
+# _sq_deadline SECONDS COMMAND...: runs it in a process group of its own and stops the whole group
+# once SECONDS pass, saying so on stderr and exiting 142. Everything this tool waits on from outside
+# (GitHub, a fetch) goes through it: it runs unattended, and a wait with no deadline only hangs
+# (L110). perl, since macOS has no timeout command.
+_sq_deadline() {
+  perl -e 'my $t = shift; my $pid = fork; exit 127 unless defined $pid;
+    if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 1; kill "KILL", -$pid; waitpid($pid, 0);
+      print STDERR "took longer than ${t}s and was stopped\n"; exit 142 };
+    alarm $t; waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$@"
+}
+_sq_gh_limit() { printf '%s\n' "${SLEEP_GH_TIMEOUT:-60}"; }
+
 # ---- the issue source ----
 
 # gh, as an account that can see the repository: the active one first, then each other signed in
-# account, its token scoped to the call (never gh auth switch, which other sessions share).
+# account, its token scoped to the call (never gh auth switch, which other sessions share). The
+# token is exported only inside the subshell running that one call, never into argv.
+_sq_gh_as() { # TOKEN-or-empty gh-arguments...
+  local tok="$1"
+  shift
+  if [ -n "$tok" ]; then ( export GH_TOKEN="$tok"; _sq_deadline "$(_sq_gh_limit)" gh "$@" ); else _sq_deadline "$(_sq_gh_limit)" gh "$@"; fi
+}
+# Exit 0 with the token (empty for the active account), 1 when no account can see it, 4 when
+# GitHub did not answer within the deadline, which is said as itself, never as no account.
 _sq_gh_token() {
-  local slug="$1" acct tok
-  if gh repo view "$slug" --json nameWithOwner >/dev/null 2>&1; then return 0; fi
-  for acct in $(gh auth status 2>/dev/null | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
-    tok="$(gh auth token -u "$acct" 2>/dev/null)" || continue
-    [ -n "$tok" ] || continue
-    if GH_TOKEN="$tok" gh repo view "$slug" --json nameWithOwner >/dev/null 2>&1; then
+  local slug="$1" acct tok rc accts
+  _sq_gh_as "" repo view "$slug" --json nameWithOwner >/dev/null 2>&1; rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 142 ] && return 4
+  accts="$(_sq_gh_as "" auth status 2>/dev/null)"; rc=$?
+  [ "$rc" = 142 ] && return 4
+  for acct in $(printf '%s\n' "$accts" | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
+    tok="$(_sq_gh_as "" auth token -u "$acct" 2>/dev/null)"; rc=$?
+    [ "$rc" = 142 ] && return 4
+    [ "$rc" = 0 ] && [ -n "$tok" ] || continue
+    _sq_gh_as "$tok" repo view "$slug" --json nameWithOwner >/dev/null 2>&1; rc=$?
+    [ "$rc" = 142 ] && return 4
+    if [ "$rc" = 0 ]; then
       printf '%s\n' "$tok"
       return 0
     fi
   done
   return 1
 }
-_sq_gh() { if [ -n "${_SQ_TOKEN:-}" ]; then GH_TOKEN="$_SQ_TOKEN" gh "$@"; else gh "$@"; fi; }
+_sq_gh() { _sq_gh_as "${_SQ_TOKEN:-}" "$@"; }
 _sq_gh_source() {
   case "$1" in
-    accounts) gh auth status --json hosts 2>/dev/null | python3 -c '
+    accounts) _sq_gh_as "" auth status --json hosts 2>/dev/null | python3 -c '
 import json, sys
 for a in json.load(sys.stdin).get("hosts", {}).get("github.com", []):
     if a.get("state") == "success" and a.get("login"):
@@ -104,7 +134,8 @@ for a in json.load(sys.stdin).get("hosts", {}).get("github.com", []):
     *) echo "unknown source call $1" >&2; return 2 ;;
   esac
 }
-_sq_source() { if [ -n "${SLEEP_QUEUE_SOURCE:-}" ]; then "$SLEEP_QUEUE_SOURCE" "$@"; else _sq_gh_source "$@"; fi; }
+# Each gh call above carries its own deadline; an injected source is held to the same one.
+_sq_source() { if [ -n "${SLEEP_QUEUE_SOURCE:-}" ]; then _sq_deadline "$(_sq_gh_limit)" "$SLEEP_QUEUE_SOURCE" "$@"; else _sq_gh_source "$@"; fi; }
 
 # One fetch into a file; a failure is a refusal carrying the source's own first line (L215).
 _sq_fetch() {
@@ -129,7 +160,12 @@ sleep_queue() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/sleep-queue.XXXXXX")" || { _sq_refuse "no temporary folder could be made"; return 3; }
   _SQ_TOKEN=""
   if [ -z "${SLEEP_QUEUE_SOURCE:-}" ]; then
-    _SQ_TOKEN="$(_sq_gh_token "$slug")" || { rm -rf "$tmp"; _sq_refuse "no signed in GitHub account can see $slug"; return 3; }
+    _SQ_TOKEN="$(_sq_gh_token "$slug")"
+    case $? in
+      0) ;;
+      4) rm -rf "$tmp"; _sq_refuse "GitHub did not answer within $(_sq_gh_limit)s while finding an account that can see $slug, so the call was stopped"; return 3 ;;
+      *) rm -rf "$tmp"; _sq_refuse "no signed in GitHub account can see $slug"; return 3 ;;
+    esac
   fi
   rc=0
   _sq_fetch "$tmp/accounts" "list of Dan's GitHub accounts" accounts || rc=3
@@ -316,14 +352,10 @@ sleep_worktree() {
     git -C "$primary" worktree add -q "$path" "$branch" >/dev/null 2>&1 || { echo "git worktree add $path $branch failed" >&2; return 2; }
   else
     # Unattended, so the fetch has a deadline (L110): a hung network gives the issue back rather
-    # than holding the claim with no end. perl, since macOS has no timeout command; the fetch runs
-    # in a process group of its own and the whole group is stopped, so its ssh goes with it (L321).
+    # than holding the claim with no end. The whole process group is stopped, so its ssh goes too.
     local limit="${SLEEP_FETCH_TIMEOUT:-120}" frc
     GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4" \
-      perl -e 'my $t = shift; my $pid = fork; exit 127 unless defined $pid;
-        if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
-        $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 1; kill "KILL", -$pid; waitpid($pid, 0); exit 142 };
-        alarm $t; waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$limit" \
+      _sq_deadline "$limit" \
       git -C "$primary" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch -q origin 2>/dev/null
     frc=$?
     if [ "$frc" = 142 ]; then echo "git fetch from origin in $primary took longer than ${limit}s and was stopped" >&2; return 2; fi
