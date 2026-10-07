@@ -541,101 +541,125 @@ const endClaim = async ($: EngineInterface, en: Enrolled, root: string | null, r
   return (r.stdout + r.stderr).trim().split('\n')[0] || `sleep-queue.sh release exited ${r.exitCode}`
 }
 
+// Every note the driver writes is marked as its own, so it is never read back as the session's progress.
 const writeNotes = async ($: EngineInterface, en: Enrolled, notes: Note[], extra: Record<string, unknown> = {}) => {
   for (const n of notes) {
     try {
-      await sleepNote($, en.current, { ...n, ...(n.kind === 'heartbeat' ? extra : {}), at: en.now, by: en.self })
+      await sleepNote($, en.current, { ...n, ...(n.kind === 'heartbeat' ? extra : {}), driver: true, at: en.now, by: en.self })
     } catch (err) {
       $.ui.log(`scope-modes: the overnight driver's ${n.kind} note could not be written: ${msg(err)}`, { to: 'debug' })
     }
   }
 }
 
-// One Stop of an enrolled session: a block keeping it working, or null to let it stop.
-const driveStop = async ($: EngineInterface): Promise<{ block: string } | null | 'not-driven'> => {
-  const en = await enrolledNow($)
-  if (!en) return 'not-driven'
-  const where = await repoOf($)
-  const driver = await loadDriver($, en)
-  const notesText = await notesNow($, en)
-  const claim = await claimNow($, en)
-  const u = await usageNow($)
-  const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root))
-  const d = decideStop({
-    now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
-    weekly: u.weekly, claim, rules: overnightRules(en.self, where.root ?? '<the repository root>'),
-  })
-  if (d.record) {
-    const unsaved = await saveDriver($, en, d.record)
-    if (unsaved && d.kind === 'block') {
-      const why = `the driver's counter could not be written (${unsaved}), so it stopped rather than block on a count it did not keep`
-      await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: why }])
-      return null
-    }
-  }
-  const ended = d.release ? await endClaim($, en, where.root, d.release) : null
-  const notes = ended && d.release ? [...d.notes, { kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : d.notes
-  await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
-  if (d.kind === 'block') return { block: ended && d.release ? `The claim on #${d.release.issue} could not be ended (${ended}): end it yourself. ${d.reason}` : d.reason }
-  $.ui.log(`scope-modes: the overnight driver let this session stop: ${d.why}`, { to: 'debug' })
-  return null
+// One at a time in this session: a Stop, an API error and the minute's tick each read the counter,
+// decide and write it back, so two interleaved would lose one's count (assume it runs twice).
+let driverChain: Promise<unknown> = Promise.resolve()
+const oneAtATime = <T>(fn: () => Promise<T>): Promise<T> => {
+  const p = driverChain.then(fn, fn)
+  driverChain = p.catch(() => undefined)
+  return p
 }
+
+// The nights this session was let stop, kept here too, so a stop whose counter could not be
+// written is still a stop: the next Stop never blocks on the older count it would read back.
+const stoppedHere = new Set<string>()
+const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
+
+// One Stop of an enrolled session: a block keeping it working, or null to let it stop.
+const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-driven'> =>
+  oneAtATime(async () => {
+    const en = await enrolledNow($)
+    if (!en) return 'not-driven' as const
+    if (stoppedHere.has(stopKey(en))) return null
+    const where = await repoOf($)
+    const driver = await loadDriver($, en)
+    const notesText = await notesNow($, en)
+    const claim = await claimNow($, en)
+    const u = await usageNow($)
+    const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root))
+    const d = decideStop({
+      now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
+      weekly: u.weekly, claim, rules: overnightRules(en.self, where.root ?? '<the repository root>'),
+    })
+    if (d.kind === 'stop') stoppedHere.add(stopKey(en))
+    if (d.record) {
+      const unsaved = await saveDriver($, en, d.record)
+      if (unsaved && d.kind === 'block') {
+        stoppedHere.add(stopKey(en))
+        const why = `the driver's counter could not be written (${unsaved}), so it stopped rather than block on a count it did not keep`
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: why }])
+        return null
+      }
+    }
+    const ended = d.release ? await endClaim($, en, where.root, d.release) : null
+    const notes = ended && d.release ? [...d.notes, { kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : d.notes
+    await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
+    if (d.kind === 'block') return { block: ended && d.release ? `The claim on #${d.release.issue} could not be ended (${ended}): end it yourself. ${d.reason}` : d.reason }
+    $.ui.log(`scope-modes: the overnight driver let this session stop: ${d.why}`, { to: 'debug' })
+    return null
+  })
 
 // A turn that ended on an API error: wait it out, or stop, as driver.ts decides.
-const driveFailure = async ($: EngineInterface, error: string, message: string) => {
-  const en = await enrolledNow($)
-  if (!en) return
-  const where = await repoOf($)
-  const u = await usageNow($)
-  const d = decideFailure({ now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver: await loadDriver($, en), error, message, weekly: u.weekly })
-  if (d.record) {
-    const unsaved = await saveDriver($, en, d.record)
-    if (unsaved) {
-      // A wait that was not recorded would never be resumed: said, and the session stops.
-      await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: `after the ${error} error the driver's counter could not be written (${unsaved}), so no retry was set` }])
-      return
+const driveFailure = ($: EngineInterface, error: string, message: string): Promise<void> =>
+  oneAtATime(async () => {
+    const en = await enrolledNow($)
+    if (!en || stoppedHere.has(stopKey(en))) return
+    const where = await repoOf($)
+    const u = await usageNow($)
+    const d = decideFailure({ now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver: await loadDriver($, en), error, message, weekly: u.weekly })
+    if (d.kind === 'stop') stoppedHere.add(stopKey(en))
+    if (d.record) {
+      const unsaved = await saveDriver($, en, d.record)
+      if (unsaved) {
+        // A wait that was not recorded would never be resumed: said, and the session stops.
+        stoppedHere.add(stopKey(en))
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: `after the ${error} error the driver's counter could not be written (${unsaved}), so no retry was set` }])
+        return
+      }
     }
-  }
-  await writeNotes($, en, d.notes)
-}
+    await writeNotes($, en, d.notes)
+  })
 
 // Each minute: start a session again once its wait is over, and park a claim held past its active
-// time even mid turn (the watchdog), said at the next Stop.
-let driving = false
+// time even mid turn (the watchdog), said at the next Stop. The session is started again outside
+// the one at a time queue, so the turn it starts can reach its own Stop.
 const driverTick = async ($: EngineInterface, seen: SleepReading) => {
-  if (driving) return
-  driving = true
-  try {
+  const resume = await oneAtATime(async (): Promise<boolean> => {
     const en = await enrolledNow($, seen)
-    if (!en) return
+    if (!en || stoppedHere.has(stopKey(en))) return false
     const r = await loadDriver($, en)
-    if (r.state !== 'ok') return
+    if (r.state !== 'ok') return false
     const d = { ...r.record }
     if (resumeDue(d, en.now)) {
       // Cleared and saved first, so a second tick never starts it twice.
       d.resumeAt = null
-      if (await saveDriver($, en, d)) return
-      try {
-        await $.prompt.submit({ text: RESUME })
-      } catch (err) {
-        d.resumeAt = en.now
-        await saveDriver($, en, d)
-        $.ui.log(`scope-modes: the overnight driver could not start the session again: ${msg(err)}`, { to: 'debug' })
-      }
-      return
+      return (await saveDriver($, en, d)) === null
     }
-    if (d.stopped || d.resumeAt !== null) return
+    if (d.stopped || d.resumeAt !== null) return false
     const c = await claimNow($, en)
-    if (c.state !== 'held') return
+    if (c.state !== 'held') return false
     const active = activeMs(d.waits, c.claim.since, en.now)
-    if (active < LIMITS.stuckMs) return
+    if (active < LIMITS.stuckMs) return false
     const where = await repoOf($)
     const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
     const failed = await endClaim($, en, where.root, { issue: c.claim.issue, state: 'parked', why })
     d.parked = failed ? `The watchdog could not park #${c.claim.issue} (${failed}); park it yourself.` : `The watchdog parked #${c.claim.issue} (${why}); its claim is ended, so leave it and claim the next issue.`
     await saveDriver($, en, d)
-  } finally {
-    driving = false
+    return false
+  })
+  if (!resume) return
+  try {
+    await $.prompt.submit({ text: RESUME })
+  } catch (err) {
+    // Not started: due again at the next minute.
+    await oneAtATime(async () => {
+      const en = await enrolledNow($)
+      if (!en) return
+      const r = await loadDriver($, en)
+      if (r.state === 'ok') await saveDriver($, en, { ...r.record, resumeAt: en.now })
+    })
+    $.ui.log(`scope-modes: the overnight driver could not start the session again: ${msg(err)}`, { to: 'debug' })
   }
 }
 

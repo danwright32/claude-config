@@ -124,8 +124,8 @@ export const progressOf = (notesText: string | null, self: string, refsText: str
   for (const line of notesText.split('\n')) {
     if (!line.trim()) continue
     try {
-      const n = JSON.parse(line) as { by?: unknown; kind?: unknown }
-      if (n.by === self && typeof n.kind === 'string' && !BOOKKEEPING.has(n.kind)) notes++
+      const n = JSON.parse(line) as { by?: unknown; kind?: unknown; driver?: unknown }
+      if (n.by === self && (n as { driver?: unknown }).driver !== true && typeof n.kind === 'string' && !BOOKKEEPING.has(n.kind)) notes++
     } catch {
       // A line that cannot be read is no progress of anybody's.
     }

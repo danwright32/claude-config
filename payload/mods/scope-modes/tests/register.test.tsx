@@ -181,6 +181,10 @@ type Opts = {
   /** What pmset says this Mac is drawing power from (#844). */
   power?: 'ac' | 'battery'
   caffeinateFails?: boolean
+  /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
+  claimsGate?: Promise<void>
+  /** Which writes of the driver's counter fail, counted from 1 (#844). */
+  driverWriteFails?: number[]
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -217,7 +221,9 @@ const world = (on: On, o: Opts = {}) => {
   on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' && !w.homeGone ? '/Users/x' : undefined }) as never)
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
+  let driverWrites = 0
   on('fs.write', ($, e) => {
+    if (e.path.includes('/state/sleep/driver/') && o.driverWriteFails?.includes(++driverWrites)) throw new Error('EIO: i/o error, write')
     w.fsWrites.push(e.path)
     w.files[e.path] = e.text
     return { value: undefined }
@@ -284,6 +290,11 @@ const world = (on: On, o: Opts = {}) => {
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
     if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/sleep-queue.sh') {
+      if (a[1] === 'claims' && o.claimsGate) {
+        const gate = o.claimsGate
+        o.claimsGate = undefined
+        return gate.then(() => ok(o.claims ?? '')) as never
+      }
       if (a[1] === 'claims') return ok(o.claims ?? '')
       if (a[1] === 'release') {
         w.released.push(a.slice(2))
@@ -1566,4 +1577,30 @@ test('/sleep says when the Mac could not be held awake, and sleep still starts (
   await start($ as never, clock)
   expect((await command($ as never, 'sleep')).text).toMatch(/ The Mac may sleep tonight: caffeinate could not be started \(sh: caffeinate: not found\)\.$/)
   expect(w.files[CURRENT]).toBeDefined()
+})
+
+test('a Stop and an API error handled at once never lose a count: the driver takes them one at a time (#844)', withDeps, async ($, on) => {
+  let open = () => undefined as void
+  const claimsGate = new Promise<void>(r => (open = r))
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claimsGate })
+  await start($ as never, clock)
+  const s = stop($ as never)
+  const f = stopFailure($ as never, 'rate_limit')
+  await Promise.resolve()
+  open()
+  await Promise.all([s, f])
+  const d = JSON.parse(w.files[DRIVER] as string) as { blocks: number; waits: unknown[]; resumeAt: number | null }
+  expect(d.blocks).toBe(1)
+  expect(d.waits.length).toBe(1)
+  expect(d.resumeAt).toBe(T0 + 5 * MIN)
+})
+
+test('a stop whose counter cannot be written is still a stop: the next Stop never blocks again (#844)', withDeps, async ($, on) => {
+  // Fresh: one block that makes progress, three idle, then the breaker; its write (the fifth) fails.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, driverWriteFails: [5] })
+  await start($ as never, clock)
+  for (let n = 0; n < 4; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w).filter(k => k === 'stopped').length).toBe(1)
 })

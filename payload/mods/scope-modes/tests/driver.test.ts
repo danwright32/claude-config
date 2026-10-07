@@ -223,6 +223,9 @@ describe('the readings', () => {
       { kind: 'heartbeat', by: 's1' }, { kind: 'wait', by: 's1' }, { kind: 'finding', by: 's1' }, { kind: 'claim', by: 's1' }, { kind: 'finding', by: 's2' },
     ].map(n => JSON.stringify(n)).join('\n') + '\nnot json'
     expect(progressOf(notes, 's1', 'b\na\n')).toBe('notes=2;refs=a,b')
+    // The driver's own notes (an unmeasured finding, a claim it could not end) are never progress.
+    const own = [{ kind: 'finding', by: 's1', driver: true }, { kind: 'failed', by: 's1', driver: true }].map(n => JSON.stringify(n)).join('\n')
+    expect(progressOf(own, 's1', '')).toBe('notes=0;refs=')
     expect(progressOf(null, 's1', '')).toBe(null)
     expect(progressOf('', 's1', null)).toBe(null)
   })
