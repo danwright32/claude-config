@@ -449,8 +449,9 @@ const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS) => {
 type Enrolled = { record: SleepRecord; self: string; home: string; dir: string; current: string; now: number }
 
 // Driven only while the Mac sleeps and the record names this session a worker (#840, H4).
-const enrolledNow = async ($: EngineInterface): Promise<Enrolled | null> => {
-  const reading = await sleepNow($)
+// `seen` is a reading this minute already took, so the tick reads the record once (L91).
+const enrolledNow = async ($: EngineInterface, seen?: SleepReading): Promise<Enrolled | null> => {
+  const reading = seen ?? (await sleepNow($))
   if (reading.state !== 'asleep') return null
   const self = await $.session.id()
   if (!Array.isArray(reading.record.workers) || !reading.record.workers.includes(self)) return null
@@ -601,11 +602,11 @@ const driveFailure = async ($: EngineInterface, error: string, message: string) 
 // Each minute: start a session again once its wait is over, and park a claim held past its active
 // time even mid turn (the watchdog), said at the next Stop.
 let driving = false
-const driverTick = async ($: EngineInterface) => {
+const driverTick = async ($: EngineInterface, seen: SleepReading) => {
   if (driving) return
   driving = true
   try {
-    const en = await enrolledNow($)
+    const en = await enrolledNow($, seen)
     if (!en) return
     const r = await loadDriver($, en)
     if (r.state !== 'ok') return
@@ -1118,8 +1119,10 @@ export const register: Register = on => {
         }
         // Sleep's record read each minute too: the first session to find it over ends it, and the
         // band follows it on and off whichever session started or ended it (#840).
+        let seen: SleepReading = { state: 'none' }
         try {
           const reading = await sleepNow($)
+          seen = reading
           await endIfOver($, reading)
           if ((reading.state === 'asleep') !== shownAsleep) {
             await showModes($)
@@ -1130,7 +1133,7 @@ export const register: Register = on => {
         }
         // The overnight driver's minute (#844): a wait that is over, and a claim held too long.
         try {
-          await driverTick($)
+          if (seen.state === 'asleep') await driverTick($, seen)
         } catch (err) {
           $.ui.log(`scope-modes: the overnight driver's minute failed: ${msg(err)}`, { to: 'debug' })
         }
@@ -1361,6 +1364,8 @@ export const register: Register = on => {
 
   // A turn that ended on an API error, while an enrolled session works overnight: waited out or stopped (#844).
   on('classic.StopFailure', async ($, e, next) => {
+    // Only while asleep: awake, a failed turn is Dan's to see, and nothing here acts or notes.
+    if (!(await isAsleep($))) return next(e)
     try {
       await driveFailure($, String(e.error), e.last_assistant_message ?? '')
     } catch (err) {
