@@ -227,6 +227,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh api repos/other/x/pulls')).toBeUndefined()
     expect(await bash('gh search issues sleep --owner other')).toBeUndefined()
     expect(await bash('gh label list')).toBeUndefined()
+    expect(await bash('gh status')).toBeUndefined()
   })
   test('every GraphQL mutation is refused, by its exact name', async () => {
     expect(await bash(`gh api graphql -f query='mutation { refreshThing(input: {}) { ok } }'`)).toBe('call the GitHub API to run refreshThing')

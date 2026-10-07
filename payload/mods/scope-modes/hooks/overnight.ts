@@ -1,5 +1,5 @@
 import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { flagOf, ghApi, ghArgs, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
+import { flagOf, ghApi, ghArgs, graphqlQuery, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
 import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, operations, type Cmd } from './nobuild.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
@@ -154,7 +154,7 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
 // Everything else gh does is refused, on any repository: being on the right repository is not
 // enough for a write (repo delete, release, secret, a workflow run).
 const GH_READ_ACTS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch'])
-const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion'])
+const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion', 'status'])
 // The writes overnight work needs, each a subcommand and action and the only flags it may carry
 // beyond -R or --repo: a comment on the issue being worked (decision 3), opening, readying and
 // merging its PR (phase 7 judges merges further), and changing that PR's title or body. Nothing is
@@ -211,14 +211,12 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
   // Another GitHub host is another place entirely, never this checkout's repository.
   const host = flagOf(a, '--hostname')
   if (host !== undefined && (typeof host !== 'string' || host.toLowerCase() !== 'github.com')) return { write: null }
-  const { method, endpoint, fields, input } = ghApi(a)
+  const { method, endpoint, fields } = ghApi(a)
   const ep = (endpoint ?? '').replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '').replace(/[?#].*$/, '')
   if (ep === 'graphql') {
     // A GraphQL document is always a POST: read it, and refuse one that cannot be read.
-    const q = a.flags.filter(f => ['-f', '-F', '--field', '--raw-field'].includes(f.name) && typeof f.value === 'string' && f.value.startsWith('query=')).pop()
-    const query = q ? (q.value as string).slice('query='.length) : undefined
-    const fromFile = input || (q !== undefined && (q.name === '-F' || q.name === '--field') && (query ?? '').startsWith('@'))
-    if (fromFile || query === undefined) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
+    const query = graphqlQuery(a)
+    if (query === null) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
     for (const op of operations(query)) {
       if (op.kind !== 'mutation') continue
       if (op.spreads || !op.fields.length) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }

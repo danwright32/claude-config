@@ -169,3 +169,17 @@ export const ghApi = (a: GhArgs): { method: string; endpoint: string | undefined
   const method = typeof m === 'string' ? m.toUpperCase() : fields.length || input ? 'POST' : 'GET'
   return { method, endpoint: a.positionals[0], fields, input }
 }
+
+/**
+ * The GraphQL document a `gh api graphql` call sends, read from its `query=` field in any spelling
+ * gh reads; null when it cannot be read: none given, a body from --input, or `-F query=@file`,
+ * which gh reads from that file. The one reading for no build and the overnight rules.
+ */
+export const graphqlQuery = (a: GhArgs): string | null => {
+  if (hasFlag(a, '--input')) return null
+  const q = a.flags.filter(f => FIELD_FLAGS.includes(f.name) && typeof f.value === 'string' && f.value.startsWith('query=')).pop()
+  if (!q) return null
+  const query = (q.value as string).slice('query='.length)
+  // -F and --field read a value starting with @ from that file; -f takes it as written.
+  return (q.name === '-F' || q.name === '--field') && query.startsWith('@') ? null : query
+}

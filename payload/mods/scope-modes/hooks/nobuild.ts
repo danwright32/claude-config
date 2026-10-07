@@ -1,5 +1,5 @@
 import type { ModKitCommand, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { ghApi, ghArgs } from './ghargs.ts'
+import { ghApi, ghArgs, graphqlQuery } from './ghargs.ts'
 import { clientRefusal, sqlRefusal } from './sql.ts'
 
 // No build (#616): what Claude may and may not do while it is on, as the spec agreed with Dan.
@@ -102,19 +102,10 @@ export const operations = (doc: string): Operation[] => {
 // Issue, milestone and label work is all allowed, through GraphQL too; a pull request is not.
 const ISSUE_WORK = (field: string) => /issue|label|milestone/i.test(field) && !/pullrequest/i.test(field)
 const graphqlRefusal = (words: string[]): string | undefined => {
-  let query: string | undefined
-  let fromFile = false
-  for (let i = 2; i < words.length; i++) {
-    const w = words[i] as string
-    if (w === '--input') return 'call the GitHub API with a query that could not be read'
-    if (['-f', '-F', '--field', '--raw-field'].includes(w) && (words[i + 1] ?? '').startsWith('query=')) {
-      query = (words[++i] as string).slice('query='.length)
-      // -F and --field read a value starting with @ from that file; -f takes it as written.
-      fromFile = (w === '-F' || w === '--field') && query.startsWith('@')
-    }
-  }
-  // A query read from a file (`-F query=@q.graphql`), or none at all, cannot be judged.
-  if (query === undefined || fromFile) return 'call the GitHub API with a query that could not be read'
+  // Read by ghargs.ts, the one reading of gh's arguments (#834): a query read from a file
+  // (`-F query=@q.graphql`), sent by --input, or none at all, cannot be judged.
+  const query = graphqlQuery(ghArgs(words))
+  if (query === null) return 'call the GitHub API with a query that could not be read'
   for (const op of operations(query)) {
     if (op.kind !== 'mutation') continue
     if (op.spreads || !op.fields.length) return 'call the GitHub API with a query that could not be read'
