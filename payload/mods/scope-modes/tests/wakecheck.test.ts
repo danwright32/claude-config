@@ -131,6 +131,21 @@ describe('the wake check', () => {
     expect(asked.filter(a => !a.startsWith('gh '))).toEqual(['git -C /Users/x/claude-config-sync remote -v', 'stat -f %m /Users/x/.claude/LESSONS.md'])
     expect(r.unmeasured).toEqual(['the overnight check stopped at its 60 s limit, so the rest of GitHub was not read'])
   })
+  test('each GitHub read is given only the time left, and the whole check 30 s by default (#834 review of 98a40f1)', async () => {
+    let t = 0
+    const given: (number | undefined)[] = []
+    const r = await wakeCheck(
+      async (argv, timeoutMs) => {
+        if (argv[0] === 'gh') given.push(timeoutMs)
+        t += 12_000 // each read takes 12 s
+        return QUIET[argv.join(' ')] ?? fail('unexpected')
+      },
+      { since: SINCE, home: HOME, now: () => t },
+    )
+    // 30 s, 18 s and 6 s left as the three reads start; never more than 20 s for one read.
+    expect(given).toEqual([20_000, 18_000, 6_000])
+    expect(r.unmeasured).toEqual(['the overnight check stopped at its 30 s limit, so the rest of GitHub was not read'])
+  })
   test('without the GitHub login nothing on GitHub can be read, and that is said', async () => {
     const r = await check({ 'gh api user --jq .login': fail('not logged in') })
     expect(r.unmeasured[0]).toBe('GitHub was not checked at all: the gh login could not be read (not logged in)')

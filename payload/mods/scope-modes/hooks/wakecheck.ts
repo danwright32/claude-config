@@ -13,7 +13,11 @@ import { etWhen } from './sleep.ts'
 // GitHub is read as the account gh is logged in as, so another account's work is not read.
 
 export type Ran = { exitCode: number; stdout: string; stderr: string }
-export type Runner = (argv: string[]) => Promise<Ran>
+/** Runs a command; `timeoutMs` is the most it may take, when the caller bounds it. */
+export type Runner = (argv: string[], timeoutMs?: number) => Promise<Ran>
+/** The whole check's deadline, and the most one GitHub read may take. */
+export const WAKE_CHECK_MS = 30_000
+const READ_MS = 20_000
 export type WakeFindings = { hits: string[]; unmeasured: string[] }
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
@@ -31,21 +35,24 @@ export const wakeCheck = async (
 ): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
-  // GitHub's reads together keep to one deadline (L110): wake and its reply wait on them, so a slow
-  // GitHub costs Dan a minute at most, as the report's own reads are bounded (#835). A read past
-  // it is not made, and that is said once; the local reads (git, stat) always run.
+  // GitHub's reads together keep to one deadline (L110): wake and its reply wait on them, and then
+  // on the report's own final render, which has its own 90 s, so this check takes 30 s at most.
+  // Each read is given only the time left (never more than 20 s), a read past the deadline is not
+  // made, and that is said once; the local reads (git, stat) always run.
   const now = o.now ?? Date.now
-  const budget = o.budgetMs ?? 60_000
+  const budget = o.budgetMs ?? WAKE_CHECK_MS
   const started = now()
   let over = false
   const SKIPPED = -2
-  const run: Runner = async argv => {
-    if (argv[0] === 'gh' && now() - started >= budget) {
+  const run = async (argv: string[]): Promise<Ran> => {
+    if (argv[0] !== 'gh') return runAny(argv)
+    const left = budget - (now() - started)
+    if (left <= 0) {
       if (!over) unmeasured.push(`the overnight check stopped at its ${Math.round(budget / 1000)} s limit, so the rest of GitHub was not read`)
       over = true
       return { exitCode: SKIPPED, stdout: '', stderr: '' }
     }
-    return runAny(argv)
+    return runAny(argv, Math.min(READ_MS, left))
   }
   const since = iso(o.since)
   // A time GitHub did not give, or gave unreadable, is unknown: said as not checked, never compared

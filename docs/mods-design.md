@@ -930,10 +930,13 @@ the ban list knowing that an action it does not name is approved.
   managed settings file (#876) nothing is approved overnight.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
   created (events and search, since either can lag), milestones touched and deploy runs in each
-  repository with an event overnight and the config repository, and LESSONS.md changed on GitHub
-  and installed. Each hit is an `outward` note and each read that failed an `unmeasured` one,
+  repository with an event overnight, each repository the night's notes name (a private one the
+  feed leaves out included) and the config repository, and the lessons file changed on GitHub and
+  installed. Each hit is an `outward` note and each read that failed an `unmeasured` one,
   written before the final render, which puts both under Needs a look at the top of the report
-  (#835), and both are said in the wake reply or the notification.
+  (#835), and both are said in the wake reply or the notification. Its GitHub reads keep to one
+  30 s deadline, each read given only the time left, so wake waits at most 30 s for it before the
+  report's own final render.
 
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 

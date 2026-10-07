@@ -23,11 +23,6 @@ export type GhArgs = {
   named: string | null | undefined
   /** A flag before the subcommand that is not one of gh's known global flags: nothing it does can be said. */
   unreadable: boolean
-  /**
-   * A subcommand the flag table does not know was given a flag other than -R or --repo: which of
-   * its flags take a value is not guessed, so nothing past them can be placed.
-   */
-  unknownFlags: boolean
 }
 
 // gh's global flags that take no value, allowed before the subcommand.
@@ -137,9 +132,7 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
     }
     plain.push(w)
   }
-  const known = sub !== '*' && Object.prototype.hasOwnProperty.call(SHORT_VALUES, sub)
-  const unknownFlags = !known && flags.some(f => !['-R', '--repo', '--help', '-h'].includes(f.name))
-  return { sub, act, flags, positionals: plain, named: unreadable ? null : namedRepo(sub, flags, plain), unreadable, unknownFlags }
+  return { sub, act, flags, positionals: plain, named: unreadable ? null : namedRepo(sub, flags, plain), unreadable }
 }
 
 const namedRepo = (sub: string, flags: GhArgs['flags'], positionals: string[]): string | null | undefined => {

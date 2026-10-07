@@ -157,6 +157,11 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     // gh named only inside a message is no gh call.
     expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
   })
+  test('gh in command position after a shell keyword or an assignment is gh run directly (#834 review of 98a40f1)', async () => {
+    expect(await bash('if gh pr view 5; then gh pr merge 5 --squash; fi')).toBeUndefined()
+    expect(await bash('while ! gh pr checks 5; do sleep 30; done; gh pr merge 5 --squash')).toBeUndefined()
+    expect(await bash('PAGER=cat gh pr merge 5 --squash')).toBeUndefined()
+  })
   test('quoted text and a heredoc body are never judged as commands (#834 review of 3f7151c)', async () => {
     expect(await bash('gh issue comment 834 --body "see env gh pr close"')).toBeUndefined()
     expect(await bash(`gh issue comment 834 --body 'nohup gh was wrong, GH_TOKEN too'`)).toBeUndefined()

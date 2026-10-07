@@ -246,7 +246,10 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
 // Only text in command position is judged: what quotes hold (a --body) and a heredoc's body are
 // blanked first, so a comment that mentions `env gh` is still a comment. A gh a shell's -c runs
 // sits inside quotes, so it is blanked here too, and is caught by the count below instead.
-const GH_DIRECT = /(?:^|[;&|(){}\n])\s*gh(?=\s|$)/g
+// gh in command position: after a separator, any shell keywords that lead a command (if, then,
+// do, else, elif, while, until, !) and any assignments (a GH_ one is refused above), as the shell
+// and mod-kit's reader both place it (#834 review of 98a40f1).
+const GH_DIRECT = /(?:^|[;&|(){}\n])(?:\s*(?:if|then|do|else|elif|while|until|!)(?=\s))*\s*(?:[A-Za-z_]\w*=\S*\s+)*gh(?=\s|$)/g
 const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate)\s(?:[^;&|\n]*\s)?gh(?=\s|$)/
 const unquoted = (raw: string): string => {
   const body = raw.replace(/(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?\n\s*\3[ \t]*(?=\n|$)/g, '$1')

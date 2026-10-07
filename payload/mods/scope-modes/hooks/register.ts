@@ -230,7 +230,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   }
   let found
   try {
-    found = await wakeCheck(argv => run($, argv), { since: record.since, home, repos })
+    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos })
   } catch (err) {
     found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`] }
   }
