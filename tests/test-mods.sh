@@ -1507,13 +1507,25 @@ TS
       || check "no mod in payload/mods has a noun that waits past 10 s" "exit=$code out=$out"
   fi
 }
-noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looked for in
+noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looked for in; $2 = "required" where it must be there
   if [ -d "$1/node_modules/typescript" ]; then
     CHECK_MODS_TS_DIR="$1" noun_wait_checks
+  elif [ "${2:-}" = required ]; then
+    # CI installs the compiler, so its absence there is a broken step, never a machine that has
+    # not installed it, and every check below would otherwise go quietly unmeasured.
+    check "the pinned TypeScript compiler is installed where CI runs the noun wait checks (#895)" "no compiler in $1"
   else
     echo "UNMEASURED: the noun wait checks (section 12) did not run: no TypeScript compiler in $1. Install it with: npm ci --prefix tools/typescript"
   fi
 }
+# Where it is required, a missing compiler is one failure, never UNMEASURED. Counted here and then
+# taken back, since the failure is the fixture's.
+before=$fail
+noun_wait_section "$TMPROOT/no-typescript-here" required > "$TMPROOT/noun-waits-required.out" 2>&1
+got=$((fail - before)); fail=$before
+[ "$got" -eq 1 ] && ! grep -q '^UNMEASURED' "$TMPROOT/noun-waits-required.out" \
+  && check "in CI a missing TypeScript compiler fails the noun wait checks, never UNMEASURED (#895)" ok \
+  || check "in CI a missing TypeScript compiler fails the noun wait checks, never UNMEASURED (#895)" "failures=$got out=$(cat "$TMPROOT/noun-waits-required.out")"
 # Without the compiler the section is UNMEASURED, never a failure, and runs nothing ...
 # Run in this shell, never a $(...) subshell, so a check it ran would move these very counters (lessons
 # review of #896); its output goes to a file to be read.
@@ -1527,7 +1539,7 @@ out="$(cat "$TMPROOT/noun-waits-unmeasured.out")"
 # ... and with it they run, here, counted like any other check.
 TS_FOR_WAITS="${CHECK_MODS_TS_DIR:-$ROOT/tools/typescript}"
 ran=$pass
-noun_wait_section "$TS_FOR_WAITS"
+noun_wait_section "$TS_FOR_WAITS" ${GITHUB_ACTIONS:+required}
 if [ -d "$TS_FOR_WAITS/node_modules/typescript" ]; then
   [ "$pass" -gt "$ran" ] && check "with the TypeScript compiler installed the noun wait checks run (#895)" ok \
     || check "with the TypeScript compiler installed the noun wait checks run (#895)" "none ran"
