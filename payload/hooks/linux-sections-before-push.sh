@@ -118,7 +118,7 @@ _ls_push_dests(){   # $1 = command  $2 = repo | words
     # heads/* expanded unquoted is matched against files in the working directory (claude-config#776
     # review). A tag only push (--tags with no refspec) updates no branch, so it names none.
     local -a specs=()
-    local i=0 n=${#tok[@]} seen=0 remote="" skip=0 tags=0 all=0 t d
+    local i=0 n=${#tok[@]} seen=0 remote="" skip=0 tags=0 all=0 t d repo_opt="" want_repo=0
     while [ "$i" -lt "$n" ]; do
       t="${tok[$i]}"; i=$((i + 1))
       if [ "$seen" -eq 0 ]; then
@@ -128,14 +128,19 @@ _ls_push_dests(){   # $1 = command  $2 = repo | words
       t="${t%%)*}"; t="${t%%\}*}"; t="$(_ls_unquote "$t")"
       [ -n "$t" ] || continue
       if [ "$skip" -eq 1 ]; then skip=0; continue; fi
+      if [ "$want_repo" -eq 1 ]; then want_repo=0; repo_opt="$t"; continue; fi
       case "$t" in
         --all|--mirror|--branches) all=1 ;;
         --tags) tags=1 ;;
-        -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
+        # --repo names the destination, in either spelling, when no remote word does.
+        --repo) want_repo=1 ;;
+        --repo=*) repo_opt="${t#--repo=}" ;;
+        -o|--push-option|--receive-pack|--exec) skip=1 ;;
         -*) ;;
         *) if [ -z "$remote" ]; then remote="$t"; else specs+=("$t"); fi ;;
       esac
     done
+    [ -n "$remote" ] || remote="$repo_opt"
     [ "$all" -eq 1 ] && printf '%s\037ALL\n' "$remote"
     if [ "${#specs[@]}" -gt 0 ]; then
       for t in "${specs[@]}"; do

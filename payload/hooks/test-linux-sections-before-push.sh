@@ -376,6 +376,17 @@ git -C "$R16" remote set-url --push mirrored "$SHARED_URL" 2>/dev/null
 run "$R16" 'git push mirrored main'; o19i="$OUT"
 [ "$RC" -eq 2 ] && check "a remote whose push URL is claude-config is refused, whatever it fetches from" ok \
                 || check "a remote whose push URL is claude-config is refused, whatever it fetches from" "rc=$RC out=$o19i"
+# --repo names the destination when no remote word does (git lets a remote word win), in either
+# spelling. R16 and R13 are both on main, so these bare pushes update main.
+run "$R16" "git push --repo=$SHARED_URL"; o19j="$OUT"
+[ "$RC" -eq 2 ] && check "--repo=<claude-config URL> pushing main is refused" ok \
+                || check "--repo=<claude-config URL> pushing main is refused" "rc=$RC out=$o19j"
+run "$R16" "git push --repo $SHARED_URL"; o19k="$OUT"
+[ "$RC" -eq 2 ] && check "--repo <claude-config URL> pushing main is refused" ok \
+                || check "--repo <claude-config URL> pushing main is refused" "rc=$RC out=$o19k"
+run "$R13" "git push --repo '$BARE'"; o19l="$OUT"
+[ "$RC" -eq 0 ] && check "--repo naming a local bare repo from a claude-config checkout passes" ok \
+                || check "--repo naming a local bare repo from a claude-config checkout passes" "rc=$RC out=$o19l"
 run "$R13" "cd \"\$X\" && git push '$BARE' main"; o19e="$OUT"
 [ "$RC" -eq 0 ] && check "an unresolvable directory pushing to a local path is not the shared repo" ok \
                 || check "an unresolvable directory pushing to a local path is not the shared repo" "rc=$RC out=$o19e"
