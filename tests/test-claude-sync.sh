@@ -2629,6 +2629,13 @@ export SYNC_LAUNCHAGENTS="$WORK/launchagents-guard"
 # once, here; the section ABOUT the check points it at its own.
 export SYNC_MANAGED_SETTINGS="$WORK/managed-settings-guard.json"
 printf '{"prependPlugins": []}\n' > "$SYNC_MANAGED_SETTINGS"
+# The process table status reads (claude-config#832). Its default is `ps -eo` of the whole machine,
+# which every other session and every parallel suite writes into, so left unset every status call
+# here reported on whatever else happened to be running: under the runner's parallel load each one
+# carried a "test suites left running" report a solo run never has. An EMPTY table, the quiet
+# machine, once, here; the sections ABOUT the process reports name their own.
+export SYNC_PS_FIXTURE="$WORK/ps-guard"
+: > "$SYNC_PS_FIXTURE"
 # The desktop notifier, for the whole suite rather than at 379 of 397 call sites. terminal-notifier
 # is installed on this Mac, so any failure-path call among the 65 that carried no seam would post a
 # real notification on whoever's machine runs this. Measured 2026-08-29 those particular sections
@@ -3161,11 +3168,39 @@ echo '{"hooks":{}}' > "$STHOME/settings.json"
 # a full parallel run on 2026-09-02 and passed on the re-run, which is a flake priced at a full
 # re-run of the slowest suite in the repo (L293, L156).
 # Identical on both sides -> status must stay quiet.
+#
+# Identical means the same bytes AND the same mtime, and the mtime is PINNED, never left to the
+# clock (claude-config#832, L130). status lists a difference of timestamp alone on purpose (see
+# local_vs_payload_records: a push restamps those files), and rsync compares mtimes to the second.
+# This fixture used to write the file and then `cp` it, which stamps the copy with whenever the cp
+# ran, so the two agreed only when both writes landed inside one wall clock second. On a loaded
+# machine they sometimes did not, status correctly printed `hooks: .f..t... same.sh`, and the
+# quiet check went red: once in a full parallel run on 2026-09-02 (blamed then on an unanchored
+# grep), then on CI runs 37489857856 and 37688692388 on 2026-10-06 and 07, each passing on re-run.
+# Reproduced by stamping the copy one second later, which prints exactly that line.
 echo 'same' > "$STHOME/hooks/same.sh"
 cp "$STHOME/hooks/same.sh" "$STREPO/payload/hooks/same.sh"
+# The control first, in the same fixture (L159): a gap of ONE second, which is all the old fixture
+# needed to straddle, is listed as a time only difference. Without it the pin below could be doing
+# nothing and the quiet check would still pass on most runs.
+touch -t 202601010000.00 "$STHOME/hooks/same.sh"
+touch -t 202601010000.01 "$STREPO/payload/hooks/same.sh"
+out_st_tgap="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "#832 the control: a one second mtime gap alone is listed by status" \
+  "grep -q '^hooks: \.f\.\.t[^ ]* same\.sh' <<< \"\$out_st_tgap\""
+touch -t 202601010000.00 "$STHOME/hooks/same.sh" "$STREPO/payload/hooks/same.sh"
+# Asserted, not assumed (L134): both copies carry the pinned stamp, read against a reference file
+# given that same stamp, so the quiet check below is about content and cannot be answered by when
+# the fixture happened to be written.
+: > "$WORK/st-pin-ref"; touch -t 202601010000.00 "$WORK/st-pin-ref"
+st_pin="$(_suite_mtime "$WORK/st-pin-ref")"
+check "#832 the quiet fixture's two copies carry one pinned mtime" \
+  "[ -n '$st_pin' ] && [ \"\$(_suite_mtime '$STHOME/hooks/same.sh')\" = '$st_pin' ] && [ \"\$(_suite_mtime '$STREPO/payload/hooks/same.sh')\" = '$st_pin' ]"
 out_st_clean="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status is quiet when local matches payload" \
   "! grep -q '^hooks: ' <<< \"\$out_st_clean\""
+# When it is not, the line that broke it is the diagnosis, so it is printed (L177).
+grep '^hooks: ' <<< "$out_st_clean" | sed 's/^/    status printed: /' || true
 
 # A hook that exists locally but NOT in the payload: status must name it.
 echo 'brand new' > "$STHOME/hooks/added.sh"
@@ -7836,6 +7871,37 @@ _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! grep -qi 'left running\|watcher processes\|test runs' <<< \"\$_ps_none\""
 
+# ---- a status call that names no table of its own reads the SUITE's, never the machine's (#832) ----
+# Every check above names its fixture. The other ninety odd `status` calls in this file named none,
+# so each read `ps -eo` of the whole machine, and what that machine is running is decided by every
+# other session and every parallel suite on it: under the runner's own parallel load, each of them
+# printed a "test suites left running" report that a solo run never prints. That is output no
+# fixture owns, appearing in exactly the runs that went flaky (L2, L284). So the table is a seam set
+# for the whole suite in the prelude, and this proves it is the one consulted.
+#
+# The machine is planted rather than waited for: a `ps` on the PATH that answers the table query
+# with a pile of suites, the shape a busy runner really has, and passes every other query through.
+_PSSHIM="$WORK/ps-shim"; mkdir -p "$_PSSHIM"
+_ps_real="$(command -v ps)"
+cat > "$_PSSHIM/ps" <<PSSHIM
+#!/bin/sh
+case "\$*" in
+  *pid=,ppid=,etime=,command=*)
+    i=1
+    while [ "\$i" -le 12 ]; do echo "\$((900 + i)) 1 02:00:00 /bin/bash /w/claude-config/payload/hooks/test-busy\$i.sh"; i=\$((i + 1)); done ;;
+  *) exec "$_ps_real" "\$@" ;;
+esac
+PSSHIM
+chmod +x "$_PSSHIM/ps"
+_ps_ambient="$(PATH="$_PSSHIM:$PATH" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#832 a status call naming no table reports nothing the machine is running" \
+  "! grep -q 'test suites left running' <<< \"\$_ps_ambient\""
+# The control, in the same fixture (L159): with the suite's table taken away, the planted machine
+# IS what status reports, so the check above can fail and is not passing on a shim nothing calls.
+_ps_ambient_ctl="$(env -u SYNC_PS_FIXTURE PATH="$_PSSHIM:$PATH" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#832 the control: without the suite's table, the planted machine is reported" \
+  "line_has \"\$_ps_ambient_ctl\" 'pid 901, running 02:00:00' 'test-busy1\.sh'"
+
 section "== status speaks about a pile of suites, and a scratch size that cannot finish (#444, #466) =="
 # On 2026-09-18 559 of this repo's suite processes had run for up to seven hours at zero CPU on a
 # Mac six agents were working on, 152 of them copies of test-run-all-tests.sh. The machine sat at
@@ -8450,7 +8516,10 @@ _SCR="$WORK/scratch-root-36"; mkdir -p "$_SCR"
 # same directory, which every claude-sync call this shard makes writes its scratch and run notes
 # under, and which a mutating run sweeps, so what this section reads depended on what every earlier
 # section and anything they left running had put there. On 2026-10-06 the four status checks below
-# went red together in a full run under parallel load and passed alone (L134, L205).
+# went red together in a full run under parallel load and passed alone (L134, L205). The status
+# below also read the machine's whole process table until the prelude gave the suite one of its own,
+# so of what it reads, only the clock is now outside this file, and every age here is set against it
+# with a margin of hours rather than seconds.
 check "#832 this section's scratch root is not the one every other run uses" \
   "[ '${_SCR%/}' != '${SYNC_SCRATCH_ROOT%/}' ]"
 _scr_age(){ scratch_age_out "$1"; }
