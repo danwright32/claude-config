@@ -13,6 +13,23 @@ import { remember } from './bounded.ts'
 const DEAD_MS = 5 * 60_000
 // Decided with Dan (2026-10-04, #633): a record is kept 7 days after its session ended.
 const KEEP_MS = 7 * 24 * 60 * 60_000
+const DAY_MS = 24 * 60 * 60_000
+// #911: a record that ended more than an hour ago leaves the sessions folder for the archive beside
+// it, where it waits out the rest of its 7 days. No reader needs it there (read 2026-10-07): the
+// collision guard and scope modes read only open and unreadable records, the goal tracker reads this
+// session's own, and the sleep queue judges an absent record gone as it judges a closed one. The one
+// exception is the job watcher, which reads a closed record for the background jobs it names and
+// judges a job left running again at every session start, so a record still naming jobs stays its
+// full 7 days. Measured the day of the incident: at most 68 sessions ended in any one hour, so the
+// folder holds tens of records rather than the 1,337 every list read that day.
+const ARCHIVE_MS = 60 * 60_000
+// The list answers within this or refuses, short of the 10 seconds the engine gives a noun call, so
+// a refusal names what the registry could not do rather than the engine's bare timeout (#911).
+const LIST_MS = 8_000
+// Records read at once; a read is one engine call, and under load the wait is the call, not the disk.
+const READERS = 16
+// Records named in one mv, far under the argument limit (paths are about 90 bytes).
+const MOVE_BATCH = 200
 const BEAT_MS = 60_000
 const MAX_EDITS = 500
 
@@ -23,6 +40,9 @@ let chain: Promise<unknown> = Promise.resolve()
 let beating = false
 
 const dirOf = (h: string) => `${h}/.claude/state/sessions`
+// One folder per day a record ended (UTC), so the 7 day sweep removes whole days without reading one.
+const archiveOf = (h: string) => `${h}/.claude/state/sessions-archive`
+const DAY_NAME = /^\d{4}-\d{2}-\d{2}$/
 const projectsOf = (h: string) => `${h}/.claude/projects`
 // Claude Code files a session's transcript under its starting folder, every character but a
 // letter, a digit or a dash turned into a dash (measured against all 1451 transcripts on this Mac,
@@ -153,6 +173,10 @@ const beat = async ($: EngineInterface) => {
 }
 
 const found = new Map<string, string>()
+// Each record file's text when the list last read it, with the size and time the folder listing gave
+// it then, by file name; kept to the names the folder still holds (#911).
+const seen = new Map<string, { size: number; mtimeMs: number; text: string }>()
+let toldUntimed = false
 // When a session's transcript was last searched for and not found: searched again after a minute,
 // not on every read, since every guarded edit reads the list (lessons review of #636).
 const missed = new Map<string, number>()
@@ -168,41 +192,140 @@ const SESSION_ID = /^[A-Za-z0-9-]+$/
 const isRecord = (r: SessionsRecord): boolean =>
   r.v === 1 && typeof r.sessionId === 'string' && typeof r.lastSeen === 'number' && (r.closedAt === null || typeof r.closedAt === 'number')
 
-// Clears out what has expired, once per session start so no edit pays for it (#633). A closed
-// record goes 7 days after it closed; a crashed one, never closed, 7 days after it was last seen;
-// a damaged one 7 days after its file last changed, named in one grey line. A damaged record any
-// newer stays, since it may belong to a live session, and still stops guarded actions.
+// A record's text as a record, or null when it is damaged: one rule for the list and the cleanup.
+const parse = (text: string | undefined): SessionsRecord | null => {
+  if (text === undefined) return null
+  try {
+    const r = JSON.parse(text) as SessionsRecord
+    return r !== null && typeof r === 'object' && isRecord(r) ? r : null
+  } catch {
+    return null
+  }
+}
+const isOpenAt = (r: SessionsRecord, now: number) => r.closedAt === null && now - r.lastSeen <= DEAD_MS
+// When a record's session ended: its clean close, else its last beat once five minutes have passed
+// with none (a crash, or a Mac asleep); null while it runs.
+const endedOf = (r: SessionsRecord, now: number): number | null => r.closedAt ?? (now - r.lastSeen > DEAD_MS ? r.lastSeen : null)
+// The archive day folder a record moves to, or null while it stays (#911, the cutoff above).
+const archiveDay = (r: SessionsRecord, now: number): string | null => {
+  const endedAt = endedOf(r, now)
+  if (endedAt === null || now - endedAt <= ARCHIVE_MS) return null
+  const jobs = (r.extra as { jobs?: unknown } | undefined)?.jobs
+  if (Array.isArray(jobs) && jobs.length > 0 && now - endedAt <= KEEP_MS) return null
+  try {
+    return new Date(endedAt).toISOString().slice(0, 10)
+  } catch {
+    // A time no date can hold stays put, and is judged again at the next start.
+    return null
+  }
+}
+
+type Listing = { name: string; kind: string; size?: number; mtimeMs?: number }
+const recordsIn = (entries: Listing[]) => entries.filter(e => e.kind === 'file' && e.name.endsWith('.json') && !e.name.startsWith('.'))
+// Reads the files at `paths`, READERS at a time, starting no new read once `stop()` says so. A read
+// that fails has undefined for its text; one never started is absent from the answer.
+const readMany = async (read: (path: string) => Promise<string>, paths: string[], stop: () => boolean): Promise<Map<string, string | undefined>> => {
+  const out = new Map<string, string | undefined>()
+  let next = 0
+  const worker = async () => {
+    while (next < paths.length && !stop()) {
+      const path = paths[next++] as string
+      try {
+        out.set(path, await read(path))
+      } catch {
+        out.set(path, undefined)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(READERS, paths.length) }, worker))
+  return out
+}
+
+// Clears out what has ended, once per session start so no edit pays for it (#633, #911). A record
+// that ended over an hour ago moves to the archive (the cutoff above), never deleted on the way; the
+// archive's day folders go once the whole day is 7 days past, so a record is kept at least 7 days
+// after it ended, as decided in #633. A damaged record goes 7 days after its file last changed, named
+// in one grey line; any newer stays, since it may belong to a live session, and still stops guarded
+// actions. Bounded like the list: what is not read in time is left for the next start.
 const prune = async ($: EngineInterface, h: string, now: number) => {
   const dir = dirOf(h)
-  let entries: { name: string; kind: string }[]
+  let entries: Listing[]
   try {
     entries = await $.fs.list(dir)
   } catch {
     return
   }
+  let stopped = false
+  const timer = $.clock.after(LIST_MS, () => {
+    stopped = true
+  })
+  const names = recordsIn(entries).map(e => e.name)
+  const texts = await readMany(p => $.fs.read(p), names.map(n => `${dir}/${n}`), () => stopped).finally(() => timer.cancel())
   const damaged: string[] = []
-  for (const ent of entries) {
-    if (ent.kind !== 'file' || !ent.name.endsWith('.json') || ent.name.startsWith('.')) continue
-    const path = `${dir}/${ent.name}`
-    let endedAt: number | null
-    let isDamaged = false
-    try {
-      const r = JSON.parse(await $.fs.read(path)) as SessionsRecord
-      if (!isRecord(r)) throw new Error('shape')
-      endedAt = r.closedAt ?? (now - r.lastSeen > DEAD_MS ? r.lastSeen : null)
-    } catch {
-      isDamaged = true
-      try {
-        endedAt = (await $.fs.stat(path)).mtimeMs
-      } catch {
-        continue
-      }
+  const moves = new Map<string, string[]>()
+  for (const name of names) {
+    const path = `${dir}/${name}`
+    if (!texts.has(path)) continue
+    const r = parse(texts.get(path))
+    if (r) {
+      const day = archiveDay(r, now)
+      if (day) moves.set(day, [...(moves.get(day) ?? []), path])
+      continue
     }
-    if (endedAt === null || now - endedAt <= KEEP_MS) continue
-    const rm = await $.process.run(['rm', '-f', path]).catch(() => undefined)
-    if (rm?.exitCode === 0 && isDamaged) damaged.push(ent.name)
+    let changedAt: number
+    try {
+      changedAt = (await $.fs.stat(path)).mtimeMs
+    } catch {
+      continue
+    }
+    if (now - changedAt <= KEEP_MS) continue
+    const rm = await $.process.run(['rm', '-f', path], { timeoutMs: 10_000 }).catch(() => undefined)
+    if (rm?.exitCode === 0) damaged.push(name)
   }
-  if (damaged.length) $.ui.log(`Session registry deleted ${damaged.length === 1 ? 'a damaged record' : `${damaged.length} damaged records`} older than ${KEEP_MS / (24 * 60 * 60_000)} days: ${damaged.join(', ')}.`)
+  if (damaged.length) $.ui.log(`Session registry deleted ${damaged.length === 1 ? 'a damaged record' : `${damaged.length} damaged records`} older than ${KEEP_MS / DAY_MS} days: ${damaged.join(', ')}.`)
+
+  const arch = archiveOf(h)
+  const archived: string[] = []
+  for (const [day, paths] of moves) {
+    const to = `${arch}/${day}`
+    const made = await $.process.run(['mkdir', '-p', to], { timeoutMs: 10_000 }).catch(() => undefined)
+    if (made?.exitCode !== 0) {
+      $.ui.log(`session-registry: could not make the archive folder ${to}, so ${paths.length} ended records stay in the sessions folder: ${made?.stderr.trim() ?? 'mkdir did not run'}`, { to: 'debug' })
+      continue
+    }
+    for (let i = 0; i < paths.length; i += MOVE_BATCH) {
+      const batch = paths.slice(i, i + MOVE_BATCH)
+      const mv = await $.process
+        .run(['mv', '-f', ...batch, `${to}/`], { timeoutMs: 10_000 })
+        .catch((err: unknown) => ({ exitCode: -1, stderr: err instanceof Error ? err.message : String(err) }))
+      // A record another session starting at the same moment moved first is not there to move.
+      if (mv.exitCode !== 0) $.ui.log(`session-registry: moving ended records to ${to} did not all go: ${mv.stderr.trim()}`, { to: 'debug' })
+      archived.push(...batch.map(p => `${to}/${p.slice(dir.length + 1)}`))
+    }
+  }
+  // A record its owner wrote again between the read above and the move (a session waking with the
+  // Mac) went to the archive fresh. Read back and put where it belongs, never over a newer write.
+  const back = await readMany(p => $.fs.read(p), archived, () => false)
+  for (const [path, text] of back) {
+    const r = parse(text)
+    if (!r || archiveDay(r, now) !== null) continue
+    const put = await $.process.run(['mv', '-n', path, `${dir}/${path.split('/').pop()}`], { timeoutMs: 10_000 }).catch(() => undefined)
+    if (put?.exitCode !== 0) $.ui.log(`session-registry: could not put the live record ${path} back in the sessions folder: ${put?.stderr.trim() ?? 'mv did not run'}`, { to: 'debug' })
+  }
+
+  let days: Listing[] = []
+  try {
+    days = await $.fs.list(arch)
+  } catch {
+    // No archive yet.
+  }
+  for (const d of days) {
+    if (d.kind !== 'dir' || !DAY_NAME.test(d.name)) continue
+    const dayEnd = Date.parse(`${d.name}T00:00:00Z`) + DAY_MS
+    if (!Number.isFinite(dayEnd) || now - dayEnd <= KEEP_MS) continue
+    const rm = await $.process.run(['rm', '-rf', `${arch}/${d.name}`], { timeoutMs: 10_000 }).catch(() => undefined)
+    if (rm?.exitCode !== 0) $.ui.log(`session-registry: could not remove the archive folder ${arch}/${d.name}: ${rm?.stderr.trim() ?? 'rm did not run'}`, { to: 'debug' })
+  }
 }
 
 export const register: Register = on => {
@@ -312,26 +435,82 @@ export const register: Register = on => {
           return out
         }
         const now = await built.clock.now()
-        let entries: { name: string; kind: string }[] = []
+        const dir = dirOf(h)
+        let entries: Listing[] = []
         try {
-          entries = await built.fs.list(dirOf(h))
+          entries = await built.fs.list(dir)
         } catch {
           out.unreadable.push('the sessions folder')
           return out
         }
-        for (const ent of entries) {
-          if (ent.kind !== 'file' || !ent.name.endsWith('.json') || ent.name.startsWith('.')) continue
-          let r: SessionsRecord
-          try {
-            r = JSON.parse(await built.fs.read(`${dirOf(h)}/${ent.name}`)) as SessionsRecord
-            if (!isRecord(r)) throw new Error('shape')
-          } catch {
-            out.unreadable.push(ent.name)
-            continue
+        const files = recordsIn(entries)
+        // A closed record whose file the listing shows unchanged since it was last read is taken as
+        // read then (#911): only open records and changed files cost a read. A listing without sizes
+        // and times gives no such answer, and every record is read, said once in the debug log (L289).
+        const texts = new Map<string, string | undefined>()
+        const toRead: string[] = []
+        let untimed = false
+        for (const ent of files) {
+          const isTimed = typeof ent.size === 'number' && typeof ent.mtimeMs === 'number' && ent.mtimeMs > 0
+          if (!isTimed) untimed = true
+          const was = seen.get(ent.name)
+          const r = isTimed && was && was.size === ent.size && was.mtimeMs === ent.mtimeMs ? parse(was.text) : null
+          if (r && !isOpenAt(r, now)) texts.set(ent.name, was?.text)
+          else toRead.push(ent.name)
+        }
+        if (untimed && !toldUntimed) {
+          toldUntimed = true
+          built.ui.log('session-registry: the sessions folder listing gave no modification times, so every record is read on every list', { to: 'debug' })
+        }
+        const listed = new Set(files.map(e => e.name))
+        for (const name of seen.keys()) if (!listed.has(name)) seen.delete(name)
+
+        // Bounded short of the engine's 10 seconds (#911): a list that cannot finish refuses by
+        // throwing, which every reader already treats as a list it could not get (the collision
+        // guard refuses the call), never answering without the records it did not reach.
+        let stopped = false
+        let read = 0
+        let timer: { cancel: () => void } | undefined
+        const expired = new Promise<'expired'>(resolve => {
+          timer = built.clock.after(LIST_MS, () => {
+            stopped = true
+            resolve('expired')
+          })
+        })
+        const work = (async () => {
+          const got = await readMany(p => built.fs.read(p).finally(() => void read++), toRead.map(n => `${dir}/${n}`), () => stopped)
+          for (const ent of files) {
+            const path = `${dir}/${ent.name}`
+            if (!got.has(path)) continue
+            const text = got.get(path)
+            // A record moved out between the listing and its read (the archive, at another session's
+            // start) is no longer a session here; one still there that cannot be read is named.
+            if (text === undefined && !(await built.fs.exists(path).catch(() => true))) continue
+            texts.set(ent.name, text)
+            if (text !== undefined && typeof ent.size === 'number' && typeof ent.mtimeMs === 'number' && ent.mtimeMs > 0)
+              seen.set(ent.name, { size: ent.size, mtimeMs: ent.mtimeMs, text })
           }
-          const isOpen = r.closedAt === null && now - r.lastSeen <= DEAD_MS
-          if (isOpen) r.transcriptPath = await transcriptOf(h, r, now)
-          ;(isOpen ? out.open : out.closed).push(r)
+          if (stopped) return
+          const open: SessionsRecord[] = []
+          for (const ent of files) {
+            if (!texts.has(ent.name)) continue
+            const r = parse(texts.get(ent.name))
+            if (!r) out.unreadable.push(ent.name)
+            else if (isOpenAt(r, now)) open.push(r)
+            else out.closed.push(r)
+          }
+          await Promise.all(open.map(async r => (r.transcriptPath = await transcriptOf(h, r, now))))
+          out.open.push(...open)
+        })()
+        work.catch(() => undefined)
+        const settled = await Promise.race([work.then(() => 'done' as const), expired]).finally(() => timer?.cancel())
+        if (settled === 'expired') {
+          const had = files.length - toRead.length + read
+          throw new Error(
+            had < files.length
+              ? `session-registry read ${had} of ${files.length} session records within ${LIST_MS / 1000} seconds, so it cannot say which sessions are open`
+              : `session-registry read all ${files.length} session records but could not find the open sessions' transcripts within ${LIST_MS / 1000} seconds`,
+          )
         }
         return out
       },
