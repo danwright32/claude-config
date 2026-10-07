@@ -72,13 +72,11 @@ const guard: { name: string; register: Register } = {
     })
   },
 }
-// The notes Claude reads. A plugin's own $.session.append reaches no hook in a test in 2.1.289, the
-// test's or another plugin's (both measured 2026-10-04: "no implementation for session.append"), so
-// every note fails here, and the mod's fallback for a note that cannot be added (a toast carrying
-// the whole note, so Dan sees what Claude was not told) is how the test reads it. The kit's error
-// now adds "a test answers it with on('session.append', ...)", but measured again on 2026-10-05
-// (#764) a test's hook on 'session.append', with or without { door: 'note' }, is never called and
-// the call still rejects with "no implementation for session.append", so this stands.
+// The notes Claude reads: what the mod appended to the session, as the world's session.append hook
+// recorded it. Until 2.1.292 a plugin's own $.session.append had no implementation in a test, so
+// every note failed and these tests read the mod's fallback toast instead. 2.1.293 implements it
+// and calls a test's hook (measured 2026-10-07, #908), which left that reading empty; the fallback
+// keeps its own test, with the session refusing the note.
 // A stand-in for Claude Code's built-in security default (#875), loaded in every test so none can
 // pass on a hook that never runs. Seated outermost for a Team or Enterprise organization, it sends
 // every classic hook event past the tier a person's own plugins load in. This is its own code for
@@ -93,7 +91,9 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withKit = { plugins: [secDefault, modKit, guard] }
-const notesOf = (w: { toasts: string[] }) =>
+const notesOf = (w: { notes: string[] }) => w.notes.join('\n')
+// A note the session refused, as the toast carrying it shows Dan.
+const unsaidOf = (w: { toasts: string[] }) =>
   w.toasts
     .filter(t => t.startsWith('Claude was not told: '))
     .map(t => t.slice('Claude was not told: '.length))
@@ -122,7 +122,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
   // The prompts a plugin submitted, each a turn of Claude's own: since #777 there are none.
   const prompts: string[] = []
   // Whether the tools fail, which a test may change partway (#867: a failed lesson write and a retry).
-  const ctl = { failWrites: init.failWrites ?? false }
+  const ctl: { failWrites: boolean; notesRefused?: string } = { failWrites: init.failWrites ?? false }
   const clock = init.ownClock ? (undefined as unknown as ReturnType<typeof mock.clock>) : mock.clock(on)
   mock.env(on, { HOME })
   // Claude Code's environment as printenv reads it: HOME and whatever the test sets.
@@ -198,7 +198,18 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl }
+  // The notes Claude reads: each row the session appended, as the harness's own append answered it
+  // (the row after `next`, never what the mod asked for), so a note counts only once it landed.
+  // While `ctl.notesRefused` holds a reason, the session refuses every note with it.
+  const notes: string[] = []
+  on('session.append', async ($, e, next) => {
+    if (ctl.notesRefused !== undefined) return { deny: ctl.notesRefused } as never
+    const appended = await next(e)
+    const content = (appended as { message?: { content?: { type?: string; text?: string }[] } }).message?.content ?? []
+    notes.push(content.map(c => c.text ?? '').join(''))
+    return appended
+  })
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes }
 }
 type W = ReturnType<typeof world>
 
@@ -398,7 +409,22 @@ test("Claude Code's memory writer is refused, and the main session is told what 
   expect(w.ran).toEqual([])
   expect(notesOf(w)).toContain('tried to save to ~/.claude/projects/-Users-dan-Apps-slate/memory/feedback-no-merge-quiz.md and was refused')
   expect(notesOf(w)).toContain('Skip the merge quiz.')
+  expect(unsaidOf(w)).toBe('')
   expect(w.prompts).toEqual([])
+})
+
+test('a note the session refuses is shown to Dan whole, with why, so he sees what Claude was not told', withKit, async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  w.ctl.notesRefused = 'the session is closing'
+  const path = `${HOME}/.claude/projects/-Users-dan-Apps-slate/memory/feedback-no-merge-quiz.md`
+  const r = await call($, { tool: 'Write', file_path: path, content: 'Skip the merge quiz.\n', agentId: 'fork-memory' })
+  expect(refusalOf(r)).toContain('a subagent never asks him')
+  expect(w.ran).toEqual([])
+  expect(notesOf(w)).toBe('')
+  const unsaid = unsaidOf(w)
+  expect(unsaid).toContain('tried to save to ~/.claude/projects/-Users-dan-Apps-slate/memory/feedback-no-merge-quiz.md and was refused')
+  expect(unsaid).toContain('Skip the merge quiz.')
+  expect(unsaid).toContain('(the session is closing)')
 })
 
 test('an Edit to a file in the memory folder is refused, naming that file', withKit, async ($, on) => {
