@@ -830,7 +830,9 @@ let through.
   account gh is logged in to (the work repositories are seen only by the work account). The result
   goes into the record as `repos` (`mayDeploy`, `mergeOnly`, `closed` with a reason each, and
   `listWhy` when the file could not be trusted at all), so the night is judged by what was settled
-  at bedtime, never a later edit. `/sleep` says which repositories are closed and why, and each
+  at bedtime, never a later edit. The `preparing` marker carries its generation (`<ms>-<session>`);
+  one more than two hours old (a chosen limit) is taken as left by a session that died mid question
+  and cleared, and `/wake` clears one at any age. `/sleep` says which repositories are closed and why, and each
   closed one is noted (`repo-closed`, with the question still to answer) for the morning report.
 - Closed for the night, no merge and no deploy: a file that is missing or does not read, a
   repository on both lists, an entry GitHub does not know, a question unanswered in 10 minutes or

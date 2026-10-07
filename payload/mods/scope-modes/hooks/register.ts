@@ -422,6 +422,11 @@ const announce = async ($: EngineInterface) => {
 }
 let announced = false
 
+// How old a preparing marker may be before it is taken as left by a session that died: a chosen
+// limit, well past the before bed questions' ten minutes each.
+const PREPARING_STALE_MS = 2 * 60 * MIN
+const PREPARING_TEXT = 'Sleep mode is already being prepared in another session. Nothing changed; if that session has gone, /wake clears it.'
+
 const startedWhere = (r: SleepRecord) => `it started at ${etWhen(r.since)} in ${r.startedBy?.cwd ?? 'a session that left no folder'}, and ends at ${etWhen(r.until)}`
 
 // /sleep (#840). The record, its workers and the night's merge and deploy lists (#843) here: the
@@ -444,10 +449,18 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
   }
   const p = await sleepPaths($)
-  // Phase 6's before bed questions hold a preparing marker while they ask; a second /sleep waits on them.
-  if (await $.fs.exists(p.preparing)) return 'Sleep mode is already being prepared in another session. Nothing changed.'
   const now = await $.clock.now()
   const self = await $.session.id()
+  // The before bed questions hold a preparing marker while they ask; a second /sleep waits on them.
+  // A marker left by a session killed mid question would hold every later /sleep off for ever, so
+  // one older than PREPARING_STALE_MS by the time its generation names is cleared (L523), and /wake
+  // clears any.
+  if (await $.fs.exists(p.preparing)) {
+    const gen = await $.fs.read(`${p.preparing}/generation`).catch(() => '')
+    const at = Number(/^(\d+)-/.exec(gen.trim())?.[1])
+    if (!(Number.isFinite(at) && now - at > PREPARING_STALE_MS)) return PREPARING_TEXT
+    await run($, ['rm', '-rf', p.preparing])
+  }
   const night = nightOf(now)
   const e = await enrol($, self)
   // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
@@ -455,9 +468,10 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   // preparing marker holds a second /sleep off while the questions wait on Dan.
   await run($, ['mkdir', '-p', p.dir])
   const marked = await run($, ['mkdir', p.preparing])
-  if (marked.exitCode !== 0) return 'Sleep mode is already being prepared in another session. Nothing changed.'
+  if (marked.exitCode !== 0) return PREPARING_TEXT
   let repos: NightRepos
   try {
+    await $.fs.write(`${p.preparing}/generation`, `${now}-${self}`)
     let ownRoot: string | undefined
     try {
       ownRoot = e.workers.includes(self) ? (await $.session.repo())?.root : undefined
@@ -525,7 +539,13 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
 // acts. Phase 9 (#837) opens the report and asks for summaries here, on the winner only.
 const wake = async ($: EngineInterface): Promise<string | null> => {
   const reading = await sleepNow($)
-  if (reading.state === 'none') return null
+  if (reading.state === 'none') {
+    // A preparing marker with no sleep behind it is one a session left when it died mid question.
+    const p = await sleepPaths($)
+    if (!(await $.fs.exists(p.preparing))) return null
+    const rm = await run($, ['rm', '-rf', p.preparing])
+    return rm.exitCode === 0 ? 'Sleep mode was not on. A sleep left half prepared was cleared, so /sleep can start again.' : `Sleep mode was not on, and a sleep left half prepared could not be cleared (${rm.stderr.trim() || `rm exited ${rm.exitCode}`}).`
+  }
   const moved = await moveAside($, 'woke')
   if ('gone' in moved) return 'Sleep mode was already woken by another session.'
   if ('error' in moved) return `Sleep mode could not be turned off (${moved.error}). It is still on.`

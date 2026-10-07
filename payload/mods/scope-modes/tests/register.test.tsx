@@ -242,7 +242,7 @@ const world = (on: On, o: Opts = {}) => {
       return ok()
     }
     if (cmd === 'rm') {
-      for (const f of ops) delete w.files[f]
+      for (const f of ops) for (const k of Object.keys(w.files)) if (k === f || (a.includes('-rf') && k.startsWith(`${f}/`))) delete w.files[k]
       return ok()
     }
     if (cmd === 'sh' && a[0] === '-c' && String(a[1]).includes('>>')) {
@@ -1089,8 +1089,8 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     repos: { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] },
   })
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
-  expect(w.fsWrites.length).toBe(1)
-  expect(w.fsWrites[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
+  expect(w.fsWrites.filter(f => !f.includes('/preparing/')).length).toBe(1)
+  expect(w.fsWrites.filter(f => !f.includes('/preparing/'))[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   expect(Object.keys(w.files).sort()).toEqual([LISTS_PATH, CURRENT].sort())
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(r.text).toBe('Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said.')
@@ -1105,7 +1105,7 @@ test('/sleep run twice says when and where sleep started, and changes nothing', 
   const r = await command($ as never, 'sleep')
   expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at 12:00 PM ET on Thu Jan 1. Nothing changed.')
   expect(w.files[CURRENT]).toBe(first)
-  expect(w.fsWrites.length).toBe(1)
+  expect(w.fsWrites.filter(f => !f.includes('/preparing/')).length).toBe(1)
 })
 
 test('/sleep started by another session, or being prepared, changes nothing', withDeps, async ($, on) => {
@@ -1114,7 +1114,7 @@ test('/sleep started by another session, or being prepared, changes nothing', wi
   expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on: it started at 7:11 PM ET on Wed Dec 31 in \/other/)
   delete w.files[CURRENT]
   w.files[`${SLEEP}/preparing/generation`] = 'g7'
-  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in another session. Nothing changed.')
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in another session. Nothing changed; if that session has gone, /wake clears it.')
   expect(w.fsWrites).toEqual([])
 })
 
@@ -1128,7 +1128,7 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   // Beside the record only the night's notes: no lists file here, so every repository is closed and noted (#843).
   expect(Object.keys(w.files).filter(f => !f.startsWith(`${SLEEP}/notes/`))).toEqual([CURRENT])
   // Each attempt writes its own temp file, so one attempt's cleanup never removes the other's.
-  expect(new Set(w.fsWrites).size).toBe(2)
+  expect(new Set(w.fsWrites.filter(f => !f.includes('/preparing/'))).size).toBe(2)
 })
 
 test('a record that cannot be written is said, and nothing is left behind', withDeps, async ($, on) => {
@@ -1510,4 +1510,22 @@ test('awake, none of this applies', withDeps, async ($, on) => {
   await start($ as never, clock)
   expect(await call($ as never, bash('gh pr merge 12'))).toBe('ran')
   expect(await call($ as never, bash('git push origin main'))).toBe('ran')
+})
+
+test('a preparing marker left by a session that died is cleared once it is stale, and /wake clears one at any age', withDeps, async ($, on) => {
+  const PREP = `${SLEEP}/preparing/generation`
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]), [PREP]: `${T0}-s7` }, githubRepos: { default: ['o/r'] } })
+  await start($ as never, clock)
+  // Just written: taken as a session asking its questions.
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already being prepared in another session/)
+  // /wake clears it, and /sleep can start.
+  expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on. A sleep left half prepared was cleared, so /sleep can start again.')
+  expect(PREP in w.files).toBe(false)
+  w.files[PREP] = `${T0}-s7`
+  await clock.advance(60 * MIN)
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already being prepared in another session/)
+  await clock.advance(2 * 60 * MIN)
+  // Three hours old: left by a session that died, cleared, and sleep starts.
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is on until/)
+  expect(Object.keys(w.files).some(f => f.includes('/preparing'))).toBe(false)
 })
