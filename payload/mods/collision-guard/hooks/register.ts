@@ -246,7 +246,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   return { list, paths: written.map(w => w.path), strict: false }
 }
 
-// Handed from the classic.PreToolUse hook that let a call through to the tool.call hook around it,
+// Handed from the tool.check hook that let a call through to the tool.call hook around it,
 // by the call's id, so only a call this guard judged and let through is noted.
 const toNote = new Map<string, ToNote>()
 // Whether Claude was told a note could not be written, since the last one that landed (#751).
@@ -256,24 +256,33 @@ let toldUnnoted = false
 const planKey = (e: unknown) => String((e as { tool_use_id?: unknown }).tool_use_id ?? '')
 
 export const register: Register = on => {
-  // Judged here, beneath every mod's tool.call hook and after the settings hooks beneath this one
-  // (#707): a call no build, winding down, the secret guard, the style check or a settings hook
-  // refuses is refused before Sonnet is asked, another session is told or a toast says safe,
-  // whichever order the mods load in. The engine raises classic.PreToolUse inside tool.call,
-  // beneath every plugin's tool.call hook (measured in a live session on 2026-10-04, Claude Code
-  // 2.1.289), and next(e) here runs only the hooks beneath, never the tool.
-  on('classic.PreToolUse', async ($, e, next) => {
+  // Judged at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
+  // hook and the settings PreToolUse hooks have passed the call on (#707): a call no build, winding
+  // down, the secret guard, the style check or a settings hook refuses is refused before Sonnet is
+  // asked, another session is told or a toast says safe, whichever order the mods load in, and
+  // next(e) here runs only the verdict beneath, never the tool. It was classic.PreToolUse, which
+  // never ran: Claude Code's built-in security default sends every classic event past the user tier
+  // this mod loads in, for a Team or Enterprise organization (a headless debug run, 2026-10-06).
+  on('tool.check', async ($, e, next) => {
     const decided = await next(e)
-    if (decided.deny !== undefined || !watches(String(e.tool))) return decided
-    const input = e as unknown as Record<string, unknown>
+    if (decided.decision === 'deny' || !watches(e.tool)) return decided
+    // A query ($.tool.check) carries no call id and runs nothing: no session is asked or told about
+    // an edit that is only being looked at, and the real call is judged when it is made.
+    if (e.tool_use_id === undefined) return decided
+    const input: Record<string, unknown> = { ...((e.input ?? {}) as Record<string, unknown>), tool: e.tool, tool_use_id: e.tool_use_id }
     const c = await check($, input)
-    if (c && 'deny' in c) return { deny: c.deny }
+    if (c && 'deny' in c) return { decision: 'deny', reason: c.deny }
     // Keyed by the call's id, which the engine gives every call, one raised without any included,
     // and which no mod above can strip (measured 2026-10-04, and tested), so two calls never share
     // a plan.
     if (c) toNote.set(planKey(e), c)
     return decided
-  })
+  }).catch(($, e, next) => ({
+    // A hook that fails is skipped and the verdict beneath stands, which would let the edit through
+    // unjudged, so a failure here refuses (L42, lessons review of #878). Nothing has run yet.
+    decision: 'deny' as const,
+    reason: `Blocked: the collision guard could not check this call against the other sessions (${next.error?.message ?? next.error?.kind ?? 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+  }))
 
   on('tool.call', async ($, e, next) => {
     if (!watches(String(e.tool))) return next(e)
