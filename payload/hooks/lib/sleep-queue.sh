@@ -68,8 +68,8 @@ _sq_generation() {
 # owner/repo of a checkout, lower case, from its origin as configured (never rewritten by insteadOf).
 _sq_slug() {
   local url
-  url="$(git -C "$1" config remote.origin.url 2>/dev/null)"
-  printf '%s\n' "$url" | sed -n -E 's#^.*github\.com[:/]+([^/]+)/([^/]+)$#\1/\2#p' | sed 's/\.git$//' | tr '[:upper:]' '[:lower:]' | grep -E '^[a-z0-9_.-]+/[a-z0-9_.-]+$'
+  url="$(git -C "$1" config remote.origin.url 2>/dev/null)" || return 1
+  python3 "$_SQ_PY" slug "$url"
 }
 
 # ---- the issue source ----
@@ -169,20 +169,28 @@ _sq_valid() {
 }
 
 # Links one entry into place as number N: written whole beside it first, so it is never seen half
-# written, and `ln` refuses when N exists, so of two writers exactly one makes it.
+# written, and `ln` refuses when N exists, so of two writers exactly one makes it. Exit 0 linked,
+# 1 the number was taken (another session wrote first), 2 nothing could be written, the reason on
+# stdout: a full disk or a folder that cannot be written to is never reported as a lost race (L11).
 _sq_link() {
-  local dir="$1" n="$2" json="$3" tmp
+  local dir="$1" n="$2" json="$3" tmp err
   tmp="$dir/.tmp.$$.$RANDOM$RANDOM"
-  printf '%s\n' "$json" > "$tmp" || return 1
-  if ln "$tmp" "$dir/$n" 2>/dev/null; then rm -f "$tmp"; return 0; fi
+  if ! err="$( { printf '%s\n' "$json" > "$tmp"; } 2>&1)"; then
+    rm -f "$tmp"
+    printf 'the entry could not be written in %s (%s)\n' "$dir" "${err:-no reason given}"
+    return 2
+  fi
+  if err="$(ln "$tmp" "$dir/$n" 2>&1)"; then rm -f "$tmp"; return 0; fi
   rm -f "$tmp"
-  return 1
+  [ -e "$dir/$n" ] && return 1
+  printf 'the entry could not be linked into %s (%s)\n' "$dir" "${err:-no reason given}"
+  return 2
 }
 
 # sleep_claim REPO_ROOT ISSUE SESSION_ID: `claimed ISSUE attempts=N STATE` (exit 0), or
 # `not-claimed ISSUE WHY` (exit 1), or refused (exit 3).
 sleep_claim() {
-  local root="${1:-}" issue="${2:-}" self="${3:-}" gen slug dir line st nxt attempts why bad try entry
+  local root="${1:-}" issue="${2:-}" self="${3:-}" gen slug dir line st nxt attempts why bad try entry err
   bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
@@ -196,10 +204,11 @@ sleep_claim() {
       mine) printf 'claimed\t%s\tattempts=%s\tmine\n' "$issue" "$attempts"; return 0 ;;
       free)
         entry="$(python3 "$_SQ_PY" entry claim "$self" "$(_sq_now)")" || { _sq_refuse "the claim entry could not be written"; return 3; }
-        if _sq_link "$dir" "$nxt" "$entry"; then
-          printf 'claimed\t%s\tattempts=%s\t%s\n' "$issue" "$((attempts + 1))" "$why"
-          return 0
-        fi ;;
+        err="$(_sq_link "$dir" "$nxt" "$entry")"
+        case $? in
+          0) printf 'claimed\t%s\tattempts=%s\t%s\n' "$issue" "$((attempts + 1))" "$why"; return 0 ;;
+          2) _sq_refuse "$err"; return 3 ;;
+        esac ;;
       *) printf 'not-claimed\t%s\t%s: %s\n' "$issue" "$st" "$why"; return 1 ;;
     esac
   done
@@ -210,7 +219,7 @@ sleep_claim() {
 # sleep_release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]: only the holder ends its
 # own claim. free puts the issue back for anyone; the others end it for the night.
 sleep_release() {
-  local root="${1:-}" issue="${2:-}" self="${3:-}" state="${4:-}" why="${5:-}" gen slug dir line st nxt attempts reason bad entry
+  local root="${1:-}" issue="${2:-}" self="${3:-}" state="${4:-}" why="${5:-}" gen slug dir line st nxt attempts reason bad entry err
   case "$state" in free|done|parked|failed) ;; *) printf 'refused\t-\ta claim ends as free, done, parked or failed, never %s\n' "$state"; return 2 ;; esac
   bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
@@ -223,10 +232,12 @@ sleep_release() {
     return 1
   fi
   entry="$(python3 "$_SQ_PY" entry "$state" "$self" "$(_sq_now)" "$why")" || { _sq_refuse "the release entry could not be written"; return 3; }
-  if ! _sq_link "$dir" "$nxt" "$entry"; then
-    printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"
-    return 1
-  fi
+  err="$(_sq_link "$dir" "$nxt" "$entry")"
+  case $? in
+    0) ;;
+    1) printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"; return 1 ;;
+    *) _sq_refuse "$err"; return 3 ;;
+  esac
   printf 'released\t%s\t%s\n' "$issue" "$state"
 }
 
@@ -272,30 +283,38 @@ sleep_worktree() {
 
 # ---- next ----
 
-# sleep_next REPO_ROOT SESSION_ID [GOAL_ISSUE...]: see the header.
+# sleep_next REPO_ROOT SESSION_ID [GOAL_ISSUE...]: see the header. Exactly one result line comes
+# first; issues it claimed but could not start follow as skip lines, with the queue's own. A claim
+# refused outright (the night ended, the claim folder cannot be written) stops it with that refusal,
+# never read as an issue someone else holds.
 sleep_next() {
-  local root="${1:-}" self="${2:-}" q rc lines n title got attempts wt err
+  local root="${1:-}" self="${2:-}" q rc lines n title got attempts wt err failed="" crc
   q="$(sleep_queue "$@")"; rc=$?
   if [ "$rc" != 0 ]; then printf '%s\n' "$q"; return 3; fi
   lines="$(printf '%s\n' "$q" | awk -F'\t' '$1 == "next" { print $2 "\t" $6 }')"
   while IFS=$'\t' read -r n title; do
     [ -n "$n" ] || continue
-    got="$(sleep_claim "$root" "$n" "$self")" || continue
+    got="$(sleep_claim "$root" "$n" "$self")"; crc=$?
+    [ "$crc" = 1 ] && continue
+    if [ "$crc" != 0 ]; then printf '%s\n' "$got"; return 3; fi
     attempts="$(printf '%s\n' "$got" | awk -F'\t' '{ print $3 }')"
     if ! wt="$(sleep_worktree "$root" "$n" 2>"${TMPDIR:-/tmp}/sleep-wt.$$")"; then
       err="$(cat "${TMPDIR:-/tmp}/sleep-wt.$$" 2>/dev/null)"
       rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
-      sleep_release "$root" "$n" "$self" failed "no worktree: $err" >/dev/null
-      printf 'skip\t%s\tclaimed but failed: %s\n' "$n" "$err" >&2
-      printf 'failed\t%s\t%s\n' "$n" "$err"
+      if ! got="$(sleep_release "$root" "$n" "$self" failed "no worktree: $err")"; then
+        err="$err; and the claim could not be ended as failed, so it is still held ($(printf '%s' "$got" | cut -f3-))"
+      fi
+      failed="$failed$(printf 'skip\t%s\tclaimed but could not start: %s' "$n" "$err")"$'\n'
       continue
     fi
     rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
     printf 'claimed\t%s\t%s\tworktree=%s\t%s\n' "$n" "$attempts" "$wt" "$title"
+    printf '%s' "$failed"
     printf '%s\n' "$q" | awk -F'\t' '$1 == "skip"'
     return 0
   done <<< "$lines"
   printf 'none\t-\tnothing left to claim tonight\n'
+  printf '%s' "$failed"
   printf '%s\n' "$q" | awk -F'\t' '$1 == "skip"'
   return 1
 }

@@ -278,6 +278,22 @@ sleep_release "$ROOT" 27 s2 free >/dev/null
 out="$(sleep_claim "$ROOT" 27 s1)"
 check_has "a released issue can be claimed again, as another attempt" "$(printf 'claimed\t27\tattempts=2')" "$out"
 
+# A claim that cannot be written is said as that, never as a lost race (L11).
+mkdir -p "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/29"
+chmod 555 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/29"
+out="$(sleep_claim "$ROOT" 29 s2)"; rc=$?
+chmod 755 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/29"
+check_eq "a claim folder that cannot be written refuses" 3 "$rc"
+check_has "saying the entry could not be written" "could not be written" "$out"
+check_not "never as another session writing first" "another session" "$out"
+
+# One reading of an origin: a trailing slash names the same repository on both sides.
+git -C "$ROOT" config remote.origin.url https://github.com/danwright32/demo/
+check_has "an origin ending in a slash is the same repository" "$(printf 'claimed\t30\t')" "$(sleep_claim "$ROOT" 30 s2)"
+check_eq "and the python reader agrees" "danwright32/demo" "$(python3 "$DIR/lib/sleep-queue.py" slug https://github.com/danwright32/demo/)"
+check_eq "a slug that would climb out of the claims folder is no slug" 1 "$(python3 "$DIR/lib/sleep-queue.py" slug https://github.com/danwright32/.. >/dev/null; echo $?)"
+git -C "$ROOT" config remote.origin.url https://github.com/danwright32/demo.git
+
 # Not asleep: no claim is made, and nothing is written.
 awake
 out="$(sleep_claim "$ROOT" 28 s1)"; rc=$?
@@ -296,6 +312,14 @@ mv "$WORK/sessions-aside" "$HOME/.claude/state/sessions"
 
 # ---- next: queue, claim, worktree ----
 rm -rf "$HOME/.claude/state/sleep/claims"
+# A claim refused outright stops next with that refusal, never read as an issue someone holds.
+mkdir -p "$HOME/.claude/state/sleep/claims/g1/danwright32__demo"
+chmod 555 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo"
+out="$(sleep_next "$ROOT" s1)"; rc=$?
+chmod 755 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo"
+check_eq "next stops on a refused claim" 3 "$rc"
+check_has "with the refusal itself" "$(printf 'refused\t-\tthe claim folder')" "$out"
+check_not "never saying nothing is left" "nothing left" "$out"
 out="$(sleep_next "$ROOT" s1)"; rc=$?
 check_eq "next claims something" 0 "$rc"
 check_has "the first issue in the queue" "$(printf 'claimed\t9\tattempts=1\tworktree=%s/.claude/worktrees/sleep-9' "$ROOT")" "$out"
@@ -321,6 +345,8 @@ out="$(sleep_next "$ROOT" s6)"
 check_has "a folder that is not this issue's worktree is refused" "is not a worktree of" "$out"
 check_has "the claim is ended as failed, never left held" "failed" "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/2" 2>/dev/null)"
 check_has "and next goes on to the issue after it" "$(printf 'claimed\t16\t')" "$out"
+check_eq "its one result line comes first" claimed "$(printf '%s\n' "$out" | head -1 | cut -f1)"
+check_has "the issue it could not start follows as a skip line" "$(printf 'skip\t5\tclaimed but could not start:')" "$out"
 session s7 "$((NOW - 1000))" null
 check_has "the last one goes to the next worker" "$(printf 'claimed\t7\t')" "$(sleep_next "$ROOT" s7)"
 session s8 "$((NOW - 1000))" null

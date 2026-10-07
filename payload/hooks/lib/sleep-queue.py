@@ -179,7 +179,13 @@ def mentions(text, n):
 
 def slug_of(url):
     m = re.search(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", (url or "").strip())
-    return ("%s/%s" % (m.group(1), m.group(2))).lower() if m else None
+    if not m:
+        return None
+    s = ("%s/%s" % (m.group(1), m.group(2))).lower()
+    # The slug becomes a folder name under the claims, so only GitHub's own characters, never `..`.
+    if not re.match(r"^[a-z0-9_.-]+/[a-z0-9_.-]+$", s) or ".." in s.split("/"):
+        return None
+    return s
 
 
 def git(cwd, *args):
@@ -363,6 +369,13 @@ def main(argv):
         if len(argv) == 6 and argv[5]:
             e["why"] = argv[5]
         print(json.dumps(e))
+        return 0
+    if cmd == "slug" and len(argv) == 3:
+        # The one reading of an origin URL, for the shell too, so both sides agree on which count.
+        s = slug_of(argv[2])
+        if not s:
+            return 1
+        print(s)
         return 0
     if cmd == "claims" and len(argv) == 3:
         all_claims(argv[2])
