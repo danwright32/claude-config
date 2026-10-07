@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {} from '../types/index.d.ts'
 
 // mod-kit, standing in: a mod cannot import another mod's files. It keeps the rows the status bar
@@ -16,15 +17,26 @@ const modKit: { name: string; register: Register } = {
       const built = await next(e)
       const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])
       const modkit = {
-        bandRow: async (row: Row) => {
+        bandRow: async (row: ModKitBandRow) => {
           const now = (await rows()).filter(r => !(r.mod === row.mod && r.id === row.id))
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...now, row] as never)
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set({ plugin: 'mod-kit', key: 'band' }, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
+        // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
+        card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+        commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
+        writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+        git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+        workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+        pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+        clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+        screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
       }
-      return { ...built, modkit } as never
+      return { ...built, modkit }
     })
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const rows = (((await $.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? []).sort((a, b) => ORDER.indexOf(a.slot) - ORDER.indexOf(b.slot))
@@ -432,7 +444,7 @@ const watcher: { name: string; register: Register } = {
         { label: 'PR 776 rerun wait', runMs: 12 * 60_000, kept: true, stuck: false, state: 'waiting', owner: 'fix CI' },
       ]
       const agents = async () => [{ name: 'fix CI', quietMs: 34 * 60_000 }]
-      return { ...built, jobs: { list, agents } } as never
+      return { ...built, jobs: { list, agents } }
     })
   },
 }
@@ -443,7 +455,7 @@ const olderWatcher: { name: string; register: Register } = {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const list = async () => [{ label: 'npm test', runMs: 60_000, kept: false, stuck: true }]
-      return { ...built, jobs: { list } } as never
+      return { ...built, jobs: { list } }
     })
   },
 }
@@ -455,7 +467,7 @@ const brokenWatcher: { name: string; register: Register } = {
       const list = async () => {
         throw new Error('registry unreadable')
       }
-      return { ...built, jobs: { list } } as never
+      return { ...built, jobs: { list } }
     })
   },
 }

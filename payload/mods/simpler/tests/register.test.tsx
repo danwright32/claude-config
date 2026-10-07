@@ -125,7 +125,7 @@ const addonNotesDraws: Register = on => {
   }
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
-    return { ...built, addonNotes: { resumeLine: async ({ text }: { text: string }) => resumeLine(text) } } as never
+    return { ...built, addonNotes: { resumeLine: async ({ text }: { text: string }) => resumeLine(text) } }
   })
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const props = e.props as { text: string; isFirstOfReply: boolean }
@@ -149,7 +149,7 @@ const addonNotesBroken: Register = on => {
     const resumeLine = async () => {
       throw new Error('add-on notes is broken')
     }
-    return { ...built, addonNotes: { resumeLine } } as never
+    return { ...built, addonNotes: { resumeLine } }
   })
 }
 const AddonNotes = (tier: 'prepend' | 'append', register: Register = addonNotesDraws) => ({ name: 'addon-notes', tier, register })

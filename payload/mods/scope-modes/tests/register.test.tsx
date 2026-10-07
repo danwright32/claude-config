@@ -122,7 +122,7 @@ const isItLive: { name: string; register: Register } = {
             return JSON.parse(r.stdout)
           },
         },
-      } as never
+      }
     })
   },
 }

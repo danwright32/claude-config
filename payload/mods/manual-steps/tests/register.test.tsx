@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
 import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
@@ -21,7 +22,7 @@ const modKit: { name: string; register: Register } = {
       const held = async () => ((await built.state.get(bandRef as never)) as { value?: Row[] }).value ?? []
       const heldPanes = async () => ((await built.state.get(paneRef as never)) as { value?: Row[] }).value ?? []
       const modkit = {
-        bandRow: async (row: Row) => {
+        bandRow: async (row: ModKitBandRow) => {
           const refuse = await built.env.get('KIT_REFUSE')
           if (refuse) throw new Error(refuse)
           await built.state.set(bandRef as never, [...(await held()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
@@ -29,7 +30,7 @@ const modKit: { name: string; register: Register } = {
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set(bandRef as never, (await held()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
-        pane: async (pane: Row) => {
+        pane: async (pane: ModKitPane) => {
           const refuse = (await built.env.get("KIT_REFUSE")) || (await built.env.get("KIT_REFUSE_PANE"))
           if (refuse) throw new Error(refuse)
           await built.state.set(paneRef as never, [...(await heldPanes()).filter(r => !(r.mod === pane.mod && r.id === pane.id)), pane] as never)
@@ -40,8 +41,16 @@ const modKit: { name: string; register: Register } = {
         // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
         // token; mod-kit's own tests prove the real one asks the secret guard.
         screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
+        // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
+        card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+        commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
+        writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+        git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+        workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
       }
-      return { ...built, modkit } as never
+      return { ...built, modkit }
     })
     // How a test reads the rows and panes it holds: a Bash call of "band" or "panes", answered here as JSON.
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
@@ -115,7 +124,7 @@ const scopeModes: { name: string; register: Register } = {
           return { isHeld: true }
         },
       }
-      return { ...built, scopeModes: modes } as never
+      return { ...built, scopeModes: modes }
     })
   },
 }
