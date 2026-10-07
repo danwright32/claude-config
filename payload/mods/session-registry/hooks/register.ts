@@ -57,14 +57,19 @@ const enqueue = (work: () => Promise<void>): Promise<void> => {
 // reads, other sessions do not see those writes, and if it never reads they never land, which the
 // debug log says once (lessons review of #739).
 //
-// Not yet measured (#751 item 1, L82): that Claude Code has switched the id by the time the /clear's
-// command has run. The debug log of a real /clear (2026-10-06) points that way: session.end settled,
-// then the log moved to the new id's file, then the command settled. Every look once a /clear or a
-// /resume has run says in the debug log which id it saw against the id session.end closed, so a real
-// /clear can settle it. Should the command finish first, its look settles on the old id and reopens
-// that record (as a resume would), the new conversation's writes land there until the beat sees the
-// new id, and the beat then closes the old record and makes the new one: the #735 defect for that
-// minute, never longer.
+// Measured once (#751 item 1, L82), and only for what follows: on Claude Code 2.1.292 the id had
+// switched by the time a /clear's command had run. One real /clear in an interactive
+// `claude --debug` session on Daniels-MacBook-Pro-2 on 2026-10-07, with the managed settings file
+// from #876 in place (so the built in security default was not seated and did not bypass the mod),
+// logged the line below. A /resume, another version, the other Mac, and a session where the
+// security default is seated were not measured:
+//   session-registry: once the /clear had run, the session id read 22710d14-5752-45bc-9bb6-51fd4f045c46;
+//   session.end had closed 28ec71a1-bfdd-470d-835f-6a7bc11c5f06, so the id had already switched.
+// Every look once a /clear or a /resume has run still says in the debug log which id it saw against
+// the id session.end closed, so a later Claude Code that reverses the order shows there. Should the
+// command ever finish first, its look settles on the old id and reopens that record (as a resume
+// would), the new conversation's writes land there until the beat sees the new id, and the beat then
+// closes the old record and makes the new one: the #735 defect for that minute, never longer.
 let expectNew = false
 // Whether a failed id lookup has been said in the debug log since the last one that worked.
 let toldNoId = false
@@ -233,8 +238,9 @@ export const register: Register = on => {
         return 'unread'
       }
       toldNoId = false
-      // What #751 item 1 needs measured on a real /clear: whether Claude Code has switched the id by
-      // the time the /clear's command has run. Said in the debug log on every such look.
+      // Whether Claude Code had switched the id by the time the /clear's (or /resume's) command had
+      // run, said in the debug log on every such look. This line is the measurement cited above
+      // expectNew (#751 item 1), and keeps showing should a later Claude Code reverse the order.
       if (afterCommand && expectNew && ended) {
         built.ui.log(
           `session-registry: once the /${ended.reason} had run, the session id read ${id}; session.end had closed ${ended.id}, so the id had ${id === ended.id ? 'not changed' : 'already switched'}.`,
