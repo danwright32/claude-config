@@ -381,6 +381,54 @@ edit "$G/wt/payload/a.md" "$G/wt"
 refused "a linked worktree on no branch at all is still refused"
 GG "$G/wt" checkout -q feat 2>/dev/null
 
+echo "payload write gate: a rebase is judged by the branch being rebased (claude-config#904)"
+
+# A rebase detaches HEAD, so read by HEAD alone an agent's own worktree mid rebase looked like one
+# on no branch, and resolving a conflict under payload/ needed the override although nothing
+# mirrors into that worktree. The branch being rebased is what decides, read from the rebase state
+# in that worktree's own git dir; the primary checkout, and a rebase of the default branch or of a
+# detached HEAD, are still refused. Each rebase here is a REAL one stopped on a real conflict, so
+# the state is whatever git writes rather than this suite's idea of it (L52).
+conflict_rebase(){ # conflict_rebase <checkout> <branch to rebase> <upstream>
+  GG "$1" checkout -q "$2" 2>/dev/null
+  printf '%s side\n' "$2" > "$1/payload/a.md"
+  GG "$1" commit -q -am "$2 side"
+  GG "$1" rebase -q "$3" >/dev/null 2>&1
+  [ -d "$(git -C "$1" rev-parse --absolute-git-dir)/rebase-merge" ] || [ -d "$(git -C "$1" rev-parse --absolute-git-dir)/rebase-apply" ]
+}
+GG "$G/primary" checkout -q -b upstream main 2>/dev/null
+printf 'upstream side\n' > "$G/primary/payload/a.md"
+GG "$G/primary" commit -q -am "upstream side"
+GG "$G/primary" checkout -q other 2>/dev/null
+if conflict_rebase "$G/wt" feat upstream; then check "the worktree rebase fixture stopped on a conflict" ok
+else check "the worktree rebase fixture stopped on a conflict" "no rebase in progress in $G/wt"; fi
+edit "$G/wt/payload/a.md" "$G/wt"
+allowed "an Edit under payload in a linked worktree mid rebase of its own branch is let through"
+runbash "printf resolved > payload/a.md" "$G/wt"
+allowed "a shell write under payload in that worktree mid rebase is let through"
+GG "$G/wt" rebase --abort 2>/dev/null
+if conflict_rebase "$G/primary" other upstream; then check "the primary rebase fixture stopped on a conflict" ok
+else check "the primary rebase fixture stopped on a conflict" "no rebase in progress in $G/primary"; fi
+edit "$G/primary/payload/a.md" "$G/primary"
+refused "the primary checkout mid rebase of a branch other than the default is still refused"
+GG "$G/primary" rebase --abort 2>/dev/null
+GG "$G/primary" checkout -q other 2>/dev/null
+if conflict_rebase "$G/wtmain" main upstream; then check "the default branch rebase fixture stopped on a conflict" ok
+else check "the default branch rebase fixture stopped on a conflict" "no rebase in progress in $G/wtmain"; fi
+edit "$G/wtmain/payload/a.md" "$G/wtmain"
+refused "a linked worktree mid rebase of the default branch is still refused"
+GG "$G/wtmain" rebase --abort 2>/dev/null
+GG "$G/wt" checkout -q --detach feat 2>/dev/null
+printf 'detached side\n' > "$G/wt/payload/a.md"
+GG "$G/wt" commit -q -am "detached side"
+GG "$G/wt" rebase -q upstream >/dev/null 2>&1
+if [ -d "$(git -C "$G/wt" rev-parse --absolute-git-dir)/rebase-merge" ]; then check "the detached rebase fixture stopped on a conflict" ok
+else check "the detached rebase fixture stopped on a conflict" "no rebase in progress in $G/wt"; fi
+edit "$G/wt/payload/a.md" "$G/wt"
+refused "a linked worktree mid rebase of a detached HEAD is still refused"
+GG "$G/wt" rebase --abort 2>/dev/null
+GG "$G/wt" checkout -q feat 2>/dev/null
+
 # Its own bookkeeping is removed once read, so the state it keeps cannot grow with calls (#603).
 left="$(find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$left" = 0 ]; then check "nothing is left in its state directory once each call is answered" ok
