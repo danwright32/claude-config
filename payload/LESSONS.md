@@ -7693,17 +7693,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   the verified debt, and Tripoint raised it as a billing discrepancy of hundreds of thousands
   of dollars.)
   SHORT: Two callers of one external endpoint build different bodies, so diff them against what the receiver REQUIRES; the pass-through one lacks the field.
-- **L1014. A platform list API filtered on two fields at once can answer from an incomplete
-  index while each filter alone is correct, so a monitor must request the broader list and apply
-  the narrower predicate itself, or a healthy item reads as missing at random.** The combined
+- **L1014. A platform list API answered through ANY filter, a single one included, can come from
+  an incomplete index, so a monitor must also read the unfiltered list and apply the predicate
+  itself before accusing anything, or a healthy item reads as missing at random.** The filtered
   query returns a well formed, plausible answer (an older record, a smaller total), so nothing
   looks like an error, and repeating it minutes later gives the right answer, which reads as the
   monitor having been flaky rather than the query. (nursedex#1113, 2026-09-29: the job watchdog
   asked GitHub for `runs?event=schedule&status=success&per_page=1` and once got
   `total_count=24` with the newest from 2026-08-26, then `total_count=55` with the newest from
-  2026-09-28; `event=schedule` alone and `status=success` alone were right on every call. It
-  alerted that Migration Drift had not succeeded in two days when it had succeeded daily.)
-  SHORT: A list API filtered on two fields at once can answer from a stale index; request the broader list and apply the narrower predicate yourself.
+  2026-09-28, and alerted that Migration Drift had not succeeded in two days when it had
+  succeeded daily. The fix kept `event=schedule` alone on the belief that one filter was safe.
+  nursedex#1138, 2026-10-07: that single filter returned a list whose newest run was 2026-09-10
+  for two jobs that had passed the day before, and the watchdog reported them dead for 61 and
+  30 days, while the unfiltered list was right.)
+  SHORT: A list API behind any filter, even one, can answer from a stale index; read the unfiltered list too and apply the predicate yourself before accusing.
 
 - **L742. A call authenticated by a cached token must, on a rejected token reply, refresh the
   token and retry that same call once before failing, because evicting the cache and failing
@@ -9773,6 +9776,9 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 - **L755. State a Durable Object keeps only in memory is discarded once it sits idle (after ten seconds when it holds no timers or pending work), so anything a later call depends on must be written to the object's storage, and tested by building a second object over the same storage.** (slate#3479, 2026-10-07)
   SHORT: A Durable Object's memory is wiped after ten idle seconds; persist what a later call needs and test by rebuilding the object over its storage.
+
+- **L1018. GitHub treats a closing keyword directly before an issue number as an instruction regardless of negation, so "This does not close #N" closes #N on merge; a PR body or commit message must never put close, fix or resolve in any form directly before an issue it means to leave open, and should write "Part of #N" instead.** (overture#4586, 2026-10-07)
+  SHORT: A closing word before #N closes it even when negated ("does not close #N"); never write one before an issue to keep open, write "Part of #N".
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
