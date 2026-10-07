@@ -15,3 +15,4 @@ auto-session-name	classic.SessionStart	#876: runs only while the managed setting
 auto-session-name	classic.UserPromptSubmit	#876: runs only while the managed settings file is in place; the session title and sessionTitle reach a mod only in this classic hook
 scope-modes	classic.PermissionRequest	#876: runs only while the managed settings file is in place; only this classic event answers Claude Code's permission prompt, and without it nothing is approved overnight (#834), which fails closed
 scope-modes	classic.PermissionDenied	#876: runs only while the managed settings file is in place; only this classic event carries the auto mode classifier's refusal, so without it a refusal overnight goes unnoted in the report (#834)
+scope-modes	classic.StopFailure	#876: runs only while the managed settings file is in place; the API error that ended a turn (rate limit, overloaded, sign in) reaches a mod only in this classic hook (#844)
