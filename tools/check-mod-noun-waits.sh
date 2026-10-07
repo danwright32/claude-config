@@ -455,19 +455,8 @@ def inner_functions(body):
         if k < len(body) and body[k] == "{":
             spans.append((k, closing(body, k) or len(body)))
             continue
-        depth, j = 0, k
-        while j < len(body):
-            c = body[j]
-            if c in "([{":
-                depth += 1
-            elif c in ")]}":
-                if depth == 0:
-                    break
-                depth -= 1
-            elif c in ",;" and depth == 0:
-                break
-            j += 1
-        spans.append((k, j))
+        # One reading of where an expression body ends, shared with the scope resolution (#895).
+        spans.append((k, _expression_end(body, k)))
     for m in re.finditer(r"(?<![\w$])function\b", body):
         brace = body.find("{", m.end())
         if brace >= 0:
