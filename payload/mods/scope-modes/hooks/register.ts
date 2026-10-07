@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
+import { bootOf, etWhen, nightOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
@@ -13,11 +14,14 @@ import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } 
 // home gets one line at the end of Claude's reply.
 //
 // Every mode lives in $.state, which a new session starts without: a new session is at home with no
-// scope mode, and session.end (exit or /clear) turns them all off, so nothing carries over.
+// scope mode, and session.end (exit or /clear) turns them all off, so nothing carries over. Sleep mode
+// (#840) is the one exception: it is the whole Mac's, kept in one record on disk (hooks/sleep.ts),
+// read afresh at every decision and never held in $.state.
 
 const MOD = 'scope-modes'
 const MIN = 60_000
 const RUN_MS = 20_000
+const BOOT_MS = 5_000
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const HOME_TEXT = 'Dan switched every session on this Mac to home.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
@@ -44,10 +48,254 @@ const scopeOf = async ($: EngineInterface) => (await $.state.get(scopeRef)).valu
 const placeOf = async ($: EngineInterface): Promise<ScopeModesPlace> => (await $.state.get(placeRef)).value ?? 'home'
 const heldOf = async ($: EngineInterface) => (await $.state.get(heldRef)).value ?? []
 
-// The band's amber line, through the status bar: the scope first, then away.
+// ---- Sleep mode (#840): the machine wide record ----
+
+// This boot's start. A session's process lives inside one boot, so once read it cannot change under
+// it (unlike the record, which is read every time); a failed read is not kept, and is tried again.
+let boot: number | undefined
+// Whether this session has a person at its prompt, from its start: a -p or detached run never works overnight.
+let interactive = false
+// The last state the band was given, so the minute's tick redraws it only when sleep began or ended.
+let shownAsleep: boolean | undefined
+
+const sleepPaths = async ($: EngineInterface) => {
+  const home = await $.env.get('HOME')
+  if (!home) throw new Error('HOME is not set')
+  const dir = sleepDir(home)
+  return { home, dir, current: `${dir}/current.json`, ended: `${dir}/ended`, notes: `${dir}/notes`, preparing: `${dir}/preparing` }
+}
+
+const thisBoot = async ($: EngineInterface): Promise<{ boot: number } | { why: string }> => {
+  if (boot !== undefined) return { boot }
+  const r = await run($, ['sysctl', '-n', 'kern.boottime'])
+  const b = r.exitCode === 0 ? bootOf(r.stdout) : null
+  if (b === null) return { why: r.stderr.trim() || `sysctl answered ${JSON.stringify(r.stdout.trim().slice(0, 80))}` }
+  boot = b
+  return { boot: b }
+}
+
+// The one predicate, read live (L83, L175): the record as it stands on disk now, asked of readSleep.
+// A failure to read is a reading of its own, never "no record" (L215), and reads as awake.
+const sleepNow = async ($: EngineInterface): Promise<SleepReading> => {
+  try {
+    const p = await sleepPaths($)
+    if (!(await $.fs.exists(p.current))) return { state: 'none' }
+    let text: string
+    try {
+      text = await $.fs.read(p.current)
+    } catch (err) {
+      // Moved aside between the look and the read (a wake elsewhere) is no record, not a broken one.
+      if (!(await $.fs.exists(p.current))) return { state: 'none' }
+      return { state: 'unreadable', why: `the sleep record could not be read (${msg(err)})` }
+    }
+    const b = await thisBoot($)
+    return readSleep(text, await $.clock.now(), 'boot' in b ? b.boot : null)
+  } catch (err) {
+    return { state: 'unreadable', why: `the sleep record could not be read (${msg(err)})` }
+  }
+}
+const isAsleep = async ($: EngineInterface) => (await sleepNow($)).state === 'asleep'
+
+// Moves the record aside: the one step that ends a sleep, so of two sessions ending it at once
+// exactly one move succeeds and only that one acts (assume it runs twice). `gone` is the other
+// having won; anything else is a failure, said, with the record left where it was.
+type Moved = { to: string; text: string | null } | { gone: true } | { error: string }
+const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<Moved> => {
+  const p = await sleepPaths($)
+  await run($, ['mkdir', '-p', p.ended])
+  const to = `${p.ended}/${await $.clock.now()}-${label}-${await $.session.id()}.json`
+  const mv = await run($, ['mv', p.current, to])
+  if (mv.exitCode !== 0) return /No such file/i.test(mv.stderr) ? { gone: true } : { error: mv.stderr.trim() || `mv exited ${mv.exitCode}` }
+  const text = await $.fs.read(to).catch(() => null)
+  return { to, text }
+}
+
+// One line appended to the night's notes, through the shell in append mode. Phase 4 (#835) builds
+// sleep_note and the report on this file; the limit note below is the first writer.
+const sleepNote = async ($: EngineInterface, generation: string, note: Record<string, unknown>) => {
+  const p = await sleepPaths($)
+  const file = `${p.notes}/${generation.replace(/[^\w.-]/g, '_')}.jsonl`
+  const r = await run($, ['sh', '-c', 'mkdir -p "$1" && printf \'%s\\n\' "$2" >> "$3"', 'sh', p.notes, JSON.stringify({ v: 1, ...note }), file])
+  if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `the note could not be written (exit ${r.exitCode})`)
+}
+
+const notify = async ($: EngineInterface, message: string): Promise<string | null> => {
+  const r = await run($, ['terminal-notifier', '-title', 'Sleep mode', '-message', message])
+  return r.exitCode === 0 ? null : r.stderr.trim() || `terminal-notifier exited ${r.exitCode}`
+}
+
+const parseRecord = (text: string | null): SleepRecord | null => {
+  try {
+    const j = JSON.parse(text ?? '') as SleepRecord
+    return j && typeof j === 'object' ? j : null
+  } catch {
+    return null
+  }
+}
+
+// Puts every session back where Dan was before sleep (#840: wake restores placeBefore).
+const restorePlace = async ($: EngineInterface, record: SleepRecord | null): Promise<string | null> => {
+  const place = record?.placeBefore
+  if (place !== 'home' && place !== 'away') return null
+  await setPlace($, place)
+  return placeSentence(place, await tellOthers($, place))
+}
+
+// A record past its noon or from another boot no longer holds (L523). The first session to see it
+// moves it aside, notes why and notifies Dan once; one that loses the move does nothing. A record
+// that is no longer the one judged (a new sleep began meanwhile) is put back, never ended.
+const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
+  if (reading.state !== 'expired' && reading.state !== 'other-boot') return
+  const reason = reading.state === 'expired' ? 'it was past noon ET' : 'the Mac restarted'
+  const moved = await moveAside($, 'limit')
+  if ('gone' in moved) return
+  if ('error' in moved) {
+    $.ui.toast(`Sleep mode is over (${reason}), but its record could not be moved aside: ${moved.error}`)
+    return
+  }
+  const record = parseRecord(moved.text)
+  if (record?.generation !== reading.record.generation) {
+    const p = await sleepPaths($)
+    await run($, ['mv', '-n', moved.to, p.current])
+    return
+  }
+  const now = await $.clock.now()
+  try {
+    await sleepNote($, record.generation, { kind: 'limit', at: now, generation: record.generation, reason, by: await $.session.id() })
+  } catch (err) {
+    $.ui.toast(`Sleep mode ended by itself (${reason}), but the note could not be written: ${msg(err)}`)
+  }
+  const failed = await notify($, `Sleep mode ended by itself at ${etWhen(now)}: ${reason}.`)
+  if (failed) $.ui.toast(`Sleep mode ended by itself (${reason}), but the notification could not be sent: ${failed}`)
+  await restorePlace($, record)
+  await showModes($)
+  await showHeld($)
+}
+
+// Enrols the sessions that work overnight: this one, and every other open session that said at its
+// start it has a person at its prompt. A -p or detached run, or a session that has not said (its
+// scope modes is older, or it has not started a turn yet), is not enrolled, and is counted.
+const enrol = async ($: EngineInterface, self: string): Promise<{ workers: string[]; others: number; left: number; unknown?: string }> => {
+  const workers = interactive ? [self] : []
+  let list
+  try {
+    list = await $.sessions.list()
+  } catch (err) {
+    return { workers, others: 0, left: 0, unknown: `the session registry could not be read (${msg(err)})` }
+  }
+  let left = 0
+  for (const o of list.open) {
+    if (o.sessionId === self) continue
+    const said = (o.extra?.[MOD] as { isInteractive?: unknown } | undefined)?.isInteractive
+    if (said === true) workers.push(o.sessionId)
+    else left++
+  }
+  const unknown = list.unreadable.length ? `the session registry could not read ${list.unreadable.join(', ')}` : undefined
+  return { workers, others: workers.filter(w => w !== self).length, left, ...(unknown ? { unknown } : {}) }
+}
+
+// Tells the session registry whether this session has a person at its prompt, for enrolment.
+const announce = async ($: EngineInterface) => {
+  try {
+    await $.sessions.setExtra({ key: MOD, value: { isInteractive: interactive } })
+  } catch (err) {
+    $.ui.log(`scope-modes: could not tell the session registry whether this session is interactive: ${msg(err)}`, { to: 'debug' })
+  }
+}
+let announced = false
+
+const startedWhere = (r: SleepRecord) => `it started at ${etWhen(r.since)} in ${r.startedBy?.cwd ?? 'a session that left no folder'}, and ends at ${etWhen(r.until)}`
+
+// /sleep (#840). Only the record and the workers here: the before bed questions (phase 6, #836),
+// paging (phase 2, #841) and the overnight driver (phase 8, #844) build on this record.
+const startSleep = async ($: EngineInterface): Promise<string> => {
+  // This boot first: without it no record can be judged, and one that is sound must never be
+  // called broken for it (L11), nor a new one written that could not be told from an old boot's.
+  const b = await thisBoot($)
+  if (!('boot' in b)) return `Sleep mode did not start: this boot's start could not be read (${b.why}).`
+  let reading = await sleepNow($)
+  if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
+  if (reading.state === 'unreadable') {
+    const p = await sleepPaths($).catch(() => null)
+    if (p && (await $.fs.exists(p.current))) return `A sleep record is already there but cannot be read (${reading.why}). Nothing changed; /wake clears it.`
+  }
+  if (reading.state === 'expired' || reading.state === 'other-boot') {
+    await endIfOver($, reading)
+    reading = await sleepNow($)
+    if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
+  }
+  const p = await sleepPaths($)
+  // Phase 6's before bed questions hold a preparing marker while they ask; a second /sleep waits on them.
+  if (await $.fs.exists(p.preparing)) return 'Sleep mode is already being prepared in another session. Nothing changed.'
+  const now = await $.clock.now()
+  const self = await $.session.id()
+  const night = nightOf(now)
+  const e = await enrol($, self)
+  const record: SleepRecord = {
+    v: 1,
+    generation: `${now}-${self}`,
+    since: now,
+    until: untilOf(night),
+    night,
+    bootTime: b.boot,
+    report: `${p.home}/Downloads/sleep-report-${night}.md`,
+    startedBy: { sessionId: self, cwd: await $.session.cwd() },
+    workers: e.workers,
+    placeBefore: await placeOf($),
+  }
+  // Written whole beside it, read back, then linked into place: a link fails when a record is
+  // already there, so of two /sleep at once exactly one record is placed and never half of one.
+  // Its own name per attempt, so two attempts in one millisecond never share it, nor one's cleanup the other's file.
+  const tmp = `${p.dir}/.current-${record.generation}-${Math.random().toString(36).slice(2, 10)}.tmp`
+  const text = JSON.stringify(record)
+  try {
+    await run($, ['mkdir', '-p', p.dir])
+    await $.fs.write(tmp, text)
+    if ((await $.fs.read(tmp)) !== text) return 'Sleep mode did not start: the record did not read back as written.'
+    const ln = await run($, ['ln', tmp, p.current])
+    if (ln.exitCode !== 0) {
+      const there = await sleepNow($)
+      if (there.state === 'asleep') return `Sleep mode is already on: ${startedWhere(there.record)}. Nothing changed.`
+      return `Sleep mode did not start: the record could not be put in place (${ln.stderr.trim() || `ln exited ${ln.exitCode}`}).`
+    }
+  } catch (err) {
+    return `Sleep mode did not start: ${msg(err)}.`
+  } finally {
+    await run($, ['rm', '-f', tmp])
+  }
+  await showModes($)
+  await showHeld($)
+  const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
+  const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'
+  let s = `Sleep mode is on until ${etWhen(record.until)}. Enrolled to work overnight: ${enrolled}.`
+  if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
+  if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
+  return s
+}
+
+// /wake and "I'm up" (#840): the record is moved aside, and only the session whose move succeeds
+// acts. Phase 9 (#837) opens the report and asks for summaries here, on the winner only.
+const wake = async ($: EngineInterface): Promise<string | null> => {
+  const reading = await sleepNow($)
+  if (reading.state === 'none') return null
+  const moved = await moveAside($, 'woke')
+  if ('gone' in moved) return 'Sleep mode was already woken by another session.'
+  if ('error' in moved) return `Sleep mode could not be turned off (${moved.error}). It is still on.`
+  const record = parseRecord(moved.text)
+  await showModes($)
+  await showHeld($)
+  if (reading.state === 'unreadable') return `Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`
+  const placed = await restorePlace($, record)
+  return `Sleep mode is off.${record?.since ? ` It began at ${etWhen(record.since)}.` : ''}${placed ? ` ${placed}` : ''}`
+}
+
+// The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
+// is read live, and while it holds away is not said again: asleep keeps every session quiet as away.
 const showModes = async ($: EngineInterface) => {
   const scope = await scopeOf($)
-  const modes = [...(scope ? [scope] : []), ...((await placeOf($)) === 'away' ? ['AWAY' as const] : [])]
+  const asleep = await isAsleep($)
+  shownAsleep = asleep
+  const modes = [...(asleep ? ['ASLEEP' as const] : []), ...(scope ? [scope] : []), ...(!asleep && (await placeOf($)) === 'away' ? ['AWAY' as const] : [])]
   try {
     await $.statusbar.setModes({ modes })
   } catch (err) {
@@ -59,9 +307,10 @@ const showModes = async ($: EngineInterface) => {
   }
 }
 
-// The held card shows only at home, where Dan can press it.
+// The held card shows only at home, where Dan can press it, and never while the Mac sleeps (#840):
+// nobody is at it, and what was held waits for wake.
 const showHeld = async ($: EngineInterface) => {
-  const card = (await placeOf($)) === 'home' ? heldCard(await heldOf($)) : undefined
+  const card = (await placeOf($)) === 'home' && !(await isAsleep($)) ? heldCard(await heldOf($)) : undefined
   try {
     if (card) await $.modkit.bandRow(card)
     else await $.modkit.clearBandRow({ mod: MOD, id: 'held' })
@@ -455,15 +704,39 @@ const SCOPE_NOTE: Record<ScopeModesScope, string> = {
 }
 const AWAY_NOTE =
   'Dan is away from the Mac. Deliver results as a private claude.ai page he can read on his phone (the Artifact tool). Open nothing on the Mac and take no focus: anything that needs him at the Mac is held for when he is back.'
+// What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
+const sleepPromptNote = (r: SleepRecord, self: string) =>
+  `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? 'This session is enrolled to work overnight.' : 'This session is not one of the overnight workers.'} Dan is asleep, so deliver as when he is away: ${AWAY_NOTE}`
 const HOME_NOTE = 'Dan is back at the Mac: deliver results as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview).'
 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
+    // Asleep (#840) keeps every session quiet as away, whatever its own place. The engine refuses
+    // handing `built` to a helper, so the record is read here with its own calls, through the same
+    // readSleep every other decision asks; a read that fails is awake, as readSleep's unreadable is.
+    const nounSeesAsleep = async (): Promise<boolean> => {
+      try {
+        const home = await built.env.get('HOME')
+        if (!home) return false
+        const current = `${sleepDir(home)}/current.json`
+        if (!(await built.fs.exists(current))) return false
+        const text = await built.fs.read(current)
+        if (boot === undefined) {
+          // Under Claude Code's 10 s cut off for a noun call (#744); sysctl answers in milliseconds.
+          const r = await built.process.run(['sysctl', '-n', 'kern.boottime'], { timeoutMs: BOOT_MS })
+          const b = r.exitCode === 0 ? bootOf(r.stdout) : null
+          if (b !== null) boot = b
+        }
+        return readSleep(text, await built.clock.now(), boot ?? null).state === 'asleep'
+      } catch {
+        return false
+      }
+    }
     const scopeModes: ScopeModes = {
-      isAway: async () => ((await built.state.get(placeRef)).value ?? 'home') === 'away',
+      isAway: async () => ((await built.state.get(placeRef)).value ?? 'home') === 'away' || (await nounSeesAsleep()),
       hold: async ({ label, prompt }) => {
-        if (((await built.state.get(placeRef)).value ?? 'home') !== 'away') return { isHeld: false }
+        if (((await built.state.get(placeRef)).value ?? 'home') !== 'away' && !(await nounSeesAsleep())) return { isHeld: false }
         const held = (await built.state.get(heldRef)).value ?? []
         if (!held.some(h => h.prompt === prompt)) {
           const seq = ((await built.state.get(heldSeqRef)).value ?? 0) + 1
@@ -483,8 +756,11 @@ export const register: Register = on => {
       ['build', 'Turn no build or winding down off.'],
       ['away', "Away: every session publishes pages for the phone and opens nothing on the Mac."],
       ['home', 'Home: every session delivers on the Mac again.'],
+      ['sleep', 'Sleep: the whole Mac goes quiet until noon ET tomorrow; interactive sessions are enrolled to work overnight.'],
+      ['wake', 'Wake: sleep mode off, every session back where it was.'],
     ] as const)
       await $.command.register({ name, description, immediate: true })
+    interactive = e.isInteractive === true
     await $.tool.register({
       name: 'switch_to_build',
       description:
@@ -501,9 +777,25 @@ export const register: Register = on => {
         } catch (err) {
           $.ui.log(`scope-modes: the wind down check failed: ${msg(err)}`, { to: 'debug' })
         }
+        // Sleep's record read each minute too: the first session to find it over ends it, and the
+        // band follows it on and off whichever session started or ended it (#840).
+        try {
+          const reading = await sleepNow($)
+          await endIfOver($, reading)
+          if ((reading.state === 'asleep') !== shownAsleep) {
+            await showModes($)
+            await showHeld($)
+          }
+        } catch (err) {
+          $.ui.log(`scope-modes: the sleep check failed: ${msg(err)}`, { to: 'debug' })
+        }
       })
     }
-    return next(e)
+    const started = await next(e)
+    await announce($)
+    // The band shows ASLEEP from the start in a session opened while the Mac sleeps.
+    if (await isAsleep($)) await showModes($)
+    return started
   })
 
   // The commands, which say which mode turned on, and confirm the off.
@@ -521,6 +813,8 @@ export const register: Register = on => {
     await setScope($, null)
     return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual.`] }
   })
+  on('command.run', { command: 'sleep' }, async $ => ({ text: await startSleep($) }))
+  on('command.run', { command: 'wake' }, async $ => ({ text: (await wake($)) ?? 'Sleep mode was not on.' }))
   on('command.run', { command: 'away' }, async $ => {
     await setPlace($, 'away')
     return { text: placeSentence('away', await tellOthers($, 'away')) }
@@ -537,6 +831,11 @@ export const register: Register = on => {
   // debug log line below records each mid turn message from Dan and how many modes it switched.
   on('prompt.submit', async ($, e, next) => {
     lastOrigin = e.origin.kind
+    // Said again once a turn has run, since the registry may not have had this session's record at start.
+    if (!announced) {
+      announced = true
+      await announce($)
+    }
     const notes: string[] = []
     if (isDans(e.origin)) {
       const triggers = triggersIn(e.text) as Trigger[]
@@ -556,6 +855,9 @@ export const register: Register = on => {
             await setScope($, null)
             notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. Say so in one line first.`)
           }
+        } else if (t.kind === 'wake') {
+          const said = await wake($)
+          if (said) notes.push(`Dan's message woke sleep mode. Say so in one line first: "${said}"`)
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
@@ -577,7 +879,9 @@ export const register: Register = on => {
     }
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
-    if ((await placeOf($)) === 'away') notes.push(AWAY_NOTE)
+    const sleeping = await sleepNow($)
+    if (sleeping.state === 'asleep') notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
+    else if ((await placeOf($)) === 'away') notes.push(AWAY_NOTE)
     else if ((await $.state.get(justHomeRef)).value) {
       notes.push(HOME_NOTE)
       await $.state.set(justHomeRef, false)
@@ -644,7 +948,8 @@ export const register: Register = on => {
     }
 
     const scope = await scopeOf($)
-    const away = (await placeOf($)) === 'away'
+    // Asleep (#840), read live at each call, keeps every session quiet as away.
+    const away = (await placeOf($)) === 'away' || (await isAsleep($))
     if (!scope && !away) return go()
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that

@@ -431,6 +431,18 @@ test('two modes at once both lead the line, in the order given; a bad or repeate
   await ui.unmount()
 })
 
+// Sleep mode (#840): asleep is machine wide and leads the line while its record holds.
+test('ASLEEP is a mode and leads the line beside a scope mode', { plugins: [modKit, modes] }, async ($, on) => {
+  const { clock } = world(on)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  await start($, clock)
+  expect(await call($, 'ASLEEP+WINDING DOWN')).toBe('done')
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('ASLEEP | WINDING DOWN')
+  expect((await ui.find({ type: 'Text', text: 'ASLEEP' }))?.props).toMatchObject({ color: 'warning', bold: true })
+  await ui.unmount()
+})
+
 // The job watcher (#611), standing in: its noun as its contract will be. Each stand in holds its
 // answer inside register, since the kit loads a test plugin as a module of its own.
 const watcher: { name: string; register: Register } = {
