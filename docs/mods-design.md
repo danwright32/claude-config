@@ -833,6 +833,65 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
   line under Limits and usage.
 
+### Sleep mode phase 5: the overnight queue and per issue claims (#842), built
+
+A shell tool rather than mod code, `payload/hooks/lib/sleep-queue.sh` with its judgments in
+`sleep-queue.py` beside it, because an overnight session runs it from Bash and the claim's
+atomicity has to be real on disk, which a suite can only prove with real processes racing. Tested by
+`hooks/test-sleep-queue.sh`, which never reaches GitHub: HOME is its own, the issue source is a stub
+named by `SLEEP_QUEUE_SOURCE` (asserted to have been called), and a `gh` first on PATH fails if
+anything calls it. What the build decided, each open to Dan changing it:
+
+- `next REPO_ROOT SESSION_ID [GOAL_ISSUE...]` is the one call an overnight session makes: queue,
+  claim the first issue nobody holds, and give it a worktree, `PRIMARY/.claude/worktrees/sleep-N` on
+  branch `sleep/N`, never a checkout in the primary checkout. A folder already at that path that is
+  not this repository's worktree is never adopted (L421); the claim ends `failed` and `next` goes on.
+  A worktree that could not be made just now (a fetch or `git worktree add` failing) gives the
+  issue back instead, ended `unstarted`: free again, and that claim is no attempt, so a network
+  drop never costs the issue the night nor counts toward parking it. A claim lost between the queue
+  and the claim is a skip line with its reason. The primary checkout
+  is the first one `git worktree list` names, or the checkout asked about when its git folder lives
+  elsewhere; a bare repository is refused.
+- Dates and versions in a branch name (`release-2026-10-07`, `v10`, `1.5.7`) name no issue; every
+  other run of digits does, which errs toward leaving an issue out, with the branch named.
+- Only while asleep, judged by `sleep_active`, the one predicate; the claims live under the night's
+  `generation`, so nothing carries from one night to the next.
+- The queue is the goal's issues in the goal's order when given (one that cannot be read is a skip
+  line with the reason, never a refusal of the rest), else open p0 to p3 issues fetched
+  with an explicit limit (500) and refused when a page that full comes back (L24), sorted by
+  priority then number. Each issue left out gets a `skip` line with its reason, for the report.
+  Dan's accounts are the ones signed in to `gh`; no account read refuses rather than judging every
+  issue someone else's.
+- An open session "names" an issue when its checkout of the same repository is on a branch whose
+  digits include the number, or its current request says `#N`. A pull request names it by `#N` in
+  its title or body or the number in its branch. A branch or pull request is ignored only while
+  tonight's work on the issue is still to be carried on: this session's own claim, a claim whose
+  session died, or one given back `unstarted`. So a dead worker's branch is carried on, while an
+  issue released `free` on purpose is judged against its branch and pull request afresh.
+- Every wait on GitHub (each `gh` call, or the injected source) has a deadline,
+  `SLEEP_GH_TIMEOUT` (60 seconds), and the worktree's fetch has `SLEEP_FETCH_TIMEOUT` (120): a hung
+  read refuses the queue or gives the issue back, and its whole process group is stopped.
+- Unanswered before bed questions are read from `~/.claude/state/sleep/unanswered/GENERATION`, one
+  `owner/repo#N` a line, which phase 6 (#836) writes.
+- Claims differ from the plan's wording in one way: the plan said a directory holding the session
+  id. A directory made by `mkdir` cannot carry its owner in the same step, so a claimer killed
+  between the two leaves a claim with no owner. Instead each issue's directory holds numbered
+  entries, each written whole beside it and hard linked into place; `ln` fails when the number
+  exists, so of any number of claimers at once exactly one makes the next entry (tested with two
+  and with eight; the suite runs the eight against a copy of the library with the link swapped for
+  a copy, and there more than one owns the issue). Nothing is deleted: the newest
+  entry is the state (`claim`, or `free`, `done`, `parked`, `failed` written by the holder, or
+  `unstarted`, written only by `next` when the worktree could not be made just now) and
+  the ones before it are the history the attempts count is read from (L27). An entry with no start
+  time is dated by its file (L409).
+- A claim whose session has ended, has been silent five minutes (the registry's own rule) or was
+  never recorded is free, and taking it over is a new attempt. A record that cannot be read keeps
+  the claim held (L215), and a missing registry refuses the queue. A damaged registry record
+  changed in the last five minutes refuses the queue, since it may be a live session's; an older
+  one is ignored, as the registry's own prune treats it.
+- `claims` prints every claim of the night as JSON lines, the seam the report (#835) reads; parking
+  at two attempts or two hours is the driver's (#844), read from the `attempts=` the claim prints.
+
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
 No round: each follows from the spec and the settled surfaces above. The ones marked open were
