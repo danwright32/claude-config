@@ -45,6 +45,24 @@ fi
 _SQ_PY="$_SQ_LIB/sleep-queue.py"
 
 _sq_refuse() { printf 'refused\t-\t%s\n' "$1"; return 3; }
+
+# The night's note of a claim or of its end (#844), written by the one writer (sleep_note in
+# sleep.sh, #835) right after the claim folder records it, so every claim and every end has its
+# note and the report never calls a finished claim ended unexpectedly. The claim folder is the
+# record; a note that cannot be written is said on stderr and never undoes the claim (L561).
+# _sq_note KIND SESSION REPO ISSUE WHAT [ATTEMPTS_OR_WHY]
+_sq_note() {
+  local kind="$1" self="$2" slug="$3" issue="$4" what="$5" extra="${6:-}" line err now
+  now="$(_sq_now)"
+  # Each step's failure said as itself (L11): building the note, or the writer refusing it.
+  if ! line="$(python3 "$_SQ_PY" note "$kind" "$self" "$now" "$slug" "$issue" "$extra" 2>&1)"; then
+    printf "sleep-queue: the night's note of this %s could not be built, so the report will not show it (%s)\n" "$what" "${line:-sleep-queue.py gave no reason}" >&2
+    return 0
+  fi
+  err="$(sleep_note "$line" "$(_sq_sleep_dir)/current.json" "$now" 2>&1 >/dev/null)" && return 0
+  printf "sleep-queue: the night's note of this %s could not be written, so the report will not show it (%s)\n" "$what" "${err:-sleep_note failed and gave no reason}" >&2
+  return 0
+}
 _sq_now() { if [ -n "${SLEEP_NOW_MS:-}" ]; then printf '%s\n' "$SLEEP_NOW_MS"; else printf '%s000\n' "$(date +%s)"; fi; }
 _sq_sleep_dir() { printf '%s/.claude/state/sleep\n' "$HOME"; }
 _sq_registry() { printf '%s/.claude/state/sessions\n' "$HOME"; }
@@ -256,7 +274,9 @@ sleep_claim() {
         entry="$(python3 "$_SQ_PY" entry claim "$self" "$(_sq_now)")" || { _sq_refuse "the claim entry could not be written"; return 3; }
         err="$(_sq_link "$dir" "$nxt" "$entry")"
         case $? in
-          0) printf 'claimed\t%s\tattempts=%s\t%s\n' "$issue" "$((attempts + 1))" "$why"; return 0 ;;
+          0)
+            _sq_note claim "$self" "$slug" "$issue" claim "$((attempts + 1))"
+            printf 'claimed\t%s\tattempts=%s\t%s\n' "$issue" "$((attempts + 1))" "$why"; return 0 ;;
           2) _sq_refuse "$err"; return 3 ;;
         esac ;;
       *) printf 'not-claimed\t%s\t%s: %s\n' "$issue" "$st" "$why"; return 1 ;;
@@ -295,6 +315,7 @@ _sq_end() {
     1) printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"; return 1 ;;
     *) _sq_refuse "$err"; return 3 ;;
   esac
+  _sq_note "$state" "$self" "$slug" "$issue" "end ($state)" "$why"
   printf 'released\t%s\t%s\n' "$issue" "$state"
 }
 

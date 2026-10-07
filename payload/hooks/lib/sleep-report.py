@@ -28,7 +28,8 @@ when the caller gave none, `at` (ms since the epoch, stamped at write time, L37)
 report knows, and the fields each reads (every other field is kept, and shown nowhere):
 
   start      power                          written here at /sleep
-  claim      repo, issue                    a worker took an issue (phase 5)
+  claim      repo, issue, attempts          a worker took an issue (phase 5; written by sleep-queue.sh)
+  released   repo, issue, state, text?      a claim given back, free or unstarted (sleep-queue.sh)
   done       repo, issue?, pr?, text        finished; checked against GitHub at wake
   parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
   failed     repo, issue?, text             could not be done (a refusal, an error)
@@ -77,7 +78,7 @@ KIND = re.compile(r"^[a-z][a-z-]{0,31}$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
-KNOWN = ("start", "claim", "done", "parked", "failed", "question", "issue", "lesson", "finding",
+KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
          "heartbeat", "wait", "usage", "stopped", "save") + ENDED
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -357,8 +358,26 @@ def build(record, notes, bad, final, now, github):
                 look.append("Session %s ended unexpectedly: last heard %s, %s before the end, and it never said it stopped." % (short(w), et_time(last), minutes(end_at - last)))
         for c in [n for n in notes if n["kind"] == "claim"]:
             key = (c.get("repo"), c.get("issue"))
-            if not any(n["kind"] in TERMINAL and (n.get("repo"), n.get("issue")) == key for n in notes):
-                look.append("%s, claimed by %s at %s, ended unexpectedly: no done, parked or failed note." % (where(c), short(c.get("by")), et_time(c["at"]) if num(c.get("at")) else "an unknown time"))
+            if any(n["kind"] in TERMINAL and (n.get("repo"), n.get("issue")) == key for n in notes):
+                continue
+            # A claim given back (released free, or unstarted) and not ended by a later claim is
+            # said as given back, never as ended unexpectedly: the queue wrote that it let go (#844).
+            # Ordered by when each was written (at), file order breaking a tie, never file order
+            # alone: concurrent writers land out of order (L751).
+            events = sorted(((n["at"], i, n) for i, n in enumerate(notes)
+                             if n["kind"] in ("claim", "released") and (n.get("repo"), n.get("issue")) == key and num(n.get("at"))),
+                            key=lambda x: (x[0], x[1]))
+            mine = next((k for k, (_, _, n) in enumerate(events) if n is c), None)
+            later = [n for _, _, n in events[mine + 1:]] if mine is not None else []
+            back = [n for n in later if n["kind"] == "released"]
+            if any(n["kind"] == "claim" for n in later):
+                continue  # a later claim of the same issue is judged on its own
+            if back:
+                b = back[-1]
+                look.append("%s was given back by %s at %s%s and was not finished tonight." % (
+                    where(c), short(b.get("by")), et_time(b["at"]), ": %s" % text_of(b) if text_of(b) else ""))
+                continue
+            look.append("%s, claimed by %s at %s, ended unexpectedly: no done, parked or failed note." % (where(c), short(c.get("by")), et_time(c["at"]) if num(c.get("at")) else "an unknown time"))
         look.extend(github["flags"])
     if bad:
         look.append("%d line%s of the notes could not be read." % (bad, "" if bad == 1 else "s"))
