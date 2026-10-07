@@ -1336,6 +1336,35 @@ export const register = on => {
   })
 }
 TS
+# A parameter shadows a helper however its function's return type is written, a type literal or one
+# inside angle brackets included (#895, lessons review).
+mknounmod "$M12W" param-typed-return typedret <<'TS'
+const waiters = new Map()
+const wait = () => new Promise(resolve => waiters.set('x', resolve))
+function hasty(wait: () => Promise<string>): { result: Promise<string> } {
+  return { result: wait() }
+}
+const brief = (wait: () => Promise<string>): Promise<{ a: string }> => wait().then(a => ({ a }))
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, typedret: { go: () => hasty(() => Promise.resolve('now')), also: () => brief(() => Promise.resolve('now')) } }
+  })
+}
+TS
+# A local function's own declaration is not a call of it, so its parameter list is never read as the
+# arguments of one (#895, lessons review).
+mknounmod "$M12W" local-function-decl declared <<'TS'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    function wait(ms: number) {
+      return new Promise(r => setTimeout(r, ms))
+    }
+    return { ...built, declared: { go: () => wait(1_000) } }
+  })
+}
+TS
 # Two same-named local helpers are each judged by the calls that reach that one, never by the other's:
 # the short call bounds its own helper and the long one is named at its own (#895, lessons review).
 mknounmod "$M12W" same-local-args timed <<'TS'
@@ -1356,7 +1385,7 @@ export const register = on => {
 TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"31 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"33 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1385,7 +1414,7 @@ done
 ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
   && check "a local helper is judged by its own calls, never a same-named one's (#895)" ok \
   || check "a local helper is judged by its own calls, never a same-named one's (#895)" "$out"
-for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top; do
+for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
@@ -1396,6 +1425,12 @@ out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 out="$(bash "$WAITS" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the noun wait check" ok \
   || check "a missing mods folder is refused by the noun wait check" "exit=$code out=$out"
+# Calls are resolved by the pinned TypeScript compiler (#895), so without it nothing is checked and
+# the run refuses by name rather than passing over nothing resolved (L490).
+out="$(CHECK_MODS_TS_DIR="$TMPROOT/no-typescript" bash "$WAITS" "$M12W" 2>&1)"; code=$?
+[ "$code" -eq 4 ] && printf '%s\n' "$out" | grep -q 'pinned TypeScript compiler cannot be loaded' \
+  && check "a missing TypeScript compiler is refused by name by the noun wait check (#895)" ok \
+  || check "a missing TypeScript compiler is refused by name by the noun wait check (#895)" "exit=$code out=$out"
 if [ -d "$ROOT/payload/mods" ]; then
   out="$(bash "$WAITS" "$ROOT/payload/mods" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "no mod in payload/mods has a noun that waits past 10 s" ok \

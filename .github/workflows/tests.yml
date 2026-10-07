@@ -197,6 +197,12 @@ jobs:
         # the rest; that is the point, not a duplicate.
         run: bash payload/hooks/test-check-home-paths.sh
 
+      - name: Install the pinned TypeScript compiler
+        # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
+        # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods.sh
+        # needs it here. The lockfile pins the version and carries the linux-x64 binary.
+        run: npm ci --prefix tools/typescript --no-audit --no-fund
+
       - name: Every suite in the repo
         # ONE step, and no list. This used to be four steps naming four directories, which is the
         # hand maintained list the runner itself refuses to keep (L96) written one level up in a

@@ -1,0 +1,138 @@
+// ts-resolve.mjs <typescript dir>: what each identifier in a set of mods' source files refers to, as
+// the TypeScript compiler's own checker resolves it (#895). Scope, shadowing, parameters, imports and
+// where an expression ends are answered by the language, not by a hand written reader.
+//
+// Input on stdin: {"mods": [{"files": ["/abs/a.ts", ...]}, ...]}, one project per mod, so a name is
+// never resolved into another mod. Output on stdout: {"/abs/a.ts": [[position, role, target], ...]}
+// with positions in code points (the unit Python indexes a str by, where the compiler counts UTF-16
+// units). role is "call" (the callee of a call), "decl" (the name a declaration gives) or "ref".
+// target is null when the checker finds no symbol, ["fn", file, start, end] for a function declared
+// in the mod (start at its `function` keyword, or the `const`, `let` or `var` of its declaration),
+// ["value", file, start, end] for any other variable the mod declares, and ["other"] for anything
+// else (a parameter, a class, a global).
+//
+// Any failure to load the pinned compiler or to read a project exits non zero with the reason on
+// stderr: the caller refuses rather than resolving nothing (L490).
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const tsDir = process.argv[2];
+if (!tsDir) {
+  console.error("ts-resolve: no TypeScript folder given");
+  process.exit(2);
+}
+const base = join(tsDir, "node_modules", "typescript", "dist");
+const { API } = await import(join(base, "api", "sync", "api.js"));
+const { SyntaxKind } = await import(join(base, "ast", "index.js"));
+const { SymbolFlags } = await import(join(base, "enums", "symbolFlags.js"));
+
+const input = JSON.parse(readFileSync(0, "utf8"));
+const real = (p) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+const dir = mkdtempSync(join(tmpdir(), "ts-resolve-"));
+const api = new API({ cwd: dir });
+const out = {};
+try {
+  const configs = input.mods.map((mod, i) => {
+    const config = join(dir, `mod${i}.tsconfig.json`);
+    writeFileSync(
+      config,
+      JSON.stringify({
+        compilerOptions: {
+          allowJs: true,
+          checkJs: false,
+          noEmit: true,
+          noLib: true,
+          types: [],
+          jsx: "preserve",
+          module: "esnext",
+          moduleResolution: "bundler",
+          allowImportingTsExtensions: true,
+        },
+        files: mod.files,
+      }),
+    );
+    return config;
+  });
+  const snapshot = api.updateSnapshot({ openProjects: configs });
+  input.mods.forEach((mod, i) => {
+    const project = snapshot.getProject(configs[i]);
+    if (!project) throw new Error(`no project for ${mod.files[0] ?? "an empty mod"}`);
+    const own = new Map(mod.files.map((f) => [real(f), f]));
+    // A UTF-16 offset in a file's text as a code point offset.
+    const units = new Map();
+    const codePoint = (file, at) => {
+      if (!units.has(file)) {
+        const text = readFileSync(file, "utf8");
+        const map = new Int32Array(text.length + 1);
+        let cp = 0;
+        for (let u = 0; u < text.length; u++) {
+          map[u] = cp;
+          const c = text.charCodeAt(u);
+          if (c >= 0xd800 && c <= 0xdbff && u + 1 < text.length) {
+            map[++u] = cp;
+          }
+          cp++;
+        }
+        map[text.length] = cp;
+        units.set(file, { text, map });
+      }
+      return units.get(file).map[at];
+    };
+    const target = (symbol) => {
+      if (!symbol) return null;
+      if (symbol.flags & SymbolFlags.Alias) symbol = project.checker.getAliasedSymbol(symbol);
+      for (const handle of symbol.declarations) {
+        const d = handle.resolve(project);
+        if (!d) continue;
+        const file = own.get(real(d.getSourceFile().fileName));
+        if (!file) continue;
+        if (d.kind === SyntaxKind.FunctionDeclaration) {
+          const text = readFileSync(file, "utf8");
+          const kw = text.indexOf("function", d.getStart());
+          return ["fn", file, codePoint(file, kw), codePoint(file, d.end)];
+        }
+        if (d.kind === SyntaxKind.VariableDeclaration) {
+          let init = d.initializer;
+          while (init && [SyntaxKind.ParenthesizedExpression, SyntaxKind.AsExpression, SyntaxKind.SatisfiesExpression, SyntaxKind.NonNullExpression, SyntaxKind.TypeAssertionExpression].includes(init.kind)) {
+            init = init.expression;
+          }
+          const list = d.parent;
+          const start = list && list.declarations && list.declarations.length === 1 ? list.getStart() : d.getStart();
+          const isFn = init && (init.kind === SyntaxKind.ArrowFunction || init.kind === SyntaxKind.FunctionExpression);
+          return [isFn ? "fn" : "value", file, codePoint(file, start), codePoint(file, d.end)];
+        }
+        return ["other"];
+      }
+      return ["other"];
+    };
+    for (const file of mod.files) {
+      const sf = project.program.getSourceFile(file);
+      if (!sf) throw new Error(`${file} is not in its mod's program`);
+      const ids = [];
+      const walk = (n) => {
+        if (n.kind === SyntaxKind.Identifier) ids.push(n);
+        n.forEachChild(walk);
+      };
+      walk(sf);
+      const symbols = ids.length ? project.checker.getSymbolAtPosition(file, ids.map((n) => n.getStart())) : [];
+      out[file] = ids.map((n, i) => {
+        const p = n.parent;
+        const role = p && p.name === n && p.kind !== SyntaxKind.PropertyAccessExpression ? "decl"
+          : p && (p.kind === SyntaxKind.CallExpression || p.kind === SyntaxKind.NewExpression) && p.expression === n ? "call"
+          : "ref";
+        return [codePoint(file, n.getStart()), role, target(symbols[i])];
+      });
+    }
+  });
+} finally {
+  api.close();
+  rmSync(dir, { recursive: true, force: true });
+}
+process.stdout.write(JSON.stringify(out));

@@ -25,8 +25,11 @@
 # whose promise a timer settles is judged at every call a noun makes of it (#756).
 # A noun's code is each `engine.create` hook's (where the nouns' methods are written), each hook on
 # a noun's own event (`on('modkit.screen', ...)`, any noun any mod's contract declares on $), and
-# every function of the mod those call, each call followed to the function its name reaches by scope:
-# the nearest enclosing declaration, then the module's top level, then another file's (#895).
+# every function of the mod those call. A called name is resolved by the TypeScript compiler's own
+# checker (tools/lib/ts-resolve.mjs, run on the compiler pinned in tools/typescript), so scope,
+# shadowing, parameters and imports are the language's answer, never the first declaration of that
+# name anywhere in the mod (#895). A name the checker finds no symbol for is followed by name, as
+# before.
 #
 # Measured live on 2026-10-05 (2.1.289, a throwaway plugin in a headless `claude -p`, #756): a
 # noun's 10 s does NOT stop while its own `$` calls are in flight, unlike a hook's budget. A noun
@@ -48,7 +51,9 @@
 #
 # Exit codes, each distinct (L11): 0 none found (the count of mods is printed, L98), 1 a wait found
 # or a noun's code that cannot be read, each named with its file and line, 2 the mods folder does
-# not exist, 3 no python3 to read the source with (L490: never a pass over nothing read).
+# not exist, 3 no python3 to read the source with, 4 the pinned TypeScript compiler cannot be
+# loaded, so no call could be resolved (L490: never a pass over nothing read). CHECK_MODS_TS_DIR
+# names another folder holding it, as check-mods.sh reads it.
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   echo "check-mod-noun-waits: '${dir:-<none given>}' is not a folder, so nothing was checked." >&2
@@ -58,12 +63,13 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "check-mod-noun-waits: python3 is not installed, so no mod's source was read." >&2
   exit 3
 fi
-python3 - "${dir%/}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" <<'PY'
-import ast, json, os, re, sys
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 - "${dir%/}" "$here/lib" "${CHECK_MODS_TS_DIR:-$here/typescript}" <<'PY'
+import ast, json, os, re, subprocess, sys
 
 root = sys.argv[1]
 sys.path.insert(0, sys.argv[2])
-from ts_source import CODE, GOES_ON_AFTER, GOES_ON_BEFORE, block_after, closing, code_only, function_span, is_jsx, kinds, top_members
+from ts_source import CODE, block_after, closing, code_only, function_span, is_jsx, kinds, top_members
 
 LIMIT_MS = 10_000
 CUT = "Claude Code cuts a noun call off at 10 s (#744)"
@@ -160,186 +166,67 @@ def definition(files, name):
     return None
 
 
-def _blocks(f):
-    """Each brace pair in f's code, (open, close), cached on f."""
-    if not hasattr(f, "blocks"):
-        f.blocks, stack = [], []
-        for i, c in enumerate(f.code):
-            if c == "{":
-                stack.append(i)
-            elif c == "}" and stack:
-                f.blocks.append((stack.pop(), i))
-    return f.blocks
-
-
-def _scope(f, at):
-    """The innermost block holding position at in f, or None at the module's top level."""
-    inside = [b for b in _blocks(f) if b[0] < at < b[1]]
-    return max(inside, key=lambda b: b[0]) if inside else None
-
-
-def _declared_function(f, at, name):
-    """The span of the function a declaration of name at at defines, or None when its value is not a
-    function (a shadowing `const pause = built.pause` resolves to no function of the mod)."""
-    rest = f.code[at:]
-    if rest.startswith("function"):
-        span = function_span(rest, name, f.kinds[at:])
+def resolve_all(mods):
+    """Every identifier in every mod's source, resolved by the TypeScript compiler's checker (#895):
+    each File gets refs, its position (in code points) to (role, target), as ts-resolve.mjs describes
+    them. Exits 4, naming why, when the pinned compiler cannot be loaded or read a mod (L490)."""
+    ts_dir = sys.argv[3]
+    script = os.path.join(sys.argv[2], "ts-resolve.mjs")
+    why = None
+    if not os.path.isdir(os.path.join(ts_dir, "node_modules", "typescript")):
+        why = f"it is not installed in {ts_dir}"
     else:
-        value = re.match(r"(?:const|let|var)\s+" + re.escape(name) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?:async\s+)?", rest)
-        if not value:
-            return None
-        v = rest[value.end() :]
-        if v.startswith("("):
-            end = closing(v, 0)
-            is_fn = end is not None and re.match(r"\s*(?::[^=;\n]+)?=>", v[end:]) is not None
-        else:
-            is_fn = re.match(r"function\b|<|" + IDENT + r"\s*=>", v) is not None
-        span = function_span(rest, name, f.kinds[at:]) if is_fn else None
-    return None if span is None else (f, at + span[0], at + span[1])
-
-
-def _declarations(f, name):
-    """Each place f's code declares name with const, let, var or function."""
-    decl = r"(?<![\w$.])(?:(?:const|let|var)\s+" + re.escape(name) + r"|function\s*\*?\s*" + re.escape(name) + r")(?![\w$])"
-    return [m.start() for m in re.finditer(decl, f.code) if f.kinds[m.start()] == CODE]
-
-
-def _opening(code, close):
-    """In code, the index of the bracket that the one at close closes, or None."""
-    pairs, stack = {")": "(", "]": "[", "}": "{"}, []
-    for j in range(close, -1, -1):
-        c = code[j]
-        if c in pairs:
-            stack.append(pairs[c])
-        elif c in "([{":
-            if not stack or stack.pop() != c:
-                return None
-            if not stack:
-                return j
-    return None
-
-
-def _bound_names(params):
-    """The names a parameter list binds, destructured ones included (`{ id, name: label }` binds id and
-    label), a default value or a type read past."""
-    out = []
-    for p in split_top(params):
-        p = re.split(r"(?<![=!<>])=(?![=>])", p, maxsplit=1)[0].strip()
-        p = re.sub(r"^\.\.\.", "", p)
-        if p[:1] in "{[":
-            close = closing(p, 0) or len(p)
-            out += [m.group(1) for m in re.finditer(r"(?:^|[{\[,]|\.\.\.|:)\s*(" + IDENT + r")\s*(?=[,}\]=]|$)", p[1 : close - 1])]
-        else:
-            m = re.match(IDENT, p)
-            if m:
-                out.append(m.group(0))
-    return out
-
-
-def _expression_end(code, b):
-    """Where an arrow's expression body starting at b ends: at a , or ; outside its brackets, at a
-    bracket closing one it stands inside, or at a line break outside its brackets unless the
-    statement goes on past it (code with no semicolons ends a statement there)."""
-    depth, j = 0, b
-    while j < len(code):
-        c = code[j]
-        if c in "([{":
-            depth += 1
-        elif c in ")]}":
-            if depth == 0:
-                break
-            depth -= 1
-        elif c in ",;" and depth == 0:
-            break
-        elif c == "\n" and depth == 0:
-            last = code[b:j].rstrip()[-1:]
-            after = code[j:].lstrip()[:1]
-            arrow = code[b:j].rstrip().endswith("=>")
-            if not arrow and last not in GOES_ON_AFTER and after not in GOES_ON_BEFORE:
-                break
-        j += 1
-    return j
-
-
-def _param_scopes(f):
-    """Each function written in f's code, as (where its body starts, where it ends, the names its
-    parameters bind), cached on f: an arrow's and a `function`'s alike."""
-    if hasattr(f, "params"):
-        return f.params
-    code, out = f.code, []
-    for m in re.finditer(r"=>", code):
-        head = code[: m.start()].rstrip()
-        # A return type between the parameters and the arrow: `(x: T): Promise<U> =>`.
-        typed = re.search(r"\)\s*:[^;{}()=]*$", head)
-        if typed:
-            head = head[: typed.start() + 1]
-        if head.endswith(")"):
-            open_at = _opening(code, len(head) - 1)
-            if open_at is None:
-                continue
-            names = _bound_names(code[open_at + 1 : len(head) - 1])
-        else:
-            one = re.search(r"(" + IDENT + r")$", head)
-            if not one:
-                continue
-            names = [one.group(1)]
-        b = m.end()
-        while b < len(code) and code[b].isspace():
-            b += 1
-        end = (closing(code, b) or len(code)) if code[b : b + 1] == "{" else _expression_end(code, b)
-        out.append((b, end, names))
-    for m in re.finditer(r"(?<![\w$.])function\b\s*\*?\s*(?:" + IDENT + r")?\s*(?:<[^()]*>)?\s*\(", code):
-        close = closing(code, m.end() - 1)
-        if close is None:
-            continue
-        brace = code.find("{", close)
-        if brace < 0:
-            continue
-        out.append((brace, closing(code, brace) or len(code), _bound_names(code[m.end() : close - 1])))
-    f.params = out
-    return out
-
-
-def visible(files, f, at, name):
-    """The declaration of name that position at in f sees, by scope as the language reads it (#895):
-    the nearest one in a block enclosing at, then one at the top level of f, then one at the top
-    level of another of the mod's files. (file, where it starts); None when the mod declares name
-    only where at cannot see it or a parameter shadows it; False when the mod declares no name of that spelling at all."""
-    best = None
-    for d in _declarations(f, name):
-        scope = _scope(f, d)
-        if scope is not None and not (scope[0] < at < scope[1]):
-            continue
-        depth = -1 if scope is None else scope[0]
-        if best is None or depth > best[0]:
-            best = (depth, d)
-    # A parameter of a function holding at binds the name nearer than any declaration outside that
-    # function, and reaches nothing in the mod.
-    shadow = max((a for a, b, names in _param_scopes(f) if a <= at < b and name in names), default=None)
-    if shadow is not None and (best is None or shadow >= best[0]):
-        return None
-    if best is not None:
-        return f, best[1]
-    declared = False
-    for g in files:
-        if g is f:
-            continue
-        for d in _declarations(g, name):
-            declared = True
-            if _scope(g, d) is None:
-                return g, d
-    return None if declared or _declarations(f, name) else False
+        payload = json.dumps({"mods": [{"files": [os.path.join(folder, f.rel) for f in files]} for _, folder, _, files in mods if files]})
+        try:
+            run = subprocess.run(["node", script, ts_dir], input=payload, capture_output=True, text=True, timeout=120)
+            if run.returncode != 0:
+                why = (run.stderr.strip().splitlines() or [f"ts-resolve.mjs exited {run.returncode}"])[-1]
+            else:
+                found = json.loads(run.stdout)
+        except FileNotFoundError:
+            why = "node is not installed"
+        except subprocess.TimeoutExpired:
+            why = "it did not answer within 120 s"
+        except ValueError as e:
+            why = f"its answer could not be read ({e})"
+    if why:
+        print(
+            f"check-mod-noun-waits: the pinned TypeScript compiler cannot be loaded ({why}), so no noun's calls "
+            f"could be resolved and nothing was checked. Install it with: npm ci --prefix tools/typescript",
+            file=sys.stderr,
+        )
+        sys.exit(4)
+    by_path = {}
+    for _, folder, _, files in mods:
+        for f in files:
+            by_path[os.path.join(folder, f.rel)] = f
+    for _, folder, _, files in mods:
+        for f in files:
+            f.refs = {at: (role, target) for at, role, target in found.get(os.path.join(folder, f.rel), [])}
+    return by_path
 
 
 def resolve(files, f, at, name):
-    """The function a call of name at position at in f reaches, by the declaration visible() finds:
-    (file, start, end), or None when that declaration is not a function or the mod declares name only
-    where the call cannot see it (a parameter, say, or another function's local). A name the mod
-    declares nowhere is resolved as before, by its first definition anywhere in the mod."""
-    seen = visible(files, f, at, name)
-    if seen is False:
+    """The function the identifier name at position at in f reaches, as the compiler's checker
+    resolves it (#895): (file, start, end), or None when it names a declaration, a parameter, or
+    anything else that is not a function the mod declares. One the checker finds no symbol for is
+    followed by name, as before."""
+    role, target = f.refs.get(at, ("ref", None))
+    if role == "decl":
+        return None
+    if target is None:
         return definition(files, name)
-    return None if seen is None else _declared_function(seen[0], seen[1], name)
+    if target[0] != "fn":
+        return None
+    return BY_PATH[target[1]], target[2], target[3]
+
+
+def declared_value(f, at):
+    """Where the variable the identifier at position at in f names is declared: (file, start), or None."""
+    role, target = f.refs.get(at, ("ref", None))
+    if target is None or target[0] not in ("fn", "value"):
+        return None
+    return BY_PATH[target[1]], target[2]
 
 
 def constants(files):
@@ -455,8 +342,19 @@ def inner_functions(body):
         if k < len(body) and body[k] == "{":
             spans.append((k, closing(body, k) or len(body)))
             continue
-        # One reading of where an expression body ends, shared with the scope resolution (#895).
-        spans.append((k, _expression_end(body, k)))
+        depth, j = 0, k
+        while j < len(body):
+            c = body[j]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif c in ",;" and depth == 0:
+                break
+            j += 1
+        spans.append((k, j))
     for m in re.finditer(r"(?<![\w$])function\b", body):
         brace = body.find("{", m.end())
         if brace >= 0:
@@ -522,7 +420,8 @@ def judge(f, at, files, consts):
     executor = code[k + 1 : (end or len(code)) - 1].strip()
     named = re.fullmatch(IDENT, executor)
     if named:
-        found = resolve(files, f, at, executor)
+        raw = code[k + 1 : (end or len(code)) - 1]
+        found = resolve(files, f, k + 1 + len(raw) - len(raw.lstrip()), executor)
         if not found:
             return f"check-mod-noun-waits: {f.where(at)}: {f.mod}'s noun code makes a promise whose executor {executor} cannot be found in {f.mod}, so whether it waits past 10 s cannot be read."
         df, start, stop = found
@@ -596,8 +495,8 @@ def with_args(consts, params, args):
 
 
 def helper_timer(files, f, at, name, args, consts):
-    """Whether calling the mod's function name at position at in f, with args, makes a promise a timer
-    under 10 s settles."""
+    """Whether the call of the mod's function name at position at in f, with args, makes a promise a
+    timer under 10 s settles."""
     found = resolve(files, f, at, name)
     if not found:
         return False
@@ -622,8 +521,8 @@ def is_timer(f, a, b, files, consts):
         args = call_args(f.code, a + lead + expr.find("("))
         return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, f, a + lead, m.group(1), args, consts)
     if re.fullmatch(IDENT, expr):
-        # The constant this member reads, found by scope as a called helper is (#895).
-        seen = visible(files, f, a + lead, expr)
+        # The variable this member reads, as the compiler resolves it (#895).
+        seen = declared_value(f, a + lead)
         if seen:
             g, d = seen
             made = re.match(r"(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code[d:])
@@ -643,6 +542,7 @@ def stored_in(code, at):
     return m.group(1) if m and m.group(1) not in KEYWORDS else None
 
 
+BY_PATH = resolve_all(mods)
 for entry, folder, man, files in mods:
     consts = constants(files)
     # The noun code: the engine.create hooks and hooks on a noun's event, then every function of the
@@ -703,7 +603,8 @@ for entry, folder, man, files in mods:
 
     def calls_in_nouns(df, dstart, name):
         """Each call a noun's code makes of the mod's function name declared at dstart in df: (file,
-        position, its arguments). A call reaching a same-named function elsewhere is that one's (#895)."""
+        position, its arguments). A call the compiler resolves to another function of that name, and
+        a declaration of one, are not calls of this one (#895)."""
         out = []
         for f, start, end, own in regions:
             if own == name and f is df and start == dstart:
@@ -721,8 +622,8 @@ for entry, folder, man, files in mods:
         for at in promises_in(f.code, start, end):
             if (f.rel, at) in judged:
                 continue
-            # A promise inside a helper written within this region is judged as that helper's, by the
-            # calls reaching it, never by this outer one's (#895).
+            # A promise inside a helper written within this region is judged as that helper's, by
+            # the calls reaching it, never by this outer one's (#895).
             if any(g is f and start <= a and b <= end and (a, b) != (start, end) and a <= at < b for g, a, b, _ in regions):
                 continue
             judged.add((f.rel, at))
