@@ -375,9 +375,17 @@ export const lessonAddition = (tool: string, input: Record<string, unknown>, fil
   if (file === undefined) return entryBlock(content)
   const size = content.length - file.length
   if (size <= 0) return undefined
-  // Every line boundary of the file where the content could hold the block, each tried in turn.
-  for (let b = 0; b <= file.length; b = file.indexOf('\n', b) === -1 ? file.length + 1 : file.indexOf('\n', b) + 1) {
-    if (content.slice(0, b) !== file.slice(0, b) || content.slice(b + size) !== file.slice(b)) continue
+  // What the two share at the start and at the end, measured once: the block can sit only at a line
+  // boundary b with b <= head and b >= file.length - tail, where both sides match by construction
+  // (sixth lessons review of #869: comparing the whole file at every boundary cost lines x size).
+  let head = 0
+  while (head < file.length && file[head] === content[head]) head++
+  let tail = 0
+  while (tail < file.length && file[file.length - 1 - tail] === content[content.length - 1 - tail]) tail++
+  const lo = file.length - tail
+  if (lo > head) return undefined
+  const next = (from: number) => (from === 0 || file[from - 1] === '\n' ? from : file.indexOf('\n', from) === -1 ? file.length + 1 : file.indexOf('\n', from) + 1)
+  for (let b = next(lo); b <= head; b = next(b + 1)) {
     const block = content.slice(b, b + size)
     if (b !== file.length && !block.endsWith('\n')) continue
     const entry = entryBlock(block)
@@ -405,9 +413,11 @@ export const addsLesson = (added: string, rule: string): boolean => {
   const provenance = String.raw`(?: \(${ref}(?:, ${ref})*(?:, \d{4}-\d{2}-\d{2})?\))?`
   const m = new RegExp(`^- L(\\d+)\\. ${escapeRe(ruleText(rule))}${provenance}$`).exec(body)
   if (!m) return false
-  if (shortAt === -1) return true
-  // Counted as the index renders it, `- L<n>. <short>` (third lessons review of #869).
-  return `- L${m[1]}. ${(lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')}`.length <= MAX_SHORT
+  // Counted as the index renders it, `- L<n>. <short>` (third lessons review of #869), or, with no
+  // SHORT line, `- L<n>. <rule>`: an entry the index cannot hold is refused by the send, which holds
+  // the whole lessons file back (sixth lessons review of #869).
+  const shown = shortAt === -1 ? ruleText(rule) : (lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')
+  return `- L${m[1]}. ${shown}`.length <= MAX_SHORT
 }
 
 /**

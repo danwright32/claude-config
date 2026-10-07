@@ -1160,3 +1160,26 @@ test('an approved lesson Write must insert the entry at a line boundary', withKi
   expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content: midLine }))).toContain(ASKS)
   expect(w.ran).toEqual([])
 })
+
+// Sixth lessons review of #869: an entry with no SHORT line was let through however long its rule,
+// so one whose index line is over the cap landed and the send then held the whole file back. Without
+// a SHORT line, `- L<n>. <rule>` itself must be within the cap.
+test('an approved lesson with no SHORT line is asked about when its rule is too long for the index', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const bare = ENTRY.replace('  SHORT: Fill a stored null on conflict.\n', '')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${bare}## Data safety` }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+// Sixth lessons review of #869: the Write check compared the whole file at every line boundary. It
+// now finds the one window from the shared start and end, and still accepts the entry in a file the
+// size the lessons file is.
+test('an approved lesson Write into a lessons file of real size goes through, inserted at its line', withKit, async ($, on) => {
+  const big = `${LESSONS_TEXT}${'- **L9. A filler lesson line.**\n'.repeat(12_000)}`
+  const w = world(on, { auto: true, files: { [LESSONS]: big } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = big.indexOf('## Data safety')
+  expect((await call($, { tool: 'Write', file_path: LESSONS, content: big.slice(0, at) + ENTRY + big.slice(at) })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
