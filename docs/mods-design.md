@@ -908,18 +908,24 @@ the ban list knowing that an action it does not name is approved.
   `notes/<generation>.jsonl`, and `retry` is taken off whatever beneath answered.
 - The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
   repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
-  label and milestone writes by gh or gh api; every other gh call but a known read (view, list,
-  status, diff, checks, watch, search, a GET to the API) is a write, allowed only on the repository
-  the checkout is, resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any
-  `cd`, every gh call read by one parser, `hooks/ghargs.ts`, as gh reads it (`--flag=value`,
-  `-XDELETE`, `-Rowner/x`, clustered `-sd`, a dotted owner) (unresolved, a folder whose remotes
-  name two repositories, a subcommand that reaches no one
-  repository, or any GraphQL mutation, whose target is an opaque id, is refused, L75; GraphQL
-  issue and label mutations are matched by exact name); LESSONS.md by any write route; every
+  label and milestone writes by gh or gh api. Every other gh call is judged by two short lists,
+  read by one parser, `hooks/ghargs.ts`, as gh reads it (`--flag=value`, `-XDELETE`, `-Rowner/x`,
+  clustered `-sd`, global flags before the subcommand, a dotted owner): a known read (view, list,
+  status, diff, checks, watch, search, a GET to the API) goes ahead anywhere; the writes overnight
+  work needs (an issue or PR comment, `pr create`, `pr edit` of title or body, `pr ready`, `pr
+  merge`, a POST to an issue or PR comment endpoint) go only to the repository the checkout is,
+  resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any `cd`; everything
+  else, on any repository, is refused (repo delete, release, secret, a workflow run, `pr close`,
+  any other API write, every GraphQL mutation). A write that cannot be resolved is refused (L75):
+  gh through a wrapper (`env`, `nohup`, `xargs`, a shell's `-c`, `eval`, `source`, `sudo`), any
+  `GH_` variable set, another `--hostname`, a flag before the subcommand or its action that gh does
+  not know, or a folder whose remotes name two repositories. Only text in command position is
+  judged, never what quotes or a heredoc hold. The lessons file by any write route; every
   claude.ai, Chrome and PostHog MCP tool whose name does not say it only reads (a read only tool
   whose name has no read word is refused too, which fails closed);
   Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
-  branch deletes (a merge with `--delete-branch` included); `claude-sync` pull, sync and install.
+  branch deletes in every spelling git takes (`--forc` is `--force`; a merge with `--delete-branch`
+  included); `claude-sync` pull, sync and install.
   Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
   managed settings file (#876) nothing is approved overnight.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues

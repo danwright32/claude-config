@@ -68,7 +68,6 @@ describe('issue, label and milestone writes', () => {
     expect(await bash('gh issue close 5')).toBe('run gh issue close')
     expect(await bash('gh issue delete 5 --yes')).toBe('run gh issue delete')
     expect(await bash('gh label create sleep')).toBe('run gh label create')
-    expect(await bash('gh label list')).toBeUndefined()
   })
   test('labels and milestones set on a PR are refused', async () => {
     expect(await bash('gh pr edit 5 --add-label bug')).toBe('set labels or a milestone on a PR')
@@ -85,55 +84,72 @@ describe('issue, label and milestone writes', () => {
   })
 })
 
-describe('every gh write but a known read goes only to the repository the checkout is', () => {
+describe('gh overnight: a short list of reads anywhere, a short list of writes on this repository, nothing else', () => {
   const other = 'write to other/x from a checkout of o/r'
   const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
-  test('a review, a close or any other write on another repository is refused', async () => {
-    expect(await bash('gh pr review 5 -R other/x --approve')).toBe(other)
-    expect(await bash('gh pr close 5 -R other/x')).toBe(other)
+  test('a write not on the list is refused even on this repository (#834 review of 3f7151c)', async () => {
+    expect(await bash('gh repo delete --yes')).toBe('run gh repo delete')
+    expect(await bash('gh repo delete o/r --yes')).toBe('run gh repo delete')
+    expect(await bash('gh release delete v1 -y')).toBe('run gh release delete')
+    expect(await bash('gh release create v1')).toBe('run gh release create')
+    expect(await bash('gh secret set TOKEN --body x')).toBe('run gh secret set')
+    expect(await bash('gh workflow run deploy.yml')).toBe('run gh workflow run')
+    expect(await bash('gh run rerun 5')).toBe('run gh run rerun')
+    expect(await bash('gh pr close 5')).toBe('run gh pr close')
+    expect(await bash('gh pr review 5 --approve')).toBe('run gh pr review')
+    expect(await bash('gh gist create notes.md')).toBe('run gh gist create')
+    expect(await bash('gh frobnicate now')).toBe('run gh frobnicate now')
+    expect(await bash('gh api -X POST repos/o/r/pulls -f title=x')).toBe('call the GitHub API to POST repos/o/r/pulls')
+    expect(await bash('gh api -X PUT repos/o/r/pulls/5/merge')).toBe('call the GitHub API to PUT repos/o/r/pulls/5/merge')
+    expect(await bash('gh api -X POST user/repos -f name=x')).toBe('call the GitHub API to POST user/repos')
+  })
+  test('a listed write may carry only the flags its job needs', async () => {
+    expect(await bash('gh pr edit 5 --title y --body z')).toBeUndefined()
+    expect(await bash('gh pr edit 5 --base other')).toBe('run gh pr edit with --base')
+    expect(await bash('gh pr edit 5 --add-reviewer x')).toBe('run gh pr edit with --add-reviewer')
+    expect(await bash('gh pr ready 5')).toBeUndefined()
+    expect(await bash('gh pr ready 5 --undo')).toBe('run gh pr ready with --undo')
+  })
+  test('the listed writes go ahead on this repository and are refused on another', async () => {
+    expect(await bash('gh pr create --title x --body-file /tmp/b.md')).toBeUndefined()
+    expect(await bash('gh pr merge 5 --squash')).toBeUndefined()
     expect(await bash('gh pr ready https://github.com/other/x/pull/5')).toBe(other)
-    expect(await bash('gh api -X POST repos/other/x/pulls -f title=x')).toBe(other)
-    expect(await bash('gh release create v1 -R other/x')).toBe(other)
+    expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
+    expect(await bash('gh pr create -R other/x --title x --body y')).toBe(other)
   })
   test('every spelling gh accepts is read the same (ghargs.ts)', async () => {
     expect(await bash('gh api --method=DELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
     expect(await bash('gh api -XDELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
-    expect(await bash('gh api -XPOST repos/other/x/pulls -ftitle=x')).toBe(other)
-    expect(await bash('gh pr close 5 -Rother/x')).toBe(other)
-    expect(await bash('gh pr close 5 --repo=other/x')).toBe(other)
-    expect(await bash('gh pr close 5 -R my.org/x')).toBe('write to my.org/x from a checkout of o/r')
+    expect(await bash('gh api -XPOST repos/other/x/issues/5/comments -fbody=x')).toBe(other)
+    expect(await bash('gh pr comment 5 -Rother/x -b hi')).toBe(other)
+    expect(await bash('gh pr comment 5 --repo=other/x -b hi')).toBe(other)
+    expect(await bash('gh pr comment 5 -R my.org/x -b hi')).toBe('write to my.org/x from a checkout of o/r')
     expect(await bash('gh pr merge 5 -sd')).toBe('delete a branch')
     expect(await bash('gh pr close 5 -d')).toBe('delete a branch')
-    // gh repo is not in the flag table, so a flag there leaves it unresolvable; with none, the owner/name names it.
-    expect(await bash('gh repo delete other/x --yes')).toBe(unresolved)
-    expect(await bash('gh repo archive other/x')).toBe(other)
-    expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
     // Global flags before the subcommand (#834 review of 8bbd403).
-    expect(await bash('gh -R other/x pr close 5')).toBe(other)
+    expect(await bash('gh -R other/x pr merge 5')).toBe(other)
     expect(await bash('gh --repo=other/x pr merge 3')).toBe(other)
-    expect(await bash('gh --frob x pr close 5')).toBe(unresolved)
+    expect(await bash('gh --frob x pr merge 5')).toBe(unresolved)
     // A flag between the subcommand and its action cannot pass its value off as a read action.
     expect(await bash('gh pr --body view close 5 -R other/x')).toBe(unresolved)
     expect(await bash('gh issue --title list create')).toBe(unresolved)
-    // A value flag never swallows -R, whatever the subcommand (#834 review of af10401).
-    expect(await bash('gh release delete v1 -yd -R other/x')).toBe(unresolved)
-    expect(await bash('gh gpg-key add -n -R other/x k.asc')).toBe(unresolved)
     // GH_REPO set through env reaches gh too.
     expect(await bash('env GH_REPO=other/x gh issue comment 5 --body x')).toBe(unresolved)
   })
   test('a gh write reached through a wrapper, or with a GH_ variable set, cannot be resolved; a read still can (#834 review of af10401)', async () => {
     for (const c of [
-      'env gh pr close 5',
-      'command gh pr close 5',
-      'nohup gh pr close 5',
-      'echo 5 | xargs gh pr close',
-      `bash -c 'gh pr close 5'`,
-      `sh -c "gh pr close 5"`,
-      `eval "gh pr close 5"`,
-      'time gh pr close 5',
-      'sudo gh pr close 5',
-      'GH_TOKEN=abc gh pr close 5',
-      'GH_HOST=example.com gh pr close 5',
+      'env gh pr merge 5',
+      'command gh pr merge 5',
+      'nohup gh pr merge 5',
+      'echo 5 | xargs gh pr merge',
+      `bash -c 'gh pr merge 5'`,
+      `sh -c "gh pr merge 5"`,
+      `eval "gh pr merge 5"`,
+      `source <(echo gh pr merge 5)`,
+      'time gh pr merge 5',
+      'sudo gh pr merge 5',
+      'GH_TOKEN=abc gh pr merge 5',
+      'GH_HOST=example.com gh pr merge 5',
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
     expect(await bash('env gh pr view 5')).toBeUndefined()
@@ -141,42 +157,36 @@ describe('every gh write but a known read goes only to the repository the checko
     // gh named only inside a message is no gh call.
     expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
   })
-  test('in a subcommand the flag table does not know, any flag makes a write unresolvable; a read goes ahead', async () => {
-    expect(await bash('gh release delete v1 -y')).toBe(unresolved)
-    expect(await bash('gh secret set TOKEN --body x')).toBe(unresolved)
-    expect(await bash('gh release delete v1')).toBeUndefined()
-    expect(await bash('gh run view 5 --log')).toBeUndefined()
+  test('quoted text and a heredoc body are never judged as commands (#834 review of 3f7151c)', async () => {
+    expect(await bash('gh issue comment 834 --body "see env gh pr close"')).toBeUndefined()
+    expect(await bash(`gh issue comment 834 --body 'nohup gh was wrong, GH_TOKEN too'`)).toBeUndefined()
+    expect(await bash(`gh issue comment 834 -F - <<'EOF'\nsudo gh pr close 5\nEOF`)).toBeUndefined()
   })
   test('a body that begins with a dash, or read from standard input, is still a comment on this repository', async () => {
     expect(await bash(`gh issue comment 834 --body '- fixed the parser'`)).toBeUndefined()
     expect(await bash('gh issue comment 834 --body-file -')).toBeUndefined()
     expect(await bash('gh pr create --title x -F -')).toBeUndefined()
   })
+  test('a gh api call to another GitHub host cannot be resolved', async () => {
+    expect(await bash('gh api --hostname ghe.example.com -X POST repos/o/r/issues/5/comments -f body=x')).toBe(unresolved)
+    expect(await bash('gh api --hostname github.com repos/o/r/issues/5/comments -X POST -f body=x')).toBeUndefined()
+  })
   test('editing or deleting a comment is refused outright', async () => {
     expect(await bash('gh issue comment 5 --delete-last --yes')).toBe('edit or delete a comment')
     expect(await bash('gh pr comment 5 --edit-last --body x')).toBe('edit or delete a comment')
-    expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
-  })
-  test('the same writes on this repository go ahead', async () => {
-    expect(await bash('gh pr review 5 --comment --body x')).toBeUndefined()
-    expect(await bash('gh pr close 5')).toBeUndefined()
-    expect(await bash('gh api -X POST repos/o/r/pulls -f title=x')).toBeUndefined()
-  })
-  test('a subcommand nobody listed, or one that reaches no repository, is a write that cannot be resolved', async () => {
-    expect(await bash('gh frobnicate now')).toBe(unresolved)
-    expect(await bash('gh gist create notes.md')).toBe(unresolved)
-    expect(await bash('gh api -X POST user/repos -f name=x')).toBe(unresolved)
   })
   test('a known read goes ahead on any repository', async () => {
     expect(await bash('gh pr view 5 -R other/x')).toBeUndefined()
+    expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
     expect(await bash('gh issue list -R other/x')).toBeUndefined()
-    expect(await bash('gh pr diff 5 -R other/x && gh pr checks 5 -R other/x && gh run view 1 -R other/x')).toBeUndefined()
+    expect(await bash('gh pr diff 5 -R other/x && gh pr checks 5 -R other/x && gh run view 1 -R other/x --log')).toBeUndefined()
     expect(await bash('gh api repos/other/x/pulls')).toBeUndefined()
     expect(await bash('gh search issues sleep --owner other')).toBeUndefined()
+    expect(await bash('gh label list')).toBeUndefined()
   })
-  test('REST and GraphQL reach one decision: a GraphQL write names no repository, matched by its exact name', async () => {
-    expect(await bash(`gh api graphql -f query='mutation { refreshThing(input: {}) { ok } }'`)).toBe(unresolved)
-    expect(await bash(`gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'`)).toBe(unresolved)
+  test('every GraphQL mutation is refused, by its exact name', async () => {
+    expect(await bash(`gh api graphql -f query='mutation { refreshThing(input: {}) { ok } }'`)).toBe('call the GitHub API to run refreshThing')
+    expect(await bash(`gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addComment')
     expect(await bash(`gh api graphql -f query='mutation { addLabelsToLabelable(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addLabelsToLabelable')
   })
 })
@@ -213,6 +223,10 @@ describe('LESSONS.md, written by any route in command position (L673)', () => {
       'echo "- L999. x" >> payload/LESSONS.md',
       `sed -i '' 's/a/b/' payload/LESSONS.md`,
       'cp /tmp/l.md ~/.claude/LESSONS.md',
+      'ln -sf /tmp/l.md payload/LESSONS.md',
+      'git mv notes.md payload/LESSONS.md',
+      'mv /tmp/l.md payload/LESSONS.md',
+      'echo x | tee -a payload/LESSONS.md',
       'rm payload/LESSONS.md',
       'git checkout HEAD~1 -- payload/LESSONS.md',
       `python3 -c "open('payload/LESSONS.md', 'a').write('x')"`,
@@ -257,11 +271,12 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
     expect(await bash('git checkout main', { cwd: '/tmp/somewhere' })).toBe('run git checkout where it could not be told whether this is a primary checkout')
   })
   test('force pushes', async () => {
-    for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror'])
+    for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror', 'git push --forc origin x', 'git push --force-with origin x', 'git push --mirr'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'force push' })
+    expect(await bash('git push --follow-tags origin x')).toBeUndefined()
   })
   test('branch deletes, locally, on GitHub and through a merge', async () => {
-    for (const c of ['git push origin --delete x', 'git push origin :x', 'git push -d origin x', 'git branch -D x', 'git branch -d x', 'gh pr merge 5 --squash --delete-branch', 'gh pr merge 5 -sd', 'gh api -X DELETE repos/o/r/git/refs/heads/x', 'git update-ref -d refs/heads/x'])
+    for (const c of ['git push origin --delete x', 'git push origin :x', 'git push -d origin x', 'git branch -D x', 'git branch -d x', 'git branch --del x', 'git push origin --dele x', 'gh pr merge 5 --squash --delete-branch', 'gh pr merge 5 -sd', 'gh api -X DELETE repos/o/r/git/refs/heads/x', 'git update-ref -d refs/heads/x'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'delete a branch' })
     expect(await bash('gh api -X PATCH repos/o/r/git/refs/heads/x -F force=true -f sha=abc')).toBe('force push')
   })

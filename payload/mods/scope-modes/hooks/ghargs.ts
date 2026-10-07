@@ -100,11 +100,9 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
   // A flag's value taken from the next word. One that looks like a flag itself means this reader
   // has a flag's arity wrong (`-yd -R other/x`), and a repository flag may be swallowed, so the
   // call cannot be read (#834 review of af10401).
-  const takeNext = (): string => {
-    const v = rest[++k] as string
-    if (/^--?[A-Za-z]/.test(v)) unreadable = true
-    return v
-  }
+  // A flag that takes a value takes the next word whatever it starts with, as gh does
+  // (`--body "- fixed X"`, `--body-file -`).
+  const takeNext = (): string => rest[++k] as string
   for (; k < rest.length; k++) {
     if (k === subAt || k === actAt) continue
     const w = rest[k] as string

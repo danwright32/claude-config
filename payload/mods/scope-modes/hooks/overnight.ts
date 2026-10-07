@@ -1,5 +1,5 @@
 import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { ghApi, ghArgs, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
+import { flagOf, ghApi, ghArgs, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
 import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, operations, type Cmd } from './nobuild.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
@@ -96,10 +96,19 @@ const resolve = (word: string | undefined, dir: string | null, home: string): st
 // ---- git ----
 
 const shortFlags = (args: readonly string[]) => args.filter(a => /^-[A-Za-z]+$/.test(a)).join('')
+// git takes any unambiguous prefix of a long option (`--forc` is --force), so a long flag counts as
+// one of these when it could be read as it: the whole name, or a prefix of four characters or more.
+const spells = (arg: string, options: readonly string[]): boolean => {
+  if (!arg.startsWith('--')) return false
+  const name = arg.split('=')[0] as string
+  return options.some(o => o === name || (name.length >= 4 && o.startsWith(name)))
+}
+const FORCES = ['--force', '--force-with-lease', '--force-if-includes', '--mirror']
+const DELETES = ['--delete', '--prune']
 const pushRefusal = (args: readonly string[]): string | undefined => {
   const short = shortFlags(args)
-  if (args.some(a => a === '--force' || a.startsWith('--force-with-lease') || a === '--force-if-includes' || a === '--mirror') || short.includes('f')) return 'force push'
-  if (args.some(a => a === '--delete' || a === '--prune') || short.includes('d')) return 'delete a branch'
+  if (args.some(a => spells(a, FORCES)) || short.includes('f')) return 'force push'
+  if (args.some(a => spells(a, DELETES)) || short.includes('d')) return 'delete a branch'
   for (const a of args) {
     if (a.startsWith('-')) continue
     // A plus leading either side of a refspec forces it, as git reads one, or fails closed where it does not.
@@ -124,7 +133,7 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
   if (sub === 'push') return pushRefusal(args)
   if (sub === 'branch') {
     const short = shortFlags(args)
-    return args.includes('--delete') || short.includes('d') || short.includes('D') ? 'delete a branch' : undefined
+    return args.some(a => spells(a, ['--delete'])) || short.includes('d') || short.includes('D') ? 'delete a branch' : undefined
   }
   if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return 'delete a branch'
   if (sub === 'switch' || (sub === 'checkout' && checkoutMoves(args))) {
@@ -139,17 +148,28 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
 // ---- gh ----
 
 // Every gh call is read by ghargs.ts, the one reading of gh's arguments here.
-// What gh only reads, wherever it points: these actions under any subcommand, and these
-// subcommands whole. Everything else gh does is a write, and goes only to the checkout's own
-// repository: a list of writes would always be missing the next one (#834 review).
+// Overnight, gh is judged by two short lists, never a list of what it must not do, which would
+// always be missing the next one (#834 reviews): what only reads, which goes ahead wherever it
+// points, and the few writes overnight work needs, which go only to the checkout's own repository.
+// Everything else gh does is refused, on any repository: being on the right repository is not
+// enough for a write (repo delete, release, secret, a workflow run).
 const GH_READ_ACTS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch'])
 const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion'])
-// The subcommands that act on one repository, named by -R or taken from the checkout. A write by
-// any other (a gist, a key, auth, an org) reaches no repository this checkout is.
-const REPO_SCOPED = new Set(['issue', 'pr', 'release', 'run', 'workflow', 'secret', 'variable', 'label', 'cache', 'ruleset', 'attestation', 'repo'])
-// GraphQL mutations, by exact name, that are issue, label and milestone writes, refused outright
-// as their REST routes are; any other mutation names its target by an opaque id, so it reaches a
-// repository that cannot be resolved, and is refused for that (L75).
+// The writes overnight work needs, each a subcommand and action and the flags it may carry beyond
+// -R or --repo (undefined: any flag the flag table reads for it): a comment on the issue being
+// worked (decision 3), opening, readying and merging its PR (phase 7 judges merges further), and
+// changing that PR's title or body. Nothing is filed overnight, so no issue is created.
+const BODY = ['-t', '--title', '-b', '--body', '-F', '--body-file']
+const GH_WRITES: Record<string, string[] | undefined> = {
+  'issue comment': ['-b', '--body', '-F', '--body-file'],
+  'pr comment': ['-b', '--body', '-F', '--body-file'],
+  'pr create': undefined,
+  'pr edit': BODY,
+  'pr ready': [],
+  'pr merge': undefined,
+}
+// GraphQL mutations that are issue, label and milestone writes, named in the refusal as such; every
+// mutation is refused overnight, each by its exact name.
 const BANNED_MUTATIONS = new Set(['createIssue', 'updateIssue', 'closeIssue', 'reopenIssue', 'deleteIssue', 'transferIssue', 'pinIssue', 'unpinIssue', 'createLinkedBranch', 'addSubIssue', 'removeSubIssue', 'reprioritizeSubIssue', 'updateIssueComment', 'deleteIssueComment', 'addLabelsToLabelable', 'removeLabelsFromLabelable', 'clearLabelsFromLabelable', 'createLabel', 'updateLabel', 'deleteLabel'])
 const LABELS_ON_PR: Record<string, string[]> = {
   edit: ['--add-label', '--remove-label', '--milestone', '-m', '--remove-milestone'],
@@ -157,33 +177,40 @@ const LABELS_ON_PR: Record<string, string[]> = {
 }
 const COMMENT_ENDPOINT = /^repos\/([^/]+)\/([^/]+)\/(?:issues|pulls)\/\d+\/(?:comments|reviews)$/
 const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/
+const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 
 // What gh is asked to do: refused outright, a write to judge by the repository it reaches, or a
-// read (undefined). REST and GraphQL reach the same decision through the same two outcomes.
+// read (undefined). REST and GraphQL reach the same decision through the same outcomes.
 type GhVerdict = { refuse: string } | { write: string | null | undefined } | undefined
 const ghVerdict = (words: readonly string[]): GhVerdict => {
   const a = ghArgs(words)
   const { sub, act } = a
-  // An unknown flag before the subcommand: what the call does cannot be read, so it reaches a
-  // repository that cannot be resolved.
+  // An unknown flag before the subcommand, or between it and its action: what the call does cannot
+  // be read, so it reaches a repository that cannot be resolved.
   if (a.unreadable) return { write: null }
   if (sub === 'api') return apiVerdict(a)
   if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || (!sub && a.flags.length)) return undefined
-  // A write in a subcommand whose flags this reader does not know cannot be placed (#834 review).
-  if (a.unknownFlags) return { write: null }
-  // Posting a comment is the one issue write overnight work needs (decision 3); changing one is not.
+  // Changing or removing a comment is not posting one (decision 3 needs only that).
   if (act === 'comment' && hasFlag(a, '--delete-last', '--edit-last')) return { refuse: 'edit or delete a comment' }
-  if (sub === 'issue' && act !== 'comment') return { refuse: `run gh issue ${act}`.trim() }
-  if (sub === 'label') return { refuse: `run gh label ${act}`.trim() }
   if (sub === 'pr') {
     const labels = LABELS_ON_PR[act]
     if (labels && hasFlag(a, ...labels)) return { refuse: 'set labels or a milestone on a PR' }
     if ((act === 'merge' || act === 'close') && hasFlag(a, '-d', '--delete-branch')) return { refuse: 'delete a branch' }
   }
-  return { write: REPO_SCOPED.has(sub) ? a.named : null }
+  const key = `${sub} ${act}`
+  if (!Object.prototype.hasOwnProperty.call(GH_WRITES, key)) return { refuse: `run gh ${key}`.trim() }
+  const allowed = GH_WRITES[key]
+  if (allowed) {
+    const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
+    if (other) return { refuse: `run gh ${key} with ${other.name}` }
+  }
+  return { write: a.named }
 }
 
 const apiVerdict = (a: GhArgs): GhVerdict => {
+  // Another GitHub host is another place entirely, never this checkout's repository.
+  const host = flagOf(a, '--hostname')
+  if (host !== undefined && (typeof host !== 'string' || host.toLowerCase() !== 'github.com')) return { write: null }
   const { method, endpoint, fields, input } = ghApi(a)
   const ep = (endpoint ?? '').replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '').replace(/[?#].*$/, '')
   if (ep === 'graphql') {
@@ -192,42 +219,68 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
     const query = q ? (q.value as string).slice('query='.length) : undefined
     const fromFile = input || (q !== undefined && (q.name === '-F' || q.name === '--field') && (query ?? '').startsWith('@'))
     if (fromFile || query === undefined) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
-    let writes = false
     for (const op of operations(query)) {
       if (op.kind !== 'mutation') continue
       if (op.spreads || !op.fields.length) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
-      const banned = op.fields.find(f => BANNED_MUTATIONS.has(f))
-      if (banned) return { refuse: `call the GitHub API to run ${banned}` }
       if (op.fields.includes('deleteRef')) return { refuse: 'delete a branch' }
-      writes = true
+      return { refuse: `call the GitHub API to run ${op.fields.find(f => BANNED_MUTATIONS.has(f)) ?? op.fields[0]}` }
     }
-    return writes ? { write: null } : undefined
+    return undefined
   }
   if (method === 'GET') return undefined
+  // The one API write overnight work needs: a comment on an issue or a PR of this repository.
   const c = COMMENT_ENDPOINT.exec(ep)
-  if (!(c && method === 'POST') && /(?:^|\/)(?:issues|labels|milestones)(?:\/|$)/.test(ep)) return { refuse: 'change issues, labels or milestones through the GitHub API' }
+  if (c && method === 'POST') return { write: PLACEHOLDER.test(c[1] as string) || PLACEHOLDER.test(c[2] as string) ? undefined : normRepo(`${c[1]}/${c[2]}`) }
+  if (/(?:^|\/)(?:issues|labels|milestones)(?:\/|$)/.test(ep)) return { refuse: 'change issues, labels or milestones through the GitHub API' }
   if (/\/git\/refs\/heads\//.test(ep)) {
     if (method === 'DELETE') return { refuse: 'delete a branch' }
     if (fields.some(f => /^force=(?:true|1)$/i.test(f))) return { refuse: 'force push' }
   }
-  // Any other write, judged by the repository its endpoint names; one naming none reaches a
-  // repository that cannot be resolved.
-  const r = /^repos\/([^/]+)\/([^/]+)(?:\/|$)/.exec(ep)
-  if (!r) return { write: null }
-  return { write: PLACEHOLDER.test(r[1] as string) || PLACEHOLDER.test(r[2] as string) ? undefined : normRepo(`${r[1]}/${r[2]}`) }
+  return { refuse: `call the GitHub API to ${method} ${ep || 'an endpoint it does not name'}` }
 }
 
 // Whether a gh call in this command line reaches gh some way other than the words this reader
 // gives: a GH_ variable set anywhere (it changes the repository, host or account), or gh run
 // through a wrapper (env, command, nohup, xargs, a shell's -c, eval, time, sudo and the like), seen
 // as more gh commands read than stand in command position in the line itself (#834 review).
+// Only text in command position is judged: what quotes hold (a --body) and a heredoc's body are
+// blanked first, so a comment that mentions `env gh` is still a comment. A gh a shell's -c runs
+// sits inside quotes, so it is blanked here too, and is caught by the count below instead.
 const GH_DIRECT = /(?:^|[;&|(){}\n])\s*gh(?=\s|$)/g
-const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate|eval|source|\.)\s(?:[^;&|\n]*\s)?['"]?gh(?=\s|$)/
+const GH_WRAPPED = /(?:^|[\s;&|(])(?:env|command|nohup|xargs|time|sudo|exec|nice|timeout|caffeinate)\s(?:[^;&|\n]*\s)?gh(?=\s|$)/
+const unquoted = (raw: string): string => {
+  const body = raw.replace(/(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?\n\s*\3[ \t]*(?=\n|$)/g, '$1')
+  let out = ''
+  let q: string | null = null
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i] as string
+    if (q) {
+      if (q === '"' && ch === '\\') i++
+      else if (ch === q) {
+        q = null
+        out += ch
+      }
+      continue
+    }
+    if (ch === '\\') {
+      out += ' '
+      i++
+      continue
+    }
+    if (ch === '"' || ch === "'") q = ch
+    out += ch
+  }
+  return out
+}
 const wrapped = (call: OvernightCall): boolean => {
-  if (/\bGH_(?:REPO|HOST|TOKEN|ENTERPRISE_TOKEN)\b/.test(call.raw)) return true
-  if (GH_WRAPPED.test(call.raw)) return true
+  const bare = unquoted(call.raw)
+  if (/\bGH_(?:REPO|HOST|TOKEN|ENTERPRISE_TOKEN)\b/.test(bare)) return true
+  if (GH_WRAPPED.test(bare)) return true
+  // eval and source run text the reader does not open; one that names gh anywhere is a gh call
+  // nobody can read.
+  if (call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))) return true
   const read = call.commands.filter(c => name(c.words[0]) === 'gh').length
-  return read > (call.raw.match(GH_DIRECT) ?? []).length
+  return read > (bare.match(GH_DIRECT) ?? []).length
 }
 
 const UNRESOLVED ='write to GitHub where the repository it reaches could not be resolved'
@@ -280,7 +333,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   // Each command in order, in the folder it runs in: a cd moves it, a subshell keeps its own.
   // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither
   // the call nor where it goes can be read, so it is refused (#834 review).
-  if (GH_WRAPPED.test(call.raw) && !call.commands.some(c => name(c.words[0]) === 'gh')) return UNRESOLVED
+  if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && /\bgh\b/.test(call.raw)) return UNRESOLVED
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
   for (const c of call.commands) {
