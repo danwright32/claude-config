@@ -80,7 +80,18 @@ sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
   cd="$(cd "$1" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" || return 1
   [ -n "$gd" ] && [ -n "$cd" ] || return 1
   [ "$(cd "$gd" 2>/dev/null && pwd -P)" != "$cd" ] || return 1      # the primary checkout
-  br="$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null)" || return 1
+  # A rebase detaches HEAD, so mid rebase the branch is the one being rebased, read from the rebase
+  # state in THIS worktree's own git dir (claude-config#904). Only a name under refs/heads/ counts:
+  # a rebase of a detached HEAD records no branch, and stays judged as on no branch. With no rebase
+  # in progress a detached HEAD is judged exactly as before.
+  br="$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null)" || {
+    local rb hn
+    for rb in rebase-merge rebase-apply; do
+      [ -f "$gd/$rb/head-name" ] || continue
+      hn="$(head -1 "$gd/$rb/head-name" 2>/dev/null)"
+      case "$hn" in refs/heads/?*) br="${hn#refs/heads/}"; break ;; esac
+    done
+  }
   [ -n "$br" ] || return 1                                          # on no branch
   def="$(git -C "$1" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
   def="${def#origin/}"
