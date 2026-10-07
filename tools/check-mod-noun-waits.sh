@@ -63,7 +63,7 @@ import ast, json, os, re, sys
 
 root = sys.argv[1]
 sys.path.insert(0, sys.argv[2])
-from ts_source import CODE, block_after, closing, code_only, function_span, is_jsx, kinds, top_members
+from ts_source import CODE, GOES_ON_AFTER, GOES_ON_BEFORE, block_after, closing, code_only, function_span, is_jsx, kinds, top_members
 
 LIMIT_MS = 10_000
 CUT = "Claude Code cuts a noun call off at 10 s (#744)"
@@ -237,8 +237,9 @@ def _bound_names(params):
 
 
 def _expression_end(code, b):
-    """Where an arrow's expression body starting at b ends: at a , or ; outside its brackets, or at a
-    bracket closing one it stands inside."""
+    """Where an arrow's expression body starting at b ends: at a , or ; outside its brackets, at a
+    bracket closing one it stands inside, or at a line break outside its brackets unless the
+    statement goes on past it (code with no semicolons ends a statement there)."""
     depth, j = 0, b
     while j < len(code):
         c = code[j]
@@ -250,6 +251,12 @@ def _expression_end(code, b):
             depth -= 1
         elif c in ",;" and depth == 0:
             break
+        elif c == "\n" and depth == 0:
+            last = code[b:j].rstrip()[-1:]
+            after = code[j:].lstrip()[:1]
+            arrow = code[b:j].rstrip().endswith("=>")
+            if not arrow and last not in GOES_ON_AFTER and after not in GOES_ON_BEFORE:
+                break
         j += 1
     return j
 
