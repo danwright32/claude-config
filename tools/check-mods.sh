@@ -128,7 +128,7 @@ done
 
 # What an engine.create hook returns, the built $ spread with what the mod adds, is never cast
 # (#833). A cast to never passes any shape, so a test's stand-in for another mod's noun that lacked a
-# member, or took a parameter narrower than the real one, type checked clean: removing the casts on
+# member, or took a parameter narrower than the real one, type checked clean: removing all 19 casts on
 # 2.1.292 found eight such stand-ins in seven mods. A stand-in is typed with
 # the real noun's types instead (import type from ../.claude-plugin/types/<mod>/index.d.ts), and each
 # member a test never reaches refuses by name. The returned object is matched with its braces

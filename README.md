@@ -1216,9 +1216,9 @@ a sync clone where the pinned version is not installed, with its `npm ci` comman
 not install it, which would put npm and the network on every pull). The laid types describe the
 Claude Code build that laid them, so `tools/typescript/claude-code-version` records the build the
 record was measured on (2.1.292, 2026-10-07, all 19 mods clean; 2.1.291 before it). The move to
-2.1.292 found eight test stand-ins in seven mods whose `engine.create` return was cast to `never`,
-which passes any shape, hiding a missing member or a parameter narrower than the real one, and one
-uncast stand-in short of members, which the 2.1.292 types refuse. Every one is now returned uncast,
+2.1.292 failed one uncast stand-in short of members. Nineteen other stand-ins returned their object
+cast to `never`, which passes any shape; removing those casts showed eight of them, in seven mods,
+hiding a missing member or a parameter narrower than the real one. Every one is now returned uncast,
 typed with the real noun's types, and `check-mods.sh` refuses such a cast in any mod
 file, by file and line, without needing Claude Code (#833). Every run that checks types says
 which build they came from against that one, and on a different build each type failure names both,
