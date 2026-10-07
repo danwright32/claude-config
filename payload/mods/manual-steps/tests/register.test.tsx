@@ -3,7 +3,7 @@ import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
-import { STEPS_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
+import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
 
 // mod-kit, standing in: a mod cannot import another mod's files, and the kit loads this stand in as
@@ -367,7 +367,7 @@ test('steps found already done are marked so, and a card that is all done is not
   expect(await band($)).toBeUndefined()
   expect(w.opened).toEqual([])
   await hand($, [step({ checked: 'already-done', title: 'Made the token' }), step({ title: 'Second' })])
-  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done', '2. Second  [done]'])
+  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done before this card', '2. Second  [done]'])
 })
 
 test('a step that does not say it was checked first is refused', withKit, async ($, on) => {
@@ -384,18 +384,18 @@ test('Done on a step Claude can check: "step 1 done" is sent, then Claude marks 
   expect(w.prompts).toEqual(['step 1 done'])
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 2 is next/)
-  expect((await band($))?.lines[1]?.[1]).toEqual({ text: '  checked', color: 'success' })
+  expect((await band($))?.lines[1]?.[1]).toMatchObject({ text: expect.stringMatching(/^  checked on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/), color: 'success' })
   expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
 })
 
-test('Done on a step Claude cannot check reads "done, per you"; the last one finished takes the card away', withKit, async ($, on) => {
+test('Done on a step Claude cannot check reads "done, you pressed Done" with its time; the last one finished takes the card away', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await hand($, [step({ checked: 'cannot-check' }), step({ title: 'Purge the cache' })])
   await press($, 'done')
   expect(w.prompts).toEqual(['step 1 done'])
   await call($, VERDICT, { step: 1, checked: 'per-you' })
-  expect((await band($))?.lines[1]?.[1]).toEqual({ text: '  done, per you', dim: true })
+  expect((await band($))?.lines[1]?.[1]).toEqual({ text: expect.stringMatching(/^  done, you pressed Done on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/) })
   expect(stored(w.mem)?.steps[0]?.finished).toBe('per-you')
   expect(await call($, VERDICT, { step: 2, checked: 'per-you' })).toMatch(/every step is finished/i)
   expect(await band($)).toBeUndefined()
@@ -961,8 +961,62 @@ test('steps_done withdrawn takes a pinned step off the card as not done, and the
     'Cloudflare WAF  waiting on you',
     '1. Turn on the WAF rule  [done]',
     'Where: https://dash.cloudflare.com/waf  [copy-link]',
-    '2. Watch the next merge  taken off, not done',
+    expect.stringMatching(/^2\. Watch the next merge  taken off on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M, not done$/),
   ])
   expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
   expect(await band($)).toBeUndefined()
+})
+
+// #886: "step 2 done" on a three step card with step 1 open was recorded as steps 1 and 2, and the
+// card said Dan installed a checker he never touched. Only the open step takes a verdict.
+test('"step 2 done" with step 1 open is refused with the ask, and nothing is recorded (#886)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step({ title: 'Pull' }), step({ title: 'Install the checker' }), step({ title: 'Run the check' })])
+  for (const checked of ['per-you', 'checked'])
+    expect(await call($, VERDICT, { step: 2, checked })).toMatch(/^refused: Step 2 \(Install the checker\) is not the open step; step 1 \(Pull\) is\. .*Ask Dan which step he means/)
+  expect(stored(w.mem)?.steps.map(s => s.finished ?? null)).toEqual([null, null, null])
+  expect((await bandText($))[1]).toBe('1. Pull  [done]')
+  // The open one takes it.
+  expect(await call($, VERDICT, { step: 1, checked: 'per-you' })).toMatch(/^Step 1 recorded; step 2 of 3 is next/)
+})
+
+// #886: steps Claude recorded on Dan's word turned grey, and he read them as done days ago.
+test('a step recorded per you, with no Done pressed, is labelled so with its time, and is not grey (#886)', withKit, async ($, on) => {
+  mock.clock(on, { now: Date.UTC(2026, 9, 7, 16, 0) })
+  const w = world(on, {}, {}, { TZ: 'America/New_York' })
+  await start($)
+  await hand($, [step({ checked: 'cannot-check' }), step({ title: 'Purge the cache' })])
+  await call($, VERDICT, { step: 1, checked: 'per-you' })
+  const how = (await band($))?.lines[1]
+  expect(how?.[0]).toEqual({ text: '1. Turn on the WAF rule', strikethrough: true })
+  expect(how?.[1]).toEqual({ text: '  done, per you, recorded on Oct 7 at 12:00 PM' })
+  expect(stored(w.mem)?.steps[0]).toMatchObject({ finished: 'per-you', finishedAt: Date.UTC(2026, 9, 7, 16, 0) })
+})
+
+test('a step finished in an earlier session shows its age and is grey, on the held card and once pinned again (#886)', withKit, async ($, on) => {
+  const NOW = Date.UTC(2026, 9, 7, 16, 0)
+  mock.clock(on, { now: NOW })
+  const card: StepsCard = {
+    heading: 'Chrome sign out',
+    steps: [
+      { title: 'Sign out', url: 'https://a.example', finished: 'per-you', finishedAt: NOW - 3 * 86_400_000 },
+      { title: 'Sign in again', url: 'https://b.example' },
+    ],
+  }
+  // Tokyo, nine hours ahead: Oct 4 at 16:00 there is Oct 5 at 1:00 AM, so the zone is the one set.
+  const w = world(on, {}, { [`card:${ROOT}`]: card }, { TZ: 'Asia/Tokyo' })
+  await start($)
+  await slashSteps($, w.w)
+  const held = (await paneShown($))?.lines.map(l => l.map(p => (p.text as string) ?? '').join(''))
+  expect(held?.[1]).toBe('1. Sign out  done, per you, in an earlier session on Oct 5 at 1:00 AM')
+  expect((await paneShown($))?.lines[1]?.[1]).toMatchObject({ dim: true })
+  await hand($, [step({ title: 'Sign out', url: 'https://a.example', checked: 'already-done' }), step({ title: 'Sign in again', url: 'https://b.example' })], 'Chrome sign out')
+  const shown = (await paneShown($))?.lines ?? (await band($))?.lines ?? []
+  expect(shown[1]?.map(p => p.text).join('')).toBe('1. Sign out  done, per you, in an earlier session on Oct 5 at 1:00 AM')
+})
+
+test('steps_done says only the open step takes a verdict, and to ask Dan which step he means (#886)', () => {
+  expect(VERDICT_DESCRIPTION).toMatch(/only the open step/i)
+  expect(VERDICT_DESCRIPTION).toMatch(/ask Dan which step he means/)
 })

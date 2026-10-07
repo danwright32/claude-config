@@ -1,7 +1,7 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
-import type { StepsVerdict } from './card.ts'
+import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
@@ -90,10 +90,26 @@ const change = async <T,>($: EngineInterface, fn: (card: StepsCard | null) => { 
   throw new Error('the steps card changed under every one of 10 attempts to update it')
 }
 
+// The moment now, on the engine's clock, which a test sets: when a step finished, and the moment a
+// card is drawn, against which it says "at 3:41 PM" or "on Oct 4" (#886).
+const now = async ($: EngineInterface): Promise<number> => {
+  try {
+    return await $.clock.now()
+  } catch (err) {
+    $.ui.log(`manual-steps: the clock could not be read, so the Mac's own time is used: ${message(err)}`, { to: 'debug' })
+    return Date.now()
+  }
+}
+// The zone is the session's TZ when it names one, which a test sets (L504); else this Mac's own.
+const drawnAt = async ($: EngineInterface): Promise<DrawnAt> => {
+  const zone = await $.env.get('TZ').catch(() => undefined)
+  return { now: await now($), ...(typeof zone === 'string' && zone ? { timeZone: zone } : {}) }
+}
+
 /** Shows the card in the band; the reason when mod-kit refused it. */
 const publishBand = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
   try {
-    await $.modkit.bandRow({ mod: MOD, id: 'steps', slot: 'steps', frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card) as never })
+    await $.modkit.bandRow({ mod: MOD, id: 'steps', slot: 'steps', frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card, await drawnAt($)) as never })
     return undefined
   } catch (err) {
     $.ui.log(`manual-steps: the steps card could not be shown in the band: ${message(err)}`, { to: 'debug' })
@@ -104,7 +120,7 @@ const publishBand = async ($: EngineInterface, card: StepsCard): Promise<string 
 /** Shows the card in the side pane `id`, drawn by mod-kit as the band draws it (#690); the reason when mod-kit refused it. */
 const publishPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard): Promise<string | undefined> => {
   try {
-    await $.modkit.pane({ mod: MOD, id, frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card) as never })
+    await $.modkit.pane({ mod: MOD, id, frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card, await drawnAt($)) as never })
     return undefined
   } catch (err) {
     $.ui.log(`manual-steps: the steps card could not be shown in the pane: ${message(err)}`, { to: 'debug' })
@@ -128,7 +144,7 @@ const clearPane = async ($: EngineInterface, id: StepsPaneId) => {
 const openPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard): Promise<boolean> => {
   if (await publishPane($, id, card)) return false
   const opened = await $.ui
-    .open({ id, title: PANE_TITLE, columns: paneColumns(card) })
+    .open({ id, title: PANE_TITLE, columns: paneColumns(card, await drawnAt($)) })
     .catch(() => ({ isPlaced: false as const, reason: 'no pane' }))
   if (opened.isPlaced) {
     const was = (await $.state.get(placeRef)).value ?? null
@@ -196,8 +212,9 @@ const refresh = async ($: EngineInterface) => {
 }
 
 // Step `n` (0 based) open again with its Done, when it is still waiting on Claude. True when it was.
-const unsend = ($: EngineInterface, n: number) =>
-  change($, card => (card && card.steps[n]?.isSent ? { card: sent(card, n, false), out: true } : { card, out: false }))
+// `forgetPress` for a Done that never reached Claude, so a later verdict does not say he pressed it.
+const unsend = ($: EngineInterface, n: number, forgetPress = false) =>
+  change($, card => (card && card.steps[n]?.isSent ? { card: sent(card, n, false, forgetPress), out: true } : { card, out: false }))
 
 // Done back on step `n` (0 based) when Claude never said whether it took, and the toast saying so.
 // One wording whichever way it was found (#708, #734).
@@ -248,7 +265,7 @@ const pressDone = async ($: EngineInterface) => {
   try {
     await $.prompt.submit({ text: `step ${n + 1} done`, asUser: true })
   } catch (err) {
-    await unsend($, n)
+    await unsend($, n, true)
     await refresh($)
     $.ui.toast(`Could not tell Claude step ${n + 1} is done: ${message(err)}. Press Done again.`)
     return
@@ -328,8 +345,8 @@ const STEP_SCHEMA = {
 // The two tools' words, exported so a test can hold them to what Dan asked of them (#872).
 export const STEPS_DESCRIPTION =
   'Pin manual steps for Dan as a card he works through, instead of listing them in your reply. Put on the card only a step Dan can do now; a step waiting on something else (a merge, a deploy, a later session) stays in the issue, not on the card. Check every step against the current state first (the hand-off rule). Each step needs its direct link, or where there is no page a location Dan can find (the app and the window), plus its actions as a list, one action per item, and any value to paste. The card labels them "Where:" and "What to do:" and numbers the actions, so write no labels or numbers. Pinning replaces the card. When Dan presses Done you receive "step N done": check it took where you can and call steps_done.'
-const VERDICT_DESCRIPTION =
-  'Record whether a pinned manual step took, after Dan pressed Done ("step N done") or said he did it: checked when you verified it, per-you when it cannot be checked, not-done when you checked and it did not take (the step opens again). withdrawn takes a step off the card undone, at any time, when it cannot be done now; the card shows it as taken off, not done.'
+export const VERDICT_DESCRIPTION =
+  'Record whether the open manual step took, after Dan pressed Done ("step N done") or said he did it: checked when you verified it, per-you when it cannot be checked, not-done when you checked and it did not take (the step opens again). Only the open step (the first one not finished) takes checked, per-you or not-done. When Dan says a step other than the open one is done, do not guess which he means and do not record the steps before it to reach it: a call naming any other step is refused, so ask Dan which step he means, then record only the open one. The card shows when each step finished, and tells a step Dan pressed Done on from one you recorded per you. withdrawn takes any unfinished step off the card undone, at any time, when it cannot be done now; the card shows it as taken off, not done.'
 export const VERDICT_INPUT = {
   type: 'object',
   properties: { step: { type: 'integer', minimum: 1 }, checked: { type: 'string', enum: [...VERDICTS] } },
@@ -426,7 +443,8 @@ export const register: Register = on => {
     if (refused) return refused
     const made = cardFrom(e)
     if ('refusal' in made) return { deny: made.refusal }
-    const card = made.card
+    // A step found done keeps how and when it finished on the card this one replaces (#886).
+    const card = keepFinished(made.card, (await $.state.get(cardRef)).value ?? null)
     if (nextStep(card) === undefined) {
       await change($, () => ({ card: null, out: undefined }))
       await hide($)
@@ -452,9 +470,10 @@ export const register: Register = on => {
     const refused = await $.modkit.screen(e)
     if (refused) return refused
     const input = e as unknown as { step?: unknown; checked?: unknown }
+    const at = await now($)
     const out = await change<ReturnType<typeof finish>>($, card => {
       if (!card || card.isCarried) return { card, out: { refusal: 'No steps are pinned; pin them with the steps tool first.' } }
-      const r = finish(card, Number(input.step), input.checked as StepsVerdict)
+      const r = finish(card, Number(input.step), input.checked as StepsVerdict, at)
       return 'refusal' in r ? { card, out: r } : { card: r.card, out: r }
     })
     if ('refusal' in out) return { deny: out.refusal }
