@@ -321,11 +321,16 @@ printf "export const register = on => {\n  on(\n    'prompt.section', { name: 'm
 mkmod "$M7B" checks
 printf "// was on('classic.PreToolUse', ...)\nexport const register = on => {\n  on('tool.check', async (\$, e, next) => next(e))\n  emitter.on('classic.Stop', () => {})\n}\n" > "$M7B/checks/hooks/register.ts"
 printf "on('classic.Stop', () => ({}))\n" > "$M7B/checks/hooks/register.test.ts"
+# A string holding // (a URL) earlier on the same line must not hide the hook after it (lessons
+# review of #879): only a line that is a comment is taken out.
+mkmod "$M7B" urls
+printf "export const register = on => {\n  const u = 'https://example.com'; on('classic.Notification', async (\$, e, next) => next(e))\n}\n" > "$M7B/urls/hooks/register.ts"
 runbp(){ : > "$LOG"; out="$(STUB_LOG="$LOG" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" bash "$CHECK" "$M7B" 2>&1)"; code=$?; }
 runbp
 [ "$code" -eq 1 ] && check "a mod hooking a bypassed event fails the run" ok || check "a mod hooking a bypassed event fails the run" "exit=$code out=$out"
 printf '%s\n' "$out" | grep -q 'stops hooks classic.Stop, which' && check "naming the mod and the classic event" ok || check "naming the mod and the classic event" "$out"
 printf '%s\n' "$out" | grep -q 'sections hooks prompt.section, which' && check "and a prompt event registered across lines" ok || check "and a prompt event registered across lines" "$out"
+printf '%s\n' "$out" | grep -q 'urls hooks classic.Notification, which' && check "and a hook after a URL on the same line" ok || check "and a hook after a URL on the same line" "$out"
 ! printf '%s\n' "$out" | grep -q 'checks hooks' && check "while tool.check, a comment, another object's on and a test file are not hooks" ok \
   || check "while tool.check, a comment, another object's on and a test file are not hooks" "$out"
 # The same check where no claude command exists: still a definite failure, never UNMEASURED.
@@ -333,7 +338,7 @@ out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" P
 [ "$code" -eq 1 ] && check "with no claude command, a hook on a bypassed event still fails" ok \
   || check "with no claude command, a hook on a bypassed event still fails" "exit=$code out=$out"
 # Listed with the issue deciding it: the run passes.
-printf '# mod\tevent\twhy\nstops\tclassic.Stop\t#1: no event can refuse a turn end\nsections\tprompt.section\t#1: prompt content is kept from mods\n' > "$KNOWN7B"
+printf '# mod\tevent\twhy\nstops\tclassic.Stop\t#1: no event can refuse a turn end\nsections\tprompt.section\t#1: prompt content is kept from mods\nurls\tclassic.Notification\t#1: no event carries it\n' > "$KNOWN7B"
 runbp
 [ "$code" -eq 0 ] && check "a bypassed hook listed with its issue passes" ok || check "a bypassed hook listed with its issue passes" "exit=$code out=$out"
 # A listing for a hook the mod no longer has must come down, or it would excuse the next one.
@@ -348,7 +353,7 @@ runbp
   && check "a listing without a reason beginning with its issue is refused" ok || check "a listing without a reason beginning with its issue is refused" "exit=$code out=$out"
 # The list against the build's own routes: a stub holding the same seven passes, one holding another
 # fails naming it, and one holding none is said as unmeasured rather than passed.
-printf 'stops\tclassic.Stop\t#1: x\nsections\tprompt.section\t#1: x\n' > "$KNOWN7B"
+printf 'stops\tclassic.Stop\t#1: x\nsections\tprompt.section\t#1: x\nurls\tclassic.Notification\t#1: x\n' > "$KNOWN7B"
 ROUTES7B=""
 for ev in attribution.text 'classic.*' prompt.compose prompt.context prompt.section settings.read skill.prompt; do
   ROUTES7B="$ROUTES7B# e(\"$ev\",(n,o,t)=>t.to(o,\"append\"))

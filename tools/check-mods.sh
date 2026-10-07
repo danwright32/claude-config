@@ -75,7 +75,10 @@ is_bypassed(){   # $1 = event name
   return 1
 }
 # Every event a mod's own hook files register, one per line: on('<event>' in command position, in
-# hooks/ outside its tests, with line comments taken out first so a comment naming one is not one.
+# hooks/ outside its tests, with whole comment lines taken out first so a comment naming one is not
+# one. Only a line that IS a comment is taken out: a // later in a line may be inside a string (a
+# URL), and cutting there would hide a hook after it (lessons review of #879). A trailing comment
+# naming an event is read as a hook, which fails loudly rather than passing a dead one.
 events_of(){   # $1 = mod dir
   perl -MFile::Find -e '
     my @f;
@@ -83,7 +86,7 @@ events_of(){   # $1 = mod dir
     for my $f (sort @f) {
       open(my $h, "<", $f) or die "cannot read $f: $!\n";
       local $/; my $s = <$h>; close $h;
-      $s =~ s{//[^\n]*}{}g;
+      $s =~ s{^[ \t]*//[^\n]*}{}mg;
       while ($s =~ /(?<![\w.\$])on\(\s*[\x27"]([A-Za-z][\w.*]*)[\x27"]/g) { print "$1\n" }
     }' "$1/hooks"
 }
