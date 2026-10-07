@@ -12,6 +12,8 @@ is tested on fixtures alone.
   entry  KIND SESSION AT [WHY]         one claim entry as JSON, for the shell to link into place
   slug   ORIGIN_URL                    owner/repo of a GitHub origin, lower case, or exit 1
   claims CLAIMS_DIR                    every claim of the night as JSON lines, for the report (phase 4)
+  note   KIND SESSION AT REPO ISSUE [EXTRA]  the night's note of a claim (EXTRA its attempt) or of
+                                       its end (EXTRA why), for sleep_note (#905)
 
 A claim is a directory per issue holding numbered entries, 1, 2, 3, each one JSON object written
 whole beside it and hard linked into place, which fails if the number is taken. So of two sessions
@@ -429,7 +431,7 @@ def main(argv):
     if cmd == "claims" and len(argv) == 3:
         all_claims(argv[2])
         return 0
-    print("usage: sleep-queue.py state ISSUE_DIR SELF REGISTRY NOW | queue key=value... | entry KIND SESSION AT [WHY] | claims CLAIMS_DIR", file=sys.stderr)
+    print("usage: sleep-queue.py state ISSUE_DIR SELF REGISTRY NOW | queue key=value... | entry KIND SESSION AT [WHY] | slug ORIGIN_URL | claims CLAIMS_DIR | note KIND SESSION AT REPO ISSUE [EXTRA]", file=sys.stderr)
     return 2
 
 

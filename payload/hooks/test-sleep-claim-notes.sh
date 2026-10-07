@@ -83,7 +83,16 @@ sleep_release "$ROOT" 24 s1 free "the network dropped" >/dev/null 2>&1
 # ---- claimed and never ended: the one that IS flagged, so the flag is proved able to fire ----
 sleep_claim "$ROOT" 25 s1 >/dev/null 2>&1
 
+# ---- notes landing out of order (concurrent writers): judged by when each was written, L751 ----
+# #30 was claimed, given back, then claimed again and never ended, but the give back landed last.
+rec="$SLEEPDIR/current.json"
+sleep_note "{\"kind\":\"claim\",\"by\":\"s1\",\"repo\":\"danwright32/demo\",\"issue\":30,\"attempts\":1,\"at\":$((NOW - 3000))}" "$rec" >/dev/null 2>&1
+sleep_note "{\"kind\":\"claim\",\"by\":\"s1\",\"repo\":\"danwright32/demo\",\"issue\":30,\"attempts\":2,\"at\":$((NOW - 1000))}" "$rec" >/dev/null 2>&1
+sleep_note "{\"kind\":\"released\",\"by\":\"s1\",\"repo\":\"danwright32/demo\",\"issue\":30,\"state\":\"free\",\"at\":$((NOW - 2000))}" "$rec" >/dev/null 2>&1
+
 r="$(final)"
+lacks "a give back that came before a later claim is not the end of that claim" "danwright32/demo#30 was given back" "$r"
+has "the later claim of #30, never ended, is flagged" "danwright32/demo#30, claimed by s1" "$r"
 has "the wake report renders" "# Sleep report" "$r"
 has "the done claim shows under Done, as GitHub has it" "danwright32/demo issue #21 Issue 21, closed" "$r"
 lacks "the done claim is never ended unexpectedly" "danwright32/demo#21, claimed" "$r"

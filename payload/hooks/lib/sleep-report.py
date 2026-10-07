@@ -362,10 +362,15 @@ def build(record, notes, bad, final, now, github):
                 continue
             # A claim given back (released free, or unstarted) and not ended by a later claim is
             # said as given back, never as ended unexpectedly: the queue wrote that it let go (#844).
-            later = [n for n in notes if n["kind"] in ("claim", "released") and (n.get("repo"), n.get("issue")) == key
-                     and num(n.get("at")) and num(c.get("at")) and n["at"] >= c["at"] and n is not c]
+            # Ordered by when each was written (at), file order breaking a tie, never file order
+            # alone: concurrent writers land out of order (L751).
+            events = sorted(((n["at"], i, n) for i, n in enumerate(notes)
+                             if n["kind"] in ("claim", "released") and (n.get("repo"), n.get("issue")) == key and num(n.get("at"))),
+                            key=lambda x: (x[0], x[1]))
+            mine = next((k for k, (_, _, n) in enumerate(events) if n is c), None)
+            later = [n for _, _, n in events[mine + 1:]] if mine is not None else []
             back = [n for n in later if n["kind"] == "released"]
-            if later and later[-1]["kind"] == "claim":
+            if any(n["kind"] == "claim" for n in later):
                 continue  # a later claim of the same issue is judged on its own
             if back:
                 b = back[-1]
