@@ -1557,6 +1557,26 @@ test('the watchdog parks a claim held past two hours of active work mid turn, th
   expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 \(120 minutes of active work on it, past the 2 hours an issue gets\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
 })
 
+test('a park the watchdog could not record is still said at the next Stop (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  // The Stop's write is the first; the watchdog's, after it parks, is the second, and fails.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [2] })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(1)
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 /)
+})
+
+test('an API error that stops the night ends the claim in hand through the queue (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'billing_error', 'API Error: 402')
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'the API answered billing_error (API Error: 402), which waiting does not cure']])
+})
+
 test('/sleep refuses on battery, and on mains holds caffeinate for the night, let go at wake (#844)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { power: 'battery' })
   await start($ as never, clock)

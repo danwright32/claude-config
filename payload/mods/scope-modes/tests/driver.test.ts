@@ -212,6 +212,15 @@ describe('StopFailure (H2, L365, Dan 2026-10-07)', () => {
     expect(fail({ weekly: LIMITS.weeklyStop - 1 }).kind).toBe('wait')
     expect(fail({ weekly: null }).kind).toBe('wait')
   })
+  test('a stop on an error ends the claim in hand too: parked at the weekly limit, failed on an error waiting does not cure', () => {
+    const weekly = fail({ weekly: LIMITS.weeklyStop, claim: held() })
+    expect(weekly.kind === 'stop' && weekly.release).toEqual({ issue: 7, state: 'parked', why: expect.stringMatching(/^the weekly limit is at/) })
+    const auth = fail({ error: 'authentication_failed', claim: held() })
+    expect(auth.kind === 'stop' && auth.release).toEqual({ issue: 7, state: 'failed', why: expect.stringMatching(/^the API answered authentication_failed/) })
+    // The claim's failed note is the queue's to write, so the driver adds only its stopped note.
+    expect(auth.notes.map(n => n.kind)).toEqual(['stopped'])
+    expect(fail({ claim: held() }).kind).toBe('wait')
+  })
   test('an unreadable counter stops rather than retry', () => {
     expect(fail({ driver: { state: 'unreadable', why: 'x' } }).kind).toBe('stop')
   })

@@ -3,7 +3,7 @@ import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, Sco
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
-  LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, heldClaim, overnightRules, progressOf, readDriver, resumeDue,
+  LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, resumeDue,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
 import { bootOf, etWhen, nightOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
@@ -565,6 +565,8 @@ const oneAtATime = <T>(fn: () => Promise<T>): Promise<T> => {
 // written is still a stop: the next Stop never blocks on the older count it would read back.
 const stoppedHere = new Set<string>()
 const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
+// A park the watchdog made but could not record on disk, said at the next Stop all the same.
+const parkedHere = new Map<string, string>()
 
 // One Stop of an enrolled session: a block keeping it working, or null to let it stop.
 const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-driven'> =>
@@ -573,7 +575,13 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     if (!en) return 'not-driven' as const
     if (stoppedHere.has(stopKey(en))) return null
     const where = await repoOf($)
-    const driver = await loadDriver($, en)
+    let driver = await loadDriver($, en)
+    const unsavedPark = parkedHere.get(stopKey(en))
+    if (unsavedPark && driver.state !== 'unreadable') {
+      const base = driver.state === 'ok' ? driver.record : freshDriver(en.record.generation, en.self, en.now)
+      driver = { state: 'ok', record: { ...base, parked: base.parked ? `${base.parked} ${unsavedPark}` : unsavedPark } }
+    }
+    parkedHere.delete(stopKey(en))
     const notesText = await notesNow($, en)
     const claim = await claimNow($, en)
     const u = await usageNow($)
@@ -607,7 +615,9 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
     if (!en || stoppedHere.has(stopKey(en))) return
     const where = await repoOf($)
     const u = await usageNow($)
-    const d = decideFailure({ now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver: await loadDriver($, en), error, message, weekly: u.weekly })
+    const driver = await loadDriver($, en)
+    const claim = await claimNow($, en)
+    const d = decideFailure({ now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, error, message, weekly: u.weekly, claim })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     if (d.record) {
       const unsaved = await saveDriver($, en, d.record)
@@ -618,7 +628,9 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
         return
       }
     }
-    await writeNotes($, en, d.notes)
+    const ended = d.kind === 'stop' && d.release ? await endClaim($, en, where.root, d.release) : null
+    const extra: Note[] = ended && d.kind === 'stop' && d.release ? [{ kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : []
+    await writeNotes($, en, [...d.notes, ...extra])
   })
 
 // Each minute: start a session again once its wait is over, and park a claim held past its active
@@ -645,7 +657,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
     const failed = await endClaim($, en, where.root, { issue: c.claim.issue, state: 'parked', why })
     d.parked = failed ? `The watchdog could not park #${c.claim.issue} (${failed}); park it yourself.` : `The watchdog parked #${c.claim.issue} (${why}); its claim is ended, so leave it and claim the next issue.`
-    await saveDriver($, en, d)
+    if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
     return false
   })
   if (!resume) return

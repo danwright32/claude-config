@@ -294,7 +294,7 @@ export const decideStop = (i: StopInput): StopDecision => {
 
 export type FailureDecision =
   | { kind: 'wait'; record: DriverRecord; minutes: number; notes: Note[] }
-  | { kind: 'stop'; record: DriverRecord | null; why: string; notes: Note[] }
+  | { kind: 'stop'; record: DriverRecord | null; why: string; notes: Note[]; release?: Release }
 
 /**
  * A turn that ended on an API error (classic.StopFailure). It carries no reset time and calls an
@@ -302,7 +302,7 @@ export type FailureDecision =
  * 5, 10, 20, 40 minutes, then an hour between tries, all night, each wait noted (Dan, 2026-10-07).
  * Anything else (sign in, billing, a refused request) is noted and the session stops (H2, L365).
  */
-export const decideFailure = (i: { now: number; self: string; generation: string; repo: string | null; driver: DriverReading; error: string; message: string; weekly: number | null }): FailureDecision => {
+export const decideFailure = (i: { now: number; self: string; generation: string; repo: string | null; driver: DriverReading; error: string; message: string; weekly: number | null; claim?: ClaimReading }): FailureDecision => {
   const where = i.repo ? { repo: i.repo } : {}
   const said = i.message.replace(/\s+/g, ' ').trim().slice(0, 200)
   if (i.driver.state === 'unreadable') {
@@ -312,9 +312,14 @@ export const decideFailure = (i: { now: number; self: string; generation: string
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, i.self, i.now)
   if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
   if (i.weekly !== null) d.weeklyAt = i.now
+  // A stop ends the claim in hand as Stop's own stops do: parked at the weekly limit, failed on an
+  // error waiting does not cure, through the queue, which writes that note (one writer, #905).
+  const claim = i.claim?.state === 'held' ? i.claim.claim : null
   const stop = (why: string, failed: boolean): FailureDecision => {
     d.stopped = why
-    return { kind: 'stop', record: d, why, notes: [...(failed ? [{ kind: 'failed', ...where, text: why }] : []), { kind: 'stopped', ...where, text: why }] }
+    const release: Release | undefined = claim ? { issue: claim.issue, state: failed ? 'failed' : 'parked', why } : undefined
+    const own: Note[] = failed && !claim ? [{ kind: 'failed', ...where, text: why }] : []
+    return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...own, { kind: 'stopped', ...where, text: why }] }
   }
   if (i.weekly !== null && i.weekly >= LIMITS.weeklyStop) return stop(`the weekly limit is at ${pct(i.weekly)}, past the ${LIMITS.weeklyStop}% the night stops at`, false)
   if (!RETRY.has(i.error)) return stop(`the API answered ${i.error}${said ? ` (${said})` : ''}, which waiting does not cure`, true)
