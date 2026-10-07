@@ -28,7 +28,13 @@ import {
   type ClosedRepo,
   type NightRepos,
   type Scripts,
-} from './overnight.ts'
+} from './mergedeploy.ts'
+import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from './overnight.ts'
+import { wakeCheck } from './wakecheck.ts'
+import {
+  LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, resumeDue,
+  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
+} from './driver.ts'
 import { bootOf, etWhen, nightOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
@@ -48,6 +54,9 @@ import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } 
 const MOD = 'scope-modes'
 const MIN = 60_000
 const RUN_MS = 20_000
+// The report at the end of a night reads GitHub for each repo worked (each gh call bounded at 15 s and all of them at 60 s
+// in the script), so it gets longer than an ordinary run.
+const REPORT_FINAL_MS = 90_000
 const BOOT_MS = 5_000
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const HOME_TEXT = 'Dan switched every session on this Mac to home.'
@@ -137,31 +146,67 @@ const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<M
   return { to, text }
 }
 
-// The command appending one note, shared by this mod's own notes and the noun's (#841), which runs
-// it through its own engine handle, since the engine refuses handing that handle to a helper.
-const noteArgv = (notesDir: string, generation: string, note: Record<string, unknown>) => [
-  'sh',
-  '-c',
-  'mkdir -p "$1" && printf \'%s\\n\' "$2" >> "$3"',
-  'sh',
-  notesDir,
-  JSON.stringify({ v: 1, ...note }),
-  `${notesDir}/${generation.replace(/[^\w.-]/g, '_')}.jsonl`,
+// The command appending one note through the one writer (#835), shared by this mod's own notes and
+// the noun's (#841), which runs it through its own engine handle, since the engine refuses handing
+// that handle to a helper. `record` is the record the note belongs to: current while asleep, or
+// the one just moved aside at the end of a night.
+const noteArgv = (home: string, record: string, note: Record<string, unknown>) => [
+  'python3',
+  `${home}/.claude/hooks/lib/sleep-report.py`,
+  'note',
+  '--record',
+  record,
+  '--line',
+  JSON.stringify(note),
 ]
 const noteFailure = (r: { exitCode: number; stderr: string }) => r.stderr.trim() || `the note could not be written (exit ${r.exitCode})`
-// One line appended to the night's notes, through the shell in append mode. Phase 4 (#835) builds
-// sleep_note and the report on this file; the limit note below is the first writer.
-const sleepNote = async ($: EngineInterface, generation: string, note: Record<string, unknown>) => {
+// The night's report (#835) and the notes it is built from are written by one script,
+// hooks/lib/sleep-report.py, which every other writer reaches through sleep_note in
+// hooks/lib/sleep.sh. The mod hands it the record it means (current, or the one just moved aside),
+// so a note written after the record has moved still lands in that night's notes.
+const report = async ($: EngineInterface, args: string[], timeoutMs = RUN_MS): Promise<string | null> => {
   const p = await sleepPaths($)
-  const r = await run($, noteArgv(p.notes, generation, note))
+  const r = await run($, ['python3', `${p.home}/.claude/hooks/lib/sleep-report.py`, ...args], timeoutMs)
+  return r.exitCode === 0 ? null : r.stderr.trim() || `the report script exited ${r.exitCode}`
+}
+
+// One line appended to the night's notes, then the report rendered again best effort.
+const sleepNote = async ($: EngineInterface, record: string, note: Record<string, unknown>) => {
+  const p = await sleepPaths($)
+  const r = await run($, noteArgv(p.home, record, note))
   if (r.exitCode !== 0) throw new Error(noteFailure(r))
+}
+
+// At the end of a night (wake or its limit): what this session reads of its own usage, then the
+// report once more, with done read from GitHub. Each failure is said, never swallowed.
+const finishReport = async ($: EngineInterface, record: string, ending: Record<string, unknown>): Promise<string[]> => {
+  const problems: string[] = []
+  let usage: Record<string, unknown> | undefined
+  try {
+    const u = await $.session.usage()
+    usage = { ...(u.cost ? { costUsd: u.cost.usd } : {}), rateLimits: u.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, ...(r.resetsAt ? { resetsAt: r.resetsAt } : {}) })) }
+  } catch (err) {
+    problems.push(`this session's usage could not be read (${msg(err)})`)
+  }
+  try {
+    await sleepNote($, record, { ...ending, at: await $.clock.now(), by: await $.session.id(), ...(usage ? { usage } : {}) })
+  } catch (err) {
+    problems.push(`the note could not be written (${msg(err)})`)
+  }
+  try {
+    const failed = await report($, ['render', '--record', record, '--final'], REPORT_FINAL_MS)
+    if (failed) problems.push(`the report could not be finished (${failed})`)
+  } catch (err) {
+    problems.push(`the report could not be finished (${msg(err)})`)
+  }
+  return problems
 }
 
 // A question for Dan while he is asleep (#841): never asked, noted for his morning report. Answers
 // null once noted, or why it could not be.
-const noteQuestion = async ($: EngineInterface, record: SleepRecord, questions: string[]): Promise<string | null> => {
+const noteQuestion = async ($: EngineInterface, questions: string[]): Promise<string | null> => {
   try {
-    await sleepNote($, record.generation, { kind: 'question', at: await $.clock.now(), by: await $.session.id(), cwd: await $.session.cwd(), questions })
+    await sleepNote($, (await sleepPaths($)).current, { kind: 'question', at: await $.clock.now(), by: await $.session.id(), cwd: await $.session.cwd(), questions })
     return null
   } catch (err) {
     return msg(err)
@@ -198,7 +243,7 @@ const resolves = async ($: EngineInterface, repo: string): Promise<string | null
   for (const a of new Set([...`${status.stdout}\n${status.stderr}`.matchAll(/account (\S+)/g)].map(m => m[1] as string))) {
     const tok = await run($, ['gh', 'auth', 'token', '-u', a])
     if (tok.exitCode !== 0 || !tok.stdout.trim()) continue
-    if ((await run($, view, { GH_TOKEN: tok.stdout.trim() })).exitCode === 0) return null
+    if ((await run($, view, RUN_MS, { GH_TOKEN: tok.stdout.trim() })).exitCode === 0) return null
   }
   return `GitHub does not know ${repo} under any account gh is logged in to (${first.stderr.trim().split('\n')[0] || `gh exited ${first.exitCode}`})`
 }
@@ -338,8 +383,8 @@ const askRepo = async ($: EngineInterface, repo: string, path: string, waitMs: n
 const workerRepos = async ($: EngineInterface, roots: string[]): Promise<string[]> => {
   const out = new Map<string, string>()
   for (const root of roots) {
-    const r = await run($, ['git', '-C', root, 'remote', 'get-url', 'origin'])
-    const slug = r.exitCode === 0 ? slugOf(r.stdout) : undefined
+    const r = await run($, ['git', '-C', root, 'remote', '-v'])
+    const slug = r.exitCode === 0 ? (repoFromRemotes(r.stdout) ?? undefined) : undefined
     if (slug && !out.has(slug.toLowerCase())) out.set(slug.toLowerCase(), slug)
   }
   return [...out.values()]
@@ -393,7 +438,7 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[]): P
 
 // What a Bash call would merge, deploy or push to a default branch tonight that the night's lists
 // refuse, with the branch and package scripts read only when the call needs them.
-const overnightRefusal = async ($: EngineInterface, night: unknown, commands: Cmd[]) => {
+const mergeDeployRefusal = async ($: EngineInterface, night: unknown, commands: Cmd[]) => {
   // A call with nothing to refuse even judged at its strictest (no folder, branch or scripts known)
   // is most calls, and needs nothing read.
   if (!judgeNight(night, commands, commands.map(() => null))) return undefined
@@ -404,8 +449,9 @@ const overnightRefusal = async ($: EngineInterface, night: unknown, commands: Cm
   const placeAt = async (dir: string): Promise<Place> => {
     const known = read.get(dir)
     if (known) return known
-    const origin = await run($, ['git', '-C', dir, 'remote', 'get-url', 'origin'])
-    const own = origin.exitCode === 0 ? slugOf(origin.stdout) : undefined
+    // The folder's repository as phase 3 reads it (repoFromRemotes): none, or more than one, is untold.
+    const remotes = await run($, ['git', '-C', dir, 'remote', '-v'])
+    const own = remotes.exitCode === 0 ? (repoFromRemotes(remotes.stdout) ?? undefined) : undefined
     let defaultBranch: string | null = null
     let currentBranch: string | null = null
     if (needs.branch) {
@@ -435,6 +481,17 @@ const overnightRefusal = async ($: EngineInterface, night: unknown, commands: Cm
   return judgeNight(night, commands, places)
 }
 
+// A repository closed for the night, as the report's question for Dan (#835 renders questions):
+// which list it belongs on, and why tonight it neither merges nor deploys. Without a repository
+// (the lists file could not be read) the question is about the file itself.
+const closedNote = (repo: string | undefined, why: string, at: number, by: string) => ({
+  kind: 'question',
+  at,
+  by,
+  ...(repo ? { repo } : {}),
+  questions: [repo ? `${repoQuestion(repo)} Tonight it neither merges nor deploys: ${why}.` : `Merging and deploying were off for every repository tonight: ${why}. Fix ${REPO_LIST_FILE}.`],
+})
+
 // A repository first met after sleep began (on neither list, never asked at bedtime) is noted once a
 // night per session, so the morning report asks which list it belongs on (#843).
 const firstMet = new Set<string>()
@@ -444,7 +501,7 @@ const noteFirstMet = async ($: EngineInterface, record: SleepRecord, over: { rep
   if (firstMet.has(k)) return
   firstMet.add(k)
   try {
-    await sleepNote($, record.generation, { kind: 'repo-closed', at: await $.clock.now(), repo: over.repo, why: over.why, question: repoQuestion(over.repo) })
+    await sleepNote($, (await sleepPaths($)).current, closedNote(over.repo, over.why, await $.clock.now(), await $.session.id()))
   } catch (err) {
     firstMet.delete(k)
     $.ui.toast(`Sleep mode could not note that ${over.repo} is on neither list: ${msg(err)}`)
@@ -464,6 +521,82 @@ const parseRecord = (text: string | null): SleepRecord | null => {
     return null
   }
 }
+
+// The wake check (#834): what really happened since sleep began, read from GitHub and the disk,
+// each hit and each read that failed written to the night's notes (`outward` and `unmeasured`, which
+// the report puts at its top), and said in one sentence for the wake reply or the notification.
+// Empty when the night was quiet and every read was made.
+const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, recordPath: string): Promise<string> => {
+  if (!record || typeof record.since !== 'number') return ''
+  const home = (await $.env.get('HOME')) ?? ''
+  // Every repository the night's notes name is read, so a private one the events feed leaves out
+  // is still checked (#834 review). No notes file is no repositories; one that cannot be read is said.
+  const repos: string[] = []
+  const unread: string[] = []
+  if (typeof record.generation === 'string') {
+    const notes = `${sleepDir(home)}/notes/${record.generation.replace(/[^\w.-]/g, '_')}.jsonl`
+    try {
+      if (await $.fs.exists(notes))
+        for (const line of (await $.fs.read(notes)).split('\n')) {
+          try {
+            const repo = (JSON.parse(line) as { repo?: unknown }).repo
+            if (typeof repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo)) repos.push(repo)
+          } catch {
+            // A line that is not JSON names no repository; the report says it could not read it.
+          }
+        }
+    } catch (err) {
+      unread.push(`the repositories the night's notes name were not read (${msg(err)})`)
+    }
+  }
+  let found
+  try {
+    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos })
+  } catch (err) {
+    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`] }
+  }
+  found.unmeasured.unshift(...unread)
+  const at = await $.clock.now()
+  const by = await $.session.id()
+  try {
+    for (const text of found.hits) await sleepNote($, recordPath, { kind: 'outward', at, by, text })
+    for (const text of found.unmeasured) await sleepNote($, recordPath, { kind: 'unmeasured', at, by, text })
+  } catch (err) {
+    $.ui.toast(`The overnight check could not write its notes: ${msg(err)}`)
+  }
+  const parts: string[] = []
+  if (found.hits.length) parts.push(`The overnight check found ${found.hits.length === 1 ? 'one thing' : `${found.hits.length} things`} to look at: ${found.hits.join('; ')}.`)
+  if (found.unmeasured.length) parts.push(`Not checked: ${found.unmeasured.join('; ')}.`)
+  return parts.join(' ')
+}
+
+// What the overnight rules ask of the disk (#834): the one GitHub repository a folder's remotes
+// name, and whether a folder is a primary checkout. A read that fails is null, which refuses.
+const lookOf = ($: EngineInterface): Look => ({
+  repoOf: async dir => {
+    const r = await run($, ['git', '-C', dir, 'remote', '-v'])
+    return r.exitCode === 0 ? repoFromRemotes(r.stdout) : null
+  },
+  isPrimary: async dir => {
+    const r = await run($, ['git', '-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'])
+    return r.exitCode === 0 ? primaryFrom(r.stdout) : null
+  },
+})
+
+// Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
+// request carries it, or undefined when it is not.
+const overnightWhy = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | undefined> => {
+  const raw = tool === 'Bash' ? String(input.command ?? '') : ''
+  const cwd = await $.session.cwd()
+  const home = (await $.env.get('HOME')) ?? ''
+  const ghRepo = (await $.env.get('GH_REPO')) || undefined
+  return overnightRefusal(
+    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo ? { ghRepo } : {}) },
+    lookOf($),
+  )
+}
+const overnightDeny = (what: string) =>
+  `Refused: sleep mode is on and Dan bans this while he sleeps, so this did not ${what}. Do not look for another way to do it; it waits for the morning. Carry on with work that does not need it, or skip this issue.`
 
 // Puts every session back where Dan was before sleep (#840: wake restores placeBefore).
 const restorePlace = async ($: EngineInterface, record: SleepRecord | null): Promise<string | null> => {
@@ -491,17 +624,18 @@ const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
     await run($, ['mv', '-n', moved.to, p.current])
     return
   }
+  await releaseAwake($, (await sleepPaths($)).dir)
   const now = await $.clock.now()
-  try {
-    await sleepNote($, record.generation, { kind: 'limit', at: now, generation: record.generation, reason, by: await $.session.id() })
-  } catch (err) {
-    $.ui.toast(`Sleep mode ended by itself (${reason}), but the note could not be written: ${msg(err)}`)
-  }
-  const failed = await notify($, `Sleep mode ended by itself at ${etWhen(now)}: ${reason}.`)
-  if (failed) $.ui.toast(`Sleep mode ended by itself (${reason}), but the notification could not be sent: ${failed}`)
+  // Every session is put back first: the overnight check reads GitHub, which may be slow (#834 review).
   await restorePlace($, record)
   await showModes($)
   await showHeld($)
+  // The overnight check's notes go in before the report is finished, so they are at its top (#834).
+  const checked = await overnightCheck($, record, moved.to)
+  const problems = await finishReport($, moved.to, { kind: 'limit', reason })
+  if (problems.length) $.ui.toast(`Sleep mode ended by itself (${reason}), but ${problems.join('; ')}.`)
+  const failed = await notify($, `Sleep mode ended by itself at ${etWhen(now)}: ${reason}.${checked ? ` ${checked}` : ''}`)
+  if (failed) $.ui.toast(`Sleep mode ended by itself (${reason}), but the notification could not be sent: ${failed}`)
 }
 
 // Enrols the sessions that work overnight: this one, and every other open session that said at its
@@ -566,6 +700,9 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
   }
   const p = await sleepPaths($)
+  // On battery a night of work drains the Mac, so sleep does not start; unknown power is said, never guessed (#844).
+  const power = await powerRefusal($)
+  if (power) return `Sleep mode did not start: ${power}.`
   const now = await $.clock.now()
   const self = await $.session.id()
   const night = nightOf(now)
@@ -634,19 +771,25 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   // Each repository closed for the night is noted, so the morning report lists it with the question
   // still to answer (#843); a note that cannot be written is said.
   let unnoted = ''
-  for (const c of [...repos.closed, ...(repos.listWhy ? [{ repo: 'every repository', why: repos.listWhy }] : [])]) {
+  for (const c of [...repos.closed, ...(repos.listWhy ? [{ repo: undefined, why: repos.listWhy }] : [])]) {
     try {
-      await sleepNote($, record.generation, { kind: 'repo-closed', at: now, repo: c.repo, why: c.why, question: repoQuestion(c.repo) })
+      await sleepNote($, p.current, closedNote(c.repo, c.why, now, self))
     } catch (err) {
       unnoted = ` The morning report may miss these: ${msg(err)}.`
     }
   }
+  const awake = await holdAwake($, p.dir, record.until, now)
   const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
   const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'
   let s = `Sleep mode is on until ${etWhen(record.until)}. Enrolled to work overnight: ${enrolled}.`
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
-  return s + closedSentence(repos) + unnoted + tookOver
+  s += closedSentence(repos) + unnoted + tookOver
+  // The report exists from the first minute, header first, so a night that ends badly still has one (#835, L10).
+  const started = await report($, ['start', '--record', p.current, '--by', self])
+  s += started ? ` The night's report could not be started: ${started}.` : ` The night's report is at ${record.report}.`
+  if (awake) s += ` The Mac may sleep tonight: ${awake}.`
+  return s
 }
 
 // /wake and "I'm up" (#840): the record is moved aside, and only the session whose move succeeds
@@ -664,11 +807,23 @@ const wake = async ($: EngineInterface): Promise<string | null> => {
   if ('gone' in moved) return 'Sleep mode was already woken by another session.'
   if ('error' in moved) return `Sleep mode could not be turned off (${moved.error}). It is still on.`
   const record = parseRecord(moved.text)
+  await releaseAwake($, (await sleepPaths($)).dir)
   await showModes($)
   await showHeld($)
   if (reading.state === 'unreadable') return `Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`
   const placed = await restorePlace($, record)
-  return `Sleep mode is off.${record?.since ? ` It began at ${etWhen(record.since)}.` : ''}${placed ? ` ${placed}` : ''}`
+  // The overnight check's notes go in before the report is finished, so they are at its top (#834).
+  const checked = await overnightCheck($, record, moved.to)
+  let s = `Sleep mode is off.${record?.since ? ` It began at ${etWhen(record.since)}.` : ''}${placed ? ` ${placed}` : ''}${checked ? ` ${checked}` : ''}`
+  // The report once more, checked against GitHub, by the one session that woke it (#835).
+  if (record?.report) {
+    const problems = await finishReport($, moved.to, { kind: 'woke' })
+    s += problems.length ? ` The night's report at ${record.report} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${record.report}.`
+  } else {
+    // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
+    s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
+  }
+  return s
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
@@ -718,7 +873,7 @@ const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => 
   const out: Cmd[] = []
   for (const c of await $.modkit.pipeline({ command: raw })) {
     const g = await $.modkit.git({ words: c.words })
-    out.push(g ? { ...c, git: { sub: g.sub, args: g.args } } : c)
+    out.push(g ? { ...c, git: { sub: g.sub, args: g.args, ...(g.dir !== undefined ? { dir: g.dir } : {}) } } : c)
   }
   return out
 }
@@ -729,11 +884,312 @@ const readWrites = async ($: EngineInterface, raw: string) =>
   $.modkit.writes({ command: raw, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
 const NO_WRITES = { files: [], changes: [], unnamed: [] }
 
-const run = async ($: EngineInterface, argv: string[], env?: Record<string, string>) => {
+const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS, env?: Record<string, string>) => {
   try {
-    return await $.process.run(argv, { timeoutMs: RUN_MS, ...(env ? { env } : {}) })
+    return await $.process.run(argv, { timeoutMs, ...(env ? { env } : {}) })
   } catch (err) {
     return { exitCode: -1, stdout: '', stderr: msg(err), isStdoutTruncated: false, isStderrTruncated: false }
+  }
+}
+
+// ---- Sleep mode phase 8 (#844): the overnight driver ----
+// Every decision is driver.ts's, from recorded state; here it is read for, then carried out. The
+// counter is written before anything it allowed is done (assume it runs twice), and a counter that
+// cannot be written stops the session rather than block on a count it did not keep.
+
+type Enrolled = { record: SleepRecord; self: string; home: string; dir: string; current: string; now: number }
+
+// Driven only while the Mac sleeps and the record names this session a worker (#840, H4).
+// `seen` is a reading this minute already took, so the tick reads the record once (L91).
+const enrolledNow = async ($: EngineInterface, seen?: SleepReading): Promise<Enrolled | null> => {
+  const reading = seen ?? (await sleepNow($))
+  if (reading.state !== 'asleep') return null
+  const self = await $.session.id()
+  if (!Array.isArray(reading.record.workers) || !reading.record.workers.includes(self)) return null
+  const p = await sleepPaths($)
+  return { record: reading.record, self, home: p.home, dir: p.dir, current: p.current, now: await $.clock.now() }
+}
+
+const queueScript = (home: string) => `${home}/.claude/hooks/lib/sleep-queue.sh`
+
+const loadDriver = async ($: EngineInterface, en: Enrolled): Promise<DriverReading> => {
+  const path = driverPath(en.dir, en.record.generation, en.self)
+  try {
+    if (!(await $.fs.exists(path))) return { state: 'none' }
+    return readDriver(await $.fs.read(path), en.record.generation, en.self)
+  } catch (err) {
+    return { state: 'unreadable', why: `the driver's counter could not be read (${msg(err)})` }
+  }
+}
+
+// null once written and read back whole; otherwise why not.
+const saveDriver = async ($: EngineInterface, en: Enrolled, d: DriverRecord): Promise<string | null> => {
+  const path = driverPath(en.dir, en.record.generation, en.self)
+  const text = JSON.stringify(d)
+  try {
+    await run($, ['mkdir', '-p', path.slice(0, path.lastIndexOf('/'))])
+    await $.fs.write(path, text)
+    return (await $.fs.read(path)) === text ? null : 'it did not read back as written'
+  } catch (err) {
+    return msg(err)
+  }
+}
+
+// The session's repository: its root, and owner/name from its origin, lower case as the queue keeps it.
+const repoOf = async ($: EngineInterface): Promise<{ root: string | null; slug: string | null }> => {
+  try {
+    const r = await $.session.repo()
+    if (!r) return { root: null, slug: null }
+    const slug = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(r.remote ?? '')?.[1]?.toLowerCase() ?? null
+    return { root: r.root, slug }
+  } catch {
+    return { root: null, slug: null }
+  }
+}
+
+// The weekly reading, null when there is none (never a zero standing in for it, L706).
+const usageNow = async ($: EngineInterface): Promise<{ weekly: number | null; usage: Record<string, unknown> | null }> => {
+  try {
+    const u = await $.session.usage()
+    const w = u.rateLimits.find(r => r.kind === 'seven_day')
+    return {
+      weekly: w && Number.isFinite(w.percentUsed) ? w.percentUsed : null,
+      usage: { ...(u.cost ? { costUsd: u.cost.usd } : {}), rateLimits: u.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, ...(r.resetsAt ? { resetsAt: r.resetsAt } : {}) })) },
+    }
+  } catch {
+    return { weekly: null, usage: null }
+  }
+}
+
+// Tonight's notes as written, '' before the first, null when they cannot be read.
+const notesNow = async ($: EngineInterface, en: Enrolled): Promise<string | null> => {
+  const path = `${en.dir}/notes/${en.record.generation.replace(/[^\w.-]/g, '_')}.jsonl`
+  try {
+    return (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+  } catch {
+    return null
+  }
+}
+
+const claimNow = async ($: EngineInterface, en: Enrolled): Promise<ClaimReading> => {
+  const r = await run($, ['bash', queueScript(en.home), 'claims'])
+  if (r.exitCode !== 0) return { state: 'unknown', why: (r.stdout + r.stderr).trim().split('\n')[0]?.replace(/^refused\t-\t/, '') || `sleep-queue.sh claims exited ${r.exitCode}` }
+  return heldClaim(r.stdout, en.self)
+}
+
+// The tip of the sleep/ branch of the issue this session holds: a new commit there is progress.
+// Only its own: another worker's commits on its own branch are not this session's (#844). Nothing
+// held reads as no branch; null when unreadable.
+const refsNow = async ($: EngineInterface, root: string | null, claim: ClaimReading): Promise<string | null> => {
+  if (!root || claim.state !== 'held') return ''
+  const r = await run($, ['git', '-C', root, 'for-each-ref', '--format=%(objectname)', `refs/heads/sleep/${claim.claim.issue}`])
+  return r.exitCode === 0 ? r.stdout : null
+}
+
+// Ends a claim through the queue, which writes the matching note (#905): null when ended, else why not.
+const endClaim = async ($: EngineInterface, en: Enrolled, root: string | null, rel: Release): Promise<string | null> => {
+  if (!root) return 'this session is not in a repository, so the queue cannot name the claim'
+  // Marked as the driver's, so the queue's note of this end is never read back as the session's progress.
+  let r
+  try {
+    r = await $.process.run(['bash', queueScript(en.home), 'release', root, String(rel.issue), en.self, rel.state, rel.why], { timeoutMs: RUN_MS, env: { SLEEP_NOTE_BY_DRIVER: '1' } })
+  } catch (err) {
+    return `sleep-queue.sh release could not be run (${msg(err)})`
+  }
+  if (r.exitCode === 0 && r.stdout.startsWith('released')) return null
+  return (r.stdout + r.stderr).trim().split('\n')[0] || `sleep-queue.sh release exited ${r.exitCode}`
+}
+
+// Every note the driver writes is marked as its own, so it is never read back as the session's progress.
+const writeNotes = async ($: EngineInterface, en: Enrolled, notes: Note[], extra: Record<string, unknown> = {}) => {
+  for (const n of notes) {
+    try {
+      await sleepNote($, en.current, { ...n, ...(n.kind === 'heartbeat' ? extra : {}), driver: true, at: en.now, by: en.self })
+    } catch (err) {
+      $.ui.log(`scope-modes: the overnight driver's ${n.kind} note could not be written: ${msg(err)}`, { to: 'debug' })
+    }
+  }
+}
+
+// One at a time in this session: a Stop, an API error and the minute's tick each read the counter,
+// decide and write it back, so two interleaved would lose one's count (assume it runs twice).
+let driverChain: Promise<unknown> = Promise.resolve()
+const oneAtATime = <T>(fn: () => Promise<T>): Promise<T> => {
+  const p = driverChain.then(fn, fn)
+  driverChain = p.catch(() => undefined)
+  return p
+}
+
+// The nights this session was let stop, kept here too, so a stop whose counter could not be
+// written is still a stop: the next Stop never blocks on the older count it would read back.
+const stoppedHere = new Set<string>()
+const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
+// A park the watchdog made but could not record on disk, said at the next Stop all the same.
+const parkedHere = new Map<string, string>()
+
+// One Stop of an enrolled session: a block keeping it working, or null to let it stop.
+const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-driven'> =>
+  oneAtATime(async () => {
+    const en = await enrolledNow($)
+    if (!en) return 'not-driven' as const
+    if (stoppedHere.has(stopKey(en))) return null
+    const where = await repoOf($)
+    if (!where.root) {
+      // The queue claims by repository, so a session in none has nothing to claim: it stops, said.
+      stoppedHere.add(stopKey(en))
+      await writeNotes($, en, [{ kind: 'stopped', text: 'this session is in no repository, so it has nothing to claim tonight' }])
+      return null
+    }
+    let driver = await loadDriver($, en)
+    const unsavedPark = parkedHere.get(stopKey(en))
+    if (unsavedPark && driver.state !== 'unreadable') {
+      const base = driver.state === 'ok' ? driver.record : freshDriver(en.record.generation, en.self, en.now)
+      driver = { state: 'ok', record: { ...base, parked: base.parked ? `${base.parked} ${unsavedPark}` : unsavedPark } }
+    }
+    parkedHere.delete(stopKey(en))
+    const notesText = await notesNow($, en)
+    const claim = await claimNow($, en)
+    const u = await usageNow($)
+    const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root, claim))
+    const d = decideStop({
+      now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
+      weekly: u.weekly, claim, rules: overnightRules(en.self, where.root),
+    })
+    if (d.kind === 'stop') stoppedHere.add(stopKey(en))
+    if (d.record) {
+      const unsaved = await saveDriver($, en, d.record)
+      if (unsaved && d.kind === 'block') {
+        stoppedHere.add(stopKey(en))
+        const why = `the driver's counter could not be written (${unsaved}), so it stopped rather than block on a count it did not keep`
+        // The claim in hand is ended too, never left held by a session that has stopped.
+        const ended = claim.state === 'held' ? await endClaim($, en, where.root, { issue: claim.claim.issue, state: 'failed', why }) : null
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: ended ? `${why}; the claim on #${claim.state === 'held' ? claim.claim.issue : ''} could not be ended: ${ended}` : why }])
+        return null
+      }
+    }
+    const ended = d.release ? await endClaim($, en, where.root, d.release) : null
+    const notes = ended && d.release ? [...d.notes, { kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : d.notes
+    await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
+    if (d.kind === 'block') return { block: ended && d.release ? `The claim on #${d.release.issue} could not be ended (${ended}): end it yourself. ${d.reason}` : d.reason }
+    $.ui.log(`scope-modes: the overnight driver let this session stop: ${d.why}`, { to: 'debug' })
+    return null
+  })
+
+// A turn that ended on an API error: wait it out, or stop, as driver.ts decides.
+const driveFailure = ($: EngineInterface, error: string, message: string): Promise<void> =>
+  oneAtATime(async () => {
+    const en = await enrolledNow($)
+    if (!en || stoppedHere.has(stopKey(en))) return
+    const where = await repoOf($)
+    const u = await usageNow($)
+    const driver = await loadDriver($, en)
+    const claim = await claimNow($, en)
+    const d = decideFailure({ now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, error, message, weekly: u.weekly, claim })
+    if (d.kind === 'stop') stoppedHere.add(stopKey(en))
+    if (d.record) {
+      const unsaved = await saveDriver($, en, d.record)
+      if (unsaved) {
+        // A wait that was not recorded would never be resumed: said, and the session stops, ending
+        // the claim in hand as the decision would have, or as failed, never leaving it held.
+        stoppedHere.add(stopKey(en))
+        const why = `after the ${error} error the driver's counter could not be written (${unsaved}), so no retry was set`
+        const rel: Release | undefined = d.kind === 'stop' && d.release ? d.release : claim.state === 'held' ? { issue: claim.claim.issue, state: 'failed', why } : undefined
+        const ended = rel ? await endClaim($, en, where.root, rel) : null
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: ended && rel ? `${why}; the claim on #${rel.issue} could not be ended: ${ended}` : why }])
+        return
+      }
+    }
+    const ended = d.kind === 'stop' && d.release ? await endClaim($, en, where.root, d.release) : null
+    const extra: Note[] = ended && d.kind === 'stop' && d.release ? [{ kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : []
+    await writeNotes($, en, [...d.notes, ...extra])
+  })
+
+// Each minute: start a session again once its wait is over, and park a claim held past its active
+// time even mid turn (the watchdog), said at the next Stop. The session is started again outside
+// the one at a time queue, so the turn it starts can reach its own Stop.
+const driverTick = async ($: EngineInterface, seen: SleepReading) => {
+  const resume = await oneAtATime(async (): Promise<boolean> => {
+    const en = await enrolledNow($, seen)
+    if (!en || stoppedHere.has(stopKey(en))) return false
+    const r = await loadDriver($, en)
+    if (r.state !== 'ok') return false
+    const d = { ...r.record }
+    if (resumeDue(d, en.now)) {
+      // Cleared and saved first, so a second tick never starts it twice.
+      d.resumeAt = null
+      return (await saveDriver($, en, d)) === null
+    }
+    if (d.stopped || d.resumeAt !== null) return false
+    const c = await claimNow($, en)
+    if (c.state !== 'held' || c.claim.since === null) return false
+    const active = activeMs(d.waits, c.claim.since, en.now)
+    if (active < LIMITS.stuckMs) return false
+    const where = await repoOf($)
+    const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
+    const failed = await endClaim($, en, where.root, { issue: c.claim.issue, state: 'parked', why })
+    d.parked = failed ? `The watchdog could not park #${c.claim.issue} (${failed}); park it yourself.` : `The watchdog parked #${c.claim.issue} (${why}); its claim is ended, so leave it and claim the next issue.`
+    if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
+    return false
+  })
+  if (!resume) return
+  try {
+    await $.prompt.submit({ text: RESUME })
+  } catch (err) {
+    // Not started: due again at the next minute.
+    await oneAtATime(async () => {
+      const en = await enrolledNow($)
+      if (!en) return
+      const r = await loadDriver($, en)
+      if (r.state === 'ok') await saveDriver($, en, { ...r.record, resumeAt: en.now })
+    })
+    $.ui.log(`scope-modes: the overnight driver could not start the session again: ${msg(err)}`, { to: 'debug' })
+  }
+}
+
+// ---- Power for the night (#844) ----
+// /sleep refuses on battery, and holds `caffeinate -i` (no idle sleep) until the record's end, so the
+// Mac never sleeps under the work. The hold ends by itself at `until`, and is let go at wake.
+
+const caffeinatePid = (dir: string) => `${dir}/caffeinate.pid`
+
+// null when on mains power; otherwise why sleep mode must not start.
+const powerRefusal = async ($: EngineInterface): Promise<string | null> => {
+  const r = await run($, ['pmset', '-g', 'batt'])
+  if (r.exitCode !== 0) return `whether this Mac is on battery could not be read (${r.stderr.trim() || `pmset exited ${r.exitCode}`})`
+  if (/'Battery Power'/.test(r.stdout)) return 'this Mac is on battery power, and a night of work would drain it. Plug it in and run /sleep again'
+  if (!/'AC Power'/.test(r.stdout)) return `pmset did not say what this Mac is drawing power from (${r.stdout.trim().split('\n')[0]?.slice(0, 120) ?? ''})`
+  return null
+}
+
+// Starts the hold; null when held, else why not (said in /sleep's answer).
+const holdAwake = async ($: EngineInterface, dir: string, untilMs: number, now: number): Promise<string | null> => {
+  const secs = Math.max(60, Math.ceil((untilMs - now) / 1000))
+  const r = await run($, ['sh', '-c', 'caffeinate -i -t "$1" </dev/null >/dev/null 2>&1 & echo $!', 'sh', String(secs)])
+  const pid = r.stdout.trim()
+  if (r.exitCode !== 0 || !/^\d+$/.test(pid)) return `caffeinate could not be started (${r.stderr.trim() || `exit ${r.exitCode}`})`
+  try {
+    // Its number and its time, so wake stops only this hold, never a caffeinate that took the number later.
+    await $.fs.write(caffeinatePid(dir), `${pid} ${secs}`)
+  } catch (err) {
+    return `caffeinate is holding the Mac awake until the night ends, but its process number could not be kept, so wake will not let it go early (${msg(err)})`
+  }
+  return null
+}
+
+// Lets the hold go: only the process recorded, and only while it is still that hold (L1011, L444).
+const releaseAwake = async ($: EngineInterface, dir: string) => {
+  const file = caffeinatePid(dir)
+  try {
+    if (!(await $.fs.exists(file))) return
+    const [pid, secs] = (await $.fs.read(file)).trim().split(' ')
+    if (pid && /^\d+$/.test(pid) && secs && /^\d+$/.test(secs)) {
+      // Only while that number is still the very hold /sleep started: the same command, the same time.
+      const ps = await run($, ['ps', '-p', pid, '-o', 'args='])
+      if (ps.exitCode === 0 && ps.stdout.trim() === `caffeinate -i -t ${secs}`) await run($, ['kill', pid])
+    }
+    await run($, ['rm', '-f', file])
+  } catch (err) {
+    $.ui.log(`scope-modes: the night's caffeinate hold could not be let go: ${msg(err)}`, { to: 'debug' })
   }
 }
 
@@ -1029,9 +1485,9 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
 }
 
 // What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run.
-type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean }
+type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean; asleep: boolean }
 const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | undefined> => {
-  const { tool, input, toolUseId, scope, away } = j
+  const { tool, input, toolUseId, scope, away, asleep } = j
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const commands = raw ? await readCommands($, raw) : []
 
@@ -1071,6 +1527,15 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
       return { deny: held.deny }
     }
   }
+  // Asleep (#834): what Dan bans while he sleeps is refused in every session, whatever the
+  // permission step beneath would say, since a session's own prompts are approved overnight.
+  if (asleep) {
+    const what = await overnightWhy($, tool, input)
+    if (what) {
+      await $.modkit.blocked({ toolUseId, guard: 'Sleep mode', reason: `Dan is asleep, so this would not ${what}.`, safeWay: 'Claude leaves it for the morning and carries on.' })
+      return { deny: overnightDeny(what) }
+    }
+  }
   return undefined
 }
 
@@ -1088,7 +1553,10 @@ const AWAY_NOTE =
   'Dan is away from the Mac. Deliver results as a private claude.ai page he can read on his phone (the Artifact tool). Open nothing on the Mac and take no focus: anything that needs him at the Mac is held for when he is back.'
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
 const sleepPromptNote = (r: SleepRecord, self: string) =>
-  `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? 'This session is enrolled to work overnight.' : 'This session is not one of the overnight workers.'} Dan is asleep, so deliver as when he is away: ${AWAY_NOTE}`
+  `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} Dan is asleep, so deliver as when he is away: ${AWAY_NOTE}`
+// What phase 3 (#834) does for a worker, and only that (L703).
+const WORKER_NOTE =
+  "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
 const HOME_NOTE = 'Dan is back at the Mac: deliver results as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview).'
 
 export const register: Register = on => {
@@ -1134,7 +1602,7 @@ export const register: Register = on => {
         if (seen?.reading.state !== 'asleep') return { isNoted: false }
         const line = { ...note, at: await built.clock.now(), by: await built.session.id() }
         // Under Claude Code's 10 s cut off for a noun call (#744); one appended line takes milliseconds.
-        const r = await built.process.run(noteArgv(`${sleepDir(seen.home)}/notes`, seen.reading.record.generation, line), { timeoutMs: BOOT_MS })
+        const r = await built.process.run(noteArgv(seen.home, `${sleepDir(seen.home)}/current.json`, line), { timeoutMs: BOOT_MS })
         if (r.exitCode !== 0) throw new Error(noteFailure(r))
         return { isNoted: true }
       },
@@ -1172,8 +1640,10 @@ export const register: Register = on => {
         }
         // Sleep's record read each minute too: the first session to find it over ends it, and the
         // band follows it on and off whichever session started or ended it (#840).
+        let seen: SleepReading = { state: 'none' }
         try {
           const reading = await sleepNow($)
+          seen = reading
           await endIfOver($, reading)
           if ((reading.state === 'asleep') !== shownAsleep) {
             await showModes($)
@@ -1181,6 +1651,12 @@ export const register: Register = on => {
           }
         } catch (err) {
           $.ui.log(`scope-modes: the sleep check failed: ${msg(err)}`, { to: 'debug' })
+        }
+        // The overnight driver's minute (#844): a wait that is over, and a claim held too long.
+        try {
+          if (seen.state === 'asleep') await driverTick($, seen)
+        } catch (err) {
+          $.ui.log(`scope-modes: the overnight driver's minute failed: ${msg(err)}`, { to: 'debug' })
         }
       })
     }
@@ -1318,7 +1794,7 @@ export const register: Register = on => {
       // Dan is asked nothing while asleep (#841): the request waits for his morning report.
       const sleeping = await sleepNow($)
       if (sleeping.state === 'asleep') {
-        const failed = await noteQuestion($, sleeping.record, [question])
+        const failed = await noteQuestion($, [question])
         const text = `Dan is asleep (sleep mode), so he was not asked: no build stays on. ${
           failed === null ? 'The request is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put it in your final message.`
         }`
@@ -1357,9 +1833,9 @@ export const register: Register = on => {
     // (#843), first, before any other mode's route or early return, so nothing reaches a merge
     // unjudged. A check that throws refuses, as below (L42).
     if (sleeping.state === 'asleep' && raw) {
-      let over: Awaited<ReturnType<typeof overnightRefusal>>
+      let over: Awaited<ReturnType<typeof mergeDeployRefusal>>
       try {
-        over = await overnightRefusal($, sleeping.record.repos, await readCommands($, raw))
+        over = await mergeDeployRefusal($, sleeping.record.repos, await readCommands($, raw))
       } catch (err) {
         over = { deny: `Blocked overnight: the merge and deploy check of this call failed (${msg(err)}), so it did not run. Leave it for the morning and note it.`, what: 'run a call the check could not judge', why: msg(err) }
       }
@@ -1375,20 +1851,21 @@ export const register: Register = on => {
     // arrives here too, so this is the one place a question to Dan is stopped overnight.
     if (tool === 'AskUserQuestion' && sleeping.state === 'asleep') {
       const qs = Array.isArray(input.questions) ? (input.questions as { question?: unknown }[]).map(q => String(q?.question ?? '')) : []
-      const failed = await noteQuestion($, sleeping.record, qs)
+      const failed = await noteQuestion($, qs)
       await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' })
       return { deny: askedAsleep(failed) }
     }
-    const away = (await placeOf($)) === 'away' || sleeping.state === 'asleep'
+    const asleep = sleeping.state === 'asleep'
+    const away = (await placeOf($)) === 'away' || asleep
     if (!scope && !away) return go()
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that
     // fails is skipped, which would run the very thing the mode is on to stop (L42).
     let refused: { deny: string } | undefined
     try {
-      refused = await judge($, { tool, input, toolUseId, scope, away })
+      refused = await judge($, { tool, input, toolUseId, scope, away, asleep })
     } catch (err) {
-      const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(away ? ['away'] : [])].join(' and ')
+      const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(asleep ? ['sleep mode'] : away ? ['away'] : [])].join(' and ')
       refused = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
     return refused ?? go()
@@ -1408,8 +1885,77 @@ export const register: Register = on => {
     return { element: e.element }
   })
 
+  // Sleep mode phase 3 (#834, Dan's decision 7): overnight, Claude Code's own permission prompts in
+  // an enrolled session are approved, while Dan's own checks stay on (the settings hooks and every
+  // mod's tool.call refusal run before this step, and a decision beneath is never overridden). Never
+  // approved: a question, the plan approval, and what Dan bans while he sleeps (overnight.ts). The
+  // record is read live, and one that cannot be read is awake: no approval (L42). A session that is
+  // not a worker is only kept quiet, so its prompts wait for Dan as always.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    // Any throw in deciding whether this session is an asleep worker reads as awake: no approval.
+    let worker = false
+    try {
+      const reading = await sleepNow($)
+      worker = reading.state === 'asleep' && (reading.record.workers?.includes(await $.session.id()) ?? false)
+    } catch (err) {
+      // Said, never silent: a session that waits on Dan overnight leaves the reason in its log.
+      $.ui.log(`scope-modes: whether this session is an overnight worker could not be read (${msg(err)}), so this prompt was not approved`, { to: 'debug' })
+      worker = false
+    }
+    if (!worker) return next(e)
+    const tool = String(e.tool_name)
+    if (NEVER_ASKED.has(tool))
+      return { decision: { behavior: 'deny', message: `Refused: Dan is asleep, so ${tool === 'ExitPlanMode' ? 'no plan is approved' : 'nothing is asked'} overnight. Leave the question on the issue for the morning and skip this issue.` } }
+    // A call that cannot be judged is never approved: it is left to the prompt, as when Dan is
+    // awake, and one `unmeasured` note says so in the morning report (#834 review of edeb682).
+    const leave = async (text: string) => {
+      try {
+        await sleepNote($, (await sleepPaths($)).current, { kind: 'unmeasured', at: await $.clock.now(), by: await $.session.id(), tool, text })
+      } catch (err) {
+        $.ui.log(`scope-modes: ${text}, and the note could not be written (${msg(err)})`, { to: 'debug' })
+      }
+      return next(e)
+    }
+    const input = (e.tool_input ?? {}) as Record<string, unknown>
+    if (tool === 'Bash' && !String(input.command ?? '').trim()) return leave('a Bash permission prompt with no command was left for Dan')
+    let what: string | undefined
+    try {
+      what = await overnightWhy($, tool, input)
+    } catch (err) {
+      return leave(`a permission prompt for ${tool} could not be judged overnight (${msg(err)}), so it was left for Dan`)
+    }
+    if (what) return { decision: { behavior: 'deny', message: overnightDeny(what) } }
+    const beneath = await next(e)
+    if (beneath.decision) return beneath
+    return { ...beneath, decision: { behavior: 'allow' } }
+  })
+
+  // A refusal by the auto mode classifier while asleep (#834) is final: a `failed` note naming the
+  // reason, and never a retry, whatever beneath asked for.
+  on('classic.PermissionDenied', async ($, e, next) => {
+    const reading = await sleepNow($)
+    if (reading.state !== 'asleep') return next(e)
+    try {
+      await sleepNote($, (await sleepPaths($)).current, {
+        kind: 'failed',
+        at: await $.clock.now(),
+        by: await $.session.id(),
+        cwd: await $.session.cwd(),
+        tool: e.tool_name,
+        text: `the auto mode classifier refused ${e.tool_name}: ${e.reason}`,
+      })
+    } catch (err) {
+      $.ui.toast(`Sleep mode: a refused call could not be noted for the report (${msg(err)})`)
+    }
+    const { retry: _retry, ...rest } = await next(e)
+    return rest
+  })
+
   // Winding down refuses the turn end until finished; Claude keeps watching CI and the deploy.
   on('classic.Stop', async ($, e, next) => {
+    // An enrolled session while the Mac sleeps is the overnight driver's (#844): kept working, or let go with a note.
+    const driven = await driveStop($)
+    if (driven !== 'not-driven') return driven ?? next(e)
     const left = await check($)
     if (left === null) return next(e)
     if (left.length === 0) {
@@ -1419,6 +1965,18 @@ export const register: Register = on => {
     return {
       block: `Winding down is not finished: ${left.join('; ')}. ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
     }
+  })
+
+  // A turn that ended on an API error, while an enrolled session works overnight: waited out or stopped (#844).
+  on('classic.StopFailure', async ($, e, next) => {
+    // Only while asleep: awake, a failed turn is Dan's to see, and nothing here acts or notes.
+    if (!(await isAsleep($))) return next(e)
+    try {
+      await driveFailure($, String(e.error), e.last_assistant_message ?? '')
+    } catch (err) {
+      $.ui.log(`scope-modes: the overnight driver could not handle the ${e.error} error: ${msg(err)}`, { to: 'debug' })
+    }
+    return next(e)
   })
 
   // Off automatically at session end, never carried into a new session.

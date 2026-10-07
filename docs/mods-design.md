@@ -803,6 +803,198 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   the report (#835) and the overnight driver (#844) build on it; the wake report and summaries
   (#837) go where `wake` names the winner.
 
+### Sleep mode phase 4: the night's report (#835), built
+
+- One script writes the report and its notes, `payload/hooks/lib/sleep-report.py`; every phase
+  reaches it through `sleep_note '<json>'` in `hooks/lib/sleep.sh`, which writes only while that
+  file's own `sleep_active` says the Mac is asleep. Nothing else formats the report or touches the
+  notes file. The kinds the report reads (`claim`, `done`, `parked`, `failed`, `question`, `issue`,
+  `lesson`, `finding`, `heartbeat`, `wait`, `usage`, `stopped`) and their fields are listed at the
+  top of the script; a kind it does not know is still shown, under Other notes.
+- Notes are `notes/<generation>.jsonl`, one line per note, appended in one write in append mode,
+  so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
+  `report` path in the record (`~/Downloads/sleep-report-<night>.md`), is derived from the record
+  and the notes and replaced whole after each note, best effort: a note whose render fails is still
+  written, the failure said on stderr, and the call exits 0 so nobody writes it twice. Renders take
+  turns under a per night flock (`notes/<generation>.render.lock`, a 15 second deadline, then the
+  render gives up and says so) and read the notes only once they hold it, so the last render has
+  read every note before it and two renders can never land out of order (#909). The render holding
+  the lock looks again once it has written and renders again while the notes have grown since it
+  read them, so a note whose own render gave up waiting is in the report all the same.
+- `/sleep` starts it at once with a header: start time ET, folder, power state read from `pmset`
+  (a failed read says `power unknown` and why), and the workers. A report that cannot be written is
+  said in the `/sleep` reply, and sleep still holds.
+- At the end (the session that wins `/wake`, or the first to see the limit) the mod notes `woke` or
+  `limit` with its own `$.session.usage()` reading on the record it moved aside, then renders once
+  more with `--final`: done is read from GitHub (merged PRs and closed issues since `since`, in
+  each repo any note names, `--limit 200` and a full page said as cut, the date predicate applied
+  again here) and cross checked against the notes both ways, a noted PR or issue the search did
+  not list read by its number before it is called wrong (L1014); a worker silent past 30 minutes that
+  never wrote `stopped`, a worker that never wrote a note, and a `claim` with no `done`, `parked` or
+  `failed` note are each flagged as ended unexpectedly. GitHub's reads are bounded at 15 s each and
+  60 s together (wake waits on them, so a GitHub outage costs Dan a minute at most); a repo not read is said, with what its sessions noted shown as unchecked.
+- Paid usage is the sum of each session's latest `usage.costUsd` (as /cost totals it), from
+  heartbeats and the end note; "not measurable" only when no note carried one. The 5 hour, weekly
+  and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
+  line under Limits and usage.
+
+### Sleep mode phase 5: the overnight queue and per issue claims (#842), built
+
+A shell tool rather than mod code, `payload/hooks/lib/sleep-queue.sh` with its judgments in
+`sleep-queue.py` beside it, because an overnight session runs it from Bash and the claim's
+atomicity has to be real on disk, which a suite can only prove with real processes racing. Tested by
+`hooks/test-sleep-queue.sh`, which never reaches GitHub: HOME is its own, the issue source is a stub
+named by `SLEEP_QUEUE_SOURCE` (asserted to have been called), and a `gh` first on PATH fails if
+anything calls it. What the build decided, each open to Dan changing it:
+
+- `next REPO_ROOT SESSION_ID [GOAL_ISSUE...]` is the one call an overnight session makes: queue,
+  claim the first issue nobody holds, and give it a worktree, `PRIMARY/.claude/worktrees/sleep-N` on
+  branch `sleep/N`, never a checkout in the primary checkout. A folder already at that path that is
+  not this repository's worktree is never adopted (L421); the claim ends `failed` and `next` goes on.
+  A worktree that could not be made just now (a fetch or `git worktree add` failing) gives the
+  issue back instead, ended `unstarted`: free again, and that claim is no attempt, so a network
+  drop never costs the issue the night nor counts toward parking it. A claim lost between the queue
+  and the claim is a skip line with its reason. The primary checkout
+  is the first one `git worktree list` names, or the checkout asked about when its git folder lives
+  elsewhere; a bare repository is refused.
+- Dates and versions in a branch name (`release-2026-10-07`, `v10`, `1.5.7`) name no issue; every
+  other run of digits does, which errs toward leaving an issue out, with the branch named.
+- Only while asleep, judged by `sleep_active`, the one predicate; the claims live under the night's
+  `generation`, so nothing carries from one night to the next.
+- The queue is the goal's issues in the goal's order when given (one that cannot be read is a skip
+  line with the reason, never a refusal of the rest), else open p0 to p3 issues fetched
+  with an explicit limit (500) and refused when a page that full comes back (L24), sorted by
+  priority then number. Each issue left out gets a `skip` line with its reason, for the report.
+  Dan's accounts are the ones signed in to `gh`; no account read refuses rather than judging every
+  issue someone else's.
+- An open session "names" an issue when its checkout of the same repository is on a branch whose
+  digits include the number, or its current request says `#N`. A pull request names it by `#N` in
+  its title or body or the number in its branch. A branch or pull request is ignored only while
+  tonight's work on the issue is still to be carried on: this session's own claim, a claim whose
+  session died, or one given back `unstarted`. So a dead worker's branch is carried on, while an
+  issue released `free` on purpose is judged against its branch and pull request afresh.
+- Every wait on GitHub (each `gh` call, or the injected source) has a deadline,
+  `SLEEP_GH_TIMEOUT` (60 seconds), and the worktree's fetch has `SLEEP_FETCH_TIMEOUT` (120): a hung
+  read refuses the queue or gives the issue back, and its whole process group is stopped.
+- Unanswered before bed questions are read from `~/.claude/state/sleep/unanswered/GENERATION`, one
+  `owner/repo#N` a line, which phase 6 (#836) writes.
+- Claims differ from the plan's wording in one way: the plan said a directory holding the session
+  id. A directory made by `mkdir` cannot carry its owner in the same step, so a claimer killed
+  between the two leaves a claim with no owner. Instead each issue's directory holds numbered
+  entries, each written whole beside it and hard linked into place; `ln` fails when the number
+  exists, so of any number of claimers at once exactly one makes the next entry (tested with two
+  and with eight; the suite runs the eight against a copy of the library with the link swapped for
+  a copy, and there more than one owns the issue). Nothing is deleted: the newest
+  entry is the state (`claim`, or `free`, `done`, `parked`, `failed` written by the holder, or
+  `unstarted`, written only by `next` when the worktree could not be made just now) and
+  the ones before it are the history the attempts count is read from (L27). An entry with no start
+  time is dated by its file (L409).
+- A claim whose session has ended, has been silent five minutes (the registry's own rule) or was
+  never recorded is free, and taking it over is a new attempt. A record that cannot be read keeps
+  the claim held (L215), and a missing registry refuses the queue. A damaged registry record
+  changed in the last five minutes refuses the queue, since it may be a live session's; an older
+  one is ignored, as the registry's own prune treats it.
+- `claims` prints every claim of the night as JSON lines, the seam the report (#835) reads; parking
+  at two attempts or two hours is the driver's (#844), read from the `attempts=` the claim prints.
+- Every claim and every end also writes its note for the report (#905), from `sleep-queue.sh`
+  itself, the one writer of the claim: `claim` with its attempt, `done`, `parked` or `failed` with
+  the reason as text, and `released` for a claim given back (`free`, `unstarted`). The report says
+  a claim given back was given back, never that it ended unexpectedly, judging the order by each
+  note's `at`. A note that cannot be written is said on stderr and never undoes the claim.
+
+### Sleep mode phase 8: keeping enrolled sessions working, safely (#844), built
+
+The overnight driver, in the scope modes mod: its decisions in `hooks/driver.ts` (pure, tested in
+`tests/driver.test.ts`), carried out in `register.ts` on `classic.Stop`, `classic.StopFailure` and
+the minute's tick. Changed from the plan by the engine spike (#839) and Dan's decision of 2026-10-07.
+
+- It drives only a session the sleep record names in `workers`, while the record reads asleep; every
+  other Stop passes to winding down as before. Each block carries the whole overnight rules (claim
+  with `sleep-queue.sh next`, work in its worktree, end the claim with `release`, write to Dan only
+  through `sleep_note`, a `stopped` note when the queue is empty), so they survive compaction.
+- Its own loop counter, one file a night and session, `~/.claude/state/sleep/driver/GEN/SESSION.json`,
+  never `stop_hook_active` (true from the second Stop on). A counter that cannot be read or written
+  stops the session with a `stopped` note rather than loop on a count it cannot keep.
+- Progress is recorded state only: this session's notes that are not bookkeeping (heartbeat, wait,
+  usage, stopped, and every note the driver writes itself, marked `driver: true`) and the tip of the
+  `sleep/N` branch of the issue it holds (`git for-each-ref`), never another worker's branch. A
+  reading that cannot be taken is no progress. The Stop, the API error and the minute's tick take
+  turns, so none writes back a stale counter over another's, and every stop, a stop whose counter
+  could not be saved included, ends the claim in hand through the queue rather than leave it held. The circuit breaker lets the session stop, with a `failed` note (the
+  claim ended as failed through the queue when one is held), after 3 blocks in a row or 20 minutes
+  of active time with nothing new; a session is also capped at 120 blocks a night. Each block writes
+  a heartbeat note with the usage reading.
+- Stuck work: a claim past 2 attempts is parked at once, and one held for 2 hours of active time is
+  parked, at Stop and by the minute's watchdog mid turn (said at the next Stop). Active time leaves
+  out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
+  A claim entry with no time of its own is never judged stuck by time.
+- Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
+  blocked on with the reason said: one failed read never stops the night. Three in a row stop it
+  with a `failed` note. The rules carry the repository path shell quoted where it needs to be.
+- API errors (`classic.StopFailure`): it carries no reset time and calls an overloaded server
+  `server_error` (#839), so a rate limit, overloaded or server error is waited out at 5, 10, 20 and
+  40 minutes, then an hour between tries, all night, each wait a `wait` note; the minute's tick
+  starts the session again with `$.prompt.submit` once the wait is over, clearing the wait first so
+  it starts once. Any other error (sign in, billing, a refused request, unknown) writes a `failed`
+  note and stops. A turn that ends well starts the waits over.
+- Weekly usage: at 95% the claim in hand is parked and the session stops; with no weekly reading
+  for 60 minutes it finishes the issue in hand, claims nothing new, and stops, with an "unmeasured"
+  finding once (L706).
+- Power: `/sleep` refuses on battery, and when `pmset` cannot say, and holds `caffeinate -i -t`
+  until the record's end, its process number kept in `caffeinate.pid` and let go at wake or at the
+  record's own end, only while that process is still `caffeinate`.
+- Unmeasured until the first real night (Dan, 2026-10-07: build now, measure on night one): a full
+  hour of work in an interactive session, and what a real usage limit looks like.
+
+### Sleep mode phase 3: permissions and outward actions (#834), built
+
+Dan's decision 7 and the plan-lite picker of 2026-10-06, "Everything not banned": overnight,
+Claude Code's own permission prompts are approved, Dan's own automatic checks stay on, and what
+the ban list names is refused. The lessons audit recommended an allow list (L42, L615); Dan chose
+the ban list knowing that an action it does not name is approved.
+
+- `classic.PermissionRequest`: while the record reads asleep and this session is one of its
+  `workers`, a prompt is approved, unless it is AskUserQuestion or ExitPlanMode (H8) or on the ban
+  list, which are denied with the reason. The settings hooks and every mod's `tool.call` refusal
+  run before this step, and a decision beneath is never overridden. Awake, a record that cannot be
+  read, or a session that is not a worker: the prompt waits for Dan as always.
+- `classic.PermissionDenied`: while asleep, a `failed` line naming the classifier's reason goes in
+  `notes/<generation>.jsonl`, and `retry` is taken off whatever beneath answered.
+- The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
+  repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
+  label and milestone writes by gh or gh api. Every other gh call is judged by two short lists,
+  read by one parser, `hooks/ghargs.ts`, as gh reads it (`--flag=value`, `-XDELETE`, `-Rowner/x`,
+  clustered `-sd`, global flags before the subcommand, a dotted owner): a known read (view, list,
+  status, diff, checks, watch, search, a GET to the API) goes ahead anywhere; the writes overnight
+  work needs (an issue or PR comment, `pr create`, `pr edit` of title or body, `pr ready`, `pr
+  merge`, a POST to an issue or PR comment endpoint) go only to the repository the checkout is,
+  resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any `cd`; everything
+  else, on any repository, is refused (repo delete, release, secret, a workflow run, `pr close`,
+  any other API write, every GraphQL mutation). A write that cannot be resolved is refused (L75):
+  a gh whose operands xargs feeds, text `eval` or `source` runs, gh named with a gh subcommand
+  after it by any other command (a wrapper mod-kit's reader does not read past), any `GH_`
+  variable or GitHub token set, another `--hostname`, a flag before the subcommand or its action
+  that gh does not know, or a folder whose remotes name two repositories. A runner the reader
+  reads past (`env`, `nohup`, `sudo`, `timeout`, a shell's `-c`) changes nothing about where gh
+  goes, so the gh it runs meets the same lists. Every command is read by mod-kit's reader, never a
+  quote reader of the mod's own. The lessons file by any write route; every
+  claude.ai, Chrome and PostHog MCP tool whose name does not say it only reads (a read only tool
+  whose name has no read word is refused too, which fails closed);
+  Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
+  branch deletes in every spelling git takes (`--forc` is `--force`; a merge with `--delete-branch`
+  included); `claude-sync` pull, sync and install.
+  Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
+  managed settings file (#876) nothing is approved overnight.
+- The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
+  created (events and search, since either can lag), milestones touched and deploy runs in each
+  repository with an event overnight, each repository the night's notes name (a private one the
+  feed leaves out included) and the config repository, and the lessons file changed on GitHub and
+  installed. Each hit is an `outward` note and each read that failed an `unmeasured` one,
+  written before the final render, which puts both under Needs a look at the top of the report
+  (#835), and both are said in the wake reply or the notification. Its GitHub reads keep to one
+  30 s deadline, each read given only the time left, so wake waits at most 30 s for it before the
+  report's own final render.
+
 ### Sleep mode phase 7: merge and deploy lists that fail closed (#843), built
 
 Dan's decision 6 (2026-10-06): merge and deploy as in the daytime, except trypennie, Bidspoke and
@@ -849,7 +1041,7 @@ let through.
   repository on both lists, an entry GitHub does not know, a question unanswered in 10 minutes or
   with nobody to ask, a repository first met after sleep began (noted once a night), a call whose
   repository cannot be told (it changes folder first), and a record from before this phase.
-- While asleep, every session's Bash calls are judged by effect (`hooks/overnight.ts`, through
+- While asleep, every session's Bash calls are judged by effect (`hooks/mergedeploy.ts`, gh read by phase 3's `ghargs.ts`, commands through
   mod-kit's reader): merges (`gh pr merge` and `--auto`, `merge-when-ready.sh`, the REST merge
   endpoints, the GraphQL merge mutations, and a query that cannot be read), deploys (no build's own
   deploy tool list, shared, `gh workflow run`, a workflow dispatch, and a package script by name or

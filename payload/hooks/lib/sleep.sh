@@ -101,3 +101,36 @@ sleep_why() {
 sleep_active() {
   [ "$(sleep_state "$@")" = asleep ]
 }
+
+# The one writer of the night's notes (claude-config#835), for every phase that has something for
+# the morning report: a question, a finding, a proposed issue or lesson, done, parked or failed
+# work, a heartbeat, a rate limit wait. Never write the notes file or the report yourself.
+#
+#   sleep_note '{"kind":"done","by":"<session id>","repo":"owner/name","issue":12,"pr":34,"text":"..."}'
+#
+# The argument is one JSON object with a `kind`; the kinds the report knows and the fields each
+# reads are listed in lib/sleep-report.py. It is written only while the Mac is asleep (this file's
+# own predicate, asked first), appended as one line to notes/<generation>.jsonl, and the report in
+# Downloads is rendered again. Exit 0 once the note is written, even when the report could not be
+# rendered after it (said on stderr: the note is the record, and the report is rendered again at
+# wake); 1 when the note was refused or not written, with why on stderr. The record, now and this
+# boot may follow, as for sleep_state, for the tests.
+# The script beside this file when bash sourced it; under a shell with no BASH_SOURCE (zsh) this
+# file cannot know where it is, so the installed copy is used, never one in the caller's folder.
+_SLEEP_LIB_DIR=""
+[ -n "${BASH_SOURCE[0]:-}" ] && _SLEEP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+sleep_note() {
+  local line="${1:-}" file="${2:-$HOME/.claude/state/sleep/current.json}" state script
+  state="$(sleep_state "$file" "${3:-}" "${4:-}")"
+  if [ "$state" != asleep ]; then
+    printf 'sleep_note: not written, since the Mac is not asleep (the sleep record reads as %s)\n' "$state" >&2
+    return 1
+  fi
+  script="$HOME/.claude/hooks/lib/sleep-report.py"
+  [ -n "$_SLEEP_LIB_DIR" ] && [ -f "$_SLEEP_LIB_DIR/sleep-report.py" ] && script="$_SLEEP_LIB_DIR/sleep-report.py"
+  if [ ! -f "$script" ]; then
+    printf 'sleep_note: not written, since sleep-report.py is neither beside sleep.sh (%s) nor installed (%s)\n' "${_SLEEP_LIB_DIR:-not known}" "$script" >&2
+    return 1
+  fi
+  python3 "$script" note --record "$file" --line "$line" || return 1
+}

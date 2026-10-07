@@ -1,406 +1,375 @@
-import { deployWith, ghApiCall, graphqlDocument, operations, runnerScript, type Cmd } from './nobuild.ts'
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { flagOf, ghApi, ghArgs, graphqlQuery, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
+import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, operations, type Cmd } from './nobuild.ts'
 
-// Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
+// Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
+// by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
+// (plan-lite picker): "Everything not banned". Claude Code's own permission prompts are approved
+// overnight in the enrolled sessions unless the call is on this list, and the list is refused
+// outright in every session while asleep, whatever the classifier would say. The lessons audit
+// recommended an allow list instead (L42, L615); Dan chose the ban list knowing an action it does
+// not name is approved. So the list here is the plan's, item for item:
 //
-// One shared file, mods/sleep-repos.json in the payload (both Macs read it, and an answer one Mac
-// writes reaches the other through the sync, as the account room's nicknames do), holds two lists:
-// `mergeOnly`, repositories that may merge overnight but never deploy, and `mayDeploy`, those that
-// may merge and run their own deploy step as in the daytime. A mergeOnly entry whose merge itself
-// deploys (`mergeDeploys: true`), or whose file does not say (`unknown`, L72), is refused the merge too, leaving the
-// green PR open for the morning (Dan's decision 6, 2026-10-06).
+// - issue, label and milestone writes by gh or gh api; any other GitHub write (a comment, which
+//   decision 3 needs on the issue being worked, a review, a close) only on the repository the
+//   checkout is, everything gh does but a short list of known reads counting as a write, and one
+//   whose repository cannot be resolved is refused (L75);
+// - LESSONS.md written by any route in command position;
+// - every write tool under mcp__claude_ai_*, mcp__claude-in-chrome__* and mcp__posthog__*, and
+//   Supabase and psql writes;
+// - git checkout or switch in a primary checkout (H7);
+// - force pushes and branch deletes;
+// - claude-sync pull and install.
 //
-// Everything without an answer fails closed, no merge and no deploy for the night (L42): a file
-// missing or unreadable, a repository on both lists or on neither, an entry GitHub does not know,
-// a question at bedtime left unanswered, and a repository first met after sleep began. /sleep reads
-// the file once and writes what it found into the sleep record (`repos`), so the night is judged by
-// what was settled at bedtime, never by a later edit (an answer given late counts from the next
-// night). A direct push to a default branch is refused in every repository.
-//
-// Pure: the shell is read by mod-kit's one reader and handed in, and the deploy tools are no build's
-// own list (nobuild.ts), so a tool added there is refused here too (L613).
+// Pure but for the two questions only the disk can answer, asked through `Look`; an answer it
+// cannot give is null, which refuses. A text match always has a way around it, so the wake check
+// (wakecheck.ts) reads what really happened overnight.
 
-/**
- * One mergeOnly entry: `mergeDeploys` true when a merge itself deploys, `unknown` when the file does
- * not say. Only false lets a merge run overnight.
- */
-export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown' }
-/** The shared file, as read. */
-export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[] }
-/** A repository closed for the night, and why, for the refusal and the morning report. */
-export type ClosedRepo = { repo: string; why: string }
-/** What the sleep record carries for the night (`repos`): the lists as settled at bedtime. */
-export type NightRepos = { mayDeploy: string[]; mergeOnly: RepoEntry[]; closed: ClosedRepo[]; listWhy?: string }
-
-/** What a repository may do tonight. */
-export type Policy = { kind: 'deploy'; repo: string } | { kind: 'merge-only'; repo: string; mergeDeploys: boolean | 'unknown' } | { kind: 'closed'; repo?: string; why: string }
-
-export const REPO_LIST_FILE = 'mods/sleep-repos.json'
-const SLUG = /^[\w.-]+\/[\w.-]+$/
-const key = (repo: string) => repo.toLowerCase()
-
-/** The shared file's text (null when there is none) as lists, or why it cannot be trusted at all. */
-export const readRepoLists = (text: string | null): { lists: RepoLists } | { why: string } => {
-  if (text === null) return { why: `${REPO_LIST_FILE} is missing` }
-  let j: unknown
-  try {
-    j = JSON.parse(text)
-  } catch {
-    return { why: `${REPO_LIST_FILE} is not JSON` }
-  }
-  if (!j || typeof j !== 'object' || Array.isArray(j)) return { why: `${REPO_LIST_FILE} is not a record` }
-  const r = j as Record<string, unknown>
-  if (typeof r.v !== 'number' || !(r.v >= 1)) return { why: `${REPO_LIST_FILE} has no version this reader knows` }
-  if (!Array.isArray(r.mayDeploy) || !Array.isArray(r.mergeOnly)) return { why: `${REPO_LIST_FILE} does not hold both lists` }
-  const mayDeploy: string[] = []
-  for (const e of r.mayDeploy) {
-    if (typeof e !== 'string' || !SLUG.test(e)) return { why: `${REPO_LIST_FILE} has a mayDeploy entry that is not owner/name: ${JSON.stringify(e)}` }
-    mayDeploy.push(e)
-  }
-  const mergeOnly: RepoEntry[] = []
-  for (const e of r.mergeOnly) {
-    const o = e as Record<string, unknown> | null
-    if (!o || typeof o !== 'object' || typeof o.repo !== 'string' || !SLUG.test(o.repo)) return { why: `${REPO_LIST_FILE} has a mergeOnly entry with no owner/name: ${JSON.stringify(e)}` }
-    if (o.mergeDeploys !== undefined && typeof o.mergeDeploys !== 'boolean') return { why: `${REPO_LIST_FILE} gives ${o.repo} a mergeDeploys that is not true or false` }
-    // Unsaid is the strict answer: a merge is taken to deploy until the file says it does not (L72).
-    mergeOnly.push({ repo: o.repo, mergeDeploys: o.mergeDeploys === undefined ? 'unknown' : o.mergeDeploys })
-  }
-  return { lists: { mayDeploy, mergeOnly } }
+/** The questions only the disk can answer. Null when it cannot be said, which refuses. */
+export type Look = {
+  /** The one GitHub repository a folder's remotes name, as owner/name in lower case. */
+  repoOf: (dir: string) => Promise<string | null>
+  /** Whether a folder is in a primary checkout (true) or a linked worktree (false). */
+  isPrimary: (dir: string) => Promise<boolean | null>
 }
 
-/** Every repository the lists name, once each, for the bedtime check that GitHub knows them. */
-export const listedRepos = (lists: RepoLists): string[] => {
-  const seen = new Map<string, string>()
-  for (const r of [...lists.mergeOnly.map(e => e.repo), ...lists.mayDeploy]) if (!seen.has(key(r))) seen.set(key(r), r)
-  return [...seen.values()]
+/** One call as the mod reads it. `raw` is the Bash command as written; `ghRepo` the session's GH_REPO. */
+export type OvernightCall = {
+  tool: string
+  input: Record<string, unknown>
+  raw: string
+  commands: Cmd[]
+  writes: ModKitWrites
+  cwd: string
+  home: string
+  ghRepo?: string
 }
 
-/** Whether a repository is on either list. */
-export const isListed = (lists: RepoLists, repo: string): boolean => listedRepos(lists).some(r => key(r) === key(repo))
+/** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
+export const NEVER_ASKED: ReadonlySet<string> = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
-/**
- * The night's lists as the sleep record carries them, from the file as read at bedtime, the
- * entries GitHub could not find, and the repositories closed for another reason (a question left
- * unanswered). A repository on both lists is closed, never given the looser one.
- */
-export const nightRepos = (read: { lists: RepoLists } | { why: string }, closed: ClosedRepo[]): NightRepos => {
-  if ('why' in read) return { mayDeploy: [], mergeOnly: [], closed, listWhy: read.why }
-  const shut = new Map(closed.map(c => [key(c.repo), c]))
-  const deploys = new Set(read.lists.mayDeploy.map(key))
-  for (const e of read.lists.mergeOnly)
-    if (deploys.has(key(e.repo)) && !shut.has(key(e.repo))) shut.set(key(e.repo), { repo: e.repo, why: `${e.repo} is on both lists in ${REPO_LIST_FILE}` })
-  return {
-    mayDeploy: read.lists.mayDeploy.filter(r => !shut.has(key(r))),
-    mergeOnly: read.lists.mergeOnly.filter(e => !shut.has(key(e.repo))),
-    closed: [...shut.values()],
-  }
-}
-
-const isNight = (n: unknown): n is NightRepos => {
-  const o = n as NightRepos | null
-  return !!o && typeof o === 'object' && Array.isArray(o.mayDeploy) && Array.isArray(o.mergeOnly) && Array.isArray(o.closed)
-}
-
-/**
- * What `repo` may do tonight, from the lists the sleep record carries. No lists (a record written
- * before this phase), a repository that could not be told, and one on neither list are all closed.
- */
-export const policyOf = (night: unknown, repo: string | undefined): Policy => {
-  if (!isNight(night)) return { kind: 'closed', ...(repo ? { repo } : {}), why: 'the sleep record carries no merge and deploy lists' }
-  if (!repo) return { kind: 'closed', why: 'which repository this reaches could not be told' }
-  if (night.listWhy) return { kind: 'closed', repo, why: night.listWhy }
-  const shut = night.closed.find(c => key(c.repo) === key(repo))
-  if (shut) return { kind: 'closed', repo, why: shut.why }
-  if (night.mayDeploy.some(r => key(r) === key(repo))) return { kind: 'deploy', repo }
-  const m = night.mergeOnly.find(e => key(e.repo) === key(repo))
-  if (m) return { kind: 'merge-only', repo, mergeDeploys: m.mergeDeploys }
-  return { kind: 'closed', repo, why: `${repo} is on neither list in ${REPO_LIST_FILE}` }
-}
-
-/** One thing a command would do that this phase judges, and the repository it names, when it names one. */
-export type Act = { kind: 'merge' | 'deploy' | 'push-default'; what: string; repo?: string }
-
-/**
- * A package.json's scripts as the judge needs them: each script's body as the commands mod-kit's
- * reader finds in it, none (no file), or why they cannot be read.
- */
-export type Scripts = Record<string, Cmd[]> | null | { unreadable: string }
-
-/** What the judge knows about where a command runs: its default branch (or the usual names) and current branch. */
-export type Where = { defaultBranch: string | null; currentBranch: string | null; scripts: Scripts }
-
-const isFlag = (w: string) => w.startsWith('-') && w !== '-'
+const base = (p: string) => (p.replace(/\/+$/, '').split('/').pop() ?? '').toLowerCase()
 const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
-const repoFlag = (words: string[]): string | undefined => {
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i] as string
-    if (w === '-R' || w === '--repo') return words[i + 1]
-    if (w.startsWith('--repo=')) return w.slice('--repo='.length)
-  }
-  return undefined
-}
-const repoOfEndpoint = (endpoint: string | undefined) => /^\/?repos\/([\w.-]+\/[\w.-]+)\//.exec(endpoint ?? '')?.[1]
-const MERGE_MUTATION = /^(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)$/
+const isLessons = (p: string | undefined) => p !== undefined && base(p) === 'lessons.md'
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
-// A deploy a package script's body runs, one level deep: each command mod-kit's reader found in
-// it, and a script it runs by name judged by that name.
-const bodyDeploys = (body: Cmd[]): string | undefined => {
-  for (const c of body) {
-    const d = deployWith(c.words)
-    if (d) return d
+export { normRepo }
+
+/** `git remote -v`'s answer as the one GitHub repository it names; null for none or more than one (a fork's upstream is where gh may send a call). */
+export const repoFromRemotes = (text: string): string | null => {
+  const found = new Set<string>()
+  for (const line of text.split('\n')) {
+    const url = line.split(/\s+/)[1]
+    if (!url) continue
+    const r = normRepo(url)
+    found.add(r ?? `not github: ${url}`)
   }
-  return undefined
+  return found.size === 1 ? ([...found][0] as string).startsWith('not github') ? null : ([...found][0] as string) : null
 }
 
-const DEFAULTS = ['main', 'master']
-const strip = (ref: string) => ref.replace(/^\+/, '').replace(/^refs\/heads\//, '')
-
-// A push reaching the default branch: a refspec whose destination is it, every branch at once, or
-// no refspec at all from the default branch itself (push.default sends the current branch).
-const pushToDefault = (args: string[], where: Where): string | undefined => {
-  const defaults = where.defaultBranch ? [where.defaultBranch] : DEFAULTS
-  const isDefault = (b: string | null) => b !== null && defaults.includes(b)
-  if (args.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return 'push every branch, the default one included'
-  // Flags taking a value, so the value is not read as the remote or a refspec.
-  const valued = new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec'])
-  const ops: string[] = []
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string
-    if (valued.has(a)) i++
-    else if (!isFlag(a)) ops.push(a)
-  }
-  const refspecs = ops.slice(1)
-  if (!refspecs.length) {
-    if (where.currentBranch === null) return 'push from a branch that could not be read'
-    return isDefault(where.currentBranch) ? `push ${where.currentBranch} straight to GitHub` : undefined
-  }
-  for (const spec of refspecs) {
-    const [src, dst] = spec.includes(':') ? (spec.split(':') as [string, string]) : [spec, spec]
-    const target = strip(dst === '' ? src : dst)
-    const resolved = target === 'HEAD' ? where.currentBranch : target
-    if (resolved === null) return 'push from a branch that could not be read'
-    if (isDefault(resolved)) return `push ${resolved} straight to GitHub`
-  }
-  return undefined
+/** `git rev-parse --path-format=absolute --git-dir --git-common-dir`'s answer: a primary checkout's two are the same. */
+export const primaryFrom = (stdout: string): boolean | null => {
+  const [dir, common] = stdout.trim().split('\n').map(l => l.trim())
+  if (!dir || !common) return null
+  return dir === common
 }
 
-/** What one command would do that this phase judges: merge a PR, deploy, or push to the default branch. */
-export const actsOf = (c: Cmd, where: Where): Act[] => {
-  const out: Act[] = []
-  const words = c.words
-  const cmd = name(words[0])
-  // The merge helper merges by gh inside a script the reader never sees, so it is a merge by its name.
-  if (words.some(w => /(?:^|\/)merge-when-ready\.sh$/.test(w))) out.push({ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: repoFlag(words) })
-  if (c.git?.sub === 'push') {
-    const p = pushToDefault(c.git.args, where)
-    if (p) out.push({ kind: 'push-default', what: p })
+// A folder a cd names, resolved against the one before it; null when the shell would decide it
+// (a variable, a glob, `cd -`), so whatever needs it is refused.
+export const resolveDir = (word: string | undefined, dir: string | null, home: string): string | null => {
+  if (word === undefined) return home
+  if (word === '-' || /[$`*?[\]{}]/.test(word)) return null
+  let p = word === '~' ? home : word.startsWith('~/') ? `${home}${word.slice(1)}` : word
+  if (!p.startsWith('/')) {
+    if (dir === null) return null
+    p = `${dir}/${p}`
   }
-  if (cmd === 'gh') {
-    const [, sub = '', act = ''] = words
-    const repo = repoFlag(words)
-    if (sub === 'pr' && act === 'merge') out.push({ kind: 'merge', what: `merge a PR${words.includes('--auto') ? ' (auto merge)' : ''}`, repo })
-    if (sub === 'workflow' && act === 'run') out.push({ kind: 'deploy', what: 'run a workflow (gh workflow run)', repo })
-    if (sub === 'api') {
-      const { method, endpoint } = ghApiCall(words)
-      const at = repoOfEndpoint(endpoint) ?? repo
-      if (endpoint === 'graphql') {
-        const doc = graphqlDocument(words)
-        const fields = doc === null ? null : operations(doc).filter(o => o.kind === 'mutation').flatMap(o => (o.spreads ? ['...'] : o.fields))
-        if (fields === null) out.push({ kind: 'merge', what: 'call the GitHub API with a query that could not be read', repo: at })
-        else if (fields.some(f => f === '...' || MERGE_MUTATION.test(f))) out.push({ kind: 'merge', what: 'merge a PR through the GitHub API', repo: at })
-      } else if (method !== 'GET' && endpoint) {
-        if (/\/pulls\/\d+\/merge\/?$/.test(endpoint) || /\/merges\/?$/.test(endpoint)) out.push({ kind: 'merge', what: `merge through the GitHub API (${endpoint})`, repo: at })
-        if (/\/dispatches\/?$/.test(endpoint)) out.push({ kind: 'deploy', what: `start a workflow through the GitHub API (${endpoint})`, repo: at })
-        const ref = /\/git\/refs\/heads\/(.+?)\/?$/.exec(endpoint)?.[1]
-        const defaults = where.defaultBranch ? [where.defaultBranch] : DEFAULTS
-        if (ref && defaults.includes(ref)) out.push({ kind: 'push-default', what: `move ${ref} through the GitHub API`, repo: at })
-      }
-    }
-  }
-  const deploys = deployWith(words)
-  if (deploys) out.push({ kind: 'deploy', what: deploys })
-  else {
-    const script = runnerScript(words)
-    if (script) {
-      const s = where.scripts
-      if (s && 'unreadable' in s) out.push({ kind: 'deploy', what: `run the ${script} script, whose body could not be read (${s.unreadable})` })
-      else if (s && Object.prototype.hasOwnProperty.call(s, script)) {
-        const inner = bodyDeploys(s[script] as Cmd[])
-        if (inner) out.push({ kind: 'deploy', what: `run the ${script} script, which would ${inner}` })
-      }
-    }
-  }
-  return out
-}
-
-/** How long a bedtime question waits for Dan before its repository is closed for the night. */
-export const QUESTION_MS = 10 * 60_000
-/** A merge there does not itself deploy: merge overnight, never deploy. */
-export const MERGE_NO_DEPLOY = 'Merge, never deploy'
-/** A merge there deploys, or Dan is not sure: the green PR waits for the morning, and nothing deploys. */
-export const HOLD_MERGES = 'Hold merges, never deploy'
-export const MAY_DEPLOY = 'Allowed to deploy'
-export const REPO_ANSWERS = [MERGE_NO_DEPLOY, HOLD_MERGES, MAY_DEPLOY] as const
-
-/** The bedtime question about a repository on neither list. */
-export const repoQuestion = (repo: string) =>
-  `Choose "${MERGE_NO_DEPLOY}" only if a merge there does not itself deploy. Overnight in ${repo}, what may Claude do?`
-
-/** A marker file's text (the preparing marker, the answers lock): who holds it, since when, and its own nonce. */
-export type Marker = { owner: string; at: number; nonce: string }
-export const markerText = (m: Marker) => JSON.stringify(m)
-export const readMarker = (text: string): Marker | { unreadable: string } => {
-  let j: unknown
-  try {
-    j = JSON.parse(text)
-  } catch {
-    return { unreadable: 'it is not JSON' }
-  }
-  const m = j as Partial<Marker> | null
-  if (!m || typeof m.owner !== 'string' || typeof m.at !== 'number' || !Number.isFinite(m.at) || typeof m.nonce !== 'string') return { unreadable: 'it names no owner, time and nonce' }
-  return { owner: m.owner, at: m.at, nonce: m.nonce }
-}
-
-/** The shared file as installed with the rest of the payload on both Macs. */
-export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.claude/${REPO_LIST_FILE}`
-
-/** owner/name from an origin remote, ssh or https, or undefined. */
-export const slugOf = (remote: string | undefined | null) => /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec((remote ?? '').trim())?.[1]
-
-/** The shared file with one bedtime answer added, or why it cannot be. */
-export const addAnswer = (text: string | null, repo: string, answer: string): { text: string } | { why: string } => {
-  if (!(REPO_ANSWERS as readonly string[]).includes(answer)) return { why: `the answer was none of the choices ("${answer}")` }
-  const read = readRepoLists(text)
-  if ('why' in read) return read
-  if (isListed(read.lists, repo)) return { why: `${repo} is already listed` }
-  const j = JSON.parse(text as string) as Record<string, unknown> & { mergeOnly: unknown[]; mayDeploy: unknown[] }
-  if (answer === MERGE_NO_DEPLOY) j.mergeOnly.push({ repo, mergeDeploys: false })
-  else if (answer === HOLD_MERGES) j.mergeOnly.push({ repo, mergeDeploys: true })
-  else j.mayDeploy.push(repo)
-  return { text: `${JSON.stringify(j, null, 2)}\n` }
-}
-
-/** A package.json's scripts from its text, each body as written (null when there is no file); the caller reads each body with mod-kit's reader. */
-export const scriptsOf = (text: string | null): Record<string, string> | null | { unreadable: string } => {
-  if (text === null) return null
-  try {
-    const s = (JSON.parse(text) as { scripts?: unknown }).scripts
-    if (s === undefined) return {}
-    if (!s || typeof s !== 'object' || Array.isArray(s)) return { unreadable: 'its scripts are not a record' }
-    return Object.fromEntries(Object.entries(s).filter(([, v]) => typeof v === 'string')) as Record<string, string>
-  } catch {
-    return { unreadable: 'package.json is not JSON' }
-  }
-}
-
-/** Where a command runs and what is read there: its default and current branch, its origin's owner/name, and its package scripts. */
-export type Place = Where & { own: string | undefined }
-
-const join = (base: string, p: string) => {
-  const parts = (p.startsWith('/') ? p : `${base}/${p}`).split('/')
   const out: string[] = []
-  for (const part of parts) {
-    if (part === '' || part === '.') continue
-    if (part === '..') out.pop()
-    else out.push(part)
+  for (const s of p.split('/')) {
+    if (!s || s === '.') continue
+    if (s === '..') out.pop()
+    else out.push(s)
   }
   return `/${out.join('/')}`
 }
-// A path word this can follow: spelled out, or under ~; anything a shell would expand otherwise
-// (a variable, a pattern, a substitution) is a place it cannot see.
-const literal = (w: string | undefined, home: string): string | null => {
-  if (w === undefined || w === '' || /[$`*?[\]{}()]/.test(w)) return null
-  if (w === '~' || w.startsWith('~/')) return home ? `${home}${w.slice(1)}` : null
-  if (w.startsWith('~')) return null
-  return w
+
+// ---- git ----
+
+const shortFlags = (args: readonly string[]) => args.filter(a => /^-[A-Za-z]+$/.test(a)).join('')
+// git takes any unambiguous prefix of a long option (`--forc` is --force), so a long flag counts as
+// one of these when it could be read as it: the whole name, or a prefix of four characters or more.
+const spells = (arg: string, options: readonly string[]): boolean => {
+  if (!arg.startsWith('--')) return false
+  const name = arg.split('=')[0] as string
+  return options.some(o => o === name || (name.length >= 4 && o.startsWith(name)))
+}
+const FORCES = ['--force', '--force-with-lease', '--force-if-includes', '--mirror']
+const DELETES = ['--delete', '--prune']
+const pushRefusal = (args: readonly string[]): string | undefined => {
+  const short = shortFlags(args)
+  if (args.some(a => spells(a, FORCES)) || short.includes('f')) return 'force push'
+  if (args.some(a => spells(a, DELETES)) || short.includes('d')) return 'delete a branch'
+  for (const a of args) {
+    if (a.startsWith('-')) continue
+    // A plus leading either side of a refspec forces it, as git reads one, or fails closed where it does not.
+    if (a.split(':').some(side => side.startsWith('+'))) return 'force push'
+    if (a.startsWith(':')) return 'delete a branch'
+  }
+  return undefined
+}
+// A checkout that moves the whole tree: anything but putting named files back after `--`.
+const checkoutMoves = (args: readonly string[]): boolean => {
+  const dd = args.indexOf('--')
+  if (dd < 0) return true
+  const paths = args.slice(dd + 1)
+  return paths.length === 0 || paths.some(p => p === '.' || p === ':/' || p.endsWith('/'))
+}
+const GIT_PUTS_BACK = new Set(['checkout', 'restore', 'rm', 'mv', 'apply', 'am'])
+
+const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: string, look: Look): Promise<string | undefined> => {
+  const sub = g.sub ?? ''
+  const args = g.args
+  if (GIT_PUTS_BACK.has(sub) && args.some(isLessons)) return 'write to LESSONS.md'
+  if (sub === 'push') return pushRefusal(args)
+  if (sub === 'branch') {
+    const short = shortFlags(args)
+    return args.some(a => spells(a, ['--delete'])) || short.includes('d') || short.includes('D') ? 'delete a branch' : undefined
+  }
+  if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return 'delete a branch'
+  if (sub === 'switch' || (sub === 'checkout' && checkoutMoves(args))) {
+    const where = g.dir === undefined ? dir : resolveDir(g.dir, dir, home)
+    const primary = where === null ? null : await look.isPrimary(where)
+    if (primary === null) return `run git ${sub} where it could not be told whether this is a primary checkout`
+    return primary ? `run git ${sub} in a primary checkout` : undefined
+  }
+  return undefined
 }
 
+// ---- gh ----
+
+// Every gh call is read by ghargs.ts, the one reading of gh's arguments here.
+// Overnight, gh is judged by two short lists, never a list of what it must not do, which would
+// always be missing the next one (#834 reviews): what only reads, which goes ahead wherever it
+// points, and the few writes overnight work needs, which go only to the checkout's own repository.
+// Everything else gh does is refused, on any repository: being on the right repository is not
+// enough for a write (repo delete, release, secret, a workflow run).
+const GH_READ_ACTS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch'])
+const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion', 'status'])
+// The writes overnight work needs, each a subcommand and action and the only flags it may carry
+// beyond -R or --repo: a comment on the issue being worked (decision 3), opening, readying and
+// merging its PR (phase 7 judges merges further), and changing that PR's title or body. Nothing is
+// filed overnight, so no issue is created, and no merge skips its checks (--admin); one left to
+// land once its checks pass (--auto) still waits on them.
+const BODY = ['-t', '--title', '-b', '--body', '-F', '--body-file']
+const GH_WRITES: Record<string, string[]> = {
+  'issue comment': ['-b', '--body', '-F', '--body-file'],
+  'pr comment': ['-b', '--body', '-F', '--body-file'],
+  'pr create': [...BODY, '-B', '--base', '-H', '--head', '-d', '--draft', '-f', '--fill', '--fill-first', '--fill-verbose'],
+  'pr edit': BODY,
+  'pr ready': [],
+  'pr merge': ['-s', '--squash', '-m', '--merge', '-r', '--rebase', '-t', '--subject', '-b', '--body', '-F', '--body-file', '--match-head-commit', '--auto'],
+}
+// GraphQL mutations that are issue, label and milestone writes, named in the refusal as such; every
+// mutation is refused overnight, each by its exact name.
+const BANNED_MUTATIONS = new Set(['createIssue', 'updateIssue', 'closeIssue', 'reopenIssue', 'deleteIssue', 'transferIssue', 'pinIssue', 'unpinIssue', 'createLinkedBranch', 'addSubIssue', 'removeSubIssue', 'reprioritizeSubIssue', 'updateIssueComment', 'deleteIssueComment', 'addLabelsToLabelable', 'removeLabelsFromLabelable', 'clearLabelsFromLabelable', 'createLabel', 'updateLabel', 'deleteLabel'])
+const LABELS_ON_PR: Record<string, string[]> = {
+  edit: ['--add-label', '--remove-label', '--milestone', '-m', '--remove-milestone'],
+  create: ['--label', '-l', '--milestone', '-m'],
+}
+const COMMENT_ENDPOINT = /^repos\/([^/]+)\/([^/]+)\/(?:issues|pulls)\/\d+\/comments$/
+const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/
+const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
+
+// What gh is asked to do: refused outright, a write to judge by the repository it reaches, or a
+// read (undefined). REST and GraphQL reach the same decision through the same outcomes.
+type GhVerdict = { refuse: string } | { write: string | null | undefined } | undefined
+const ghVerdict = (words: readonly string[]): GhVerdict => {
+  const a = ghArgs(words)
+  const { sub, act } = a
+  // An unknown flag before the subcommand, or between it and its action: what the call does cannot
+  // be read, so it reaches a repository that cannot be resolved.
+  if (a.unreadable) return { write: null }
+  if (sub === 'api') return apiVerdict(a)
+  // gh with no subcommand only prints its help or version.
+  if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || !sub) return undefined
+  // Changing or removing a comment is not posting one (decision 3 needs only that).
+  if (act === 'comment' && hasFlag(a, '--delete-last', '--edit-last')) return { refuse: 'edit or delete a comment' }
+  if (sub === 'pr') {
+    const labels = LABELS_ON_PR[act]
+    if (labels && hasFlag(a, ...labels)) return { refuse: 'set labels or a milestone on a PR' }
+    if ((act === 'merge' || act === 'close') && hasFlag(a, '-d', '--delete-branch')) return { refuse: 'delete a branch' }
+  }
+  const key = `${sub} ${act}`
+  if (!Object.prototype.hasOwnProperty.call(GH_WRITES, key)) return { refuse: `run gh ${key}`.trim() }
+  const allowed = GH_WRITES[key] as string[]
+  const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
+  if (other) return { refuse: `run gh ${key} with ${other.name}` }
+  return { write: a.named }
+}
+
+const apiVerdict = (a: GhArgs): GhVerdict => {
+  // Another GitHub host is another place entirely, never this checkout's repository.
+  const host = flagOf(a, '--hostname')
+  if (host !== undefined && (typeof host !== 'string' || host.toLowerCase() !== 'github.com')) return { write: null }
+  const { method, endpoint, fields } = ghApi(a)
+  const ep = (endpoint ?? '').replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '').replace(/[?#].*$/, '')
+  if (ep === 'graphql') {
+    // A GraphQL document is always a POST: read it, and refuse one that cannot be read.
+    const query = graphqlQuery(a)
+    if (query === null) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
+    for (const op of operations(query)) {
+      if (op.kind !== 'mutation') continue
+      if (op.spreads || !op.fields.length) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
+      if (op.fields.includes('deleteRef')) return { refuse: 'delete a branch' }
+      return { refuse: `call the GitHub API to run ${op.fields.find(f => BANNED_MUTATIONS.has(f)) ?? op.fields[0]}` }
+    }
+    return undefined
+  }
+  if (method === 'GET') return undefined
+  // The one API write overnight work needs: a comment on an issue or a PR of this repository.
+  const c = COMMENT_ENDPOINT.exec(ep)
+  if (c && method === 'POST') return { write: PLACEHOLDER.test(c[1] as string) || PLACEHOLDER.test(c[2] as string) ? undefined : normRepo(`${c[1]}/${c[2]}`) }
+  if (/(?:^|\/)(?:issues|labels|milestones)(?:\/|$)/.test(ep)) return { refuse: 'change issues, labels or milestones through the GitHub API' }
+  if (/\/git\/refs\/heads\//.test(ep)) {
+    if (method === 'DELETE') return { refuse: 'delete a branch' }
+    if (fields.some(f => /^force=(?:true|1)$/i.test(f))) return { refuse: 'force push' }
+  }
+  return { refuse: `call the GitHub API to ${method} ${ep || 'an endpoint it does not name'}` }
+}
+
+// Whether a gh call in this command line reaches gh some way its words do not show. mod-kit's
+// reader looks past the runners that change nothing about where gh goes (env, command, nohup,
+// time, sudo, timeout, a shell's -c), so a gh they run is judged by its own words like any other.
+// What it cannot show is refused: any GH_ variable or GitHub token set (it changes the repository,
+// host, account or config gh uses), a gh that xargs feeds its operands to, and eval or source
+// naming gh, which run text nobody reads. Read with mod-kit's reader only, never a quote reader of
+// our own (tools/check-mod-shared-parts.sh); the variable check reads the line as written, so a
+// quoted message that spells an assignment is refused too, which fails closed.
+const wrapped = (call: OvernightCall): boolean => {
+  // Anywhere in the line, quotes included, so `env -S 'GH_REPO=x gh ...'` is seen too.
+  if (/\b(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(call.raw)) return true
+  if (call.commands.some(c => name(c.words[0]) === 'gh' && c.xargs)) return true
+  // A file sourced in the same line can set any of those without the line showing it, and so can
+  // a string env -S splits into a command.
+  if (call.commands.some(c => ['source', '.'].includes(name(c.words[0])))) return true
+  if (/(?:^|[\s;&|(])env\s+(?:\S+\s+)*?(?:-S|--split-string)\b/.test(call.raw)) return true
+  return call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))
+}
+
+const UNRESOLVED = 'write to GitHub where the repository it reaches could not be resolved'
+// A GitHub write goes only to the repository the checkout it runs in is. `target` is the one the
+// call names (undefined: none, so gh takes GH_REPO, else the checkout's; null: none can be said).
+const writeRefusal = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<string | undefined> => {
+  // GH_REPO set inline in the command reaches gh past every word the reader gives.
+  if (wrapped(call)) return UNRESOLVED
+  if (target === null) return UNRESOLVED
+  const here = dir === null ? null : await look.repoOf(dir)
+  const to = target === undefined ? (call.ghRepo ? normRepo(call.ghRepo) : here) : target
+  if (!to || !here) return UNRESOLVED
+  return to === here ? undefined : `write to ${to} from a checkout of ${here}`
+}
+
+// ---- MCP tools ----
+
+const LISTED = ['mcp__claude_ai_', 'mcp__claude-in-chrome__', 'mcp__posthog__']
+const READS = new Set(['get', 'list', 'search', 'read', 'fetch', 'find', 'lookup', 'query', 'view', 'describe'])
+const WRITES = new Set(['create', 'update', 'delete', 'remove', 'send', 'post', 'add', 'set', 'edit', 'write', 'upload', 'apply', 'deploy', 'merge', 'reset', 'rebase', 'restore', 'pause', 'save', 'schedule', 'respond', 'complete', 'propose', 'start', 'execute', 'exec', 'run', 'insert', 'publish', 'batch', 'move', 'cancel', 'clear', 'submit', 'upsert', 'patch', 'put', 'invite', 'archive', 'enable', 'disable', 'authenticate', 'navigate', 'click', 'type', 'press', 'fill', 'select', 'drag', 'drop', 'close', 'install', 'register', 'assign', 'share', 'approve', 'reject'])
+// A listed server's tool reads only when its own name says it reads and nothing in it says it writes.
+const mcpWrites = (tool: string): boolean => {
+  const own = tool.slice(tool.lastIndexOf('__') + 2)
+  const words = own.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  return !words.some(w => READS.has(w)) || words.some(w => WRITES.has(w))
+}
+
+// Whether the word after a gh named as an argument makes it a gh call: a gh subcommand, or a flag
+// (`-R o/r`), as a wrapper passes it on. A search term or a path (`grep gh README.md`, `ls gh`)
+// runs nothing. A user's own gh alias in that place is not seen; the wake check is the backstop.
+const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
+const runsGh = (next: string | undefined): boolean => next !== undefined && (next.startsWith('-') || GH_SUBCOMMANDS.has(next))
+// The commands that name a program without running it: printing its name, or finding where it is.
+const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'type', 'whereis', 'man', 'brew'])
+const SYNC_REFUSED = (sub: string | undefined) => sub !== undefined && (sub === 'pull' || sub === 'sync' || sub === 'apply-only' || sub.startsWith('install'))
+
 /**
- * The folder each command runs in, as the #892 push hook resolves it: the session's folder, moved by
- * each `cd` or `pushd` before it, and by a git command's own -C. Null where it cannot be followed (a
- * variable, a pattern, `popd`, a bare `cd`, or --git-dir and --work-tree, which name a repository
- * apart from any folder), and from then on, which is a repository that cannot be told (L75).
+ * What the call would have done, when it is on the overnight list ("run gh issue create", "force
+ * push"), or undefined when it is not. A question only the disk can answer that comes back null
+ * refuses the call.
  */
-export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | null)[] => {
-  let dir: string | null = cwd || null
-  const out: (string | null)[] = []
-  for (const c of commands) {
-    const cmd = name(c.words[0])
+export const overnightRefusal = async (call: OvernightCall, look: Look): Promise<string | undefined> => {
+  const { tool, input } = call
+  if (EDITORS.has(tool)) return isLessons(String(input.file_path ?? input.notebook_path ?? '')) ? 'write to LESSONS.md' : undefined
+  const db = dbToolRefusal(tool, input)
+  if (db && db !== 'reads') return db.what
+  if (db === 'reads') return undefined
+  if (LISTED.some(p => tool.startsWith(p))) return mcpWrites(tool) ? `use ${tool}` : undefined
+  if (tool !== 'Bash') return undefined
+  // A Bash call whose command cannot be read is refused, never approved as an empty one.
+  if (!call.raw.trim()) return 'run a Bash call with no command'
+
+  // LESSONS.md by what the call changes on the disk, as mod-kit's write reader finds it.
+  const w = call.writes
+  if (w.files.some(f => isLessons(f.path ?? f.word)) || w.changes.some(c => isLessons(c.path ?? c.word))) return 'write to LESSONS.md'
+  if (w.unnamed.some(u => [...u.words, ...u.inputs, ...(u.targets ?? []), ...(u.into ? [u.into] : [])].some(isLessons))) return 'write to LESSONS.md'
+
+  // Each command in order, in the folder it runs in: a cd moves it, a subshell keeps its own.
+  // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither
+  // the call nor where it goes can be read, so it is refused (#834 review).
+  if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && /\bgh\b/.test(call.raw)) return UNRESOLVED
+  let dir: string | null = call.cwd
+  const stack: (string | null)[] = []
+  for (const c of call.commands) {
+    let words = c.words
+    while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
+    const cmd = name(words[0])
+    if (cmd === '(') {
+      stack.push(dir)
+      continue
+    }
+    if (cmd === ')') {
+      dir = stack.length ? (stack.pop() as string | null) : dir
+      continue
+    }
     if (cmd === 'cd' || cmd === 'pushd') {
-      const to = c.words.slice(1).filter(w => !isFlag(w))[0]
-      const lit = literal(to, home)
-      dir = dir !== null && lit !== null ? join(dir, lit) : null
-      out.push(dir)
+      dir = resolveDir(words.slice(1).find(a => !a.startsWith('-') || a === '-'), dir, call.home)
       continue
     }
     if (cmd === 'popd') {
       dir = null
-      out.push(dir)
       continue
     }
-    if (cmd === 'git') {
-      let here = dir
-      for (let i = 1; i < c.words.length; i++) {
-        const w = c.words[i] as string
-        if (w === '-C') {
-          const lit = literal(c.words[++i], home)
-          here = here !== null && lit !== null ? join(here, lit) : null
-        } else if (/^--(?:git-dir|work-tree)(?:=|$)/.test(w)) here = null
-        else if (!w.startsWith('-')) break
+    if (c.program && 'text' in c.program && c.verdict && /lessons\.md/i.test(c.program.text)) return 'write to LESSONS.md'
+    // Code whose effects the reader cannot see fails closed (#834 review of 46f07ff): a program it
+    // cannot read at all, and one that runs a process naming gh, git, a database client or
+    // claude-sync, which would reach what the list bans past every rule above.
+    if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
+    if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && /\b(?:gh|git|psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text))
+      return 'run code that runs gh, git or a database client, which cannot be judged'
+    // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
+    // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
+    // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
+    // running it are let through; a command missing from that list fails closed.
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && runsGh(words[i + 2]))) return UNRESOLVED
+    if (c.git) {
+      const why = await gitRefusal(c.git, dir, call.home, look)
+      if (why) return why
+      continue
+    }
+    if (cmd === 'gh') {
+      const v = ghVerdict(words)
+      if (v && 'refuse' in v) return v.refuse
+      if (v && 'write' in v) {
+        const why = await writeRefusal(v.write, dir, call, look)
+        if (why) return why
       }
-      out.push(here)
       continue
     }
-    out.push(dir)
+    const syncSub = cmd === 'claude-sync' ? words[1] : SHELLS.has(cmd) && name(words[1]) === 'claude-sync' ? words[2] : undefined
+    if (SYNC_REFUSED(syncSub)) return `run claude-sync ${syncSub}`
+    if (cmd === 'supabase' && DEPLOYERS.supabase?.(words.slice(1))) return 'change a database with supabase'
+    // The one list of database clients no build reads too (L370), sqlite3 included.
+    const sql = databaseRefusal({ ...c, words })
+    if (sql) return sql.what
   }
-  return out
-}
-
-/** What a call needs read before it can be judged: whether it pushes or calls gh, or runs a package script. */
-export const needsOf = (commands: Cmd[]) => ({
-  branch: commands.some(c => c.git?.sub === 'push' || name(c.words[0]) === 'gh'),
-  scripts: commands.some(c => runnerScript(c.words) !== undefined),
-})
-
-/**
- * The first act in a call tonight's lists refuse, with the refusal Claude reads. The repository is
- * the one a command names (--repo, a repos/ endpoint), else the one in the folder it runs in
- * (`places`, one per command, null where the folder could not be followed or read, which is a
- * repository that cannot be told, closed, L75).
- */
-export const judgeNight = (night: unknown, commands: Cmd[], places: (Place | null)[]): { deny: string; what: string; repo?: string; why: string } | undefined => {
-  const unseen: Place = { defaultBranch: null, currentBranch: null, scripts: { unreadable: 'the folder it runs in could not be followed' }, own: undefined }
-  for (let i = 0; i < commands.length; i++) {
-    const c = commands[i] as Cmd
-    const place = places[i] ?? unseen
-    for (const act of actsOf(c, place)) {
-      const repo = act.repo ?? place.own
-      const why = refusalOf(act, policyOf(night, repo))
-      if (why)
-        return {
-          what: act.what,
-          ...(repo ? { repo } : {}),
-          why,
-          deny: `Blocked overnight: this would ${act.what}, and ${why}. Leave the green PR open and write a note for the morning report saying what is waiting and why; carry on with other work.`,
-        }
-    }
-  }
-  return undefined
-}
-
-/** Every repository closed tonight, as one sentence for /sleep's answer, or empty. */
-export const closedSentence = (night: NightRepos): string => {
-  if (night.listWhy) return ` Merging and deploying are off for every repository tonight: ${night.listWhy}.`
-  if (!night.closed.length) return ''
-  return ` No merge and no deploy tonight in ${night.closed.map(c => `${c.repo} (${c.why})`).join('; ')}.`
-}
-
-/** Whether tonight's policy refuses an act, and the sentence saying why. */
-export const refusalOf = (act: Act, policy: Policy): string | undefined => {
-  if (act.kind === 'push-default') return 'a direct push to a default branch is never made overnight; push a branch and open a PR'
-  if (policy.kind === 'closed') return `${policy.why}, so tonight it neither merges nor deploys`
-  if (act.kind === 'deploy' && policy.kind === 'merge-only') return `${policy.repo} may merge overnight but never deploy`
-  if (act.kind === 'merge' && policy.kind === 'merge-only' && policy.mergeDeploys === true) return `a merge in ${policy.repo} deploys, so it is never merged overnight`
-  if (act.kind === 'merge' && policy.kind === 'merge-only' && policy.mergeDeploys !== false)
-    return `whether a merge in ${policy.repo} deploys is not recorded in ${REPO_LIST_FILE}, so it is never merged overnight`
   return undefined
 }

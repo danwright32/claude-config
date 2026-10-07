@@ -1,172 +1,362 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Cmd } from '../hooks/nobuild.ts'
-import { actsOf, addAnswer, HOLD_MERGES, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Scripts, type Where } from '../hooks/overnight.ts'
+import { NEVER_ASKED, normRepo, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from '../hooks/overnight.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
 
-// Sleep mode phase 7 (#843). Commands are read by mod-kit's own reader (its byte for byte copy
-// under tests/mod-kit), as the mod reads them in a session.
+// Sleep mode phase 3 (#834): what is refused overnight, by effect and by the repository a call
+// reaches. Commands are read by mod-kit's own reader (its byte for byte copy under tests/mod-kit),
+// as the mod reads them, so a quoted separator is read as it is in a session (#730). The disk's
+// answers (which repository a folder's remotes name, whether a folder is a primary checkout) come
+// from a stand in Look, so each case says what the disk holds.
+const HOME = '/Users/x'
+const CWD = '/Users/x/repo'
+const REPOS: Record<string, string> = { '/Users/x/repo': 'o/r', '/Users/x/wt': 'o/r', '/Users/x/theirs': 'other/x' }
+const PRIMARY: Record<string, boolean> = { '/Users/x/repo': true, '/Users/x/wt': false, '/Users/x/theirs': true }
+const under = <T>(map: Record<string, T>, dir: string): T | null => {
+  for (const [k, v] of Object.entries(map)) if (dir === k || dir.startsWith(`${k}/`)) return v
+  return null
+}
+const look: Look = { repoOf: async dir => under(REPOS, dir), isPrimary: async dir => under(PRIMARY, dir) }
+
 const cmds = (command: string): Cmd[] =>
   pipeline(command).map(c => {
     const g = git(c.words)
-    return g ? { ...c, git: { sub: g.sub, args: g.args } } : c
+    return g ? { ...c, git: { sub: g.sub, args: g.args, dir: g.dir } } : c
   })
-const ON_BRANCH: Where = { defaultBranch: 'main', currentBranch: 'fix-843', scripts: null }
-const acts = (command: string, where: Where = ON_BRANCH) => cmds(command).flatMap(c => actsOf(c, where))
-const kinds = (command: string, where?: Where) => acts(command, where).map(a => a.kind)
+const bash = (command: string, o: { cwd?: string; ghRepo?: string; look?: Look } = {}) =>
+  overnightRefusal({ tool: 'Bash', input: { command }, raw: command, commands: cmds(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ghRepo: o.ghRepo }, o.look ?? look)
+const NONE = { files: [], changes: [], unnamed: [] }
+const tool = (name: string, input: Record<string, unknown>) => overnightRefusal({ tool: name, input, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME }, look)
 
-const LISTS = JSON.stringify({
-  v: 1,
-  mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }, { repo: 'o/merges-quietly', mergeDeploys: false }, { repo: 'o/unsaid' }],
-  mayDeploy: ['o/deploys'],
-})
-
-describe('the shared lists, read', () => {
-  test('a good file reads as both lists; a mergeOnly entry that does not say whether a merge deploys reads as unknown, never as safe (L72)', () => {
-    const r = readRepoLists(LISTS)
-    expect('lists' in r && r.lists.mergeOnly).toEqual([
-      { repo: 'Try-Pennie/slate', mergeDeploys: true },
-      { repo: 'o/merges-quietly', mergeDeploys: false },
-      { repo: 'o/unsaid', mergeDeploys: 'unknown' },
+describe('ordinary overnight work is not on the list, so it goes ahead', () => {
+  test('building, testing, committing, pushing a branch and opening a PR', async () => {
+    for (const c of [
+      'npm test 2>&1 | tail -20',
+      'source .venv/bin/activate && npm test',
+      'git status && git log --oneline -5 && git branch --show-current',
+      'git add payload/a.ts && git commit -F /tmp/m.txt',
+      'git push -u origin sleep-834',
+      'git rebase origin/main',
+      'gh pr create --title "x" --body-file /tmp/b.md',
+      'gh pr view 5 --json state && gh issue view 834 --comments && gh issue list --limit 50',
+      'gh api repos/o/r/pulls/5',
+      `gh api graphql -f query='query { viewer { login } }'`,
+      'gh pr merge 5 --squash',
+      'claude-sync status',
+      `psql -c 'select 1'`,
+      'cat payload/LESSONS.md && grep -n L174 ~/.claude/LESSONS.md',
+      'git commit -m "say LESSONS.md in a message"',
     ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
   })
-  test('a missing file, one that does not parse, a wrong shape and a bad entry each say why, never a partial list', () => {
-    const why = (t: string | null) => {
-      const r = readRepoLists(t)
-      return 'why' in r ? r.why : 'read'
-    }
-    expect(why(null)).toBe('mods/sleep-repos.json is missing')
-    expect(why('{"v":1,')).toBe('mods/sleep-repos.json is not JSON')
-    expect(why('[]')).toBe('mods/sleep-repos.json is not a record')
-    expect(why('{"mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.json has no version this reader knows')
-    expect(why('{"v":1,"mergeOnly":[]}')).toBe('mods/sleep-repos.json does not hold both lists')
-    expect(why('{"v":1,"mergeOnly":[],"mayDeploy":["slate"]}')).toMatch(/mayDeploy entry that is not owner\/name/)
-    expect(why('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":"yes"}],"mayDeploy":[]}')).toMatch(/mergeDeploys that is not true or false/)
+  test('a branch checked out in a linked worktree, and a file put back in the primary one', async () => {
+    expect(await bash('git checkout -b sleep-834', { cwd: '/Users/x/wt' })).toBeUndefined()
+    expect(await bash('git switch main', { cwd: '/Users/x/wt' })).toBeUndefined()
+    expect(await bash('git checkout -- payload/a.ts')).toBeUndefined()
   })
-})
-
-describe('a bedtime answer, added to the shared file', () => {
-  const empty = '{"v":1,"mergeOnly":[],"mayDeploy":[]}'
-  test('each option means exactly what it says: merge never deploy only where a merge does not deploy, hold merges where it does or is unknown', () => {
-    expect(repoQuestion('o/new')).toMatch(/only if a merge there does not itself deploy/)
-    const merge = addAnswer(empty, 'o/new', MERGE_NO_DEPLOY)
-    expect('text' in merge && JSON.parse(merge.text).mergeOnly).toEqual([{ repo: 'o/new', mergeDeploys: false }])
-    const hold = addAnswer(empty, 'o/new', HOLD_MERGES)
-    expect('text' in hold && JSON.parse(hold.text).mergeOnly).toEqual([{ repo: 'o/new', mergeDeploys: true }])
-    const deploy = addAnswer(empty, 'o/new', MAY_DEPLOY)
-    expect('text' in deploy && JSON.parse(deploy.text).mayDeploy).toEqual(['o/new'])
+  test('a Bash call with no command is refused, never approved as empty (#834 review of edeb682)', async () => {
+    expect(await overnightRefusal({ tool: 'Bash', input: {}, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME }, look)).toBe('run a Bash call with no command')
   })
-  test('anything else, a repository already listed, and a broken file are refused', () => {
-    expect(addAnswer(empty, 'o/new', 'maybe')).toEqual({ why: 'the answer was none of the choices ("maybe")' })
-    expect(addAnswer('{"v":1,"mergeOnly":[],"mayDeploy":["O/New"]}', 'o/new', MERGE_NO_DEPLOY)).toEqual({ why: 'o/new is already listed' })
-    expect(addAnswer('{"v":1,', 'o/new', HOLD_MERGES)).toEqual({ why: 'mods/sleep-repos.json is not JSON' })
+  test('editing code, and tools nobody listed', async () => {
+    expect(await tool('Edit', { file_path: '/Users/x/repo/payload/a.ts' })).toBeUndefined()
+    expect(await tool('mcp__playwright__browser_click', { element: 'x' })).toBeUndefined()
+    expect(await tool('WebFetch', { url: 'https://example.com' })).toBeUndefined()
   })
 })
 
-describe('a marker, read', () => {
-  test('owner, time and nonce come back; anything else says why it cannot be read', () => {
-    expect(readMarker('{"owner":"s1","at":5,"nonce":"n"}')).toEqual({ owner: 's1', at: 5, nonce: 'n' })
-    expect(readMarker('g7')).toEqual({ unreadable: 'it is not JSON' })
-    expect(readMarker('{"owner":"s1"}')).toEqual({ unreadable: 'it names no owner, time and nonce' })
+describe('issue, label and milestone writes', () => {
+  test('every gh issue and gh label write is refused', async () => {
+    expect(await bash('gh issue create --title x --body y')).toBe('run gh issue create')
+    expect(await bash('gh issue edit 5 --add-label priority-p1')).toBe('run gh issue edit')
+    expect(await bash('gh issue close 5')).toBe('run gh issue close')
+    expect(await bash('gh issue delete 5 --yes')).toBe('run gh issue delete')
+    expect(await bash('gh label create sleep')).toBe('run gh label create')
+  })
+  test('labels and milestones set on a PR are refused', async () => {
+    expect(await bash('gh pr edit 5 --add-label bug')).toBe('set labels or a milestone on a PR')
+    expect(await bash('gh pr edit 5 --milestone "Sleep mode"')).toBe('set labels or a milestone on a PR')
+    expect(await bash('gh pr create --title x --label=bug')).toBe('set labels or a milestone on a PR')
+    expect(await bash('gh pr edit 5 --title y')).toBeUndefined()
+  })
+  test('the same writes through gh api, REST or GraphQL', async () => {
+    expect(await bash('gh api -X POST repos/o/r/milestones -f title=x')).toBe('change issues, labels or milestones through the GitHub API')
+    expect(await bash('gh api repos/o/r/issues -f title=x')).toBe('change issues, labels or milestones through the GitHub API')
+    expect(await bash('gh api -X PATCH repos/o/r/issues/5 -f state=closed')).toBe('change issues, labels or milestones through the GitHub API')
+    expect(await bash(`gh api graphql -f query='mutation { createIssue(input: {}) { issue { id } } }'`)).toBe('call the GitHub API to run createIssue')
+    expect(await bash('gh api graphql --input q.json')).toBe('call the GitHub API with a GraphQL document that could not be read')
   })
 })
 
-describe('what each repository may do tonight', () => {
-  const night = nightRepos(readRepoLists(LISTS), [{ repo: 'o/gone', why: 'GitHub does not know o/gone' }])
-  test('mayDeploy deploys; mergeOnly merges unless its merge deploys; case does not matter', () => {
-    expect(policyOf(night, 'O/Deploys')).toEqual({ kind: 'deploy', repo: 'O/Deploys' })
-    expect(policyOf(night, 'o/merges-quietly')).toEqual({ kind: 'merge-only', repo: 'o/merges-quietly', mergeDeploys: false })
-    expect(policyOf(night, 'try-pennie/slate')).toEqual({ kind: 'merge-only', repo: 'try-pennie/slate', mergeDeploys: true })
-    expect(policyOf(night, 'o/unsaid')).toEqual({ kind: 'merge-only', repo: 'o/unsaid', mergeDeploys: 'unknown' })
-    // Not known not to deploy: the merge waits for the morning, and the refusal says why.
-    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, policyOf(night, 'o/unsaid'))).toBe('whether a merge in o/unsaid deploys is not recorded in mods/sleep-repos.json, so it is never merged overnight')
+describe('gh overnight: a short list of reads anywhere, a short list of writes on this repository, nothing else', () => {
+  const other = 'write to other/x from a checkout of o/r'
+  const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
+  test('a write not on the list is refused even on this repository (#834 review of 3f7151c)', async () => {
+    expect(await bash('gh repo delete --yes')).toBe('run gh repo delete')
+    expect(await bash('gh repo delete o/r --yes')).toBe('run gh repo delete')
+    expect(await bash('gh release delete v1 -y')).toBe('run gh release delete')
+    expect(await bash('gh release create v1')).toBe('run gh release create')
+    expect(await bash('gh secret set TOKEN --body x')).toBe('run gh secret set')
+    expect(await bash('gh workflow run deploy.yml')).toBe('run gh workflow run')
+    expect(await bash('gh run rerun 5')).toBe('run gh run rerun')
+    expect(await bash('gh pr close 5')).toBe('run gh pr close')
+    expect(await bash('gh pr review 5 --approve')).toBe('run gh pr review')
+    expect(await bash('gh gist create notes.md')).toBe('run gh gist create')
+    expect(await bash('gh frobnicate now')).toBe('run gh frobnicate now')
+    expect(await bash('gh api -X POST repos/o/r/pulls -f title=x')).toBe('call the GitHub API to POST repos/o/r/pulls')
+    expect(await bash('gh api -X PUT repos/o/r/pulls/5/merge')).toBe('call the GitHub API to PUT repos/o/r/pulls/5/merge')
+    expect(await bash('gh api -X POST user/repos -f name=x')).toBe('call the GitHub API to POST user/repos')
   })
-  test('a repository on neither list fails closed, with no merge and no deploy', () => {
-    const p = policyOf(night, 'o/new')
-    expect(p).toEqual({ kind: 'closed', repo: 'o/new', why: 'o/new is on neither list in mods/sleep-repos.json' })
-    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, p)).toMatch(/neither merges nor deploys/)
-    expect(refusalOf({ kind: 'deploy', what: 'deploy' }, p)).toMatch(/neither merges nor deploys/)
+  test('a listed write may carry only the flags its job needs', async () => {
+    expect(await bash('gh pr edit 5 --title y --body z')).toBeUndefined()
+    expect(await bash('gh pr edit 5 --base other')).toBe('run gh pr edit with --base')
+    expect(await bash('gh pr edit 5 --add-reviewer x')).toBe('run gh pr edit with --add-reviewer')
+    expect(await bash('gh pr ready 5')).toBeUndefined()
+    expect(await bash('gh pr ready 5 --undo')).toBe('run gh pr ready with --undo')
   })
-  test('a list that could not be read fails closed for every repository, the listed ones too', () => {
-    const broken = nightRepos(readRepoLists('{"v":1,'), [])
-    for (const repo of ['o/deploys', 'Try-Pennie/slate', 'o/new']) expect(policyOf(broken, repo)).toEqual({ kind: 'closed', repo, why: 'mods/sleep-repos.json is not JSON' })
-    const missing = nightRepos(readRepoLists(null), [])
-    expect(policyOf(missing, 'o/deploys')).toEqual({ kind: 'closed', repo: 'o/deploys', why: 'mods/sleep-repos.json is missing' })
+  test('the listed writes go ahead on this repository and are refused on another', async () => {
+    expect(await bash('gh pr create --title x --body-file /tmp/b.md')).toBeUndefined()
+    expect(await bash('gh pr merge 5 --squash')).toBeUndefined()
+    expect(await bash('gh pr ready https://github.com/other/x/pull/5')).toBe(other)
+    expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
+    expect(await bash('gh pr create -R other/x --title x --body y')).toBe(other)
   })
-  test('a repository on both lists is closed, never given the looser one', () => {
-    const both = nightRepos(readRepoLists('{"v":1,"mergeOnly":[{"repo":"o/x","mergeDeploys":false}],"mayDeploy":["o/x"]}'), [])
-    expect(policyOf(both, 'o/x')).toEqual({ kind: 'closed', repo: 'o/x', why: 'o/x is on both lists in mods/sleep-repos.json' })
+  test('every spelling gh accepts is read the same (ghargs.ts)', async () => {
+    expect(await bash('gh api --method=DELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
+    expect(await bash('gh api -XDELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
+    expect(await bash('gh api -XPOST repos/other/x/issues/5/comments -fbody=x')).toBe(other)
+    expect(await bash('gh pr comment 5 -Rother/x -b hi')).toBe(other)
+    expect(await bash('gh pr comment 5 --repo=other/x -b hi')).toBe(other)
+    expect(await bash('gh pr comment 5 -R my.org/x -b hi')).toBe('write to my.org/x from a checkout of o/r')
+    expect(await bash('gh pr merge 5 -sd')).toBe('delete a branch')
+    expect(await bash('gh pr close 5 -d')).toBe('delete a branch')
+    // Global flags before the subcommand (#834 review of 8bbd403).
+    expect(await bash('gh -R other/x pr merge 5')).toBe(other)
+    expect(await bash('gh --repo=other/x pr merge 3')).toBe(other)
+    expect(await bash('gh --frob x pr merge 5')).toBe(unresolved)
+    // A flag between the subcommand and its action cannot pass its value off as a read action.
+    expect(await bash('gh pr --body view close 5 -R other/x')).toBe(unresolved)
+    expect(await bash('gh issue --title list create')).toBe(unresolved)
+    // GH_REPO set through env reaches gh too.
+    expect(await bash('env GH_REPO=other/x gh issue comment 5 --body x')).toBe(unresolved)
   })
-  test('an entry GitHub did not know, a question left unanswered, an untold repository and a record with no lists are all closed', () => {
-    expect(policyOf(night, 'o/gone')).toEqual({ kind: 'closed', repo: 'o/gone', why: 'GitHub does not know o/gone' })
-    expect(policyOf(night, undefined)).toEqual({ kind: 'closed', why: 'which repository this reaches could not be told' })
-    expect(policyOf(undefined, 'o/deploys')).toEqual({ kind: 'closed', repo: 'o/deploys', why: 'the sleep record carries no merge and deploy lists' })
+  test('a runner the reader looks past is judged by the gh it runs; what it cannot show is refused (#834 review of af10401)', async () => {
+    // env, command, nohup, a shell's -c, time, sudo and timeout change nothing about where gh goes:
+    // mod-kit's reader reads past them, and the gh they run meets the same two lists.
+    for (const c of ['env gh pr merge 5', 'command gh pr merge 5', 'nohup gh pr merge 5', `bash -c 'gh pr merge 5'`, `sh -c "gh pr merge 5"`, 'time gh pr merge 5', 'sudo gh pr merge 5', 'timeout 30 gh pr merge 5'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+    for (const c of ['env gh pr merge 5 -R other/x', `bash -c 'gh pr merge 5 -R other/x'`, 'sudo gh pr close 5'])
+      expect({ c, r: await bash(c) }).not.toEqual({ c, r: undefined })
+    // What the words cannot show: the operands xargs feeds, text eval or source runs, a GH_ variable set.
+    // env -S and a sourced file can set where gh goes without the words showing it (#834 review of edeb682).
+    for (const c of [`env -S 'gh pr merge 5'`, `env --split-string='gh pr merge 5'`, `env -S 'GH_REPO=other/x gh pr merge 5'`, 'source ~/.ghenv && gh pr merge 5', '. ./env.sh; gh issue comment 5 --body x'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
+    for (const c of ['echo 5 | xargs gh pr merge', `eval "gh pr merge 5"`, `source <(echo gh pr merge 5)`, 'GH_TOKEN=abc gh pr merge 5', 'GH_HOST=example.com gh pr merge 5', 'env GH_REPO=other/x gh pr merge 5'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
+    expect(await bash('env gh pr view 5')).toBeUndefined()
+    expect(await bash(`bash -c 'gh issue list'`)).toBeUndefined()
+    // gh named only inside a message is no gh call.
+    expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
   })
-  test('what each policy refuses', () => {
-    const deploy = policyOf(night, 'o/deploys')
-    const quiet = policyOf(night, 'o/merges-quietly')
-    const loud = policyOf(night, 'Try-Pennie/slate')
-    const merge = { kind: 'merge' as const, what: 'merge a PR' }
-    const dep = { kind: 'deploy' as const, what: 'deploy with wrangler' }
-    const push = { kind: 'push-default' as const, what: 'push main straight to GitHub' }
-    expect([refusalOf(merge, deploy), refusalOf(dep, deploy)]).toEqual([undefined, undefined])
-    expect(refusalOf(merge, quiet)).toBe(undefined)
-    expect(refusalOf(dep, quiet)).toBe('o/merges-quietly may merge overnight but never deploy')
-    expect(refusalOf(merge, loud)).toBe('a merge in Try-Pennie/slate deploys, so it is never merged overnight')
-    // A direct push to a default branch is refused in every repository, deploying ones included.
-    for (const p of [deploy, quiet, loud]) expect(refusalOf(push, p)).toMatch(/never made overnight/)
+  test('a merge may carry only its method, subject and --auto; --admin is refused (#834 review of 1b556d3)', async () => {
+    expect(await bash('gh pr merge 5 --squash --subject x --body y')).toBeUndefined()
+    expect(await bash('gh pr merge 5 --squash --admin')).toBe('run gh pr merge with --admin')
+    expect(await bash('gh pr merge 5 --auto --squash')).toBeUndefined()
+    expect(await bash('gh pr create --title x --body y --base main --head b --draft')).toBeUndefined()
+    expect(await bash('gh pr create --title x --body y --reviewer someone')).toBe('run gh pr create with --reviewer')
+  })
+  test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
+    expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
+    // stdbuf is a runner mod-kit's reader reads past, so its gh meets the lists like any other.
+    expect(await bash('stdbuf -o0 gh pr merge 5 --squash')).toBeUndefined()
+    expect(await bash('chronic /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
+    expect(await bash('frobwrap --quiet gh issue comment 5 --body x')).toBe(unresolved)
+    expect(await bash('frobwrap 5 gh pr merge 5')).toBe(unresolved)
+    // Saying the word inside quotes is not running it.
+    expect(await bash('echo "gh is slow today"')).toBeUndefined()
+    // Finding where gh is runs nothing (#834 review of 00abaed).
+    expect(await bash('which gh && command -v gh && type gh')).toBeUndefined()
+    // A file that happens to be named gh is not the gh program.
+    expect(await bash('cat ./gh && ls bin/gh && chmod +x scripts/gh')).toBeUndefined()
+    // gh as an argument that runs nothing: a search term, a path (#834 review of 7ee831c).
+    expect(await bash('grep gh README.md && grep -rn gh src && ls gh && git log -- gh')).toBeUndefined()
+    expect(await bash('setsid gh -R o/r pr merge 5')).toBe(unresolved)
+    expect(await bash('nohupish /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
+  })
+  test('code the reader cannot read, or that runs gh, git or a database itself, is refused (#834 review of 46f07ff)', async () => {
+    expect(await bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`)).toBe('run code that runs gh, git or a database client, which cannot be judged')
+    expect(await bash(`node -e "eval(process.argv[1])" x`)).toMatch(/^run code (this reader cannot read|that runs)/)
+    expect(await bash(`python3 -c "print(1 + 1)"`)).toBeUndefined()
+  })
+  test('any GH_ variable set before gh cannot be resolved (#834 review of 1b556d3)', async () => {
+    expect(await bash('GH_CONFIG_DIR=/tmp/other gh pr merge 5 --squash')).toBe(unresolved)
+    expect(await bash('GH_PATH=/x gh issue comment 5 --body y')).toBe(unresolved)
+  })
+  test('gh in command position after a shell keyword or an assignment is gh run directly (#834 review of 98a40f1)', async () => {
+    expect(await bash('if gh pr view 5; then gh pr merge 5 --squash; fi')).toBeUndefined()
+    expect(await bash('while ! gh pr checks 5; do sleep 30; done; gh pr merge 5 --squash')).toBeUndefined()
+    expect(await bash('PAGER=cat gh pr merge 5 --squash')).toBeUndefined()
+  })
+  test('quoted text and a heredoc body are never judged as commands (#834 review of 3f7151c)', async () => {
+    expect(await bash('gh issue comment 834 --body "see env gh pr close"')).toBeUndefined()
+    expect(await bash(`gh issue comment 834 --body 'nohup gh was wrong, GH_TOKEN too'`)).toBeUndefined()
+    expect(await bash(`gh issue comment 834 -F - <<'EOF'\nsudo gh pr close 5\nEOF`)).toBeUndefined()
+  })
+  test('a body that begins with a dash, or read from standard input, is still a comment on this repository', async () => {
+    expect(await bash(`gh issue comment 834 --body '- fixed the parser'`)).toBeUndefined()
+    expect(await bash('gh issue comment 834 --body-file -')).toBeUndefined()
+    expect(await bash('gh pr create --title x -F -')).toBeUndefined()
+  })
+  test('a gh api call to another GitHub host cannot be resolved', async () => {
+    expect(await bash('gh api --hostname ghe.example.com -X POST repos/o/r/issues/5/comments -f body=x')).toBe(unresolved)
+    expect(await bash('gh api --hostname github.com repos/o/r/issues/5/comments -X POST -f body=x')).toBeUndefined()
+  })
+  test('a review through the API is refused as gh pr review is; a PR comment through the API goes ahead (#834 review of f0c7cdc)', async () => {
+    expect(await bash('gh api repos/o/r/pulls/5/reviews -f event=APPROVE')).toBe('call the GitHub API to POST repos/o/r/pulls/5/reviews')
+    expect(await bash('gh api repos/o/r/pulls/5/comments -f body=x -f commit_id=abc -f path=a.ts -F line=3')).toBeUndefined()
+  })
+  test('editing or deleting a comment is refused outright', async () => {
+    expect(await bash('gh issue comment 5 --delete-last --yes')).toBe('edit or delete a comment')
+    expect(await bash('gh pr comment 5 --edit-last --body x')).toBe('edit or delete a comment')
+  })
+  test('a known read goes ahead on any repository', async () => {
+    expect(await bash('gh pr view 5 -R other/x')).toBeUndefined()
+    expect(await bash('gh -R other/x pr view 5')).toBeUndefined()
+    expect(await bash('gh issue list -R other/x')).toBeUndefined()
+    expect(await bash('gh pr diff 5 -R other/x && gh pr checks 5 -R other/x && gh run view 1 -R other/x --log')).toBeUndefined()
+    expect(await bash('gh api repos/other/x/pulls')).toBeUndefined()
+    expect(await bash('gh search issues sleep --owner other')).toBeUndefined()
+    expect(await bash('gh label list')).toBeUndefined()
+    expect(await bash('gh status')).toBeUndefined()
+  })
+  test('every GraphQL mutation is refused, by its exact name', async () => {
+    expect(await bash(`gh api graphql -f query='mutation { refreshThing(input: {}) { ok } }'`)).toBe('call the GitHub API to run refreshThing')
+    expect(await bash(`gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addComment')
+    expect(await bash(`gh api graphql -f query='mutation { addLabelsToLabelable(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addLabelsToLabelable')
   })
 })
 
-describe('what a command does, by effect', () => {
-  test('every merge route: gh pr merge (and --auto), the merge helper, the REST merge endpoints and the GraphQL mutations', () => {
-    expect(kinds('gh pr merge 12 --squash')).toEqual(['merge'])
-    expect(acts('gh pr merge 12 --auto --squash')[0]?.what).toBe('merge a PR (auto merge)')
-    expect(acts('gh pr merge 12 --repo Try-Pennie/slate')[0]?.repo).toBe('Try-Pennie/slate')
-    expect(kinds('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r --squash')).toEqual(['merge'])
-    expect(acts('gh api -X PUT repos/o/r/pulls/12/merge')).toEqual([{ kind: 'merge', what: 'merge through the GitHub API (repos/o/r/pulls/12/merge)', repo: 'o/r' }])
-    expect(kinds('gh api repos/o/r/merges -f base=main -f head=x')).toEqual(['merge'])
-    expect(kinds(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`)).toEqual(['merge'])
-    expect(kinds(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "x"}) { clientMutationId } }'`)).toEqual(['merge'])
-    // A query that cannot be read is judged as the strictest thing it could be.
-    expect(kinds('gh api graphql -F query=@q.graphql')).toEqual(['merge'])
+describe('comments go only to the repository the checkout is', () => {
+  test('a comment on this repository goes ahead', async () => {
+    expect(await bash('gh issue comment 834 --body "parked: needs a decision"')).toBeUndefined()
+    expect(await bash('gh pr comment 5 -R o/r --body x')).toBeUndefined()
+    expect(await bash('gh issue comment https://github.com/o/r/issues/834 --body x')).toBeUndefined()
+    expect(await bash('gh api repos/o/r/issues/834/comments -f body=x')).toBeUndefined()
+    expect(await bash('gh api repos/{owner}/{repo}/issues/834/comments -f body=x')).toBeUndefined()
+    expect(await bash('cd /Users/x/wt && gh issue comment 834 --body x', { cwd: '/tmp' })).toBeUndefined()
   })
-  test('reads are not merges: viewing a PR, reading its merge state, a GraphQL query', () => {
-    expect(kinds('gh pr view 12 --json mergeable')).toEqual([])
-    expect(kinds('gh api repos/o/r/pulls/12/merge')).toEqual([])
-    expect(kinds(`gh api graphql -f query='query { repository(owner: "o", name: "r") { name } }'`)).toEqual([])
-    expect(kinds('git merge origin/main')).toEqual([])
+  test('a comment on another repository is refused', async () => {
+    expect(await bash('gh issue comment 5 -R other/x --body x')).toBe('write to other/x from a checkout of o/r')
+    expect(await bash('gh pr comment https://github.com/other/x/pull/3 --body x')).toBe('write to other/x from a checkout of o/r')
+    expect(await bash('gh api repos/other/x/issues/5/comments -f body=x')).toBe('write to other/x from a checkout of o/r')
+    expect(await bash('gh issue comment 5 --body x', { ghRepo: 'other/x' })).toBe('write to other/x from a checkout of o/r')
   })
-  test('deploys: the deploy tools no build knows, gh workflow run, a dispatch, and a package script by name or by body', () => {
-    expect(kinds('npx wrangler deploy')).toEqual(['deploy'])
-    expect(kinds('supabase db push')).toEqual(['deploy'])
-    expect(kinds('npm run deploy')).toEqual(['deploy'])
-    expect(kinds('gh workflow run deploy.yml')).toEqual(['deploy'])
-    expect(kinds('gh api -X POST repos/o/r/actions/workflows/deploy.yml/dispatches -f ref=main')).toEqual(['deploy'])
-    const scripts: Scripts = { ship: cmds('next build && wrangler deploy'), test: cmds('vitest run'), build: cmds('next build') }
-    const here: Where = { ...ON_BRANCH, scripts }
-    expect(acts('npm run ship', here)).toEqual([{ kind: 'deploy', what: 'run the ship script, which would deploy with wrangler' }])
-    expect(kinds('npm test', here)).toEqual([])
-    expect(kinds('pnpm build', here)).toEqual([])
-    // A package.json that cannot be read: any script it runs could deploy.
-    expect(kinds('npm run build', { ...ON_BRANCH, scripts: { unreadable: 'not JSON' } })).toEqual(['deploy'])
-    // No package.json: nothing to run.
-    expect(kinds('npm run build')).toEqual([])
+  test('a comment whose repository cannot be resolved is refused (L75)', async () => {
+    const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
+    expect(await bash('GH_REPO=other/x gh issue comment 5 --body x')).toBe(unresolved)
+    expect(await bash('gh issue comment 5 --body x', { cwd: '/tmp' })).toBe(unresolved)
+    expect(await bash('cd "$DIR" && gh issue comment 5 --body x')).toBe(unresolved)
+    expect(await bash('gh issue comment 5 --body x', { look: { ...look, repoOf: async () => null } })).toBe(unresolved)
   })
-  test('a push reaching the default branch, by refspec, by HEAD, by pushing everything, or bare from the default branch', () => {
-    expect(kinds('git push origin main')).toEqual(['push-default'])
-    expect(kinds('git push origin HEAD:refs/heads/main')).toEqual(['push-default'])
-    expect(kinds('git push --force origin +main')).toEqual(['push-default'])
-    expect(kinds('git push --all origin')).toEqual(['push-default'])
-    expect(kinds('git push', { ...ON_BRANCH, currentBranch: 'main' })).toEqual(['push-default'])
-    expect(kinds('git push origin HEAD', { ...ON_BRANCH, currentBranch: 'main' })).toEqual(['push-default'])
-    // A branch of its own is ordinary overnight work.
-    expect(kinds('git push -u origin fix-843')).toEqual([])
-    expect(kinds('git push')).toEqual([])
-    expect(kinds('git push origin HEAD')).toEqual([])
-    // A current branch that cannot be read is judged the strict way.
-    expect(kinds('git push', { ...ON_BRANCH, currentBranch: null })).toEqual(['push-default'])
-    // With no default branch known, main and master both count.
-    expect(kinds('git push origin master', { ...ON_BRANCH, defaultBranch: null })).toEqual(['push-default'])
-    expect(kinds('gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc')).toEqual(['push-default'])
+})
+
+describe('LESSONS.md, written by any route in command position (L673)', () => {
+  test('an edit tool, a redirect, sed, a copy, a removal, git putting it back, inline code', async () => {
+    expect(await tool('Edit', { file_path: '/Users/x/repo/payload/LESSONS.md' })).toBe('write to LESSONS.md')
+    expect(await tool('Write', { file_path: '/Users/x/.claude/lessons.md' })).toBe('write to LESSONS.md')
+    for (const c of [
+      'echo "- L999. x" >> payload/LESSONS.md',
+      `sed -i '' 's/a/b/' payload/LESSONS.md`,
+      'cp /tmp/l.md ~/.claude/LESSONS.md',
+      'ln -sf /tmp/l.md payload/LESSONS.md',
+      'git mv notes.md payload/LESSONS.md',
+      'mv /tmp/l.md payload/LESSONS.md',
+      'echo x | tee -a payload/LESSONS.md',
+      'rm payload/LESSONS.md',
+      'git checkout HEAD~1 -- payload/LESSONS.md',
+      `python3 -c "open('payload/LESSONS.md', 'a').write('x')"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
+  })
+})
+
+describe('outward tools: every write under claude.ai, Chrome and PostHog, and database writes', () => {
+  test('a write is refused, a read goes ahead', async () => {
+    expect(await tool('mcp__claude_ai_Slack__slack_send_message', { text: 'x' })).toBe('use mcp__claude_ai_Slack__slack_send_message')
+    expect(await tool('mcp__claude_ai_Slack__slack_read_channel', {})).toBeUndefined()
+    expect(await tool('mcp__claude_ai_Google_Calendar__create_event', {})).toBe('use mcp__claude_ai_Google_Calendar__create_event')
+    expect(await tool('mcp__claude_ai_SFDC_USE__updateSobjectRecord', {})).toBe('use mcp__claude_ai_SFDC_USE__updateSobjectRecord')
+    expect(await tool('mcp__claude_ai_SFDC_-_Read_Only__soqlQuery', {})).toBeUndefined()
+    expect(await tool('mcp__claude-in-chrome__navigate', { url: 'https://x' })).toBe('use mcp__claude-in-chrome__navigate')
+    expect(await tool('mcp__claude-in-chrome__read_page', {})).toBeUndefined()
+    expect(await tool('mcp__posthog__exec', { command: 'x' })).toBe('use mcp__posthog__exec')
+    // A name that says neither is refused: only a name that reads is let through.
+    expect(await tool('mcp__claude_ai_Google_Calendar__suggest_time', {})).toBe('use mcp__claude_ai_Google_Calendar__suggest_time')
+  })
+  test('Supabase and psql by the SQL they run', async () => {
+    expect(await tool('mcp__claude_ai_Supabase__execute_sql', { query: 'select 1' })).toBeUndefined()
+    expect(await tool('mcp__claude_ai_Supabase__execute_sql', { query: 'delete from t' })).toMatch(/delete|change/i)
+    expect(await tool('mcp__claude_ai_Supabase__apply_migration', { query: 'x' })).toBe('apply_migration')
+    expect(await tool('mcp__claude_ai_Supabase__list_tables', {})).toBeUndefined()
+    expect(await tool('Skill', { skill: 'db-apply' })).toBe('run the db-apply skill')
+    expect(await bash(`psql "$DATABASE_URL" -c 'update t set a = 1'`)).toMatch(/update|change/i)
+    expect(await bash('supabase db push')).toBe('change a database with supabase')
+    // One list of database clients for no build and overnight (L370), sqlite3 included.
+    expect(await bash(`sqlite3 data.db 'delete from t'`)).toMatch(/delete|change/i)
+    expect(await bash(`sqlite3 data.db 'select 1'`)).toBeUndefined()
+  })
+})
+
+describe('the checkout, force pushes, branch deletes and the live config', () => {
+  test('a branch checkout or switch in a primary checkout is refused (H7)', async () => {
+    expect(await bash('git checkout main')).toBe('run git checkout in a primary checkout')
+    expect(await bash('git switch -c x')).toBe('run git switch in a primary checkout')
+    expect(await bash('git -C /Users/x/repo checkout main', { cwd: '/Users/x/wt' })).toBe('run git checkout in a primary checkout')
+    expect(await bash('cd /Users/x/repo && git checkout -b x', { cwd: '/Users/x/wt' })).toBe('run git checkout in a primary checkout')
+    expect(await bash('git checkout -- .')).toBe('run git checkout in a primary checkout')
+  })
+  test('one whose checkout cannot be told is refused', async () => {
+    expect(await bash('git checkout main', { cwd: '/tmp/somewhere' })).toBe('run git checkout where it could not be told whether this is a primary checkout')
+  })
+  test('force pushes', async () => {
+    for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror', 'git push --forc origin x', 'git push --force-with origin x', 'git push --mirr'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'force push' })
+    expect(await bash('git push --follow-tags origin x')).toBeUndefined()
+  })
+  test('branch deletes, locally, on GitHub and through a merge', async () => {
+    for (const c of ['git push origin --delete x', 'git push origin :x', 'git push -d origin x', 'git branch -D x', 'git branch -d x', 'git branch --del x', 'git push origin --dele x', 'gh pr merge 5 --squash --delete-branch', 'gh pr merge 5 -sd', 'gh api -X DELETE repos/o/r/git/refs/heads/x', 'git update-ref -d refs/heads/x'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'delete a branch' })
+    expect(await bash('gh api -X PATCH repos/o/r/git/refs/heads/x -F force=true -f sha=abc')).toBe('force push')
+  })
+  test('claude-sync pull and install, by any path to it', async () => {
+    expect(await bash('claude-sync pull')).toBe('run claude-sync pull')
+    expect(await bash('~/claude-config-sync/claude-sync install-autosync')).toBe('run claude-sync install-autosync')
+    expect(await bash('bash ~/claude-config-sync/claude-sync sync')).toBe('run claude-sync sync')
+  })
+})
+
+describe('what is never approved, and the disk readers', () => {
+  test('a question and the plan approval are never approved overnight (H8)', () => {
+    expect([...NEVER_ASKED].sort()).toEqual(['AskUserQuestion', 'ExitPlanMode'])
+  })
+  test('normRepo reads every spelling of a GitHub repository', () => {
+    expect(normRepo('O/R')).toBe('o/r')
+    expect(normRepo('github.com/o/r')).toBe('o/r')
+    expect(normRepo('https://github.com/o/r.git')).toBe('o/r')
+    expect(normRepo('git@github.com:o/r.git')).toBe('o/r')
+    expect(normRepo('ssh://git@github.com/o/r')).toBe('o/r')
+    expect(normRepo('https://gitlab.com/o/r')).toBeNull()
+    expect(normRepo('r')).toBeNull()
+  })
+  test('one GitHub repository across the remotes, or none said', () => {
+    expect(repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\norigin\tgit@github.com:o/r.git (push)\n')).toBe('o/r')
+    // A fork's upstream is where gh may send a comment, so two repositories cannot be resolved.
+    expect(repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\nupstream\thttps://github.com/other/x (fetch)\n')).toBeNull()
+    expect(repoFromRemotes('')).toBeNull()
+  })
+  test('a primary checkout has its git folder and its common one the same', () => {
+    expect(primaryFrom('/Users/x/repo/.git\n/Users/x/repo/.git\n')).toBe(true)
+    expect(primaryFrom('/Users/x/repo/.git/worktrees/wt\n/Users/x/repo/.git\n')).toBe(false)
+    expect(primaryFrom('')).toBeNull()
   })
 })

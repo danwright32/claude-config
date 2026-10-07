@@ -180,6 +180,35 @@ type Opts = {
   branches?: Record<string, string>
   /** A link of the preparing marker or the answers lock that fails (#843). */
   markerFails?: string
+  /** The report script (#835) failing, by what it was asked to do (start, note, render), with its stderr. */
+  reportFails?: Record<string, string>
+  /** HOME stops reading once a note is written, so the final render's own setup throws. */
+  homeGoneAfterNote?: boolean
+  /** What this session's usage reads, or a read that throws. */
+  usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
+  /** /repo is a linked worktree rather than a primary checkout (#834). */
+  linkedWorktree?: boolean
+  /** The wake check's reads (#834), each command line's own answer: its output, or a failure. */
+  night?: Record<string, string | { fails: string }>
+  /** What the permission step beneath answers a permission request with (#834). */
+  beneathDecision?: { behavior: 'deny'; message: string }
+  /** Whether the step beneath a classifier refusal asks for a retry (#834). */
+  beneathRetries?: boolean
+  /** What `sleep-queue.sh claims` prints (#844): one JSON line per issue claimed tonight. */
+  claims?: string
+  /** The tip of each sleep/ branch, by its ref, as for-each-ref prints it for that ref (#844). */
+  refs?: Record<string, string>
+  /** What pmset says this Mac is drawing power from (#844). */
+  power?: 'ac' | 'battery'
+  caffeinateFails?: boolean
+  /** The session is in no repository (#844). */
+  noRepo?: boolean
+  /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
+  psArgs?: string
+  /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
+  claimsGate?: Promise<void>
+  /** Which writes of the driver's counter fail, counted from 1 (#844). */
+  driverWriteFails?: number[]
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -207,12 +236,25 @@ const world = (on: On, o: Opts = {}) => {
     fsWrites: [] as string[],
     notified: [] as string[],
     appended: [] as { file: string; line: string }[],
+    reports: [] as { op: string; record: string; final?: boolean }[],
+    homeGone: false,
+    /** What reached the screen and GitHub, in order: each modes change, and the wake check's first read (#834). */
+    order: [] as string[],
+    /** Reading this session's id throws from now on (#834: a permission decision that throws). */
+    idThrows: false,
+    released: [] as string[][],
+    releasedBy: [] as string[],
+    caffeinated: [] as string[],
+    killed: [] as string[],
   }
   const clock = mock.clock(on, { now: T0 })
-  mock.env(on, { HOME: '/Users/x' })
+  // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' && !w.homeGone ? '/Users/x' : undefined }) as never)
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
+  let driverWrites = 0
   on('fs.write', ($, e) => {
+    if (e.path.includes('/state/sleep/driver/') && o.driverWriteFails?.includes(++driverWrites)) throw new Error('EIO: i/o error, write')
     w.fsWrites.push(e.path)
     w.files[e.path] = e.text
     return { value: undefined }
@@ -255,12 +297,15 @@ const world = (on: On, o: Opts = {}) => {
       for (const f of ops) for (const k of Object.keys(w.files)) if (k === f || (a.includes('-rf') && k.startsWith(`${f}/`))) delete w.files[k]
       return ok()
     }
-    if (cmd === 'sh' && a[0] === '-c' && String(a[1]).includes('>>')) {
-      // The note appended to the night's notes file: sh -c '...' sh <dir> <line> <file>
-      const [, , , , line, file] = a as string[]
-      if (o.noteFails) return fail(1, o.noteFails)
-      w.appended.push({ file: file as string, line: line as string })
-      w.files[file as string] = `${w.files[file as string] ?? ''}${line}\n`
+    if (cmd === 'python3' && a[0] === '/Users/x/.claude/hooks/lib/sleep-report.py') {
+      // The night's report and its notes (#835): python3 sleep-report.py <op> --record <path> [--line <json>] [--final]
+      const [, op, ...rest] = a as [string, string, ...string[]]
+      const arg = (k: string) => rest[rest.indexOf(k) + 1] as string
+      w.reports.push({ op, record: arg('--record'), ...(rest.includes('--final') ? { final: true } : {}) })
+      if (op === 'note' && o.noteFails) return fail(1, o.noteFails)
+      if (o.reportFails?.[op]) return fail(1, o.reportFails[op])
+      if (op === 'note') w.appended.push({ file: arg('--record'), line: arg('--line') })
+      if (op === 'note' && o.homeGoneAfterNote) w.homeGone = true
       return ok()
     }
     if (cmd === 'terminal-notifier') {
@@ -276,6 +321,32 @@ const world = (on: On, o: Opts = {}) => {
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
+    // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
+    if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/sleep-queue.sh') {
+      if (a[1] === 'claims' && o.claimsGate) {
+        const gate = o.claimsGate
+        o.claimsGate = undefined
+        return gate.then(() => ok(o.claims ?? '')) as never
+      }
+      if (a[1] === 'claims') return ok(o.claims ?? '')
+      if (a[1] === 'release') {
+        w.released.push(a.slice(2))
+        w.releasedBy.push(String(e.init?.env?.SLEEP_NOTE_BY_DRIVER))
+        return ok(`released\t${a[3]}\t${a[5]}\n`)
+      }
+    }
+    if (a.includes('for-each-ref')) return ok(o.refs?.[a[a.length - 1] as string] ?? '')
+    if (cmd === 'pmset') return ok(o.power === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
+    if (cmd === 'sh' && String(a[1]).startsWith('caffeinate')) {
+      if (o.caffeinateFails) return fail(127, 'sh: caffeinate: not found')
+      w.caffeinated.push(a[a.length - 1] as string)
+      return ok('4242\n')
+    }
+    if (cmd === 'ps') return ok(`${o.psArgs ?? `caffeinate -i -t ${w.caffeinated[0] ?? ''}`}\n`)
+    if (cmd === 'kill') {
+      w.killed.push(a[0] as string)
+      return ok()
+    }
     w.runs.push(argv)
     if (cmd === '__sessions') {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
@@ -288,10 +359,6 @@ const world = (on: On, o: Opts = {}) => {
       return v && 'throws' in v ? fail(1, v.throws) : ok(JSON.stringify(v))
     }
     // Sleep mode phase 7 (#843): each folder's origin, GitHub's answer to a repo view by account, and gh's accounts.
-    if (cmd === 'git' && a.includes('get-url')) {
-      const url = (o.origins ?? { '/repo': 'git@github.com:o/r.git' })[a[1] as string]
-      return url ? ok(`${url}\n`) : fail(2, 'error: No such remote')
-    }
     if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view') {
       const token = e.init?.env?.GH_TOKEN
       const seen = token ? (o.githubRepos?.[token] ?? []) : (o.githubRepos?.default ?? [])
@@ -307,6 +374,31 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a.includes('ls-remote')) return o.branchOnGitHub === false ? fail(2) : ok(`abc\trefs/heads/${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('worktree')) return ok(o.worktrees ?? `worktree /repo\nbranch refs/heads/main\n`)
     if (cmd === 'git' && a.includes('status')) return ok('')
+    // What the overnight rules ask of the disk (#834): /repo is a primary checkout of o/r unless a
+    // test says otherwise, and every other folder is in no repository.
+    if (cmd === 'git' && a.includes('remote')) {
+      const dir = a[a.indexOf('-C') + 1] as string
+      if (dir === '/Users/x/claude-config-sync') return ok('origin\tgit@github.com:o/claude-config.git (fetch)\n')
+      // Each folder's origin a test names (#843).
+      const named = o.origins?.[dir]
+      if (named) return ok(`origin\t${named} (fetch)\n`)
+      return dir === '/repo' ? ok('origin\tgit@github.com:o/r.git (fetch)\n') : fail(128, 'fatal: not a git repository')
+    }
+    if (cmd === 'git' && a.includes('--git-common-dir')) {
+      const dir = a[a.indexOf('-C') + 1] as string
+      if (dir !== '/repo') return fail(128, 'fatal: not a git repository')
+      return ok(o.linkedWorktree ? '/main/.git/worktrees/repo\n/main/.git\n' : '/repo/.git\n/repo/.git\n')
+    }
+    // The wake check's reads (#834): a quiet night unless a test gives one of them its own answer.
+    const said = o.night?.[argv.join(' ')]
+    if (said !== undefined) return typeof said === 'string' ? ok(said) : fail(1, said.fails)
+    if (cmd === 'gh' && a[0] === 'api' && a[1] === 'user') {
+      w.order.push('github')
+      return ok('dan\n')
+    }
+    if (cmd === 'gh' && a[0] === 'api' && /^(?:users\/dan\/events|repos\/[^/]+\/[^/]+\/(?:milestones|commits))/.test(a[1] ?? '')) return ok('[]')
+    if (cmd === 'gh' && (a[0] === 'search' || (a[0] === 'run' && a[1] === 'list'))) return ok('[]')
+    if (cmd === 'stat') return ok('1\n')
     if (cmd === 'gh') {
       const gh = o.gh ?? { pr: null, issues: {} }
       if (gh.fails) return fail(1, gh.fails)
@@ -322,9 +414,17 @@ const world = (on: On, o: Opts = {}) => {
     }
     return fail(1, `unexpected: ${argv.join(' ')}`)
   })
-  on('session.id', () => ({ value: 's1' }) as never)
+  on('session.id', () => {
+    if (w.idThrows) throw new Error('the session id could not be read')
+    return { value: 's1' } as never
+  })
+  on('session.usage', () => {
+    const u = o.usage ?? { cost: { usd: 1.5 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] }
+    if ('throws' in u) throw new Error(u.throws)
+    return { value: { startedAt: T0, context: { window: 200_000, percent: 10 }, ...u } } as never
+  })
   on('session.cwd', () => ({ value: '/repo' }) as never)
-  on('session.repo', () => ({ value: { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
+  on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -345,6 +445,9 @@ const world = (on: On, o: Opts = {}) => {
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   on('classic.Stop', () => ({}) as never)
+  on('classic.PermissionRequest', () => (o.beneathDecision ? { decision: o.beneathDecision } : {}) as never)
+  on('classic.PermissionDenied', () => (o.beneathRetries ? { retry: true } : {}) as never)
+  on('classic.StopFailure', () => ({}) as never)
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -356,7 +459,10 @@ const world = (on: On, o: Opts = {}) => {
     if (tag === 'CARD') w.cards.push(JSON.parse(body))
     if (tag === 'BAND') w.bands.push(JSON.parse(body))
     if (tag === 'CLEAR') w.cleared.push(body)
-    if (tag === 'MODES') w.modes.push(JSON.parse(body))
+    if (tag === 'MODES') {
+      w.modes.push(JSON.parse(body))
+      w.order.push(`modes ${body}`)
+    }
     return { value: undefined }
   })
   on('tool.call', ($, e) => {
@@ -390,7 +496,7 @@ type $T = {
   command: { run: (e: never) => Promise<unknown> }
   prompt: { submit: (e: never) => Promise<unknown> }
   turn: { complete: (e: never) => Promise<unknown> }
-  classic: { Stop: (e: never) => Promise<unknown> }
+  classic: { Stop: (e: never) => Promise<unknown>; PermissionRequest: (e: never) => Promise<unknown>; PermissionDenied: (e: never) => Promise<unknown> }
 }
 const start = async ($: $T, clock: { settle: () => Promise<void> }) => {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
@@ -1069,6 +1175,8 @@ test('another mod holds its own item while away, and is told nothing was held at
 
 const SLEEP = '/Users/x/.claude/state/sleep'
 const CURRENT = `${SLEEP}/current.json`
+// The writes of the record itself, leaving out the caffeinate hold's process number (#844).
+const recordWrites = (w: { fsWrites: string[] }) => w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
@@ -1103,11 +1211,22 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     repos: { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] },
   })
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
-  expect(w.fsWrites.filter(f => !f.includes('/preparing')).length).toBe(1)
-  expect(w.fsWrites.filter(f => !f.includes('/preparing'))[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
-  expect(Object.keys(w.files).sort()).toEqual([LISTS_PATH, CURRENT].sort())
+  expect(recordWrites(w).length).toBe(1)
+  expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT].sort())
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe('Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said.')
+  expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
+  // The report is started at once from the record just placed, so it exists from the first minute (#835).
+  expect(w.reports).toEqual([{ op: 'start', record: CURRENT }])
+  expect(w.runs.some(r => r[0] === 'python3')).toBe(false)
+})
+
+test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { reportFails: { start: 'the report could not be written to /Users/x/Downloads/sleep-report-1969-12-31.md (Permission denied)' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/ The night's report could not be started: the report could not be written to \/Users\/x\/Downloads\/sleep-report-1969-12-31\.md \(Permission denied\)\.$/)
+  expect(lastModes(w)).toEqual(['ASLEEP'])
 })
 
 test('/sleep run twice says when and where sleep started, and changes nothing', withDeps, async ($, on) => {
@@ -1119,7 +1238,7 @@ test('/sleep run twice says when and where sleep started, and changes nothing', 
   const r = await command($ as never, 'sleep')
   expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at 12:00 PM ET on Thu Jan 1. Nothing changed.')
   expect(w.files[CURRENT]).toBe(first)
-  expect(w.fsWrites.filter(f => !f.includes('/preparing')).length).toBe(1)
+  expect(recordWrites(w).length).toBe(1)
 })
 
 test('/sleep started by another session, or being prepared, changes nothing', withDeps, async ($, on) => {
@@ -1142,9 +1261,8 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   // The other finds the first one's record, or its preparing marker while it is still settling the night.
   expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
-  // Beside the record only the night's notes: no lists file here, so every repository is closed and noted (#843).
-  expect(Object.keys(w.files).filter(f => !f.startsWith(`${SLEEP}/notes/`))).toEqual([CURRENT])
-  // Each attempt writes its own temp file, so one attempt's cleanup never removes the other's.
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid'))).toEqual([CURRENT])
+  // Each attempt writes its own marker, so one attempt's cleanup never removes the other's.
   expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
 })
 
@@ -1178,7 +1296,12 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe('Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other.')
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
+  // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
+  const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
+  expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
+  expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
+  expect(w.reports[1]).toEqual({ op: 'render', record: moved, final: true })
   expect(w.files[CURRENT]).toBeUndefined()
   expect(Object.keys(w.files)).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
@@ -1246,10 +1369,18 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(lastModes(w)).toEqual([])
   expect(w.notified).toEqual(['Sleep mode ended by itself at 12:00 PM ET on Thu Jan 1: it was past noon ET.'])
   expect(w.appended.length).toBe(1)
-  expect(w.appended[0]?.file).toBe(`${SLEEP}/notes/g0.jsonl`)
-  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ v: 1, kind: 'limit', at: tick, generation: 'g0', reason: 'it was past noon ET', by: 's1' })
+  // Noted on the record it moved aside (the writer adds the version and generation), and the report finished (#835).
+  const moved = `${SLEEP}/ended/${tick}-limit-s1.json`
+  expect(w.appended[0]?.file).toBe(moved)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'limit', reason: 'it was past noon ET', at: tick, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
+  expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
   // Every session put back where it was before sleep.
   expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
+  // The band is cleared before the overnight check reads GitHub, which may be slow (#834).
+  const after = w.order.slice(w.order.lastIndexOf('modes ["ASLEEP"]') + 1)
+  expect(after[0]).toBe('modes []')
+  expect(after.filter(x => x === 'github')).toEqual(['github'])
+  expect(after[after.length - 1]).toBe('github')
   await clock.advance(5 * MIN)
   expect(w.notified.length).toBe(1)
 })
@@ -1310,6 +1441,33 @@ test('with this boot unreadable, a sound record is never called broken: /sleep s
   expect(w.files[CURRENT]).toBe(asleepRecord())
 })
 
+test('a wake whose report cannot be finished says each thing that failed, and is still awake (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, usage: { throws: 'no usage yet' }, reportFails: { render: 'gh: not logged in' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  // A usage hook that throws is skipped by the engine, so the read fails with the engine's own words.
+  expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/sleep-report-1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\.$/)
+  expect(w.files[CURRENT]).toBeUndefined()
+  // The woke note is still written, without a usage reading it does not have.
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'woke', at: T0, by: 's1' })
+})
+
+test('a night that ends by itself and cannot note it says so in a toast (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: T0 }) }, reportFails: { note: 'the note is not JSON' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.toasts).toContain('Sleep mode ended by itself (it was past noon ET), but the note could not be written (the note is not JSON).')
+})
+
+test('a final render whose own setup throws is said with the rest, never escaping the wake (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, homeGoneAfterNote: true })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/is not complete: the report could not be finished \(HOME is not set\)\.$/)
+  expect(w.reports.map(x => x.op)).toEqual(['note'])
+  expect(w.files[CURRENT]).toBeUndefined()
+})
+
 // ---- Sleep mode phase 2 (#841): nothing asks Dan while he is asleep ----
 
 const MERGE_Q = { tool: 'AskUserQuestion', questions: [{ question: 'Merge PR #31, the wording change?', options: [{ label: 'Merge' }, { label: 'Close it' }] }], tool_use_id: 'q1' } as never
@@ -1323,8 +1481,9 @@ test('while asleep a question to Dan is refused in every session, noted for the 
   )
   expect(w.asked).toEqual([])
   expect(w.appended.length).toBe(1)
-  expect(w.appended[0]?.file).toBe(`${SLEEP}/notes/g0.jsonl`)
-  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ v: 1, kind: 'question', at: T0, by: 's1', cwd: '/repo', questions: ['Merge PR #31, the wording change?'] })
+  // Through the one writer (#835), on the record it belongs to; the writer adds the version and generation.
+  expect(w.appended[0]?.file).toBe(CURRENT)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'question', at: T0, by: 's1', cwd: '/repo', questions: ['Merge PR #31, the wording change?'] })
   expect(w.cards).toEqual([{ toolUseId: 'q1', guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' }])
 })
 
@@ -1392,8 +1551,8 @@ test('another mod reads whether the Mac is asleep through the noun, live, and no
   w.files[CURRENT] = asleepRecord()
   expect(await ask()).toBe('true')
   expect(await note()).toBe('{"isNoted":true}')
-  expect(w.appended[0]?.file).toBe(`${SLEEP}/notes/g0.jsonl`)
-  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ v: 1, kind: 'save', files: ['~/.claude/CLAUDE.md'], rule: 'Always ask first.', at: T0, by: 's1' })
+  expect(w.appended[0]?.file).toBe(CURRENT)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'save', files: ['~/.claude/CLAUDE.md'], rule: 'Always ask first.', at: T0, by: 's1' })
   // A record past its end, or one that cannot be read, is awake.
   w.files[CURRENT] = asleepRecord({ until: T0 })
   expect(await ask()).toBe('false')
@@ -1410,7 +1569,9 @@ test('a note the noun cannot write throws, so the caller can say so (#841)', { p
 // ---- Sleep mode phase 7 (#843): per repository merge and deploy lists that fail closed ----
 
 const night = (repos: unknown) => ({ files: { [CURRENT]: asleepRecord({ repos }) } })
-const closedNotes = (w: { appended: { line: string }[] }) => w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'repo-closed')
+// The night's questions about a repository closed for the night, as the report renders them (#835).
+const closedNotes = (w: { appended: { line: string }[] }) =>
+  w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && /neither merges nor deploys|were off for every repository/.test(String((n.questions as string[] | undefined)?.[0])))
 const asRegExp = (s: string) => new RegExp(s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
 
 test('a worker repository on neither list is asked about at bedtime, and the answer is saved to the shared file and holds tonight', withDeps, async ($, on) => {
@@ -1432,10 +1593,10 @@ test('a question left unanswered for 10 minutes closes that repository for the n
   const pending = command($ as never, 'sleep')
   await clock.advance(10 * MIN)
   const r = await pending
-  expect(r.text).toMatch(/No merge and no deploy tonight in o\/r \(the question about o\/r was not answered in 10 minutes\)\.$/)
+  expect(r.text).toMatch(/No merge and no deploy tonight in o\/r \(the question about o\/r was not answered in 10 minutes\)\./)
   expect(recordOf(w).repos).toEqual({ mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'the question about o/r was not answered in 10 minutes' }] })
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
-  expect(closedNotes(w)[0]?.question).toBe('Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do?')
+  expect(closedNotes(w)[0]?.questions).toEqual(['Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do? Tonight it neither merges nor deploys: the question about o/r was not answered in 10 minutes.'])
   // The shared file is untouched: the question is asked again next time.
   expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [], mayDeploy: [] })
   expect(await call($ as never, bash('gh pr merge 12 --squash'))).toMatch(
@@ -1453,7 +1614,7 @@ test('a lists file that is missing closes every repository, and asks nothing', w
   const r = await command($ as never, 'sleep')
   expect(r.text).toMatch(asRegExp('Merging and deploying are off for every repository tonight: mods/sleep-repos.json is missing.'))
   expect(w.asked).toEqual([])
-  expect(closedNotes(w).map(n => n.why)).toEqual(['mods/sleep-repos.json is missing'])
+  expect(closedNotes(w).map(n => n.questions)).toEqual([['Merging and deploying were off for every repository tonight: mods/sleep-repos.json is missing. Fix mods/sleep-repos.json.']])
   expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and mods/sleep-repos.json is missing, so tonight'))
 })
 
@@ -1482,8 +1643,9 @@ test('a repository first met after sleep began is closed and noted once', withDe
   expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and o/r is on neither list in mods/sleep-repos.json, so tonight it neither merges nor deploys.'))
   expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
-  // Its own --repo is judged by that repository's place on the lists.
-  expect(await call($ as never, bash('gh pr merge 4 --repo o/other'))).toBe('ran')
+  // Its own --repo is judged by that repository's place on the lists, which lets it merge; it is
+  // then phase 3's rule (a write only to the checkout's own repository) that refuses it.
+  expect(await call($ as never, bash('gh pr merge 4 --repo o/other'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not write to o\/other from a checkout of o\/r\./)
 })
 
 test('a record written before this phase, with no lists, refuses every merge and deploy', withDeps, async ($, on) => {
@@ -1496,14 +1658,15 @@ test('a record written before this phase, with no lists, refuses every merge and
 })
 
 test('merge only: a repository whose merge deploys keeps its green PR open; one whose merge does not merges but never deploys', withDeps, async ($, on) => {
-  const { clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: true }, { repo: 'o/quiet', mergeDeploys: false }], closed: [] }))
+  const { clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: true }, { repo: 'o/quiet', mergeDeploys: false }], closed: [] }), origins: { '/quiet': 'git@github.com:o/quiet.git' } })
   await start($ as never, clock)
   expect(await call($ as never, bash('gh pr merge 12 --auto --squash'))).toMatch(
     asRegExp('Blocked overnight: this would merge a PR (auto merge), and a merge in o/r deploys, so it is never merged overnight. Leave the green PR open'),
   )
   expect(await call($ as never, bash('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --squash'))).toMatch(/^Blocked overnight/)
-  expect(await call($ as never, bash('gh pr merge 5 --repo o/quiet'))).toBe('ran')
-  expect(await call($ as never, bash('gh workflow run deploy.yml --repo o/quiet'))).toMatch(asRegExp('o/quiet may merge overnight but never deploy'))
+  // In a checkout of o/quiet (phase 3 lets a session write only to the repository its checkout is).
+  expect(await call($ as never, bash('cd /quiet && gh pr merge 5'))).toBe('ran')
+  expect(await call($ as never, bash('cd /quiet && gh workflow run deploy.yml'))).toMatch(asRegExp('o/quiet may merge overnight but never deploy'))
 })
 
 test('a package script whose body deploys is refused where deploying is not allowed; a push to main is refused everywhere', withDeps, async ($, on) => {
@@ -1679,4 +1842,332 @@ test('the preparing marker is released however /sleep ends after claiming it, en
   expect(w.fileOps.some(r => r[0] === 'ln' && r[2] === `${SLEEP}/preparing`)).toBe(true)
   expect(`${SLEEP}/preparing` in w.files).toBe(false)
   expect(CURRENT in w.files).toBe(false)
+})
+
+test('a record that reads as asleep but cannot be read once moved aside says the report was not finished (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, replacedBeforeMove: '{"v":1,' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toBe(`Sleep mode is off. The night's report was not finished: the record moved aside to ${SLEEP}/ended/${T0}-woke-s1.json could not be read.`)
+  expect(w.reports).toEqual([])
+})
+
+// ---- Sleep mode phase 3 (#834): permissions and outward actions ----
+
+type Decided = { decision?: { behavior: string; message?: string } }
+const permission = async ($: $T, tool_name: string, tool_input: Record<string, unknown>) =>
+  (await $.classic.PermissionRequest({ tool_name, tool_input } as never)) as Decided
+const PUSH = { command: 'git push -u origin sleep-834' }
+const worker = { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } }
+
+test('asleep, a worker session has its permission prompts approved by themselves', withDeps, async ($, on) => {
+  const { clock } = world(on, worker)
+  await start($ as never, clock)
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toEqual({ behavior: 'allow' })
+  expect((await permission($ as never, 'Edit', { file_path: '/repo/a.ts' })).decision).toEqual({ behavior: 'allow' })
+})
+
+test('awake, a session that is not a worker, or a record that cannot be read: nothing is approved', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  w.files[CURRENT] = asleepRecord({ workers: ['s9'] })
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  w.files[CURRENT] = '{"v":1'
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  w.files[CURRENT] = asleepRecord({ workers: ['s1'], until: T0 - 1 })
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+})
+
+test('a question, the plan approval and what Dan bans are never approved, and a decision beneath stands', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...worker, beneathDecision: { behavior: 'deny', message: 'a rule said no' } })
+  await start($ as never, clock)
+  const q = await permission($ as never, 'AskUserQuestion', { questions: [] })
+  expect(q.decision?.behavior).toBe('deny')
+  expect(q.decision?.message).toMatch(/nothing is asked overnight/)
+  expect((await permission($ as never, 'ExitPlanMode', {})).decision?.message).toMatch(/no plan is approved overnight/)
+  const banned = await permission($ as never, 'Bash', { command: 'gh issue create --title x --body y' })
+  expect(banned.decision?.behavior).toBe('deny')
+  expect(banned.decision?.message).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run gh issue create\./)
+  // Never an allow over a refusal beneath (Dan's own checks stay on).
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toEqual({ behavior: 'deny', message: 'a rule said no' })
+})
+
+test('asleep, what Dan bans is refused at the call in every session, worker or not, with the card', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s9'] }) } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git push --force origin x'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not force push\./)
+  expect(w.cards[w.cards.length - 1]).toMatchObject({ guard: 'Sleep mode', reason: 'Dan is asleep, so this would not force push.' })
+  expect(await call($ as never, bash('git checkout main'))).toMatch(/did not run git checkout in a primary checkout/)
+  expect(await call($ as never, bash('gh issue comment 5 -R other/x --body hi'))).toMatch(/did not write to other\/x from a checkout of o\/r/)
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toBe('ran')
+  expect(await call($ as never, edit('/repo/payload/LESSONS.md'))).toMatch(/did not write to LESSONS\.md/)
+  // Awake, the same calls run.
+  delete w.files[CURRENT]
+  expect(await call($ as never, bash('git push --force origin x'))).toBe('ran')
+})
+
+test('in a linked worktree a branch checkout goes ahead overnight', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...worker, linkedWorktree: true })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git checkout -b sleep-834'))).toBe('ran')
+})
+
+test('a classifier refusal while asleep is noted as failed and never retried; awake it is left alone', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...worker, beneathRetries: true })
+  await start($ as never, clock)
+  const r = (await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: { command: 'git clean -fd' }, tool_use_id: 't1', reason: '[Irreversible Local Destruction]' } as never)) as { retry?: boolean }
+  expect(r.retry).toBeUndefined()
+  const last = w.appended[w.appended.length - 1]
+  // Through the one writer (#835), on the night's record, as the report's failed kind reads it.
+  expect(last?.file).toBe(CURRENT)
+  expect(JSON.parse(last?.line as string)).toMatchObject({ kind: 'failed', by: 's1', cwd: '/repo', tool: 'Bash', text: 'the auto mode classifier refused Bash: [Irreversible Local Destruction]' })
+  delete w.files[CURRENT]
+  const awake = (await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: 't2', reason: 'x' } as never)) as { retry?: boolean }
+  expect(awake.retry).toBe(true)
+})
+
+test('a worker is told its prompts approve themselves and a refusal is final; a session that is not is not', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  expect((await say($ as never, 'hello')).context?.join('\n')).toMatch(/enrolled to work overnight\. Its permission prompts are approved by themselves.*A refusal.*is final/s)
+  w.files[CURRENT] = asleepRecord({ workers: ['s9'] })
+  expect((await say($ as never, 'hello')).context?.join('\n')).not.toMatch(/approved by themselves/)
+})
+
+test('a Bash prompt with no command, or one that cannot be judged, is left to Dan and noted, never approved (#834 review of edeb682)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  expect((await permission($ as never, 'Bash', {})).decision).toBeUndefined()
+  expect((await permission($ as never, 'Bash', { command: '   ' })).decision).toBeUndefined()
+  // A judge that throws (mod-kit's reader breaking) is left to Dan too.
+  expect((await permission($ as never, 'Bash', { command: 'gh pr merge 5 __reader_fails' })).decision).toBeUndefined()
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
+  expect(notes.map(n => n.kind)).toEqual(['unmeasured', 'unmeasured', 'unmeasured'])
+  expect(notes[0]?.text).toMatch(/^a Bash permission prompt with no command was left for Dan/)
+  expect(notes[2]?.text).toMatch(/^a permission prompt for Bash could not be judged overnight \(.+\), so it was left for Dan/)
+})
+
+test('a permission decision that throws reads as awake: nothing approved', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  w.idThrows = true
+  expect((await permission($ as never, 'Bash', PUSH)).decision).toBeUndefined()
+  expect(w.logs.filter(l => /^scope-modes: whether this session is an overnight worker could not be read \(.+\), so this prompt was not approved$/.test(l)).length).toBe(1)
+})
+
+test('the wake check reads every repository the night notes named, private ones too', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [`${SLEEP}/notes/g0.jsonl`]: '{"v":1,"kind":"claim","repo":"o/private","issue":3}\n{"v":1,"kind":"start"}\nnot json\n' } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  expect(w.runs.some(r => r.join(' ') === 'gh api repos/o/private/milestones?state=all&per_page=100')).toBe(true)
+  expect(w.runs.some(r => r.join(' ') === 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100')).toBe(true)
+})
+
+test('/wake puts what the overnight check found first, in the reply and the notes', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    ...worker,
+    night: {
+      'gh api users/dan/events?per_page=100': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
+      'stat -f %m /Users/x/.claude/LESSONS.md': { fails: 'stat: No such file or directory' },
+    },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(stat: stat: No such file or directory\)\. The night's report is at /)
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
+  // Written before the night's end note, so the final render puts them at the top of the report.
+  expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'woke'])
+  expect(w.appended.every(a => a.file === `${SLEEP}/ended/${T0}-woke-s1.json`)).toBe(true)
+  expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight"')
+})
+
+// ---- Sleep mode phase 8 (#844): the overnight driver, wired ----
+
+const DRIVER = `${SLEEP}/driver/g0/s1.json`
+const NOTES = `${SLEEP}/notes/g0.jsonl`
+const asleepWorker = (extra: Record<string, unknown> = {}) => asleepRecord({ workers: ['s1'], ...extra })
+const kinds = (w: { appended: { line: string }[] }) => w.appended.map(a => (JSON.parse(a.line) as { kind: string }).kind)
+const stopFailure = async ($: $T, error: string, message = 'API Error: 429 rate limited') =>
+  (await ($ as unknown as { classic: { StopFailure: (e: never) => Promise<unknown> } }).classic.StopFailure({ error, last_assistant_message: message } as never))
+
+test('an enrolled session is blocked at Stop with the overnight rules, its counter kept on disk and a heartbeat noted (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  const r = await stop($ as never)
+  expect(r.block).toMatch(/^You hold no issue: claim the next one\. Overnight rules \(sleep mode\)/)
+  expect(r.block).toContain('bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1')
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ v: 1, generation: 'g0', session: 's1', blocks: 1 })
+  expect(kinds(w)).toEqual(['heartbeat'])
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'heartbeat', repo: 'o/r', by: 's1', usage: { rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
+})
+
+test('a session the record does not name is never driven: its Stop passes, and nothing is noted (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.files[DRIVER]).toBeUndefined()
+  expect(w.appended).toEqual([])
+})
+
+test('the circuit breaker lets a session that does nothing new stop, ending its claim; only a commit on its own branch keeps it going (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
+  // A commit on its own claim's branch is progress, read from git, never from what the model said.
+  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n' }
+  expect((await stop($ as never)).block).toBeDefined()
+  // Another worker's commits on its own branch are not this session's progress.
+  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n', 'refs/heads/sleep/9': 'def456\n' }
+  for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'circuit breaker: 3 blocks in a row with no new commit, claim or note']])
+  expect(kinds(w)[kinds(w).length - 1]).toBe('stopped')
+  // Stopped for the night: never blocked again.
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('a counter that cannot be written still ends the claim in hand, on a Stop and on an API error (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '7', 's1', 'failed']])
+})
+
+test('an API error whose wait cannot be recorded ends the claim in hand rather than leave it held (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'rate_limit')
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '7', 's1', 'failed']])
+})
+
+test('a counter that cannot be read stops the session rather than loop, and says so (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [DRIVER]: '{"v":1,' } })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w)).toEqual(['stopped'])
+  expect(w.files[DRIVER]).toBe('{"v":1,')
+})
+
+test('a rate limit waits 5 minutes, noted, then the session is started again once, and a sign in error stops it (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'rate_limit')
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'wait', minutes: 5, error: 'rate_limit', text: 'API Error: 429 rate limited', by: 's1' })
+  await clock.advance(4 * MIN)
+  expect(w.prompts).toEqual([])
+  await clock.advance(MIN)
+  expect(w.prompts).toEqual(['Sleep mode: the wait after the API error is over. Carry on with the overnight work where it stopped, checking the claim and the branch before redoing anything.'])
+  await clock.advance(5 * MIN)
+  expect(w.prompts.length).toBe(1)
+  // The next failure waits longer: 10 minutes.
+  await stopFailure($ as never, 'server_error', 'API Error: 529 overloaded')
+  expect(JSON.parse(w.appended[1]?.line as string)).toMatchObject({ kind: 'wait', minutes: 10, error: 'server_error' })
+  await stopFailure($ as never, 'authentication_failed', 'API Error: 401')
+  expect(kinds(w).slice(-2)).toEqual(['failed', 'stopped'])
+  await clock.advance(30 * MIN)
+  expect(w.prompts.length).toBe(1)
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('the watchdog parks a claim held past two hours of active work mid turn, through the queue, and the next Stop says so (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toMatch(/^You hold #7 in o\/r \(attempt 1\)/)
+  await clock.advance(MIN)
+  expect(w.released).toEqual([['/repo', '7', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+  // Marked as the driver's own, so the queue's parked note is never read back as the session's progress.
+  expect(w.releasedBy).toEqual(['1'])
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 \(120 minutes of active work on it, past the 2 hours an issue gets\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
+})
+
+test('a park the watchdog could not record is still said at the next Stop (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  // The Stop's write is the first; the watchdog's, after it parks, is the second, and fails.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [2] })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(1)
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 /)
+})
+
+test('an API error that stops the night ends the claim in hand through the queue (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'billing_error', 'API Error: 402')
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'the API answered billing_error (API Error: 402), which waiting does not cure']])
+})
+
+test('/sleep refuses on battery, and on mains holds caffeinate for the night, let go at wake (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { power: 'battery' })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode did not start: this Mac is on battery power, and a night of work would drain it. Plug it in and run /sleep again.')
+  expect(w.files[CURRENT]).toBeUndefined()
+  w.o.power = 'ac'
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(w.caffeinated).toEqual([String(Math.ceil((UNTIL - T0) / 1000))])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBe(`4242 ${Math.ceil((UNTIL - T0) / 1000)}`)
+  await command($ as never, 'wake')
+  expect(w.killed).toEqual(['4242'])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
+})
+
+test('wake never stops another caffeinate that took the hold\'s process number (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { psArgs: 'caffeinate' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  await command($ as never, 'wake')
+  expect(w.killed).toEqual([])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
+})
+
+test('/sleep says when the Mac could not be held awake, and sleep still starts (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { caffeinateFails: true })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toMatch(/ The Mac may sleep tonight: caffeinate could not be started \(sh: caffeinate: not found\)\.$/)
+  expect(w.files[CURRENT]).toBeDefined()
+})
+
+test('a Stop and an API error handled at once never lose a count: the driver takes them one at a time (#844)', withDeps, async ($, on) => {
+  let open = () => undefined as void
+  const claimsGate = new Promise<void>(r => (open = r))
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claimsGate })
+  await start($ as never, clock)
+  const s = stop($ as never)
+  const f = stopFailure($ as never, 'rate_limit')
+  await Promise.resolve()
+  open()
+  await Promise.all([s, f])
+  const d = JSON.parse(w.files[DRIVER] as string) as { blocks: number; waits: unknown[]; resumeAt: number | null }
+  expect(d.blocks).toBe(1)
+  expect(d.waits.length).toBe(1)
+  expect(d.resumeAt).toBe(T0 + 5 * MIN)
+})
+
+test('a stop whose counter cannot be written is still a stop: the next Stop never blocks again (#844)', withDeps, async ($, on) => {
+  // Fresh: one block that makes progress, three idle, then the breaker; its write (the fifth) fails.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, driverWriteFails: [5] })
+  await start($ as never, clock)
+  for (let n = 0; n < 4; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w).filter(k => k === 'stopped').length).toBe(1)
+})
+
+test('an enrolled session in no repository has nothing to claim: it stops at once with a stopped note, never told to run a command it cannot (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, noRepo: true })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w)).toEqual(['stopped'])
+  expect(JSON.parse(w.appended[0]?.line as string).text).toBe('this session is in no repository, so it has nothing to claim tonight')
+  expect((await stop($ as never)).block).toBeUndefined()
 })
