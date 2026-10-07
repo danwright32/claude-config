@@ -21,6 +21,9 @@ import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } 
 const MOD = 'scope-modes'
 const MIN = 60_000
 const RUN_MS = 20_000
+// The report at the end of a night reads GitHub for each repo worked (each gh call bounded at 15 s and all of them at 60 s
+// in the script), so it gets longer than an ordinary run.
+const REPORT_FINAL_MS = 90_000
 const BOOT_MS = 5_000
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const HOME_TEXT = 'Dan switched every session on this Mac to home.'
@@ -110,13 +113,45 @@ const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<M
   return { to, text }
 }
 
-// One line appended to the night's notes, through the shell in append mode. Phase 4 (#835) builds
-// sleep_note and the report on this file; the limit note below is the first writer.
-const sleepNote = async ($: EngineInterface, generation: string, note: Record<string, unknown>) => {
+// The night's report (#835) and the notes it is built from are written by one script,
+// hooks/lib/sleep-report.py, which every other writer reaches through sleep_note in
+// hooks/lib/sleep.sh. The mod hands it the record it means (current, or the one just moved aside),
+// so a note written after the record has moved still lands in that night's notes.
+const report = async ($: EngineInterface, args: string[], timeoutMs = RUN_MS): Promise<string | null> => {
   const p = await sleepPaths($)
-  const file = `${p.notes}/${generation.replace(/[^\w.-]/g, '_')}.jsonl`
-  const r = await run($, ['sh', '-c', 'mkdir -p "$1" && printf \'%s\\n\' "$2" >> "$3"', 'sh', p.notes, JSON.stringify({ v: 1, ...note }), file])
-  if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `the note could not be written (exit ${r.exitCode})`)
+  const r = await run($, ['python3', `${p.home}/.claude/hooks/lib/sleep-report.py`, ...args], timeoutMs)
+  return r.exitCode === 0 ? null : r.stderr.trim() || `the report script exited ${r.exitCode}`
+}
+
+// One line appended to the night's notes, then the report rendered again best effort.
+const sleepNote = async ($: EngineInterface, record: string, note: Record<string, unknown>) => {
+  const failed = await report($, ['note', '--record', record, '--line', JSON.stringify(note)])
+  if (failed) throw new Error(failed)
+}
+
+// At the end of a night (wake or its limit): what this session reads of its own usage, then the
+// report once more, with done read from GitHub. Each failure is said, never swallowed.
+const finishReport = async ($: EngineInterface, record: string, ending: Record<string, unknown>): Promise<string[]> => {
+  const problems: string[] = []
+  let usage: Record<string, unknown> | undefined
+  try {
+    const u = await $.session.usage()
+    usage = { ...(u.cost ? { costUsd: u.cost.usd } : {}), rateLimits: u.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, ...(r.resetsAt ? { resetsAt: r.resetsAt } : {}) })) }
+  } catch (err) {
+    problems.push(`this session's usage could not be read (${msg(err)})`)
+  }
+  try {
+    await sleepNote($, record, { ...ending, at: await $.clock.now(), by: await $.session.id(), ...(usage ? { usage } : {}) })
+  } catch (err) {
+    problems.push(`the note could not be written (${msg(err)})`)
+  }
+  try {
+    const failed = await report($, ['render', '--record', record, '--final'], REPORT_FINAL_MS)
+    if (failed) problems.push(`the report could not be finished (${failed})`)
+  } catch (err) {
+    problems.push(`the report could not be finished (${msg(err)})`)
+  }
+  return problems
 }
 
 const notify = async ($: EngineInterface, message: string): Promise<string | null> => {
@@ -160,11 +195,8 @@ const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
     return
   }
   const now = await $.clock.now()
-  try {
-    await sleepNote($, record.generation, { kind: 'limit', at: now, generation: record.generation, reason, by: await $.session.id() })
-  } catch (err) {
-    $.ui.toast(`Sleep mode ended by itself (${reason}), but the note could not be written: ${msg(err)}`)
-  }
+  const problems = await finishReport($, moved.to, { kind: 'limit', reason })
+  if (problems.length) $.ui.toast(`Sleep mode ended by itself (${reason}), but ${problems.join('; ')}.`)
   const failed = await notify($, `Sleep mode ended by itself at ${etWhen(now)}: ${reason}.`)
   if (failed) $.ui.toast(`Sleep mode ended by itself (${reason}), but the notification could not be sent: ${failed}`)
   await restorePlace($, record)
@@ -270,6 +302,9 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   let s = `Sleep mode is on until ${etWhen(record.until)}. Enrolled to work overnight: ${enrolled}.`
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
+  // The report exists from the first minute, header first, so a night that ends badly still has one (#835, L10).
+  const started = await report($, ['start', '--record', p.current, '--by', self])
+  s += started ? ` The night's report could not be started: ${started}.` : ` The night's report is at ${record.report}.`
   return s
 }
 
@@ -286,7 +321,13 @@ const wake = async ($: EngineInterface): Promise<string | null> => {
   await showHeld($)
   if (reading.state === 'unreadable') return `Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`
   const placed = await restorePlace($, record)
-  return `Sleep mode is off.${record?.since ? ` It began at ${etWhen(record.since)}.` : ''}${placed ? ` ${placed}` : ''}`
+  let s = `Sleep mode is off.${record?.since ? ` It began at ${etWhen(record.since)}.` : ''}${placed ? ` ${placed}` : ''}`
+  // The report once more, checked against GitHub, by the one session that woke it (#835).
+  if (record?.report) {
+    const problems = await finishReport($, moved.to, { kind: 'woke' })
+    s += problems.length ? ` The night's report at ${record.report} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${record.report}.`
+  }
+  return s
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
@@ -347,9 +388,9 @@ const readWrites = async ($: EngineInterface, raw: string) =>
   $.modkit.writes({ command: raw, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
 const NO_WRITES = { files: [], changes: [], unnamed: [] }
 
-const run = async ($: EngineInterface, argv: string[]) => {
+const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS) => {
   try {
-    return await $.process.run(argv, { timeoutMs: RUN_MS })
+    return await $.process.run(argv, { timeoutMs })
   } catch (err) {
     return { exitCode: -1, stdout: '', stderr: msg(err), isStdoutTruncated: false, isStderrTruncated: false }
   }

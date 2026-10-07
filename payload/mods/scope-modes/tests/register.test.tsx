@@ -166,6 +166,12 @@ type Opts = {
   notifyFails?: boolean
   /** A new record written over the old one just before the first move of it: a sleep begun between a read and a move. */
   replacedBeforeMove?: string
+  /** The report script (#835) failing, by what it was asked to do (start, note, render), with its stderr. */
+  reportFails?: Record<string, string>
+  /** HOME stops reading once a note is written, so the final render's own setup throws. */
+  homeGoneAfterNote?: boolean
+  /** What this session's usage reads, or a read that throws. */
+  usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -191,9 +197,12 @@ const world = (on: On, o: Opts = {}) => {
     fsWrites: [] as string[],
     notified: [] as string[],
     appended: [] as { file: string; line: string }[],
+    reports: [] as { op: string; record: string; final?: boolean }[],
+    homeGone: false,
   }
   const clock = mock.clock(on, { now: T0 })
-  mock.env(on, { HOME: '/Users/x' })
+  // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' && !w.homeGone ? '/Users/x' : undefined }) as never)
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
   on('fs.write', ($, e) => {
@@ -237,11 +246,14 @@ const world = (on: On, o: Opts = {}) => {
       for (const f of ops) delete w.files[f]
       return ok()
     }
-    if (cmd === 'sh' && a[0] === '-c' && String(a[1]).includes('>>')) {
-      // The note appended to the night's notes file: sh -c '...' sh <dir> <line> <file>
-      const [, , , , line, file] = a as string[]
-      w.appended.push({ file: file as string, line: line as string })
-      w.files[file as string] = `${w.files[file as string] ?? ''}${line}\n`
+    if (cmd === 'python3' && a[0] === '/Users/x/.claude/hooks/lib/sleep-report.py') {
+      // The night's report and its notes (#835): python3 sleep-report.py <op> --record <path> [--line <json>] [--final]
+      const [, op, ...rest] = a as [string, string, ...string[]]
+      const arg = (k: string) => rest[rest.indexOf(k) + 1] as string
+      w.reports.push({ op, record: arg('--record'), ...(rest.includes('--final') ? { final: true } : {}) })
+      if (o.reportFails?.[op]) return fail(1, o.reportFails[op])
+      if (op === 'note') w.appended.push({ file: arg('--record'), line: arg('--line') })
+      if (op === 'note' && o.homeGoneAfterNote) w.homeGone = true
       return ok()
     }
     if (cmd === 'terminal-notifier') {
@@ -289,6 +301,11 @@ const world = (on: On, o: Opts = {}) => {
     return fail(1, `unexpected: ${argv.join(' ')}`)
   })
   on('session.id', () => ({ value: 's1' }) as never)
+  on('session.usage', () => {
+    const u = o.usage ?? { cost: { usd: 1.5 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] }
+    if ('throws' in u) throw new Error(u.throws)
+    return { value: { startedAt: T0, context: { window: 200_000, percent: 10 }, ...u } } as never
+  })
   on('session.cwd', () => ({ value: '/repo' }) as never)
   on('session.repo', () => ({ value: { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -1058,7 +1075,18 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   expect(w.fsWrites[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   expect(Object.keys(w.files)).toEqual([CURRENT])
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe('Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said.')
+  expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
+  // The report is started at once from the record just placed, so it exists from the first minute (#835).
+  expect(w.reports).toEqual([{ op: 'start', record: CURRENT }])
+  expect(w.runs.some(r => r[0] === 'python3')).toBe(false)
+})
+
+test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { reportFails: { start: 'the report could not be written to /Users/x/Downloads/sleep-report-1969-12-31.md (Permission denied)' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/ The night's report could not be started: the report could not be written to \/Users\/x\/Downloads\/sleep-report-1969-12-31\.md \(Permission denied\)\.$/)
+  expect(lastModes(w)).toEqual(['ASLEEP'])
 })
 
 test('/sleep run twice says when and where sleep started, and changes nothing', withDeps, async ($, on) => {
@@ -1125,7 +1153,12 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe('Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other.')
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
+  // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
+  const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
+  expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
+  expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
+  expect(w.reports[1]).toEqual({ op: 'render', record: moved, final: true })
   expect(w.files[CURRENT]).toBeUndefined()
   expect(Object.keys(w.files)).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
@@ -1193,8 +1226,11 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(lastModes(w)).toEqual([])
   expect(w.notified).toEqual(['Sleep mode ended by itself at 12:00 PM ET on Thu Jan 1: it was past noon ET.'])
   expect(w.appended.length).toBe(1)
-  expect(w.appended[0]?.file).toBe(`${SLEEP}/notes/g0.jsonl`)
-  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ v: 1, kind: 'limit', at: tick, generation: 'g0', reason: 'it was past noon ET', by: 's1' })
+  // Noted on the record it moved aside (the writer adds the version and generation), and the report finished (#835).
+  const moved = `${SLEEP}/ended/${tick}-limit-s1.json`
+  expect(w.appended[0]?.file).toBe(moved)
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'limit', reason: 'it was past noon ET', at: tick, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
+  expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
   // Every session put back where it was before sleep.
   expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
   await clock.advance(5 * MIN)
@@ -1255,4 +1291,31 @@ test('with this boot unreadable, a sound record is never called broken: /sleep s
   await start($ as never, clock)
   expect((await command($ as never, 'sleep')).text).toBe("Sleep mode did not start: this boot's start could not be read (sysctl: unknown oid).")
   expect(w.files[CURRENT]).toBe(asleepRecord())
+})
+
+test('a wake whose report cannot be finished says each thing that failed, and is still awake (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, usage: { throws: 'no usage yet' }, reportFails: { render: 'gh: not logged in' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  // A usage hook that throws is skipped by the engine, so the read fails with the engine's own words.
+  expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/sleep-report-1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\.$/)
+  expect(w.files[CURRENT]).toBeUndefined()
+  // The woke note is still written, without a usage reading it does not have.
+  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'woke', at: T0, by: 's1' })
+})
+
+test('a night that ends by itself and cannot note it says so in a toast (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: T0 }) }, reportFails: { note: 'the note is not JSON' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.toasts).toContain('Sleep mode ended by itself (it was past noon ET), but the note could not be written (the note is not JSON).')
+})
+
+test('a final render whose own setup throws is said with the rest, never escaping the wake (#835)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, homeGoneAfterNote: true })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/is not complete: the report could not be finished \(HOME is not set\)\.$/)
+  expect(w.reports.map(x => x.op)).toEqual(['note'])
+  expect(w.files[CURRENT]).toBeUndefined()
 })
