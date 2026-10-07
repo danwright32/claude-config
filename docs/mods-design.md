@@ -799,9 +799,23 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   Copy link on every link rather than only a long one, and the 80 column cap).
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
-  verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
-  `not-done`, which opens the step again with its Done. A Done that cannot reach Claude opens the
-  step again with a toast saying why.
+  verdict through `steps_done`: `checked`, `per-you`, or `not-done`, which opens the step again
+  with its Done. A Done that cannot reach Claude opens the step again with a toast saying why.
+- **Only the open step** (#886). On 2026-10-07 "step 2 done" with step 1 open was recorded as
+  both, and the card said Dan had installed a checker he never touched. So `steps_done` takes
+  `checked`, `per-you` or `not-done` only on the open step; one naming any other is refused,
+  telling Claude to ask Dan which step he means rather than guess, and never to record the steps
+  before it to reach it. `withdrawn` claims nothing was done, so it still takes any unfinished step.
+- **When each step finished** (#886). Dan read steps recorded a minute earlier as "done days ago",
+  because they were grey. So grey now means old and only old: a step found already done when the
+  card was pinned ("already done before this card") and one finished in an earlier session ("in an
+  earlier session on Oct 4 at 3:41 PM", the card held from one or a step pinned again from it) are
+  grey and struck through. One finished in this session is struck through in the terminal's own
+  colour with the clock time it finished, which never goes stale on a card nobody redraws:
+  "checked at 3:41 PM" in green, "done, you pressed Done at 3:41 PM" when Dan pressed its Done,
+  and "done, per you, recorded at 3:41 PM" when Claude recorded it on his word with nothing
+  pressed. A step pinned again as already done keeps how and when it finished on the card it
+  replaces. A withdrawn step keeps #872's dimmed, unstruck "taken off, not done", with its time.
 - **Only what Dan can do now** (#872). The tool asks for a step only when Dan can do it now; one
   waiting on something else (a merge, a deploy) stays in its issue. A step pinned anyway comes off
   through `steps_done` as `withdrawn`, at any time: dimmed, not struck through, and "taken off, not

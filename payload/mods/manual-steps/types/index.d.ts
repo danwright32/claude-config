@@ -21,6 +21,15 @@ export type StepsStep = {
   /** Set once it is finished, and how. */
   finished?: StepsFinish
   /**
+   * When it finished, in epoch milliseconds, so the card can say (#886). A step found done before it
+   * was shown has none, and nor does one kept before #886.
+   */
+  finishedAt?: number
+  /** Dan pressed its Done, so a verdict on it was asked for by the card, not taken from his words. */
+  isPressed?: boolean
+  /** Finished in an earlier session and carried into this one's card, so drawn grey with its age (#886). */
+  isEarlier?: boolean
+  /**
    * Done was pressed and "step N done" sent; Claude has not yet said whether it took. Never kept
    * in the store: the turn that would answer it does not reach another session.
    */

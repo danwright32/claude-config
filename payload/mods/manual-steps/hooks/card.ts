@@ -13,15 +13,44 @@ export const CHECKED = ['already-done', 'not-done', 'cannot-check'] as const
 export const VERDICTS = ['checked', 'per-you', 'not-done', 'withdrawn'] as const
 export type StepsVerdict = (typeof VERDICTS)[number]
 
-// How a finished step reads after its struck title (design round: "already done" grey, "checked"
-// green, "done, per you" grey). A Record over the type, so a new way of finishing cannot ship
-// without its words (L113).
-const FINISH: Record<StepsFinish, { text: string; color?: string; dim?: boolean; isUndone?: true }> = {
-  already: { text: 'already done', dim: true },
-  checked: { text: 'checked', color: 'success' },
-  'per-you': { text: 'done, per you', dim: true },
+// How a finished step reads after its title. A Record over the type, so a new way of finishing
+// cannot ship without its words (L113). Grey reads as old (#886: Dan took steps recorded a minute
+// before for ones "done days ago"), so only a step finished before this card is grey: found done
+// when it was pinned, or finished in an earlier session. One finished in this session is struck
+// through in the terminal's own colour, with the time it finished. `earlier` is the words before
+// "in an earlier session".
+type Finish = { text: string; earlier: string; color?: string; isUndone?: true }
+const FINISH: Record<StepsFinish, Finish> = {
+  already: { text: 'already done before this card', earlier: 'already done' },
+  checked: { text: 'checked', earlier: 'checked', color: 'success' },
+  // Recorded by Claude on Dan's word with no Done pressed: labelled so, never read as his press.
+  'per-you': { text: 'done, per you, recorded', earlier: 'done, per you,' },
   // Removed, never done (#872): its title is not struck through, which is how a done step reads.
-  withdrawn: { text: 'taken off, not done', dim: true, isUndone: true },
+  withdrawn: { text: 'taken off, not done', earlier: 'taken off, not done,', isUndone: true },
+}
+// A per you verdict on a step whose Done Dan pressed: the card asked, so it says he pressed it.
+const PRESSED: Finish = { text: 'done, you pressed Done', earlier: 'done, you pressed Done,' }
+const finishOf = (s: StepsStep): Finish => (s.finished === 'per-you' && s.isPressed ? PRESSED : FINISH[s.finished ?? 'already'])
+
+/** The moment a card is drawn, and the zone its times are read in (left out, this Mac's own). */
+export type DrawnAt = { now: number; timeZone?: string }
+
+// When a step finished, as a clock time that never goes stale on a card nobody redraws (L589):
+// "at 3:41 PM" on the day it is drawn, else "on Oct 4 at 3:41 PM", with the year when it differs.
+// A zone Intl does not know is read as this Mac's own rather than refusing to draw the card.
+export const finishedWhen = (at: number, drawn: DrawnAt): string => {
+  const parts = (t: number, o: Intl.DateTimeFormatOptions) => {
+    try {
+      return new Intl.DateTimeFormat('en-US', { ...o, timeZone: drawn.timeZone }).format(t)
+    } catch {
+      return new Intl.DateTimeFormat('en-US', o).format(t)
+    }
+  }
+  const time = parts(at, { hour: 'numeric', minute: '2-digit' })
+  const day = (t: number) => parts(t, { year: 'numeric', month: 'short', day: 'numeric' })
+  if (day(at) === day(drawn.now)) return `at ${time}`
+  const sameYear = parts(at, { year: 'numeric' }) === parts(drawn.now, { year: 'numeric' })
+  return `on ${parts(at, sameYear ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' })} at ${time}`
 }
 
 const AMBER = 'warning'
@@ -134,20 +163,81 @@ export const nextStep = (card: StepsCard): number | undefined => {
   return i < 0 ? undefined : i
 }
 
-/** The card with step `i` (0 based) marked as sent, or no longer sent. */
-export const sent = (card: StepsCard, i: number, isSent: boolean): StepsCard => ({
+/**
+ * The card with step `i` (0 based) marked as sent, or no longer sent. Sent marks it pressed too,
+ * which only `forgetPress` takes back, for a Done that never reached Claude (#886).
+ */
+export const sent = (card: StepsCard, i: number, isSent: boolean, forgetPress = false): StepsCard => ({
   ...card,
-  steps: card.steps.map((s, k) => (k === i ? { ...s, isSent } : s)),
+  steps: card.steps.map((s, k) => {
+    if (k !== i) return s
+    if (isSent) return { ...s, isSent, isPressed: true }
+    if (!forgetPress) return { ...s, isSent }
+    const { isPressed: _pressed, ...rest } = s
+    return { ...rest, isSent }
+  }),
 })
 
-/** The card after Claude's verdict on step `n` (1 based), or why it cannot be applied. */
-export const finish = (card: StepsCard, n: number, verdict: StepsVerdict): Made | Refused => {
+/**
+ * The card after Claude's verdict on step `n` (1 based), finished at `at` (epoch milliseconds), or
+ * why it cannot be applied. Only the open step takes checked, per-you or not-done (#886): "step 2
+ * done" with step 1 open was recorded as both, and the card claimed an install Dan never did, so a
+ * verdict on any other step is refused and Claude is told to ask which he means. withdrawn takes any
+ * unfinished step off, since it claims nothing was done.
+ */
+export const finish = (card: StepsCard, n: number, verdict: StepsVerdict, at?: number): Made | Refused => {
   if (!(VERDICTS as readonly string[]).includes(verdict)) return { refusal: `"${String(verdict)}" is not one of ${VERDICTS.join(', ')}.` }
   const step = Number.isInteger(n) ? card.steps[n - 1] : undefined
   if (!step) return { refusal: `There is no step ${n}; the card has ${card.steps.length}.` }
-  if (step.finished) return { refusal: `Step ${n} is already finished (${FINISH[step.finished].text}).` }
-  const next: StepsStep = verdict === 'not-done' ? { ...step, isSent: false } : { ...step, isSent: false, finished: verdict }
+  if (step.finished) return { refusal: `Step ${n} is already finished (${finishOf(step).text}).` }
+  const open = nextStep(card)
+  if (verdict !== 'withdrawn' && open !== undefined && open !== n - 1) {
+    const o = card.steps[open]
+    return {
+      refusal: `Step ${n} (${step.title}) is not the open step; step ${open + 1} (${o?.title ?? ''}) is. Do not guess which step Dan means, and do not record the steps before it to reach it. Ask Dan which step he means, then record only the open step; a step further on can be recorded once every step before it is finished.`,
+    }
+  }
+  const next: StepsStep =
+    verdict === 'not-done' ? { ...step, isSent: false } : { ...step, isSent: false, finished: verdict, ...(at === undefined ? {} : { finishedAt: at }) }
   return { card: { ...card, steps: card.steps.map((s, k) => (k === n - 1 ? next : s)) } }
+}
+
+/**
+ * `card`, just pinned, with each step found already done keeping how and when it finished on `prior`,
+ * the card it replaces (#886): pinned again, a step finished a minute ago, or days ago in an earlier
+ * session, would otherwise read as "already done" with no time. Matched by title and link or location.
+ * A step from a held card (carried from an earlier session) is marked as finished in one.
+ */
+export const keepFinished = (card: StepsCard, prior: StepsCard | null | undefined): StepsCard => {
+  if (!prior || !Array.isArray(prior.steps)) return card
+  const keyOf = (s: StepsStep) => `${s.title}\n${s.url ?? s.location}`
+  const was = new Map(prior.steps.filter(s => s && s.finished && s.finished !== 'withdrawn').map(s => [keyOf(s), s]))
+  const steps = card.steps.map(s => {
+    const p = s.finished === 'already' ? was.get(keyOf(s)) : undefined
+    if (!p?.finished) return s
+    const kept: StepsStep = { ...s, finished: p.finished }
+    if (p.finishedAt !== undefined) kept.finishedAt = p.finishedAt
+    if (p.isPressed) kept.isPressed = true
+    if (p.isEarlier || prior.isCarried) kept.isEarlier = true
+    return kept
+  })
+  return { ...card, steps }
+}
+
+// A finished step's line (#886): its title, then how and when it finished. Grey, struck through, only
+// for a step finished before this card: found already done (when, unknown), or in an earlier session
+// (the card itself held from one, or a step pinned again from it). One finished in this session is
+// struck through in the terminal's own colour. A withdrawn step is never struck through (#872).
+const finishedLine = (s: StepsStep, label: string, isCarried: boolean, drawn: DrawnAt): CardPart[] => {
+  const f = finishOf(s)
+  const when = s.finishedAt === undefined ? '' : ` ${finishedWhen(s.finishedAt, drawn)}`
+  const isOld = s.finished === 'already' || s.isEarlier === true || isCarried
+  // Taken off, it reads as removed rather than done in either session: dimmed, never struck (#872).
+  if (f.isUndone) return [{ text: label, dim: true }, { text: `  ${isOld ? `${f.earlier} in an earlier session` : f.text}${when}`, dim: true }]
+  const title: CardPart = { text: label, ...(isOld ? { dim: true } : {}), strikethrough: true }
+  if (s.finished === 'already' && !s.isEarlier && !isCarried) return [title, { text: `  ${f.text}`, dim: true }]
+  if (isOld) return [title, { text: `  ${f.earlier} in an earlier session${when}`, dim: true }]
+  return [title, { text: `  ${f.text}${when}`, ...(f.color ? { color: f.color } : {}) }]
 }
 
 /** One part of a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
@@ -165,7 +255,7 @@ export type CardPart =
  * Code's Link, so one cut at the edge still opens and copies whole where the terminal draws
  * hyperlinks, with Copy link beside it for the terminals that do not, Apple Terminal among them (#708).
  */
-export const cardLines = (card: StepsCard): CardPart[][] => {
+export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardPart[][] => {
   const open = nextStep(card)
   // While the open step is Dan's to do, the heading says it waits on him (#863), on the card's own
   // line rather than a row of its own beside the card, so the band and the pane state it once.
@@ -175,8 +265,7 @@ export const cardLines = (card: StepsCard): CardPart[][] => {
   card.steps.forEach((s, i) => {
     const label = `${i + 1}. ${s.title}`
     if (s.finished) {
-      const { isUndone, ...how } = FINISH[s.finished]
-      lines.push([isUndone ? { text: label, dim: true } : { text: label, dim: true, strikethrough: true }, { ...how, text: `  ${how.text}` }])
+      lines.push(finishedLine(s, label, card.isCarried === true, drawn))
       return
     }
     if (i !== open) {
@@ -217,10 +306,10 @@ const RULE = 2
  * location is not cut at the dock's edge (#708), up to MAX_PANE_COLUMNS. A link is not measured,
  * since it opens and copies whole however much of it shows; a button is its label in brackets.
  */
-export const paneColumns = (card: StepsCard): number => {
+export const paneColumns = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): number => {
   const width = (l: CardPart[]) =>
     l.reduce((sum, p) => sum + ('button' in p ? p.label.length + 2 : p.href ? 0 : (p.indent ?? 0) + p.text.length), 0)
-  return Math.min(MAX_PANE_COLUMNS, RULE + Math.max(...cardLines(card).map(width)))
+  return Math.min(MAX_PANE_COLUMNS, RULE + Math.max(...cardLines(card, drawn).map(width)))
 }
 
 /** What the next session's Claude reads about steps carried over from an earlier one in this project. */

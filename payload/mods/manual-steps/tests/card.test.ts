@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, carriedNote, finish, fold, nextStep, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, finish, fold, keepFinished, nextStep, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -73,6 +73,26 @@ describe('finish', () => {
     expect('refusal' in finish(a.card, 1, 'per-you')).toBe(true)
     expect('refusal' in finish(c, 1, 'maybe' as never)).toBe(true)
   })
+  // #886: "step 2 done" with step 1 open was recorded as both, and the card claimed an install Dan
+  // never did. Only the open step takes a verdict; any other is refused with the ask.
+  test('a verdict on a step that is not the open one is refused, telling Claude to ask Dan which step he means', () => {
+    const c = made({ heading: 'x', steps: [step({ title: 'Pull' }), step({ title: 'Install the checker' }), step({ title: 'Run the check' })] })
+    for (const v of ['checked', 'per-you', 'not-done'] as const) {
+      const r = finish(c, 2, v)
+      expect('refusal' in r && r.refusal).toMatch(/^Step 2 \(Install the checker\) is not the open step; step 1 \(Pull\) is\. .*Ask Dan which step he means/)
+    }
+    expect('refusal' in finish(c, 1, 'per-you')).toBe(false)
+  })
+  test('a verdict records when the step finished, and whether Dan pressed its Done', () => {
+    const c = made({ heading: 'x', steps: [step(), step({ title: 'Second' })] })
+    const a = finish(sent(c, 0, true), 1, 'per-you', 1234)
+    if ('refusal' in a) throw new Error(a.refusal)
+    expect(a.card.steps[0]).toMatchObject({ finished: 'per-you', finishedAt: 1234, isPressed: true, isSent: false })
+    const b = finish(a.card, 2, 'per-you', 5678)
+    if ('refusal' in b) throw new Error(b.refusal)
+    expect(b.card.steps[1]).toMatchObject({ finished: 'per-you', finishedAt: 5678 })
+    expect(b.card.steps[1]?.isPressed).toBeUndefined()
+  })
   // #872: a step that cannot be done yet comes off the card honestly, as withdrawn rather than done.
   test('withdrawn takes a step off, the open one or a later one, and the card moves on', () => {
     const c = sent(made({ heading: 'x', steps: [step(), step({ title: 'Second' }), step({ title: 'Third' })] }), 0, true)
@@ -121,6 +141,28 @@ describe('fold', () => {
   })
 })
 
+describe('keepFinished', () => {
+  // #886: a card pinned again replaces the old one, and a step found done would lose how and when it
+  // finished, reading as "already done" with no time. It keeps them, and one from a held card is
+  // from an earlier session.
+  test('a step pinned again as already done keeps how and when it finished; a step it does not match stays already done', () => {
+    const prior: StepsCard = {
+      heading: 'x',
+      steps: [
+        { title: 'A', url: 'https://a.example', finished: 'per-you', finishedAt: 10, isPressed: true },
+        { title: 'B', url: 'https://b.example' },
+      ],
+    }
+    const next = made({ heading: 'x', steps: [step({ title: 'A', url: 'https://a.example', checked: 'already-done' }), step({ title: 'C', url: 'https://c.example', checked: 'already-done' }), step({ title: 'B', url: 'https://b.example' })] })
+    const kept = keepFinished(next, prior)
+    expect(kept.steps[0]).toEqual({ title: 'A', url: 'https://a.example', finished: 'per-you', finishedAt: 10, isPressed: true })
+    expect(kept.steps[1]).toEqual({ title: 'C', url: 'https://c.example', finished: 'already' })
+    expect(kept.steps[2]?.finished).toBeUndefined()
+    expect(keepFinished(next, { ...prior, isCarried: true }).steps[0]).toMatchObject({ finished: 'per-you', isEarlier: true })
+    expect(keepFinished(next, null)).toEqual(next)
+  })
+})
+
 describe('carriedNote', () => {
   // Telling Dan they are all done wrote nothing, so the kept card came back every session (#708).
   // The note's only way out is the steps tool, where a step found done is already-done and a card
@@ -157,7 +199,7 @@ describe('cardLines', () => {
     expect(l[0]).toEqual([{ text: 'Cloudflare WAF', color: 'warning' }, { text: '  waiting on you', dim: true }])
     expect(l.map(textOf)).toEqual([
       'Cloudflare WAF  waiting on you',
-      '1. Create the API token  already done',
+      '1. Create the API token  already done before this card',
       '2. Turn on the rule  [done]',
       'Where: https://dash.cloudflare.com/waf  [copy-link]',
       'What to do: Security, WAF, Custom rules, Deploy',
@@ -188,18 +230,50 @@ describe('cardLines', () => {
     expect((lines(at) as (P & { wrap?: boolean })[][]).find(x => x[1]?.text?.startsWith('Salesforce'))?.[1]?.wrap).toBe(true)
   })
 
-  test('a finished step is dimmed and struck through, then how it finished: already done and per you grey, checked green', () => {
-    let c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B' }), step({ title: 'C' })] })
-    const r1 = finish(c, 2, 'checked')
-    if ('refusal' in r1) throw new Error(r1.refusal)
-    const r2 = finish(r1.card, 3, 'per-you')
-    if ('refusal' in r2) throw new Error(r2.refusal)
-    c = r2.card
-    const l = lines(c)
-    for (const n of [1, 2, 3]) expect(l[n]?.[0]).toMatchObject({ dim: true, strikethrough: true })
-    expect(l[1]?.[1]).toEqual({ text: '  already done', dim: true })
-    expect(l[2]?.[1]).toEqual({ text: '  checked', color: 'success' })
-    expect(l[3]?.[1]).toEqual({ text: '  done, per you', dim: true })
+  // #886: grey reads as old, so only a step finished before this card is grey. One finished in this
+  // session is struck through in the terminal's own colour with the time it finished, and a Done
+  // Dan pressed reads differently from a step Claude recorded on his word.
+  test('a step finished in this session is struck through, not grey, with the time it finished; Done pressed and per you read differently', () => {
+    const T = Date.UTC(2026, 9, 7, 19, 41)
+    let c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B' }), step({ title: 'C' }), step({ title: 'D' }), step({ title: 'E' })] })
+    const verdict = (n: number, v: 'checked' | 'per-you') => {
+      const r = finish(c, n, v, T)
+      if ('refusal' in r) throw new Error(r.refusal)
+      c = r.card
+    }
+    verdict(2, 'checked')
+    c = sent(c, 2, true)
+    verdict(3, 'per-you')
+    verdict(4, 'per-you')
+    const l = cardLines(c, { now: T + 60_000, timeZone: 'America/New_York' }) as P[][]
+    expect(l[1]).toEqual([{ text: '1. A', dim: true, strikethrough: true }, { text: '  already done before this card', dim: true }])
+    expect(l[2]).toEqual([{ text: '2. B', strikethrough: true }, { text: '  checked at 3:41 PM', color: 'success' }])
+    expect(l[3]).toEqual([{ text: '3. C', strikethrough: true }, { text: '  done, you pressed Done at 3:41 PM' }])
+    expect(l[4]).toEqual([{ text: '4. D', strikethrough: true }, { text: '  done, per you, recorded at 3:41 PM' }])
+    expect(l[5]?.[0]).toMatchObject({ text: '5. E', bold: true })
+  })
+
+  test('a step finished in an earlier session is grey, says so, and shows when it finished', () => {
+    const T = Date.UTC(2026, 9, 7, 19, 41)
+    const DAY = 86_400_000
+    const card: StepsCard = {
+      heading: 'Chrome sign out',
+      isCarried: true,
+      steps: [
+        { title: 'Sign out', url: 'https://a.example', finished: 'per-you', finishedAt: T - 3 * DAY },
+        { title: 'Clear cookies', url: 'https://b.example', finished: 'checked', finishedAt: T - 60 * 60_000, isPressed: true },
+        { title: 'Old', url: 'https://c.example', finished: 'per-you', isPressed: true },
+        { title: 'Sign in again', url: 'https://d.example' },
+      ],
+    }
+    const l = cardLines(card, { now: T, timeZone: 'America/New_York' }) as P[][]
+    expect(l[1]).toEqual([{ text: '1. Sign out', dim: true, strikethrough: true }, { text: '  done, per you, in an earlier session on Oct 4 at 3:41 PM', dim: true }])
+    expect(l[2]).toEqual([{ text: '2. Clear cookies', dim: true, strikethrough: true }, { text: '  checked in an earlier session at 2:41 PM', dim: true }])
+    // Kept before #886, with no time: said to be earlier all the same.
+    expect(l[3]).toEqual([{ text: '3. Old', dim: true, strikethrough: true }, { text: '  done, you pressed Done, in an earlier session', dim: true }])
+    // A step pinned again from the held card keeps the same reading.
+    const again = keepFinished(made({ heading: 'Chrome sign out', steps: [step({ title: 'Sign out', url: 'https://a.example', checked: 'already-done' }), step({ title: 'Sign in again', url: 'https://d.example' })] }), card)
+    expect((cardLines(again, { now: T, timeZone: 'America/New_York' }) as P[][])[1]?.[1]).toEqual({ text: '  done, per you, in an earlier session on Oct 4 at 3:41 PM', dim: true })
   })
 
   // #872: withdrawn reads as removed, never as done: dimmed but not struck through, which is how a
