@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
@@ -53,11 +53,24 @@ const kit: { name: string; register: Register } = {
     })
   },
 }
-const withKit = { plugins: [kit] }
+// A stand-in for Claude Code's built-in security default (#875), loaded in every test so none can
+// pass on a hook that never runs. Seated outermost for a Team or Enterprise organization, it sends
+// every classic hook event past the tier a person's own plugins load in. This is its own code for
+// that event, copied from the 2.1.292 binary: `e("classic.*",(n,o,t)=>t.to(o,"append"))`. A
+// headless debug run on 2026-10-06 logged it for this mod on every Bash call:
+// "...keystroke-guard: classic.PreToolUse bypassed by cc-plugin-sec-default (tier user); beneath runs".
+const secDefault: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'sec-default-stand-in',
+  tier: 'prepend',
+  register: on => {
+    on('classic.*', ($, e, next) => next.to(e, 'append'))
+  },
+}
+const withKit = { plugins: [secDefault, kit] }
 
 // The Mac beneath the mod: which processes run at which path, which is frontmost, and what Dan
 // answers. Each tool call that gets past the mod is recorded, and so is each question asked.
-const world = (on: On, w: World) => {
+const world = (engine: Engine, on: On, w: World) => {
   const reached: string[] = []
   const asked: { question: string; header: string; options: string[] }[] = []
   const toasts: string[] = []
@@ -90,7 +103,16 @@ const world = (on: On, w: World) => {
     // The tool's own result: answers keyed by each question's text, as the dialog records them.
     return { result: { questions: qs, answers: { [q?.question ?? '']: w.answer } }, text: `"${q?.question}"="${w.answer}"` } as never
   })
-  on('tool.call', ($, e) => {
+  // Core, standing in: the engine decides whether the call may run (the tool.check chain over every
+  // plugin, with the call's id and its arguments as the permission decision reads them), then runs
+  // it. The harness raises classic.PreToolUse above this hook as a session does, but not tool.check,
+  // so it is raised here. Beneath every plugin's tool.check hook the rules allow the call.
+  on('tool.check', () => ({ decision: 'allow' }))
+  on('tool.call', async ($, e) => {
+    const { tool, tool_use_id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
+    const verdict = await engine.tool.check({ tool: String(tool), input, ...(tool_use_id === undefined ? {} : { tool_use_id: String(tool_use_id) }) } as never)
+    // A refusal there reaches the call as core reports it, an errored result whose text is the reason.
+    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
     reached.push(e.tool)
     return { result: 'ran', text: 'ran' } as never
   })
@@ -115,7 +137,7 @@ const refusal = (r: unknown) => {
 }
 
 test('an undeclared target is refused before anyone is asked', withKit, async ($, on) => {
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   const r = await $.tool.call(bash(`osascript -e 'tell application "System Events" to ${KEYWORD} "n"'`))
   expect(w.reached).not.toContain('Bash')
   expect(w.asked.length).toBe(0)
@@ -124,7 +146,7 @@ test('an undeclared target is refused before anyone is asked', withKit, async ($
 
 test('the right app, frontmost and alone, gets the agreed question once and then runs', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   await $.tool.call(bash(KEY))
   expect(w.asked).toEqual([{ question: "I'm about to type into Overture. Ready?", header: 'Taking over', options: ['Go ahead', 'Not now'] }])
   expect(w.reached).toContain('Bash')
@@ -132,7 +154,7 @@ test('the right app, frontmost and alone, gets the agreed question once and then
 
 test('a wrong frontmost app is refused, with the card and a toast', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 77, running: { 10: OVERTURE, 77: LIGHTROOM }, answer: 'Go ahead' })
+  const w = world($, on, { front: 77, running: { 10: OVERTURE, 77: LIGHTROOM }, answer: 'Go ahead' })
   const r = await $.tool.call(bash(KEY, 'w1'))
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe("Blocked: Overture isn't the front app (Adobe Lightroom Classic is). Bring it forward first, then type.")
@@ -145,21 +167,21 @@ test('a wrong frontmost app is refused, with the card and a toast', withKit, asy
 test('two copies of an app with a long name are refused too (lessons review)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const OTHER_LR = '/Users/x/Beta/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic'
-  const w = world(on, { front: 10, running: { 10: LIGHTROOM, 11: OTHER_LR }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: LIGHTROOM, 11: OTHER_LR }, answer: 'Go ahead' })
   await $.tool.call(bash(`TARGET_APP="${LIGHTROOM}" cliclick c:1,1`))
   expect(w.reached).not.toContain('Bash')
 })
 
 test('two running copies of the app are refused', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE, 11: DEBUG }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE, 11: DEBUG }, answer: 'Go ahead' })
   await $.tool.call(bash(KEY))
   expect(w.reached).not.toContain('Bash')
 })
 
 test('a declined heads up refuses the action', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Not now' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Not now' })
   const r = await $.tool.call(bash(KEY))
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe('Blocked: You said not now to typing into Overture.')
@@ -167,7 +189,7 @@ test('a declined heads up refuses the action', withKit, async ($, on) => {
 
 test('a dismissed heads up refuses the action', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'dismiss' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'dismiss' })
   const r = await $.tool.call(bash(KEY))
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe('Blocked: The question about Overture was dismissed.')
@@ -175,7 +197,7 @@ test('a dismissed heads up refuses the action', withKit, async ($, on) => {
 
 test('a yes holds while input keeps coming, and lapses after 10 quiet minutes', withKit, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   await $.tool.call(bash(KEY))
   await clock.advance(9 * 60_000)
   await $.tool.call(bash(KEY))
@@ -190,7 +212,7 @@ test('a yes holds while input keeps coming, and lapses after 10 quiet minutes', 
 test('a focus stealer gets the agreed question but no process check', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   // Two copies running and the wrong app frontmost: a full check would refuse this.
-  const w = world(on, { front: 77, running: { 10: OVERTURE, 11: DEBUG }, answer: 'Go ahead' })
+  const w = world($, on, { front: 77, running: { 10: OVERTURE, 11: DEBUG }, answer: 'Go ahead' })
   await $.tool.call(bash('open -a "Google Chrome" report.html'))
   expect(w.asked).toEqual([{ question: "I'm about to bring Google Chrome to the front. Ready?", header: 'Taking over', options: ['Go ahead', 'Not now'] }])
   expect(w.reached).toContain('Bash')
@@ -198,7 +220,7 @@ test('a focus stealer gets the agreed question but no process check', withKit, a
 
 test('a declined focus stealer says so in its own words', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: {}, answer: 'Not now' })
+  const w = world($, on, { front: 10, running: {}, answer: 'Not now' })
   const r = await $.tool.call(bash('open -a "Google Chrome" report.html'))
   expect(refusal(r)).toBe('Blocked: You said not now to bringing Google Chrome to the front.')
   expect(w.toasts).toContain('Blocked bringing Google Chrome to the front.')
@@ -206,7 +228,7 @@ test('a declined focus stealer says so in its own words', withKit, async ($, on)
 
 test('an ordinary command is not asked about', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: {}, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: {}, answer: 'Go ahead' })
   await $.tool.call(bash('git status'))
   expect(w.asked.length).toBe(0)
   expect(w.reached).toContain('Bash')
@@ -214,7 +236,7 @@ test('an ordinary command is not asked about', withKit, async ($, on) => {
 
 test('a yes for an app it cannot name covers nothing else (lessons review)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: {}, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: {}, answer: 'Go ahead' })
   // An activate with no app named: the guard cannot say which app comes forward.
   await $.tool.call(bash(`osascript -e 'activate'`, 'u1'))
   await $.tool.call(bash(`osascript -e 'activate'`, 'u2'))
@@ -223,7 +245,7 @@ test('a yes for an app it cannot name covers nothing else (lessons review)', wit
 
 test('Chrome extension tools are left alone', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: {}, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: {}, answer: 'Go ahead' })
   await $.tool.call({ tool: 'mcp__claude-in-chrome__computer', action: 'left_click' } as never)
   expect(w.asked.length).toBe(0)
   expect(w.reached).toContain('mcp__claude-in-chrome__computer')
@@ -245,9 +267,9 @@ const Refuser = (tier: 'prepend' | 'append'): { name: string; tier: 'prepend' | 
 })
 
 for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as const) {
-  test(`an action a guard ${where} it refuses is never asked about, while one it lets through still is (#707)`, { plugins: [kit, Refuser(tier)] }, async ($, on) => {
+  test(`an action a guard ${where} it refuses is never asked about, while one it lets through still is (#707)`, { plugins: [secDefault, kit, Refuser(tier)] }, async ($, on) => {
     mock.clock(on, { now: 0 })
-    const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+    const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
     await $.tool.call(bash(KEY, 'a1'))
     expect(w.asked.length).toBe(1)
     // An app not yet asked about, which this guard would ask about.
@@ -266,7 +288,7 @@ for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as con
 // A settings hook decides at classic.PreToolUse beneath every mod, as the test's own hook does here.
 test('an action a settings hook refuses is never asked about (#707)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   on('classic.PreToolUse', ($, e) => (String((e as unknown as { command?: string }).command).includes('NO-BUILD') ? { deny: 'Blocked by a settings hook.' } : {}))
   const r = await $.tool.call(bash(`${KEY} && echo NO-BUILD`))
   expect(refusal(r)).toBe('Blocked by a settings hook.')
@@ -299,10 +321,10 @@ const scopeModes: { name: string; register: Register } = {
   },
 }
 
-test('while Dan is away an action is held for when he is back, never asked about in the band (#707)', { plugins: [kit, scopeModes] }, async ($, on) => {
+test('while Dan is away an action is held for when he is back, never asked about in the band (#707)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
   // The wrong app in front: held all the same, since Dan cannot bring it forward from his phone.
-  const w = world(on, { front: 77, running: { 10: OVERTURE, 77: LIGHTROOM }, answer: 'Go ahead', away: true })
+  const w = world($, on, { front: 77, running: { 10: OVERTURE, 77: LIGHTROOM }, answer: 'Go ahead', away: true })
   const r = await $.tool.call(bash(KEY, 'h1'))
   expect(w.asked).toEqual([])
   expect(w.reached).not.toContain('Bash')
@@ -315,9 +337,9 @@ test('while Dan is away an action is held for when he is back, never asked about
   expect(w.asked).toEqual([])
 })
 
-test('at home nothing is held and the heads up is asked as before (#707)', { plugins: [kit, scopeModes] }, async ($, on) => {
+test('at home nothing is held and the heads up is asked as before (#707)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   await $.tool.call(bash(KEY))
   expect(w.holds.length).toBe(1)
   expect(w.asked.length).toBe(1)
@@ -347,17 +369,17 @@ const typeErrorScopeModes: { name: string; register: Register } = {
     })
   },
 }
-test('a TypeError from inside a loaded scope modes refuses the action too (#707 review)', { plugins: [kit, typeErrorScopeModes] }, async ($, on) => {
+test('a TypeError from inside a loaded scope modes refuses the action too (#707 review)', { plugins: [secDefault, kit, typeErrorScopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   const r = await $.tool.call(bash(KEY, 'b2'))
   expect(w.asked).toEqual([])
   expect(refusal(r)).toContain("Couldn't tell whether you are away")
 })
 
-test('an away check that fails refuses the action rather than ask a question nobody may see (#707)', { plugins: [kit, brokenScopeModes] }, async ($, on) => {
+test('an away check that fails refuses the action rather than ask a question nobody may see (#707)', { plugins: [secDefault, kit, brokenScopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   const r = await $.tool.call(bash(KEY, 'b1'))
   expect(w.asked).toEqual([])
   expect(w.reached).not.toContain('Bash')
@@ -367,13 +389,85 @@ test('an away check that fails refuses the action rather than ask a question nob
 
 // The toast says what failed, the away check, never "Blocked typing into Overture", which reads as
 // though the action itself was judged and refused (L11, #732).
-test('an away check that fails toasts that the check failed, in each of the two actions', { plugins: [kit, brokenScopeModes] }, async ($, on) => {
+test('an away check that fails toasts that the check failed, in each of the two actions', { plugins: [secDefault, kit, brokenScopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const w = world(on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
   await $.tool.call(bash(KEY, 'b3'))
   await $.tool.call(bash('open -a "Google Chrome" report.html', 'b4'))
   expect(w.toasts).toEqual([
     "Couldn't tell whether you are away, so typing into Overture was stopped.",
     "Couldn't tell whether you are away, so bringing Google Chrome to the front was stopped.",
   ])
+})
+
+// The control for the stand-in (L159): a classic PreToolUse hook of a person's own plugin runs
+// without it and is sent past with it, so the tests above, which pass beside it, cannot be leaning
+// on a classic hook (#875).
+const probe: { name: string; register: Register } = {
+  name: 'probe',
+  register: on => {
+    on('classic.PreToolUse', async ($, e, next) => {
+      await $.ui.log('probe ran', { to: 'debug' })
+      return next(e)
+    })
+  },
+}
+const probeRan = async ($: Engine, on: On) => {
+  const logs: string[] = []
+  on('ui.log', ($, e) => {
+    logs.push(e.text)
+    return { value: undefined }
+  })
+  on('classic.PreToolUse', () => ({}))
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  await $.tool.call(bash('echo hi', 'p1'))
+  return logs.includes('probe ran')
+}
+test("a person's own classic PreToolUse hook runs where no security default is seated (#875)", { plugins: [probe] }, async ($, on) => {
+  expect(await probeRan($, on)).toBe(true)
+})
+test("the security default's stand-in sends that hook past, as the real one does (#875)", { plugins: [secDefault, probe] }, async ($, on) => {
+  expect(await probeRan($, on)).toBe(false)
+})
+
+// A $.tool.check query runs nothing and carries no call id: Dan is never asked about a command that
+// is only being looked at, and the real call is judged when it is made (#875).
+test('a query about a keystroke asks nobody, and the real call is still judged', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Not now' })
+  const q = await $.tool.check({ tool: 'Bash', input: { command: KEY } } as never)
+  expect(q.decision).toBe('allow')
+  expect(w.asked).toEqual([])
+  const r = await $.tool.call(bash(KEY, 'q1'))
+  expect(w.asked.length).toBe(1)
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toContain('You said not now to typing into Overture.')
+})
+
+// A hook that fails at tool.check is skipped and the verdict beneath stands, which would let the
+// keystroke through unchecked; this guard refuses instead (L42, #875).
+const brokenKit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        modkit: {
+          blocked: async () => undefined,
+          commands: async () => {
+            throw new Error('the command reader is down')
+          },
+        },
+      }
+    })
+  },
+}
+test('a check that fails refuses the keystroke rather than let it through unchecked', { plugins: [secDefault, brokenKit] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  const r = await $.tool.call(bash(KEY, 'f1'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.asked).toEqual([])
+  expect(refusal(r)).toContain('Blocked: the keystroke guard could not check this command (the command reader is down)')
 })
