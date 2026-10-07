@@ -418,6 +418,10 @@ def main(argv):
                 n["state"] = kind
             if extra:
                 n["text"] = extra
+        # An end the overnight driver made itself (#844) is marked as the driver's, so the driver
+        # never reads its own park or failure back as the session's progress.
+        if os.environ.get("SLEEP_NOTE_BY_DRIVER") == "1":
+            n["driver"] = True
         n["at"] = at
         print(json.dumps(n))
         return 0

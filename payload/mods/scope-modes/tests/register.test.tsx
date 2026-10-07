@@ -174,6 +174,21 @@ type Opts = {
   homeGoneAfterNote?: boolean
   /** What this session's usage reads, or a read that throws. */
   usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
+  /** What `sleep-queue.sh claims` prints (#844): one JSON line per issue claimed tonight. */
+  claims?: string
+  /** The tip of each sleep/ branch, by its ref, as for-each-ref prints it for that ref (#844). */
+  refs?: Record<string, string>
+  /** What pmset says this Mac is drawing power from (#844). */
+  power?: 'ac' | 'battery'
+  caffeinateFails?: boolean
+  /** The session is in no repository (#844). */
+  noRepo?: boolean
+  /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
+  psArgs?: string
+  /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
+  claimsGate?: Promise<void>
+  /** Which writes of the driver's counter fail, counted from 1 (#844). */
+  driverWriteFails?: number[]
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -201,13 +216,19 @@ const world = (on: On, o: Opts = {}) => {
     appended: [] as { file: string; line: string }[],
     reports: [] as { op: string; record: string; final?: boolean }[],
     homeGone: false,
+    released: [] as string[][],
+    releasedBy: [] as string[],
+    caffeinated: [] as string[],
+    killed: [] as string[],
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
   on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' && !w.homeGone ? '/Users/x' : undefined }) as never)
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
+  let driverWrites = 0
   on('fs.write', ($, e) => {
+    if (e.path.includes('/state/sleep/driver/') && o.driverWriteFails?.includes(++driverWrites)) throw new Error('EIO: i/o error, write')
     w.fsWrites.push(e.path)
     w.files[e.path] = e.text
     return { value: undefined }
@@ -272,6 +293,32 @@ const world = (on: On, o: Opts = {}) => {
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
+    // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
+    if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/sleep-queue.sh') {
+      if (a[1] === 'claims' && o.claimsGate) {
+        const gate = o.claimsGate
+        o.claimsGate = undefined
+        return gate.then(() => ok(o.claims ?? '')) as never
+      }
+      if (a[1] === 'claims') return ok(o.claims ?? '')
+      if (a[1] === 'release') {
+        w.released.push(a.slice(2))
+        w.releasedBy.push(String(e.init?.env?.SLEEP_NOTE_BY_DRIVER))
+        return ok(`released\t${a[3]}\t${a[5]}\n`)
+      }
+    }
+    if (a.includes('for-each-ref')) return ok(o.refs?.[a[a.length - 1] as string] ?? '')
+    if (cmd === 'pmset') return ok(o.power === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
+    if (cmd === 'sh' && String(a[1]).startsWith('caffeinate')) {
+      if (o.caffeinateFails) return fail(127, 'sh: caffeinate: not found')
+      w.caffeinated.push(a[a.length - 1] as string)
+      return ok('4242\n')
+    }
+    if (cmd === 'ps') return ok(`${o.psArgs ?? `caffeinate -i -t ${w.caffeinated[0] ?? ''}`}\n`)
+    if (cmd === 'kill') {
+      w.killed.push(a[0] as string)
+      return ok()
+    }
     w.runs.push(argv)
     if (cmd === '__sessions') {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
@@ -310,7 +357,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: { startedAt: T0, context: { window: 200_000, percent: 10 }, ...u } } as never
   })
   on('session.cwd', () => ({ value: '/repo' }) as never)
-  on('session.repo', () => ({ value: { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
+  on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -331,6 +378,7 @@ const world = (on: On, o: Opts = {}) => {
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   on('classic.Stop', () => ({}) as never)
+  on('classic.StopFailure', () => ({}) as never)
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -1049,6 +1097,8 @@ test('another mod holds its own item while away, and is told nothing was held at
 
 const SLEEP = '/Users/x/.claude/state/sleep'
 const CURRENT = `${SLEEP}/current.json`
+// The writes of the record itself, leaving out the caffeinate hold's process number (#844).
+const recordWrites = (w: { fsWrites: string[] }) => w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
@@ -1074,9 +1124,9 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     placeBefore: 'home',
   })
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
-  expect(w.fsWrites.length).toBe(1)
-  expect(w.fsWrites[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
-  expect(Object.keys(w.files)).toEqual([CURRENT])
+  expect(recordWrites(w).length).toBe(1)
+  expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid'))).toEqual([CURRENT])
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
   // The report is started at once from the record just placed, so it exists from the first minute (#835).
@@ -1101,7 +1151,7 @@ test('/sleep run twice says when and where sleep started, and changes nothing', 
   const r = await command($ as never, 'sleep')
   expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at 12:00 PM ET on Thu Jan 1. Nothing changed.')
   expect(w.files[CURRENT]).toBe(first)
-  expect(w.fsWrites.length).toBe(1)
+  expect(recordWrites(w).length).toBe(1)
 })
 
 test('/sleep started by another session, or being prepared, changes nothing', withDeps, async ($, on) => {
@@ -1121,9 +1171,9 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   const texts = [a.text, b.text]
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   expect(texts.filter(t => t?.startsWith('Sleep mode is already on')).length).toBe(1)
-  expect(Object.keys(w.files)).toEqual([CURRENT])
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid'))).toEqual([CURRENT])
   // Each attempt writes its own temp file, so one attempt's cleanup never removes the other's.
-  expect(new Set(w.fsWrites).size).toBe(2)
+  expect(new Set(recordWrites(w)).size).toBe(2)
 })
 
 test('a record that cannot be written is said, and nothing is left behind', withDeps, async ($, on) => {
@@ -1427,4 +1477,194 @@ test('a record that reads as asleep but cannot be read once moved aside says the
   const r = await command($ as never, 'wake')
   expect(r.text).toBe(`Sleep mode is off. The night's report was not finished: the record moved aside to ${SLEEP}/ended/${T0}-woke-s1.json could not be read.`)
   expect(w.reports).toEqual([])
+})
+
+// ---- Sleep mode phase 8 (#844): the overnight driver, wired ----
+
+const DRIVER = `${SLEEP}/driver/g0/s1.json`
+const NOTES = `${SLEEP}/notes/g0.jsonl`
+const asleepWorker = (extra: Record<string, unknown> = {}) => asleepRecord({ workers: ['s1'], ...extra })
+const kinds = (w: { appended: { line: string }[] }) => w.appended.map(a => (JSON.parse(a.line) as { kind: string }).kind)
+const stopFailure = async ($: $T, error: string, message = 'API Error: 429 rate limited') =>
+  (await ($ as unknown as { classic: { StopFailure: (e: never) => Promise<unknown> } }).classic.StopFailure({ error, last_assistant_message: message } as never))
+
+test('an enrolled session is blocked at Stop with the overnight rules, its counter kept on disk and a heartbeat noted (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  const r = await stop($ as never)
+  expect(r.block).toMatch(/^You hold no issue: claim the next one\. Overnight rules \(sleep mode\)/)
+  expect(r.block).toContain('bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1')
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ v: 1, generation: 'g0', session: 's1', blocks: 1 })
+  expect(kinds(w)).toEqual(['heartbeat'])
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'heartbeat', repo: 'o/r', by: 's1', usage: { rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
+})
+
+test('a session the record does not name is never driven: its Stop passes, and nothing is noted (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.files[DRIVER]).toBeUndefined()
+  expect(w.appended).toEqual([])
+})
+
+test('the circuit breaker lets a session that does nothing new stop, ending its claim; only a commit on its own branch keeps it going (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
+  // A commit on its own claim's branch is progress, read from git, never from what the model said.
+  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n' }
+  expect((await stop($ as never)).block).toBeDefined()
+  // Another worker's commits on its own branch are not this session's progress.
+  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n', 'refs/heads/sleep/9': 'def456\n' }
+  for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'circuit breaker: 3 blocks in a row with no new commit, claim or note']])
+  expect(kinds(w)[kinds(w).length - 1]).toBe('stopped')
+  // Stopped for the night: never blocked again.
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('a counter that cannot be written still ends the claim in hand, on a Stop and on an API error (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '7', 's1', 'failed']])
+})
+
+test('an API error whose wait cannot be recorded ends the claim in hand rather than leave it held (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'rate_limit')
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '7', 's1', 'failed']])
+})
+
+test('a counter that cannot be read stops the session rather than loop, and says so (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [DRIVER]: '{"v":1,' } })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w)).toEqual(['stopped'])
+  expect(w.files[DRIVER]).toBe('{"v":1,')
+})
+
+test('a rate limit waits 5 minutes, noted, then the session is started again once, and a sign in error stops it (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'rate_limit')
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'wait', minutes: 5, error: 'rate_limit', text: 'API Error: 429 rate limited', by: 's1' })
+  await clock.advance(4 * MIN)
+  expect(w.prompts).toEqual([])
+  await clock.advance(MIN)
+  expect(w.prompts).toEqual(['Sleep mode: the wait after the API error is over. Carry on with the overnight work where it stopped, checking the claim and the branch before redoing anything.'])
+  await clock.advance(5 * MIN)
+  expect(w.prompts.length).toBe(1)
+  // The next failure waits longer: 10 minutes.
+  await stopFailure($ as never, 'server_error', 'API Error: 529 overloaded')
+  expect(JSON.parse(w.appended[1]?.line as string)).toMatchObject({ kind: 'wait', minutes: 10, error: 'server_error' })
+  await stopFailure($ as never, 'authentication_failed', 'API Error: 401')
+  expect(kinds(w).slice(-2)).toEqual(['failed', 'stopped'])
+  await clock.advance(30 * MIN)
+  expect(w.prompts.length).toBe(1)
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('the watchdog parks a claim held past two hours of active work mid turn, through the queue, and the next Stop says so (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toMatch(/^You hold #7 in o\/r \(attempt 1\)/)
+  await clock.advance(MIN)
+  expect(w.released).toEqual([['/repo', '7', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+  // Marked as the driver's own, so the queue's parked note is never read back as the session's progress.
+  expect(w.releasedBy).toEqual(['1'])
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 \(120 minutes of active work on it, past the 2 hours an issue gets\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
+})
+
+test('a park the watchdog could not record is still said at the next Stop (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  // The Stop's write is the first; the watchdog's, after it parks, is the second, and fails.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [2] })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(1)
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #7 /)
+})
+
+test('an API error that stops the night ends the claim in hand through the queue (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'billing_error', 'API Error: 402')
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'the API answered billing_error (API Error: 402), which waiting does not cure']])
+})
+
+test('/sleep refuses on battery, and on mains holds caffeinate for the night, let go at wake (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { power: 'battery' })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode did not start: this Mac is on battery power, and a night of work would drain it. Plug it in and run /sleep again.')
+  expect(w.files[CURRENT]).toBeUndefined()
+  w.o.power = 'ac'
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(w.caffeinated).toEqual([String(Math.ceil((UNTIL - T0) / 1000))])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBe(`4242 ${Math.ceil((UNTIL - T0) / 1000)}`)
+  await command($ as never, 'wake')
+  expect(w.killed).toEqual(['4242'])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
+})
+
+test('wake never stops another caffeinate that took the hold\'s process number (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { psArgs: 'caffeinate' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  await command($ as never, 'wake')
+  expect(w.killed).toEqual([])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
+})
+
+test('/sleep says when the Mac could not be held awake, and sleep still starts (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { caffeinateFails: true })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toMatch(/ The Mac may sleep tonight: caffeinate could not be started \(sh: caffeinate: not found\)\.$/)
+  expect(w.files[CURRENT]).toBeDefined()
+})
+
+test('a Stop and an API error handled at once never lose a count: the driver takes them one at a time (#844)', withDeps, async ($, on) => {
+  let open = () => undefined as void
+  const claimsGate = new Promise<void>(r => (open = r))
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claimsGate })
+  await start($ as never, clock)
+  const s = stop($ as never)
+  const f = stopFailure($ as never, 'rate_limit')
+  await Promise.resolve()
+  open()
+  await Promise.all([s, f])
+  const d = JSON.parse(w.files[DRIVER] as string) as { blocks: number; waits: unknown[]; resumeAt: number | null }
+  expect(d.blocks).toBe(1)
+  expect(d.waits.length).toBe(1)
+  expect(d.resumeAt).toBe(T0 + 5 * MIN)
+})
+
+test('a stop whose counter cannot be written is still a stop: the next Stop never blocks again (#844)', withDeps, async ($, on) => {
+  // Fresh: one block that makes progress, three idle, then the breaker; its write (the fifth) fails.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, driverWriteFails: [5] })
+  await start($ as never, clock)
+  for (let n = 0; n < 4; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w).filter(k => k === 'stopped').length).toBe(1)
+})
+
+test('an enrolled session in no repository has nothing to claim: it stops at once with a stopped note, never told to run a command it cannot (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, noRepo: true })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w)).toEqual(['stopped'])
+  expect(JSON.parse(w.appended[0]?.line as string).text).toBe('this session is in no repository, so it has nothing to claim tonight')
+  expect((await stop($ as never)).block).toBeUndefined()
 })

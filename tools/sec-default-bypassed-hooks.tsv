@@ -13,3 +13,4 @@ goal-tracker	classic.PermissionRequest	#876: runs only while the managed setting
 goal-tracker	classic.Notification	#876: runs only while the managed settings file is in place; no event a user tier mod receives carries Claude Code's idle notification
 auto-session-name	classic.SessionStart	#876: runs only while the managed settings file is in place; the session title reaches a mod only in this classic payload
 auto-session-name	classic.UserPromptSubmit	#876: runs only while the managed settings file is in place; the session title and sessionTitle reach a mod only in this classic hook
+scope-modes	classic.StopFailure	#876: runs only while the managed settings file is in place; the API error that ended a turn (rate limit, overloaded, sign in) reaches a mod only in this classic hook (#844)

@@ -105,6 +105,12 @@ lacks "the claim given back is never ended unexpectedly" "danwright32/demo#24, c
 has "a claim never ended is still flagged" "danwright32/demo#25, claimed by s1" "$r"
 lacks "released is a kind the report knows, never under Other notes" "released from" "$r"
 
+# ---- an end the overnight driver made is marked as the driver's, so it is never read as the session's progress (#844) ----
+sleep_claim "$ROOT" 28 s1 >/dev/null 2>&1
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 28 s1 parked "the driver parked it" >/dev/null 2>&1
+has "the driver's end is marked as the driver's" '"kind":"parked","by":"s1","repo":"danwright32/demo","issue":28,"text":"the driver parked it","driver":true' "$(notes)"
+lacks "the session's own ends are not" '"issue":21,"text":"merged as PR #4","driver"' "$(notes)"
+
 # ---- a release that does not happen writes no note ----
 before="$(notes | wc -l | tr -d ' ')"
 sleep_release "$ROOT" 21 s1 done "again" >/dev/null 2>&1
