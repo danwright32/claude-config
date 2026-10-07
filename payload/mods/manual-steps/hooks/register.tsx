@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, nextStep, paneColumns, sent } from './card.ts'
+import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
 import type { StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
 
@@ -304,8 +304,17 @@ const STEP_SCHEMA = {
   properties: {
     title: { type: 'string', description: 'What to do, in a few words.' },
     url: { type: 'string', description: 'The direct https:// link to the page the step is done on.' },
-    location: { type: 'string', description: 'Only where there is no page: the exact app, screen and section.' },
-    clicks: { type: 'string', description: 'The exact click path on that page.' },
+    location: {
+      type: 'string',
+      description:
+        'Only where there is no page: a place Dan can find by looking, naming the app and the window, then the screen or section (for example "Terminal, a new window" or "System Settings, Privacy and Security"). For something he types to you in this session, write "paste it where you type your messages to me". The card draws the "Where:" label itself, so do not write it.',
+    },
+    // #872: a list, one action per item, drawn as a numbered sub list; a plain string still works.
+    clicks: {
+      anyOf: [{ type: 'array', items: { type: 'string' }, minItems: 1 }, { type: 'string' }],
+      description:
+        'What Dan does there, as a list with one action per item, in order (["Open Terminal", "Paste the command and press Return", "Type /exit"]); the card numbers them under "What to do:". Never join several actions into one sentence. Do not write the label or the numbers.',
+    },
     value: { type: 'string', description: 'A value to paste, given a Copy button.' },
     checked: {
       type: 'string',
@@ -316,12 +325,23 @@ const STEP_SCHEMA = {
   required: ['title', 'checked'],
 }
 
+// The two tools' words, exported so a test can hold them to what Dan asked of them (#872).
+export const STEPS_DESCRIPTION =
+  'Pin manual steps for Dan as a card he works through, instead of listing them in your reply. Put on the card only a step Dan can do now; a step waiting on something else (a merge, a deploy, a later session) stays in the issue, not on the card. Check every step against the current state first (the hand-off rule). Each step needs its direct link, or where there is no page a location Dan can find (the app and the window), plus its actions as a list, one action per item, and any value to paste. The card labels them "Where:" and "What to do:" and numbers the actions, so write no labels or numbers. Pinning replaces the card. When Dan presses Done you receive "step N done": check it took where you can and call steps_done.'
+const VERDICT_DESCRIPTION =
+  'Record whether a pinned manual step took, after Dan pressed Done ("step N done") or said he did it: checked when you verified it, per-you when it cannot be checked, not-done when you checked and it did not take (the step opens again). withdrawn takes a step off the card undone, at any time, when it cannot be done now; the card shows it as taken off, not done.'
+export const VERDICT_INPUT = {
+  type: 'object',
+  properties: { step: { type: 'integer', minimum: 1 }, checked: { type: 'string', enum: [...VERDICTS] } },
+  required: ['step', 'checked'],
+}
+
 // #863: a step handed to Dan in prose scrolls away unseen, so Claude's final message saying one
 // waits on him, with no unfinished step on the card he can see, sends Claude back to pin it. Once a
 // chain of turn ends (stop_hook_active), so it can never loop, and only where the steps tool exists.
 let interactive = false
 const proseStep = (phrase: string) =>
-  `Your reply leaves Dan a step in prose ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or exact location, the clicks, and any value to paste. Then say in one line that it is on the card. If nothing is actually left for Dan to do, say so in one line instead.`
+  `Your reply leaves Dan a step in prose ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -330,8 +350,7 @@ export const register: Register = on => {
     if (!e.isInteractive) return next(e)
     await $.tool.register({
       name: 'steps',
-      description:
-        'Pin manual steps for Dan as a card he works through, instead of listing them in your reply. Check every step against the current state first (the hand-off rule). Each step needs its direct link, or where there is no page its exact location, plus the exact clicks and any value to paste. Pinning replaces the card. When Dan presses Done you receive "step N done": check it took where you can and call steps_done.',
+      description: STEPS_DESCRIPTION,
       inputSchema: {
         type: 'object',
         properties: { heading: { type: 'string', description: 'What the steps are for, in a few words.' }, steps: { type: 'array', items: STEP_SCHEMA, minItems: 1 } },
@@ -340,13 +359,8 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'steps_done',
-      description:
-        'Record whether a pinned manual step took, after Dan pressed Done ("step N done") or said he did it: checked when you verified it, per-you when it cannot be checked, not-done when you checked and it did not take (the step opens again).',
-      inputSchema: {
-        type: 'object',
-        properties: { step: { type: 'integer', minimum: 1 }, checked: { type: 'string', enum: ['checked', 'per-you', 'not-done'] } },
-        required: ['step', 'checked'],
-      },
+      description: VERDICT_DESCRIPTION,
+      inputSchema: VERDICT_INPUT,
     })
     await $.command.register({ name: 'steps', description: 'Show the manual steps card again' })
     // Carried over from an earlier session here: held, not shown, until Claude has re-checked them

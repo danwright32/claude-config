@@ -1,5 +1,8 @@
-/** How a finished step finished: found done before it was shown, checked by Claude after Done, or taken on Dan's word. */
-export type StepsFinish = 'already' | 'checked' | 'per-you'
+/**
+ * How a finished step finished: found done before it was shown, checked by Claude after Done, taken
+ * on Dan's word, or withdrawn by Claude as not doable now and taken off undone (#872).
+ */
+export type StepsFinish = 'already' | 'checked' | 'per-you' | 'withdrawn'
 
 /** One manual step as the card holds it. */
 export type StepsStep = {
@@ -8,8 +11,11 @@ export type StepsStep = {
   url?: string
   /** Where the step is done when there is no page: the app, screen and section. */
   location?: string
-  /** The exact click path on that page. */
-  clicks?: string
+  /**
+   * What to do there: one action as a string, or several, in order, which the card numbers one per
+   * line (#872). A card kept before #872 holds a string.
+   */
+  clicks?: string | string[]
   /** A value to paste, with Copy beside it. */
   value?: string
   /** Set once it is finished, and how. */

@@ -18,6 +18,20 @@ describe('cardFrom', () => {
     const c = made({ heading: 'Salesforce', steps: [step({ url: undefined, location: 'Salesforce desktop app, Setup, Object Manager' })] })
     expect(c.steps[0]?.location).toBe('Salesforce desktop app, Setup, Object Manager')
   })
+  // #872: the card draws "Where:" and "What to do:" itself, so a label the author wrote is taken off
+  // rather than drawn twice, however it is cased or spaced. A location that was only a label is none.
+  test('takes off a label the author already wrote, so the card never doubles it', () => {
+    const c = made({
+      heading: 'x',
+      steps: [step({ url: undefined, location: 'where:  Keychain Access, login', clicks: 'What To Do : File, New Password Item' }), step({ title: 'B', clicks: 'Then: Save' })],
+    })
+    expect(c.steps[0]).toMatchObject({ location: 'Keychain Access, login', clicks: 'File, New Password Item' })
+    expect(c.steps[1]?.clicks).toBe('Save')
+    // Only a leading label: the same words later in the text stay.
+    expect(made({ heading: 'x', steps: [step({ clicks: 'Settings, then: Where: to send' })] }).steps[0]?.clicks).toBe('Settings, then: Where: to send')
+    const r = cardFrom({ heading: 'x', steps: [step({ url: undefined, location: 'Where:' })] })
+    expect('refusal' in r && r.refusal).toMatch(/^Step 1 .*has no link or exact location/)
+  })
   test('refuses a link that is not a web address', () => {
     const r = cardFrom({ heading: 'x', steps: [step({ url: 'dash.cloudflare.com' })] })
     expect('refusal' in r && r.refusal).toMatch(/Step 1 .*link .*https/)
@@ -58,6 +72,18 @@ describe('finish', () => {
     expect('refusal' in finish(c, 3, 'checked')).toBe(true)
     expect('refusal' in finish(a.card, 1, 'per-you')).toBe(true)
     expect('refusal' in finish(c, 1, 'maybe' as never)).toBe(true)
+  })
+  // #872: a step that cannot be done yet comes off the card honestly, as withdrawn rather than done.
+  test('withdrawn takes a step off, the open one or a later one, and the card moves on', () => {
+    const c = sent(made({ heading: 'x', steps: [step(), step({ title: 'Second' }), step({ title: 'Third' })] }), 0, true)
+    const a = finish(c, 3, 'withdrawn')
+    if ('refusal' in a) throw new Error(a.refusal)
+    expect(a.card.steps[2]?.finished).toBe('withdrawn')
+    const b = finish(a.card, 1, 'withdrawn')
+    if ('refusal' in b) throw new Error(b.refusal)
+    expect(b.card.steps[0]).toMatchObject({ finished: 'withdrawn', isSent: false })
+    expect(nextStep(b.card)).toBe(1)
+    expect('refusal' in finish(b.card, 1, 'withdrawn')).toBe(true)
   })
   test('not done reopens a step whose Done was sent', () => {
     const c = sent(made({ heading: 'x', steps: [step()] }), 0, true)
@@ -112,6 +138,9 @@ describe('cardLines', () => {
   type P = { text?: string; button?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
   const lines = (c: StepsCard) => cardLines(c) as P[][]
   const textOf = (l: P[]) => l.map(p => p.text ?? `[${p.button}]`).join('')
+  // #872: the card draws each label itself, bold and whole, under the step's title.
+  const WHERE = { text: 'Where: ', bold: true, whole: true, indent: 3 }
+  const WHAT = { text: 'What to do: ', bold: true, whole: true, indent: 3 }
 
   test('an amber heading, only the next step open, later steps by title alone', () => {
     const c = made({
@@ -130,8 +159,8 @@ describe('cardLines', () => {
       'Cloudflare WAF  waiting on you',
       '1. Create the API token  already done',
       '2. Turn on the rule  [done]',
-      'https://dash.cloudflare.com/waf  [copy-link]',
-      'Security, WAF, Custom rules, Deploy',
+      'Where: https://dash.cloudflare.com/waf  [copy-link]',
+      'What to do: Security, WAF, Custom rules, Deploy',
       'ip.src eq 1.2.3.4  [copy]',
       '3. Purge the cache',
     ])
@@ -152,11 +181,11 @@ describe('cardLines', () => {
       steps: [step({ clicks: 'Settings, Security, Web application firewall, Custom rules, Create rule', value: 'ip.src eq 1.2.3.4' })],
     })
     const l = lines(c) as (P & { wrap?: boolean })[][]
-    expect(l.find(x => x[0]?.text?.startsWith('Settings'))?.[0]?.wrap).toBe(true)
-    expect(l.find(x => x[0]?.text?.startsWith('https://'))?.[0]?.wrap).toBeUndefined()
+    expect(l.find(x => x[1]?.text?.startsWith('Settings'))?.[1]?.wrap).toBe(true)
+    expect(l.find(x => x[1]?.text?.startsWith('https://'))?.[1]?.wrap).toBeUndefined()
     expect(l.find(x => x[0]?.text === 'ip.src eq 1.2.3.4')?.[0]?.wrap).toBeUndefined()
     const at = made({ heading: 'x', steps: [step({ url: undefined, location: 'Salesforce desktop app, Setup, Object Manager, Account, Fields' })] })
-    expect((lines(at) as (P & { wrap?: boolean })[][]).find(x => x[0]?.text?.startsWith('Salesforce'))?.[0]?.wrap).toBe(true)
+    expect((lines(at) as (P & { wrap?: boolean })[][]).find(x => x[1]?.text?.startsWith('Salesforce'))?.[1]?.wrap).toBe(true)
   })
 
   test('a finished step is dimmed and struck through, then how it finished: already done and per you grey, checked green', () => {
@@ -173,11 +202,21 @@ describe('cardLines', () => {
     expect(l[3]?.[1]).toEqual({ text: '  done, per you', dim: true })
   })
 
+  // #872: withdrawn reads as removed, never as done: dimmed but not struck through, which is how a
+  // finished step reads, and says it was not done.
+  test('a withdrawn step is dimmed, not struck through, and says it was taken off not done', () => {
+    const r = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn')
+    if ('refusal' in r) throw new Error(r.refusal)
+    const l = lines(r.card)
+    expect(l[1]).toEqual([{ text: '1. A', dim: true }, { text: '  taken off, not done', dim: true }])
+    expect(l[2]?.[0]).toMatchObject({ text: '2. B', bold: true })
+  })
+
   test('an exact location stands where the link would, and a sent Done reads as sent', () => {
     const c = sent(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] }), 0, true)
     const l = lines(c)
     // Sent, the step waits on Claude rather than on Dan, so the heading no longer says it waits on him (#863).
-    expect(l.map(textOf)).toEqual(['x', '1. Turn on the WAF rule  sent', 'Keychain Access, login'])
+    expect(l.map(textOf)).toEqual(['x', '1. Turn on the WAF rule  sent', 'Where: Keychain Access, login'])
   })
 
   // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
@@ -186,12 +225,74 @@ describe('cardLines', () => {
   test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
-    expect(l[2]).toEqual([{ text: url, href: url, indent: 3 }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
+    expect(l[2]).toEqual([WHERE, { text: url, href: url }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
     // The click path is not a link.
-    expect(l[3]?.[0]?.href).toBeUndefined()
+    expect(l[3]?.[1]?.href).toBeUndefined()
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]
     // Text, never a link; it wraps rather than being cut (#734).
-    expect(at[2]).toEqual([{ text: 'Keychain Access, login', indent: 3, wrap: true }])
+    expect(at[2]).toEqual([WHERE, { text: 'Keychain Access, login', wrap: true }])
+  })
+
+  // #872: a bare location line read to Dan as an unexplained fragment, so the card labels each part
+  // of the open step itself: "Where:" before the link or location, "What to do:" before the clicks,
+  // each bold and drawn whole, once. The value stays on its own line with Copy.
+  test('the open step labels its link or location and its clicks, each label once and bold; the value has none', () => {
+    const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login', clicks: 'File, New Password Item', value: 'hunter2' })] }))
+    expect(at.slice(2)).toEqual([
+      [WHERE, { text: 'Keychain Access, login', wrap: true }],
+      [WHAT, { text: 'File, New Password Item', wrap: true }],
+      [{ text: 'hunter2', indent: 3 }, { text: '  ' }, { button: 'copy', label: 'Copy' }],
+    ])
+    const all = at.flat().map(p => p.text ?? '').join('\n')
+    expect(all.match(/Where:/g)).toHaveLength(1)
+    expect(all.match(/What to do:/g)).toHaveLength(1)
+    // A later step is its title alone, so it carries no labels either.
+    const two = lines(made({ heading: 'x', steps: [step({ clicks: 'A, B' }), step({ title: 'Later', clicks: 'C, D' })] }))
+    expect(two.flat().filter(p => p.text === 'Where: ' || p.text === 'What to do: ')).toHaveLength(2)
+  })
+
+  // #872, Dan after a step whose What to do held four actions in one sentence: "step 4 would've been a
+  // lot clearer if it had a sub list where all of the steps in what to do were also numbered". So
+  // clicks given as a list are drawn under the bold label, one numbered action per line.
+  test('a four action step renders 1 to 4 under the bold What to do label, one action per line', () => {
+    const actions = ['Open Terminal', 'Paste the command and press Return', 'Type /clear', 'Type /exit']
+    const c = made({ heading: 'x', steps: [step({ clicks: actions, value: 'claude --resume' })] })
+    expect(c.steps[0]?.clicks).toEqual(actions)
+    const l = lines(c)
+    expect(l[3]).toEqual([WHAT])
+    expect(l.slice(4, 8)).toEqual(actions.map((a, k) => [{ text: `${k + 1}. `, whole: true, indent: 5 }, { text: a, wrap: true }]))
+    expect(l.map(textOf).slice(3, 9)).toEqual([
+      'What to do: ',
+      '1. Open Terminal',
+      '2. Paste the command and press Return',
+      '3. Type /clear',
+      '4. Type /exit',
+      'claude --resume  [copy]',
+    ])
+  })
+
+  test('an action list takes off a label and numbers the author wrote, drops empty actions, and one action is a line', () => {
+    const c = made({ heading: 'x', steps: [step({ clicks: ['What to do: 1. Open Terminal', ' ', '2) Type /exit'] }), step({ title: 'B', clicks: ['Save'] })] })
+    expect(c.steps[0]?.clicks).toEqual(['Open Terminal', 'Type /exit'])
+    // A list of one is drawn as the plain string always was: beside the label, unnumbered.
+    expect(c.steps[1]?.clicks).toBe('Save')
+    // Only a list number, which a space follows: a number that is the action's own text stays whole.
+    expect(made({ heading: 'x', steps: [step({ clicks: ['1.5x zoom', '2.5 GB limit: raise it', '3)Save'] })] }).steps[0]?.clicks).toEqual([
+      '1.5x zoom',
+      '2.5 GB limit: raise it',
+      '3)Save',
+    ])
+    // A list with nothing in it is no clicks at all, and one holding a non string is refused.
+    expect(made({ heading: 'x', steps: [step({ clicks: [' '] })] }).steps[0]?.clicks).toBeUndefined()
+    const r = cardFrom({ heading: 'x', steps: [step({ clicks: ['Open', 3] })] })
+    expect('refusal' in r && r.refusal).toMatch(/^Step 1 .*clicks/)
+  })
+
+  test('a step with a link gets "Where:" on the link line', () => {
+    const l = lines(made({ heading: 'x', steps: [step({ clicks: 'Security, WAF' })] })) as (P & { href?: string })[][]
+    expect(l[2]?.[0]).toEqual(WHERE)
+    expect(l[2]?.[1]?.href).toBe('https://dash.cloudflare.com/waf')
+    expect(l[3]?.[0]).toEqual(WHAT)
   })
 
   test('a value of several lines shows on one line, and the indent follows the number width', () => {

@@ -802,6 +802,17 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   verdict through `steps_done`: `checked` (green), `per-you` ("done, per you", grey), or
   `not-done`, which opens the step again with its Done. A Done that cannot reach Claude opens the
   step again with a toast saying why.
+- **Only what Dan can do now** (#872). The tool asks for a step only when Dan can do it now; one
+  waiting on something else (a merge, a deploy) stays in its issue. A step pinned anyway comes off
+  through `steps_done` as `withdrawn`, at any time: dimmed, not struck through, and "taken off, not
+  done", so it never reads as done.
+- **Labels** (#872). The card draws its own bold labels so the author never writes them: "Where:"
+  before the link or location, "What to do:" before the actions, and the value on its own line with
+  Copy. A label an author wrote anyway is taken off, as are numbers before listed actions. The
+  actions come as a list, one per item, drawn under "What to do:" numbered one per line; a single
+  action, and a plain string from an older caller, sits beside the label. A label is a mod-kit run
+  marked `whole`, drawn in a box that never shrinks, so a long link or location beside it is cut or
+  wraps instead (measured on Ink at 30 columns, an unprotected label drew as "Whe...").
 - **A Done Claude never answers** (#708). While "sent" shows, Claude Code's own working indicator
   is what says the turn is alive. When the turn "step N done" started ends, answered, interrupted or
   failed, with no verdict on that step, Done comes back and a toast says "Claude did not say whether

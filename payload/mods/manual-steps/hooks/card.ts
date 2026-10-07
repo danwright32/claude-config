@@ -6,17 +6,22 @@ import type { StepsCard, StepsFinish, StepsStep } from '../types/index.d.ts'
 
 /** What Claude says it found when it checked a step against the current state before handing it over. */
 export const CHECKED = ['already-done', 'not-done', 'cannot-check'] as const
-/** What Claude says after Dan pressed Done: it checked it took, it cannot check (so on Dan's word), or it did not take. */
-export const VERDICTS = ['checked', 'per-you', 'not-done'] as const
+/**
+ * What Claude says after Dan pressed Done: it checked it took, it cannot check (so on Dan's word), or
+ * it did not take. Or, at any time, that a step cannot be done now and comes off the card (#872).
+ */
+export const VERDICTS = ['checked', 'per-you', 'not-done', 'withdrawn'] as const
 export type StepsVerdict = (typeof VERDICTS)[number]
 
 // How a finished step reads after its struck title (design round: "already done" grey, "checked"
 // green, "done, per you" grey). A Record over the type, so a new way of finishing cannot ship
 // without its words (L113).
-const FINISH: Record<StepsFinish, { text: string; color?: string; dim?: boolean }> = {
+const FINISH: Record<StepsFinish, { text: string; color?: string; dim?: boolean; isUndone?: true }> = {
   already: { text: 'already done', dim: true },
   checked: { text: 'checked', color: 'success' },
   'per-you': { text: 'done, per you', dim: true },
+  // Removed, never done (#872): its title is not struck through, which is how a done step reads.
+  withdrawn: { text: 'taken off, not done', dim: true, isUndone: true },
 }
 
 const AMBER = 'warning'
@@ -28,6 +33,18 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 // One line each, its spacing collapsed: a value or a title is cut at the band's edge, and a click path
 // or a location wraps there (#734), as one line of text either way.
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+// The labels the card draws before a step's place and its clicks (#872), bold and whole, so the
+// author never writes them. A bare location line read to Dan as an unexplained fragment.
+const WHERE = 'Where: '
+const WHAT = 'What to do: '
+// A label an author wrote anyway, taken off the front so the card never draws it twice: the card's
+// own two and the names an author reaches for instead, however cased or spaced.
+const AUTHOR_LABEL = /^(?:where|location|what to do|then|clicks)\s*:\s*/i
+const unlabelled = (s: string | undefined) => (s === undefined ? undefined : str(s.replace(AUTHOR_LABEL, '')))
+// A list number an author put before an action, taken off since the card numbers the list itself.
+// Only one a space follows, so a number that is the action's own text ("1.5x zoom") stays whole.
+const AUTHOR_NUMBER = /^\d+[.)]\s+/
 
 /** The card a handover describes, or why it is refused, naming the step. */
 export const cardFrom = (input: unknown): Made | Refused => {
@@ -43,10 +60,10 @@ export const cardFrom = (input: unknown): Made | Refused => {
     if (!title) return { refusal: `Step ${n} has no title.` }
     const name = `Step ${n} (${oneLine(title)})`
     const url = str(s.url)
-    const location = str(s.location)
+    const location = unlabelled(str(s.location))
     if (!url && !location)
       return {
-        refusal: `${name} has no link or exact location, so Dan would have to hunt for it. Give its url (https://...), or where there is no page, the exact place: the app, screen and section.`,
+        refusal: `${name} has no link or exact location, so Dan would have to hunt for it. Give its url (https://...), or where there is no page, a place Dan can find: the app and the window, then the screen or section.`,
       }
     // The whole link, not only its start: a space or a control character anywhere is no address,
     // and a control character would reach the terminal's hyperlink as it is (#708).
@@ -60,8 +77,22 @@ export const cardFrom = (input: unknown): Made | Refused => {
     const step: StepsStep = { title: oneLine(title) }
     if (url) step.url = url
     if (location) step.location = oneLine(location)
-    const clicks = str(s.clicks)
-    if (clicks) step.clicks = oneLine(clicks)
+    // The clicks as one string, or as a list of actions the card numbers one per line (#872). A list
+    // of one is that one action as a string, drawn as a string always was.
+    if (Array.isArray(s.clicks)) {
+      if (!s.clicks.every(a => typeof a === 'string'))
+        return { refusal: `${name}: its clicks must be a list of actions, each one a string.` }
+      const actions = (s.clicks as string[])
+        .map((a, k) => (k === 0 ? unlabelled(str(a)) : str(a)))
+        .map(a => (a === undefined ? undefined : str(a.replace(AUTHOR_NUMBER, ''))))
+        .filter((a): a is string => a !== undefined)
+        .map(oneLine)
+      if (actions.length === 1) step.clicks = actions[0]
+      else if (actions.length > 1) step.clicks = actions
+    } else {
+      const clicks = unlabelled(str(s.clicks))
+      if (clicks) step.clicks = oneLine(clicks)
+    }
     // The value is kept exactly as given, since Copy must paste what Claude handed over.
     if (typeof s.value === 'string' && s.value.trim()) step.value = s.value
     if (checked === 'already-done') step.finished = 'already'
@@ -121,14 +152,15 @@ export const finish = (card: StepsCard, n: number, verdict: StepsVerdict): Made 
 
 /** One part of a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
 export type CardPart =
-  | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true }
+  | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true; whole?: true }
   | { button: 'done' | 'copy' | 'copy-link'; label: string }
 
 /**
  * The card's lines: the amber heading, "waiting on you" after it while the open step is Dan's,
  * then each step on its own line. Only the next step is open,
- * bold in the terminal's own text colour, with Done and, indented under it, its link or location,
- * its clicks and any value with Copy. A later step is its title alone; a finished one is dimmed and
+ * bold in the terminal's own text colour, with Done and, indented under it, its link or location
+ * after a bold "Where:", its clicks after a bold "What to do:" (several actions numbered one per
+ * line under it), and any value with Copy (#872). A later step is its title alone; a finished one is dimmed and
  * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
  * Code's Link, so one cut at the edge still opens and copies whole where the terminal draws
  * hyperlinks, with Copy link beside it for the terminals that do not, Apple Terminal among them (#708).
@@ -143,7 +175,8 @@ export const cardLines = (card: StepsCard): CardPart[][] => {
   card.steps.forEach((s, i) => {
     const label = `${i + 1}. ${s.title}`
     if (s.finished) {
-      lines.push([{ text: label, dim: true, strikethrough: true }, { ...FINISH[s.finished], text: `  ${FINISH[s.finished].text}` }])
+      const { isUndone, ...how } = FINISH[s.finished]
+      lines.push([isUndone ? { text: label, dim: true } : { text: label, dim: true, strikethrough: true }, { ...how, text: `  ${how.text}` }])
       return
     }
     if (i !== open) {
@@ -153,11 +186,22 @@ export const cardLines = (card: StepsCard): CardPart[][] => {
     lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: 'done' as const, label: 'Done' }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
-    if (s.url) lines.push([{ text: s.url, href: s.url, indent }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
+    // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location
+    // wrapping beside it never takes the label with it (#872).
+    const lead = (text: string): CardPart => ({ text, bold: true, whole: true, indent })
+    if (s.url) lines.push([lead(WHERE), { text: s.url, href: s.url }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
     // A long location or click path wraps under its step rather than being cut at the edge (#734):
-    // mod-kit's left rule reaches down every row it takes.
-    else if (s.location) lines.push([{ text: s.location, indent, wrap: true }])
-    if (s.clicks) lines.push([{ text: s.clicks, indent, wrap: true }])
+    // mod-kit's left rule reaches down every row it takes. It wraps beside its label, so the rows it
+    // continues on sit under its own first word.
+    else if (s.location) lines.push([lead(WHERE), { text: s.location, wrap: true }])
+    if (typeof s.clicks === 'string') lines.push([lead(WHAT), { text: s.clicks, wrap: true }])
+    else if (Array.isArray(s.clicks) && s.clicks.length) {
+      // Several actions: the label on its own line, then each action numbered under it, its number
+      // drawn whole and the action wrapping beside it (#872).
+      lines.push([lead(WHAT)])
+      const width = String(s.clicks.length).length
+      s.clicks.forEach((a, k) => lines.push([{ text: `${String(k + 1).padStart(width)}. `, whole: true, indent: indent + 2 }, { text: a, wrap: true }]))
+    }
     if (s.value) lines.push([{ text: oneLine(s.value), indent }, { text: '  ' }, { button: 'copy', label: 'Copy' }])
   })
   return lines
