@@ -5,7 +5,8 @@ Sleep mode keeps one record for the whole Mac (~/.claude/state/sleep/current.jso
 and one notes file per sleep beside it, notes/<generation>.jsonl: one JSON object per line, only
 ever appended to. The report, the markdown file the record names in `report` (in ~/Downloads), is
 DERIVED from the record and the notes, never edited in place, so any session can render it at any
-moment and the last render wins with nothing lost (no lock): it is rendered after every note, best
+moment: the append is lockless, and renders take turns under a short lock with a deadline, so the
+last to render read every note before it (#909). It is rendered after every note, best
 effort, and once more at wake, when it also reads GitHub for what was really done.
 
 Whether the Mac is asleep is never judged here. That is the one predicate in lib/sleep.sh and
@@ -49,7 +50,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
 resetsAt?}]}, as $.session.usage() reads it. A note of a kind not listed is shown under Other notes.
 
 Seams for tests: SLEEP_REPORT_NOW_MS stands in for the clock, SLEEP_REPORT_GH_TOTAL_S for the
-time GitHub's reads may take together; pmset and gh are found on PATH.
+time GitHub's reads may take together, SLEEP_REPORT_LOCK_S for how long a render waits its turn;
+SLEEP_REPORT_PAUSE holds a render between reading the notes and replacing the report until a `go`
+file is in that folder, and SLEEP_REPORT_MARKS names a folder each render drops a marker in as it
+pauses or waits (#909); pmset and gh are found on PATH.
 """
 
 import argparse
@@ -566,11 +570,116 @@ def confirm(repo, what, number, since, deadline, done, flags):
         flags.append("%s %s #%s was noted done, but GitHub does not show it %s since sleep began." % (repo, label, number, verb))
 
 
+def _mark(name):
+    """Test seam (#909): with SLEEP_REPORT_MARKS naming a folder, a render drops a marker there at
+    each step a test waits on, so the test waits on the step itself, never a fixed time."""
+    d = os.environ.get("SLEEP_REPORT_MARKS", "")
+    if d:
+        try:
+            with open(os.path.join(d, "%s.%d" % (name, os.getpid())), "w"):
+                pass
+        except OSError:
+            pass
+
+
+def _pause():
+    """Test seam (#909): with SLEEP_REPORT_PAUSE naming a folder, a render waits after reading the
+    notes and before replacing the report until a `go` file is there (at most 30 seconds), so a test
+    can hold one render while another runs, the order that loses a note."""
+    d = os.environ.get("SLEEP_REPORT_PAUSE", "")
+    if not d:
+        return
+    _mark("paused")
+    deadline = time.monotonic() + 30
+    while not os.path.exists(os.path.join(d, "go")) and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+# How long a render waits for another to finish; SLEEP_REPORT_LOCK_S stands in for it in tests.
+_lock_s = os.environ.get("SLEEP_REPORT_LOCK_S", "")
+RENDER_LOCK_S = int(_lock_s) if _lock_s.isdigit() else 15
+
+
+class RenderLock:
+    """One render of a night's report at a time, from reading the notes to replacing the report (#909).
+
+    Appending a note stays lockless; only the render is serialised. A render reads the notes after it
+    holds the lock, so the one that takes it last reads every note appended before it, and its report
+    is the one left in place: two renders can no longer land out of order and put back a report missing
+    the newer note. One that cannot take the lock within RENDER_LOCK_S gives up and says so (its note
+    is written, and the render holding the lock, the next note's or wake's carries it, L110). flock is
+    let go by the kernel when its holder dies, so a killed render never leaves it held (L409)."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = None
+
+    def __enter__(self):
+        import fcntl
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
+        except OSError as e:
+            raise Refused("the report's render lock could not be opened at %s (%s)" % (self.path, e.strerror or e))
+        deadline = time.monotonic() + RENDER_LOCK_S
+        waited = False
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if not waited:
+                    waited = True
+                    _mark("waiting")
+                if time.monotonic() >= deadline:
+                    os.close(self.fd)
+                    self.fd = None
+                    raise Refused("another render of this report held it for %d seconds, so this one gave up" % RENDER_LOCK_S)
+                time.sleep(0.02)
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)  # closing it lets the flock go
+        return False
+
+
 def render(record_path, record, final):
-    notes, bad = read_notes(notes_path(record_path, record))
+    path = notes_path(record_path, record)
+    github = {"done": [], "flags": []}
+    if final:
+        # GitHub's reads take up to GH_TOTAL_S, so they run before the lock, never holding every
+        # other render behind them; done is read from GitHub, the notes again under the lock.
+        github = github_done(record, read_notes(path)[0])
+    with RenderLock(path[:-len(".jsonl")] + ".render.lock"):
+        return _render_locked(path, record, final, github)
+
+
+def _notes_size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return -1
+
+
+RERENDERS = 5
+
+
+def _render_locked(path, record, final, github):
+    # Rendered again while the notes have grown since they were read, so a note whose own render
+    # gave up waiting for this one is in the report all the same (#909); a few times at most.
+    for _ in range(RERENDERS):
+        size = _notes_size(path)
+        dest = _render_once(path, record, final, github)
+        if _notes_size(path) == size:
+            break
+    return dest
+
+
+def _render_once(path, record, final, github):
+    notes, bad = read_notes(path)
     now = now_ms()
-    github = github_done(record, notes) if final else {"done": [], "flags": []}
     text = build(record, notes, bad, final, now, github)
+    _pause()
     dest = record["report"]
     try:
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
