@@ -254,9 +254,16 @@ COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.
 # never removes the receiving Mac's own copy. A mod's top level tsconfig.json is NOT excluded: the
 # engine only writes one where none exists and leaves an existing one alone, so it is source.
 
-# desktop alert (no-op if disabled or the notifier isn't installed)
+# desktop alert (no-op if disabled or the notifier isn't installed). Not shown while the Mac is
+# asleep (sleep mode, claude-config#841): what it would have said goes to the log instead, for the
+# morning. The sleep record is read through the tool's own copy of lib/sleep.sh, the one predicate
+# every hook asks, and a record (or a lib) that cannot be read counts as awake, so it notifies.
 notify(){
   [ "${SYNC_NO_NOTIFY:-0}" = "1" ] && return 0
+  if [ -f "$SYNC_SELF_PAYLOAD/hooks/lib/sleep.sh" ] && ( . "$SYNC_SELF_PAYLOAD/hooks/lib/sleep.sh" && sleep_active "$CLAUDE_HOME/state/sleep/current.json" ); then
+    sync_log_line "not shown, Dan is asleep: $1"
+    return 0
+  fi
   local n="${SYNC_NOTIFIER:-terminal-notifier}"
   command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 || true
 }

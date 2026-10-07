@@ -17,6 +17,7 @@
 # Guards:
 #   CLAUDE_DETACHED_RUN set    a headless run has nobody to act on it. Silent.
 #   LESSON_FANOUT_OFF=1        the documented override. Silent.
+#   Asleep (sleep mode)        nobody is there to run it; it waits for the morning. Silent.
 #   Cooldown per Mac           one request per stretch of work, not one per tool call; its length
 #                              is a window this hook sets, not measured.
 # Fails QUIET: anything it cannot read exits 0 with no output.
@@ -30,6 +31,12 @@ set -uo pipefail
 cat >/dev/null 2>&1 || true
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+# Asleep (sleep mode, claude-config#841): nobody is there to run it, so it waits, with no cooldown
+# spent, and the first tool call after wake asks. Unreadable counts as awake (lib/sleep.sh).
+if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null \
+  && sleep_active "$CLAUDE_HOME/state/sleep/current.json"; then
+  exit 0
+fi
 LESSONS="$CLAUDE_HOME/LESSONS.md"
 LEDGER="$CLAUDE_HOME/state/lesson-fanout.done"
 STAMP="$CLAUDE_HOME/state/lesson-fanout-notice.stamp"
