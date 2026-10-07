@@ -946,6 +946,55 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
 - Unmeasured until the first real night (Dan, 2026-10-07: build now, measure on night one): a full
   hour of work in an interactive session, and what a real usage limit looks like.
 
+### Sleep mode phase 3: permissions and outward actions (#834), built
+
+Dan's decision 7 and the plan-lite picker of 2026-10-06, "Everything not banned": overnight,
+Claude Code's own permission prompts are approved, Dan's own automatic checks stay on, and what
+the ban list names is refused. The lessons audit recommended an allow list (L42, L615); Dan chose
+the ban list knowing that an action it does not name is approved.
+
+- `classic.PermissionRequest`: while the record reads asleep and this session is one of its
+  `workers`, a prompt is approved, unless it is AskUserQuestion or ExitPlanMode (H8) or on the ban
+  list, which are denied with the reason. The settings hooks and every mod's `tool.call` refusal
+  run before this step, and a decision beneath is never overridden. Awake, a record that cannot be
+  read, or a session that is not a worker: the prompt waits for Dan as always.
+- `classic.PermissionDenied`: while asleep, a `failed` line naming the classifier's reason goes in
+  `notes/<generation>.jsonl`, and `retry` is taken off whatever beneath answered.
+- The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
+  repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
+  label and milestone writes by gh or gh api. Every other gh call is judged by two short lists,
+  read by one parser, `hooks/ghargs.ts`, as gh reads it (`--flag=value`, `-XDELETE`, `-Rowner/x`,
+  clustered `-sd`, global flags before the subcommand, a dotted owner): a known read (view, list,
+  status, diff, checks, watch, search, a GET to the API) goes ahead anywhere; the writes overnight
+  work needs (an issue or PR comment, `pr create`, `pr edit` of title or body, `pr ready`, `pr
+  merge`, a POST to an issue or PR comment endpoint) go only to the repository the checkout is,
+  resolved from `-R`, a link, the endpoint, `GH_REPO` and the folder after any `cd`; everything
+  else, on any repository, is refused (repo delete, release, secret, a workflow run, `pr close`,
+  any other API write, every GraphQL mutation). A write that cannot be resolved is refused (L75):
+  a gh whose operands xargs feeds, text `eval` or `source` runs, gh named with a gh subcommand
+  after it by any other command (a wrapper mod-kit's reader does not read past), any `GH_`
+  variable or GitHub token set, another `--hostname`, a flag before the subcommand or its action
+  that gh does not know, or a folder whose remotes name two repositories. A runner the reader
+  reads past (`env`, `nohup`, `sudo`, `timeout`, a shell's `-c`) changes nothing about where gh
+  goes, so the gh it runs meets the same lists. Every command is read by mod-kit's reader, never a
+  quote reader of the mod's own. The lessons file by any write route; every
+  claude.ai, Chrome and PostHog MCP tool whose name does not say it only reads (a read only tool
+  whose name has no read word is refused too, which fails closed);
+  Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
+  branch deletes in every spelling git takes (`--forc` is `--force`; a merge with `--delete-branch`
+  included); `claude-sync` pull, sync and install.
+  Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
+  managed settings file (#876) nothing is approved overnight.
+- The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
+  created (events and search, since either can lag), milestones touched and deploy runs in each
+  repository with an event overnight, each repository the night's notes name (a private one the
+  feed leaves out included) and the config repository, and the lessons file changed on GitHub and
+  installed. Each hit is an `outward` note and each read that failed an `unmeasured` one,
+  written before the final render, which puts both under Needs a look at the top of the report
+  (#835), and both are said in the wake reply or the notification. Its GitHub reads keep to one
+  30 s deadline, each read given only the time left, so wake waits at most 30 s for it before the
+  report's own final render.
+
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
 No round: each follows from the spec and the settled surfaces above. The ones marked open were

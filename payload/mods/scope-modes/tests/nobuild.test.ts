@@ -202,6 +202,9 @@ describe('allowed in no build, which the audit found refused (#702)', () => {
   test('a GraphQL read through gh api, and issue, label and milestone mutations', () => {
     expect(bash(['gh', 'api', 'graphql', '-f', 'query=query { repository(owner: "o", name: "r") { issues(first: 5) { nodes { title } } } }'])).toBeUndefined()
     expect(bash(['gh', 'api', 'graphql', '-f', 'query={ viewer { login } }', '--jq', '.data'])).toBeUndefined()
+    // Every spelling gh reads, through the one reader of gh's arguments (#834 review of 9ed23a4).
+    expect(bash(['gh', 'api', 'graphql', '-fquery={ viewer { login } }'])).toBeUndefined()
+    expect(bash(['gh', 'api', 'graphql', '--field=query={ viewer { login } }'])).toBeUndefined()
     expect(bash(['gh', 'api', 'graphql', '-F', 'n=5', '-f', 'query=query($n: Int!) { viewer { repositories(first: $n) { nodes { name } } } }'])).toBeUndefined()
     expect(bash(['gh', 'api', 'graphql', '-f', 'query=mutation { addLabelsToLabelable(input: {labelableId: "x", labelIds: ["y"]}) { clientMutationId } }'])).toBeUndefined()
     expect(bash(['gh', 'api', 'graphql', '-f', 'query=mutation { a: createIssue(input: {repositoryId: "x", title: "t"}) { issue { number } } }'])).toBeUndefined()
