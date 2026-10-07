@@ -702,16 +702,66 @@ acquire_lock(){
   # the number said (L226). It went unnoticed while the sleep was exactly one second and the two
   # readings happened to agree. Shortening the poll to a tenth (#205) would have turned a 90 second
   # wait into a 9 second one with nothing anywhere reporting the change.
-  local broke=0 max="${SYNC_LOCK_WAIT:-90}" pid lock_host="" lock_t0
+  #
+  # A PATIENT run (a typed pull, claude-config#850) waits longer, says so, and holds its place. The
+  # pull Dan typed on 2026-10-06 refused at once while the watcher was six minutes into a send, and
+  # the session then had to poll the lock by hand. So it waits up to SYNC_PULL_LOCK_WAIT, says whose
+  # lock it is waiting on and, every SYNC_LOCK_WAIT_REPORT seconds, that it is still waiting, and
+  # refuses at that named deadline in its own words (L110). And it takes the place at the front
+  # while it waits: a mkdir lock has no queue, so a run that only retried would lose the free lock to
+  # every watcher tick that happened to start in between, for as long as edits kept coming (L1012).
+  local broke=0 max="${SYNC_LOCK_WAIT:-90}" pid lock_host="" lock_t0 ahead
+  local patient="${LOCK_PATIENT:-0}" said_wait=0 last_report report_every="${SYNC_LOCK_WAIT_REPORT:-30}"
+  LOCK_REFUSAL=""
+  if [ "$patient" = 1 ]; then
+    max="${SYNC_PULL_LOCK_WAIT:-$PULL_LOCK_WAIT_DEFAULT}"
+    case "$max" in ''|*[!0-9]*) max="$PULL_LOCK_WAIT_DEFAULT" ;; esac
+  fi
   case "$max" in ''|*[!0-9]*) max=90 ;; esac
+  case "$report_every" in ''|*[!0-9]*|0) report_every=30 ;; esac
   lock_t0="$(date +%s)"
+  last_report="$lock_t0"
   lock_wait_expired(){   # -> true once `max` seconds have really passed since the first attempt
     local _lw_now
     _lw_now="$(date +%s)"
     [ "$(( _lw_now - lock_t0 ))" -ge "$max" ]
   }
-  while ! mkdir "$SYNC_LOCK" 2>/dev/null; do
+  # Every way out of the wait that is a refusal goes through here, so none of them can leave this
+  # run's place at the front behind it, and a patient run always says what it waited on and for how
+  # long rather than the bare refusal with_lock falls back to.
+  lock_give_up(){
+    local _lg_waited
+    _lg_waited="$(( $(date +%s) - lock_t0 ))"
+    drop_lock_place
+    if [ -z "$LOCK_REFUSAL" ] && [ "$patient" = 1 ]; then
+      LOCK_REFUSAL="waited $(wait_in_words "$_lg_waited") for $(lock_holder_words "$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)") to finish, and it still holds $SYNC_LOCK, so this ${cmd:-run} stopped at its deadline (SYNC_PULL_LOCK_WAIT=${max}s) without changing anything. Run 'claude-sync status' to see where things stand, and run it again once that has finished."
+    fi
+    # 0, and the caller returns 1: it is called as the last part of an && list, where a failing
+    # status inside the braces would end the whole script under set -e before with_lock could speak.
+    return 0
+  }
+  while :; do
+    # A place at the front held by ANOTHER live waiter is honoured even when the lock is free: the
+    # free lock is theirs, and taking it is exactly the queue jump the place exists to stop.
+    if ahead="$(lock_place_ahead)"; then
+      LOCK_REFUSAL="a claude-sync pull on this Mac (process $ahead) is waiting its turn for the sync lock and holds the place ahead of this ${cmd:-run}, so this one stopped instead of going in front of it. Nothing was changed, and it can run again once that pull has finished."
+      lock_wait_expired && { lock_give_up; return 1; }
+      sleep "$SYNC_POLL_INTERVAL"
+      continue
+    fi
+    LOCK_REFUSAL=""
+    mkdir "$SYNC_LOCK" 2>/dev/null && break
     pid="$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)"
+    if [ "$patient" = 1 ] && [ -n "$pid" ] && [ "$pid" != "$$" ]; then
+      [ "$(cat "$SYNC_LOCK.next" 2>/dev/null || true)" = "$$" ] || take_lock_place
+      if [ "$said_wait" = 0 ]; then
+        echo "claude-sync: waiting for $(lock_holder_words "$pid") to finish before this ${cmd:-run} goes ahead. It holds the next turn and waits up to $(wait_in_words "$max") (SYNC_PULL_LOCK_WAIT)." >&2
+        said_wait=1; last_report="$(date +%s)"
+      elif [ "$(( $(date +%s) - last_report ))" -ge "$report_every" ]; then
+        echo "claude-sync: still waiting for $(lock_holder_words "$pid"): $(wait_in_words "$(( $(date +%s) - lock_t0 ))") so far, of $(wait_in_words "$max")." >&2
+        last_report="$(date +%s)"
+      fi
+    fi
     # Our OWN lock, met again. reexec_after_self_update runs the updated script with
     # `exec`, which replaces the process image and keeps the SAME pid, so the resumed run
     # arrives back here holding a lock it took before the update. Without this it waits
@@ -738,7 +788,7 @@ acquire_lock(){
     # direction. A lock with no machine recorded predates this and falls back to age. (#29)
     lock_host="$(cat "$SYNC_LOCK/host" 2>/dev/null || true)"
     if [ -n "$lock_host" ] && [ "$lock_host" = "$(sync_hostname)" ] && lock_owner_alive "$pid"; then
-      lock_wait_expired && return 1
+      lock_wait_expired && { lock_give_up; return 1; }
       sleep "$SYNC_POLL_INTERVAL"
       continue
     fi
@@ -767,13 +817,89 @@ acquire_lock(){
         [ "$broke" -le 5 ] && continue
       fi
     fi
-    lock_wait_expired && return 1
+    lock_wait_expired && { lock_give_up; return 1; }
     sleep "$SYNC_POLL_INTERVAL"
   done
   printf '%s\n' "$$" > "$SYNC_LOCK/pid" 2>/dev/null || true
   # Which machine holds it, so a lock met later can be judged by the right evidence (#29).
   printf '%s\n' "$(sync_hostname)" > "$SYNC_LOCK/host" 2>/dev/null || true
+  # And what it is, so a run waiting behind it can say whose lock it is (claude-config#850).
+  printf '%s\n' "$(lock_command_words)" > "$SYNC_LOCK/command" 2>/dev/null || true
+  drop_lock_place
+  if [ "$said_wait" = 1 ]; then
+    echo "claude-sync: the sync lock came free after $(wait_in_words "$(( $(date +%s) - lock_t0 ))"), so this ${cmd:-run} is going ahead." >&2
+  fi
   return 0
+}
+
+# How long a typed pull waits for a run already holding the lock (claude-config#850). Twelve
+# minutes: the longest part of a send that holds the lock is the suites covering the hooks it
+# publishes, bounded by SYNC_SEND_TESTS_TIMEOUT at ten minutes, and two more cover the rest of that
+# send. The run that prompted this held the lock for about six.
+PULL_LOCK_WAIT_DEFAULT=720
+
+wait_in_words(){   # seconds -> "40 seconds", "1 second", or duration_in_words past two minutes
+  local s="${1:-}"
+  case "$s" in ''|*[!0-9]*) printf 'an unknown length of time'; return 0 ;; esac
+  if [ "$s" -ge 120 ]; then duration_in_words "$s"; return 0; fi
+  if [ "$s" -eq 1 ]; then printf '1 second'; else printf '%s seconds' "$s"; fi
+}
+
+# What this run is, in the words a run waiting behind it says it is waiting for.
+lock_command_words(){
+  if [ "${SYNC_IN_WATCH:-0}" = "1" ]; then printf "the change watcher's send"; return 0; fi
+  printf 'a claude-sync %s' "${cmd:-run}"
+}
+
+lock_holder_words(){   # $1 = the pid recorded in the lock -> "the change watcher's send (process 12, ...)"
+  local p="${1:-}" what host where=""
+  what="$(cat "$SYNC_LOCK/command" 2>/dev/null || true)"
+  # A lock taken by a version from before this was recorded says nothing about itself.
+  [ -n "$what" ] || what="another claude-sync run"
+  host="$(cat "$SYNC_LOCK/host" 2>/dev/null || true)"
+  [ -n "$host" ] && [ "$host" != "$(sync_hostname)" ] && where=" on $host"
+  if [ -z "$p" ]; then
+    printf '%s (just starting, its process not yet recorded)' "$what"
+    return 0
+  fi
+  printf '%s (process %s%s, holding the sync lock for %s)' "$what" "$p" "$where" "$(wait_in_words "$(lock_age_seconds)")"
+}
+
+# THE PLACE AT THE FRONT (claude-config#850, L1012). One file beside the lock naming the process
+# that is next. Created by a hard link, which fails when the name exists, so two waiters cannot
+# both believe they hold it, and the pid is already inside it the moment it appears.
+take_lock_place(){
+  local tmp="$SYNC_LOCK.next.$$"
+  printf '%s\n' "$$" > "$tmp" 2>/dev/null || return 0
+  ln "$tmp" "$SYNC_LOCK.next" 2>/dev/null || true
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+drop_lock_place(){
+  # Only our own: a place another waiter holds is theirs to give up.
+  if [ "$(cat "$SYNC_LOCK.next" 2>/dev/null || true)" = "$$" ]; then rm -f "$SYNC_LOCK.next" 2>/dev/null || true; fi
+  return 0
+}
+# Prints the pid of ANOTHER live waiter holding the place, and succeeds; otherwise fails. A place
+# left by a process that has gone, or older than any wait could last, is removed rather than
+# honoured, or one pull killed mid wait would stop every later run for good. Age covers a pid the
+# system has since given to something unrelated, which would otherwise look alive for ever.
+lock_place_ahead(){
+  local f="$SYNC_LOCK.next" p m now limit
+  [ -f "$f" ] || return 1
+  p="$(cat "$f" 2>/dev/null || true)"
+  [ "$p" = "$$" ] && return 1
+  limit="${SYNC_PULL_LOCK_WAIT:-$PULL_LOCK_WAIT_DEFAULT}"
+  case "$limit" in ''|*[!0-9]*) limit="$PULL_LOCK_WAIT_DEFAULT" ;; esac
+  m="$(file_mtime "$f")"; now="$(date +%s)"
+  case "$m" in ''|*[!0-9]*) m="$now" ;; esac
+  if [ -n "$p" ] && lock_owner_alive "$p" && [ "$(( now - m ))" -le "$(( limit + 60 ))" ]; then
+    printf '%s' "$p"
+    return 0
+  fi
+  # Removed only if it is still the same place, so one a new waiter has just taken survives.
+  if [ "$(cat "$f" 2>/dev/null || true)" = "$p" ]; then rm -f "$f" 2>/dev/null || true; fi
+  return 1
 }
 
 release_lock(){
@@ -892,7 +1018,7 @@ with_lock(){   # $@ = the command to run while holding the lock
   if [ "${LOCK_HELD:-0}" = 1 ]; then "$@"; return $?; fi
   # Before the lock, so a run that cannot read the skills list stops holding nothing (#415).
   require_unmanaged_skill_list
-  acquire_lock || die "another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand."
+  acquire_lock || die "${LOCK_REFUSAL:-another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand.}"
   LOCK_HELD=1
   # Here rather than in each command, and here rather than in a read-only one: a clone that has
   # taken the lock is a clone that can leave a record behind, and status changes nothing by design.
@@ -3612,6 +3738,10 @@ refuse_resurrected_deletions(){
     lastdel="$delcommit"
   done < <(git -C "$SYNC_REPO" ls-files --others --exclude-standard -- payload 2>/dev/null || true)
   [ -n "$restored" ] || return 0
+  # Kept back on EVERY send while the copy stays here (claude-config#849), though it is said once
+  # per file below: a watcher tick that commits nothing because of it is a hold, not nothing to send.
+  # Not when the local copy was removed too, because then nothing here differs any more.
+  [ -n "$removed" ] || note_held_back "$(printf '%s\n' $restored)"
   # Once per path, not on every edit. The watcher fires on every save and the file stays where it
   # is by default, so a message per send is the alert that gets ignored (L36). The record is keyed
   # on the path AND the content, so a file that CHANGES is a new decision and is reported again.
@@ -3695,6 +3825,16 @@ comma_list(){    # $1 = a newline separated list -> "first.md, second.md, third.
   return 0
 }
 
+# Every file THIS send kept back, whichever check kept it (claude-config#849). Each hold says so in
+# its own NOT publishing sentence; this is the same fact kept where do_send can read it, so a send
+# that committed nothing because files were held reports that as its outcome rather than as
+# "nothing", which the watcher logged as "nothing to send" while a lesson sat unsent (L98, L11).
+SEND_HELD_BACK=""
+note_held_back(){   # $1 = a newline separated list of paths relative to the payload
+  SEND_HELD_BACK="$(union_lines "$SEND_HELD_BACK" "$1")"
+  return 0
+}
+
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
@@ -3739,6 +3879,7 @@ SWPROT
     else
       _sw_next="Run '$(receive_command)', which receives the repo's version and settles the two copies on this Mac, and the next send publishes the result."
     fi
+    note_held_back "$_sw_held"
     echo "claude-sync: NOT publishing $(comma_list "$_sw_held") because the shared repo has changed $([ "$(printf '%s\n' "$_sw_held" | wc -l | tr -d ' ')" = 1 ] && printf 'it' || printf 'them') since this Mac last applied, and mirroring this Mac's copy upward would revert what is there. Nothing here was altered and nothing was lost. $_sw_next" >&2
     # SAID, NOT NOTIFIED. The watcher sends on every save, and this state lasts until the next pull,
     # so a desktop notification here is one per keystroke for a condition the very next pull clears:
@@ -3753,6 +3894,7 @@ SWPROT
   if [ -n "$_sw_stale" ]; then
     protected="${protected:+$protected
 }$_sw_stale"
+    note_held_back "$_sw_stale"
     echo "claude-sync: NOT publishing $(comma_list "$_sw_stale") because this Mac's copy is an earlier version the shared repo has since replaced, so sending it would undo that change there. Nothing here was altered. $(if [ "${SYNC_RECEIVES_NEXT:-0}" = "1" ]; then printf 'This sync goes on to bring the current version onto this Mac.'; else printf "Run '%s' to bring the current version onto this Mac." "$(receive_command)"; fi)" >&2
   fi
   for d in "${MIRROR_DIRS[@]}" skills; do
@@ -3804,6 +3946,7 @@ PROT
     if [ -z "$_sh_local" ]; then
       # Not writing is the safe direction: a payload left as it is can still be published next
       # time, and one overwritten from an unreadable local file cannot be recovered (L5).
+      note_held_back settings.hooks.json
       echo "claude-sync: $CLAUDE_HOME/settings.json could not be read as JSON, so the hooks block was NOT published and the repo keeps the copy it had. Check it with 'jq . $CLAUDE_HOME/settings.json'." >&2
       # Logged like every other way the block is held back (claude-config#592, review of #785).
       sync_log_line "the hooks block was NOT published, because $CLAUDE_HOME/settings.json could not be read as JSON"
@@ -3819,6 +3962,9 @@ PROT
       if [ -n "$_sh_verdict" ]; then
         # Held back, like the merge failure below: only this block waits, and everything else in
         # the send still travels (claude-config#413).
+        # A hold only where this Mac's merged block differs from what the repo has (claude-config#849);
+        # a fault already in the repo's copy keeps nothing of this Mac's back.
+        [ "$_sh_merged" = "$(printf '%s' "$_sh_pay" | jq -c . 2>/dev/null || true)" ] || note_held_back settings.hooks.json
         echo "claude-sync: the hooks block was NOT published and the repo keeps the copy it had, because $_sh_verdict" >&2
         # AND IN THE SYNC LOG, with a time (claude-config#592). The watcher keeps a send's stderr to
         # itself and logs a one line summary, so on 2026-10-02 a notification arrived with no line in
@@ -3832,6 +3978,7 @@ PROT
       elif [ -n "$_sh_merged" ]; then
         printf '%s' "$_sh_merged" | jq '{hooks: .}' | tok > "$PAYLOAD/settings.hooks.json"
       else
+        note_held_back settings.hooks.json
         echo "claude-sync: the hooks block could not be merged for publishing, so the repo keeps the copy it had and this Mac's hook changes have NOT been sent. Check $CLAUDE_HOME/settings.json and the payload's settings.hooks.json with jq." >&2
         sync_log_line "the hooks block was NOT published, because it could not be merged with the payload's settings.hooks.json"
       fi
@@ -3892,6 +4039,7 @@ $LESSONS_FILE"*) lessons_held=1 ;; esac
         withnote=" and what is rendered from it"
       fi
       heldfiles="$(union_lines "$heldsrc" "$rendered")"
+      note_held_back "$heldfiles"
       echo "claude-sync: NOT publishing $(comma_list "$heldfiles") because $(lesson_fault_cause "$kind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$kind") and it publishes on the next send.${withheld} Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
       notify "held back $(comma_list "$heldsrc")${withnote}: $(lesson_fault_notice "$kind")"
     done
@@ -8173,6 +8321,7 @@ $timed_out_suites" in
 $suite
 "*) why="$name did not finish within SYNC_SEND_TESTS_TIMEOUT (${limit}s) here and was stopped with everything it had started" ;;
       esac
+      note_held_back "$(printf '%s\n' "$files" | sed 's|^payload/||')"
       echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: $rerun. The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
       notify "held back $(printf '%s' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' '): $why"
     done <<FAILED
@@ -8252,7 +8401,7 @@ do_release(){
 # direction. Printed only under the watcher, because a person running `claude-sync send` by hand
 # has the sentences and does not need the token; the watcher sets SYNC_IN_WATCH itself, and a
 # reader that finds no marker says so rather than assuming success.
-send_outcome(){   # $1 = sent|nothing|behind|held|failed
+send_outcome(){   # $1 = sent|nothing|withheld <files>|behind|held|failed
   [ "${SYNC_IN_WATCH:-0}" = "1" ] || return 0
   printf 'SEND-OUTCOME %s\n' "$1"
   return 0
@@ -8422,7 +8571,17 @@ do_send(){
   stage_local_to_payload
   have_git || return 0
   send_hook_tests                        # holds back the hooks a red suite covers; the rest sends (#269)
-  commit_if_changed || { send_outcome nothing; return 0; }   # nothing changed -> nothing to send
+  # Nothing committed is two different states (claude-config#849): nothing differs, or something
+  # differs and every such file was held back. Only the first is "nothing"; the second names the
+  # files on its marker, and the sentence saying why has already been printed above.
+  if ! commit_if_changed; then
+    if [ -n "$SEND_HELD_BACK" ]; then
+      send_outcome "withheld $(comma_list "$SEND_HELD_BACK")"
+    else
+      send_outcome nothing
+    fi
+    return 0
+  fi
   # A commit we just made from our OWN ~/.claude is applied here by construction:
   # stage_local_to_payload mirrored this Mac's files into it moments ago. Record it
   # as applied, or .last-applied stays at the previous commit and the guard above
@@ -10388,7 +10547,24 @@ do_watch(){
       if [ "$rc" -ne 0 ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sync FAILED (exit $rc): ${out:-<no output>}"
       else
+        # What the send SAID beside its marker (claude-config#849). The arms below turn the marker
+        # into one summary line, and before this everything else was dropped, including the NOT
+        # publishing sentence that names a held file and says why. Kept for every outcome, because
+        # the log is where an automatic send is read afterwards and nobody saw its output live.
+        # "Sent." is left out: it is the marker's own news in words, and repeating it is noise.
+        said="$(printf '%s\n' "$out" | awk 'NF && !/^SEND-OUTCOME / && $0 != "Sent."')"
+        said_logged=0
         case "$out" in
+          # BEFORE every other arm, and it carries the reason on the SAME line as the files: a held
+          # file is the one outcome where the summary alone cannot be acted on (L80). Not the held
+          # arm's prefix: "SEND-OUTCOME held" does not occur inside "SEND-OUTCOME withheld".
+          *"SEND-OUTCOME withheld "*)
+            # A here-string, not a pipe into head: a consumer that stops early kills its producer
+            # under pipefail (L183).
+            held_files="$(awk 'sub(/^SEND-OUTCOME withheld /, "") && !done { print; done = 1 }' <<< "$out")"
+            held_why="$(printf '%s\n' "$said" | sed 's/^claude-sync: //' | tr '\n' ' ' | sed 's/ *$//')"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent: $held_files held back, ${held_why:-and the send said nothing more this time (a hold that is explained once per file was explained on an earlier tick)}"
+            said_logged=1 ;;
           *"SEND-OUTCOME sent"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sent" ;;
           *"SEND-OUTCOME nothing"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: nothing to send" ;;
           *"SEND-OUTCOME behind"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: skipped, this Mac is behind the shared repo" ;;
@@ -10416,12 +10592,19 @@ do_watch(){
             stale_said="${out//SEND-OUTCOME stale-daemon/}"
             stale_said="${stale_said//$'\n'/ }"
             while [ "${stale_said# }" != "$stale_said" ]; do stale_said="${stale_said# }"; done
-            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk. $stale_said" ;;
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk. $stale_said"
+            said_logged=1 ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible
           # (L98), and it is what a version too old to print the marker looks like.
-          *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}" ;;
+          *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}"
+             said_logged=1 ;;
         esac
+        # Beneath the summary, indented, so each tick still starts with one dated line a reader can
+        # scan, and a held file or a skipped send is named in the send's own words under it.
+        if [ "$said_logged" -eq 0 ] && [ -n "$said" ]; then
+          printf '%s\n' "$said" | sed 's/^/    /'
+        fi
       fi
       # Scratch used to be reclaimed HERE, by the watcher, on a clock this loop held in memory
       # (claude-config#251). It never fired: the clock was set to "now" when the loop started, and
@@ -10653,7 +10836,10 @@ case "$cmd" in
   # report_when_lock_released, and with_lock prints it after releasing the lock, so `sync`, `send`'s
   # fall-through reconcile and the `apply-only` resume point all get the same verification as `pull`
   # without a call site being able to forget one (claude-config#184).
-  pull) with_lock do_pull ;;
+  # A typed pull WAITS for a run already holding the lock, saying so, rather than refusing at once
+  # (claude-config#850). A plain global, never an env prefix: a prefix on a function call is
+  # exported to everything it starts, and a child claude-sync would then wait as though typed (L169).
+  pull) LOCK_PATIENT=1; with_lock do_pull ;;
   sync) with_lock do_sync ;;
   send) with_lock do_send ;;
   # NOT locked as a whole: watch is a long-lived loop that would then hold the lock for
