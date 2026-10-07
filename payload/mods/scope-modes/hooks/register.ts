@@ -243,7 +243,8 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   }
   // Written whole beside it, read back, then linked into place: a link fails when a record is
   // already there, so of two /sleep at once exactly one record is placed and never half of one.
-  const tmp = `${p.dir}/.current-${record.generation}.tmp`
+  // Its own name per attempt, so two attempts in one millisecond never share it, nor one's cleanup the other's file.
+  const tmp = `${p.dir}/.current-${record.generation}-${Math.random().toString(36).slice(2, 10)}.tmp`
   const text = JSON.stringify(record)
   try {
     await run($, ['mkdir', '-p', p.dir])

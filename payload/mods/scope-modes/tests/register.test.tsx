@@ -1054,7 +1054,8 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     placeBefore: 'home',
   })
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
-  expect(w.fsWrites).toEqual([`${SLEEP}/.current-${T0}-s1.tmp`])
+  expect(w.fsWrites.length).toBe(1)
+  expect(w.fsWrites[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   expect(Object.keys(w.files)).toEqual([CURRENT])
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(r.text).toBe('Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said.')
@@ -1090,6 +1091,8 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   expect(texts.filter(t => t?.startsWith('Sleep mode is already on')).length).toBe(1)
   expect(Object.keys(w.files)).toEqual([CURRENT])
+  // Each attempt writes its own temp file, so one attempt's cleanup never removes the other's.
+  expect(new Set(w.fsWrites).size).toBe(2)
 })
 
 test('a record that cannot be written is said, and nothing is left behind', withDeps, async ($, on) => {
