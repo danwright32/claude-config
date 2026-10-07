@@ -112,10 +112,16 @@ check_eq "an end refused (the claim already ended) writes no note" "$before" "$(
 
 # ---- a note that cannot be written is said, and the claim still stands (it is the record) ----
 chmod 400 "$SLEEPDIR/notes/g1.jsonl"
-out="$(sleep_claim "$ROOT" 26 s1 2>&1)"; rc=$?
-chmod 600 "$SLEEPDIR/notes/g1.jsonl"
-check_eq "the claim still succeeds when its note cannot be written" 0 "$rc"
-has "the lost note is said" "the night's note of this claim could not be written" "$out"
+if [ -w "$SLEEPDIR/notes/g1.jsonl" ]; then
+  # Root ignores the mode, so the case cannot be set up here: said, never read as a pass or a fail (L411).
+  chmod 600 "$SLEEPDIR/notes/g1.jsonl"
+  echo "UNMEASURED: a notes file that cannot be written could not be made here (running as root?), so the lost note case was not run"
+else
+  out="$(sleep_claim "$ROOT" 26 s1 2>&1)"; rc=$?
+  chmod 600 "$SLEEPDIR/notes/g1.jsonl"
+  check_eq "the claim still succeeds when its note cannot be written" 0 "$rc"
+  has "the lost note is said" "the night's note of this claim could not be written" "$out"
+fi
 
 [ -s "$WORK/gh-called" ] || { fail=$((fail + 1)); echo "FAIL: the wake render never asked the gh stand-in, so the report was never checked as at wake"; }
 
