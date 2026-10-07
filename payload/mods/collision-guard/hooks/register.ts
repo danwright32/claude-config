@@ -277,7 +277,12 @@ export const register: Register = on => {
     // a plan.
     if (c) toNote.set(planKey(e), c)
     return decided
-  })
+  }).catch(($, e, next) => ({
+    // A hook that fails is skipped and the verdict beneath stands, which would let the edit through
+    // unjudged, so a failure here refuses (L42, lessons review of #878). Nothing has run yet.
+    decision: 'deny' as const,
+    reason: `Blocked: the collision guard could not check this call against the other sessions (${next.error?.message ?? next.error?.kind ?? 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+  }))
 
   on('tool.call', async ($, e, next) => {
     if (!watches(String(e.tool))) return next(e)

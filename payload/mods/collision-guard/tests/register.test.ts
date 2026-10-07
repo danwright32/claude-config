@@ -231,7 +231,7 @@ type Send = true | { refused: string } | 'throws'
 // How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
 // refuses it.
 type Ran = 'ok' | 'error' | { deny: string }
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -250,6 +250,7 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
       return ok(out === null ? '' : JSON.stringify(out))
     }
     w.runs.push(e.argv.join(' '))
+    if (cmd === '__sessions' && o.listBreaks) return ok('not json')
     if (cmd === '__sessions') return ok(JSON.stringify({ open: [rec('me', o.self), ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 'me' }))
     if (cmd === 'tail' && o.tail === 'fails') return { value: { exitCode: 1, stdout: '', stderr: 'Permission denied', isStdoutTruncated: false, isStderrTruncated: false } }
     if (cmd === 'tail' && o.tail === 'no-request') return ok(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'hi' } }) + '\n')
@@ -940,7 +941,18 @@ test('a call a settings hook refuses is never judged, told or toasted (#707)', w
   expect(w.prompts.length).toBe(1)
 })
 
-// The plan is handed from the classic hook to the tool.call hook by the call's id. A call raised
+// A check that fails outright (here the session list cannot be read at all) refuses the call: a
+// tool.check hook that fails is skipped and the verdict beneath allows it, which would let an edit
+// through unjudged (L42, lessons review of #878).
+test('a check that fails refuses the call rather than let it through unjudged', withDeps, async ($, on) => {
+  const w = world($, on, { listBreaks: true })
+  const r = await $.tool.call(edit('/repo/src/InvoiceTable.tsx', 'x1'))
+  expect(refusal(r)).toContain('Blocked: the collision guard could not check this call against the other sessions')
+  expect(w.reached).toEqual([])
+  expect(w.edits).toEqual([])
+})
+
+// The plan is handed from the tool.check hook to the tool.call hook by the call's id. A call raised
 // with none is given one by the engine (measured 2026-10-04), so two such calls are each noted as
 // their own (lessons review of #707).
 test('two calls raised without an id are each noted, never mixed up (#707 review)', withDeps, async ($, on) => {
@@ -955,7 +967,7 @@ test('two calls raised without an id are each noted, never mixed up (#707 review
 // Both sides of that hand over read the key through one helper (#732). A call with no id cannot
 // reach the guard by any route: the engine refuses a mod that hands a call on without its id and
 // runs the call with the id it was raised under (measured here, Claude Code 2.1.289), so the plan
-// the classic hook stores is the one the tool.call hook reads back.
+// the tool.check hook stores is the one the tool.call hook reads back.
 const IdDropper: { name: string; tier: 'prepend'; register: Register } = {
   name: 'id-dropper',
   tier: 'prepend',
