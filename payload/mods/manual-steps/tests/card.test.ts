@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, carriedNote, finish, fold, keepFinished, nextStep, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, finish, finishedWhen, fold, keepFinished, nextStep, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -249,9 +249,9 @@ describe('cardLines', () => {
     verdict(4, 'per-you')
     const l = cardLines(c, { now: T + 60_000, timeZone: 'America/New_York' }) as P[][]
     expect(l[1]).toEqual([{ text: '1. A', dim: true, strikethrough: true }, { text: '  already done before this card', dim: true }])
-    expect(l[2]).toEqual([{ text: '2. B', strikethrough: true }, { text: '  checked at 3:41 PM', color: 'success' }])
-    expect(l[3]).toEqual([{ text: '3. C', strikethrough: true }, { text: '  done, you pressed Done at 3:41 PM' }])
-    expect(l[4]).toEqual([{ text: '4. D', strikethrough: true }, { text: '  done, per you, recorded at 3:41 PM' }])
+    expect(l[2]).toEqual([{ text: '2. B', strikethrough: true }, { text: '  checked on Oct 7 at 3:41 PM', color: 'success' }])
+    expect(l[3]).toEqual([{ text: '3. C', strikethrough: true }, { text: '  done, you pressed Done on Oct 7 at 3:41 PM' }])
+    expect(l[4]).toEqual([{ text: '4. D', strikethrough: true }, { text: '  done, per you, recorded on Oct 7 at 3:41 PM' }])
     expect(l[5]?.[0]).toMatchObject({ text: '5. E', bold: true })
   })
 
@@ -262,7 +262,7 @@ describe('cardLines', () => {
     const r = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn', T)
     if ('refusal' in r) throw new Error(r.refusal)
     const at = { now: T, timeZone: 'America/New_York' }
-    expect((cardLines(r.card, at) as P[][])[1]).toEqual([{ text: '1. A', dim: true }, { text: '  taken off at 3:41 PM, not done', dim: true }])
+    expect((cardLines(r.card, at) as P[][])[1]).toEqual([{ text: '1. A', dim: true }, { text: '  taken off on Oct 7 at 3:41 PM, not done', dim: true }])
     expect((cardLines({ ...r.card, isCarried: true }, { ...at, now: T + 3 * 86_400_000 }) as P[][])[1]?.[1]).toEqual({
       text: '  taken off in an earlier session on Oct 7 at 3:41 PM, not done',
       dim: true,
@@ -271,6 +271,17 @@ describe('cardLines', () => {
     const untimed = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn')
     if ('refusal' in untimed) throw new Error(untimed.refusal)
     expect((cardLines({ ...untimed.card, isCarried: true }, at) as P[][])[1]?.[1]).toEqual({ text: '  taken off in an earlier session, not done', dim: true })
+  })
+
+  // #886 review: a card nobody redraws keeps its text past midnight, so a time with no date would
+  // read as today on the next day. The date is always there, read in the zone given.
+  test('when a step finished always carries its date, so it never goes stale, in the zone given', () => {
+    const T = Date.UTC(2026, 9, 7, 19, 41)
+    const ny = 'America/New_York'
+    expect(finishedWhen(T, { now: T, timeZone: ny })).toBe('on Oct 7 at 3:41 PM')
+    expect(finishedWhen(T, { now: T + 86_400_000, timeZone: ny })).toBe('on Oct 7 at 3:41 PM')
+    expect(finishedWhen(T, { now: T, timeZone: 'Asia/Kolkata' })).toBe('on Oct 8 at 1:11 AM')
+    expect(finishedWhen(T, { now: Date.UTC(2027, 0, 2), timeZone: ny })).toBe('on Oct 7, 2026 at 3:41 PM')
   })
 
   test('a step finished in an earlier session is grey, says so, and shows when it finished', () => {
@@ -288,7 +299,7 @@ describe('cardLines', () => {
     }
     const l = cardLines(card, { now: T, timeZone: 'America/New_York' }) as P[][]
     expect(l[1]).toEqual([{ text: '1. Sign out', dim: true, strikethrough: true }, { text: '  done, per you, in an earlier session on Oct 4 at 3:41 PM', dim: true }])
-    expect(l[2]).toEqual([{ text: '2. Clear cookies', dim: true, strikethrough: true }, { text: '  checked in an earlier session at 2:41 PM', dim: true }])
+    expect(l[2]).toEqual([{ text: '2. Clear cookies', dim: true, strikethrough: true }, { text: '  checked in an earlier session on Oct 7 at 2:41 PM', dim: true }])
     // Kept before #886, with no time: said to be earlier all the same.
     expect(l[3]).toEqual([{ text: '3. Old', dim: true, strikethrough: true }, { text: '  done, you pressed Done, in an earlier session', dim: true }])
     // A step pinned again from the held card keeps the same reading.

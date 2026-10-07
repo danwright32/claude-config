@@ -100,7 +100,11 @@ const now = async ($: EngineInterface): Promise<number> => {
     return Date.now()
   }
 }
-const drawnAt = async ($: EngineInterface): Promise<DrawnAt> => ({ now: await now($) })
+// The zone is the session's TZ when it names one, which a test sets (L504); else this Mac's own.
+const drawnAt = async ($: EngineInterface): Promise<DrawnAt> => {
+  const zone = await $.env.get('TZ').catch(() => undefined)
+  return { now: await now($), ...(typeof zone === 'string' && zone ? { timeZone: zone } : {}) }
+}
 
 /** Shows the card in the band; the reason when mod-kit refused it. */
 const publishBand = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {

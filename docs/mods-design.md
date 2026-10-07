@@ -811,12 +811,14 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   card was pinned ("already done before this card") and one finished in an earlier session ("in an
   earlier session on Oct 4 at 3:41 PM", the card held from one or a step pinned again from it) are
   grey and struck through. One finished in this session is struck through in the terminal's own
-  colour with the clock time it finished, which never goes stale on a card nobody redraws:
-  "checked at 3:41 PM" in green, "done, you pressed Done at 3:41 PM" when Dan pressed its Done,
-  and "done, per you, recorded at 3:41 PM" when Claude recorded it on his word with nothing
-  pressed. A step pinned again as already done keeps how and when it finished on the card it
-  replaces. A withdrawn step keeps #872's dimmed, unstruck "taken off, not done", the time going
-  with being taken off ("taken off at 3:41 PM, not done"). A not-done verdict forgets the press,
+  colour with the date and time it finished, never the time alone, which on a card nobody
+  redraws would read as today after midnight: "checked on Oct 7 at 3:41 PM" in green, "done, you
+  pressed Done on Oct 7 at 3:41 PM" when Dan pressed its Done, and "done, per you, recorded on
+  Oct 7 at 3:41 PM" when Claude recorded it on his word with nothing pressed. Times are read in
+  this Mac's zone, or the session's TZ when set. A step pinned again as already done keeps how
+  and when it finished on the card it replaces. A withdrawn step keeps #872's dimmed, unstruck
+  "taken off, not done", the time going with being taken off ("taken off on Oct 7 at 3:41 PM,
+  not done"). A not-done verdict forgets the press,
   so a later verdict on Dan's words never says he pressed Done.
 - **Only what Dan can do now** (#872). The tool asks for a step only when Dan can do it now; one
   waiting on something else (a merge, a deploy) stays in its issue. A step pinned anyway comes off

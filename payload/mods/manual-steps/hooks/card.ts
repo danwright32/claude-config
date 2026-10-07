@@ -36,9 +36,10 @@ const finishOf = (s: StepsStep): Finish => (s.finished === 'per-you' && s.isPres
 /** The moment a card is drawn, and the zone its times are read in (left out, this Mac's own). */
 export type DrawnAt = { now: number; timeZone?: string }
 
-// When a step finished, as a clock time that never goes stale on a card nobody redraws (L589):
-// "at 3:41 PM" on the day it is drawn, else "on Oct 4 at 3:41 PM", with the year when it differs.
-// A zone Intl does not know is read as this Mac's own rather than refusing to draw the card.
+// When a step finished, as a date and a clock time, so it stays true on a card nobody redraws (L589):
+// a time alone would read as today on the next day. "on Oct 4 at 3:41 PM", with the year when it is
+// not the year the card is drawn in. A zone Intl does not know is read as this Mac's own rather than
+// refusing to draw the card.
 export const finishedWhen = (at: number, drawn: DrawnAt): string => {
   const parts = (t: number, o: Intl.DateTimeFormatOptions) => {
     try {
@@ -48,8 +49,6 @@ export const finishedWhen = (at: number, drawn: DrawnAt): string => {
     }
   }
   const time = parts(at, { hour: 'numeric', minute: '2-digit' })
-  const day = (t: number) => parts(t, { year: 'numeric', month: 'short', day: 'numeric' })
-  if (day(at) === day(drawn.now)) return `at ${time}`
   const sameYear = parts(at, { year: 'numeric' }) === parts(drawn.now, { year: 'numeric' })
   return `on ${parts(at, sameYear ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' })} at ${time}`
 }
