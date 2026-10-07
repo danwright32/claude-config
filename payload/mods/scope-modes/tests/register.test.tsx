@@ -181,6 +181,8 @@ type Opts = {
   /** What pmset says this Mac is drawing power from (#844). */
   power?: 'ac' | 'battery'
   caffeinateFails?: boolean
+  /** The session is in no repository (#844). */
+  noRepo?: boolean
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
@@ -355,7 +357,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: { startedAt: T0, context: { window: 200_000, percent: 10 }, ...u } } as never
   })
   on('session.cwd', () => ({ value: '/repo' }) as never)
-  on('session.repo', () => ({ value: { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
+  on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -1656,4 +1658,13 @@ test('a stop whose counter cannot be written is still a stop: the next Stop neve
   expect((await stop($ as never)).block).toBeUndefined()
   expect((await stop($ as never)).block).toBeUndefined()
   expect(kinds(w).filter(k => k === 'stopped').length).toBe(1)
+})
+
+test('an enrolled session in no repository has nothing to claim: it stops at once with a stopped note, never told to run a command it cannot (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, noRepo: true })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(kinds(w)).toEqual(['stopped'])
+  expect(JSON.parse(w.appended[0]?.line as string).text).toBe('this session is in no repository, so it has nothing to claim tonight')
+  expect((await stop($ as never)).block).toBeUndefined()
 })

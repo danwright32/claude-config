@@ -583,6 +583,12 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     if (!en) return 'not-driven' as const
     if (stoppedHere.has(stopKey(en))) return null
     const where = await repoOf($)
+    if (!where.root) {
+      // The queue claims by repository, so a session in none has nothing to claim: it stops, said.
+      stoppedHere.add(stopKey(en))
+      await writeNotes($, en, [{ kind: 'stopped', text: 'this session is in no repository, so it has nothing to claim tonight' }])
+      return null
+    }
     let driver = await loadDriver($, en)
     const unsavedPark = parkedHere.get(stopKey(en))
     if (unsavedPark && driver.state !== 'unreadable') {
@@ -596,7 +602,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root, claim))
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
-      weekly: u.weekly, claim, rules: overnightRules(en.self, where.root ?? '<the repository root>'),
+      weekly: u.weekly, claim, rules: overnightRules(en.self, where.root),
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     if (d.record) {
