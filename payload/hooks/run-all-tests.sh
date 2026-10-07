@@ -602,10 +602,10 @@ if [ "$ran" -gt 0 ]; then
   # were found by looking at what a migration could not place (L2).
   #
   # Fixing that suite does not stop the next one, so this is a ratchet on the
-  # class: the whole run is bracketed by a listing of the real spool, and any
-  # change at all is reported (L30).
+  # class: the whole run is bracketed by a snapshot of the real spool's records,
+  # and a record added under this run's id fails it (L30). Records other
+  # sessions add are reported but not counted, as below.
   _live_spool="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
-  _spool_before="$(ls -1 "$_live_spool" 2>/dev/null | sort)"
   _spool_before_bytes="$(cat "$_live_spool"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
   # Every RECORD already there, so what was ADDED can be read back rather than only counted
   # (claude-config#230). The totals alone cannot say WHO wrote, and the spool is a machine wide
@@ -1220,11 +1220,14 @@ if [ -n "$slow_profile" ]; then
   done
   echo
 fi
-# Did the run leave anything in the real spool? A cheap first look at the file list and the total
-# size, so the record comparison below only runs when something changed (L63).
-_spool_after="$(ls -1 "${_live_spool:-}" 2>/dev/null | sort)"
+# Did the run leave anything in the real spool? The record comparison below ALWAYS runs
+# (claude-config#884). It used to run only when the file list or the total byte count had moved,
+# and a stamped write landing while another session removed exactly as many bytes left both
+# unchanged, so the pollution passed. A proxy for "something was added" is not the quantity this
+# guard protects (L63, L367); the comparison itself is one awk over the spool, about the cost of
+# the `cat` that measured the size.
 _spool_after_bytes="$(cat "${_live_spool:-}"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
-if [ "${_spool_before:-}" != "$_spool_after" ] || [ "${_spool_before_bytes:-}" != "$_spool_after_bytes" ]; then
+{
   # ONE rule (claude-config#880): the run fails only when the spool gained a line stamped with THIS
   # run's id, or the id of a run nested inside it. Every suite is pointed at a throwaway spool
   # above, so a suite has no reason to be here at all, and a write it makes through the library
@@ -1287,7 +1290,7 @@ SPOOLADDED
     printf '%s\n' "$_sp_theirs" | sort -u
     echo "  Another Claude session was working elsewhere on this machine. Not this run's doing, and not counted against it."
   fi
-fi
+}
 # The other live stores, the same bracket (claude-config#216).
 _live_after="$(_live_fingerprint 2>/dev/null || true)"
 if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then

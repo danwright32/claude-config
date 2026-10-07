@@ -1708,7 +1708,7 @@ esac
 # The marker is only evidence while the stamping works, and a stamping that has quietly stopped
 # makes every write read as somebody else's, which is the guard going blind while passing (L345).
 # So the runner proves the mechanism on a throwaway spool before it trusts an absence, and says so
-# and falls back to judging by directory when it cannot. The seam points the proof at a library
+# and counts every line the live spool gains against itself when it cannot. The seam points the proof at a library
 # that does not stamp.
 rm -f "$SPOOL2"/*.jsonl "$SP2/suites"/test-libwriter.sh
 STUBLIB="$SP2/stub-issue-spool.sh"
@@ -1732,8 +1732,8 @@ case "$out_m3" in
     check "#275 a marker that cannot be proved is announced rather than trusted" "out=$out_m3" ;;
 esac
 [ "$code_m3" -ne 0 ] \
-  && check "#275 and attribution falls back to the directory, which fails closed" ok \
-  || check "#275 and attribution falls back to the directory, which fails closed" "exit=$code_m3 out=$out_m3"
+  && check "#275 and every added line then counts against the run, which fails closed" ok \
+  || check "#275 and every added line then counts against the run, which fails closed" "exit=$code_m3 out=$out_m3"
 
 # The control: with the real library the proof passes, so the fallback line is NOT printed. Without
 # this, a runner that could never prove the marker would satisfy every check above (L159).
@@ -1895,6 +1895,36 @@ case "$out_d5" in
   *)
     check "#880 and it is named as this run's write" "out=$out_d5" ;;
 esac
+
+# The same write hidden by a SAME SIZE drain (claude-config#884). The bracket used to compare
+# records only when the file list or the total byte count had moved, and another session removing
+# exactly as many bytes as a suite added leaves both unchanged. The suite below empties a file
+# holding one seeded record and appends a stamped record padded to that record's exact length, so
+# every file is still there and the total is identical; the run must still go red.
+sp880_seed
+printf '{"ts":"2026-10-06T10:00:03Z","status":"found","cwd":"/opt/elsewhere","findings":["%s"]}\n' \
+  "$(printf 'p%.0s' $(seq 1 400))" > "$SPOOL880/samesize.jsonl"
+sp880_suite samesize "want=\$(wc -c < \"\$S/samesize.jsonl\" | tr -d ' ')
+base=\$(printf '{\"ts\":\"2026-10-06T11:00:00Z\",\"status\":\"found\",\"cwd\":\"/opt/elsewhere\",\"suite_run\":\"%s\",\"findings\":[\"\"]}\\n' \"\$CLAUDE_SUITE_RUN_ID\" | wc -c | tr -d ' ')
+pad=\$(printf 'q%.0s' \$(seq 1 \$((want - base))))
+: > \"\$S/samesize.jsonl\"
+printf '{\"ts\":\"2026-10-06T11:00:00Z\",\"status\":\"found\",\"cwd\":\"/opt/elsewhere\",\"suite_run\":\"%s\",\"findings\":[\"%s\"]}\\n' \"\$CLAUDE_SUITE_RUN_ID\" \"\$pad\" >> \"\$S/pending.jsonl\""
+out_d8="$(sp880_run)"; code_d8=$?
+[ "$code_d8" -ne 0 ] \
+  && check "#884 a stamped write hidden by a same size drain still fails the run" ok \
+  || check "#884 a stamped write hidden by a same size drain still fails the run" "exit=$code_d8 out=$out_d8"
+# And the fixture really did keep the total identical, or the case above is the ordinary one.
+case "$out_d8" in
+  *"Bytes went from "*)
+    _d8_from="$(printf '%s\n' "$out_d8" | sed -n 's/.*Bytes went from \([0-9]*\) to \([0-9]*\)\..*/\1/p')"
+    _d8_to="$(printf '%s\n' "$out_d8" | sed -n 's/.*Bytes went from \([0-9]*\) to \([0-9]*\)\..*/\2/p')"
+    [ -n "$_d8_from" ] && [ "$_d8_from" = "$_d8_to" ] \
+      && check "#884 and the fixture left the spool's total size unchanged" ok \
+      || check "#884 and the fixture left the spool's total size unchanged" "from=$_d8_from to=$_d8_to" ;;
+  *)
+    check "#884 and the fixture left the spool's total size unchanged" "out=$out_d8" ;;
+esac
+rm -f "$SPOOL880/samesize.jsonl"
 
 # A NESTED run: a suite that starts a runner of its own hands its children a different id, and a
 # record from one of them is still a test writing the live store. The inner id therefore carries
