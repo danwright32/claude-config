@@ -10,16 +10,28 @@
 # file type, on BOTH Macs, with the same reviewer (lib/ai-review-run.py, --kind pr), and the merge
 # gate waits for it.
 #
-#   pr-review.sh start   --dir <repo> [--sha <head>] [--base-ref <ref>]
-#   pr-review.sh check   --dir <repo> [--sha <head>] [--base-ref <ref>]
-#   pr-review.sh restart --dir <repo> [--sha <head>] [--base-ref <ref>]
+#   pr-review.sh start   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]
+#   pr-review.sh check   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]
+#   pr-review.sh restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]
 #
 # start: begins a detached review of <base>..<head> and returns at once. <base> is the merge base
-#   of the head with --base-ref (default: origin's default branch). A review that cannot begin is
-#   recorded as a FINISHED review saying why, never left as nothing, so the gate can tell "could not
-#   run" from "never asked" (L98, L11).
-# check: what the merge gate and a repo's own merge script ask. Exit 0 allows the merge, 1 refuses,
-#   and stdout says why in either case. No review yet for this head starts one and refuses.
+#   of the head with --base-ref (default: origin's default branch). A ref on origin is FETCHED
+#   first, so the base is the branch's real tip and never this checkout's copy of it, which can be
+#   any number of commits stale (claude-config#852: a merge from a primary checkout 130 commits
+#   behind diffed 305 KB against a 300 KB cap). A review that cannot begin is recorded as a
+#   FINISHED review saying why, never left as nothing, so the gate can tell "could not run" from
+#   "never asked" (L98, L11).
+# check: what the merge gate and a repo's own merge script ask. Exit 0 allows the merge, 1 refuses
+#   on a verdict, and 3 refuses because the review has not finished yet (running, or started by
+#   this very check), so a caller that waits (lib/merge-when-ready.sh) can tell the two apart
+#   without reading the words. stdout says why in every case. A caller that only asks "may this
+#   merge" treats any non zero as a refusal, as before. No review yet for this head starts one.
+# --branch: the label the messages and the review file carry, which is the PULL REQUEST's head
+#   branch when the caller knows it (the merge gate reads headRefName). Without it, the checkout's
+#   branch is used only when the checkout stands on the reviewed head; otherwise the label is the
+#   short commit. The checkout's branch used to label every review, so a merge run from a checkout
+#   another session had on fix/2210-corrected-number-wins named that branch in a refusal about a
+#   different pull request (claude-config#852).
 # restart: throws away this head's review, whatever state it is in, and starts it again. The remedy
 #   the refusals name for a review that failed or ran out of time.
 #
@@ -70,16 +82,16 @@ PRR_SHOW_LINES=20
 PRR_LINE_CHARS=300
 PRR_OVERRIDE="SKIP_PR_REVIEW=1"
 
-usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>]" >&2; exit 64; }
+usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]" >&2; exit 64; }
 
 verb="${1:-}"; shift || true
-dir="."; sha=""; base_ref=""
+dir="."; sha=""; base_ref=""; branch_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     # A flag given last has no value, and `shift 2` then fails WITHOUT shifting, which loops.
-    --dir|--sha|--base-ref)
+    --dir|--sha|--base-ref|--branch)
       [ $# -ge 2 ] || { echo "pr-review.sh: $1 needs a value." >&2; usage; }
-      case "$1" in --dir) dir="$2" ;; --sha) sha="$2" ;; --base-ref) base_ref="$2" ;; esac
+      case "$1" in --dir) dir="$2" ;; --sha) sha="$2" ;; --base-ref) base_ref="$2" ;; --branch) branch_arg="$2" ;; esac
       shift 2 ;;
     *) usage ;;
   esac
@@ -107,8 +119,15 @@ final="$AR_STATE_DIR/$name.txt"
 pending="$final.pending"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 repo_label="$(basename "$top")"
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-[ -n "$branch" ] && [ "$branch" != "HEAD" ] || branch="$short"
+# The label: the caller's (the pull request's head branch), else this checkout's branch only when the
+# checkout stands on the reviewed commit, else the commit itself (claude-config#852). Line breaks and
+# spaces are removed, since the label is one field of the review file's header.
+branch="$(printf '%s' "$branch_arg" | tr -d '[:space:]')"
+if [ -z "$branch" ] && [ -n "$full_sha" ] && [ "$(git rev-parse HEAD 2>/dev/null)" = "$full_sha" ]; then
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [ "$branch" = "HEAD" ] && branch=""
+fi
+[ -n "$branch" ] || branch="$short"
 
 elapsed_text() {   # seconds -> "1m 42s" or "42s"
   local s="$1"
@@ -141,6 +160,25 @@ resolve_base_ref() {
   done
 }
 
+# Bring a base on origin up to date before it is used, so the merge base is the branch's real tip
+# (claude-config#852). Only a ref named origin/<branch> is fetched; a commit or a local ref is used as
+# given. When the fetch fails the review goes ahead from this checkout's copy, and base_note says so
+# in the message. That copy can only be STALE, never ahead, and a stale base makes the diff LARGER
+# (main's own commits read as the branch's), never smaller, so nothing on the branch goes unreviewed;
+# what it can cost is a too-large refusal, which the note then explains (L93, L11).
+base_note=""
+refresh_base_ref() {   # $1 = ref
+  case "$1" in
+    origin/HEAD) return 0 ;;
+    origin/?*) ;;
+    *) return 0 ;;
+  esac
+  local b="${1#origin/}"
+  if ! git fetch -q origin "+refs/heads/$b:refs/remotes/origin/$b" >/dev/null 2>&1; then
+    base_note=" (could not fetch $1 from origin, so the base is this checkout's copy of it, which may be stale and then makes the diff larger than the branch)"
+  fi
+}
+
 do_start() {
   if [ -e "$final" ] || [ -e "$pending" ]; then
     echo "The lessons review of $repo_label $branch at $short has already been run, or is still running."
@@ -163,6 +201,7 @@ do_start() {
   fi
   local ref mb
   ref="$(resolve_base_ref)"
+  [ -n "$ref" ] && refresh_base_ref "$ref"
   mb=""
   [ -n "$ref" ] && mb="$(git merge-base "$ref" "$full_sha" 2>/dev/null)"
   if [ -z "$mb" ]; then
@@ -184,7 +223,7 @@ do_start() {
   size="$(wc -c < "$diff_file" | tr -d '[:space:]')"
   if [ "${size:-0}" -gt "$PRR_MAX_BYTES" ]; then
     rm -f "$diff_file"
-    record too-large "The whole branch diff $short_mb..$short is $((size / 1024)) KB, over the $((PRR_MAX_BYTES / 1024)) KB a review can use (PR_REVIEW_MAX_BYTES; 11 of 600 measured branches were over it). Split the branch, or merge with the override after telling Dan why." "$mb"
+    record too-large "The whole branch diff $short_mb..$short is $((size / 1024)) KB, over the $((PRR_MAX_BYTES / 1024)) KB a review can use (PR_REVIEW_MAX_BYTES; 11 of 600 measured branches were over it)$base_note. Split the branch, or merge with the override after telling Dan why." "$mb"
     echo "The lessons review could not run: the branch diff is too large ($((size / 1024)) KB)."; return 0
   fi
   local fitted in out note
@@ -207,7 +246,7 @@ do_start() {
     --diff-file "$diff_file" --deadline "$PRR_DEADLINE" --started "$started" \
     </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null || true
-  echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the merge waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))."
+  echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the merge waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
 }
 
 remedy() {
@@ -226,7 +265,7 @@ do_check() {
       rm -f "$pending"
     else
       echo "Refusing to merge yet: the lessons review of $repo_label $branch at $short is still running ($(elapsed_text $((now - st))) of its $(elapsed_text "$dl") deadline). Run the merge again once it has finished."
-      return 1
+      return 3
     fi
   fi
   if [ ! -e "$final" ]; then
@@ -234,7 +273,7 @@ do_check() {
     started_msg="$(do_start)"
     if [ -e "$pending" ]; then
       echo "Refusing to merge yet: no lessons review existed for $repo_label at $short, so one was started now. $started_msg Run the merge again once it has finished."
-      return 1
+      return 3
     fi
     [ -e "$final" ] || { echo "Refusing to merge: the lessons review could neither start nor record why. $started_msg"; remedy; return 1; }
   fi
