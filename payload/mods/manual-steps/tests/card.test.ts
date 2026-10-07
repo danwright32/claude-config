@@ -267,6 +267,10 @@ describe('cardLines', () => {
       text: '  taken off in an earlier session on Oct 7 at 3:41 PM, not done',
       dim: true,
     })
+    // Kept before #886, with no time: the same words, without one.
+    const untimed = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn')
+    if ('refusal' in untimed) throw new Error(untimed.refusal)
+    expect((cardLines({ ...untimed.card, isCarried: true }, at) as P[][])[1]?.[1]).toEqual({ text: '  taken off in an earlier session, not done', dim: true })
   })
 
   test('a step finished in an earlier session is grey, says so, and shows when it finished', () => {

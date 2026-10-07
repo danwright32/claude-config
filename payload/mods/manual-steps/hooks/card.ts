@@ -18,15 +18,16 @@ export type StepsVerdict = (typeof VERDICTS)[number]
 // before for ones "done days ago"), so only a step finished before this card is grey: found done
 // when it was pinned, or finished in an earlier session. One finished in this session is struck
 // through in the terminal's own colour, with the time it finished. `earlier` is the words before
-// "in an earlier session".
-type Finish = { text: string; earlier: string; color?: string; isUndone?: true }
+// "in an earlier session" and the time, and `after` any words after the time.
+type Finish = { text: string; earlier: string; after?: string; color?: string; isUndone?: true }
 const FINISH: Record<StepsFinish, Finish> = {
   already: { text: 'already done before this card', earlier: 'already done' },
   checked: { text: 'checked', earlier: 'checked', color: 'success' },
   // Recorded by Claude on Dan's word with no Done pressed: labelled so, never read as his press.
   'per-you': { text: 'done, per you, recorded', earlier: 'done, per you,' },
   // Removed, never done (#872): its title is not struck through, which is how a done step reads.
-  withdrawn: { text: 'taken off, not done', earlier: 'taken off, not done,', isUndone: true },
+  // The time goes with being taken off, never after "not done", which would read as not done then.
+  withdrawn: { text: 'taken off, not done', earlier: 'taken off', after: ', not done', isUndone: true },
 }
 // A per you verdict on a step whose Done Dan pressed: the card asked, so it says he pressed it.
 const PRESSED: Finish = { text: 'done, you pressed Done', earlier: 'done, you pressed Done,' }
@@ -237,10 +238,9 @@ const finishedLine = (s: StepsStep, label: string, isCarried: boolean, drawn: Dr
   const when = s.finishedAt === undefined ? '' : ` ${finishedWhen(s.finishedAt, drawn)}`
   const isOld = s.finished === 'already' || s.isEarlier === true || isCarried
   // Taken off, it reads as removed rather than done in either session: dimmed, never struck (#872).
-  // The time goes with being taken off, never after "not done", which would read as not done then.
   if (f.isUndone) {
     if (!isOld && !when) return [{ text: label, dim: true }, { text: `  ${f.text}`, dim: true }]
-    return [{ text: label, dim: true }, { text: `  taken off${isOld ? ' in an earlier session' : ''}${when}, not done`, dim: true }]
+    return [{ text: label, dim: true }, { text: `  ${f.earlier}${isOld ? ' in an earlier session' : ''}${when}${f.after ?? ''}`, dim: true }]
   }
   const title: CardPart = { text: label, ...(isOld ? { dim: true } : {}), strikethrough: true }
   if (s.finished === 'already' && !s.isEarlier && !isCarried) return [title, { text: `  ${f.text}`, dim: true }]
