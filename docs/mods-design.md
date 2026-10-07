@@ -815,7 +815,12 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
   `report` path in the record (`~/Downloads/sleep-report-<night>.md`), is derived from the record
   and the notes and replaced whole after each note, best effort: a note whose render fails is still
-  written, the failure said on stderr, and the call exits 0 so nobody writes it twice.
+  written, the failure said on stderr, and the call exits 0 so nobody writes it twice. Renders take
+  turns under a per night flock (`notes/<generation>.render.lock`, a 15 second deadline, then the
+  render gives up and says so) and read the notes only once they hold it, so the last render has
+  read every note before it and two renders can never land out of order (#909). The render holding
+  the lock looks again once it has written and renders again while the notes have grown since it
+  read them, so a note whose own render gave up waiting is in the report all the same.
 - `/sleep` starts it at once with a header: start time ET, folder, power state read from `pmset`
   (a failed read says `power unknown` and why), and the workers. A report that cannot be written is
   said in the `/sleep` reply, and sleep still holds.
