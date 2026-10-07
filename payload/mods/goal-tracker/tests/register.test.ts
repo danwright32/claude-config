@@ -86,7 +86,7 @@ type WorldOpts = {
   questionOpenMs?: number
   slowMs?: number
   /** What scope modes' noun answers for whether the Mac is asleep (#841), read at each ask; 'throws' for a reader that breaks. */
-  asleep?: boolean | 'throws'
+  asleep?: boolean | 'throws' | 'typeerror'
 }
 const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
   const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
@@ -97,7 +97,7 @@ const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
       if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (e.argv[0] === '__asleep') {
-      const code = opts.asleep === true ? 0 : opts.asleep === 'throws' ? 2 : 1
+      const code = opts.asleep === true ? 0 : opts.asleep === 'throws' ? 2 : opts.asleep === 'typeerror' ? 3 : 1
       return { value: { exitCode: code, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const isWrite = e.argv[0] === '__extra'
@@ -1271,6 +1271,7 @@ const sleeper: { name: string; register: Register } = {
           isAsleep: async () => {
             const r = await built.process.run(['__asleep'])
             if (r.exitCode === 2) throw new Error('the sleep record reader broke')
+            if (r.exitCode === 3) throw new TypeError("undefined is not an object (evaluating 'record.until')")
             return r.exitCode === 0
           },
         },
@@ -1310,4 +1311,16 @@ test('a sleep check that breaks counts as awake, so the notification is still se
   await settled()
   expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
   expect(w.debug.some(d => /could not tell whether the Mac is asleep \(the sleep record reader broke\)/.test(d))).toBe(true)
+})
+
+// A noun's error reaches the caller rewrapped by the engine (measured here: no longer a TypeError), so
+// this holds the behaviour, said and sent, rather than telling the two regexes apart.
+test('a sleep check that fails inside scope modes with a TypeError is still said, never taken for scope modes being absent (#841)', withSleeper, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: 'typeerror' })
+  await start($)
+  await idle($)
+  await settled()
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+  expect(w.debug.some(d => /could not tell whether the Mac is asleep \(undefined is not an object/.test(d))).toBe(true)
 })

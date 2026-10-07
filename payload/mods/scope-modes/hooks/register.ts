@@ -110,8 +110,6 @@ const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<M
   return { to, text }
 }
 
-// One line appended to the night's notes, through the shell in append mode. Phase 4 (#835) builds
-// sleep_note and the report on this file; the limit note below is the first writer.
 // The command appending one note, shared by this mod's own notes and the noun's (#841), which runs
 // it through its own engine handle, since the engine refuses handing that handle to a helper.
 const noteArgv = (notesDir: string, generation: string, note: Record<string, unknown>) => [
@@ -124,6 +122,8 @@ const noteArgv = (notesDir: string, generation: string, note: Record<string, unk
   `${notesDir}/${generation.replace(/[^\w.-]/g, '_')}.jsonl`,
 ]
 const noteFailure = (r: { exitCode: number; stderr: string }) => r.stderr.trim() || `the note could not be written (exit ${r.exitCode})`
+// One line appended to the night's notes, through the shell in append mode. Phase 4 (#835) builds
+// sleep_note and the report on this file; the limit note below is the first writer.
 const sleepNote = async ($: EngineInterface, generation: string, note: Record<string, unknown>) => {
   const p = await sleepPaths($)
   const r = await run($, noteArgv(p.notes, generation, note))

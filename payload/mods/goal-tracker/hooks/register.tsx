@@ -72,7 +72,8 @@ const isAsleep = async ($: EngineInterface): Promise<boolean> => {
     return (await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep()) === true
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
-    if (!(err instanceof TypeError && /scopeModes|undefined|not a function/.test(why)))
+    // Only the noun itself missing (scope modes not loaded) goes unsaid, as the keystroke guard reads it.
+    if (!(err instanceof TypeError && /scopeModes/.test(why)))
       $.ui.log(`goal-tracker: could not tell whether the Mac is asleep (${why}), so the notification is sent`, { to: 'debug' })
     return false
   }
