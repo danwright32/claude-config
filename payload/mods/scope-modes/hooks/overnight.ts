@@ -361,6 +361,17 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       continue
     }
     if (c.program && 'text' in c.program && c.verdict && /lessons\.md/i.test(c.program.text)) return 'write to LESSONS.md'
+    // Code whose effects the reader cannot see fails closed (#834 review of 46f07ff): a program it
+    // cannot read at all, and one that runs a process naming gh, git, a database client or
+    // claude-sync, which would reach what the list bans past every rule above.
+    if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
+    if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && /\b(?:gh|git|psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text))
+      return 'run code that runs gh, git or a database client, which cannot be judged'
+    // A command run by a wrapper the reader does not look past (setsid, stdbuf, chronic): its first
+    // argument that is no flag or assignment names gh, so a gh call is hidden behind it.
+    const first = words.slice(1).find(w => !w.startsWith('-') && !/^[A-Za-z_]\w*=/.test(w))
+    if (cmd !== 'gh' && !['echo', 'printf'].includes(cmd) && first !== undefined && name(first) === 'gh') return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look)
       if (why) return why

@@ -164,6 +164,18 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh pr create --title x --body y --base main --head b --draft')).toBeUndefined()
     expect(await bash('gh pr create --title x --body y --reviewer someone')).toBe('run gh pr create with --reviewer')
   })
+  test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
+    expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
+    expect(await bash('stdbuf -o0 gh pr merge 5 --squash')).toBe(unresolved)
+    expect(await bash('chronic /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
+    // Saying the word is not running it.
+    expect(await bash('echo gh is slow today')).toBeUndefined()
+  })
+  test('code the reader cannot read, or that runs gh, git or a database itself, is refused (#834 review of 46f07ff)', async () => {
+    expect(await bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`)).toBe('run code that runs gh, git or a database client, which cannot be judged')
+    expect(await bash(`node -e "eval(process.argv[1])" x`)).toMatch(/^run code (this reader cannot read|that runs)/)
+    expect(await bash(`python3 -c "print(1 + 1)"`)).toBeUndefined()
+  })
   test('any GH_ variable set before gh cannot be resolved (#834 review of 1b556d3)', async () => {
     expect(await bash('GH_CONFIG_DIR=/tmp/other gh pr merge 5 --squash')).toBe(unresolved)
     expect(await bash('GH_PATH=/x gh issue comment 5 --body y')).toBe(unresolved)
