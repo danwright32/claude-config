@@ -5987,6 +5987,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   lead's name, email and phone reached Slack.)
   SHORT: A shape-matching scrub cannot see percent-encoded data, so strip query strings and fragments from URLs before logging or alerting them.
 
+- **L752. An endpoint that receives personal data or a secret takes it in the request body, never
+  in the address: the hosting platform's request logs record every address in full, query string
+  included, before your code runs, so no scrub or route logic of yours can keep it out.** Distinct
+  from L741, which strips addresses your own code logs; here the copy is taken by the platform,
+  and the only control is not putting the value in the address. A GET that still carries such a
+  value should be refused by name, so a caller building the old address learns the rule.
+  (Try-Pennie/bidspoke#1740 and #1815, 2026-10-06: `GET /api/executions/archive-search?ssn=...`
+  took the SSN from the query string while Workers Logs ran with invocation logs on every request,
+  so each SSN searched for sat in Cloudflare's logs even though the route kept it out of the audit
+  log.)
+  SHORT: Take personal data or a secret in the request body, never the address: platform request logs record full addresses before your code runs.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
@@ -7734,6 +7746,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   leads, who were refused at confirm. One compute offered every Monday time, the next, from the
   same data, offered none. Fixed for all 72 paged reads in slate#3280.)
   SHORT: Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
+
+- **L753. In a Next.js App Router error boundary, wire Try again to `retry`, never `reset`**,
+  because `reset` only re-renders the payload the browser already holds, so a read that failed on
+  the server draws the same failure screen again and the button looks dead while reading as wired.
+  Check the prop names against the installed Next's own types (`ErrorInfo` in
+  `next/dist/client/components/error-boundary.d.ts`), and prove the control by mounting the real
+  boundary and pressing it, never by matching the source text.
+  SHORT: In a Next.js error boundary wire Try again to retry, never reset: reset re-renders the payload the browser holds, so the button looks dead.
+  (paperboi#509: error.tsx and global-error.tsx both passed `reset`; a test mounting each screen
+  inside Next 16.3.8's own ErrorBoundary and pressing Try again failed until both passed `retry`,
+  which asks the server for the page again first)
 
 ## Building with AI
 
@@ -9734,6 +9757,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   nulls for them, so 8 of the first 118 live buyer sales kept nulls while the node reported
   `mirrored: true`.)
   SHORT: When two writers can create the same row, one a partial recovery copy, the merge on conflict must fill a stored null, not only refuse to overwrite.
+
+- **L754. In a GitHub workflow, a job allowed to run after an earlier failure (`if: !cancelled()`)
+  does not pass that tolerance on: every job that `needs` it still takes the default `success()`,
+  which is false when ANY ancestor failed, so give each downstream job its own condition or it is
+  silently skipped.** The tolerant job runs and succeeds, its dependent appears to need only that
+  success, and the whole branch below it is skipped anyway, which reads as those jobs never having
+  been configured rather than as the failure upstream. Mirror the tolerant job's guard on every
+  dependent (`if: ${{ !cancelled() && needs.<job>.result == 'success' }}`) and pin it in a wiring
+  test. (slate#3431, 2026-10-06: the load run's `setup-burst` deliberately runs after a failed
+  baseline so that only the speed verdict is lost, but the `burst` job beneath it carried no `if:`,
+  so a failed baseline would have skipped all three bursts and the judge would have failed them as
+  missing; the workflow's own comment on the `drive` job already stated the rule.)
+  SHORT: A job that runs after an earlier failure does not pass that on: give every job that needs it its own if, or default success() skips it.
 
 ## Test speed
 
