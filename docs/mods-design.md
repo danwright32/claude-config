@@ -826,7 +826,8 @@ anything calls it. What the build decided, each open to Dan changing it:
   other run of digits does, which errs toward leaving an issue out, with the branch named.
 - Only while asleep, judged by `sleep_active`, the one predicate; the claims live under the night's
   `generation`, so nothing carries from one night to the next.
-- The queue is the goal's issues in the goal's order when given, else open p0 to p3 issues fetched
+- The queue is the goal's issues in the goal's order when given (one that cannot be read is a skip
+  line with the reason, never a refusal of the rest), else open p0 to p3 issues fetched
   with an explicit limit (500) and refused when a page that full comes back (L24), sorted by
   priority then number. Each issue left out gets a `skip` line with its reason, for the report.
   Dan's accounts are the ones signed in to `gh`; no account read refuses rather than judging every
@@ -844,7 +845,8 @@ anything calls it. What the build decided, each open to Dan changing it:
   exists, so of any number of claimers at once exactly one makes the next entry (tested with two
   and with eight; the suite runs the eight against a copy of the library with the link swapped for
   a copy, and there more than one owns the issue). Nothing is deleted: the newest
-  entry is the state (`claim`, or `free`, `done`, `parked`, `failed` written by the holder) and
+  entry is the state (`claim`, or `free`, `done`, `parked`, `failed` written by the holder, or
+  `unstarted`, written only by `next` when the worktree could not be made just now) and
   the ones before it are the history the attempts count is read from (L27). An entry with no start
   time is dated by its file (L409).
 - A claim whose session has ended, has been silent five minutes (the registry's own rule) or was

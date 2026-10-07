@@ -185,6 +185,11 @@ out="$(sleep_queue "$ROOT" s1 8 12 3 5)"
 check_eq "the goal's issues come in the goal's order, any priority" "8 5" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
 check_has "a goal issue opened by somebody else is still left out" "$(printf 'skip\t12\topened by somebody-else')" "$out"
 check_has "a closed goal issue is left out" "$(printf 'skip\t3\tclosed')" "$out"
+# One goal issue that cannot be read is a skip line with the reason; the rest are still worked.
+out="$(sleep_queue "$ROOT" s1 8 77 5)"; rc=$?
+check_eq "a goal issue that cannot be read does not refuse the queue" 0 "$rc"
+check_eq "the readable goal issues are still queued" "8 5" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
+check_has "and the unreadable one is a skip line saying why" "$(printf 'skip\t77\tthe goal issue #77 could not be read from GitHub')" "$out"
 
 # Awake, there is no night to queue for.
 awake

@@ -121,7 +121,7 @@ _sq_fetch() {
 
 # sleep_queue REPO_ROOT SESSION_ID [GOAL_ISSUE...]: next and skip lines, as the header says.
 sleep_queue() {
-  local root="${1:-}" self="${2:-}" gen slug tmp limit="${SLEEP_QUEUE_LIMIT:-500}" n rc goal=""
+  local root="${1:-}" self="${2:-}" gen slug tmp limit="${SLEEP_QUEUE_LIMIT:-500}" n rc goal="" goalskips="" why
   [ $# -ge 2 ] || { _sq_refuse "sleep_queue needs a repository root and a session id"; return 3; }
   shift 2
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
@@ -137,7 +137,12 @@ sleep_queue() {
     : > "$tmp/goal.jsonl"
     for n in "$@"; do
       case "$n" in ''|*[!0-9]*) rm -rf "$tmp"; _sq_refuse "goal issue $n is not an issue number"; return 3 ;; esac
-      _sq_fetch "$tmp/one" "goal issue #$n" issue "$slug" "$n" || { rc=3; break; }
+      # One goal issue that cannot be read is a skip line with the source's reason; the rest of
+      # the goal is still worked.
+      if ! why="$(_sq_fetch "$tmp/one" "goal issue #$n" issue "$slug" "$n")"; then
+        goalskips="$goalskips$(printf 'skip\t%s\t%s' "$n" "${why#$'refused\t-\t'}")"$'\n'
+        continue
+      fi
       cat "$tmp/one" >> "$tmp/goal.jsonl"; echo >> "$tmp/goal.jsonl"
       goal="$goal${goal:+,}$n"
     done
@@ -155,6 +160,7 @@ print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))' "$tm
       "claims=$(_sq_sleep_dir)/claims/$gen/${slug%%/*}__${slug#*/}" "registry=$(_sq_registry)" \
       "now=$(_sq_now)" "self=$self" "goal=$goal"
     rc=$?
+    [ "$rc" = 0 ] && printf '%s' "$goalskips"
   fi
   rm -rf "$tmp"
   return "$rc"
