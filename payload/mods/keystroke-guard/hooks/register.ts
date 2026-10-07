@@ -101,19 +101,27 @@ const holdWhileAway = async ($: EngineInterface, label: string, prompt: string):
 }
 
 export const register: Register = on => {
-  // Asked here, beneath every mod's tool.call hook and after the settings hooks beneath this one
-  // (#707): an action no build, winding down, the secret guard or a settings hook refuses is refused
-  // before Dan is asked, whichever order the mods load in. The engine raises classic.PreToolUse
-  // inside tool.call, beneath every plugin's tool.call hook (measured live on 2026-10-04, Claude
-  // Code 2.1.289), and next(e) here runs only the hooks beneath, never the command.
-  on('classic.PreToolUse', { tool: 'Bash' }, async ($, e, next) => {
+  // Asked at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
+  // hook and the settings PreToolUse hooks have passed the call on, and before the mode settles an
+  // ask: an action no build, winding down, the secret guard or a settings hook refuses is refused
+  // before Dan is asked, whichever order the mods load in (#707), and next(e) here runs no command,
+  // only the verdict beneath. It was classic.PreToolUse, which never ran: Claude Code's built-in
+  // security default sends every classic event past the user tier this mod loads in, for a Team or
+  // Enterprise organization. A headless debug run on 2026-10-06 logged that on every Bash call, and
+  // a command this guard refuses ran. The built-in's own tool.check hook runs this tier first and
+  // keeps a refusal.
+  on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
     const decided = await next(e)
-    if (decided.deny !== undefined) return decided
-    const c = classify(await $.modkit.commands({ command: e.command }), e.command)
+    if (decided.decision === 'deny') return decided
+    // A query ($.tool.check) carries no call id and runs nothing; the real call is judged when it is
+    // made, so Dan is never asked about a command that is only being looked at.
+    if (e.tool_use_id === undefined) return decided
+    const command = String((e.input as { command?: unknown } | null)?.command ?? '')
+    const c = classify(await $.modkit.commands({ command }), command)
     if (c.kind === 'none') return decided
     const typing = c.kind === 'input'
     const app = c.app ?? 'an app'
-    const toolUseId = String(e.tool_use_id ?? '')
+    const toolUseId = e.tool_use_id
     const action = typing ? `typing into ${app}` : `bringing ${app} to the front`
 
     // The toast says what was judged: the action by default, or whatever failed before it could be
@@ -121,18 +129,18 @@ export const register: Register = on => {
     const refuse = async (r: Refusal, toast = `Blocked ${action}.`) => {
       await $.modkit.blocked({ toolUseId, guard: GUARD, reason: r.reason, safeWay: r.safeWay })
       await $.ui.toast(toast)
-      return { deny: refusalText(r) }
+      return { decision: 'deny' as const, reason: refusalText(r) }
     }
 
     // Held as scope modes words its own held actions, so the two read the same (L605).
-    const away = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${e.command}`)
+    const away = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${command}`)
     if (away !== 'home') {
       if ('failed' in away) {
         const reason = `Couldn't tell whether you are away (${away.failed}), so this was stopped.`
         return refuse({ reason, safeWay: 'Try again in a moment.' }, `Couldn't tell whether you are away, so ${action} was stopped.`)
       }
       if (away.held.card) await $.modkit.blocked({ toolUseId, ...away.held.card })
-      return { deny: away.held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
+      return { decision: 'deny' as const, reason: away.held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
     }
 
     if (typing) {
@@ -145,5 +153,10 @@ export const register: Register = on => {
     const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
     return decided
-  })
+  }).catch(($, e, next) => ({
+    // A hook that fails is skipped and the verdict beneath stands, which would let the keystroke
+    // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check.
+    decision: 'deny' as const,
+    reason: `Blocked: the keystroke guard could not check this command (${next.error?.message ?? next.error?.kind ?? 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+  }))
 }
