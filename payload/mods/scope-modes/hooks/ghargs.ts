@@ -102,7 +102,7 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
   // call cannot be read (#834 review of af10401).
   const takeNext = (): string => {
     const v = rest[++k] as string
-    if (v.startsWith('-')) unreadable = true
+    if (/^--?[A-Za-z]/.test(v)) unreadable = true
     return v
   }
   for (; k < rest.length; k++) {

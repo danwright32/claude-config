@@ -25,9 +25,28 @@ const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
  * repositories the night's notes name, each read whatever the events feed shows (#834 review: a
  * private repository the feed leaves out is still read).
  */
-export const wakeCheck = async (run: Runner, o: { since: number; home: string; repos?: string[] }): Promise<WakeFindings> => {
+export const wakeCheck = async (
+  runAny: Runner,
+  o: { since: number; home: string; repos?: string[]; now?: () => number; budgetMs?: number },
+): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
+  // GitHub's reads together keep to one deadline (L110): wake and its reply wait on them, so a slow
+  // GitHub costs Dan a minute at most, as the report's own reads are bounded (#835). A read past
+  // it is not made, and that is said once; the local reads (git, stat) always run.
+  const now = o.now ?? Date.now
+  const budget = o.budgetMs ?? 60_000
+  const started = now()
+  let over = false
+  const SKIPPED = -2
+  const run: Runner = async argv => {
+    if (argv[0] === 'gh' && now() - started >= budget) {
+      if (!over) unmeasured.push(`the overnight check stopped at its ${Math.round(budget / 1000)} s limit, so the rest of GitHub was not read`)
+      over = true
+      return { exitCode: SKIPPED, stdout: '', stderr: '' }
+    }
+    return runAny(argv)
+  }
   const since = iso(o.since)
   // A time GitHub did not give, or gave unreadable, is unknown: said as not checked, never compared
   // away as before sleep nor counted as overnight (L50).
@@ -39,7 +58,8 @@ export const wakeCheck = async (run: Runner, o: { since: number; home: string; r
   // One read, its JSON parsed; a failure is said under `what`, and the answer is null.
   const json = async <T>(argv: string[], what: string): Promise<T | null> => {
     const r = await run(argv)
-    const tool = `${argv[0]} ${argv[1]}${argv[0] === 'gh' && argv[1] === 'search' ? ` ${argv[2]}` : argv[0] === 'gh' && argv[1] === 'run' ? ` ${argv[2]}` : ''}`
+    if (r.exitCode === SKIPPED) return null
+    const tool =`${argv[0]} ${argv[1]}${argv[0] === 'gh' && argv[1] === 'search' ? ` ${argv[2]}` : argv[0] === 'gh' && argv[1] === 'run' ? ` ${argv[2]}` : ''}`
     if (r.exitCode !== 0) {
       unmeasured.push(`${what} were not checked (${tool}: ${firstLine(r.stderr) || `exit ${r.exitCode}`})`)
       return null

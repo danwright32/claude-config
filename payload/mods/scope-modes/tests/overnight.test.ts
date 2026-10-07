@@ -147,6 +147,11 @@ describe('every gh write but a known read goes only to the repository the checko
     expect(await bash('gh release delete v1')).toBeUndefined()
     expect(await bash('gh run view 5 --log')).toBeUndefined()
   })
+  test('a body that begins with a dash, or read from standard input, is still a comment on this repository', async () => {
+    expect(await bash(`gh issue comment 834 --body '- fixed the parser'`)).toBeUndefined()
+    expect(await bash('gh issue comment 834 --body-file -')).toBeUndefined()
+    expect(await bash('gh pr create --title x -F -')).toBeUndefined()
+  })
   test('editing or deleting a comment is refused outright', async () => {
     expect(await bash('gh issue comment 5 --delete-last --yes')).toBe('edit or delete a comment')
     expect(await bash('gh pr comment 5 --edit-last --body x')).toBe('edit or delete a comment')

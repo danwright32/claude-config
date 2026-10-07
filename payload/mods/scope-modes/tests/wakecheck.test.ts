@@ -115,6 +115,22 @@ describe('the wake check', () => {
     expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret"'])
     expect(r.unmeasured).toEqual([])
   })
+  test('the check keeps to its overall deadline, and says what it left unread (L110)', async () => {
+    let t = 0
+    const asked: string[] = []
+    const r = await wakeCheck(
+      async argv => {
+        asked.push(argv.join(' '))
+        t += 25_000 // each read takes 25 s
+        return QUIET[argv.join(' ')] ?? fail('unexpected')
+      },
+      { since: SINCE, home: HOME, now: () => t, budgetMs: 60_000 },
+    )
+    // Three GitHub reads use the 60 s; the local reads still run, and nothing after them on GitHub.
+    expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
+    expect(asked.filter(a => !a.startsWith('gh '))).toEqual(['git -C /Users/x/claude-config-sync remote -v', 'stat -f %m /Users/x/.claude/LESSONS.md'])
+    expect(r.unmeasured).toEqual(['the overnight check stopped at its 60 s limit, so the rest of GitHub was not read'])
+  })
   test('without the GitHub login nothing on GitHub can be read, and that is said', async () => {
     const r = await check({ 'gh api user --jq .login': fail('not logged in') })
     expect(r.unmeasured[0]).toBe('GitHub was not checked at all: the gh login could not be read (not logged in)')
