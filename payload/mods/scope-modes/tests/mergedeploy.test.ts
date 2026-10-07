@@ -172,6 +172,10 @@ describe('what a command does, by effect', () => {
     expect(kinds('pnpm build', here)).toEqual([])
     // A package.json that cannot be read: any script it runs could deploy.
     expect(kinds('npm run build', { ...ON_BRANCH, scripts: { unreadable: 'not JSON' } })).toEqual(['deploy'])
+    // A package manager's own command (install, ci, add) runs no script by that name, whatever is unreadable.
+    for (const c of ['npm install', 'npm ci', 'npm i', 'yarn add left-pad', 'pnpm install', 'bun install']) expect(kinds(c, { ...ON_BRANCH, scripts: { unreadable: 'not JSON' } })).toEqual([])
+    // `npm test` runs the script named test, so an unreadable package.json refuses it.
+    expect(kinds('npm test', { ...ON_BRANCH, scripts: { unreadable: 'not JSON' } })).toEqual(['deploy'])
     // No package.json: nothing to run.
     expect(kinds('npm run build')).toEqual([])
   })

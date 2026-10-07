@@ -174,6 +174,8 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** A sleep record another /sleep places the moment this one takes the preparing marker (#843). */
+  recordOnMarker?: string
   /** Dan's bedtime answer, given only when this settles (#843). */
   repoAnswerLate?: Promise<string>
   /** origin/HEAD's branch, main unless said (#843). */
@@ -299,6 +301,8 @@ const world = (on: On, o: Opts = {}) => {
       if (to in w.files) return fail(1, `ln: ${to}: File exists`)
       if (!(from in w.files)) return fail(1, `ln: ${from}: No such file or directory`)
       w.files[to] = w.files[from] as string
+      // Another /sleep finishing just as this one takes the marker (#843).
+      if (o.recordOnMarker && to.endsWith('/state/sleep/preparing')) w.files['/Users/x/.claude/state/sleep/current.json'] = o.recordOnMarker
       return ok()
     }
     if (cmd === 'rm') {
@@ -2246,4 +2250,22 @@ test('a bedtime answer given after the wait that cannot be saved is noted for th
   await clock.settle()
   const lost = w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && /was not saved/.test(String((n.questions as string[])[0])))
   expect(lost.map(n => (n.questions as string[])[0])).toEqual(['Your answer about o/r ("Allowed to deploy") was not saved: mods/sleep-repos.json is missing. Choose again at the next /sleep.'])
+})
+
+test('a /sleep that takes the marker just after another finished reads the record again, and asks nothing', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, githubRepos: { default: ['o/r'] }, recordOnMarker: asleepRecord() })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on: it started at 7:11 PM ET on Wed Dec 31 in \/other/)
+  expect(w.asked).toEqual([])
+  // Nothing was asked even through the asleep route, which would have noted the question.
+  expect(w.appended).toEqual([])
+  expect(`${SLEEP}/preparing` in w.files).toBe(false)
+})
+
+test('a bedtime answer is written beside the record, never as a half file in the synced mods folder', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Allowed to deploy' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(JSON.parse(w.files[LISTS_PATH] as string).mayDeploy).toEqual(['o/r'])
+  expect(w.fsWrites.filter(f => f.startsWith('/Users/x/.claude/mods/'))).toEqual([])
 })

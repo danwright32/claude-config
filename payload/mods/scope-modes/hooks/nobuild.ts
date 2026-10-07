@@ -165,11 +165,14 @@ const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
 const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
 
 /** The package script a runner runs (`npm run build`, `yarn build`, `npm test`), or undefined when it runs none. */
+// A package manager's own commands, which run no package script by that name (bare `npm publish`
+// included: it is npm's publish, refused on its own; `npm run publish` runs the script named publish).
+const RUNNER_OWN = new Set(['install', 'i', 'ci', 'add', 'remove', 'rm', 'uninstall', 'un', 'update', 'up', 'upgrade', 'ls', 'list', 'outdated', 'audit', 'init', 'create', 'exec', 'dlx', 'x', 'why', 'info', 'view', 'config', 'cache', 'link', 'unlink', 'pack', 'version', 'login', 'logout', 'whoami', 'help', 'publish', 'prune', 'dedupe', 'rebuild', 'fund', 'doctor', 'pm'])
 export const runnerScript = (words: string[]): string | undefined => {
   if (!RUNNERS.has(name(words[0]))) return undefined
-  const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
-  // Bare `npm publish` is npm's own publish, not a script; `npm run publish` runs the script named publish.
-  return script && !isFlag(script) && !(words[1] === 'publish') ? script : undefined
+  if (words[1] === 'run' || words[1] === 'run-script') return words[2] && !isFlag(words[2]) ? words[2] : undefined
+  const script = words[1]
+  return script && !isFlag(script) && !RUNNER_OWN.has(script) ? script : undefined
 }
 
 /**

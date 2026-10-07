@@ -352,7 +352,9 @@ const recordAnswer = async ($: EngineInterface, path: string, repo: string, answ
     if (t !== null && typeof t === 'object') return `${REPO_LIST_FILE} could not be read (${t.error})`
     const added = addAnswer(t, repo, answer)
     if ('why' in added) return added.why
-    const tmp = `${path}.${claim.claimed.nonce}.tmp`
+    // Written in the sleep folder, which nothing syncs, and moved over: a half written or left over
+    // copy never sits in mods/, which the sync mirrors both ways. Both are under ~/.claude, one disk.
+    const tmp = `${sleepDir((await $.env.get('HOME')) ?? '')}/.sleep-repos-${claim.claimed.nonce}.tmp`
     try {
       await $.fs.write(tmp, added.text)
     } catch (err) {
@@ -737,6 +739,13 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   if ('unreadable' in claim) return `A preparing marker is there but cannot be read (${claim.unreadable}). Nothing changed; /wake clears it.`
   if ('failed' in claim) return `Sleep mode did not start: its preparing marker could not be written (${claim.failed}).`
   const tookOver = claim.tookOver ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
+  // Another /sleep may have placed its record between the read above and this claim: read it again,
+  // so the bedtime questions are never asked for a night that has already begun.
+  const again = await sleepNow($)
+  if (again.state === 'asleep') {
+    await releaseMarker($, p.preparing, claim.claimed)
+    return `Sleep mode is already on: ${startedWhere(again.record)}. Nothing changed.`
+  }
   // Everything from here until the record is in place is under the marker, so a second /sleep never
   // asks the questions again in between, and it is released however this ends.
   let e: Awaited<ReturnType<typeof enrol>>
