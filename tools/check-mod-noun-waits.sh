@@ -176,13 +176,20 @@ def resolve_all(mods):
     if not os.path.isdir(os.path.join(ts_dir, "node_modules", "typescript")):
         why = f"it is not installed in {ts_dir}"
     else:
-        payload = json.dumps({"mods": [{"files": [os.path.join(folder, f.rel) for f in files]} for _, folder, _, files in mods if files]})
+        payload = json.dumps({"mods": [{"files": [os.path.abspath(os.path.join(folder, f.rel)) for f in files]} for _, folder, _, files in mods if files]})
         try:
             run = subprocess.run(["node", script, ts_dir], input=payload, capture_output=True, text=True, timeout=120)
             if run.returncode != 0:
-                why = (run.stderr.strip().splitlines() or [f"ts-resolve.mjs exited {run.returncode}"])[-1]
+                lines = run.stderr.strip().splitlines()
+                # The error itself, not the runtime's closing version line.
+                why = next((l.strip() for l in lines if re.match(r"\s*(?:\w*Error\b|ts-resolve:)", l)), lines[-1] if lines else f"ts-resolve.mjs exited {run.returncode}")
             else:
                 found = json.loads(run.stdout)
+                # A file the resolver answered nothing for would be followed by name throughout, a
+                # pass over nothing resolved (L490).
+                missing = [os.path.abspath(os.path.join(folder, f.rel)) for _, folder, _, files in mods for f in files if os.path.abspath(os.path.join(folder, f.rel)) not in found]
+                if missing:
+                    why = f"it answered nothing for {missing[0]}" + (f" and {len(missing) - 1} other file(s)" if len(missing) > 1 else "")
         except FileNotFoundError:
             why = "node is not installed"
         except subprocess.TimeoutExpired:
@@ -199,10 +206,10 @@ def resolve_all(mods):
     by_path = {}
     for _, folder, _, files in mods:
         for f in files:
-            by_path[os.path.join(folder, f.rel)] = f
+            by_path[os.path.abspath(os.path.join(folder, f.rel))] = f
     for _, folder, _, files in mods:
         for f in files:
-            f.refs = {at: (role, target) for at, role, target in found.get(os.path.join(folder, f.rel), [])}
+            f.refs = {at: (role, target) for at, role, target in found.get(os.path.abspath(os.path.join(folder, f.rel)), [])}
     return by_path
 
 

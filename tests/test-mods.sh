@@ -1422,6 +1422,11 @@ for m in waits-in-map passed-to-listener called-back-later through-helper named-
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
   || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
+# A mods folder named relative to where the check runs is resolved too: the compiler's project is
+# written in a folder of its own, so each file is handed to it by its absolute path (#895).
+out="$(cd "$(dirname "$M12W")" && bash "$WAITS" "$(basename "$M12W")" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a mods folder given by a relative path is checked the same (#895)" ok \
+  || check "a mods folder given by a relative path is checked the same (#895)" "exit=$code out=$out"
 out="$(bash "$WAITS" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the noun wait check" ok \
   || check "a missing mods folder is refused by the noun wait check" "exit=$code out=$out"

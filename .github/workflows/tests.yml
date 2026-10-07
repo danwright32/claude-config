@@ -163,6 +163,8 @@ jobs:
           # runs node directly. Named for the same reason as python3, and held to it by
           # tests/test-ci-environment-tools.sh, which fails on an invoked interpreter not named here.
           node --version
+          # The pinned TypeScript compiler is installed with npm ci before the suites (#895).
+          npm --version
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
           # How many cores this runner actually has (claude-config#210). The HOOK_TESTS_BUDGET
