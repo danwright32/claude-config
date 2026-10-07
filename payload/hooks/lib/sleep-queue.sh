@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# sleep-queue.sh: sleep mode's overnight queue and per issue claims (claude-config#842, phase 5 of
+# the Sleep mode milestone).
+#
+# Sourced for its functions, or run as a command by an overnight session:
+#
+#   bash ~/.claude/hooks/lib/sleep-queue.sh next    REPO_ROOT SESSION_ID [GOAL_ISSUE...]
+#   bash ~/.claude/hooks/lib/sleep-queue.sh queue   REPO_ROOT SESSION_ID [GOAL_ISSUE...]
+#   bash ~/.claude/hooks/lib/sleep-queue.sh claim   REPO_ROOT ISSUE SESSION_ID
+#   bash ~/.claude/hooks/lib/sleep-queue.sh release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]
+#   bash ~/.claude/hooks/lib/sleep-queue.sh claims
+#
+# `next` is the one an overnight session uses: it builds the queue, claims the first issue nobody
+# holds, and gives it a worktree of its own (never a checkout or switch in the primary checkout,
+# H7). It prints one line, tab separated, then the queue's skip lines for the report:
+#
+#   claimed  ISSUE  attempts=N  worktree=PATH  TITLE        exit 0
+#   none     -      nothing left to claim tonight            exit 1
+#   refused  -      WHY                                      exit 3
+#
+# The queue (L24): the goal's issues when given, else every open p0 to p3 issue, fetched with an
+# explicit limit (SLEEP_QUEUE_LIMIT, 500) and refused when a page comes back that full, sorted here
+# by priority then number. Left out, each with its reason on a skip line: needs-dan; a before bed
+# question about it that went unanswered (phase 6, #836, writes those to
+# ~/.claude/state/sleep/unanswered/GENERATION, one owner/repo#N a line); an open pull request or a
+# branch naming it, unless tonight's own claims have touched it, when the claim decides; an issue an
+# open session is on (its branch or its request names it); and any issue not opened by one of
+# Dan's GitHub accounts, since another person's issue is data, never instructions (L28).
+#
+# Claims (sleep-queue.py says how they are kept): one directory per issue under
+# ~/.claude/state/sleep/claims/GENERATION/OWNER__REPO/ISSUE, holding numbered entries each linked
+# into place whole, so two sessions reaching for one issue make exactly one owner. A claim whose
+# session has gone from the session registry is free again; the attempts count is every claim the
+# issue has had tonight, read by the overnight driver (phase 8, #844) to park an issue at two.
+#
+# Only while the Mac is asleep, judged by sleep.sh's sleep_active, the one predicate (#840). Every
+# GitHub read goes through one source, `gh` here, or the command SLEEP_QUEUE_SOURCE names, which the
+# tests use so that nothing reaches GitHub.
+
+_SQ_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! . "$_SQ_LIB/sleep.sh"; then
+  echo "refused	-	sleep-queue.sh could not load sleep.sh beside it, so whether the Mac is asleep cannot be read" >&2
+  return 3 2>/dev/null || exit 3
+fi
+_SQ_PY="$_SQ_LIB/sleep-queue.py"
+
+_sq_refuse() { printf 'refused\t-\t%s\n' "$1"; return 3; }
+_sq_now() { if [ -n "${SLEEP_NOW_MS:-}" ]; then printf '%s\n' "$SLEEP_NOW_MS"; else printf '%s000\n' "$(date +%s)"; fi; }
+_sq_sleep_dir() { printf '%s/.claude/state/sleep\n' "$HOME"; }
+_sq_registry() { printf '%s/.claude/state/sessions\n' "$HOME"; }
+
+# Tonight's generation, only while asleep. Read from the record that sleep_active has just judged.
+_sq_generation() {
+  local rec now gen
+  rec="$(_sq_sleep_dir)/current.json"
+  now="$(_sq_now)"
+  if ! sleep_active "$rec" "$now"; then
+    printf 'the Mac is not asleep (the sleep record reads %s), so there is no night to queue or claim for\n' "$(sleep_state "$rec" "$now")"
+    return 1
+  fi
+  gen="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("generation") or "")' "$rec" 2>/dev/null)"
+  case "$gen" in
+    ''|*[!A-Za-z0-9._-]*) printf 'the sleep record names no generation this reader accepts\n'; return 1 ;;
+  esac
+  printf '%s\n' "$gen"
+}
+
+# owner/repo of a checkout, lower case, from its origin as configured (never rewritten by insteadOf).
+_sq_slug() {
+  local url
+  url="$(git -C "$1" config remote.origin.url 2>/dev/null)"
+  printf '%s\n' "$url" | sed -n -E 's#^.*github\.com[:/]+([^/]+)/([^/]+)$#\1/\2#p' | sed 's/\.git$//' | tr '[:upper:]' '[:lower:]' | grep -E '^[a-z0-9_.-]+/[a-z0-9_.-]+$'
+}
+
+# ---- the issue source ----
+
+# gh, as an account that can see the repository: the active one first, then each other signed in
+# account, its token scoped to the call (never gh auth switch, which other sessions share).
+_sq_gh_token() {
+  local slug="$1" acct tok
+  if gh repo view "$slug" --json nameWithOwner >/dev/null 2>&1; then return 0; fi
+  for acct in $(gh auth status 2>/dev/null | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
+    tok="$(gh auth token -u "$acct" 2>/dev/null)" || continue
+    [ -n "$tok" ] || continue
+    if GH_TOKEN="$tok" gh repo view "$slug" --json nameWithOwner >/dev/null 2>&1; then
+      printf '%s\n' "$tok"
+      return 0
+    fi
+  done
+  return 1
+}
+_sq_gh() { if [ -n "${_SQ_TOKEN:-}" ]; then GH_TOKEN="$_SQ_TOKEN" gh "$@"; else gh "$@"; fi; }
+_sq_gh_source() {
+  case "$1" in
+    accounts) gh auth status --json hosts 2>/dev/null | python3 -c '
+import json, sys
+for a in json.load(sys.stdin).get("hosts", {}).get("github.com", []):
+    if a.get("state") == "success" and a.get("login"):
+        print(a["login"])' ;;
+    issues) _sq_gh issue list -R "$2" --state open --limit "$3" --json number,title,labels,author ;;
+    issue) _sq_gh issue view "$3" -R "$2" --json number,title,labels,author,state ;;
+    prs) _sq_gh pr list -R "$2" --state open --limit "$3" --json number,title,body,headRefName ;;
+    branches) _sq_gh api --paginate "repos/$2/branches?per_page=100" --jq '.[].name' ;;
+    *) echo "unknown source call $1" >&2; return 2 ;;
+  esac
+}
+_sq_source() { if [ -n "${SLEEP_QUEUE_SOURCE:-}" ]; then "$SLEEP_QUEUE_SOURCE" "$@"; else _sq_gh_source "$@"; fi; }
+
+# One fetch into a file; a failure is a refusal carrying the source's own first line (L215).
+_sq_fetch() {
+  local out="$1" what="$2" err
+  shift 2
+  if ! _sq_source "$@" > "$out" 2> "$out.err"; then
+    err="$(awk 'NF { print; exit }' "$out.err")"
+    _sq_refuse "the $what could not be read from GitHub (${err:-no reason given})"
+    return 3
+  fi
+}
+
+# ---- the queue ----
+
+# sleep_queue REPO_ROOT SESSION_ID [GOAL_ISSUE...]: next and skip lines, as the header says.
+sleep_queue() {
+  local root="${1:-}" self="${2:-}" gen slug tmp limit="${SLEEP_QUEUE_LIMIT:-500}" n rc goal=""
+  [ $# -ge 2 ] || { _sq_refuse "sleep_queue needs a repository root and a session id"; return 3; }
+  shift 2
+  gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/sleep-queue.XXXXXX")" || { _sq_refuse "no temporary folder could be made"; return 3; }
+  _SQ_TOKEN=""
+  if [ -z "${SLEEP_QUEUE_SOURCE:-}" ]; then
+    _SQ_TOKEN="$(_sq_gh_token "$slug")" || { rm -rf "$tmp"; _sq_refuse "no signed in GitHub account can see $slug"; return 3; }
+  fi
+  rc=0
+  _sq_fetch "$tmp/accounts" "list of Dan's GitHub accounts" accounts || rc=3
+  if [ "$rc" = 0 ] && [ $# -gt 0 ]; then
+    : > "$tmp/goal.jsonl"
+    for n in "$@"; do
+      case "$n" in ''|*[!0-9]*) rm -rf "$tmp"; _sq_refuse "goal issue $n is not an issue number"; return 3 ;; esac
+      _sq_fetch "$tmp/one" "goal issue #$n" issue "$slug" "$n" || { rc=3; break; }
+      cat "$tmp/one" >> "$tmp/goal.jsonl"; echo >> "$tmp/goal.jsonl"
+      goal="$goal${goal:+,}$n"
+    done
+    [ "$rc" = 0 ] && { python3 -c '
+import json, sys
+print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))' "$tmp/goal.jsonl" > "$tmp/issues.json" 2>"$tmp/goal.err" || { _sq_refuse "a goal issue came back as something other than JSON"; rc=3; }; }
+  elif [ "$rc" = 0 ]; then
+    _sq_fetch "$tmp/issues.json" "open issues of $slug" issues "$slug" "$limit" || rc=3
+  fi
+  [ "$rc" = 0 ] && { _sq_fetch "$tmp/prs.json" "open pull requests of $slug" prs "$slug" "$limit" || rc=3; }
+  [ "$rc" = 0 ] && { _sq_fetch "$tmp/branches" "branches of $slug" branches "$slug" || rc=3; }
+  if [ "$rc" = 0 ]; then
+    python3 "$_SQ_PY" queue "repo=$slug" "limit=$limit" "issues=$tmp/issues.json" "prs=$tmp/prs.json" \
+      "branches=$tmp/branches" "accounts=$tmp/accounts" "unanswered=$(_sq_sleep_dir)/unanswered/$gen" \
+      "claims=$(_sq_sleep_dir)/claims/$gen/${slug%%/*}__${slug#*/}" "registry=$(_sq_registry)" \
+      "now=$(_sq_now)" "self=$self" "goal=$goal"
+    rc=$?
+  fi
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+# ---- claims ----
+
+_sq_issue_dir() { printf '%s/claims/%s/%s__%s/%s\n' "$(_sq_sleep_dir)" "$1" "${2%%/*}" "${2#*/}" "$3"; }
+_sq_valid() {
+  case "$1" in ''|*[!0-9]*) printf 'issue %s is not an issue number\n' "$1"; return 1 ;; esac
+  case "$2" in ''|*[!A-Za-z0-9-]*) printf 'session id %s is not one the registry uses\n' "$2"; return 1 ;; esac
+}
+
+# Links one entry into place as number N: written whole beside it first, so it is never seen half
+# written, and `ln` refuses when N exists, so of two writers exactly one makes it.
+_sq_link() {
+  local dir="$1" n="$2" json="$3" tmp
+  tmp="$dir/.tmp.$$.$RANDOM$RANDOM"
+  printf '%s\n' "$json" > "$tmp" || return 1
+  if ln "$tmp" "$dir/$n" 2>/dev/null; then rm -f "$tmp"; return 0; fi
+  rm -f "$tmp"
+  return 1
+}
+
+# sleep_claim REPO_ROOT ISSUE SESSION_ID: `claimed ISSUE attempts=N STATE` (exit 0), or
+# `not-claimed ISSUE WHY` (exit 1), or refused (exit 3).
+sleep_claim() {
+  local root="${1:-}" issue="${2:-}" self="${3:-}" gen slug dir line st nxt attempts why bad try entry
+  bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
+  gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
+  dir="$(_sq_issue_dir "$gen" "$slug" "$issue")"
+  mkdir -p "$dir" || { _sq_refuse "the claim folder $dir could not be made"; return 3; }
+  # A lost race means another entry landed first: judge again from what is there now.
+  for try in 1 2 3 4 5; do
+    line="$(python3 "$_SQ_PY" state "$dir" "$self" "$(_sq_registry)" "$(_sq_now)")" || { _sq_refuse "the claim on #$issue could not be judged"; return 3; }
+    IFS=$'\t' read -r st nxt attempts why <<< "$line"
+    case "$st" in
+      mine) printf 'claimed\t%s\tattempts=%s\tmine\n' "$issue" "$attempts"; return 0 ;;
+      free)
+        entry="$(python3 "$_SQ_PY" entry claim "$self" "$(_sq_now)")" || { _sq_refuse "the claim entry could not be written"; return 3; }
+        if _sq_link "$dir" "$nxt" "$entry"; then
+          printf 'claimed\t%s\tattempts=%s\t%s\n' "$issue" "$((attempts + 1))" "$why"
+          return 0
+        fi ;;
+      *) printf 'not-claimed\t%s\t%s: %s\n' "$issue" "$st" "$why"; return 1 ;;
+    esac
+  done
+  printf 'not-claimed\t%s\tanother session kept writing to this claim first\n' "$issue"
+  return 1
+}
+
+# sleep_release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]: only the holder ends its
+# own claim. free puts the issue back for anyone; the others end it for the night.
+sleep_release() {
+  local root="${1:-}" issue="${2:-}" self="${3:-}" state="${4:-}" why="${5:-}" gen slug dir line st nxt attempts reason bad entry
+  case "$state" in free|done|parked|failed) ;; *) printf 'refused\t-\ta claim ends as free, done, parked or failed, never %s\n' "$state"; return 2 ;; esac
+  bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
+  gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
+  dir="$(_sq_issue_dir "$gen" "$slug" "$issue")"
+  line="$(python3 "$_SQ_PY" state "$dir" "$self" "$(_sq_registry)" "$(_sq_now)")" || { _sq_refuse "the claim on #$issue could not be judged"; return 3; }
+  IFS=$'\t' read -r st nxt attempts reason <<< "$line"
+  if [ "$st" != mine ]; then
+    printf 'not-released\t%s\tthis session does not hold it (%s: %s)\n' "$issue" "$st" "$reason"
+    return 1
+  fi
+  entry="$(python3 "$_SQ_PY" entry "$state" "$self" "$(_sq_now)" "$why")" || { _sq_refuse "the release entry could not be written"; return 3; }
+  if ! _sq_link "$dir" "$nxt" "$entry"; then
+    printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"
+    return 1
+  fi
+  printf 'released\t%s\t%s\n' "$issue" "$state"
+}
+
+# sleep_claims_json: every claim of tonight, one JSON line each (repo, issue, attempts, entries).
+# The seam the nightly report (phase 4, #835) reads claims through, so it never parses the folders.
+sleep_claims_json() {
+  local gen
+  gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  python3 "$_SQ_PY" claims "$(_sq_sleep_dir)/claims/$gen"
+}
+
+# ---- worktrees ----
+
+# sleep_worktree REPO_ROOT ISSUE: the issue's own worktree, PRIMARY/.claude/worktrees/sleep-ISSUE on
+# branch sleep/ISSUE, made from the remote default branch, or the one already there when it is this
+# repository's worktree. Anything else at that path is never adopted (L421).
+sleep_worktree() {
+  local root="$1" issue="$2" common primary path branch base have
+  common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || { echo "$root is not a git checkout" >&2; return 1; }
+  primary="$(dirname "$common")"
+  path="$primary/.claude/worktrees/sleep-$issue"
+  branch="sleep/$issue"
+  if [ -e "$path" ]; then
+    have="$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+    if [ "$have" = "$common" ] && [ "$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" = "$path" ]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+    echo "$path is there already and is not a worktree of $primary, so it was left alone" >&2
+    return 1
+  fi
+  git -C "$primary" fetch -q origin 2>/dev/null || { echo "git fetch from origin failed in $primary" >&2; return 1; }
+  if git -C "$primary" show-ref --verify -q "refs/heads/$branch"; then
+    git -C "$primary" worktree add -q "$path" "$branch" >/dev/null 2>&1 || { echo "git worktree add $path $branch failed" >&2; return 1; }
+  else
+    base="$(git -C "$primary" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+    [ -n "$base" ] || base=origin/main
+    if git -C "$primary" show-ref --verify -q "refs/remotes/origin/$branch"; then base="origin/$branch"; fi
+    git -C "$primary" worktree add -q -b "$branch" "$path" "$base" >/dev/null 2>&1 || { echo "git worktree add $path from $base failed" >&2; return 1; }
+  fi
+  printf '%s\n' "$path"
+}
+
+# ---- next ----
+
+# sleep_next REPO_ROOT SESSION_ID [GOAL_ISSUE...]: see the header.
+sleep_next() {
+  local root="${1:-}" self="${2:-}" q rc lines n title got attempts wt err
+  q="$(sleep_queue "$@")"; rc=$?
+  if [ "$rc" != 0 ]; then printf '%s\n' "$q"; return 3; fi
+  lines="$(printf '%s\n' "$q" | awk -F'\t' '$1 == "next" { print $2 "\t" $6 }')"
+  while IFS=$'\t' read -r n title; do
+    [ -n "$n" ] || continue
+    got="$(sleep_claim "$root" "$n" "$self")" || continue
+    attempts="$(printf '%s\n' "$got" | awk -F'\t' '{ print $3 }')"
+    if ! wt="$(sleep_worktree "$root" "$n" 2>"${TMPDIR:-/tmp}/sleep-wt.$$")"; then
+      err="$(cat "${TMPDIR:-/tmp}/sleep-wt.$$" 2>/dev/null)"
+      rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
+      sleep_release "$root" "$n" "$self" failed "no worktree: $err" >/dev/null
+      printf 'skip\t%s\tclaimed but failed: %s\n' "$n" "$err" >&2
+      printf 'failed\t%s\t%s\n' "$n" "$err"
+      continue
+    fi
+    rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
+    printf 'claimed\t%s\t%s\tworktree=%s\t%s\n' "$n" "$attempts" "$wt" "$title"
+    printf '%s\n' "$q" | awk -F'\t' '$1 == "skip"'
+    return 0
+  done <<< "$lines"
+  printf 'none\t-\tnothing left to claim tonight\n'
+  printf '%s\n' "$q" | awk -F'\t' '$1 == "skip"'
+  return 1
+}
+
+# ---- run as a command ----
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  cmd="${1:-}"
+  shift 2>/dev/null
+  case "$cmd" in
+    next) sleep_next "$@" ;;
+    queue) sleep_queue "$@" ;;
+    claim) sleep_claim "$@" ;;
+    release) sleep_release "$@" ;;
+    claims) sleep_claims_json ;;
+    *) echo "usage: sleep-queue.sh next|queue|claim|release|claims ... (see the header of $0)" >&2; exit 2 ;;
+  esac
+  exit $?
+fi
