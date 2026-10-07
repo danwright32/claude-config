@@ -313,6 +313,11 @@ const mcpWrites = (tool: string): boolean => {
   return !words.some(w => READS.has(w)) || words.some(w => WRITES.has(w))
 }
 
+// Whether the word after a gh named as an argument makes it a gh call: a gh subcommand, or a flag
+// (`-R o/r`), as a wrapper passes it on. A search term or a path (`grep gh README.md`, `ls gh`)
+// runs nothing. A user's own gh alias in that place is not seen; the wake check is the backstop.
+const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
+const runsGh = (next: string | undefined): boolean => next !== undefined && (next.startsWith('-') || GH_SUBCOMMANDS.has(next))
 // The commands that name a program without running it: printing its name, or finding where it is.
 const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'type', 'whereis', 'man', 'brew'])
 const SYNC_REFUSED = (sub: string | undefined) => sub !== undefined && (sub === 'pull' || sub === 'sync' || sub === 'apply-only' || sub.startsWith('install'))
@@ -376,7 +381,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
     // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
     // running it are let through; a command missing from that list fails closed.
-    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some(w => (w === 'gh' || w.endsWith('/bin/gh')) && unquotedWords.has(w))) return UNRESOLVED
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && unquotedWords.has(w) && runsGh(words[i + 2]))) return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look)
       if (why) return why
