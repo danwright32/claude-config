@@ -224,8 +224,12 @@ type Listing = { name: string; kind: string; size?: number; mtimeMs?: number }
 const recordsIn = (entries: Listing[]) => entries.filter(e => e.kind === 'file' && e.name.endsWith('.json') && !e.name.startsWith('.'))
 // Reads the files at `paths`, READERS at a time, starting no new read once `stop()` says so. A read
 // that fails has undefined for its text; one never started is absent from the answer.
-const readMany = async (read: (path: string) => Promise<string>, paths: string[], stop: () => boolean): Promise<Map<string, string | undefined>> => {
-  const out = new Map<string, string | undefined>()
+const readMany = async (
+  read: (path: string) => Promise<string>,
+  paths: string[],
+  stop: () => boolean,
+  out = new Map<string, string | undefined>(),
+): Promise<Map<string, string | undefined>> => {
   let next = 0
   const worker = async () => {
     while (next < paths.length && !stop()) {
@@ -239,6 +243,25 @@ const readMany = async (read: (path: string) => Promise<string>, paths: string[]
   }
   await Promise.all(Array.from({ length: Math.min(READERS, paths.length) }, worker))
   return out
+}
+
+// readMany within LIST_MS: what was read by then, without waiting on a read still in flight, which
+// is left out as if never started (lessons review of #913: the read back after the move was unbounded).
+// `after` is the hook's own clock.after, called in place.
+const readWithin = async (after: (ms: number, fn: () => void) => { cancel: () => void }, read: (path: string) => Promise<string>, paths: string[]) => {
+  const out = new Map<string, string | undefined>()
+  let stopped = false
+  let timer: { cancel: () => void } | undefined
+  const timeUp = new Promise<void>(resolve => {
+    timer = after(LIST_MS, () => {
+      stopped = true
+      resolve()
+    })
+  })
+  const work = readMany(read, paths, () => stopped, out)
+  work.catch(() => undefined)
+  await Promise.race([work, timeUp]).finally(() => timer?.cancel())
+  return new Map(out)
 }
 
 // Clears out what has ended, once per session start so no edit pays for it (#633, #911). A record
@@ -255,12 +278,9 @@ const prune = async ($: EngineInterface, h: string, now: number) => {
   } catch {
     return
   }
-  let stopped = false
-  const timer = $.clock.after(LIST_MS, () => {
-    stopped = true
-  })
+  const after = (ms: number, fn: () => void) => $.clock.after(ms, fn)
   const names = recordsIn(entries).map(e => e.name)
-  const texts = await readMany(p => $.fs.read(p), names.map(n => `${dir}/${n}`), () => stopped).finally(() => timer.cancel())
+  const texts = await readWithin(after, p => $.fs.read(p), names.map(n => `${dir}/${n}`))
   const damaged: string[] = []
   const moves = new Map<string, string[]>()
   for (const name of names) {
@@ -305,7 +325,9 @@ const prune = async ($: EngineInterface, h: string, now: number) => {
   }
   // A record its owner wrote again between the read above and the move (a session waking with the
   // Mac) went to the archive fresh. Read back and put where it belongs, never over a newer write.
-  const back = await readMany(p => $.fs.read(p), archived, () => false)
+  // Bounded too: one not read back in time stays archived, and its owner's next beat, within a
+  // minute, writes it into the sessions folder again.
+  const back = await readWithin(after, p => $.fs.read(p), archived)
   for (const [path, text] of back) {
     const r = parse(text)
     if (!r || archiveDay(r, now) !== null) continue

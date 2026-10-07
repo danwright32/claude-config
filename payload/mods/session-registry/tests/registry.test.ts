@@ -846,6 +846,22 @@ test('a record its owner wrote again just as it was archived is put back, so a l
   expect(ids((await listed($)).open)).toEqual(['k1', 's1'])
 })
 
+// Lessons review of #913: the read back after the move was unbounded, so on the first start after
+// this shipped a loaded Mac would read all 1,337 moved records again inside session.start.
+test('the read back of records just archived is bounded like the first read: one that never answers holds the start no longer than the limit (#911)', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/k1.json`]: recOf('k1', { lastSeen: NOW - 2 * HOUR }) } })
+  w.hang(`${ARCH}/1969-12-31/k1.json`)
+  let started = false
+  const starting = start($).then(() => (started = true))
+  await w.hangReached
+  await w.clock.advance(9_000)
+  await starting
+  w.unhang()
+  expect(started).toBe(true)
+  expect(`${ARCH}/1969-12-31/k1.json` in w.files).toBe(true)
+  expect(w.own()).toMatchObject({ sessionId: 's1', closedAt: null })
+})
+
 test("an archive folder for a day 7 days past is removed; a later day's, and anything not named for a day, are kept (#911)", withConsumer, async ($, on) => {
   const w = world(on, {
     files: { [`${ARCH}/1969-12-24/a.json`]: recOf('a', {}), [`${ARCH}/1969-12-26/b.json`]: recOf('b', {}), [`${ARCH}/notes/c.json`]: 'mine' },
