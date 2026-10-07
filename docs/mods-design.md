@@ -1487,11 +1487,20 @@ Not settled by any round, built so the spec holds, and each an open question for
   cookie changes to disk about every 30 seconds, so the check looks once a second for up to 50
   tries, and the mod now allows it 60 seconds rather than 30. Chrome comes to the front when the
   logout page opens, which is acceptable here since the sign in page follows straight after.
+- **The Chrome route was proven on Dans-MacBook-Pro on 2026-10-07** (#786), at about 9:45 AM ET,
+  by Dan. The check before printed "still signed in to claude.ai in profile Default" and `exit 1`;
+  `bin/chrome-logout.sh` ran; the check after gave "signed out" and `exit 0`, within the check's
+  one minute wait. The before output is quoted as recorded on #786; the after result is as Dan reported it from a
+  choice, not pasted, so its exact wording and how many seconds it took are not recorded. Dan then
+  signed back in.
+- **Whether Chrome's last used profile follows the focused window is not tested** (#786, item 2).
+  It matters only with a second Chrome profile, and Dans-MacBook-Pro has only the one, Default
+  (2026-10-07).
 - **The browser is chosen per Mac** (#808, Dan 2026-10-05: "the sign out prompt ... open in safari
   on this mac and chrome on my other mac"). The defaults run `bin/browser.sh logout` and
   `bin/browser.sh signed-out`, which read the Mac's LocalHostName and run Safari's pair on
-  Daniels-MacBook-Pro-2 and Chrome's pair on Dans-MacBook-Pro (proven on Daniels-MacBook-Pro-2, not
-  yet run on Dans-MacBook-Pro, #786); a Mac named in neither is
+  Daniels-MacBook-Pro-2 and Chrome's pair on Dans-MacBook-Pro (the Chrome pair proven on
+  Daniels-MacBook-Pro-2 on 2026-10-05 and on Dans-MacBook-Pro on 2026-10-07, #786); a Mac named in neither is
   refused by name rather than given a browser (L75). Keyed in the script, not a synced setting,
   because the payload is shared and a per Mac default cannot live in one manifest.
   `bin/safari-logout.sh` opens `https://claude.ai/logout` in Safari. `bin/safari-signed-out.sh`
