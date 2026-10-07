@@ -1281,6 +1281,22 @@ export const register = on => {
   })
 }
 TS
+# A parameter shadows a top-level helper of its name, in a function and in an arrow alike, so a call
+# to it reaches nothing in the mod (#895, lessons review).
+mknounmod "$M12W" param-shadows-top shadowed <<'TS'
+const waiters = new Map()
+const wait = () => new Promise(resolve => waiters.set('x', resolve))
+function hasty(wait: () => Promise<string>) {
+  return wait()
+}
+const brief = (wait: () => Promise<string>): Promise<string> => wait()
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, shadowed: { go: () => hasty(() => Promise.resolve('now')), also: () => brief(() => Promise.resolve('now')) } }
+  })
+}
+TS
 # Two same-named local helpers are each judged by the calls that reach that one, never by the other's:
 # the short call bounds its own helper and the long one is named at its own (#895, lessons review).
 mknounmod "$M12W" same-local-args timed <<'TS'
@@ -1301,7 +1317,7 @@ export const register = on => {
 TS
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"29 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"30 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1330,7 +1346,7 @@ done
 ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
   && check "a local helper is judged by its own calls, never a same-named one's (#895)" ok \
   || check "a local helper is judged by its own calls, never a same-named one's (#895)" "$out"
-for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local; do
+for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.

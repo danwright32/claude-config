@@ -204,11 +204,100 @@ def _declarations(f, name):
     return [m.start() for m in re.finditer(decl, f.code) if f.kinds[m.start()] == CODE]
 
 
+def _opening(code, close):
+    """In code, the index of the bracket that the one at close closes, or None."""
+    pairs, stack = {")": "(", "]": "[", "}": "{"}, []
+    for j in range(close, -1, -1):
+        c = code[j]
+        if c in pairs:
+            stack.append(pairs[c])
+        elif c in "([{":
+            if not stack or stack.pop() != c:
+                return None
+            if not stack:
+                return j
+    return None
+
+
+def _bound_names(params):
+    """The names a parameter list binds, destructured ones included (`{ id, name: label }` binds id and
+    label), a default value or a type read past."""
+    out = []
+    for p in split_top(params):
+        p = re.split(r"(?<![=!<>])=(?![=>])", p, maxsplit=1)[0].strip()
+        p = re.sub(r"^\.\.\.", "", p)
+        if p[:1] in "{[":
+            close = closing(p, 0) or len(p)
+            out += [m.group(1) for m in re.finditer(r"(?:^|[{\[,]|\.\.\.|:)\s*(" + IDENT + r")\s*(?=[,}\]=]|$)", p[1 : close - 1])]
+        else:
+            m = re.match(IDENT, p)
+            if m:
+                out.append(m.group(0))
+    return out
+
+
+def _expression_end(code, b):
+    """Where an arrow's expression body starting at b ends: at a , or ; outside its brackets, or at a
+    bracket closing one it stands inside."""
+    depth, j = 0, b
+    while j < len(code):
+        c = code[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c in ",;" and depth == 0:
+            break
+        j += 1
+    return j
+
+
+def _param_scopes(f):
+    """Each function written in f's code, as (where its body starts, where it ends, the names its
+    parameters bind), cached on f: an arrow's and a `function`'s alike."""
+    if hasattr(f, "params"):
+        return f.params
+    code, out = f.code, []
+    for m in re.finditer(r"=>", code):
+        head = code[: m.start()].rstrip()
+        # A return type between the parameters and the arrow: `(x: T): Promise<U> =>`.
+        typed = re.search(r"\)\s*:[^;{}()=]*$", head)
+        if typed:
+            head = head[: typed.start() + 1]
+        if head.endswith(")"):
+            open_at = _opening(code, len(head) - 1)
+            if open_at is None:
+                continue
+            names = _bound_names(code[open_at + 1 : len(head) - 1])
+        else:
+            one = re.search(r"(" + IDENT + r")$", head)
+            if not one:
+                continue
+            names = [one.group(1)]
+        b = m.end()
+        while b < len(code) and code[b].isspace():
+            b += 1
+        end = (closing(code, b) or len(code)) if code[b : b + 1] == "{" else _expression_end(code, b)
+        out.append((b, end, names))
+    for m in re.finditer(r"(?<![\w$.])function\b\s*\*?\s*(?:" + IDENT + r")?\s*(?:<[^()]*>)?\s*\(", code):
+        close = closing(code, m.end() - 1)
+        if close is None:
+            continue
+        brace = code.find("{", close)
+        if brace < 0:
+            continue
+        out.append((brace, closing(code, brace) or len(code), _bound_names(code[m.end() : close - 1])))
+    f.params = out
+    return out
+
+
 def visible(files, f, at, name):
     """The declaration of name that position at in f sees, by scope as the language reads it (#895):
     the nearest one in a block enclosing at, then one at the top level of f, then one at the top
     level of another of the mod's files. (file, where it starts); None when the mod declares name
-    only where at cannot see it; False when the mod declares no name of that spelling at all."""
+    only where at cannot see it or a parameter shadows it; False when the mod declares no name of that spelling at all."""
     best = None
     for d in _declarations(f, name):
         scope = _scope(f, d)
@@ -217,6 +306,11 @@ def visible(files, f, at, name):
         depth = -1 if scope is None else scope[0]
         if best is None or depth > best[0]:
             best = (depth, d)
+    # A parameter of a function holding at binds the name nearer than any declaration outside that
+    # function, and reaches nothing in the mod.
+    shadow = max((a for a, b, names in _param_scopes(f) if a <= at < b and name in names), default=None)
+    if shadow is not None and (best is None or shadow >= best[0]):
+        return None
     if best is not None:
         return f, best[1]
     declared = False
