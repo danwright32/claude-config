@@ -215,7 +215,9 @@ export const decideStop = (i: StopInput): StopDecision => {
   const { now, self } = i
   if (i.driver.state === 'unreadable') {
     const why = `${i.driver.why}, so the driver cannot count its blocks and stopped rather than loop`
-    return { kind: 'stop', record: null, why, notes: [{ kind: 'stopped', text: why }] }
+    // The claim in hand is ended too, as on every other stop, never left held by a stopped session.
+    const held = i.claim.state === 'held' ? i.claim.claim : null
+    return { kind: 'stop', record: null, why, ...(held ? { release: { issue: held.issue, state: 'failed', why } } : {}), notes: [{ kind: 'stopped', text: why }] }
   }
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, self, now)
   if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
@@ -309,7 +311,8 @@ export const decideFailure = (i: { now: number; self: string; generation: string
   const said = i.message.replace(/\s+/g, ' ').trim().slice(0, 200)
   if (i.driver.state === 'unreadable') {
     const why = `${i.driver.why}, so after the ${i.error} error the driver stopped rather than retry on a count it cannot keep`
-    return { kind: 'stop', record: null, why, notes: [{ kind: 'stopped', ...where, text: why }] }
+    const held = i.claim?.state === 'held' ? i.claim.claim : null
+    return { kind: 'stop', record: null, why, ...(held ? { release: { issue: held.issue, state: 'failed' as const, why } } : {}), notes: [{ kind: 'stopped', ...where, text: why }] }
   }
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, i.self, i.now)
   if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
@@ -342,8 +345,14 @@ export const RESUME = 'Sleep mode: the wait after the API error is over. Carry o
  * The overnight rules, carried in every block so they survive compaction (#844). `self` and `root`
  * fill in the commands; nothing here names a phase that is not built.
  */
-export const overnightRules = (self: string, root: string) =>
-  [
+// A word for a shell command line: left as it is when plain, else single quoted, so a repository
+// path with a space or an apostrophe (Dan's work MacBook has both) runs as written.
+const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`)
+
+export const overnightRules = (self: string, rootPath: string) => {
+  const root = shellWord(rootPath)
+  self = shellWord(self)
+  return [
     'Overnight rules (sleep mode): Dan is asleep and asks nothing tonight.',
     `Claim work with \`bash ~/.claude/hooks/lib/sleep-queue.sh next ${root} ${self}\`; it prints the issue and a worktree of its own: work only there, never switch branches in the primary checkout.`,
     'If it prints attempts=3 or more, release that issue as parked at once and claim the next.',
@@ -353,3 +362,4 @@ export const overnightRules = (self: string, root: string) =>
     `When \`next\` prints none, write \`sleep_note '{"kind":"stopped","by":"${self}","text":"nothing left to claim"}'\` and stop.`,
     'What is done is judged from commits and notes, never from what you say, so commit and note as you go.',
   ].join(' ')
+}

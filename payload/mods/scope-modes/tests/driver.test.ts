@@ -67,6 +67,18 @@ describe('the block', () => {
     expect(r.kind === 'block' && r.reason).toMatch(/^You hold #7 in o\/r \(attempt 1\): carry on with it\./)
     expect(r.notes).toEqual([{ kind: 'heartbeat', repo: 'o/r', issue: 7 }])
   })
+  test('a repository path with spaces or an apostrophe is quoted, so the commands run as written', () => {
+    const rules = overnightRules('s1', "/Users/x/Documents - Dan’s Mac/it's here")
+    expect(rules).toContain("sleep-queue.sh next '/Users/x/Documents - Dan’s Mac/it'\\''s here' s1")
+    expect(rules).toContain("sleep-queue.sh release '/Users/x/Documents - Dan’s Mac/it'\\''s here' <issue> s1 ")
+  })
+  test('an unreadable counter still ends the claim in hand, on a Stop and after an API error', () => {
+    const bad: DriverReading = { state: 'unreadable', why: 'x' }
+    const s = decideStop(input({ driver: bad, claim: held() }))
+    expect(s.kind === 'stop' && s.release).toEqual({ issue: 7, state: 'failed', why: expect.stringMatching(/^x, so the driver cannot count/) })
+    const f = decideFailure({ now: T0, self: 's1', generation: 'g1', repo: 'o/r', driver: bad, error: 'rate_limit', message: '', weekly: 1, claim: held() })
+    expect(f.kind === 'stop' && f.release).toEqual({ issue: 7, state: 'failed', why: expect.stringMatching(/^x, so after the rate_limit error/) })
+  })
   test('the rules carry no long dash', () => {
     const dashes = [0x2014, 0x2013].map(c => String.fromCharCode(c))
     expect(dashes.some(c => RULES.includes(c))).toBe(false)
