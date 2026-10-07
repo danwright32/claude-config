@@ -294,6 +294,14 @@ sleep_release "$ROOT" 27 s2 free >/dev/null
 out="$(sleep_claim "$ROOT" 27 s1)"
 check_has "a released issue can be claimed again, as another attempt" "$(printf 'claimed\t27\tattempts=2')" "$out"
 
+# Tonight's claim exempts an issue from its pull request only while its work is to be carried on.
+c13="$HOME/.claude/state/sleep/claims/g1/danwright32__demo/13"; mkdir -p "$c13"
+printf '{"kind":"claim","session":"ghost2","at":1}' > "$c13/1"
+check_has "a dead worker's issue is carried on despite its pull request" "$(printf 'next\t13\t')" "$(sleep_queue "$ROOT" s2)"
+printf '{"kind":"free","session":"ghost2","at":2}' > "$c13/2"
+check_has "one its holder released on purpose is judged afresh, and its pull request keeps it out" "$(printf 'skip\t13\topen pull request #40 names it')" "$(sleep_queue "$ROOT" s2)"
+rm -rf "$c13"
+
 # A claim that cannot be written is said as that, never as a lost race (L11).
 mkdir -p "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/29"
 chmod 555 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/29"
@@ -390,7 +398,10 @@ check_has "in the worktree the dead session left" "worktree=$ROOT/.claude/worktr
 # Something else sitting where the worktree goes is never adopted (L421), and the claim ends failed.
 mkdir -p "$ROOT/.claude/worktrees/sleep-5"; echo stranger > "$ROOT/.claude/worktrees/sleep-5/file"
 session s6 "$((NOW - 1000))" null
-out="$(sleep_next "$ROOT" s6)"
+# The worktree's reason never goes through a temp file, so nothing is left in the temp folder.
+mkdir -p "$WORK/tmp6"
+out="$(TMPDIR="$WORK/tmp6" sleep_next "$ROOT" s6)"
+check_eq "next leaves no temp file for a worktree's failure" "" "$(ls -A "$WORK/tmp6")"
 check_has "a folder that is not this issue's worktree is refused" "is not a worktree of" "$out"
 check_has "the claim is ended as failed, never left held" '"kind": "failed"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/4" 2>/dev/null)"
 check_has "and next goes on to the issue after it" "$(printf 'claimed\t16\t')" "$out"

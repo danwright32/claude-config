@@ -842,7 +842,8 @@ anything calls it. What the build decided, each open to Dan changing it:
   between the two leaves a claim with no owner. Instead each issue's directory holds numbered
   entries, each written whole beside it and hard linked into place; `ln` fails when the number
   exists, so of any number of claimers at once exactly one makes the next entry (tested with two
-  and with eight; replacing the link with a copy makes both fail). Nothing is deleted: the newest
+  and with eight; the suite runs the eight against a copy of the library with the link swapped for
+  a copy, and there more than one owns the issue). Nothing is deleted: the newest
   entry is the state (`claim`, or `free`, `done`, `parked`, `failed` written by the holder) and
   the ones before it are the history the attempts count is read from (L27). An entry with no start
   time is dated by its file (L409).

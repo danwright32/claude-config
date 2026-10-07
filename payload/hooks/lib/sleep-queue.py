@@ -319,13 +319,16 @@ def queue(a):
             skip("a before bed question about it went unanswered")
             continue
         st, _, attempts, why = claim_state(os.path.join(claims, str(n)), reg, a["self"])
-        claimed_tonight = bool(entries(os.path.join(claims, str(n))))
+        es = entries(os.path.join(claims, str(n)))
         if st in ("held", "ended", "unknown"):
             skip("claim %s: %s" % (st, why))
             continue
-        # Tonight's own claim decides for an issue it has touched: a branch or pull request from
-        # a session that died is the work to carry on, never a reason to leave it.
-        if not claimed_tonight:
+        # Tonight's own claim decides only where its work is still to be carried on: this session's
+        # claim, a dead session's, or one given back unstarted. An issue its holder released on
+        # purpose is judged afresh, so a pull request it opened still keeps others off it.
+        last = es[-1][1] if es else None
+        carry_on = st == "mine" or (last is not None and last.get("kind") in ("claim", "unstarted"))
+        if not carry_on:
             pr = next((p for p in prs if mentions(p.get("title"), n) or mentions(p.get("body"), n) or str(n) in digits(p.get("headRefName"))), None)
             if pr is not None:
                 skip("open pull request #%s names it" % pr.get("number"))

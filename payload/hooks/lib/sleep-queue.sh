@@ -346,10 +346,11 @@ sleep_next() {
     fi
     if [ "$crc" != 0 ]; then printf '%s\n' "$got"; return 3; fi
     attempts="$(printf '%s\n' "$got" | awk -F'\t' '{ print $3 }')"
-    wt="$(sleep_worktree "$root" "$n" 2>"${TMPDIR:-/tmp}/sleep-wt.$$")"; crc=$?
+    # Its one line on stdout on success, its reason on stderr on failure: captured together, so no
+    # temp file is needed for the reason.
+    wt="$(sleep_worktree "$root" "$n" 2>&1)"; crc=$?
     if [ "$crc" != 0 ]; then
-      err="$(cat "${TMPDIR:-/tmp}/sleep-wt.$$" 2>/dev/null)"
-      rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
+      err="$wt"
       # Never here (exit 1) ends it for the night; not just now (exit 2) gives it back.
       local end=failed
       [ "$crc" = 2 ] && end=unstarted
@@ -359,7 +360,6 @@ sleep_next() {
       failed="$failed$(printf 'skip\t%s\tclaimed but could not start (%s): %s' "$n" "$([ "$end" = unstarted ] && echo 'given back for a later pass' || echo 'ended for tonight')" "$err")"$'\n'
       continue
     fi
-    rm -f "${TMPDIR:-/tmp}/sleep-wt.$$"
     printf 'claimed\t%s\t%s\tworktree=%s\t%s\n' "$n" "$attempts" "$wt" "$title"
     printf '%s' "$failed"
     printf '%s\n' "$q" | awk -F'\t' '$1 == "skip"'
