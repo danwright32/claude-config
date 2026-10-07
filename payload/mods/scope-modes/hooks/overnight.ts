@@ -292,25 +292,88 @@ export const scriptsOf = (text: string | null): Record<string, string> | null | 
   }
 }
 
-/** What a call needs read before it can be judged: whether it changes folder first, pushes or calls gh, or runs a package script. */
+/** Where a command runs and what is read there: its default and current branch, its origin's owner/name, and its package scripts. */
+export type Place = Where & { own: string | undefined }
+
+const join = (base: string, p: string) => {
+  const parts = (p.startsWith('/') ? p : `${base}/${p}`).split('/')
+  const out: string[] = []
+  for (const part of parts) {
+    if (part === '' || part === '.') continue
+    if (part === '..') out.pop()
+    else out.push(part)
+  }
+  return `/${out.join('/')}`
+}
+// A path word this can follow: spelled out, or under ~; anything a shell would expand otherwise
+// (a variable, a pattern, a substitution) is a place it cannot see.
+const literal = (w: string | undefined, home: string): string | null => {
+  if (w === undefined || w === '' || /[$`*?[\]{}()]/.test(w)) return null
+  if (w === '~' || w.startsWith('~/')) return home ? `${home}${w.slice(1)}` : null
+  if (w.startsWith('~')) return null
+  return w
+}
+
+/**
+ * The folder each command runs in, as the #892 push hook resolves it: the session's folder, moved by
+ * each `cd` or `pushd` before it, and by a git command's own -C. Null where it cannot be followed (a
+ * variable, a pattern, `popd`, a bare `cd`, or --git-dir and --work-tree, which name a repository
+ * apart from any folder), and from then on, which is a repository that cannot be told (L75).
+ */
+export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | null)[] => {
+  let dir: string | null = cwd || null
+  const out: (string | null)[] = []
+  for (const c of commands) {
+    const cmd = name(c.words[0])
+    if (cmd === 'cd' || cmd === 'pushd') {
+      const to = c.words.slice(1).filter(w => !isFlag(w))[0]
+      const lit = literal(to, home)
+      dir = dir !== null && lit !== null ? join(dir, lit) : null
+      out.push(dir)
+      continue
+    }
+    if (cmd === 'popd') {
+      dir = null
+      out.push(dir)
+      continue
+    }
+    if (cmd === 'git') {
+      let here = dir
+      for (let i = 1; i < c.words.length; i++) {
+        const w = c.words[i] as string
+        if (w === '-C') {
+          const lit = literal(c.words[++i], home)
+          here = here !== null && lit !== null ? join(here, lit) : null
+        } else if (/^--(?:git-dir|work-tree)(?:=|$)/.test(w)) here = null
+        else if (!w.startsWith('-')) break
+      }
+      out.push(here)
+      continue
+    }
+    out.push(dir)
+  }
+  return out
+}
+
+/** What a call needs read before it can be judged: whether it pushes or calls gh, or runs a package script. */
 export const needsOf = (commands: Cmd[]) => ({
-  moves: commands.some(c => ['cd', 'pushd', 'popd'].includes(name(c.words[0]))),
   branch: commands.some(c => c.git?.sub === 'push' || name(c.words[0]) === 'gh'),
   scripts: commands.some(c => runnerScript(c.words) !== undefined),
 })
 
 /**
  * The first act in a call tonight's lists refuse, with the refusal Claude reads. The repository is
- * the one a command names (--repo, a repos/ endpoint), else `own`, the session's; a call that
- * changes folder first reaches one that cannot be told, which is closed (L75), and a git -C or a cd
- * runs where this did not read the branch.
+ * the one a command names (--repo, a repos/ endpoint), else the one in the folder it runs in
+ * (`places`, one per command, null where the folder could not be followed or read, which is a
+ * repository that cannot be told, closed, L75).
  */
-export const judgeNight = (night: unknown, commands: Cmd[], where: Where & { own: string | undefined }): { deny: string; what: string; repo?: string; why: string } | undefined => {
-  const moves = needsOf(commands).moves
-  for (const c of commands) {
-    const elsewhere = moves || c.words.includes('-C')
-    for (const act of actsOf(c, { ...where, currentBranch: elsewhere ? null : where.currentBranch })) {
-      const repo = act.repo ?? (moves ? undefined : where.own)
+export const judgeNight = (night: unknown, commands: Cmd[], places: (Place | null)[]): { deny: string; what: string; repo?: string; why: string } | undefined => {
+  const unseen: Place = { defaultBranch: null, currentBranch: null, scripts: { unreadable: 'the folder it runs in could not be followed' }, own: undefined }
+  for (let i = 0; i < commands.length; i++) {
+    const c = commands[i] as Cmd
+    const place = places[i] ?? unseen
+    for (const act of actsOf(c, place)) {
+      const repo = act.repo ?? place.own
       const why = refusalOf(act, policyOf(night, repo))
       if (why)
         return {

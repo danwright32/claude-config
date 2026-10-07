@@ -136,7 +136,7 @@ const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/s1/scratchpad'
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
-type Session = { sessionId: string; extra?: Record<string, unknown> }
+type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown> }
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
 // unless headRefName says otherwise) and by `gh pr view` only by its own number.
 type GhPr = { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] }
@@ -174,6 +174,10 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** The session registry answers with no lists at all (#843). */
+  registryGarbled?: boolean
+  /** The branch checked out in each folder other than /repo (#843). */
+  branches?: Record<string, string>
   /** A link of the preparing marker or the answers lock that fails (#843). */
   markerFails?: string
 }
@@ -275,6 +279,8 @@ const world = (on: On, o: Opts = {}) => {
     w.runs.push(argv)
     if (cmd === '__sessions') {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
+      // A registry answer missing its lists, so enrolment throws reading it (#843).
+      if (o.registryGarbled) return ok('{}')
       return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
     if (cmd === '__verdict') {
@@ -294,6 +300,7 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'gh' && a[0] === 'auth' && a[1] === 'status') return ok(Object.keys(o.githubRepos ?? {}).filter(k => k !== 'default').map(k => `  Logged in to github.com account ${k} (keyring)`).join('\n'))
     if (cmd === 'gh' && a[0] === 'auth' && a[1] === 'token') return ok(`${a[3]}\n`)
     if (cmd === 'git' && a.includes('--show-current') && o.branch === '__fails') return fail(128, 'fatal: not a git repository')
+    if (cmd === 'git' && a.includes('--show-current') && o.branches?.[a[1] as string] !== undefined) return ok(`${o.branches[a[1] as string]}\n`)
     if (cmd === 'git' && a.includes('--show-current')) return ok(`${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('symbolic-ref')) return ok('origin/main\n')
     if (cmd === 'git' && a.includes('--list')) return ok(o.branchHere === false ? '' : `  ${o.branch ?? 'scope-modes-616'}\n`)
@@ -1597,4 +1604,79 @@ test('a bedtime question that is dismissed or cannot be shown closes the reposit
   expect(closed.map(c => c.repo)).toEqual(['o/r'])
   expect(closed[0]?.why).toMatch(/^the question about o\/r was dismissed or could not be asked \(.+\)$/)
   expect(r.text).not.toMatch(/not answered in 10 minutes/)
+})
+
+// ---- #843: the overnight check runs first, whatever else is on ----
+
+const QUIET = { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: true }, { repo: 'o/other', mergeDeploys: false }], closed: [] }
+
+test('asleep, a merge is judged before any other mode: with no build on, winding down on, and in a call that also opens a PR', withDeps, async ($, on) => {
+  const { clock } = world(on, night(QUIET))
+  await start($ as never, clock)
+  // Winding down and no build each have their own refusals; the overnight one must come first.
+  await command($ as never, 'winddown')
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight: this would merge a PR, and a merge in o\/r deploys/)
+  await command($ as never, 'nobuild')
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight/)
+  await command($ as never, 'build')
+  // A call that may open a PR is watched on its own route; it is judged all the same.
+  expect(await call($ as never, bash('gh pr create --fill && gh pr merge --auto'))).toMatch(/^Blocked overnight/)
+})
+
+test('asleep, the folder a command runs in decides its repository: a cd or git -C it can follow, and a refusal for one it cannot', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' }, branches: { '/other': 'main' } })
+  await start($ as never, clock)
+  // o/other merges quietly: followed there, the merge runs.
+  expect(await call($ as never, bash('cd /other && gh pr merge 3'))).toBe('ran')
+  // A folder it cannot follow is a repository it cannot tell.
+  expect(await call($ as never, bash('cd "$WHERE" && gh pr merge 3'))).toMatch(/which repository this reaches could not be told/)
+  // /other is on main: a bare push from there reaches the default branch.
+  expect(await call($ as never, bash('git -C /other push'))).toMatch(/^Blocked overnight: this would push main straight to GitHub/)
+  expect(await call($ as never, bash('cd /other && git push'))).toMatch(/^Blocked overnight/)
+  // --git-dir names a repository by its git folder, which this does not follow: refused.
+  expect(await call($ as never, bash('git --git-dir=/elsewhere/.git push'))).toMatch(/^Blocked overnight/)
+  // The session's own folder is on its branch: an ordinary push.
+  expect(await call($ as never, bash('git push'))).toBe('ran')
+})
+
+test('the bedtime questions share one 10 minute wait, so /sleep never blocks longer, and the ones not reached are closed and said', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    open: [{ sessionId: 's2', repoRoot: '/other', extra: { 'scope-modes': { isInteractive: true } } }],
+    origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' },
+    files: { [LISTS_PATH]: listsFile([]) },
+    githubRepos: { default: ['o/r', 'o/other'] },
+    repoAnswer: null,
+  })
+  await start($ as never, clock)
+  let done = false
+  const pending = command($ as never, 'sleep').then(r => {
+    done = true
+    return r
+  })
+  await clock.advance(10 * MIN)
+  expect(done).toBe(true)
+  const r = await pending
+  expect(w.asked.length).toBe(1)
+  const closed = (recordOf(w).repos as { closed: { repo: string; why: string }[] }).closed
+  expect(closed).toEqual([
+    { repo: 'o/r', why: 'the question about o/r was not answered in 10 minutes' },
+    { repo: 'o/other', why: 'o/other was not asked: the 10 minutes for bedtime questions ran out' },
+  ])
+  expect(r.text).toMatch(/o\/other was not asked/)
+})
+
+test('the preparing marker is released however /sleep ends after claiming it, enrolment throwing included', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { registryGarbled: true, files: { [LISTS_PATH]: listsFile([]) } })
+  await start($ as never, clock)
+  let threw = ''
+  try {
+    await command($ as never, 'sleep')
+  } catch (err) {
+    threw = String((err as Error)?.message ?? err)
+  }
+  expect(threw).not.toBe('')
+  // The marker was placed, then released: a later /sleep is not held off by it.
+  expect(w.fileOps.some(r => r[0] === 'ln' && r[2] === `${SLEEP}/preparing`)).toBe(true)
+  expect(`${SLEEP}/preparing` in w.files).toBe(false)
+  expect(CURRENT in w.files).toBe(false)
 })

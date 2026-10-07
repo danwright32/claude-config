@@ -825,7 +825,8 @@ let through.
   and to that decision.
 - At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
-  neither list is asked about, one picker at a time, each waiting 10 minutes. Each option means
+  neither list is asked about, one picker at a time, all of them sharing one 10 minute wait (a
+  repository not reached in it is closed, saying so), so `/sleep` never blocks longer. Each option means
   exactly what it says: "Merge, never deploy" (chosen only where a merge does not itself deploy, as
   the question says; `mergeDeploys: false`), "Hold merges, never deploy" (`mergeDeploys: true`) and
   "Allowed to deploy". An answer is written into the installed file under the answers lock
@@ -853,7 +854,11 @@ let through.
   endpoints, the GraphQL merge mutations, and a query that cannot be read), deploys (no build's own
   deploy tool list, shared, `gh workflow run`, a workflow dispatch, and a package script by name or
   by a body that deploys), and a push reaching a default branch, refused in every repository. The
-  repository is the one a command names (`--repo`, a `repos/` endpoint), else the session's own.
+  repository is the one a command names (`--repo`, a `repos/` endpoint), else the one in the folder
+  it runs in, followed as the #892 push hook does (a `cd` or `pushd` before it, a git `-C`); a folder
+  it cannot follow (a variable, a pattern, `popd`, `--git-dir` or `--work-tree`) is a repository it
+  cannot tell, closed. This check runs first whenever the Mac is asleep, before any other mode's
+  route, so no merge reaches GitHub unjudged.
   The refusal tells Claude to leave the green PR open and note it for the report. Phase 3's bans
   (#834) apply on top; `mayDeploy` lifts only this phase's deploy refusals.
 

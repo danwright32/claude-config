@@ -16,6 +16,8 @@ import {
   repoQuestion,
   type Marker,
   needsOf,
+  dirsOf,
+  type Place,
   nightRepos,
   QUESTION_MS,
   readRepoLists,
@@ -313,10 +315,11 @@ const recordAnswer = async ($: EngineInterface, path: string, repo: string, answ
   }
 }
 
-// One bedtime question, waiting QUESTION_MS. An answer given after the wait still goes into the
-// file, for the nights after this one; tonight that repository stays closed.
+// One bedtime question, waiting `waitMs`, what is left of the questions' shared QUESTION_MS. An
+// answer given after the wait still goes into the file, for the nights after this one; tonight that
+// repository stays closed.
 type Asked = { answer: string } | { unanswered: true } | { failed: string }
-const askRepo = async ($: EngineInterface, repo: string, path: string): Promise<Asked> => {
+const askRepo = async ($: EngineInterface, repo: string, path: string, waitMs: number): Promise<Asked> => {
   let late = false
   const asking: Promise<Asked> = $.ui.ask(repoQuestion(repo), { options: [MERGE_NO_DEPLOY, HOLD_MERGES, MAY_DEPLOY], header: 'Overnight' }).then(
     async (a: string) => {
@@ -326,7 +329,7 @@ const askRepo = async ($: EngineInterface, repo: string, path: string): Promise<
     // Dismissed, or the dialog could not be shown: never read as a question left unanswered (L11).
     (err: unknown) => ({ failed: msg(err) }),
   )
-  const first = await Promise.race([asking, $.clock.sleep(QUESTION_MS).then((): Asked => ({ unanswered: true }))])
+  const first = await Promise.race([asking, $.clock.sleep(waitMs).then((): Asked => ({ unanswered: true }))])
   if ('unanswered' in first) late = true
   return first
 }
@@ -349,6 +352,8 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[]): P
   const path = repoListPath(home)
   let read = await readLists($, path)
   const closed: ClosedRepo[] = []
+  // Every question shares one QUESTION_MS, so /sleep never waits on Dan longer than that in all.
+  const askUntil = (await $.clock.now()) + QUESTION_MS
   for (const repo of repos) {
     if (!('lists' in read)) break
     if (isListed(read.lists, repo)) continue
@@ -356,7 +361,12 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[]): P
       closed.push({ repo, why: `${repo} is on neither list in ${REPO_LIST_FILE}, and nobody was at this session to ask` })
       continue
     }
-    const asked = await askRepo($, repo, path)
+    const left = askUntil - (await $.clock.now())
+    if (left <= 0) {
+      closed.push({ repo, why: `${repo} was not asked: the 10 minutes for bedtime questions ran out` })
+      continue
+    }
+    const asked = await askRepo($, repo, path, left)
     if ('unanswered' in asked) {
       closed.push({ repo, why: `the question about ${repo} was not answered in 10 minutes` })
       continue
@@ -384,41 +394,45 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[]): P
 // What a Bash call would merge, deploy or push to a default branch tonight that the night's lists
 // refuse, with the branch and package scripts read only when the call needs them.
 const overnightRefusal = async ($: EngineInterface, night: unknown, commands: Cmd[]) => {
+  // A call with nothing to refuse even judged at its strictest (no folder, branch or scripts known)
+  // is most calls, and needs nothing read.
+  if (!judgeNight(night, commands, commands.map(() => null))) return undefined
   const needs = needsOf(commands)
-  // A call with nothing to refuse even judged at its strictest (no repository, no branch, unreadable
-  // scripts) is most calls, and needs nothing read.
-  if (!judgeNight(night, commands, { defaultBranch: null, currentBranch: null, scripts: { unreadable: 'not read' }, own: undefined })) return undefined
-  const cwd = await $.session.cwd()
-  let own: string | undefined
-  try {
-    own = slugOf((await $.session.repo())?.remote)
-  } catch {
-    own = undefined
-  }
-  let defaultBranch: string | null = null
-  let currentBranch: string | null = null
-  if (needs.branch) {
-    const head = await run($, ['git', '-C', cwd, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
-    defaultBranch = head.exitCode === 0 ? head.stdout.trim().replace(/^origin\//, '') || null : null
-    const cur = await run($, ['git', '-C', cwd, 'branch', '--show-current'])
-    currentBranch = cur.exitCode === 0 && cur.stdout.trim() ? cur.stdout.trim() : null
-  }
-  let scripts: Scripts = null
-  if (needs.scripts) {
-    if (needs.moves) scripts = { unreadable: 'the call changes folder first' }
-    else {
-      const t = await readText($, `${cwd.replace(/\/+$/, '')}/package.json`)
+  const dirs = dirsOf(commands, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
+  // What each folder a command runs in says: its origin, branches and package scripts, read once.
+  const read = new Map<string, Place>()
+  const placeAt = async (dir: string): Promise<Place> => {
+    const known = read.get(dir)
+    if (known) return known
+    const origin = await run($, ['git', '-C', dir, 'remote', 'get-url', 'origin'])
+    const own = origin.exitCode === 0 ? slugOf(origin.stdout) : undefined
+    let defaultBranch: string | null = null
+    let currentBranch: string | null = null
+    if (needs.branch) {
+      const head = await run($, ['git', '-C', dir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+      defaultBranch = head.exitCode === 0 ? head.stdout.trim().replace(/^origin\//, '') || null : null
+      const cur = await run($, ['git', '-C', dir, 'branch', '--show-current'])
+      currentBranch = cur.exitCode === 0 && cur.stdout.trim() ? cur.stdout.trim() : null
+    }
+    let scripts: Scripts = null
+    if (needs.scripts) {
+      const t = await readText($, `${dir.replace(/\/+$/, '')}/package.json`)
       const bodies = t !== null && typeof t === 'object' ? { unreadable: t.error } : scriptsOf(t)
       if (bodies === null || 'unreadable' in bodies) scripts = bodies as Scripts
       else {
         // Each body read by mod-kit's one reader, as a command line is (L613).
-        const read: Record<string, Cmd[]> = {}
-        for (const [k, body] of Object.entries(bodies)) read[k] = await readCommands($, body as string)
-        scripts = read
+        const parsed: Record<string, Cmd[]> = {}
+        for (const [k, body] of Object.entries(bodies)) parsed[k] = await readCommands($, body as string)
+        scripts = parsed
       }
     }
+    const place: Place = { defaultBranch, currentBranch, scripts, own }
+    read.set(dir, place)
+    return place
   }
-  return judgeNight(night, commands, { defaultBranch, currentBranch, scripts, own })
+  const places: (Place | null)[] = []
+  for (const d of dirs) places.push(d === null ? null : await placeAt(d))
+  return judgeNight(night, commands, places)
 }
 
 // A repository first met after sleep began (on neither list, never asked at bedtime) is noted once a
@@ -565,11 +579,13 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   if ('unreadable' in claim) return `A preparing marker is there but cannot be read (${claim.unreadable}). Nothing changed; /wake clears it.`
   if ('failed' in claim) return `Sleep mode did not start: its preparing marker could not be written (${claim.failed}).`
   const tookOver = claim.tookOver ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
-  const e = await enrol($, self)
-  // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
-  // a question for each worker's repository on neither list, every entry checked with GitHub.
+  // Everything from here to the record is under the marker, and it is released however this ends.
+  let e: Awaited<ReturnType<typeof enrol>>
   let repos: NightRepos
   try {
+    e = await enrol($, self)
+    // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
+    // a question for each worker's repository on neither list, every entry checked with GitHub.
     let ownRoot: string | undefined
     try {
       ownRoot = e.workers.includes(self) ? (await $.session.repo())?.root : undefined
@@ -1337,20 +1353,9 @@ export const register: Register = on => {
     const scope = await scopeOf($)
     // Asleep (#840), read live at each call, keeps every session quiet as away.
     const sleeping = await sleepNow($)
-    // And asks Dan nothing (#841): a question is noted for his morning report and Claude skips it,
-    // in every session, a worker or not. A question any other mod or hook leads Claude to ask
-    // arrives here too, so this is the one place a question to Dan is stopped overnight.
-    if (tool === 'AskUserQuestion' && sleeping.state === 'asleep') {
-      const qs = Array.isArray(input.questions) ? (input.questions as { question?: unknown }[]).map(q => String(q?.question ?? '')) : []
-      const failed = await noteQuestion($, sleeping.record, qs)
-      await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' })
-      return { deny: askedAsleep(failed) }
-    }
-    const away = (await placeOf($)) === 'away' || sleeping.state === 'asleep'
-    if (!scope && !away) return go()
-
     // Asleep, a merge, a deploy or a push to a default branch is judged against the night's lists
-    // (#843). A check that throws refuses, as below (L42).
+    // (#843), first, before any other mode's route or early return, so nothing reaches a merge
+    // unjudged. A check that throws refuses, as below (L42).
     if (sleeping.state === 'asleep' && raw) {
       let over: Awaited<ReturnType<typeof overnightRefusal>>
       try {
@@ -1364,6 +1369,18 @@ export const register: Register = on => {
         return { deny: over.deny }
       }
     }
+
+    // And asks Dan nothing (#841): a question is noted for his morning report and Claude skips it,
+    // in every session, a worker or not. A question any other mod or hook leads Claude to ask
+    // arrives here too, so this is the one place a question to Dan is stopped overnight.
+    if (tool === 'AskUserQuestion' && sleeping.state === 'asleep') {
+      const qs = Array.isArray(input.questions) ? (input.questions as { question?: unknown }[]).map(q => String(q?.question ?? '')) : []
+      const failed = await noteQuestion($, sleeping.record, qs)
+      await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' })
+      return { deny: askedAsleep(failed) }
+    }
+    const away = (await placeOf($)) === 'away' || sleeping.state === 'asleep'
+    if (!scope && !away) return go()
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that
     // fails is skipped, which would run the very thing the mode is on to stop (L42).
