@@ -163,6 +163,8 @@ jobs:
           # runs node directly. Named for the same reason as python3, and held to it by
           # tests/test-ci-environment-tools.sh, which fails on an invoked interpreter not named here.
           node --version
+          # The pinned TypeScript compiler is installed with npm ci before the suites (#895).
+          npm --version
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
           # How many cores this runner actually has (claude-config#210). The HOOK_TESTS_BUDGET
@@ -196,6 +198,12 @@ jobs:
         # exactly what it has to be clean. It runs again inside the step below as one suite among
         # the rest; that is the point, not a duplicate.
         run: bash payload/hooks/test-check-home-paths.sh
+
+      - name: Install the pinned TypeScript compiler
+        # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
+        # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods.sh
+        # needs it here. The lockfile pins the version and carries the linux-x64 binary.
+        run: npm ci --prefix tools/typescript --no-audit --no-fund
 
       - name: Every suite in the repo
         # ONE step, and no list. This used to be four steps naming four directories, which is the

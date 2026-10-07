@@ -56,7 +56,7 @@ esac
 #
 # command:package. bash and perl ship in the base image and are named anyway, so the list can be
 # compared against the workflow's without an exception nobody can see.
-TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps python3:python3 node:nodejs"
+TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps python3:python3 node:nodejs npm:npm"
 
 # The tools the workflow's environment step PROBES, read from the step itself, in ONE place
 # (claude-config#624). Two checks hold that list to something: every probed tool has a package
