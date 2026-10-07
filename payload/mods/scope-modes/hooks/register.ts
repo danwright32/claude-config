@@ -705,22 +705,24 @@ const holdAwake = async ($: EngineInterface, dir: string, untilMs: number, now: 
   const pid = r.stdout.trim()
   if (r.exitCode !== 0 || !/^\d+$/.test(pid)) return `caffeinate could not be started (${r.stderr.trim() || `exit ${r.exitCode}`})`
   try {
-    await $.fs.write(caffeinatePid(dir), pid)
+    // Its number and its time, so wake stops only this hold, never a caffeinate that took the number later.
+    await $.fs.write(caffeinatePid(dir), `${pid} ${secs}`)
   } catch (err) {
     return `caffeinate is holding the Mac awake until the night ends, but its process number could not be kept, so wake will not let it go early (${msg(err)})`
   }
   return null
 }
 
-// Lets the hold go: only the process recorded, and only while it is still caffeinate (L1011, L444).
+// Lets the hold go: only the process recorded, and only while it is still that hold (L1011, L444).
 const releaseAwake = async ($: EngineInterface, dir: string) => {
   const file = caffeinatePid(dir)
   try {
     if (!(await $.fs.exists(file))) return
-    const pid = (await $.fs.read(file)).trim()
-    if (/^\d+$/.test(pid)) {
-      const ps = await run($, ['ps', '-p', pid, '-o', 'comm='])
-      if (ps.exitCode === 0 && /(^|\/)caffeinate$/.test(ps.stdout.trim())) await run($, ['kill', pid])
+    const [pid, secs] = (await $.fs.read(file)).trim().split(' ')
+    if (pid && /^\d+$/.test(pid) && secs && /^\d+$/.test(secs)) {
+      // Only while that number is still the very hold /sleep started: the same command, the same time.
+      const ps = await run($, ['ps', '-p', pid, '-o', 'args='])
+      if (ps.exitCode === 0 && ps.stdout.trim() === `caffeinate -i -t ${secs}`) await run($, ['kill', pid])
     }
     await run($, ['rm', '-f', file])
   } catch (err) {

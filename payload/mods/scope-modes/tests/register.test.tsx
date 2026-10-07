@@ -181,6 +181,8 @@ type Opts = {
   /** What pmset says this Mac is drawing power from (#844). */
   power?: 'ac' | 'battery'
   caffeinateFails?: boolean
+  /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
+  psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
   claimsGate?: Promise<void>
   /** Which writes of the driver's counter fail, counted from 1 (#844). */
@@ -308,7 +310,7 @@ const world = (on: On, o: Opts = {}) => {
       w.caffeinated.push(a[a.length - 1] as string)
       return ok('4242\n')
     }
-    if (cmd === 'ps') return ok('/usr/bin/caffeinate\n')
+    if (cmd === 'ps') return ok(`${o.psArgs ?? `caffeinate -i -t ${w.caffeinated[0] ?? ''}`}\n`)
     if (cmd === 'kill') {
       w.killed.push(a[0] as string)
       return ok()
@@ -1604,9 +1606,18 @@ test('/sleep refuses on battery, and on mains holds caffeinate for the night, le
   const r = await command($ as never, 'sleep')
   expect(r.text).toMatch(/^Sleep mode is on until/)
   expect(w.caffeinated).toEqual([String(Math.ceil((UNTIL - T0) / 1000))])
-  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBe('4242')
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBe(`4242 ${Math.ceil((UNTIL - T0) / 1000)}`)
   await command($ as never, 'wake')
   expect(w.killed).toEqual(['4242'])
+  expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
+})
+
+test('wake never stops another caffeinate that took the hold\'s process number (#844)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { psArgs: 'caffeinate' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  await command($ as never, 'wake')
+  expect(w.killed).toEqual([])
   expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
 })
 
