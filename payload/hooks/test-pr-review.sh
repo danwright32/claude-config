@@ -269,10 +269,10 @@ check "and says it found nothing" "0 findings" "$out"
 # 3c. no review for this head: one is started, and the merge is refused while it runs.
 reset_state
 out="$(FAKE_CLAUDE_SLEEP=3 prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "no review for the head refuses" "1" "$rc"
+check_eq "no review for the head refuses as still to come (3), not as a verdict" "3" "$rc"
 check "and starts one" "started" "$out"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "a running review refuses" "1" "$rc"
+check_eq "a running review refuses, with its own exit code so a waiter can tell it from a verdict" "3" "$rc"
 check "and says it is still running, with its elapsed time" "still running" "$out"
 check "naming its deadline" "30s" "$out"
 wait_final "$HEAD_SHA" || bad "the started review finished"
@@ -678,6 +678,71 @@ check_eq "#591 a generated file with a non-ASCII name is found by its real name"
 # instead: the pipe through tr must not hide that refusal and skip the fallback.
 qold="$(cd "$QREPO" && bash -c "git(){ case \" \$* \" in *' --source '*) echo 'error: unknown option source' >&2; return 129 ;; esac; command git \"\$@\"; }; . '$DIR/lib/ai-review-common.sh'; ar_generated_paths '$QB' '$QH'")"
 check_eq "#591 and on a git with no check-attr --source, the working tree's attributes still find it" "$QNAME" "$qold"
+
+# ===========================================================================================
+# 10. The label and the base are the PULL REQUEST's, never this checkout's (claude-config#852).
+#     Merging Slate #3358 from a primary checkout that another session had on
+#     fix/2210-corrected-number-wins labelled the review with that branch. And a merge run from a
+#     checkout whose origin/main was 130 commits stale diffed from that stale tip, 305 KB against
+#     a 300 KB cap, when the pull request's real base made it a fraction of that.
+# ===========================================================================================
+reset_state
+G checkout -q -b other/session-work
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$HEAD_SHA" --base-ref origin/main)"
+check_not "#852 a review of another head is not labelled with the branch this checkout is on" "other/session-work" "$out"
+check "#852 with no branch named, it is labelled by its own commit" "whole branch repo ${HEAD_SHA:0:7} (" "$out"
+wait_final "$HEAD_SHA" || bad "#852 the unnamed review finished"
+check_eq "#852 and the review file records the commit, not the checkout's branch" "${HEAD_SHA:0:7}" "$(meta "$(final_of "$HEAD_SHA")" branch)"
+reset_state
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$HEAD_SHA" --base-ref origin/main --branch feat/sync)"
+check "#852 a branch named by the caller is the label" "whole branch repo feat/sync (" "$out"
+wait_final "$HEAD_SHA" || bad "#852 the named review finished"
+reset_state
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/pr-head-name"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(FAKE_CLAUDE_OUT='No issues found.' fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#852 the gate still refuses while the review it started runs" "2" "$rc"
+check "#852 the gate labels the review with the pull request's own head branch" "feat/pr-head-name" "$out"
+check_not "#852 never with the branch the merging checkout is on" "other/session-work" "$out"
+wait_final "$HEAD_SHA" || bad "#852 the gate's review finished"
+G checkout -q feat/sync
+G branch -q -D other/session-work
+# The checkout's own branch is still the right label when it IS the head being reviewed.
+reset_state
+CUR_SHA="$(G rev-parse HEAD)"
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --base-ref origin/main)"
+check "#852 the checkout's branch labels a review of its own head" "whole branch repo feat/sync (" "$out"
+wait_final "$CUR_SHA" || bad "#852 the own head review finished"
+
+# The base is fetched from origin, not read from a stale remote tracking ref.
+reset_state
+OTHER="$WORKDIR/other-clone"
+git clone -q "$ORIGIN" "$OTHER" 2>/dev/null
+OG(){ git -C "$OTHER" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+OG checkout -q main
+for n in 1 2 3; do printf 'moved %s\n' "$n" >> "$OTHER/Moved.md"; OG add Moved.md; OG commit -q -m "main moved $n"; done
+OG push -q origin main 2>/dev/null
+NEW_MAIN="$(OG rev-parse HEAD)"
+OG checkout -q -b feat/fresh
+printf 'fresh\n' > "$OTHER/Fresh.md"; OG add Fresh.md; OG commit -q -m fresh
+OG push -q origin feat/fresh 2>/dev/null
+FRESH="$(OG rev-parse HEAD)"
+STALE_MAIN="$(G rev-parse origin/main)"
+[ "$STALE_MAIN" != "$NEW_MAIN" ] && ok || bad "#852 fixture: this checkout's origin/main is stale"
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$FRESH" --base-ref origin/main)"
+check "#852 the diff starts at the base branch's real tip on origin" "${NEW_MAIN:0:7}..${FRESH:0:7}" "$out"
+wait_final "$FRESH" || bad "#852 the fresh review finished"
+check_eq "#852 and the review records that tip as its base" "$NEW_MAIN" "$(meta "$(final_of "$FRESH")" base)"
+check_not "#852 the review never reads Moved.md, which main already holds" "Moved.md" "$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+# When origin cannot be reached the local copy is all there is: the review still runs, and says
+# its base may be stale rather than presenting it as the real one (L93, L11).
+reset_state
+G update-ref refs/remotes/origin/main "$STALE_MAIN"
+mv "$ORIGIN" "$ORIGIN.away"
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$HEAD_SHA" --base-ref origin/main)"
+mv "$ORIGIN.away" "$ORIGIN"
+check "#852 an unreachable origin still starts the review" "started" "$out"
+check "#852 and says the base came from this checkout's copy, which may be stale" "could not fetch origin/main" "$out"
+wait_final "$HEAD_SHA" || bad "#852 the offline review finished: $out"
 
 echo
 echo "passed: $pass, failed: $fail"

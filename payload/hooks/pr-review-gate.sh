@@ -66,9 +66,12 @@ cd "$repo_dir" 2>/dev/null || refuse "Refusing to merge: could not enter $repo_d
 pr="$(mt_pr_number "$command")"
 repo_flag="$(mt_repo_flag "$command")"
 slug="${repo_flag:-$(mt_remote_slug)}"
-envelope="$(mt_pr_view "$pr" "number,headRefOid,baseRefName,url" "$slug" "$repo_flag")"
+envelope="$(mt_pr_view "$pr" "number,headRefOid,baseRefName,headRefName,url" "$slug" "$repo_flag")"
 head="$(printf '%s' "$envelope" | jq -r 'if .found then .view.headRefOid // "" else "" end' 2>/dev/null)"
 base="$(printf '%s' "$envelope" | jq -r 'if .found then .view.baseRefName // "" else "" end' 2>/dev/null)"
+# The pull request's own branch labels the review, never the branch this checkout happens to be on,
+# which on a shared primary checkout is another session's work (claude-config#852).
+head_branch="$(printf '%s' "$envelope" | jq -r 'if .found then .view.headRefName // "" else "" end' 2>/dev/null)"
 if [ -z "$head" ]; then
   err="$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)"
   refuse "Refusing to merge: could not read the head of $(mt_pr_label "$pr") in ${slug:-this repository} from GitHub${err:+ ($err)}, so there is no way to know which lessons review answers for it. Override, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>."
@@ -76,6 +79,7 @@ fi
 
 args=(check --dir "$repo_dir" --sha "$head")
 [ -n "$base" ] && args+=(--base-ref "origin/$base")
+[ -n "$head_branch" ] && args+=(--branch "$head_branch")
 # The read key the findings' refusal carries, if this merge presents it (claude-config#788). The
 # hook does not inherit the command's own assignments, so it is read from the command text and
 # handed on; anything else in the environment is cleared, so only THIS command can present one.
