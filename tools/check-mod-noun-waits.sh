@@ -198,32 +198,47 @@ def _declared_function(f, at, name):
     return None if span is None else (f, at + span[0], at + span[1])
 
 
-def resolve(files, f, at, name):
-    """The function a call of name at position at in f reaches, by scope as the language reads it
-    (#895): the nearest declaration of name in a block enclosing the call, then one at the top level
-    of f, then one at the top level of another of the mod's files. (file, start, end), or None when
-    the declaration found is not a function. A name with no declaration in scope at all is resolved
-    as before, by its first definition anywhere in the mod."""
-    decl = re.compile(r"(?<![\w$.])(?:(?:const|let|var)\s+" + re.escape(name) + r"|function\s*\*?\s*" + re.escape(name) + r")(?![\w$])")
+def _declarations(f, name):
+    """Each place f's code declares name with const, let, var or function."""
+    decl = r"(?<![\w$.])(?:(?:const|let|var)\s+" + re.escape(name) + r"|function\s*\*?\s*" + re.escape(name) + r")(?![\w$])"
+    return [m.start() for m in re.finditer(decl, f.code) if f.kinds[m.start()] == CODE]
+
+
+def visible(files, f, at, name):
+    """The declaration of name that position at in f sees, by scope as the language reads it (#895):
+    the nearest one in a block enclosing at, then one at the top level of f, then one at the top
+    level of another of the mod's files. (file, where it starts); None when the mod declares name
+    only where at cannot see it; False when the mod declares no name of that spelling at all."""
     best = None
-    for m in decl.finditer(f.code):
-        if f.kinds[m.start()] != CODE:
-            continue
-        scope = _scope(f, m.start())
+    for d in _declarations(f, name):
+        scope = _scope(f, d)
         if scope is not None and not (scope[0] < at < scope[1]):
             continue
         depth = -1 if scope is None else scope[0]
         if best is None or depth > best[0]:
-            best = (depth, m.start())
+            best = (depth, d)
     if best is not None:
-        return _declared_function(f, best[1], name)
+        return f, best[1]
+    declared = False
     for g in files:
         if g is f:
             continue
-        for m in decl.finditer(g.code):
-            if g.kinds[m.start()] == CODE and _scope(g, m.start()) is None:
-                return _declared_function(g, m.start(), name)
-    return definition(files, name)
+        for d in _declarations(g, name):
+            declared = True
+            if _scope(g, d) is None:
+                return g, d
+    return None if declared or _declarations(f, name) else False
+
+
+def resolve(files, f, at, name):
+    """The function a call of name at position at in f reaches, by the declaration visible() finds:
+    (file, start, end), or None when that declaration is not a function or the mod declares name only
+    where the call cannot see it (a parameter, say, or another function's local). A name the mod
+    declares nowhere is resolved as before, by its first definition anywhere in the mod."""
+    seen = visible(files, f, at, name)
+    if seen is False:
+        return definition(files, name)
+    return None if seen is None else _declared_function(seen[0], seen[1], name)
 
 
 def constants(files):
@@ -517,10 +532,13 @@ def is_timer(f, a, b, files, consts):
         args = call_args(f.code, a + lead + expr.find("("))
         return args is not None and m.group(1) not in KEYWORDS and helper_timer(files, f, a + lead, m.group(1), args, consts)
     if re.fullmatch(IDENT, expr):
-        for g in files:
-            d = re.search(r"(?<![\w$.])(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code)
-            if d:
-                return judge(g, d.end(), files, consts) is None
+        # The constant this member reads, found by scope as a called helper is (#895).
+        seen = visible(files, f, a + lead, expr)
+        if seen:
+            g, d = seen
+            made = re.match(r"(?:const|let|var)\s+" + re.escape(expr) + r"\s*(?::[^=\n]+)?=(?!=)\s*(?=new\s+Promise\b)", g.code[d:])
+            if made:
+                return judge(g, d + made.end(), files, consts) is None
     return False
 
 
@@ -593,13 +611,17 @@ for entry, folder, man, files in mods:
                 out.append((f, start + m.start()))
         return out
 
-    def calls_in_nouns(name):
-        """Each call a noun's code makes of the mod's function name: (file, position, its arguments)."""
+    def calls_in_nouns(df, dstart, name):
+        """Each call a noun's code makes of the mod's function name declared at dstart in df: (file,
+        position, its arguments). A call reaching a same-named function elsewhere is that one's (#895)."""
         out = []
         for f, start, end, own in regions:
-            if own == name:
+            if own == name and f is df and start == dstart:
                 continue
             for m in re.finditer(r"(?<![\w$.])" + re.escape(name) + r"\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
+                reached = resolve(files, f, start + m.start(), name)
+                if not reached or reached[0] is not df or reached[1] != dstart:
+                    continue
                 args = call_args(f.code, start + m.end() - 1)
                 out.append((f, start + m.start(), args or []))
         return out
@@ -609,10 +631,14 @@ for entry, folder, man, files in mods:
         for at in promises_in(f.code, start, end):
             if (f.rel, at) in judged:
                 continue
+            # A promise inside a helper written within this region is judged as that helper's, by the
+            # calls reaching it, never by this outer one's (#895).
+            if any(g is f and start <= a and b <= end and (a, b) != (start, end) and a <= at < b for g, a, b, _ in regions):
+                continue
             judged.add((f.rel, at))
             if is_raced(f, at):
                 continue
-            calls = calls_in_nouns(name) if name else []
+            calls = calls_in_nouns(f, start, name) if name else []
             fn = function_of(f.code[start:end]) if calls else None
             if calls and fn is not None:
                 # A helper: judged at each call a noun makes, with that call's arguments, and a call
