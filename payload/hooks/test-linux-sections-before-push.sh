@@ -387,6 +387,13 @@ run "$R16" "git push --repo $SHARED_URL"; o19k="$OUT"
 run "$R13" "git push --repo '$BARE'"; o19l="$OUT"
 [ "$RC" -eq 0 ] && check "--repo naming a local bare repo from a claude-config checkout passes" ok \
                 || check "--repo naming a local bare repo from a claude-config checkout passes" "rc=$RC out=$o19l"
+# claude-config through an ssh host alias for a second account, or an ssh URL with a port.
+run "$R16" 'git push git@github.com-work:danwright32/claude-config.git HEAD:main'; o19m="$OUT"
+[ "$RC" -eq 2 ] && check "claude-config through a github.com-<alias> ssh host is refused" ok \
+                || check "claude-config through a github.com-<alias> ssh host is refused" "rc=$RC out=$o19m"
+run "$R16" 'git push ssh://git@github.com:22/danwright32/claude-config.git HEAD:main'; o19n="$OUT"
+[ "$RC" -eq 2 ] && check "claude-config through an ssh URL with a port is refused" ok \
+                || check "claude-config through an ssh URL with a port is refused" "rc=$RC out=$o19n"
 run "$R13" "cd \"\$X\" && git push '$BARE' main"; o19e="$OUT"
 [ "$RC" -eq 0 ] && check "an unresolvable directory pushing to a local path is not the shared repo" ok \
                 || check "an unresolvable directory pushing to a local path is not the shared repo" "rc=$RC out=$o19e"

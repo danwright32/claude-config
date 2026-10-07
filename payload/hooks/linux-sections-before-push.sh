@@ -15,8 +15,9 @@
 # It is repo-agnostic by construction: a repository with no tests/run-on-linux.sh is not this one,
 # and the hook does nothing at all there rather than guessing what to run.
 #
-# Fails OPEN in every direction it cannot see: no docker, no base to diff against, a parse error, a
-# repository this does not apply to. Of the Linux run it blocks on one thing only, something that
+# The Linux run fails OPEN in every direction it cannot see: no docker, no base to diff against, a
+# parse error, a repository this does not apply to. (The default branch rule below is the one
+# exception: it fails closed on a push it cannot place.) Of the Linux run it blocks on one thing only, something that
 # actually ran on Linux and failed: a changed section's own checks, or the prelude they run after,
 # each named as what it is (claude-config#625). A machine that cannot ask the question must not stop
 # a push over it, and the audit says UNMEASURED so that a run nobody made is never mistaken for a
@@ -86,8 +87,10 @@ _ls_unquote(){ local t="$1"; t="${t#[\"\']}"; t="${t%[\"\']}"; printf '%s' "$t";
 _ls_is_shared_url(){   # $1 = a remote URL
   local u
   u="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  # Anchored at BOTH ends: a URL that merely contains the path (a mirror's) is somewhere else.
-  [[ "$u" =~ ^((https?|ssh|git)://([^/@]+@)?|[^/@:]+@)?github\.com[:/]+danwright32/claude-config(\.git)?/*$ ]]
+  # Anchored at BOTH ends: a URL that merely contains the path (a mirror's) is somewhere else. The
+  # host may carry a port, or a github.com-<name> ssh alias, the usual way a second GitHub account
+  # is reached; an alias not starting github.com would need ssh's own config read, and is not.
+  [[ "$u" =~ ^((https?|ssh|git)://([^/@]+@)?|[^/@:]+@)?github\.com(-[a-z0-9._-]+)?(:[0-9]+)?[:/]+danwright32/claude-config(\.git)?/*$ ]]
 }
 # Whether a remote word names a URL or a path rather than a configured remote's name.
 _ls_is_location(){ case "$1" in */*|*:*|.*|'~'*) return 0 ;; esac; return 1; }
