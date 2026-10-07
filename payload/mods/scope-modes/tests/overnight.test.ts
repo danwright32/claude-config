@@ -157,6 +157,17 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     // gh named only inside a message is no gh call.
     expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
   })
+  test('a merge may carry only its method, subject and --auto; --admin is refused (#834 review of 1b556d3)', async () => {
+    expect(await bash('gh pr merge 5 --squash --subject x --body y')).toBeUndefined()
+    expect(await bash('gh pr merge 5 --squash --admin')).toBe('run gh pr merge with --admin')
+    expect(await bash('gh pr merge 5 --auto --squash')).toBeUndefined()
+    expect(await bash('gh pr create --title x --body y --base main --head b --draft')).toBeUndefined()
+    expect(await bash('gh pr create --title x --body y --reviewer someone')).toBe('run gh pr create with --reviewer')
+  })
+  test('any GH_ variable set before gh cannot be resolved (#834 review of 1b556d3)', async () => {
+    expect(await bash('GH_CONFIG_DIR=/tmp/other gh pr merge 5 --squash')).toBe(unresolved)
+    expect(await bash('GH_PATH=/x gh issue comment 5 --body y')).toBe(unresolved)
+  })
   test('gh in command position after a shell keyword or an assignment is gh run directly (#834 review of 98a40f1)', async () => {
     expect(await bash('if gh pr view 5; then gh pr merge 5 --squash; fi')).toBeUndefined()
     expect(await bash('while ! gh pr checks 5; do sleep 30; done; gh pr merge 5 --squash')).toBeUndefined()

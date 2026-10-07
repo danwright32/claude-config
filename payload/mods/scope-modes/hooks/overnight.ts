@@ -155,18 +155,19 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
 // enough for a write (repo delete, release, secret, a workflow run).
 const GH_READ_ACTS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch'])
 const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion'])
-// The writes overnight work needs, each a subcommand and action and the flags it may carry beyond
-// -R or --repo (undefined: any flag the flag table reads for it): a comment on the issue being
-// worked (decision 3), opening, readying and merging its PR (phase 7 judges merges further), and
-// changing that PR's title or body. Nothing is filed overnight, so no issue is created.
+// The writes overnight work needs, each a subcommand and action and the only flags it may carry
+// beyond -R or --repo: a comment on the issue being worked (decision 3), opening, readying and
+// merging its PR (phase 7 judges merges further), and changing that PR's title or body. Nothing is
+// filed overnight, so no issue is created, and no merge skips its checks (--admin); one left to
+// land once its checks pass (--auto) still waits on them.
 const BODY = ['-t', '--title', '-b', '--body', '-F', '--body-file']
-const GH_WRITES: Record<string, string[] | undefined> = {
+const GH_WRITES: Record<string, string[]> = {
   'issue comment': ['-b', '--body', '-F', '--body-file'],
   'pr comment': ['-b', '--body', '-F', '--body-file'],
-  'pr create': undefined,
+  'pr create': [...BODY, '-B', '--base', '-H', '--head', '-d', '--draft', '-f', '--fill', '--fill-first', '--fill-verbose'],
   'pr edit': BODY,
   'pr ready': [],
-  'pr merge': undefined,
+  'pr merge': ['-s', '--squash', '-m', '--merge', '-r', '--rebase', '-t', '--subject', '-b', '--body', '-F', '--body-file', '--match-head-commit', '--auto'],
 }
 // GraphQL mutations that are issue, label and milestone writes, named in the refusal as such; every
 // mutation is refused overnight, each by its exact name.
@@ -199,11 +200,9 @@ const ghVerdict = (words: readonly string[]): GhVerdict => {
   }
   const key = `${sub} ${act}`
   if (!Object.prototype.hasOwnProperty.call(GH_WRITES, key)) return { refuse: `run gh ${key}`.trim() }
-  const allowed = GH_WRITES[key]
-  if (allowed) {
-    const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
-    if (other) return { refuse: `run gh ${key} with ${other.name}` }
-  }
+  const allowed = GH_WRITES[key] as string[]
+  const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
+  if (other) return { refuse: `run gh ${key} with ${other.name}` }
   return { write: a.named }
 }
 
@@ -277,7 +276,9 @@ const unquoted = (raw: string): string => {
 }
 const wrapped = (call: OvernightCall): boolean => {
   const bare = unquoted(call.raw)
-  if (/\bGH_(?:REPO|HOST|TOKEN|ENTERPRISE_TOKEN)\b/.test(bare)) return true
+  // Any GH_ variable set changes what gh does (its repository, host, account or config), as do
+  // gh's own config and token variables under other names.
+  if (/\b(?:GH_\w+|GITHUB_TOKEN|GITHUB_ENTERPRISE_TOKEN)=/.test(bare)) return true
   if (GH_WRAPPED.test(bare)) return true
   // eval and source run text the reader does not open; one that names gh anywhere is a gh call
   // nobody can read.
