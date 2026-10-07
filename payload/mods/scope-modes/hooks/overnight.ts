@@ -176,7 +176,7 @@ const LABELS_ON_PR: Record<string, string[]> = {
   edit: ['--add-label', '--remove-label', '--milestone', '-m', '--remove-milestone'],
   create: ['--label', '-l', '--milestone', '-m'],
 }
-const COMMENT_ENDPOINT = /^repos\/([^/]+)\/([^/]+)\/(?:issues|pulls)\/\d+\/(?:comments|reviews)$/
+const COMMENT_ENDPOINT = /^repos\/([^/]+)\/([^/]+)\/(?:issues|pulls)\/\d+\/comments$/
 const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/
 const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 

@@ -204,6 +204,10 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh api --hostname ghe.example.com -X POST repos/o/r/issues/5/comments -f body=x')).toBe(unresolved)
     expect(await bash('gh api --hostname github.com repos/o/r/issues/5/comments -X POST -f body=x')).toBeUndefined()
   })
+  test('a review through the API is refused as gh pr review is; a PR comment through the API goes ahead (#834 review of f0c7cdc)', async () => {
+    expect(await bash('gh api repos/o/r/pulls/5/reviews -f event=APPROVE')).toBe('call the GitHub API to POST repos/o/r/pulls/5/reviews')
+    expect(await bash('gh api repos/o/r/pulls/5/comments -f body=x -f commit_id=abc -f path=a.ts -F line=3')).toBeUndefined()
+  })
   test('editing or deleting a comment is refused outright', async () => {
     expect(await bash('gh issue comment 5 --delete-last --yes')).toBe('edit or delete a comment')
     expect(await bash('gh pr comment 5 --edit-last --body x')).toBe('edit or delete a comment')
