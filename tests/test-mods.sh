@@ -1501,9 +1501,10 @@ noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looke
   fi
 }
 # Without the compiler the section is UNMEASURED, never a failure, and runs nothing ...
-before=$fail; ran=$pass
-out="$(noun_wait_section "$TMPROOT/no-typescript-here" 2>&1)"
-[ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
+# The section runs in a subshell here, so it reports the counters it ended with: a check it ran
+# would move them there and nowhere else (lessons review of #896).
+out="$(noun_wait_section "$TMPROOT/no-typescript-here" 2>&1; printf 'COUNTS %s %s\n' "$pass" "$fail")"
+printf '%s\n' "$out" | grep -qx "COUNTS $pass $fail" && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
   && ! printf '%s\n' "$out" | grep -q "^FAIL" \
   && check "with no TypeScript compiler the noun wait checks are UNMEASURED, never failed (#895)" ok \
   || check "with no TypeScript compiler the noun wait checks are UNMEASURED, never failed (#895)" "$out"
