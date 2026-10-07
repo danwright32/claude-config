@@ -211,7 +211,7 @@ export const deployWith = (words: string[]): string | undefined => {
   const deployer = DEPLOYERS[cmd]
   if (deployer && deployer(words.slice(1))) return `deploy with ${cmd}`
   if (RUNNERS.has(cmd)) {
-    const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
+    const script = runnerScript(words)
     if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return `run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`
   }
   if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return `run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`

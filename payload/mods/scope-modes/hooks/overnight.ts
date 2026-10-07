@@ -241,9 +241,10 @@ export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.clau
 export const slugOf = (remote: string | undefined | null) => /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec((remote ?? '').trim())?.[1]
 
 /**
- * The shared file with one bedtime answer added, or why it cannot be. "Merge only" records that
- * merging is allowed there (`mergeDeploys: false`): that is what Dan chose, and a repository whose
- * merge deploys is corrected in the file.
+ * The shared file with one bedtime answer added, or why it cannot be. "Merge only" adds the
+ * repository with `mergeDeploys` unsaid, which reads as true (L72): the question cannot tell
+ * whether a merge there deploys, so its merges wait for the morning until the file says
+ * `mergeDeploys: false` (decision 6: where a merge deploys, the green PR stays open).
  */
 export const addAnswer = (text: string | null, repo: string, answer: string): { text: string } | { why: string } => {
   if (answer !== MERGE_ONLY && answer !== MAY_DEPLOY) return { why: `the answer was neither choice ("${answer}")` }
@@ -251,7 +252,7 @@ export const addAnswer = (text: string | null, repo: string, answer: string): { 
   if ('why' in read) return read
   if (isListed(read.lists, repo)) return { why: `${repo} is already listed` }
   const j = JSON.parse(text as string) as Record<string, unknown> & { mergeOnly: unknown[]; mayDeploy: unknown[] }
-  if (answer === MERGE_ONLY) j.mergeOnly.push({ repo, mergeDeploys: false })
+  if (answer === MERGE_ONLY) j.mergeOnly.push({ repo })
   else j.mayDeploy.push(repo)
   return { text: `${JSON.stringify(j, null, 2)}\n` }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Cmd } from '../hooks/nobuild.ts'
-import { actsOf, nightRepos, policyOf, readRepoLists, refusalOf, type Scripts, type Where } from '../hooks/overnight.ts'
+import { actsOf, addAnswer, MAY_DEPLOY, MERGE_ONLY, nightRepos, policyOf, readRepoLists, refusalOf, type Scripts, type Where } from '../hooks/overnight.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 
 // Sleep mode phase 7 (#843). Commands are read by mod-kit's own reader (its byte for byte copy
@@ -41,6 +41,23 @@ describe('the shared lists, read', () => {
     expect(why('{"v":1,"mergeOnly":[]}')).toBe('mods/sleep-repos.json does not hold both lists')
     expect(why('{"v":1,"mergeOnly":[],"mayDeploy":["slate"]}')).toMatch(/mayDeploy entry that is not owner\/name/)
     expect(why('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":"yes"}],"mayDeploy":[]}')).toMatch(/mergeDeploys that is not true or false/)
+  })
+})
+
+describe('a bedtime answer, added to the shared file', () => {
+  const empty = '{"v":1,"mergeOnly":[],"mayDeploy":[]}'
+  test('merge only is added with mergeDeploys unsaid, so its merges wait until the file says a merge does not deploy (L72)', () => {
+    const r = addAnswer(empty, 'o/new', MERGE_ONLY)
+    expect('text' in r && JSON.parse(r.text)).toEqual({ v: 1, mergeOnly: [{ repo: 'o/new' }], mayDeploy: [] })
+    const lists = readRepoLists('text' in r ? r.text : null)
+    expect('lists' in lists && lists.lists.mergeOnly).toEqual([{ repo: 'o/new', mergeDeploys: true }])
+  })
+  test('allowed to deploy goes on mayDeploy; anything else, a repository already listed, and a broken file are refused', () => {
+    const r = addAnswer(empty, 'o/new', MAY_DEPLOY)
+    expect('text' in r && JSON.parse(r.text).mayDeploy).toEqual(['o/new'])
+    expect(addAnswer(empty, 'o/new', 'maybe')).toEqual({ why: 'the answer was neither choice ("maybe")' })
+    expect(addAnswer('{"v":1,"mergeOnly":[],"mayDeploy":["O/New"]}', 'o/new', MERGE_ONLY)).toEqual({ why: 'o/new is already listed' })
+    expect(addAnswer('{"v":1,', 'o/new', MERGE_ONLY)).toEqual({ why: 'mods/sleep-repos.json is not JSON' })
   })
 })
 

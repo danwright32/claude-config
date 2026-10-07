@@ -217,17 +217,19 @@ const recordAnswer = async ($: EngineInterface, path: string, repo: string, answ
 
 // One bedtime question, waiting QUESTION_MS. An answer given after the wait still goes into the
 // file, for the nights after this one; tonight that repository stays closed.
-const askRepo = async ($: EngineInterface, repo: string, path: string): Promise<string | null> => {
+type Asked = { answer: string } | { unanswered: true } | { failed: string }
+const askRepo = async ($: EngineInterface, repo: string, path: string): Promise<Asked> => {
   let late = false
-  const asking = $.ui.ask(`Overnight, may Claude deploy in ${repo}?`, { options: [MERGE_ONLY, MAY_DEPLOY], header: 'Overnight' }).then(
+  const asking: Promise<Asked> = $.ui.ask(`Overnight, may Claude deploy in ${repo}?`, { options: [MERGE_ONLY, MAY_DEPLOY], header: 'Overnight' }).then(
     async (a: string) => {
       if (late) await recordAnswer($, path, repo, a).catch(() => null)
-      return a as string | null
+      return { answer: a }
     },
-    () => null,
+    // Dismissed, or the dialog could not be shown: never read as a question left unanswered (L11).
+    (err: unknown) => ({ failed: msg(err) }),
   )
-  const first = await Promise.race([asking, $.clock.sleep(QUESTION_MS).then(() => null)])
-  if (first === null) late = true
+  const first = await Promise.race([asking, $.clock.sleep(QUESTION_MS).then((): Asked => ({ unanswered: true }))])
+  if ('unanswered' in first) late = true
   return first
 }
 
@@ -256,12 +258,16 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[]): P
       closed.push({ repo, why: `${repo} is on neither list in ${REPO_LIST_FILE}, and nobody was at this session to ask` })
       continue
     }
-    const answer = await askRepo($, repo, path)
-    if (answer === null) {
+    const asked = await askRepo($, repo, path)
+    if ('unanswered' in asked) {
       closed.push({ repo, why: `the question about ${repo} was not answered in 10 minutes` })
       continue
     }
-    const failed = await recordAnswer($, path, repo, answer)
+    if ('failed' in asked) {
+      closed.push({ repo, why: `the question about ${repo} was dismissed or could not be asked (${asked.failed})` })
+      continue
+    }
+    const failed = await recordAnswer($, path, repo, asked.answer)
     if (failed) {
       closed.push({ repo, why: `the answer about ${repo} was not saved: ${failed}` })
       continue

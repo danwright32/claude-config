@@ -825,7 +825,10 @@ let through.
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
   neither list is asked about, one picker at a time ("Merge only, never deploy" or "Allowed to
   deploy"), each waiting 10 minutes; an answer is written into the installed file (whole beside it,
-  then moved), and an answer given after the 10 minutes is still written, for later nights. Every
+  then moved), and an answer given after the 10 minutes is still written, for later nights. "Merge
+  only" is written with `mergeDeploys` unsaid, so that repository's merges also wait for the morning
+  until the file says a merge there does not deploy: the question cannot tell. A question dismissed
+  or not shown closes the repository with its own reason, never as unanswered. Every
   listed entry is then checked with `gh repo view`, under the active account and then each other
   account gh is logged in to (the work repositories are seen only by the work account). The result
   goes into the record as `repos` (`mayDeploy`, `mergeOnly`, `closed` with a reason each, and

@@ -352,6 +352,7 @@ const world = (on: On, o: Opts = {}) => {
       const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
       w.asked.push(q)
       if (q.startsWith('Overnight, may Claude deploy') && o.repoAnswer === null) return new Promise(() => undefined) as never
+      if (q.startsWith('Overnight, may Claude deploy') && o.repoAnswer === '__dismissed') throw new Error('the dialog was dismissed')
       if (q.startsWith('Overnight, may Claude deploy') && o.repoAnswer !== undefined) {
         const a = o.repoAnswer
         return { result: { questions: (e as unknown as { questions: unknown[] }).questions, answers: { [q]: a } }, text: `answered ${a}` } as never
@@ -1528,4 +1529,14 @@ test('a preparing marker left by a session that died is cleared once it is stale
   // Three hours old: left by a session that died, cleared, and sleep starts.
   expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is on until/)
   expect(Object.keys(w.files).some(f => f.includes('/preparing'))).toBe(false)
+})
+
+test('a bedtime question that is dismissed or cannot be shown closes the repository and says so, never as unanswered (L11)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, githubRepos: { default: ['o/r'] }, repoAnswer: '__dismissed' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  const closed = (recordOf(w).repos as { closed: { repo: string; why: string }[] }).closed
+  expect(closed.map(c => c.repo)).toEqual(['o/r'])
+  expect(closed[0]?.why).toMatch(/^the question about o\/r was dismissed or could not be asked \(.+\)$/)
+  expect(r.text).not.toMatch(/not answered in 10 minutes/)
 })
