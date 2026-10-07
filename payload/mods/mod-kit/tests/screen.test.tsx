@@ -32,7 +32,7 @@ const secretGuard: { name: string; register: Register } = {
         if (text.includes('TYPEERR')) throw new TypeError("undefined is not an object (evaluating 'known.some')")
         return text.includes('SECRET') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null
       }
-      return { ...built, secretGuard: { screen } } as never
+      return { ...built, secretGuard: { screen } }
     })
   },
 }
