@@ -122,7 +122,9 @@ for entry in sorted(os.listdir(root)):
                 continue
             path = os.path.join(base, name)
             try:
-                with open(path) as f:
+                # Read as written (CRLF kept, a byte order mark kept), so positions match the
+                # compiler's (#895).
+                with open(path, encoding="utf-8", newline="") as f:
                     files.append(File(entry, os.path.relpath(path, folder), f.read()))
             except (OSError, UnicodeDecodeError) as e:
                 report(f"check-mod-noun-waits: {entry}/{os.path.relpath(path, folder)} cannot be read ({e}), so its nouns were not checked.")

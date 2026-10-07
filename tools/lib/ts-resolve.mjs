@@ -65,11 +65,19 @@ try {
     const project = snapshot.getProject(configs[i]);
     if (!project) throw new Error(`no project for ${mod.files[0] ?? "an empty mod"}`);
     const own = new Map(mod.files.map((f) => [real(f), f]));
-    // A UTF-16 offset in a file's text as a code point offset.
+    // A compiler position in a file as a code point offset into the file as written. The compiler
+    // drops a leading byte order mark from its text (measured on 7.0.2), so its positions run one
+    // UTF-16 unit short of the file's there; Python reads the mark as a character (#895).
     const units = new Map();
+    const raw = (file) => {
+      codePoint(file, 0);
+      return units.get(file);
+    };
     const codePoint = (file, at) => {
       if (!units.has(file)) {
         const text = readFileSync(file, "utf8");
+        const sf = project.program.getSourceFile(file);
+        const shift = text.startsWith("﻿") && !(sf && typeof sf.text === "string" && sf.text.startsWith("﻿")) ? 1 : 0;
         const map = new Int32Array(text.length + 1);
         let cp = 0;
         for (let u = 0; u < text.length; u++) {
@@ -81,9 +89,10 @@ try {
           cp++;
         }
         map[text.length] = cp;
-        units.set(file, { text, map });
+        units.set(file, { text, map, shift });
       }
-      return units.get(file).map[at];
+      const u = units.get(file);
+      return u.map[at + u.shift];
     };
     const target = (symbol) => {
       if (!symbol) return null;
@@ -94,8 +103,9 @@ try {
         const file = own.get(real(d.getSourceFile().fileName));
         if (!file) continue;
         if (d.kind === SyntaxKind.FunctionDeclaration) {
-          const text = readFileSync(file, "utf8");
-          const kw = text.indexOf("function", d.getStart());
+          const { text, shift } = raw(file);
+          // Found in the file as written, then handed back as the compiler's position.
+          const kw = text.indexOf("function", d.getStart() + shift) - shift;
           return ["fn", file, codePoint(file, kw), codePoint(file, d.end)];
         }
         if (d.kind === SyntaxKind.VariableDeclaration) {

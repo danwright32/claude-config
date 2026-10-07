@@ -1383,9 +1383,29 @@ export const register = on => {
   })
 }
 TS
+# A file saved with CRLF line endings and a byte order mark is resolved at the same positions the
+# compiler reports, so its same-named locals are told apart as in any other file (#895).
+mknounmod "$M12W" crlf-local crlfed <<'TS'
+const waiters = new Map()
+function patient(id: string) {
+  const pause = () => new Promise(resolve => waiters.set(id, resolve))
+  return pause()
+}
+function hasty() {
+  const pause = () => Promise.resolve('now')
+  return pause()
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, crlfed: { go: () => hasty() } }
+  })
+}
+TS
+python3 -c 'import sys; p=sys.argv[1]; t=open(p).read(); open(p, "w", newline="").write("\ufeff" + t.replace("\n", "\r\n"))' "$M12W/crlf-local/hooks/register.ts"
 out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-case "$out" in *"33 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"34 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2; do
   printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
     && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1414,7 +1434,7 @@ done
 ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
   && check "a local helper is judged by its own calls, never a same-named one's (#895)" ok \
   || check "a local helper is judged by its own calls, never a same-named one's (#895)" "$out"
-for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl; do
+for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl crlf-local; do
   ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
 done
 # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
