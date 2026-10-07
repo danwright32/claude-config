@@ -1224,3 +1224,25 @@ test('a new sleep begun between reading the old record and moving it is put back
   expect(w.notified).toEqual([])
   expect(w.appended).toEqual([])
 })
+
+test('what is held while asleep is not offered until wake, and then is', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ placeBefore: 'home' }) } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  const heldRows = () => w.bands.filter(b => b.id === 'held')
+  expect(heldRows()).toEqual([])
+  await command($ as never, 'wake')
+  expect((heldRows()[heldRows().length - 1] as Row).lines[1]).toEqual([{ text: 'Open a.pdf in Preview ' }, { button: 'held-1', label: 'Open' }])
+})
+
+test('sleep beginning takes the held card away until wake', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  await call($ as never, bash('open -a Preview a.pdf'))
+  await command($ as never, 'home')
+  expect(w.bands.some(b => b.id === 'held')).toBe(true)
+  const cleared = w.cleared.length
+  await command($ as never, 'sleep')
+  expect(w.cleared.slice(cleared)).toContain('held')
+})

@@ -789,8 +789,9 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   a session that has not said, is not enrolled, and `/sleep` counts them.
 - Asleep keeps every session quiet as away: away's holds apply whatever the session's own place,
   the band shows ASLEEP rather than AWAY beside it, and each prompt tells Claude sleep is on, until
-  when, and whether this session is a worker. Wake puts `placeBefore` back on every session, as
-  `/away` or `/home` would.
+  when, and whether this session is a worker. The held card is not drawn while asleep, even in a
+  session whose own place is home: nobody is at the Mac to press it, and it comes back at wake.
+  Wake puts `placeBefore` back on every session, as `/away` or `/home` would.
 - Ending moves the record aside with `mv` to `ended/<time>-<woke|limit>-<session>.json`, the one
   step that claims it: only the session whose move succeeds acts. At the limit, the first session's
   minute tick moves it, appends a `limit` line to `notes/<generation>.jsonl` (phase 4 builds the

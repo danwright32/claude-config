@@ -169,6 +169,7 @@ const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
   if (failed) $.ui.toast(`Sleep mode ended by itself (${reason}), but the notification could not be sent: ${failed}`)
   await restorePlace($, record)
   await showModes($)
+  await showHeld($)
 }
 
 // Enrols the sessions that work overnight: this one, and every other open session that said at its
@@ -260,6 +261,7 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     await run($, ['rm', '-f', tmp])
   }
   await showModes($)
+  await showHeld($)
   const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
   const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'
   let s = `Sleep mode is on until ${etWhen(record.until)}. Enrolled to work overnight: ${enrolled}.`
@@ -278,6 +280,7 @@ const wake = async ($: EngineInterface): Promise<string | null> => {
   if ('error' in moved) return `Sleep mode could not be turned off (${moved.error}). It is still on.`
   const record = parseRecord(moved.text)
   await showModes($)
+  await showHeld($)
   if (reading.state === 'unreadable') return `Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`
   const placed = await restorePlace($, record)
   return `Sleep mode is off.${record?.since ? ` It began at ${etWhen(record.since)}.` : ''}${placed ? ` ${placed}` : ''}`
@@ -301,9 +304,10 @@ const showModes = async ($: EngineInterface) => {
   }
 }
 
-// The held card shows only at home, where Dan can press it.
+// The held card shows only at home, where Dan can press it, and never while the Mac sleeps (#840):
+// nobody is at it, and what was held waits for wake.
 const showHeld = async ($: EngineInterface) => {
-  const card = (await placeOf($)) === 'home' ? heldCard(await heldOf($)) : undefined
+  const card = (await placeOf($)) === 'home' && !(await isAsleep($)) ? heldCard(await heldOf($)) : undefined
   try {
     if (card) await $.modkit.bandRow(card)
     else await $.modkit.clearBandRow({ mod: MOD, id: 'held' })
@@ -775,7 +779,10 @@ export const register: Register = on => {
         try {
           const reading = await sleepNow($)
           await endIfOver($, reading)
-          if ((reading.state === 'asleep') !== shownAsleep) await showModes($)
+          if ((reading.state === 'asleep') !== shownAsleep) {
+            await showModes($)
+            await showHeld($)
+          }
         } catch (err) {
           $.ui.log(`scope-modes: the sleep check failed: ${msg(err)}`, { to: 'debug' })
         }
