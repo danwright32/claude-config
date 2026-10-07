@@ -938,8 +938,10 @@ check, because Docker's daemon was not running, and it only ever covers sections
 the refusal never sees them. The refusal is judged by where the push goes (#892): the directory it
 runs in (a `git -C`, a `cd` in the same command, or the session's) and the URL of the remote it
 reaches, so a scratch copy of this repository pushing to a local bare remote is left alone, while
-claude-config under any remote name is still refused. A push to `main` whose directory cannot be
-resolved (a variable, or a directory the same command creates) is refused rather than guessed at.
+claude-config under any remote name is still refused. A push that names `main`, or whose branch
+cannot be read (a bare `git push`, `HEAD`), from a directory that cannot be resolved (a variable,
+or a directory the same command creates) is refused rather than guessed at. Remotes are judged by
+their push URL, and only a URL that is GitHub's claude-config counts.
 
 CI's environment step is the list the container is built from, and
 `tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository

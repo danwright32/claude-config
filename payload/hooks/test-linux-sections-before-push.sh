@@ -360,6 +360,22 @@ run "$R13" 'ALLOW_DIRECT_MAIN_PUSH=1 git -C "$X" push origin main'; o19c="$OUT"
 run "$R13" 'cd "$X" && git push origin feature'; o19d="$OUT"
 [ "$RC" -eq 0 ] && check "an unresolvable push to a feature branch is not a push to main" ok \
                 || check "an unresolvable push to a feature branch is not a push to main" "rc=$RC out=$o19d"
+run "$R13" 'cd "$X" && git push'; o19f="$OUT"
+[ "$RC" -eq 2 ] && check "an unresolvable bare push, whose branch cannot be read, is refused" ok \
+                || check "an unresolvable bare push, whose branch cannot be read, is refused" "rc=$RC out=$o19f"
+run "$R13" 'cd "$X" && git push origin HEAD'; o19g="$OUT"
+[ "$RC" -eq 2 ] && check "an unresolvable push of HEAD, whose branch cannot be read, is refused" ok \
+                || check "an unresolvable push of HEAD, whose branch cannot be read, is refused" "rc=$RC out=$o19g"
+# Only a URL that IS GitHub's claude-config counts: one merely containing that text is elsewhere.
+run "$R13" 'cd "$X" && git push https://mirror.example/github.com/danwright32/claude-config main'; o19h="$OUT"
+[ "$RC" -eq 0 ] && check "a URL that only contains the shared path is not the shared repo" ok \
+                || check "a URL that only contains the shared path is not the shared repo" "rc=$RC out=$o19h"
+# A remote that fetches from a local mirror and PUSHES to claude-config is judged by where it pushes.
+git -C "$R16" remote add mirrored "$BARE" 2>/dev/null
+git -C "$R16" remote set-url --push mirrored "$SHARED_URL" 2>/dev/null
+run "$R16" 'git push mirrored main'; o19i="$OUT"
+[ "$RC" -eq 2 ] && check "a remote whose push URL is claude-config is refused, whatever it fetches from" ok \
+                || check "a remote whose push URL is claude-config is refused, whatever it fetches from" "rc=$RC out=$o19i"
 run "$R13" "cd \"\$X\" && git push '$BARE' main"; o19e="$OUT"
 [ "$RC" -eq 0 ] && check "an unresolvable directory pushing to a local path is not the shared repo" ok \
                 || check "an unresolvable directory pushing to a local path is not the shared repo" "rc=$RC out=$o19e"

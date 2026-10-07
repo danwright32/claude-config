@@ -86,7 +86,8 @@ _ls_unquote(){ local t="$1"; t="${t#[\"\']}"; t="${t%[\"\']}"; printf '%s' "$t";
 _ls_is_shared_url(){   # $1 = a remote URL
   local u
   u="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  [[ "$u" =~ github\.com[:/]+danwright32/claude-config(\.git)?/*$ ]]
+  # Anchored at BOTH ends: a URL that merely contains the path (a mirror's) is somewhere else.
+  [[ "$u" =~ ^((https?|ssh|git)://([^/@]+@)?|[^/@:]+@)?github\.com[:/]+danwright32/claude-config(\.git)?/*$ ]]
 }
 # Whether a remote word names a URL or a path rather than a configured remote's name.
 _ls_is_location(){ case "$1" in */*|*:*|.*|'~'*) return 0 ;; esac; return 1; }
@@ -104,7 +105,8 @@ _ls_default_remote(){
 # branch being ALL for --all, --mirror, --branches and a pattern refspec. Read from the push
 # segment's own words: explicit refspecs first, then where a bare `git push` goes (@{push}), then the
 # current branch. $2 = words: read the words alone and call no git at all, for a push whose
-# repository could not be resolved, so a destination only git could answer is left out.
+# repository could not be resolved, where a destination only git could answer (a bare push, HEAD)
+# is printed as ? because it may be the default branch.
 _ls_push_dests(){   # $1 = command  $2 = repo | words
   local segs seg mode="${2:-repo}"
   segs="$(ps__shell_segments "$1")" || segs="$(printf '%s' "$1" | sed -E 's/(&&|\|\||;|\|)/\n/g' | tr '\n' '\036')"
@@ -140,7 +142,7 @@ _ls_push_dests(){   # $1 = command  $2 = repo | words
         t="${t#+}"
         case "$t" in *:*) d="${t#*:}" ;; *) d="$t" ;; esac
         if [ -z "$d" ] || [ "$d" = "HEAD" ]; then
-          [ "$mode" = words ] && continue
+          if [ "$mode" = words ]; then printf '%s\037?\n' "$remote"; continue; fi
           d="$(_ls_cur_branch)"
         fi
         d="${d#refs/heads/}"
@@ -148,8 +150,10 @@ _ls_push_dests(){   # $1 = command  $2 = repo | words
         case "$d" in *'*'*) d="ALL" ;; esac
         printf '%s\037%s\n' "$remote" "$d"
       done
-    elif [ "$tags" -eq 1 ] || [ "$all" -eq 1 ] || [ "$mode" = words ]; then
+    elif [ "$tags" -eq 1 ] || [ "$all" -eq 1 ]; then
       :
+    elif [ "$mode" = words ]; then
+      printf '%s\037?\n' "$remote"
     else
       d="$(git rev-parse --abbrev-ref --symbolic-full-name '@{push}' 2>/dev/null)"
       if [ -n "$d" ]; then d="${d#*/}"; else d="$(_ls_cur_branch)"; fi
@@ -167,7 +171,13 @@ if ! ps_has_override "$cmd" ALLOW_DIRECT_MAIN_PUSH; then
       [ -n "$_ls_d" ] || continue
       case "$_ls_d" in ALL|"$_ls_def") ;; *) continue ;; esac
       [ -n "$_ls_r" ] || _ls_r="$(_ls_default_remote)"
-      _ls_url="$(git ls-remote --get-url "$_ls_r" 2>/dev/null)"
+      # Where the push GOES: a configured remote's push URL (pushurl and pushInsteadOf applied),
+      # which can differ from the one it fetches from; otherwise the word as git expands it.
+      if git config --get "remote.$_ls_r.url" >/dev/null 2>&1; then
+        _ls_url="$(git remote get-url --push "$_ls_r" 2>/dev/null)"
+      else
+        _ls_url="$(git ls-remote --get-url "$_ls_r" 2>/dev/null)"
+      fi
       _ls_is_shared_url "${_ls_url:-$_ls_r}" && _ls_hit=1
     done <<DESTS
 $(_ls_push_dests "$cmd" repo)
@@ -179,7 +189,7 @@ DESTS
     # refused, never replaced by a nearby one).
     _ls_def="main"
     while IFS=$'\x1f' read -r _ls_r _ls_d; do
-      case "$_ls_d" in ALL|main|master) ;; *) continue ;; esac
+      case "$_ls_d" in ALL|main|master|'?') ;; *) continue ;; esac
       if _ls_is_location "$_ls_r"; then _ls_is_shared_url "$_ls_r" && _ls_hit=1
       else _ls_hit=1; _ls_blind=1; fi
     done <<DESTS
@@ -188,7 +198,7 @@ DESTS
   fi
   if [ -n "$_ls_hit" ] && [ -n "$_ls_blind" ]; then
     {
-      echo "PUSH BLOCKED: this pushes to $_ls_def, and the hook could not tell which repository it pushes from."
+      echo "PUSH BLOCKED: this may push to $_ls_def, and the hook could not tell which repository it pushes from."
       echo ""
       echo "The command runs the push somewhere that is not a git work tree yet, or names it through"
       echo "a variable, so it cannot be checked against the shared claude-config repository, where a"
