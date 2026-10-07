@@ -1431,10 +1431,24 @@ export const register = on => {
   })
 }
 TS
+  # A noun method given as a shorthand property (`{ wait }`) is the function of that name, followed
+  # like a call (#895, lessons review).
+  mknounmod "$M12W" shorthand-method short <<'TS'
+const waiters = new Map()
+function wait({ id }: { id: string }) {
+  return new Promise(resolve => waiters.set(id, resolve))
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, short: { wait } }
+  })
+}
+TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"36 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
-  for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2; do
+  case "$out" in *"37 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
       || check "a wait settled only by a later event is named at ${at%%/*}'s line" "$out"
@@ -1466,7 +1480,7 @@ TS
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends; do rm -rf "${M12W:?}/$m"; done
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method; do rm -rf "${M12W:?}/$m"; done
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
     || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
@@ -1501,10 +1515,12 @@ noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looke
   fi
 }
 # Without the compiler the section is UNMEASURED, never a failure, and runs nothing ...
-# The section runs in a subshell here, so it reports the counters it ended with: a check it ran
-# would move them there and nowhere else (lessons review of #896).
-out="$(noun_wait_section "$TMPROOT/no-typescript-here" 2>&1; printf 'COUNTS %s %s\n' "$pass" "$fail")"
-printf '%s\n' "$out" | grep -qx "COUNTS $pass $fail" && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
+# Run in this shell, never a $(...) subshell, so a check it ran would move these very counters (lessons
+# review of #896); its output goes to a file to be read.
+before=$fail; ran=$pass
+noun_wait_section "$TMPROOT/no-typescript-here" > "$TMPROOT/noun-waits-unmeasured.out" 2>&1
+out="$(cat "$TMPROOT/noun-waits-unmeasured.out")"
+[ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
   && ! printf '%s\n' "$out" | grep -q "^FAIL" \
   && check "with no TypeScript compiler the noun wait checks are UNMEASURED, never failed (#895)" ok \
   || check "with no TypeScript compiler the noun wait checks are UNMEASURED, never failed (#895)" "$out"

@@ -583,6 +583,14 @@ for entry, folder, man, files in mods:
                 found = resolve(files, f, start + m.start(), m.group(1))
                 if found:
                     todo.append((*found, m.group(1)))
+        # A function handed over as a shorthand property (`{ wait }`, a noun's method) is that
+        # function's code too, as the compiler resolves the name (#895).
+        for at, (role, _) in f.refs.items():
+            if role == "short" and start <= at < end:
+                short = re.match(IDENT, f.code[at:])
+                found = resolve(files, f, at, short.group(0)) if short else None
+                if found:
+                    todo.append((*found, short.group(0)))
 
     # Each member of a Promise.race a noun's code writes, raced against a timer under 10 s (the limit
     # measured on 2026-10-05).

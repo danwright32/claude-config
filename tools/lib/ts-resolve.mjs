@@ -5,7 +5,8 @@
 // Input on stdin: {"mods": [{"files": ["/abs/a.ts", ...]}, ...]}, one project per mod, so a name is
 // never resolved into another mod. Output on stdout: {"/abs/a.ts": [[position, role, target], ...]}
 // with positions in code points (the unit Python indexes a str by, where the compiler counts UTF-16
-// units). role is "call" (the callee of a call), "decl" (the name a declaration gives) or "ref".
+// units). role is "call" (the callee of a call), "decl" (the name a declaration gives), "short" (a
+// shorthand property, `{ wait }`, whose target is the value it reads) or "ref".
 // target is null when the checker finds no symbol, ["fn", file, start, end] for a function declared
 // in the mod (start at its `function` keyword, or the `const`, `let` or `var` of its declaration),
 // ["value", file, start, end] for any other variable the mod declares, and ["other"] for anything
@@ -30,6 +31,16 @@ const load = (...parts) => import(pathToFileURL(join(base, ...parts)).href);
 const { API } = await load("api", "sync", "api.js");
 const { SyntaxKind } = await load("ast", "index.js");
 const { SymbolFlags } = await load("enums", "symbolFlags.js");
+// The kinds whose name an identifier gives, rather than reads: only these make it a "decl".
+const DECLARATIONS = new Set([
+  SyntaxKind.VariableDeclaration, SyntaxKind.FunctionDeclaration, SyntaxKind.FunctionExpression,
+  SyntaxKind.Parameter, SyntaxKind.BindingElement, SyntaxKind.ClassDeclaration, SyntaxKind.ClassExpression,
+  SyntaxKind.MethodDeclaration, SyntaxKind.PropertyDeclaration, SyntaxKind.PropertySignature,
+  SyntaxKind.PropertyAssignment, SyntaxKind.GetAccessor, SyntaxKind.SetAccessor, SyntaxKind.InterfaceDeclaration,
+  SyntaxKind.TypeAliasDeclaration, SyntaxKind.EnumDeclaration, SyntaxKind.EnumMember, SyntaxKind.ModuleDeclaration,
+  SyntaxKind.ImportClause, SyntaxKind.ImportSpecifier, SyntaxKind.NamespaceImport, SyntaxKind.ExportSpecifier,
+  SyntaxKind.TypeParameter,
+].filter((k) => k !== undefined));
 
 const input = JSON.parse(readFileSync(0, "utf8"));
 const real = (p) => {
@@ -138,7 +149,12 @@ try {
       const symbols = ids.length ? project.checker.getSymbolAtPosition(file, ids.map((n) => n.getStart())) : [];
       out[file] = ids.map((n, i) => {
         const p = n.parent;
-        const role = p && p.name === n && p.kind !== SyntaxKind.PropertyAccessExpression ? "decl"
+        // A shorthand property (`{ wait }`) reads the value of that name, so it is a reference to
+        // the variable or function, resolved through the checker's own lookup for it.
+        if (p && p.kind === SyntaxKind.ShorthandPropertyAssignment && p.name === n) {
+          return [codePoint(file, n.getStart()), "short", target(project.checker.getShorthandAssignmentValueSymbol(p))];
+        }
+        const role = p && p.name === n && DECLARATIONS.has(p.kind) ? "decl"
           : p && (p.kind === SyntaxKind.CallExpression || p.kind === SyntaxKind.NewExpression) && p.expression === n ? "call"
           : "ref";
         return [codePoint(file, n.getStart()), role, target(symbols[i])];
