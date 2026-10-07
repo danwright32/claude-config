@@ -24,7 +24,6 @@ import {
   REPO_LIST_FILE,
   repoListPath,
   scriptsOf,
-  slugOf,
   type ClosedRepo,
   type NightRepos,
   type Scripts,
@@ -245,7 +244,11 @@ const resolves = async ($: EngineInterface, repo: string): Promise<string | null
     if (tok.exitCode !== 0 || !tok.stdout.trim()) continue
     if ((await run($, view, RUN_MS, { GH_TOKEN: tok.stdout.trim() })).exitCode === 0) return null
   }
-  return `GitHub does not know ${repo} under any account gh is logged in to (${first.stderr.trim().split('\n')[0] || `gh exited ${first.exitCode}`})`
+  // Only gh's own not found answer says GitHub does not know it; anything else (no network, a rate
+  // limit, a token gh could not use) is a check that could not be made, said as such (L11).
+  const said = first.stderr.trim().split('\n')[0] || `gh exited ${first.exitCode}`
+  if (!/Could not resolve to a Repository/i.test(first.stderr)) return `${repo} could not be checked with GitHub (${said})`
+  return `GitHub does not know ${repo} under any account gh is logged in to (${said})`
 }
 
 // A marker file (the preparing marker, the answers lock), placed whole: written beside itself

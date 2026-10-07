@@ -174,6 +174,8 @@ type Opts = {
   githubRepos?: Record<string, string[]>
   /** Dan's bedtime answer, or none: the question waits until the test moves the clock. */
   repoAnswer?: string | null
+  /** gh repo view fails for a reason other than the repository being unknown (#843): its stderr. */
+  ghRepoViewFails?: string
   /** The session registry answers with no lists at all (#843). */
   registryGarbled?: boolean
   /** The branch checked out in each folder other than /repo (#843). */
@@ -359,6 +361,7 @@ const world = (on: On, o: Opts = {}) => {
       return v && 'throws' in v ? fail(1, v.throws) : ok(JSON.stringify(v))
     }
     // Sleep mode phase 7 (#843): each folder's origin, GitHub's answer to a repo view by account, and gh's accounts.
+    if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view' && o.ghRepoViewFails) return fail(1, o.ghRepoViewFails)
     if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view') {
       const token = e.init?.env?.GH_TOKEN
       const seen = token ? (o.githubRepos?.[token] ?? []) : (o.githubRepos?.default ?? [])
@@ -1626,6 +1629,14 @@ test('a lists file that does not parse closes every repository, the listed ones 
   expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('and mods/sleep-repos.json is not JSON, so tonight it neither merges nor deploys'))
 })
 
+test('an entry that could not be checked with GitHub is closed, and said as not checked, never as unknown (L11)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]) }, githubRepos: { default: ['o/r'], work: [] }, ghRepoViewFails: 'error connecting to api.github.com' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  const closed = (recordOf(w).repos as { closed: { repo: string; why: string }[] }).closed
+  expect(closed).toEqual([{ repo: 'o/r', why: 'o/r could not be checked with GitHub (error connecting to api.github.com)' }])
+})
+
 test('an entry GitHub does not know under any account is closed for the night', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/typo', mergeDeploys: false }]) }, githubRepos: { default: ['o/r'], work: [] } })
   await start($ as never, clock)
@@ -1795,6 +1806,9 @@ test('asleep, the folder a command runs in decides its repository: a cd or git -
   expect(await call($ as never, bash('cd "$WHERE" && gh pr merge 3'))).toMatch(/which repository this reaches could not be told/)
   // /other is on main: a bare push from there reaches the default branch.
   expect(await call($ as never, bash('git -C /other push'))).toMatch(/^Blocked overnight: this would push main straight to GitHub/)
+  // git's own -c takes a value, which never hides the -C after it.
+  expect(await call($ as never, bash('git -c core.pager=cat -C /other push'))).toMatch(/^Blocked overnight: this would push main straight to GitHub/)
+  expect(await call($ as never, bash('git -c x=y --work-tree /w push'))).toMatch(/^Blocked overnight/)
   expect(await call($ as never, bash('cd /other && git push'))).toMatch(/^Blocked overnight/)
   // --git-dir names a repository by its git folder, which this does not follow: refused.
   expect(await call($ as never, bash('git --git-dir=/elsewhere/.git push'))).toMatch(/^Blocked overnight/)

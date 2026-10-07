@@ -274,8 +274,6 @@ export const readMarker = (text: string): Marker | { unreadable: string } => {
 /** The shared file as installed with the rest of the payload on both Macs. */
 export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.claude/${REPO_LIST_FILE}`
 
-/** owner/name from an origin remote, ssh or https, or undefined. */
-export const slugOf = (remote: string | undefined | null) => /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec((remote ?? '').trim())?.[1]
 
 /** The shared file with one bedtime answer added, or why it cannot be. */
 export const addAnswer = (text: string | null, repo: string, answer: string): { text: string } | { why: string } => {
@@ -324,13 +322,13 @@ export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | nu
     else if (cmd === 'cd' || cmd === 'pushd') dir = resolveDir(c.words.slice(1).find(a => !a.startsWith('-') || a === '-'), dir, home)
     else if (cmd === 'popd') dir = null
     if (cmd === 'git') {
-      let here = dir
-      for (let i = 1; i < c.words.length; i++) {
-        const w = c.words[i] as string
-        if (w === '-C') here = here === null ? null : resolveDir(c.words[++i] ?? '$', here, home)
-        else if (/^--(?:git-dir|work-tree)(?:=|$)/.test(w)) here = null
-        else if (!w.startsWith('-')) break
-      }
+      // git's own options, before its subcommand, as mod-kit's git reader reads them (each option
+      // that takes a value, -c included, takes it): its -C moves the folder; --git-dir and
+      // --work-tree name a repository apart from any folder; more than one -C is not followed.
+      const globals = c.git ? c.words.slice(1, c.words.length - c.git.args.length - (c.git.sub === undefined ? 0 : 1)) : c.words.slice(1)
+      let here: string | null = dir
+      if (!c.git || globals.filter(w => w === '-C').length > 1 || globals.some(w => /^--(?:git-dir|work-tree)(?:=|$)/.test(w))) here = null
+      else if (c.git.dir !== undefined) here = here === null ? null : resolveDir(c.git.dir, here, home)
       out.push(here)
       continue
     }

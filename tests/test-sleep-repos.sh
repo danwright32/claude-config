@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for payload/mods/sleep-repos.json, sleep mode's per repository merge and deploy lists
-# (claude-config#843). The mod reads it with readRepoLists (mods/scope-modes/hooks/overnight.ts),
+# (claude-config#843). The mod reads it with readRepoLists (mods/scope-modes/hooks/mergedeploy.ts),
 # which closes every repository for the night when the file does not read, so a shipped file that
 # does not parse would silently stop every overnight merge. This holds the shipped file to the same
 # shape that reader requires, and to Dan's decision 6 (2026-10-06): trypennie, Bidspoke and Slate
