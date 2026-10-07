@@ -49,6 +49,82 @@ for d in "${mods[@]}"; do
   fi
 done
 
+# No mod hooks an event Claude Code's built-in security default sends past the user tier every mod
+# loads in (#875). Seated outermost for a Team or Enterprise organization (both Macs), it routes each
+# of these straight to the tier beneath, so a mod's hook on one never runs, and nothing says so but a
+# debug log line. Its own code in 2.1.292: e("classic.*",(n,o,t)=>t.to(o,"append")), and the same for
+# each name below. A hook that cannot move yet is listed by mod and event in BYPASS_KNOWN with the
+# issue deciding it. Filesystem only, so it holds on CI's runner too; where a claude binary is found,
+# the list is compared with that build's own routes below.
+BYPASSED_ROUTES="attribution.text
+classic.*
+prompt.compose
+prompt.context
+prompt.section
+settings.read
+skill.prompt"
+BYPASS_KNOWN="${CHECK_MODS_BYPASS_KNOWN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sec-default-bypassed-hooks.tsv}"
+is_bypassed(){   # $1 = event name
+  local r
+  # Read line by line, never word split, where classic.* would be expanded as a file pattern.
+  while IFS= read -r r; do
+    # Unquoted on purpose: classic.* is a pattern, and a dot in the others is a dot.
+    # shellcheck disable=SC2254
+    case "$1" in $r) return 0 ;; esac
+  done <<< "$BYPASSED_ROUTES"
+  return 1
+}
+# Every event a mod's own hook files register, one per line: on('<event>' in command position, in
+# hooks/ outside its tests, with whole comment lines taken out first so a comment naming one is not
+# one. Only a line that IS a comment is taken out: a // later in a line may be inside a string (a
+# URL), and cutting there would hide a hook after it (lessons review of #879). A trailing comment
+# naming an event is read as a hook, which fails loudly rather than passing a dead one.
+events_of(){   # $1 = mod dir
+  perl -MFile::Find -e '
+    my @f;
+    find(sub { push @f, $File::Find::name if -f $_ && /\.tsx?$/ && !/\.test\.tsx?$/ }, $ARGV[0]) if -d $ARGV[0];
+    for my $f (sort @f) {
+      open(my $h, "<", $f) or die "cannot read $f: $!\n";
+      local $/; my $s = <$h>; close $h;
+      $s =~ s{^[ \t]*//[^\n]*}{}mg;
+      while ($s =~ /(?<![\w.\$])on\(\s*[\x27"]([A-Za-z][\w.*]*)[\x27"]/g) { print "$1\n" }
+    }' "$1/hooks"
+}
+known_bypass=""
+if [ -f "$BYPASS_KNOWN" ]; then
+  # Each line: mod, event, and why it stays, which begins with the issue deciding it (L675, L129).
+  bad_known="$(awk -F'\t' '!/^#/ && NF > 0 && (NF < 3 || $3 !~ /^#[0-9]+:? [A-Za-z]/) { print NR }' "$BYPASS_KNOWN" | paste -sd, -)"
+  if [ -n "$bad_known" ]; then
+    echo "check-mods: $BYPASS_KNOWN line(s) $bad_known need a mod, an event and a reason that begins with the issue deciding it (#123: why)"
+    failed=1
+  fi
+  known_bypass="$(awk -F'\t' '!/^#/ && NF >= 2 { print $1 "\t" $2 }' "$BYPASS_KNOWN")"
+fi
+for d in "${mods[@]}"; do
+  name="$(basename "$d")"
+  if ! evs="$(events_of "$d")"; then
+    echo "check-mods: $name: could not read its hook files to see which events they register (the reason is above), so it was stopped"
+    failed=1
+    continue
+  fi
+  # Read line by line, never word split: classic.* would be expanded as a file pattern.
+  while IFS= read -r ev; do
+    [ -n "$ev" ] || continue
+    is_bypassed "$ev" || continue
+    if printf '%s\n' "$known_bypass" | grep -qxF "$name	$ev"; then continue; fi
+    echo "check-mods: $name hooks $ev, which Claude Code's built-in security default sends past the user tier mods load in, so it never runs (#875). Move it to an event that reaches a mod (tool.check for a PreToolUse check, turn.complete, command.run, session.end), or list it in $BYPASS_KNOWN with the issue deciding it."
+    failed=1
+  done <<< "$(printf '%s\n' "$evs" | LC_ALL=C sort -u)"
+  # A listed hook this mod no longer registers: the line comes down, or it would excuse the next one.
+  while IFS= read -r ev; do
+    [ -n "$ev" ] || continue
+    if ! printf '%s\n' "$evs" | grep -qxF "$ev"; then
+      echo "check-mods: $name no longer hooks $ev, so its line in $BYPASS_KNOWN must come down."
+      failed=1
+    fi
+  done <<< "$(printf '%s\n' "$known_bypass" | awk -F'\t' -v m="$name" '$1 == m { print $2 }')"
+done
+
 bin="${CLAUDE_BIN:-}"
 if [ -z "$bin" ]; then
   bin="$(command -v claude 2>/dev/null || true)"
@@ -60,6 +136,27 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   # A missing tsconfig.json is a definite failure, which outranks the unmeasured rest.
   [ "$failed" -eq 1 ] && exit 1
   exit 3
+fi
+
+# The list of bypassed events above, against the routes this build's security default really has
+# (#875, L41): each is the literal e("<event>",(n,o,t)=>t.to(o,"append")) in its code, whatever the
+# minifier names its variables. A build that adds one would leave a new dead hook unflagged, and one
+# that drops one would flag a hook that now runs, so either difference fails. Read from the file the
+# command resolves to; a file holding no route at all (a stub, another build layout) is said, not
+# passed.
+bin_file="$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")"
+routes_now="$(grep -a -o -E '[A-Za-z_$]\("[A-Za-z.*]+",\([A-Za-z_$]+,[A-Za-z_$]+,[A-Za-z_$]+\)=>[A-Za-z_$]+\.to\([A-Za-z_$]+,"append"\)\)' "$bin_file" 2>/dev/null \
+  | sed -E 's/^.\("([^"]+)".*/\1/' | LC_ALL=C sort -u || true)"
+if [ -z "$routes_now" ]; then
+  echo "check-mods: UNMEASURED: no security default route was found in $bin_file, so the list of bypassed events was not compared with this build. The list in tools/check-mods.sh still applies." >&2
+else
+  routes_list="$(printf '%s\n' "$BYPASSED_ROUTES" | LC_ALL=C sort -u)"
+  added="$(LC_ALL=C comm -13 <(printf '%s\n' "$routes_list") <(printf '%s\n' "$routes_now") | paste -sd' ' -)"
+  dropped="$(LC_ALL=C comm -23 <(printf '%s\n' "$routes_list") <(printf '%s\n' "$routes_now") | paste -sd' ' -)"
+  if [ -n "$added$dropped" ]; then
+    echo "check-mods: this Claude Code build's security default routes past the user tier: $(printf '%s\n' "$routes_now" | paste -sd' ' -). The list in tools/check-mods.sh differs${added:+ (not listed: $added)}${dropped:+ (listed, no longer routed: $dropped)}. Update BYPASSED_ROUTES, then check every mod hook on the events that changed."
+    failed=1
+  fi
 fi
 
 # The TypeScript compiler for the strict type check (#758): TSC_BIN, else the pinned one in

@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVAL_MS } from '../hooks/rules.ts'
@@ -68,7 +68,20 @@ const guard: { name: string; register: Register } = {
 // now adds "a test answers it with on('session.append', ...)", but measured again on 2026-10-05
 // (#764) a test's hook on 'session.append', with or without { door: 'note' }, is never called and
 // the call still rejects with "no implementation for session.append", so this stands.
-const withKit = { plugins: [modKit, guard] }
+// A stand-in for Claude Code's built-in security default (#875), loaded in every test so none can
+// pass on a hook that never runs. Seated outermost for a Team or Enterprise organization, it sends
+// every classic hook event past the tier a person's own plugins load in. This is its own code for
+// that event, copied from the 2.1.292 binary: `e("classic.*",(n,o,t)=>t.to(o,"append"))`. A
+// headless debug run on 2026-10-06 logged it for this mod on every tool call:
+// "ask-before-saving+...: classic.PreToolUse bypassed by cc-plugin-sec-default (tier user); beneath runs".
+const secDefault: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'sec-default-stand-in',
+  tier: 'prepend',
+  register: on => {
+    on('classic.*', ($, e, next) => next.to(e, 'append'))
+  },
+}
+const withKit = { plugins: [secDefault, modKit, guard] }
 const notesOf = (w: { toasts: string[] }) =>
   w.toasts
     .filter(t => t.startsWith('Claude was not told: '))
@@ -88,7 +101,7 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // `auto` stands for auto mode (#738): its classifier refuses a call no model request asked for, which
 // a call a plugin makes for itself is. `ownClock` leaves the clock to the test.
 // `gate` holds the guard's first read of its gate until `opened` settles, calling `reached` as it starts.
-const world = (on: On, init: { files?: Record<string, string>; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
@@ -137,8 +150,16 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: t } as never
   })
-  on('tool.call', ($, e, next) => {
-    const { tool, tool_use_id: _id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
+  // Core, standing in: the engine decides whether the call may run (the tool.check chain over every
+  // plugin, with the call's id and its arguments as the permission decision reads them), then runs
+  // it. The harness raises classic.PreToolUse above this hook as a session does, but not tool.check,
+  // so it is raised here. Beneath every plugin's tool.check hook the rules allow the call.
+  on('tool.check', () => ({ decision: 'allow' }))
+  on('tool.call', async ($, e, next) => {
+    const { tool, tool_use_id: id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
+    const verdict = await engine.tool.check({ tool: String(tool), input, ...(id === undefined ? {} : { tool_use_id: String(id) }) } as never)
+    // A refusal there reaches the call as core reports it, an errored result whose text is the reason.
+    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
     if (tool === 'AskUserQuestion') {
       if (dialog.fails) throw new Error('the dialog broke')
       const a = input as unknown as Asked
@@ -174,7 +195,7 @@ type Caller = { tool: { call: (e: never) => Promise<unknown> } }
 type Result = { deny?: string; text?: string; isError?: boolean; context?: readonly string[] }
 let calls = 0
 const call = async ($: Caller, input: Record<string, unknown>) => (await $.tool.call({ tool_use_id: `t${++calls}`, ...input } as never)) as Result
-// What Claude reads of a refused call: the refusal, whether a tool.call hook or the classic hook gave it.
+// What Claude reads of a refused call: the refusal, whether a tool.call hook or the tool.check hook gave it.
 const refusalOf = (r: Result) => r.deny ?? (r.isError ? r.text : undefined) ?? ''
 const contextOf = (r: Result) => (r.context ?? []).join('\n')
 const idIn = (refusal: string) => /"source": "ask-before-saving:([^"]+)"/.exec(refusal)?.[1]
@@ -201,7 +222,7 @@ const quietOnMain = (w: W) => {
 }
 
 test('a Write to a project CLAUDE.md is refused, and Claude is told to ask Dan in the dialog, naming the file, in plain words', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '# Slate\n\n- Ask before merging.\n' })
   expect(w.ran).toEqual([])
   const why = refusalOf(r)
@@ -215,7 +236,7 @@ test('a Write to a project CLAUDE.md is refused, and Claude is told to ask Dan i
 })
 
 test('the dialog Claude opens shows the mod\'s own answers, and For good saves the identical call once, told in that same result', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const command = `F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`
   const refused = refusalOf(await call($, { tool: 'Bash', command, description: 'Append the rule to MEMORY.md' }))
   expect(refused).toContain('~/.claude/projects/p/memory/MEMORY.md')
@@ -252,7 +273,7 @@ test('the dialog Claude opens shows the mod\'s own answers, and For good saves t
 // #777: a subagent's call raised the question in Dan's main session, and For good then asked the main
 // session to send the subagent's call again, in the wrong tree, twice. A subagent never asks.
 test("a subagent's write to lasting memory is refused and never asked about: nothing reaches the main session or Dan", withKit, async ($, on) => {
-  const w = world(on, { agents: ['agent-a1'] })
+  const w = world($, on, { agents: ['agent-a1'] })
   const r = await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'a', new_string: 'a\n- Ask before merging.', agentId: 'agent-a1' })
   const why = refusalOf(r)
   expect(why).toContain('only the main session may do, after asking Dan; a subagent never asks him')
@@ -289,7 +310,7 @@ const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> =>
     clearTimeout(timer)
   }
 }
-// Lessons review of #783: a subagent's judged call is marked so the classic hook beneath, which
+// Lessons review of #783: a subagent's judged call is marked so the tool.check hook beneath, which
 // cannot see the loop, does not judge it again for the main session. With one mark per key, the
 // first of two identical calls to finish cleared it while the second was still on its way down, and
 // the second was judged again there (here, after the shell profile changed under it) and refused
@@ -299,7 +320,7 @@ test("two identical subagent calls in flight: the first finishing never exposes 
   const arrived = new Promise<void>(r => (reached = r))
   let open!: () => void
   const opened = new Promise<void>(r => (open = r))
-  const w = world(on, { agents: ['agent-a1'], gate: { reached, opened } })
+  const w = world($, on, { agents: ['agent-a1'], gate: { reached, opened } })
   const command = 'python3 -c "print(1)" # $XGATE/CLAUDE.md HOLD-AT-GUARD'
   // The second call, marked by ask before saving, then held by the guard beneath it.
   const second = call($, { tool: 'Bash', command, agentId: 'agent-a1' })
@@ -320,7 +341,7 @@ test("two identical subagent calls in flight: the first finishing never exposes 
 })
 
 test('the subagent call from #777, a python heredoc building fixture homes in a test, goes straight through, from a subagent or the main session', withKit, async ($, on) => {
-  const w = world(on, { agents: ['agent-a1'] })
+  const w = world($, on, { agents: ['agent-a1'] })
   await call($, { tool: 'Bash', command: FIXTURE, agentId: 'agent-a1' })
   await call($, { tool: 'Bash', command: FIXTURE })
   expect(w.ran.length).toBe(2)
@@ -336,7 +357,7 @@ test('the subagent call from #777, a python heredoc building fixture homes in a 
 // Lessons review of #783: any exit but 0 read as "unset", so a printenv that failed let the save
 // through unasked. Only exit 1 means unset; anything else fails the hook, which refuses.
 test('a printenv that fails is never read as the variable being unset: the save is refused', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   // An inline script the real reader judges writes files, to a file its text cannot name, so what the
   // command mentions is read (#752: the stand-in reader took every python3 command for one, and
   // print(1) writes nothing; #830: one whose file is named is judged by that file alone).
@@ -349,7 +370,7 @@ test('a printenv that fails is never read as the variable being unset: the save 
 // (#830: the script itself writes the test file it names, which is judged alone).
 const FIXTURE_UNNAMED = FIXTURE.replace("open(p,'w')", "import sys; open(sys.argv[1],'w')")
 test('a path through a variable Claude Code\'s environment holds still counts, so its save is refused', withKit, async ($, on) => {
-  const w = world(on, { env: { WORK: '/Users/dan/.claude' } })
+  const w = world($, on, { env: { WORK: '/Users/dan/.claude' } })
   expect(FIXTURE_UNNAMED).not.toBe(FIXTURE)
   expect(refusalOf(await call($, { tool: 'Bash', command: FIXTURE_UNNAMED }))).toContain(ASKS)
   expect(w.ran).toEqual([])
@@ -359,7 +380,7 @@ test('a path through a variable Claude Code\'s environment holds still counts, s
 // no agent list names (#705, the engine's declaration). Refused like a subagent's, and the main
 // session is told, so it can decide with Dan.
 test("Claude Code's memory writer is refused, and the main session is told what it would have saved", withKit, async ($, on) => {
-  const w = world(on, { agents: ['agent-a1'] })
+  const w = world($, on, { agents: ['agent-a1'] })
   const path = `${HOME}/.claude/projects/-Users-dan-Apps-slate/memory/feedback-no-merge-quiz.md`
   const r = await call($, { tool: 'Write', file_path: path, content: 'Skip the merge quiz.\n', agentId: 'fork-memory' })
   expect(refusalOf(r)).toContain('a subagent never asks him')
@@ -371,7 +392,7 @@ test("Claude Code's memory writer is refused, and the main session is told what 
 
 test('an Edit to a file in the memory folder is refused, naming that file', withKit, async ($, on) => {
   const path = `${HOME}/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md`
-  const w = world(on, { files: { [path]: '- [a](a.md)\n' } })
+  const w = world($, on, { files: { [path]: '- [a](a.md)\n' } })
   const r = await call($, { tool: 'Edit', file_path: path, old_string: '- [a](a.md)', new_string: '- [a](a.md)\n- [b](b.md)' })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain(ASKS)
@@ -379,7 +400,7 @@ test('an Edit to a file in the memory folder is refused, naming that file', with
 })
 
 test('a Bash heredoc into CLAUDE.md is refused too', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const r = await call($, { tool: 'Bash', command: "cat >> CLAUDE.md <<'EOF'\n- Never merge on Fridays.\nEOF" })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain(ASKS)
@@ -389,7 +410,7 @@ test('a Bash heredoc into CLAUDE.md is refused too', withKit, async ($, on) => {
 // #705: these went straight through. The paths are mod-kit's shared reader's (proved in its tests):
 // a cd before a relative path, a copy into the memory folder, an inline script, a patch.
 test('a write by any shell route mod-kit reads is refused: a cd into the memory folder, a copy into it, an inline script, a patch', withKit, async ($, on) => {
-  const w = world(on, { files: { [`${CWD}/rules.patch`]: '--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule\n' } })
+  const w = world($, on, { files: { [`${CWD}/rules.patch`]: '--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule\n' } })
   const routes = [
     "cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- skip it\nEOF",
     'cp note.md ~/.claude/projects/p/memory/',
@@ -402,7 +423,7 @@ test('a write by any shell route mod-kit reads is refused: a cd into the memory 
 
 // #743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` appended to MEMORY.md with no question.
 test('a save through a path the command holds in a variable is refused, naming the file it goes to', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   for (const command of [`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`, `export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect(`${command}: ${why}`).toContain(ASKS)
@@ -412,7 +433,7 @@ test('a save through a path the command holds in a variable is refused, naming t
 })
 
 test('a save to a target the words cannot name is refused when the command mentions lasting memory, and goes through when it mentions none', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const asked = refusalOf(await call($, { tool: 'Bash', command: `printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"` }))
   expect(asked).toContain(ASKS)
   expect(asked).toContain('~/.claude/projects/p/memory/MEMORY.md')
@@ -426,7 +447,7 @@ test('a save to a target the words cannot name is refused when the command menti
 // command's real write targets, those are judged, never every path its text quotes.
 const MEM = '~/.claude/projects/p/memory/MEMORY.md'
 test('a command that only quotes a memory path in its text goes straight through: a python heredoc writing a test file, an issue body', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const commands = [
     `python3 - <<'EOF'\np='payload/mods/ask-before-saving/tests/register.test.tsx'\ns=open(p).read()\ns=s.replace("const A = 1", "const A = '${MEM}'")\nopen(p,'w').write(s)\nEOF`,
     `python3 - <<'EOF'\nfrom pathlib import Path\nPath('tests/fixture.txt').write_text('${MEM}\\n')\nEOF`,
@@ -441,7 +462,7 @@ test('a command that only quotes a memory path in its text goes straight through
 })
 
 test('a command whose real write target cannot be read is still asked about when its text mentions lasting memory', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const commands = [
     // A file named at run time, a path the shell builds, a temporary file made inside the memory folder.
     `python3 - <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('${MEM}')\nEOF`,
@@ -457,7 +478,7 @@ test('a command whose real write target cannot be read is still asked about when
 })
 
 test('a write anywhere else, a patch that touches no lasting memory, a backup in a temporary folder, and a Bash call that writes nothing go straight through', withKit, async ($, on) => {
-  const w = world(on, { files: { [`${CWD}/other.patch`]: '--- a/README.md\n+++ b/README.md\n' } })
+  const w = world($, on, { files: { [`${CWD}/other.patch`]: '--- a/README.md\n+++ b/README.md\n' } })
   await call($, { tool: 'Write', file_path: 'README.md', content: 'x' })
   await call($, { tool: 'Bash', command: 'git apply other.patch' })
   await call($, { tool: 'Bash', command: 'cp CLAUDE.md /tmp/backup/CLAUDE.md' })
@@ -468,21 +489,21 @@ test('a write anywhere else, a patch that touches no lasting memory, a backup in
 // #726: everything under a temporary folder was exempt, but a session started in a repository
 // cloned there loads its CLAUDE.md and AGENTS.md, so a save to one went through unasked.
 test('a save into a checkout in a temporary folder is refused, by Write and by Bash', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/tmp/repo/AGENTS.md', content: '- use pnpm\n' }))).toContain('/tmp/repo/AGENTS.md')
   expect(refusalOf(await call($, { tool: 'Bash', command: 'cp CLAUDE.md /tmp/repo/CLAUDE.md' }))).toContain(ASKS)
   expect(w.ran).toEqual([])
 })
 
 test('a save to a temporary folder the disk cannot read is refused, never let through', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const r = await call($, { tool: 'Write', file_path: '/tmp/locked/CLAUDE.md', content: '- rule\n' })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain('could not check whether this writes lasting memory (EACCES: /tmp/locked)')
 })
 
 test('a subagent write the mod cannot judge is refused too, never let through', withKit, async ($, on) => {
-  const w = world(on, { agents: ['agent-a1'] })
+  const w = world($, on, { agents: ['agent-a1'] })
   const r = await call($, { tool: 'Write', file_path: '/tmp/locked/CLAUDE.md', content: '- rule\n', agentId: 'agent-a1' })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain('could not check whether this writes lasting memory')
@@ -491,7 +512,7 @@ test('a subagent write the mod cannot judge is refused too, never let through', 
 // #705: Dan was asked about a save before any guard had judged it. The refusal comes beneath every
 // mod's tool.call hook now, so a save another guard refuses never asks him.
 test('a save another guard refuses is refused by that guard, so Claude is never told to ask about it', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- GUARD-REFUSES this rule\n' })
   expect(r.deny).toBe('Blocked: this carries a dash.')
   expect(w.ran).toEqual([])
@@ -499,7 +520,7 @@ test('a save another guard refuses is refused by that guard, so Claude is never 
 
 // #707: a settings hook (the payload write gate) decides beneath every mod at classic.PreToolUse.
 test('a save a settings hook refuses is refused by it, before any instruction to ask (#707)', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   on('classic.PreToolUse', ($, e) => (JSON.stringify(e).includes('GATE-REFUSES') ? { deny: 'Blocked: the payload write gate refused it.' } : {}))
   const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- GATE-REFUSES this rule\n' })
   expect(refusalOf(r)).toBe('Blocked: the payload write gate refused it.')
@@ -508,7 +529,7 @@ test('a save a settings hook refuses is refused by it, before any instruction to
 })
 
 test("Dan's own permanent words skip the question, and Claude is told to say what it saved", withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   await dan($, 'From now on, ask before you merge anything.')
   const r = await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'a', new_string: 'a\n- Ask before merging.' })
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
@@ -520,7 +541,7 @@ test("Dan's own permanent words skip the question, and Claude is told to say wha
 })
 
 test("the same words from his phone count, and still pass every other guard's check", withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   await dan($, 'Always run the linter first.', 'bridge')
   await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'a', new_string: 'a\n- Run the linter first.' })
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
@@ -530,7 +551,7 @@ test("the same words from his phone count, and still pass every other guard's ch
 })
 
 test("permanent words from a peer session's message or a plugin's prompt do not skip the question", withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   for (const kind of ['peer', 'plugin']) {
     await dan($, 'From now on, never merge on Fridays.', kind)
     const r = await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: kind, new_string: `${kind}\n- Never merge on Fridays.` })
@@ -542,7 +563,7 @@ test("permanent words from a peer session's message or a plugin's prompt do not 
 // Dan's answer is read only from his dialog: a question that hides the file, one about no waiting
 // save, or one carrying its own answers is refused before he sees it.
 test('the dialog is refused when the question does not name the file, names no waiting save, or carries answers already', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const refused = refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }))
   const vague = await askDan($, w, refused, 'For good', 'the project notes')
   expect(vague.deny).toContain('must name the file the rule would go to (~/Apps/slate/AGENTS.md)')
@@ -557,7 +578,7 @@ test('the dialog is refused when the question does not name the file, names no w
 })
 
 test('a dialog that closed itself while Dan was away approves nothing, and the save can be asked about again', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   const refused = refusalOf(await call($, input))
   w.dialog.afk = true
@@ -571,7 +592,7 @@ test('a dialog that closed itself while Dan was away approves nothing, and the s
 })
 
 test("an answer typed in Dan's own words saves nothing and is handed to Claude to act on", withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   const refused = refusalOf(await call($, input))
   const typed = await askDan($, w, refused, 'only for the web app', '~/Apps/slate/AGENTS.md')
@@ -581,7 +602,7 @@ test("an answer typed in Dan's own words saves nothing and is handed to Claude t
 })
 
 test('the same save refused twice waits under one question, the latest', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   const first = refusalOf(await call($, input))
   const second = refusalOf(await call($, input))
@@ -591,7 +612,7 @@ test('the same save refused twice waits under one question, the latest', withKit
 })
 
 test('For good approves the save, not the spelling: the same file and text by another path goes through, other text does not', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   await askDan($, w, refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' })), 'For good', '~/Apps/slate/AGENTS.md')
   expect(refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use npm.\n' }))).toContain(ASKS)
   expect(w.ran).toEqual([])
@@ -603,7 +624,7 @@ test('For good approves the save, not the spelling: the same file and text by an
 // Lessons review of #738: For good approves the file named. A relative path sent again after the
 // session has moved writes another file, which nobody asked him about.
 test('For good approves the file named: sent again after the session moves, a relative path is refused again', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const refused = refusalOf(await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' }))
   w.at.cwd = '/Users/dan/Apps/other'
   await askDan($, w, refused, 'For good', '~/Apps/slate/CLAUDE.md')
@@ -614,7 +635,7 @@ test('For good approves the file named: sent again after the session moves, a re
 })
 
 test('a Bash save approved in one folder is refused again when it is sent from another', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const command = "cat >> CLAUDE.md <<'EOF'\n- Never merge on Fridays.\nEOF"
   await askDan($, w, refusalOf(await call($, { tool: 'Bash', command })), 'For good', '~/Apps/slate/CLAUDE.md')
   w.at.cwd = '/Users/dan/Apps/other'
@@ -632,7 +653,7 @@ test('an approval whose time is not a number stands for nothing: its save is ref
   on('clock.after', () => {
     throw new Error('the mod reloaded')
   })
-  const w = world(on, { auto: true, ownClock: true })
+  const w = world($, on, { auto: true, ownClock: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   await ($ as unknown as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: CWD, surface: 'terminal', isInteractive: true } as never)
@@ -645,7 +666,7 @@ test('an approval whose time is not a number stands for nothing: its save is ref
 // L523, L567: an approval nobody uses must not stand open, and one past its time is refused where it
 // is used, said plainly both ways.
 test('an approval Claude does not use within its time lapses: Dan and Claude are told, and the call is refused again', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   await w.clock.advance(APPROVAL_MS - 1)
@@ -663,7 +684,7 @@ test('an approval past its time is refused where it is used even when nothing an
   on('clock.after', () => {
     throw new Error('the mod reloaded')
   })
-  const w = world(on, { auto: true, ownClock: true })
+  const w = world($, on, { auto: true, ownClock: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   const answered = await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   // A timer that cannot be set never stops Claude being told to send it again.
@@ -680,7 +701,7 @@ test('an approval past its time is refused where it is used even when nothing an
 // its approval, which then lapsed as "unused" though Claude did send it (L11). Dan is told at once
 // that it did not go through, and the lapse says why, never that it went unused.
 test('an approved save another guard refuses when sent again is said as not going through, never as unused', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   w.files['/gate/refuses'] = '1'
@@ -715,7 +736,7 @@ test('a refused resend whose approval is gone by the time the write lands raises
     }
     return next(e)
   })
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   w.files['/gate/refuses'] = '1'
@@ -727,7 +748,7 @@ test('a refused resend whose approval is gone by the time the write lands raises
 
 // And when the guard lets it through on a later send inside the time, it is saved as approved.
 test('an approved save refused once by another guard is still saved when sent again in time', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   w.files['/gate/refuses'] = '1'
@@ -747,7 +768,7 @@ test('an approval refused once and found past its time where it is used is said 
   on('clock.after', () => {
     throw new Error('the mod reloaded')
   })
-  const w = world(on, { auto: true, ownClock: true })
+  const w = world($, on, { auto: true, ownClock: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   w.files['/gate/refuses'] = '1'
@@ -767,7 +788,7 @@ test('an approval refused once and found past its time where it is used is said 
 })
 
 test('For good whose save then fails says so to Dan, and never that it was saved', withKit, async ($, on) => {
-  const w = world(on, { failWrites: true })
+  const w = world($, on, { failWrites: true })
   const input = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'gone', new_string: 'gone\n- rule' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/CLAUDE.md')
   const r = await call($, input)
@@ -777,7 +798,7 @@ test('For good whose save then fails says so to Dan, and never that it was saved
 })
 
 test('an approval the session ends before Claude uses is dropped, and Dan is told it was never used', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   await ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
@@ -789,7 +810,7 @@ test('an approval the session ends before Claude uses is dropped, and Dan is tol
 // The lessons review of #806: one Claude sent that another guard refused is not "never used" at
 // session end either (#764, L11).
 test('an approval whose save another guard refused is said as refused, never as unused, when the session ends', withKit, async ($, on) => {
-  const w = world(on, { auto: true })
+  const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/AGENTS.md')
   w.files['/gate/refuses'] = '1'
@@ -803,7 +824,7 @@ test('an approval whose save another guard refused is said as refused, never as 
 })
 
 test('Just this session writes nothing and holds the rule, in Claude\'s plain words, in the system prompt through a compaction until the session ends', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const refused = refusalOf(await call($, { tool: 'Write', file_path: `${HOME}/.claude/projects/p/memory/note.md`, content: 'Skip the screenshots today.\n' }))
   const answered = await askDan($, w, refused, 'Just this session', '~/.claude/projects/p/memory/note.md', 'skip the screenshots')
   expect(w.ran).toEqual([])
@@ -818,7 +839,7 @@ test('Just this session writes nothing and holds the rule, in Claude\'s plain wo
 })
 
 test('Not at all writes nothing and tells Claude not to save it', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   const input = { tool: 'Write', file_path: 'CLAUDE.md', content: '- Not a standing preference.\n' }
   const answered = await askDan($, w, refusalOf(await call($, input)), 'Not at all', '~/Apps/slate/CLAUDE.md')
   expect(w.ran).toEqual([])
@@ -828,14 +849,14 @@ test('Not at all writes nothing and tells Claude not to save it', withKit, async
 })
 
 test('a save the mod cannot judge is refused, never let through: a failing hook fails closed', withKit, async ($, on) => {
-  const w = world(on, { cwdFails: true })
+  const w = world($, on, { cwdFails: true })
   const r = await call($, { tool: 'Write', file_path: '/anywhere/CLAUDE.md', content: '- rule\n' })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain('could not check')
 })
 
 test('a question that is not about a save is left to Claude Code untouched', withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   w.dialog.answer = 'A'
   const q = { question: 'Which first?', header: 'Next', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }
   const r = await call($, { tool: 'AskUserQuestion', questions: [q], metadata: { source: 'next-issue' } })
@@ -848,7 +869,7 @@ test('a question that is not about a save is left to Claude Code untouched', wit
 // had nothing to do with a save came back as "Not saved: Ask before saving could not read Dan's
 // answer". It is that question's own failure, untouched.
 test("a failure of a question that is not about a save is never reported as a save's", withKit, async ($, on) => {
-  const w = world(on)
+  const w = world($, on)
   w.dialog.fails = true
   const q = { question: 'Which first?', header: 'Next', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }
   let out: string
@@ -892,7 +913,7 @@ const proposeLesson = async ($: Caller, w: W, answer: string | undefined, extra:
 }
 
 test('a lesson Dan approved in the durable lesson picker is added with no second question, once', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   const answered = await proposeLesson($, w, 'Add to LESSONS.md')
   // Dan saw the rule and the picker's own three answers.
   const q = w.asked[0]?.questions[0]
@@ -913,7 +934,7 @@ test('a lesson Dan approved in the durable lesson picker is added with no second
 })
 
 test('an approved lesson does not let any other write through: other text, a removal, a second lesson, another file, a shell append', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const others = [
     // An unrelated edit to the lessons file.
@@ -935,7 +956,7 @@ test('an approved lesson does not let any other write through: other text, a rem
 })
 
 test("an approval only Dan's own answer in the dialog gives: answers Claude filled in, a hidden rule, a short rule, his own words, a subagent's picker", withKit, async ($, on) => {
-  const w = world(on, { auto: true, agents: ['agent-a1'], files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, agents: ['agent-a1'], files: { [LESSONS]: LESSONS_TEXT } })
   // Claude's call carrying its own answer is refused before Dan sees it.
   const filled = await proposeLesson($, w, 'Add to LESSONS.md', { answers: { q: 'Add to LESSONS.md' } })
   expect(filled.deny).toContain('only his choice in the dialog decides')
@@ -958,7 +979,7 @@ test("an approval only Dan's own answer in the dialog gives: answers Claude fill
 })
 
 test('Project memory instead and Skip approve nothing for the lessons file', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   const project = await proposeLesson($, w, 'Project memory instead')
   expect(contextOf(project)).toContain(`Dan answered Project memory instead: do not add it to ${LESSONS_SHOWN}`)
   expect(refusalOf(await call($, addLesson))).toContain(ASKS)
@@ -969,7 +990,7 @@ test('Project memory instead and Skip approve nothing for the lessons file', wit
 })
 
 test('an approved lesson lapses after its time: Dan and Claude are told, and the write is asked about again', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   await w.clock.advance(APPROVAL_MS)
   expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
@@ -979,7 +1000,7 @@ test('an approved lesson lapses after its time: Dan and Claude are told, and the
 })
 
 test('an approved lesson whose write fails still stands, so the corrected write goes through without asking', withKit, async ($, on) => {
-  const w = world(on, { auto: true, failWrites: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, failWrites: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const failed = await call($, addLesson)
   expect(failed.isError).toBe(true)
@@ -994,7 +1015,7 @@ test('an approved lesson whose write fails still stands, so the corrected write 
 // #764 for lessons: an approved lesson write another guard refuses is said as not added, and its
 // lapse says it was refused, never unused; a later send in time still goes through.
 test('an approved lesson write another guard refuses is said as not added, and its lapse never calls it unused', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   w.files['/gate/refuses'] = '1'
   expect(refusalOf(await call($, addLesson))).toBe('Blocked: another session is editing this file.')
@@ -1006,7 +1027,7 @@ test('an approved lesson write another guard refuses is said as not added, and i
 })
 
 test('an approved lesson write a settings hook refuses gives the approval back, so the next send goes through', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   let refuse = true
   on('classic.PreToolUse', ($$, e) => (refuse && JSON.stringify(e).includes('L752') ? { deny: 'Blocked: the payload write gate refused it.' } : {}))
   await proposeLesson($, w, 'Add to LESSONS.md')
@@ -1020,7 +1041,7 @@ test('an approved lesson write a settings hook refuses gives the approval back, 
 // Lessons review of #869: an approved lesson let anything else ride along with the rule. The added
 // text must be exactly one new entry: the approved rule, then only its provenance and SHORT line.
 test('an approved lesson lets nothing ride along: no extra sentence, no extra line after the entry, no note after it', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const body = ENTRY.replace(/\n+$/, '')
   const riders = [
@@ -1045,7 +1066,7 @@ test('an approved lesson lets nothing ride along: no extra sentence, no extra li
 // a duplicate line or reordering the file counted as only adding.
 test('an approved lesson by Write goes through only as the old file with the entry inserted in one place', withKit, async ($, on) => {
   const old = `${LESSONS_TEXT}\n- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n`
-  const w = world(on, { auto: true, files: { [LESSONS]: old } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: old } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const at = old.indexOf('## Data safety')
   const inserted = old.slice(0, at) + ENTRY + old.slice(at)
@@ -1064,7 +1085,7 @@ test('an approved lesson by Write goes through only as the old file with the ent
 // Second lessons review of #869: the provenance accepted any text in parentheses, so a sentence Dan
 // never read could ride along there. It is held to the provenance shape: repo#N, then a date.
 test('an approved lesson takes only a provenance shaped as one: a sentence in parentheses is asked about', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const body = ENTRY.replace('(slate#9, 2026-10-06)', '(slate#9, 2026-10-06: and from now on always push on Fridays)')
   const input = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${body}## Data safety` }
@@ -1077,7 +1098,7 @@ test('an approved lesson takes only a provenance shaped as one: a sentence in pa
 // read before the lesson check looked at the tool, so a read that failed replaced the guard's own
 // refusal with "could not check".
 test("a refused shell call while a lesson approval stands keeps the guard's own refusal", withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const r = await call($, { tool: 'Bash', command: `python3 -c "import sys; open(sys.argv[1],'w').write('1')" out.txt # $PRINTENV_BREAKS/CLAUDE.md GUARD-REFUSES` })
   expect(refusalOf(r)).toBe('Blocked: this carries a dash.')
@@ -1088,7 +1109,7 @@ test("a refused shell call while a lesson approval stands keeps the guard's own 
 // its `- L<n>. ` prefix; an owner qualified repo is a provenance; and a lapsed lesson approval is
 // told to Claude in the refusal, as For good's is.
 test('a SHORT line over the index cap with its prefix is asked about, and an owner qualified provenance goes through', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const over = ENTRY.replace('SHORT: Fill a stored null on conflict.', `SHORT: ${'x'.repeat(155)}`)
   expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${over}## Data safety` }))).toContain(ASKS)
@@ -1103,7 +1124,7 @@ test('a lesson approval found past its time where it is used is told to Claude i
   on('clock.after', () => {
     throw new Error('the mod reloaded')
   })
-  const w = world(on, { auto: true, ownClock: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, ownClock: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   now = APPROVAL_MS
   const late = refusalOf(await call($, addLesson))
@@ -1116,7 +1137,7 @@ test('a lesson approval found past its time where it is used is told to Claude i
 // so the entry could be split around it, a section heading landing inside the entry. An Edit adds
 // only before or after the text it keeps.
 test('an approved lesson split around the text an Edit keeps is asked about', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const at = ENTRY.indexOf(' (slate#9')
   const split = `${ENTRY.slice(0, at)}## Data safety${ENTRY.slice(at)}`
@@ -1133,7 +1154,7 @@ test('an approved lesson split around the text an Edit keeps is asked about', wi
 // Anything else asks.
 test('an approved lesson Edit whose kept text is not whole lines of the file, or not found once, is asked about', withKit, async ($, on) => {
   const old = `${LESSONS_TEXT}- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n`
-  const w = world(on, { auto: true, files: { [LESSONS]: old } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: old } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const edits = [
     // Mid line: the entry spliced into the middle of another lesson.
@@ -1153,7 +1174,7 @@ test('an approved lesson Edit whose kept text is not whole lines of the file, or
 })
 
 test('an approved lesson Write must insert the entry at a line boundary', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const at = LESSONS_TEXT.indexOf('Never destroy')
   const midLine = LESSONS_TEXT.slice(0, at) + ENTRY + LESSONS_TEXT.slice(at)
@@ -1165,7 +1186,7 @@ test('an approved lesson Write must insert the entry at a line boundary', withKi
 // so one whose index line is over the cap landed and the send then held the whole file back. Without
 // a SHORT line, `- L<n>. <rule>` itself must be within the cap.
 test('an approved lesson with no SHORT line is asked about when its rule is too long for the index', withKit, async ($, on) => {
-  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const bare = ENTRY.replace('  SHORT: Fill a stored null on conflict.\n', '')
   expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${bare}## Data safety` }))).toContain(ASKS)
@@ -1177,7 +1198,7 @@ test('an approved lesson with no SHORT line is asked about when its rule is too 
 // size the lessons file is.
 test('an approved lesson Write into a lessons file of real size goes through, inserted at its line', withKit, async ($, on) => {
   const big = `${LESSONS_TEXT}${'- **L9. A filler lesson line.**\n'.repeat(12_000)}`
-  const w = world(on, { auto: true, files: { [LESSONS]: big } })
+  const w = world($, on, { auto: true, files: { [LESSONS]: big } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const at = big.indexOf('## Data safety')
   expect((await call($, { tool: 'Write', file_path: LESSONS, content: big.slice(0, at) + ENTRY + big.slice(at) })).deny).toBeUndefined()
