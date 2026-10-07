@@ -42,8 +42,9 @@ const WHAT = 'What to do: '
 // own two and the names an author reaches for instead, however cased or spaced.
 const AUTHOR_LABEL = /^(?:where|location|what to do|then|clicks)\s*:\s*/i
 const unlabelled = (s: string | undefined) => (s === undefined ? undefined : str(s.replace(AUTHOR_LABEL, '')))
-// A number an author put before an action, taken off since the card numbers the list itself.
-const AUTHOR_NUMBER = /^\d+\s*[.)]\s*/
+// A list number an author put before an action, taken off since the card numbers the list itself.
+// Only one a space follows, so a number that is the action's own text ("1.5x zoom") stays whole.
+const AUTHOR_NUMBER = /^\d+[.)]\s+/
 
 /** The card a handover describes, or why it is refused, naming the step. */
 export const cardFrom = (input: unknown): Made | Refused => {

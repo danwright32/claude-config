@@ -276,6 +276,12 @@ describe('cardLines', () => {
     expect(c.steps[0]?.clicks).toEqual(['Open Terminal', 'Type /exit'])
     // A list of one is drawn as the plain string always was: beside the label, unnumbered.
     expect(c.steps[1]?.clicks).toBe('Save')
+    // Only a list number, which a space follows: a number that is the action's own text stays whole.
+    expect(made({ heading: 'x', steps: [step({ clicks: ['1.5x zoom', '2.5 GB limit: raise it', '3)Save'] })] }).steps[0]?.clicks).toEqual([
+      '1.5x zoom',
+      '2.5 GB limit: raise it',
+      '3)Save',
+    ])
     // A list with nothing in it is no clicks at all, and one holding a non string is refused.
     expect(made({ heading: 'x', steps: [step({ clicks: [' '] })] }).steps[0]?.clicks).toBeUndefined()
     const r = cardFrom({ heading: 'x', steps: [step({ clicks: ['Open', 3] })] })
