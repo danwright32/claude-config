@@ -1,6 +1,7 @@
 // Ask before saving (claude-config#618): what counts as lasting memory, when Dan's own words already
 // made a rule permanent, and what Claude is told to ask in Claude Code's own dialog (#777). Pure, so
 // each rule is tested on its own.
+import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 
 export const MOD = 'ask-before-saving'
 
@@ -281,6 +282,142 @@ export const sourceOf = (id: string) => `${MOD}:${id}`
 export const saveIdOf = (source: unknown): string | undefined => {
   if (typeof source !== 'string' || !source.startsWith(`${MOD}:`)) return undefined
   return source.slice(MOD.length + 1) || undefined
+}
+
+// The durable lesson check's picker (#867). payload/hooks/durable-lesson-check.sh tells Claude to ask
+// with this `metadata.source` and the rule in `metadata.rule`; its suite holds the two to these names.
+// Dan's "Add to LESSONS.md", read from the dialog's own result, approves the write that adds that rule
+// to the lessons file, so he is not asked For good about it a second time (Dan, 2026-10-06: "The
+// confirmation that I want to add the durable lesson should be enough to indicate that I want to add
+// it forever."). Nothing Claude writes approves it: the mod sets the answers, refuses a call carrying
+// its own, and reads only the answer the dialog hands back.
+export const LESSON_SOURCE = 'durable-lesson'
+export const LESSON_ADD = 'Add to LESSONS.md'
+export const LESSON_PROJECT = 'Project memory instead'
+export const LESSON_SKIP = 'Skip'
+export const LESSON_HEADER = 'Lesson'
+/** The lessons file the picker approves a write to, as a tool reaches it. */
+export const lessonsFile = (home: string): string => `${home.replace(/\/$/, '')}/.claude/LESSONS.md`
+
+/** The answer Dan gave that made an approval, as he pressed it: For good, or the lesson picker's add. */
+export const pressed = (x: AskBeforeSavingApproval): string => (x.lesson !== undefined ? LESSON_ADD : FOR_GOOD)
+
+/**
+ * What Dan reads when an approval's lapse cannot be timed, naming the answer he pressed (lessons
+ * review of #869: it said For good for a lesson approval too).
+ */
+export const untimed = (x: AskBeforeSavingApproval, why: string): string =>
+  `The ${APPROVAL_MS / 60_000} minute limit on ${pressed(x)} for saving to ${x.files.join(', ')} could not be timed (${why}), so nothing will say when it lapses; it still lapses then.`
+
+export const lessonOptions = (file: string) => [
+  { label: LESSON_ADD, description: `Added to ${file}, with no second question` },
+  { label: LESSON_PROJECT, description: "Kept in this project's memory, not the lessons file" },
+  { label: LESSON_SKIP, description: 'Nothing is saved' },
+]
+
+/**
+ * A rule as text, the way it is compared: the lessons file sets a rule in bold and wraps it, so the
+ * bold marks go and every run of white space is one space.
+ */
+export const ruleText = (s: string): string => s.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * The shortest rule an approval is taken for. A rule of a word or two is contained in almost any
+ * entry, so it would approve writes Dan never saw; a lesson's rule is a sentence or two.
+ */
+export const MIN_RULE = 40
+
+/**
+ * The longest index line an approved entry's SHORT line may render as, `- L<n>. <short>`: the
+ * index's own cap, ENTRY_CAP in hooks/test-rule-file-budget.sh, which hooks/test-durable-lesson-check.sh
+ * holds this to, so the short form is a short form and nothing more.
+ */
+export const MAX_SHORT = 160
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * The entry an inserted block carries, when the block is one entry in its fixed shape: blank lines,
+ * then lines starting at `- **L<n>.` with no blank line among them, then blank lines. Anything else
+ * is undefined. Whether the entry is the approved rule is addsLesson's question.
+ */
+const entryBlock = (block: string): string | undefined => {
+  const m = /^\n*(- \*\*L\d+\.[\s\S]*?\S)\n*$/.exec(block)
+  return m && !m[1]?.includes('\n\n') ? m[1] : undefined
+}
+
+/**
+ * The entry a write to the lessons file adds, under one fail-safe rule rather than a list of shapes
+ * refused (the lessons reviews of #869 found a new shape each round: an entry split around kept text,
+ * spliced mid line, beside a removal). `file` is the lessons file as it is now. Anything else is
+ * undefined, and is asked about.
+ * - An Edit (never replace_all) whose old text is whole lines of the file, found exactly once, and
+ *   whose new text is that old text, a newline and the entry block, or the entry block, a newline and
+ *   the old text.
+ * - A Write whose content is the file with exactly the entry block inserted at one line boundary
+ *   (before the end, the block ends at a line end too).
+ */
+export const lessonAddition = (tool: string, input: Record<string, unknown>, file: string | undefined): string | undefined => {
+  if (tool === 'Edit') {
+    const from = String(input.old_string ?? '')
+    const to = String(input.new_string ?? '')
+    if (file === undefined || input.replace_all === true || !from || from.startsWith('\n') || from.endsWith('\n')) return undefined
+    const at = file.indexOf(from)
+    if (at === -1 || file.indexOf(from, at + 1) !== -1) return undefined
+    const end = at + from.length
+    if ((at !== 0 && file[at - 1] !== '\n') || (end !== file.length && file[end] !== '\n')) return undefined
+    if (to.startsWith(`${from}\n`)) return entryBlock(to.slice(from.length + 1))
+    if (to.endsWith(`\n${from}`)) return entryBlock(to.slice(0, to.length - from.length - 1))
+    return undefined
+  }
+  if (tool !== 'Write') return undefined
+  const content = String(input.content ?? '')
+  if (file === undefined) return entryBlock(content)
+  const size = content.length - file.length
+  if (size <= 0) return undefined
+  // What the two share at the start and at the end, measured once: the block can sit only at a line
+  // boundary b with b <= head and b >= file.length - tail, where both sides match by construction
+  // (sixth lessons review of #869: comparing the whole file at every boundary cost lines x size).
+  let head = 0
+  while (head < file.length && file[head] === content[head]) head++
+  let tail = 0
+  while (tail < file.length && file[file.length - 1 - tail] === content[content.length - 1 - tail]) tail++
+  const lo = file.length - tail
+  if (lo > head) return undefined
+  const next = (from: number) => (from === 0 || file[from - 1] === '\n' ? from : file.indexOf('\n', from) === -1 ? file.length + 1 : file.indexOf('\n', from) + 1)
+  for (let b = next(lo); b <= head; b = next(b + 1)) {
+    const block = content.slice(b, b + size)
+    if (b !== file.length && !block.endsWith('\n')) continue
+    const entry = entryBlock(block)
+    if (entry !== undefined) return entry
+  }
+  return undefined
+}
+
+/**
+ * Whether the added text is exactly that one lesson (lessons review of #869: anything else written
+ * beside the rule reached every session unseen by Dan): one new entry, `- **L<n>.` then the rule as
+ * he approved it (bold and wrapping aside), then at most its provenance (repo#N, then a date), then at most
+ * one SHORT line whose index line, `- L<n>. <short>`, is within the index's cap. Blank lines around it
+ * are the file's spacing.
+ */
+export const addsLesson = (added: string, rule: string): boolean => {
+  const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
+  const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
+  if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
+  const body = ruleText((shortAt === -1 ? lines : lines.slice(0, shortAt)).join('\n'))
+  // Provenance is its shape and nothing more, one or more `repo#N` (owner qualified or not) and an
+  // optional date (lessons reviews of #869: any text in parentheses let a sentence Dan never read
+  // ride along, and `owner/repo#N` is a provenance too).
+  const ref = String.raw`(?:[\w.-]+\/)?[\w.-]+#\d+`
+  const provenance = String.raw`(?: \(${ref}(?:, ${ref})*(?:, \d{4}-\d{2}-\d{2})?\))?`
+  const m = new RegExp(`^- L(\\d+)\\. ${escapeRe(ruleText(rule))}${provenance}$`).exec(body)
+  if (!m) return false
+  // Counted as the index renders it, `- L<n>. <short>` (third lessons review of #869), or, with no
+  // SHORT line, `- L<n>. <rule>`: an entry the index cannot hold is refused by the send, which holds
+  // the whole lessons file back (sixth lessons review of #869).
+  const shown = shortAt === -1 ? ruleText(rule) : (lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')
+  return `- L${m[1]}. ${shown}`.length <= MAX_SHORT
 }
 
 /**

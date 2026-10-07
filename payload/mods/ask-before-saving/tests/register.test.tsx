@@ -97,6 +97,8 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
   const toasts: string[] = []
   // The prompts a plugin submitted, each a turn of Claude's own: since #777 there are none.
   const prompts: string[] = []
+  // Whether the tools fail, which a test may change partway (#867: a failed lesson write and a retry).
+  const ctl = { failWrites: init.failWrites ?? false }
   const clock = init.ownClock ? (undefined as unknown as ReturnType<typeof mock.clock>) : mock.clock(on)
   mock.env(on, { HOME })
   // Claude Code's environment as printenv reads it: HOME and whatever the test sets.
@@ -148,7 +150,7 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     if (init.auto && next.origin.plugin !== 'engine')
       return { deny: `The server-side auto mode classifier gave no verdict for ${String(tool)}: the request that produced this action did not ask for one.` } as never
     ran.push({ tool: String(tool), input })
-    if (init.failWrites) return { isError: true, result: 'String to replace not found in file.', text: 'String to replace not found in file.' } as never
+    if (ctl.failWrites) return { isError: true, result: 'String to replace not found in file.', text: 'String to replace not found in file.' } as never
     return { result: 'written', text: 'written' } as never
   })
   on('ui.invalidate', () => ({ value: undefined }) as never)
@@ -164,7 +166,7 @@ const world = (on: On, init: { files?: Record<string, string>; failWrites?: bool
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv }
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl }
 }
 type W = ReturnType<typeof world>
 
@@ -863,4 +865,321 @@ test("a failure of a question that is not about a save is never reported as a sa
   const r = await askDan($, w, refused, 'For good', '~/Apps/slate/AGENTS.md')
   expect(r.deny).toContain("Not saved: Ask before saving could not read Dan's answer")
   expect(w.ran).toEqual([])
+})
+
+// #867: the durable lesson check asks Dan whether to add a proposed rule to the lessons file, and
+// his "Add to LESSONS.md" was then asked about a second time by For good. Dan, 2026-10-06: "The
+// confirmation that I want to add the durable lesson should be enough to indicate that I want to add
+// it forever." His picker answer, read from the dialog's own result, approves a write that adds that
+// rule to that file; nothing Claude writes can.
+const LESSONS = `${HOME}/.claude/LESSONS.md`
+const LESSONS_SHOWN = '~/.claude/LESSONS.md'
+// The rule and its why, as the durable lesson check has Claude propose it.
+const RULE = 'A merge on conflict must fill a stored null from a non null incoming value, not only refuse to overwrite it. A clause that never updates also never repairs.'
+const LESSONS_TEXT = '# Lessons\n\n## Proof over green\n\n- **L1. A test or guard is only real once it has been seen to fail.**\n\n## Data safety\n\n- **L5. Never destroy good state.**\n'
+// The entry as the lessons file carries one: numbered, the rule in bold and wrapped, then the why.
+const ENTRY = '- **L752. A merge on conflict must fill a stored null from a non null incoming value, not only\n  refuse to overwrite it.** A clause that never updates also never repairs. (slate#9, 2026-10-06)\n  SHORT: Fill a stored null on conflict.\n\n'
+const addLesson = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${ENTRY}## Data safety` }
+// Claude proposing the lesson as the durable lesson check tells it to, and Dan answering.
+const proposeLesson = async ($: Caller, w: W, answer: string | undefined, extra: Record<string, unknown> = {}, rule = RULE, question = `Add this lesson to ${LESSONS_SHOWN}: ${rule} Likely applies to: slate (merges); unlikely in: the rest.`) => {
+  w.dialog.answer = answer
+  return call($, {
+    tool: 'AskUserQuestion',
+    questions: [{ question, header: 'Durable', options: [{ label: 'Add', description: 'a' }, { label: 'Skip', description: 's' }], multiSelect: false }],
+    metadata: { source: 'durable-lesson', rule },
+    ...extra,
+  })
+}
+
+test('a lesson Dan approved in the durable lesson picker is added with no second question, once', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const answered = await proposeLesson($, w, 'Add to LESSONS.md')
+  // Dan saw the rule and the picker's own three answers.
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
+  expect(q.question).toContain(RULE)
+  expect(q.header).toBe('Lesson')
+  expect(q.options.map(o => o.label)).toEqual(['Add to LESSONS.md', 'Project memory instead', 'Skip'])
+  expect(contextOf(answered)).toContain('Dan answered Add to LESSONS.md')
+  // The entry, wrapped and in bold as the file carries it, goes straight through.
+  const added = await call($, addLesson)
+  expect(added.deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  expect(contextOf(added)).toContain(`Added to ${LESSONS_SHOWN}, as Dan answered Add to LESSONS.md.`)
+  quietOnMain(w)
+  // Used once: the same write again is asked about.
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
+
+test('an approved lesson does not let any other write through: other text, a removal, a second lesson, another file, a shell append', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const others = [
+    // An unrelated edit to the lessons file.
+    { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '- **L753. Something else entirely, never shown to Dan.**\n\n## Data safety' },
+    // The rule, but replacing what was there.
+    { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: ENTRY },
+    // The rule with a second lesson riding along.
+    { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${ENTRY}- **L753. A rule nobody approved.**\n\n## Data safety` },
+    // The rule, to another lasting memory file.
+    { tool: 'Write', file_path: 'CLAUDE.md', content: `- ${RULE}\n` },
+    // The rule, by a shell append: asked about through For good as before.
+    { tool: 'Bash', command: `printf '%s\\n' '- ${RULE}' >> ~/.claude/LESSONS.md` },
+  ]
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // None of them used it up: the approved write still goes through.
+  expect((await call($, addLesson)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test("an approval only Dan's own answer in the dialog gives: answers Claude filled in, a hidden rule, a short rule, his own words, a subagent's picker", withKit, async ($, on) => {
+  const w = world(on, { auto: true, agents: ['agent-a1'], files: { [LESSONS]: LESSONS_TEXT } })
+  // Claude's call carrying its own answer is refused before Dan sees it.
+  const filled = await proposeLesson($, w, 'Add to LESSONS.md', { answers: { q: 'Add to LESSONS.md' } })
+  expect(filled.deny).toContain('only his choice in the dialog decides')
+  // A rule the question Dan reads does not state approves nothing.
+  const hidden = await proposeLesson($, w, 'Add to LESSONS.md', {}, RULE, `Add this lesson to ${LESSONS_SHOWN}? Likely applies to: slate.`)
+  expect(hidden.deny).toContain('state the rule word for word')
+  // A rule too short to tell one entry from another approves nothing.
+  const short = await proposeLesson($, w, 'Add to LESSONS.md', {}, 'merge', `Add this lesson to ${LESSONS_SHOWN}: merge`)
+  expect(short.deny).toContain('the whole rule')
+  expect(w.asked).toEqual([])
+  // Dan typing in his own words, and a dialog that closed while he was away, approve nothing.
+  await proposeLesson($, w, 'yes add it')
+  w.dialog.afk = true
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  w.dialog.afk = false
+  // A subagent's picker records nothing.
+  await proposeLesson($, w, 'Add to LESSONS.md', { agentId: 'agent-a1' })
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('Project memory instead and Skip approve nothing for the lessons file', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const project = await proposeLesson($, w, 'Project memory instead')
+  expect(contextOf(project)).toContain(`Dan answered Project memory instead: do not add it to ${LESSONS_SHOWN}`)
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  const skip = await proposeLesson($, w, 'Skip')
+  expect(contextOf(skip)).toContain('Dan answered Skip')
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('an approved lesson lapses after its time: Dan and Claude are told, and the write is asked about again', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
+  expect(notesOf(w)).toContain(`Dan's Add to LESSONS.md on saving this to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('an approved lesson whose write fails still stands, so the corrected write goes through without asking', withKit, async ($, on) => {
+  const w = world(on, { auto: true, failWrites: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const failed = await call($, addLesson)
+  expect(failed.isError).toBe(true)
+  expect(w.toasts.join('\n')).toContain(`Not added to ${LESSONS_SHOWN}: String to replace not found in file.`)
+  w.ctl.failWrites = false
+  const again = await call($, addLesson)
+  expect(again.deny).toBeUndefined()
+  expect(contextOf(again)).toContain(`Added to ${LESSONS_SHOWN}`)
+  expect(w.ran.length).toBe(2)
+})
+
+// #764 for lessons: an approved lesson write another guard refuses is said as not added, and its
+// lapse says it was refused, never unused; a later send in time still goes through.
+test('an approved lesson write another guard refuses is said as not added, and its lapse never calls it unused', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  w.files['/gate/refuses'] = '1'
+  expect(refusalOf(await call($, addLesson))).toBe('Blocked: another session is editing this file.')
+  expect(w.toasts.join('\n')).toContain(`Not added to ${LESSONS_SHOWN}: Blocked: another session is editing this file.`)
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.join('\n')).not.toContain('unused')
+  expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} lapsed after 10 minutes: Claude sent the save, but it was refused`)
+  expect(w.ran).toEqual([])
+})
+
+test('an approved lesson write a settings hook refuses gives the approval back, so the next send goes through', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  let refuse = true
+  on('classic.PreToolUse', ($$, e) => (refuse && JSON.stringify(e).includes('L752') ? { deny: 'Blocked: the payload write gate refused it.' } : {}))
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  expect(refusalOf(await call($, addLesson))).toBe('Blocked: the payload write gate refused it.')
+  expect(w.toasts.join('\n')).toContain(`Not added to ${LESSONS_SHOWN}: Blocked: the payload write gate refused it.`)
+  refuse = false
+  expect((await call($, addLesson)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #869: an approved lesson let anything else ride along with the rule. The added
+// text must be exactly one new entry: the approved rule, then only its provenance and SHORT line.
+test('an approved lesson lets nothing ride along: no extra sentence, no extra line after the entry, no note after it', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const body = ENTRY.replace(/\n+$/, '')
+  const riders = [
+    // A sentence Dan never read, inside the entry before its provenance.
+    body.replace(' (slate#9', ' Also always push on Fridays. (slate#9'),
+    // An extra line after the SHORT line.
+    `${body}\n  Also: always push on Fridays.`,
+    // A note after the entry that is not part of it.
+    `${body}\n\nSome unrelated note for every session.`,
+    // A SHORT line far past the index cap, carrying more than a short form.
+    body.replace('SHORT: Fill a stored null on conflict.', `SHORT: Fill a stored null on conflict. ${'And another thing. '.repeat(12)}`),
+  ]
+  for (const added of riders) {
+    const input = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${added}\n\n## Data safety` }
+    expect(`${added}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  }
+  expect(w.ran).toEqual([])
+  expect((await call($, addLesson)).deny).toBeUndefined()
+})
+
+// Lessons review of #869: a Write was judged by whether each old line survived anywhere, so dropping
+// a duplicate line or reordering the file counted as only adding.
+test('an approved lesson by Write goes through only as the old file with the entry inserted in one place', withKit, async ($, on) => {
+  const old = `${LESSONS_TEXT}\n- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n`
+  const w = world(on, { auto: true, files: { [LESSONS]: old } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = old.indexOf('## Data safety')
+  const inserted = old.slice(0, at) + ENTRY + old.slice(at)
+  const removals = [
+    // A duplicate line dropped while the entry goes in.
+    inserted.replace('- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n', '- **L6. Duplicate line.**\n'),
+    // The sections reordered while the entry goes in.
+    `# Lessons\n\n${old.slice(at)}\n${ENTRY}## Proof over green\n\n- **L1. A test or guard is only real once it has been seen to fail.**\n`,
+  ]
+  for (const content of removals) expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect((await call($, { tool: 'Write', file_path: LESSONS, content: inserted })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// Second lessons review of #869: the provenance accepted any text in parentheses, so a sentence Dan
+// never read could ride along there. It is held to the provenance shape: repo#N, then a date.
+test('an approved lesson takes only a provenance shaped as one: a sentence in parentheses is asked about', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const body = ENTRY.replace('(slate#9, 2026-10-06)', '(slate#9, 2026-10-06: and from now on always push on Fridays)')
+  const input = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${body}## Data safety` }
+  expect(refusalOf(await call($, input))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect((await call($, addLesson)).deny).toBeUndefined()
+})
+
+// Second lessons review of #869: with an approval standing, a refused Bash call ran every target
+// read before the lesson check looked at the tool, so a read that failed replaced the guard's own
+// refusal with "could not check".
+test("a refused shell call while a lesson approval stands keeps the guard's own refusal", withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const r = await call($, { tool: 'Bash', command: `python3 -c "import sys; open(sys.argv[1],'w').write('1')" out.txt # $PRINTENV_BREAKS/CLAUDE.md GUARD-REFUSES` })
+  expect(refusalOf(r)).toBe('Blocked: this carries a dash.')
+  expect(w.printenv).toEqual([])
+})
+
+// Third lessons review of #869: the SHORT line is held to the index cap as the index counts it, with
+// its `- L<n>. ` prefix; an owner qualified repo is a provenance; and a lapsed lesson approval is
+// told to Claude in the refusal, as For good's is.
+test('a SHORT line over the index cap with its prefix is asked about, and an owner qualified provenance goes through', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const over = ENTRY.replace('SHORT: Fill a stored null on conflict.', `SHORT: ${'x'.repeat(155)}`)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${over}## Data safety` }))).toContain(ASKS)
+  const owned = ENTRY.replace('(slate#9, 2026-10-06)', '(dwright-pennie/slate#9, 2026-10-06)')
+  expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${owned}## Data safety` })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('a lesson approval found past its time where it is used is told to Claude in the refusal', withKit, async ($, on) => {
+  let now = 0
+  on('clock.now', () => ({ value: now }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world(on, { auto: true, ownClock: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  now = APPROVAL_MS
+  const late = refusalOf(await call($, addLesson))
+  expect(late).toContain(ASKS)
+  expect(late).toContain(`Dan's earlier Add to LESSONS.md on this save lapsed after 10 minutes`)
+  expect(w.ran).toEqual([])
+})
+
+// Fourth lessons review of #869: an Edit whose new text kept the old text anywhere counted as adding,
+// so the entry could be split around it, a section heading landing inside the entry. An Edit adds
+// only before or after the text it keeps.
+test('an approved lesson split around the text an Edit keeps is asked about', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = ENTRY.indexOf(' (slate#9')
+  const split = `${ENTRY.slice(0, at)}## Data safety${ENTRY.slice(at)}`
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: split }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // After the kept text is an addition too.
+  expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: `- **L5. Never destroy good state.**\n\n${ENTRY}` })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// Fifth lessons review of #869, and the fail-safe rule that answers every shape: an Edit adds an
+// approved lesson only when its old text is whole lines of the file, found once, and its new text is
+// that old text, a newline and the entry block, or the entry block, a newline and the old text.
+// Anything else asks.
+test('an approved lesson Edit whose kept text is not whole lines of the file, or not found once, is asked about', withKit, async ($, on) => {
+  const old = `${LESSONS_TEXT}- **L6. Duplicate line.**\n- **L6. Duplicate line.**\n`
+  const w = world(on, { auto: true, files: { [LESSONS]: old } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const edits = [
+    // Mid line: the entry spliced into the middle of another lesson.
+    { old_string: 'Never destroy', new_string: `Never destroy\n${ENTRY}` },
+    { old_string: 'Never destroy', new_string: `${ENTRY}Never destroy` },
+    // A line the file holds twice, so where the entry lands is not one place.
+    { old_string: '- **L6. Duplicate line.**', new_string: `- **L6. Duplicate line.**\n${ENTRY}` },
+    // Text the file does not hold.
+    { old_string: '## Not a heading here', new_string: `${ENTRY}## Not a heading here` },
+    // The entry run straight onto the kept line, with no line break between.
+    { old_string: '## Data safety', new_string: `${ENTRY.replace(/\n+$/, '')}## Data safety` },
+  ]
+  for (const e of edits) expect(`${JSON.stringify(e)}: ${refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, ...e }))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect((await call($, addLesson)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('an approved lesson Write must insert the entry at a line boundary', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = LESSONS_TEXT.indexOf('Never destroy')
+  const midLine = LESSONS_TEXT.slice(0, at) + ENTRY + LESSONS_TEXT.slice(at)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content: midLine }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+// Sixth lessons review of #869: an entry with no SHORT line was let through however long its rule,
+// so one whose index line is over the cap landed and the send then held the whole file back. Without
+// a SHORT line, `- L<n>. <rule>` itself must be within the cap.
+test('an approved lesson with no SHORT line is asked about when its rule is too long for the index', withKit, async ($, on) => {
+  const w = world(on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const bare = ENTRY.replace('  SHORT: Fill a stored null on conflict.\n', '')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${bare}## Data safety` }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+// Sixth lessons review of #869: the Write check compared the whole file at every line boundary. It
+// now finds the one window from the shared start and end, and still accepts the entry in a file the
+// size the lessons file is.
+test('an approved lesson Write into a lessons file of real size goes through, inserted at its line', withKit, async ($, on) => {
+  const big = `${LESSONS_TEXT}${'- **L9. A filler lesson line.**\n'.repeat(12_000)}`
+  const w = world(on, { auto: true, files: { [LESSONS]: big } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const at = big.indexOf('## Data safety')
+  expect((await call($, { tool: 'Write', file_path: LESSONS, content: big.slice(0, at) + ENTRY + big.slice(at) })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
 })

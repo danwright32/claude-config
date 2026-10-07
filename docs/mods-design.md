@@ -1167,6 +1167,30 @@ and the band question is removed rather than kept beside it (L29). Three defects
   - What only a live session shows: whether the classifier allows the call Claude sends again, which
     it judges against the conversation as for any call (a For good cannot overrule it), and that a
     plugin's prompt starts Claude's turn while the session is idle.
+- **An approved durable lesson is not asked about again** (#867, built 2026-10-06; Dan: "The
+  confirmation that I want to add the durable lesson should be enough to indicate that I want to add
+  it forever."). The durable lesson check (`hooks/durable-lesson-check.sh`) has Claude propose a
+  rule in a picker, and Dan's add was followed by For good's own question for the same write (L330:
+  an acknowledgement must be consulted by every rule raising that question). Now the picker carries
+  `metadata.source` `durable-lesson` and the rule in `metadata.rule`, and the mod treats it as it
+  treats its own question: the rule must be stated word for word in the question Dan reads (and run
+  to at least 40 characters, so a word or two cannot approve any entry), the call may carry no
+  answers, and the mod sets the answers itself (Add to LESSONS.md, Project memory instead, Skip), so
+  the label read back is its own. Only Add to LESSONS.md, read from the dialog's result, records an
+  approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
+  lapsing, refused on its age and said at session end the same way. The write it lets through is an
+  Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
+  lessons reviews of #869 found a new shape each round). An Edit's old text must be one or more
+  whole lines of the file as it is now, found exactly once, and its new text that old text, a newline
+  and the entry block, or the entry block, a newline and the old text. A Write must be the file with
+  exactly the entry block inserted at one line boundary. The entry block is one entry in a fixed
+  shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
+  provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
+  is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
+  Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
+  time, so the corrected write is not asked about either, and a refusal by another guard is said to
+  Dan and recorded, so its lapse never calls it unused (#764). Project memory instead and Skip
+  approve nothing, and a subagent's picker records nothing.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
   which for a heredoc or a script was unreadable.

@@ -6,6 +6,20 @@ import {
   FOR_GOOD,
   HEADER,
   type InCheckout,
+  LESSON_ADD,
+  LESSON_HEADER,
+  LESSON_PROJECT,
+  LESSON_SKIP,
+  LESSON_SOURCE,
+  MAX_SHORT,
+  MIN_RULE,
+  addsLesson,
+  lessonAddition,
+  lessonOptions,
+  lessonsFile,
+  pressed,
+  ruleText,
+  untimed,
   type IsSet,
   NOT_AT_ALL,
   THIS_SESSION,
@@ -72,6 +86,10 @@ const fromAgent = new Map<string, number>()
 // The calls the classic hook let through on a For good approval, by tool_use_id, with where each
 // saves to: read back by the tool.call hook above it in the same dispatch, to say what became of it.
 const reissued = new Map<string, string>()
+// The calls the classic hook let through on an approval from the durable lesson picker (#867), by
+// tool_use_id, with that approval: taken from $.state as the call passed, so a second matching call
+// meanwhile is asked about, and given back by the tool.call hook above when the write did not land.
+const lessonUsed = new Map<string, AskBeforeSavingApproval>()
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -177,8 +195,8 @@ const tell = async ($: EngineInterface, text: string) => {
 const lapsedFor = (x: AskBeforeSavingApproval) => {
   const where = x.files.join(', ')
   return x.refused !== undefined
-    ? `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not saved within that time.`
-    : `The For good you gave for saving to ${where} lapsed after ${MINUTES} minutes unused, so it no longer lets that save through.`
+    ? `The ${pressed(x)} you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not saved within that time.`
+    : `The ${pressed(x)} you gave for saving to ${where} lapsed after ${MINUTES} minutes unused, so it no longer lets that save through.`
 }
 
 // Every approval past its time is taken out and said, to Dan and to Claude (L523): one Claude never
@@ -196,18 +214,19 @@ const lapse = async ($: EngineInterface) => {
     await tell(
       $,
       x.refused !== undefined
-        ? `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes: the save you sent was refused before it was saved (${x.refused}), so nothing was saved, and sending it again asks him again.`
-        : `Dan's For good on saving this to ${where} lapsed after ${MINUTES} minutes unused: it no longer lets that save through, and sending it again asks him again.`,
+        ? `Dan's ${pressed(x)} on saving this to ${where} lapsed after ${MINUTES} minutes: the save you sent was refused before it was saved (${x.refused}), so nothing was saved, and sending it again asks him again.`
+        : `Dan's ${pressed(x)} on saving this to ${where} lapsed after ${MINUTES} minutes unused: it no longer lets that save through, and sending it again asks him again.`,
     )
   }
 }
 // Times the lapse, never throwing: a timer that cannot be set is said. The approval is then refused
 // on its age where it is used, and said at session end, so only the announcement on time is lost.
-const lapseAfter = ($: EngineInterface, ms: number, where: string) => {
+// Named by the approval itself, so the toast says the answer Dan pressed (lessons review of #869).
+const lapseAfter = ($: EngineInterface, ms: number, x: AskBeforeSavingApproval) => {
   try {
     $.clock.after(Math.max(0, ms), () => void lapse($).catch(err => $.ui.toast(`Ask before saving could not take out an approval past its time: ${message(err)}`)))
   } catch (err) {
-    $.ui.toast(`The ${MINUTES} minute limit on For good for saving to ${where} could not be timed (${message(err)}), so nothing will say when it lapses; it still lapses then.`, { timeoutMs: 10_000 })
+    $.ui.toast(untimed(x, message(err)), { timeoutMs: 10_000 })
   }
 }
 
@@ -232,12 +251,49 @@ const takeApproval = async ($: EngineInterface, key: string) => {
   return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
 }
 
+// The text a call adds to the lessons file, when it is an Edit or Write to that file and all it does
+// is add (#867); undefined for anything else. An Edit or Write writes its own file_path and nothing
+// else, so the path is the whole judgement of where it saves, and it is judged before anything is
+// read: a Bash call is never looked into here (second lessons review of #869, where a refused shell
+// call's target reads failed and replaced the refusal that stopped it). A file that exists and cannot
+// be read fails the hook, and the hook fails closed.
+const lessonAdded = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> => {
+  if (tool !== 'Edit' && tool !== 'Write') return undefined
+  const file = lessonsFile(at.home)
+  if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return undefined
+  // The file as it is now: an Edit's kept text is judged against it as well as a Write's content.
+  const old = (await $.fs.exists(file)) ? await $.fs.read(file) : undefined
+  return lessonAddition(tool, input, old)
+}
+
+// The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
+// that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
+const takeLesson = async ($: EngineInterface, added: string) => {
+  const now = await $.clock.now()
+  let live: AskBeforeSavingApproval | undefined
+  let lapsed: AskBeforeSavingApproval[] = []
+  await update($, approvalsRef, a => {
+    live = undefined
+    lapsed = []
+    const keep: AskBeforeSavingApproval[] = []
+    for (const x of a ?? []) {
+      const fits = x.lesson !== undefined && addsLesson(added, x.lesson)
+      if (fits && !stands(x.until, now)) lapsed.push(x)
+      else if (fits && !live) live = x
+      else keep.push(x)
+    }
+    return keep
+  })
+  for (const x of lapsed) $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
+  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
+}
+
 // What Claude reads when the approval for the call it sent has lapsed (#764: never "unused" for one
 // it sent that another guard refused).
 const lapsedNote = (x: AskBeforeSavingApproval) =>
   x.refused !== undefined
-    ? `Dan's earlier For good on this save lapsed after ${MINUTES} minutes; the save you sent before was refused (${x.refused}), so he has to be asked again.`
-    : `Dan's earlier For good on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
+    ? `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes; the save you sent before was refused (${x.refused}), so he has to be asked again.`
+    : `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
 // What a subagent is told when its write would save lasting memory: refused, never asked (#777).
 const agentRefusal = (where: string) =>
@@ -245,7 +301,7 @@ const agentRefusal = (where: string) =>
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
 
-type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown } }
+type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown } }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
@@ -303,6 +359,7 @@ export const register: Register = on => {
     }
     let r: Awaited<ReturnType<typeof next>>
     let forGood: string | undefined
+    let lesson: AskBeforeSavingApproval | undefined
     try {
       r = await next(e)
     } finally {
@@ -310,6 +367,27 @@ export const register: Register = on => {
       if (key !== undefined) approved.delete(key)
       forGood = reissued.get(id)
       reissued.delete(id)
+      lesson = lessonUsed.get(id)
+      lessonUsed.delete(id)
+    }
+    // A lesson added on Dan's answer in the durable lesson picker (#867). One that did not land (an
+    // Edit whose text was not found, a settings hook refusing it) gives the approval back for the rest
+    // of its time, so the corrected call is not asked about either, and records why, so its lapse
+    // never calls it unused; Dan, who pressed add believing it saved, is told it was not.
+    if (lesson !== undefined) {
+      const where = lesson.files.join(', ')
+      if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `Added to ${where}, as Dan answered ${LESSON_ADD}.`] }
+      const why = String(r.deny ?? r.text ?? 'the tool reported an error')
+      const back: AskBeforeSavingApproval = { ...lesson, refused: why }
+      $.ui.toast(`Not added to ${where}: ${why}`, { timeoutMs: 10_000 })
+      if (!stands(back.until, await $.clock.now())) {
+        $.ui.toast(lapsedFor(back), { timeoutMs: 10_000 })
+        return r
+      }
+      await update($, approvalsRef, a => [...(a ?? []), back])
+      // A refusal carries no context: Claude reads the refusal itself.
+      if (r.deny !== undefined) return r
+      return { ...r, context: [...(r.context ?? []), `Not added to ${where}. Dan's ${LESSON_ADD} still stands until it lapses: correct the call and send it again, and it is added without asking him.`] }
     }
     // A save Dan answered For good, sent again, refused by another guard before the classic hook
     // could take its approval (#764): Dan is told now that it did not go through, and the approval,
@@ -324,7 +402,21 @@ export const register: Register = on => {
         hit = undefined
         return (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: String(r.deny) }) : x))
       })
-      if (hit) $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
+      if (hit) {
+        $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
+        return r
+      }
+      // And a lesson Dan approved in the durable lesson picker, added by a call another guard refused
+      // before the classic hook could take its approval (#867): said the same way.
+      const added = await lessonAdded($, tool, input, at)
+      if (added === undefined) return r
+      const now = await $.clock.now()
+      let fit = undefined as AskBeforeSavingApproval | undefined
+      await update($, approvalsRef, a => {
+        fit = undefined
+        return (a ?? []).map(x => (!fit && x.lesson !== undefined && stands(x.until, now) && addsLesson(added, x.lesson) ? (fit = { ...x, refused: String(r.deny) }) : x))
+      })
+      if (fit) $.ui.toast(`Not added to ${fit.files.join(', ')}: ${r.deny}`, { timeoutMs: 10_000 })
       return r
     }
     if (forGood !== undefined) {
@@ -357,6 +449,14 @@ export const register: Register = on => {
       reissued.set(String(raw.tool_use_id ?? ''), live.files.join(', '))
       return next(e)
     }
+    // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
+    // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
+    const added = await lessonAdded($, tool, input, at)
+    const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
+    if (lesson.live) {
+      lessonUsed.set(String(raw.tool_use_id ?? ''), lesson.live)
+      return next(e)
+    }
     // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
     // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
     const decided = await next(e)
@@ -367,13 +467,61 @@ export const register: Register = on => {
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
     const ask = askInstruction(id, files)
-    return { deny: lapsed ? `${lapsedNote(lapsed)} ${ask}` : ask }
+    const late = lapsed ?? lesson.lapsed
+    return { deny: late ? `${lapsedNote(late)} ${ask}` : ask }
   }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const ask = e as unknown as AskInput & Record<string, unknown>
+    // The durable lesson check's picker (#867): Dan's answer may approve the lesson's write. The mod
+    // sets the picker's answers, so the label read back is one of its own, and an approval comes
+    // only from the answer the dialog hands back: never from a call carrying its own, a rule the
+    // question Dan reads does not state, his own typed words, or a dialog that closed while he was away.
+    const lessonAsked = async () => {
+      // A subagent never writes lasting memory (#777), so its picker approves nothing.
+      if (e.agentId !== undefined) return next(e)
+      const { home } = await whereOf($)
+      const file = display(lessonsFile(home), home)
+      const questions = Array.isArray(ask.questions) ? ask.questions : []
+      const rule = typeof ask.metadata?.rule === 'string' ? ruleText(ask.metadata.rule) : ''
+      if (rule.length < MIN_RULE)
+        return { deny: `Put the whole rule, word for word as it will be added to ${file}, in metadata "rule" (at least ${MIN_RULE} characters), and state it in the question.` }
+      if (questions.length !== 1 || typeof questions[0]?.question !== 'string')
+        return { deny: `Ask one question about this lesson, stating the rule word for word as metadata "rule" carries it.` }
+      const question = questions[0].question as string
+      if (!ruleText(question).includes(rule)) return { deny: `The question must state the rule word for word as metadata "rule" carries it, so Dan approves the text that is added to ${file}.` }
+      if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
+        return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this lesson.' }
+
+      const r = await next({ ...e, questions: [{ ...questions[0], header: LESSON_HEADER, options: lessonOptions(file), multiSelect: false }] } as typeof e)
+      if (r.deny !== undefined || r.isError) return r
+      const out = (r.result ?? {}) as AskResult
+      const asked = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
+      const chosen = out.answers?.[asked] ?? out.answers?.[question]
+      const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
+      if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so the lesson is not approved. Ask him again when he is back.`)
+      if (chosen === LESSON_PROJECT) return say(`Dan answered ${LESSON_PROJECT}: do not add it to ${file}. Save it to this project's memory instead; that save is asked about as usual.`)
+      if (chosen === LESSON_SKIP) return say(`Dan answered ${LESSON_SKIP}: nothing is saved.`)
+      if (chosen !== LESSON_ADD)
+        return say(`Dan did not choose ${LESSON_ADD}${typeof chosen === 'string' && chosen.trim() ? `, he answered in his own words: "${chosen}"` : ''}. The lesson is not approved; act on what he said.`)
+      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule }
+      await update($, approvalsRef, a => [...(a ?? []), made])
+      lapseAfter($, APPROVAL_MS, made)
+      return say(
+        `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
+          `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+      )
+    }
+    if (ask.metadata?.source === LESSON_SOURCE) {
+      try {
+        return await lessonAsked()
+      } catch (err) {
+        return { deny: `Ask before saving could not read Dan's answer about the lesson (${message(err)}), so nothing is approved. Ask him again.` }
+      }
+    }
     const id = saveIdOf(ask.metadata?.source)
     // A question about no save is Claude Code's alone, its failures included (lessons review of #783:
     // a catch over the whole hook reported them as a save whose answer could not be read).
@@ -423,7 +571,7 @@ export const register: Register = on => {
       const key: string = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
       const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS }
       await update($, approvalsRef, a => [...(a ?? []), made])
-      lapseAfter($, APPROVAL_MS, where)
+      lapseAfter($, APPROVAL_MS, made)
       return say(
         `Dan answered For good to saving this to ${where}. Send the same ${q.tool} call again now, unchanged, and it is saved without asking him again: ` +
           `${callShown(q.tool, q.input)}. If it is not sent within ${MINUTES} minutes, this lapses.`,
@@ -442,7 +590,7 @@ export const register: Register = on => {
     const waiting = (await $.state.get(approvalsRef)).value ?? []
     if (waiting.length) {
       const now = await $.clock.now()
-      for (const x of waiting) lapseAfter($, lapseWait(x.until, now), x.files.join(', '))
+      for (const x of waiting) lapseAfter($, lapseWait(x.until, now), x)
     }
     return r
   })
@@ -470,8 +618,8 @@ export const register: Register = on => {
     for (const x of unused)
       $.ui.toast(
         x.refused !== undefined
-          ? `The For good you gave for saving to ${x.files.join(', ')} ended with the session: Claude sent the save, but it was refused before it was saved (${x.refused}), so nothing was saved.`
-          : `The For good you gave for saving to ${x.files.join(', ')} was never used before the session ended, so it no longer lets that save through.`,
+          ? `The ${pressed(x)} you gave for saving to ${x.files.join(', ')} ended with the session: Claude sent the save, but it was refused before it was saved (${x.refused}), so nothing was saved.`
+          : `The ${pressed(x)} you gave for saving to ${x.files.join(', ')} was never used before the session ended, so it no longer lets that save through.`,
         { timeoutMs: 10_000 },
       )
     return next(e)

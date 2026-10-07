@@ -30,6 +30,12 @@ export type AskBeforeSavingApproval = {
    * the approval stood unused: its lapse says so rather than calling it unused (#764).
    */
   refused?: string
+  /**
+   * Set on an approval Dan gave in the durable lesson picker (#867), as the rule compared (rules.ts
+   * ruleText): a write that only adds this rule to the lessons file goes through. Its key is never a
+   * save's, so a call is never matched to it by key.
+   */
+  lesson?: string
 }
 
 declare module 'claude-code' {
@@ -38,7 +44,8 @@ declare module 'claude-code' {
      * In $.state so a reload of the mod keeps them, and dropped at session end: the refused saves
      * waiting for Claude to ask Dan in the dialog, the rules he gave for this session only, his
      * latest message, read for the words that already make a rule permanent, and the saves he
-     * answered For good that Claude has yet to send again.
+     * answered For good that Claude has yet to send again, beside the lessons he answered Add to
+     * LESSONS.md in the durable lesson picker (#867, `lesson` set) that Claude has yet to add.
      */
     'ask-before-saving': { pending: AskBeforeSavingQuestion[]; rules: string[]; lastPrompt: string | null; approvals: AskBeforeSavingApproval[] }
   }
