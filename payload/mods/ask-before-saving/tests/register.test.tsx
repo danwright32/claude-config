@@ -1215,3 +1215,55 @@ test('an approved lesson Write into a lessons file of real size goes through, in
   expect((await call($, { tool: 'Write', file_path: LESSONS, content: big.slice(0, at) + ENTRY + big.slice(at) })).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
 })
+
+
+// ---- Sleep mode phase 2 (#841): a save waits for the morning report while Dan is asleep ----
+
+// Scope modes, standing in. An inline plugin cannot reach this file's variables, so the night is in
+// the world's files, read at each call: /night/asleep while the Mac sleeps, /night/note-fails
+// holding why a note cannot be written. A note written comes back to the world as a NOTE toast.
+const sleeper: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        scopeModes: {
+          isAsleep: async () => built.fs.exists('/night/asleep'),
+          sleepNote: async (note: Record<string, unknown>) => {
+            if (!(await built.fs.exists('/night/asleep'))) return { isNoted: false }
+            if (await built.fs.exists('/night/note-fails')) throw new Error(await built.fs.read('/night/note-fails'))
+            await built.ui.toast(`NOTE ${JSON.stringify(note)}`)
+            return { isNoted: true }
+          },
+        },
+      }
+    })
+  },
+}
+const withSleeper = { plugins: [secDefault, modKit, guard, sleeper] }
+const nightNotes = (w: { toasts: string[] }) => w.toasts.filter(t => t.startsWith('NOTE ')).map(t => JSON.parse(t.slice(5)) as unknown)
+
+test('while asleep a save to lasting memory is not asked about: it is noted for the morning report, and asked again once awake (#841)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '' } })
+  const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '# Slate\n\n- Ask before merging.\n' })
+  expect(w.ran).toEqual([])
+  expect(refusalOf(r)).toBe(
+    'Not saved: this writes lasting memory (~/Apps/slate/CLAUDE.md), and Dan is asleep (sleep mode), so he is not asked tonight. The save is noted for his morning report, where he decides. Do not write it any other way; carry on with the rest of the work.',
+  )
+  expect(nightNotes(w)).toEqual([{ kind: 'save', files: ['~/Apps/slate/CLAUDE.md'], rule: '# Slate\n\n- Ask before merging.' }])
+  quietOnMain(w)
+  delete w.files['/night/asleep']
+  const again = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '# Slate\n\n- Ask before merging.\n' })
+  expect(refusalOf(again)).toContain(ASKS)
+})
+
+test('a save that cannot be noted while asleep is still not written, and Claude is told to carry it in its final message (#841)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '', '/night/note-fails': 'sh: notes: Permission denied' } })
+  const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '# Slate\n\n- Ask before merging.\n' })
+  expect(w.ran).toEqual([])
+  expect(refusalOf(r)).toBe(
+    'Not saved: this writes lasting memory (~/Apps/slate/CLAUDE.md), and Dan is asleep (sleep mode), so he is not asked tonight. It could not be noted for his morning report (sh: notes: Permission denied), so put the rule and ~/Apps/slate/CLAUDE.md in your final message. Do not write it any other way; carry on with the rest of the work.',
+  )
+})
