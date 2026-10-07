@@ -465,7 +465,7 @@ def github_done(record, notes):
         # A note is unchecked only when the list that would check it failed: a PR note by the PR
         # list, an issue only note by the issue list, so the list that answered never repeats it.
         done.extend("%s%s: %s (as noted, unchecked)" % (where(n), ", PR #%s" % n["pr"] if n.get("pr") is not None else "", text_of(n))
-                    for n in noted if (why_p if n.get("pr") is not None else why_i))
+                    for n in noted if (n.get("pr") is not None and why_p) or (n.get("pr") is None and n.get("issue") is not None and why_i))
         asked = set()
         if prs:
             if prs["full"]:
@@ -508,6 +508,10 @@ def confirm(repo, what, number, since, deadline, done, flags):
     label = "PR" if what == "pr" else "issue"
     left = int(deadline - time.monotonic())
     why = None
+    # Any session can write a note, so only a plain number ever reaches gh's command line.
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        flags.append("%s %s %s was noted done, but that is not a %s number, so GitHub was not asked." % (repo, label, json.dumps(number), label))
+        return
     if left <= 0:
         why = "the report ran out of its %d seconds for GitHub" % GH_TOTAL_S
     else:

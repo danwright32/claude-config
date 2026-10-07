@@ -171,7 +171,7 @@ const finishReport = async ($: EngineInterface, record: string, ending: Record<s
 
 // A question for Dan while he is asleep (#841): never asked, noted for his morning report. Answers
 // null once noted, or why it could not be.
-const noteQuestion = async ($: EngineInterface, record: SleepRecord, questions: string[]): Promise<string | null> => {
+const noteQuestion = async ($: EngineInterface, questions: string[]): Promise<string | null> => {
   try {
     await sleepNote($, (await sleepPaths($)).current, { kind: 'question', at: await $.clock.now(), by: await $.session.id(), cwd: await $.session.cwd(), questions })
     return null
@@ -1008,7 +1008,7 @@ export const register: Register = on => {
       // Dan is asked nothing while asleep (#841): the request waits for his morning report.
       const sleeping = await sleepNow($)
       if (sleeping.state === 'asleep') {
-        const failed = await noteQuestion($, sleeping.record, [question])
+        const failed = await noteQuestion($, [question])
         const text = `Dan is asleep (sleep mode), so he was not asked: no build stays on. ${
           failed === null ? 'The request is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put it in your final message.`
         }`
@@ -1048,7 +1048,7 @@ export const register: Register = on => {
     // arrives here too, so this is the one place a question to Dan is stopped overnight.
     if (tool === 'AskUserQuestion' && sleeping.state === 'asleep') {
       const qs = Array.isArray(input.questions) ? (input.questions as { question?: unknown }[]).map(q => String(q?.question ?? '')) : []
-      const failed = await noteQuestion($, sleeping.record, qs)
+      const failed = await noteQuestion($, qs)
       await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' })
       return { deny: askedAsleep(failed) }
     }
