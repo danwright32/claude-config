@@ -438,6 +438,13 @@ case "$command" in
     base_ref=$(printf '%s' "$rollup" | jq -r '.baseRefName // ""' 2>/dev/null)
     merge_state=$(printf '%s' "$rollup" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
     update_cmd="gh pr update-branch $number${slug:+ --repo $slug}"
+    # The merge method this merge asked for travels with it, so the one step remedy merges the same
+    # way. Only the flags the helper carries are read; anything else is not its to pass on.
+    helper_flags=""
+    for hf in --squash --merge --rebase --delete-branch; do
+      case " $command " in *" $hf "*) helper_flags="$helper_flags $hf" ;; esac
+    done
+    helper_cmd="bash ~/.claude/hooks/lib/merge-when-ready.sh $number${slug:+ --repo $slug}$helper_flags"
     behind_override="Deliberate override: ALLOW_BEHIND_MERGE=1 <the same command>, which skips this rule only: the checks must still be green and the merge must still pin its commit."
 
     [ -z "$base_ref" ] && deny "Refusing to merge: gh did not report which base branch PR #$number merges into, so nothing here could read that branch's current tip or tell whether the head contains it. A green verdict earned against an older base says nothing about what main will hold after the merge. Check the pull request's base, then re-run. $behind_override"
@@ -473,7 +480,7 @@ case "$command" in
       else
         distance="it is $behind_by commits behind $base_ref"
       fi
-      deny "PR #$number is green, but its head does not contain the current tip of its base branch: $distance. Its checks were earned against an older base, so the combination $base_ref would hold after this merge has never been tested, which is how two green pull requests turn main red (L85). Run: $update_cmd , then wait for the new checks on the updated head to go green, and merge that head. $behind_override"
+      deny "PR #$number is green, but its head does not contain the current tip of its base branch: $distance. Its checks were earned against an older base, so the combination $base_ref would hold after this merge has never been tested, which is how two green pull requests turn main red (L85). Run: $update_cmd , then wait for the new checks on the updated head to go green, and merge that head. Or do all of that in one step, in the background, from a checkout of the repository: $helper_cmd . It updates the branch, waits for the new head's checks and lessons review, asks this gate and the review gate about the exact pinned merge, and merges only that head (claude-config#851). $behind_override"
     fi
     ;;
 esac
