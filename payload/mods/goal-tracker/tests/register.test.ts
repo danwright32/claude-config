@@ -1324,3 +1324,15 @@ test('a sleep check that fails inside scope modes with a TypeError is still said
   expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
   expect(w.debug.some(d => /could not tell whether the Mac is asleep \(undefined is not an object/.test(d))).toBe(true)
 })
+
+// Scope modes not loaded: $.scopeModes is undefined in this mod's own code, a TypeError naming it,
+// never rewrapped by a noun, so nothing is said and the notification goes (#841).
+test('without scope modes loaded the notification is sent and no failed sleep check is said (#841)', unseated, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  await start($)
+  await idle($)
+  await settled()
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+  expect(w.debug.filter(d => /could not tell whether the Mac is asleep/.test(d))).toEqual([])
+})
