@@ -176,8 +176,8 @@ type Opts = {
   usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
   /** What `sleep-queue.sh claims` prints (#844): one JSON line per issue claimed tonight. */
   claims?: string
-  /** The tips of the sleep/ branches, as for-each-ref prints them (#844). */
-  refs?: string
+  /** The tip of each sleep/ branch, by its ref, as for-each-ref prints it for that ref (#844). */
+  refs?: Record<string, string>
   /** What pmset says this Mac is drawing power from (#844). */
   power?: 'ac' | 'battery'
   caffeinateFails?: boolean
@@ -301,7 +301,7 @@ const world = (on: On, o: Opts = {}) => {
         return ok(`released\t${a[3]}\t${a[5]}\n`)
       }
     }
-    if (a.includes('for-each-ref')) return ok(o.refs ?? '')
+    if (a.includes('for-each-ref')) return ok(o.refs?.[a[a.length - 1] as string] ?? '')
     if (cmd === 'pmset') return ok(o.power === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
     if (cmd === 'sh' && String(a[1]).startsWith('caffeinate')) {
       if (o.caffeinateFails) return fail(127, 'sh: caffeinate: not found')
@@ -1501,20 +1501,38 @@ test('a session the record does not name is never driven: its Stop passes, and n
   expect(w.appended).toEqual([])
 })
 
-test('the circuit breaker lets a session that does nothing new stop, with a failed note; a new commit keeps it going (#844)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+test('the circuit breaker lets a session that does nothing new stop, ending its claim; only a commit on its own branch keeps it going (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
   await start($ as never, clock)
   for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
-  // A commit on a sleep/ branch is progress, read from git, never from what the model said.
-  w.o.refs = 'abc123\n'
+  // A commit on its own claim's branch is progress, read from git, never from what the model said.
+  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n' }
   expect((await stop($ as never)).block).toBeDefined()
-  w.o.refs = 'abc123\n'
+  // Another worker's commits on its own branch are not this session's progress.
+  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n', 'refs/heads/sleep/9': 'def456\n' }
   for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
   expect((await stop($ as never)).block).toBeUndefined()
-  expect(kinds(w).slice(-2)).toEqual(['failed', 'stopped'])
-  expect(JSON.parse(w.appended[w.appended.length - 1]?.line as string).text).toBe('circuit breaker: 3 blocks in a row with no new commit, claim or note')
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'circuit breaker: 3 blocks in a row with no new commit, claim or note']])
+  expect(kinds(w)[kinds(w).length - 1]).toBe('stopped')
   // Stopped for the night: never blocked again.
   expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('a counter that cannot be written still ends the claim in hand, on a Stop and on an API error (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '7', 's1', 'failed']])
+})
+
+test('an API error whose wait cannot be recorded ends the claim in hand rather than leave it held (#844)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'rate_limit')
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '7', 's1', 'failed']])
 })
 
 test('a counter that cannot be read stops the session rather than loop, and says so (#844)', withDeps, async ($, on) => {

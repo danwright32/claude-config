@@ -911,8 +911,11 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   never `stop_hook_active` (true from the second Stop on). A counter that cannot be read or written
   stops the session with a `stopped` note rather than loop on a count it cannot keep.
 - Progress is recorded state only: this session's notes that are not bookkeeping (heartbeat, wait,
-  usage, stopped) and the tips of the `sleep/` branches (`git for-each-ref`). A reading that cannot
-  be taken is no progress. The circuit breaker lets the session stop, with a `failed` note (the
+  usage, stopped, and every note the driver writes itself, marked `driver: true`) and the tip of the
+  `sleep/N` branch of the issue it holds (`git for-each-ref`), never another worker's branch. A
+  reading that cannot be taken is no progress. The Stop, the API error and the minute's tick take
+  turns, so none writes back a stale counter over another's, and every stop, a stop whose counter
+  could not be saved included, ends the claim in hand through the queue rather than leave it held. The circuit breaker lets the session stop, with a `failed` note (the
   claim ended as failed through the queue when one is held), after 3 blocks in a row or 20 minutes
   of active time with nothing new; a session is also capped at 120 blocks a night. Each block writes
   a heartbeat note with the usage reading.

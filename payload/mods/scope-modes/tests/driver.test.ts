@@ -121,6 +121,11 @@ describe('the circuit breaker (H3)', () => {
     const theirs = JSON.stringify({ kind: 'stopped', by: 's2', at: T0 + 1 })
     expect(decideStop(input({ driver: ok(after()), notesText: theirs })).kind).toBe('block')
   })
+  test('a stopped note while a claim is still held ends that claim, never leaving it held for the night', () => {
+    const mine = JSON.stringify({ kind: 'stopped', by: 's1', at: T0 + 1 })
+    const r = decideStop(input({ driver: ok(after()), notesText: mine, claim: held() }))
+    expect(r.kind === 'stop' && r.release).toEqual({ issue: 7, state: 'parked', why: 'the session said it stopped while still holding this issue' })
+  })
   test('claims that cannot be read stop the session, said, rather than judge a claim it cannot see', () => {
     const r = decideStop(input({ claim: { state: 'unknown', why: 'a line of the claims could not be read' } }))
     expect(r.kind).toBe('stop')

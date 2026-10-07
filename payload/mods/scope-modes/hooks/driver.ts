@@ -123,8 +123,8 @@ export const waitedIn = (waits: Wait[], from: number, to: number) =>
 export const activeMs = (waits: Wait[], from: number, to: number) => Math.max(0, to - from - waitedIn(waits, from, to))
 
 /**
- * What progress reads as now: this session's own notes that are not bookkeeping, and the tips of
- * tonight's sleep/ branches. Either reading missing makes the whole reading null, which counts as no
+ * What progress reads as now: this session's own notes that are not bookkeeping, and the tip of the
+ * sleep/ branch of the issue it holds (never another worker's branch, whose commits are not its own). Either reading missing makes the whole reading null, which counts as no
  * progress (a breaker that trips on an unreadable reading stops; one that resets on it loops).
  */
 export const progressOf = (notesText: string | null, self: string, refsText: string | null): string | null => {
@@ -237,7 +237,9 @@ export const decideStop = (i: StopInput): StopDecision => {
     return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...extra, { kind: 'stopped', ...where, text: why }] }
   }
 
-  if (saidStopped(i.notesText, self, d.since)) return stop('the session said it stopped (its stopped note)')
+  if (saidStopped(i.notesText, self, d.since)) {
+    return stop('the session said it stopped (its stopped note)', claim ? { issue: claim.issue, state: 'parked', why: 'the session said it stopped while still holding this issue' } : undefined)
+  }
 
   if (i.weekly !== null && i.weekly >= LIMITS.weeklyStop) {
     const why = `the weekly limit is at ${pct(i.weekly)}, past the ${LIMITS.weeklyStop}% the night stops at`

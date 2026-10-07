@@ -526,10 +526,12 @@ const claimNow = async ($: EngineInterface, en: Enrolled): Promise<ClaimReading>
   return heldClaim(r.stdout, en.self)
 }
 
-// The tips of tonight's sleep/ branches: a new commit on any of them is progress. null when unreadable.
-const refsNow = async ($: EngineInterface, root: string | null): Promise<string | null> => {
-  if (!root) return ''
-  const r = await run($, ['git', '-C', root, 'for-each-ref', '--format=%(objectname)', 'refs/heads/sleep/'])
+// The tip of the sleep/ branch of the issue this session holds: a new commit there is progress.
+// Only its own: another worker's commits on its own branch are not this session's (#844). Nothing
+// held reads as no branch; null when unreadable.
+const refsNow = async ($: EngineInterface, root: string | null, claim: ClaimReading): Promise<string | null> => {
+  if (!root || claim.state !== 'held') return ''
+  const r = await run($, ['git', '-C', root, 'for-each-ref', '--format=%(objectname)', `refs/heads/sleep/${claim.claim.issue}`])
   return r.exitCode === 0 ? r.stdout : null
 }
 
@@ -585,7 +587,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const notesText = await notesNow($, en)
     const claim = await claimNow($, en)
     const u = await usageNow($)
-    const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root))
+    const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root, claim))
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
       weekly: u.weekly, claim, rules: overnightRules(en.self, where.root ?? '<the repository root>'),
@@ -596,7 +598,9 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
       if (unsaved && d.kind === 'block') {
         stoppedHere.add(stopKey(en))
         const why = `the driver's counter could not be written (${unsaved}), so it stopped rather than block on a count it did not keep`
-        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: why }])
+        // The claim in hand is ended too, never left held by a session that has stopped.
+        const ended = claim.state === 'held' ? await endClaim($, en, where.root, { issue: claim.claim.issue, state: 'failed', why }) : null
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: ended ? `${why}; the claim on #${claim.state === 'held' ? claim.claim.issue : ''} could not be ended: ${ended}` : why }])
         return null
       }
     }
@@ -622,9 +626,13 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
     if (d.record) {
       const unsaved = await saveDriver($, en, d.record)
       if (unsaved) {
-        // A wait that was not recorded would never be resumed: said, and the session stops.
+        // A wait that was not recorded would never be resumed: said, and the session stops, ending
+        // the claim in hand as the decision would have, or as failed, never leaving it held.
         stoppedHere.add(stopKey(en))
-        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: `after the ${error} error the driver's counter could not be written (${unsaved}), so no retry was set` }])
+        const why = `after the ${error} error the driver's counter could not be written (${unsaved}), so no retry was set`
+        const rel: Release | undefined = d.kind === 'stop' && d.release ? d.release : claim.state === 'held' ? { issue: claim.claim.issue, state: 'failed', why } : undefined
+        const ended = rel ? await endClaim($, en, where.root, rel) : null
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: ended && rel ? `${why}; the claim on #${rel.issue} could not be ended: ${ended}` : why }])
         return
       }
     }
