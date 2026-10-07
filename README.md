@@ -1246,8 +1246,10 @@ test` does not, so such a noun passes its own tests and fails only in a session 
 each call a noun makes to the function the TypeScript compiler's own checker resolves it to, through
 `tools/lib/ts-resolve.mjs` on the compiler pinned in `tools/typescript`, so scope, shadowing and
 parameters are the language's answer rather than the first function of that name in the mod (#895).
-Unlike the type check above, it refuses (exit 4, naming `npm ci --prefix tools/typescript`) where that
-compiler is not installed, so CI installs it before the suites run. (It no
+Run on its own, it refuses (exit 4, naming `npm ci --prefix tools/typescript`) where that compiler
+is not installed. `tests/test-mods.sh` then reports its noun wait checks UNMEASURED with the same
+command, as the type check above does, rather than failing, and CI installs the compiler so they
+always run there. (It no
 longer checks ask before saving's waiting saves against the goal tracker: since #777 the question
 is Claude Code's own dialog, which the goal tracker reads like any other question.)
 
