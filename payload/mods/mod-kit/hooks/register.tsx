@@ -97,23 +97,26 @@ type Pass = { mods: ModLook[]; unread: { name: string; text: string }[]; retry: 
 // asked, its newest file, mod-kit's own touch of its manifest not counted. No manifest, no mod:
 // nothing loads the folder. No hooks folder, no module: nothing of it is loaded, so it has no tools
 // to lose. A manifest that is there but cannot be read may be a mod that is unloaded now, so it is a
-// failure, said and asked about again.
-const beginPass = async ($: EngineInterface, home: string, entries: readonly { name: string; kind: string }[], after: string): Promise<Pass> => {
+// failure, said and asked about again. Its line says only that: no reload or ask was measured (#977
+// review).
+const beginPass = async ($: EngineInterface, home: string, entries: readonly { name: string; kind: string }[]): Promise<Pass> => {
   const pass: Pass = { mods: [], unread: [], retry: new Set((await $.state.get(askAgain)).value ?? []), stamps: { ...((await $.state.get(stamped)).value ?? {}) } }
   for (const entry of entries) {
     if (entry.kind !== 'dir' || entry.name === 'mod-kit') continue
     const dir = `${home}/${entry.name}`
     const manifestPath = `${dir}/.claude-plugin/plugin.json`
+    let part = 'manifest'
     try {
       if (!(await $.fs.exists(manifestPath))) continue
       const deps = dependsOn(await $.fs.read(manifestPath))
+      part = 'hooks folder'
       if (!(await $.fs.exists(`${dir}/hooks`))) continue
       const own = (f: { name: string; mtimeMs: number }) => f.name === 'plugin.json' && f.mtimeMs === pass.stamps[entry.name]
       const read = async () => Math.max(newestFile((await $.fs.list(`${dir}/.claude-plugin`)).filter(f => !own(f))), await newestBeneath($, `${dir}/hooks`))
       let newest: Promise<number> | undefined
       pass.mods.push({ name: entry.name, manifestPath, deps, newest: () => (newest ??= read()) })
     } catch (err) {
-      pass.unread.push({ name: entry.name, text: `${entry.name} could not be asked to load again after ${after} reloaded (${reason(err)}). ${lost}` })
+      pass.unread.push({ name: entry.name, text: `${entry.name}'s ${part} could not be read (${reason(err)}), so mod-kit could not tell whether it needs to load again. ${lost}` })
     }
   }
   return pass
@@ -171,7 +174,7 @@ const afterOwnStart = async ($: EngineInterface) => {
     $.ui.log(`mod-kit reloaded, but the mods folder ${home} could not be read (${reason(err)}), so a mod that changed with it was not asked to load again. ${lost}`)
     return
   }
-  const pass = await beginPass($, home, entries, 'mod-kit')
+  const pass = await beginPass($, home, entries)
   await askDependents($, pass, new Map([['mod-kit', before]]), { sayAgain: true, who: () => 'mod-kit' })
   await $.state.set(started, passStart)
 }
@@ -201,7 +204,7 @@ const atTurnStart = async ($: EngineInterface, turnStart: number) => {
     return
   }
   saidAtTurns.delete('folder')
-  const pass = await beginPass($, home, entries, 'a mod it depends on')
+  const pass = await beginPass($, home, entries)
   const byName = new Map(pass.mods.map(m => [m.name, m]))
   const newest: Record<string, number> = {}
   for (const provider of new Set(pass.mods.flatMap(m => m.deps))) {

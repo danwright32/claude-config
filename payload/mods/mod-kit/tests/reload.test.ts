@@ -257,7 +257,12 @@ test('a manifest that is there but cannot be read is said and asked again; a fol
   await w.clock.advance(10 * MIN)
   await start($)
   // The kit turns a throwing answer into a missing one, so the reason in the line is its own.
-  expect(w.logs.filter(l => l.includes('locked') && l.includes('could not be asked')).length).toBe(1)
+  // #977 review: the line says what was measured, that the manifest could not be read, and claims
+  // no reload or ask that did not happen.
+  const lockedSaid = w.logs.filter(l => l.includes('locked'))
+  expect(lockedSaid.length).toBe(1)
+  expect(lockedSaid[0]).toContain("locked's manifest could not be read")
+  expect(lockedSaid[0]).not.toContain('could not be asked')
   expect(w.logs.filter(l => l.includes('not-a-mod'))).toEqual([])
   ;(mods.locked as Mod).manifestUnreadable = false
   await w.clock.advance(10 * MIN)
