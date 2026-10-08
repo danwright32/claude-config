@@ -8,7 +8,10 @@ const T0 = 1_000 * MIN
 type Msg = { role: 'user' | 'assistant'; text: string; toolUses: never[] }
 type Reply = string | { failed: 'api-error' | 'empty-reply' | 'aborted' } | 'throws'
 type Rename = 'set' | 'refused' | 'refused-for-mod' | 'unknown' | 'throws'
-type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void> }
+// The repository the session runs in, as $.session.repo() answers it: none by default, so the
+// tests about naming itself see the name alone; 'throws' is a repository that cannot be read.
+type Repo = { root: string; remote: string | null } | null | 'throws'
+type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void>; repo?: Repo }
 
 const exchange = (): Msg[] => [
   { role: 'user', text: 'Build the auto session name mod from issue 635', toolUses: [] },
@@ -24,9 +27,17 @@ const world = (on: On, o: Opts = {}) => {
     logs: [] as string[],
     debug: [] as string[],
     messages: o.messages ?? exchange(),
+    repo: o.repo ?? null,
+    repoReads: 0,
   }
   const clock = mock.clock(on, { now: T0 })
   on('session.id', () => ({ value: 's1' }) as never)
+  // Read from w on each call, so a test can move the session to another repository part way.
+  on('session.repo', () => {
+    w.repoReads++
+    if (w.repo === 'throws') return { deny: 'git could not read the working copy' } as never
+    return { value: w.repo && { ...w.repo, internal: false, name: null } } as never
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.messages', () => {
     if (o.messagesThrow) return { deny: 'transcript unavailable' } as never
@@ -59,7 +70,8 @@ const world = (on: On, o: Opts = {}) => {
     ;(e.to === 'debug' ? w.debug : w.logs).push(e.text)
     return { value: undefined }
   })
-  return { ...w, clock }
+  // The same object, never a copy: a test's change to w.repo must reach the stand-in above.
+  return Object.assign(w, { clock })
 }
 
 type T = {
@@ -519,4 +531,64 @@ test('a session whose ten minute write failed is named at the next idle point on
   expect(w.prompts.length).toBe(1)
   expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
   expect(w.logs.length).toBe(1)
+})
+
+// #945: every name this mod sets starts with the repository the session runs in, in brackets.
+const CONFIG_WORKTREE = { root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: 'git@github.com:danwright32/claude-config.git' }
+const OVERTURE = { root: '/Users/x/Apps/Overture', remote: 'https://github.com/danwright32/Overture.git' }
+
+test('the name is prefixed with the repository the session runs in, a worktree naming its parent', async ($, on) => {
+  const w = world(on, { repo: CONFIG_WORKTREE })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['(claude-config) Auto session name mod'])
+  expect(w.logs).toEqual([])
+})
+
+test('the repository is read when the name is set, so a session that moved is named for where it is', async ($, on) => {
+  const w = world(on, { repo: CONFIG_WORKTREE })
+  await start($)
+  await w.clock.advance(5 * MIN)
+  w.repo = OVERTURE
+  await w.clock.advance(5 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['(overture) Auto session name mod'])
+})
+
+test('the fallback route carries the prefix too', async ($, on) => {
+  const w = world(on, { repo: OVERTURE, rename: 'refused' })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect((await prompt($)).sessionTitle).toBe('(overture) Auto session name mod')
+})
+
+test("a reply already carrying this repository's prefix is not doubled", async ($, on) => {
+  const w = world(on, { repo: OVERTURE, replies: ['(overture) Fix export'] })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['(overture) Fix export'])
+})
+
+test("a reply carrying another repository's prefix has it replaced", async ($, on) => {
+  const w = world(on, { repo: OVERTURE, replies: ['(claude-config) Fix export'] })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['(overture) Fix export'])
+})
+
+test('a session in no repository is named without a prefix', async ($, on) => {
+  const w = world(on, { repo: null })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  // The repository was asked, and answered none.
+  expect(w.repoReads).toBeGreaterThan(0)
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
+  expect(w.logs).toEqual([])
+})
+
+test('a repository that cannot be read still names the session, without the prefix, and says so', async ($, on) => {
+  const w = world(on, { repo: 'throws' })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
+  expect(w.logs).toEqual(['Auto session name named this session without its repository in front: the repository could not be read (git could not read the working copy).'])
 })

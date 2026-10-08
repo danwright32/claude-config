@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { AutoSessionNameRecord as Rec } from '../types/index.d.ts'
-import { cleanName, hasExchange, namePrompt, renameOutcome } from './name.ts'
+import { cleanName, hasExchange, namePrompt, renameOutcome, repoLabel, withRepo } from './name.ts'
 
 // Auto session name (claude-config#635), behaviour agreed with Dan on 2026-10-04: ten minutes after
 // an interactive session starts (or after its first exchange, when nothing was asked by then) it is
@@ -154,6 +154,18 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   })
   if (!still || still.outcome !== 'waiting' || !mine(still)) return
 
+  // The repository goes in front, read now rather than at the start, so a session that moved is
+  // named for where it is (#945). One that cannot be read still gets its name, without the prefix,
+  // and a line says so once the name is set.
+  let unread = ''
+  let label: string | null = null
+  try {
+    label = repoLabel(await $.session.repo())
+  } catch (err) {
+    unread = errText(err)
+  }
+  name = withRepo(label, name)
+
   // First route: the built-in /rename, queued by the engine until the session is idle. Its answer
   // is read by the shape of its success text. A refusal, or an answer that says nothing, falls back
   // to returning sessionTitle on Dan's next message, which first checks whether the name took.
@@ -183,6 +195,7 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   // newer attempt may have taken over in the meantime.
   await update($, cur => (cur && mine(cur) ? { ...cur, outcome: 'named', claim: null, pendingTitle: outcome === 'set' ? null : name } : undefined))
   $.ui.log(`${MOD}: /rename answered ${outcome} (${detail}); ${outcome === 'set' ? 'named' : 'will set sessionTitle on the next message'}`, { to: 'debug' })
+  if (unread) $.ui.log(`${WHO} named this session without its repository in front: the repository could not be read (${unread}).`)
 }
 
 export const register: Register = on => {

@@ -16,6 +16,21 @@ const LONG_DASH = new RegExp('[\\u2012\\u2013\\u2014\\u2015\\u2212]', 'g')
 // Straight, curly and angle quotes, backticks and markdown emphasis around a name.
 const WRAPPERS = new RegExp('^[\\s"\'`*_\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+|[\\s"\'`*_\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+$', 'g')
 
+// The repository prefix every name this mod sets starts with (#945): `(claude-config) Fix export`.
+// A label is the repository's name in lower case with no brackets, so a bracketed run with neither
+// a bracket nor a capital in it is read as a prefix; `(WIP)` is the name's own and is kept.
+const REPO_PREFIX = /^\(([^()\p{Lu}]+)\)(?:\s+|$)/u
+// Room for the name: a label is cut to this, so at least 27 of the 60 characters stay the name's.
+const LABEL_CHARS = 30
+const WORKTREES = '/.claude/worktrees/'
+
+/** The name with any repository prefixes in front of it taken off. */
+const unprefixed = (name: string): string => {
+  let rest = name.trim()
+  for (let m = REPO_PREFIX.exec(rest); m; m = REPO_PREFIX.exec(rest)) rest = rest.slice(m[0].length)
+  return rest
+}
+
 export type Cleaned = { name: string } | { refused: 'empty' | 'too-long' }
 
 export const cleanName = (reply: string): Cleaned => {
@@ -26,12 +41,55 @@ export const cleanName = (reply: string): Cleaned => {
   // inside a word (two-way) has neither and stays.
   name = name.replace(LONG_DASH, ' ').replace(/(^|\s)-+(\s|$)/g, ' ')
   name = name.replace(/[.\s]+$/, '').replace(WRAPPERS, '').replace(/\s+/g, ' ').trim()
+  // A prefix Haiku copied from the conversation is not the name: the right one goes on at naming.
+  name = unprefixed(name)
   if (!/[\p{L}\p{N}]/u.test(name)) return { refused: 'empty' }
   if (name.split(' ').length > MAX_WORDS || name.length > MAX_CHARS) return { refused: 'too-long' }
   return { name }
 }
 
-const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}...` : s)
+// The last part of a path or a remote (`git@host:o/r.git`, `https://host/o/r/`), trailing slashes off.
+const lastPart = (s: string, separators: RegExp): string => s.replace(/\/+$/, '').split(separators).pop() ?? ''
+
+/**
+ * The repository a session runs in, as its prefix label (#945): the origin's repository name, else
+ * the checkout folder's name, in lower case with brackets removed; null outside a repository. A
+ * worktree under `.claude/worktrees/` names its parent: the engine already gives the main working
+ * tree as `root`, and the folder is cut here too so the label never rests on that alone.
+ */
+export const repoLabel = (repo: { root: string; remote: string | null } | null): string | null => {
+  if (!repo) return null
+  let name = lastPart((repo.remote ?? '').trim(), /[/:]/).replace(/\.git$/i, '')
+  if (!name) {
+    const root = repo.root.replace(/\/+$/, '')
+    const at = `${root}/`.indexOf(WORKTREES)
+    name = lastPart(at >= 0 ? root.slice(0, at) : root, /\//)
+  }
+  const label = name.toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, LABEL_CHARS).trim()
+  return label || null
+}
+
+/**
+ * The name as this mod sets it: `(label) name`. A prefix already there is never doubled, one from
+ * another repository is replaced, and with no label the name goes alone. The prefix counts toward
+ * the 60 character cap, and the name is what is shortened, at a word where one fits.
+ */
+export const withRepo = (label: string | null, name: string): string => {
+  const rest = unprefixed(name) || name.trim()
+  if (!label) return rest
+  const head = `(${label}) `
+  const room = MAX_CHARS - head.length
+  if (rest.length <= room) return head + rest
+  let kept = ''
+  for (const word of rest.split(' ')) {
+    const next = kept ? `${kept} ${word}` : word
+    if (next.length > room) break
+    kept = next
+  }
+  return head + (kept || rest.slice(0, room)).replace(/[\s,;:]+$/, '')
+}
+
+const cut =(s: string, n: number) => (s.length > n ? `${s.slice(0, n)}...` : s)
 const isRequest = (m: SessionMessage) => m.role === 'user' && m.text.trim().length > 0
 
 // A request from the person, and a reply after it.
