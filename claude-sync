@@ -143,6 +143,7 @@ CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI 
 CI_RED_SINCE_FILE="$SYNC_REPO/.ci-red-since"   # since when the shared repo's head has been red (#336)
 MY_PUSH_FILE="$SYNC_REPO/.my-push"   # the head this Mac last sent, and what became of it (#340)
 RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
+UNLOADABLE_NOTIFIED_FILE="$SYNC_REPO/.unloadable-notified"   # skills entries the cannot load notice already named (#968)
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
 # Untracked and per clone, because it records what has been RUN here rather than what the config
@@ -264,14 +265,26 @@ COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.
 # asleep (sleep mode, claude-config#841): what it would have said goes to the log instead, for the
 # morning. The sleep record is read through the tool's own copy of lib/sleep.sh, the one predicate
 # every hook asks, and a record (or a lib) that cannot be read counts as awake, so it notifies.
+# NOTIFY_POSTED says whether the last call really POSTED, for a caller that records a notice as
+# delivered (notify_posted below); notify itself never fails the run.
+NOTIFY_POSTED=0
 notify(){
+  NOTIFY_POSTED=0
   [ "${SYNC_NO_NOTIFY:-0}" = "1" ] && return 0
   if [ -f "$SYNC_SELF_PAYLOAD/hooks/lib/sleep.sh" ] && ( . "$SYNC_SELF_PAYLOAD/hooks/lib/sleep.sh" && sleep_active "$CLAUDE_HOME/state/sleep/current.json" ); then
     sync_log_line "not shown, Dan is asleep: $1"
     return 0
   fi
   local n="${SYNC_NOTIFIER:-terminal-notifier}"
-  command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 || true
+  command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 && NOTIFY_POSTED=1
+  return 0
+}
+# notify, answering whether the notification was really POSTED: not when notifications are off,
+# when the sleep record held it for the morning, or when the notifier is missing or failed. So one
+# nobody saw is tried again rather than recorded as told (claude-config#968, L368).
+notify_posted(){
+  notify "$1"
+  [ "$NOTIFY_POSTED" = 1 ]
 }
 # The log the scheduled and watch jobs write to (their launch agents point stdout and stderr here).
 # A line appended directly, with its own time, for an event that must leave a record whichever entry
@@ -1387,7 +1400,7 @@ protect_unloadable_local_skills(){
 }
 
 refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where it is going (a verb for the report)  $3 = "prune" to clear entries holding no files at all
-  local entry reason named=""
+  local entry reason named="" entries=""
   while IFS="$(printf '\t')" read -r entry reason; do
     [ -n "${entry:-}" ] || continue
     # An entry holding NO FILES has nothing to lose, and git cannot carry the deletion of an empty
@@ -1405,12 +1418,164 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
       named+="  skills/$entry: $reason, and it held no files at all, so it was removed from the payload and will stop being reported"$'\n'
       continue
     fi
+    # Only an entry still standing counts toward the notification: a pruned one is gone, not a skill
+    # somebody has to fix, so the line above is all it gets (claude-config#968).
+    entries+="$entry"$'\n'
     named+="  skills/$entry: $reason"$'\n'
   done < <(unloadable_skill_entries "$1")
-  [ -z "$named" ] && return 0
+  # Recorded even when nothing is refused, so a set that empties is remembered as empty and the same
+  # folder turning up again later is news again.
+  if [ -z "$named" ]; then
+    unloadable_notice "$2" "" "skills that cannot load were not $2"
+    return 0
+  fi
   echo "claude-sync: these entries under skills/ cannot load, so they were NOT $2 and nothing else about this run was affected:" >&2
   printf '%s' "$named" >&2
-  notify "skills that cannot load were not $2"
+  unloadable_notice "$2" "$entries" "skills that cannot load were not $2"
+  return 0
+}
+
+# THE NOTICE IS POSTED ONCE PER NEW FOLDER, NOT ON EVERY RUN (claude-config#968). The watcher sends
+# on every save, and an unloadable folder stays unloadable until somebody acts, so a notice per send
+# was three identical desktop notifications inside one minute on 2026-10-08 for a condition that had
+# not changed: the alert that teaches people to dismiss alerts (L36). The terminal line above is
+# still said on every run, because it goes to the log and costs nobody anything.
+#
+# Posts $3 when the set holds a folder the last notice under this key did not name, then records
+# which folders have now been told about. A set that only SHRANK is not news, and a folder that left
+# and came back is. Keyed per notice, because "not sent", "not applied to this Mac" and the apply's
+# "kept local files a send will refuse" are about different folders.
+#
+# A folder counts as told only once the notification was really POSTED (L368). When it was not
+# (notifications off, the sleep record holding it for the morning, a notifier missing or failing),
+# only the folders already told about are kept in the record, so the new ones are news again on
+# the next run: otherwise a condition that began at night is never seen. A record that cannot be
+# read or written fails toward notifying (L42): a repeated notice is noise, a missing one is a
+# broken skill nobody hears about.
+unloadable_notice(){   # $1 = the key  $2 = the entries refused now, one per line  $3 = the message
+  local f="$UNLOADABLE_NOTIFIED_FILE" prev cur="/" told="/" e fresh="" tmp
+  prev="$(awk -F'\t' -v k="$1" '$1 == k { print $2 }' "$f" 2>/dev/null || true)"
+  # Joined with a slash, which no folder name can contain, so a name with a space cannot match part
+  # of another.
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    cur+="$e/"
+    case "$prev" in *"/$e/"*) told+="$e/" ;; *) fresh=new ;; esac
+  done <<ENTRIES
+$2
+ENTRIES
+  if [ -n "$fresh" ] && ! notify_posted "$3"; then
+    cur="$told"
+  fi
+  # Written beside the record and renamed over it, so a run that dies mid write leaves the old record
+  # whole. Named for this tool and this run, not scratch: it never leaves the sync clone, where the
+  # gitignore covers it, and the sync lock means only one run writes here at a time.
+  tmp="$f.claude-sync-new.$$"
+  if { awk -F'\t' -v k="$1" '$1 != k' "$f" 2>/dev/null || true
+       [ "$cur" = / ] || printf '%s\t%s\n' "$1" "$cur"; } > "$tmp"; then
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
+# A RETIRED SKILL'S LEFTOVER FOLDER (claude-config#968). The mirror never touches a .git folder
+# (COMMON_EXCLUDES), so when the shared config retires a skill that this Mac installed as a git
+# clone, the apply deletes every file it carried and leaves the folder holding only .git. #932
+# retired six skills and left two such folders here; every send then called them skills that cannot
+# load, with a desktop notice each time, and nothing would ever clear them: the folder is not in the
+# payload for the mirror to delete, and an rsync exclude protects it from --delete by design.
+#
+# Removed only on PROOF that nothing is lost (L5, L211). All of these must hold, judged against the
+# STATE the folder is in, so it does not matter whether the apply or a stale send's #331 cleanup
+# emptied it (L247):
+#   - the shared repo DELETED payload/skills/<name> and does not hold it now, so it was retired, not
+#     never shared: a folder somebody started here with git init is theirs;
+#   - the folder holds nothing but version control and regenerable cruft (.git, .DS_Store,
+#     __pycache__, *.pyc, .claude-plugin/types). A *.local.json or a *.conflict-* copy is excluded
+#     from the mirror too, but each is something a person made, so it keeps the folder;
+#   - no ref outside the remote-tracking ones (a branch, HEAD, a tag, a note, the stash, anything
+#     under refs/) and no reflog entry reaches a commit missing from its own remotes, because the
+#     mirror never carried .git and it is the only copy of anything committed here. The cost of
+#     counting the reflog is a clone whose upstream rewrote its history being kept and reported
+#     rather than removed, which is the side to err on.
+# Anything short of that is LEFT ALONE and said, once per pull, with the reason.
+skill_folder_own_files(){   # $1 = a folder -> every file in it but version control and cruft, or status 1 when it could not be read
+  local out
+  # Only the folder's OWN .git is passed over, because it is the one repository the proof inspects.
+  # A .git deeper down is a nested repository whose commits nothing here checks, so its files count
+  # as the folder's own and keep it (L5).
+  out="$(cd "$1" && find . \( -path ./.git -o -name __pycache__ -o -path '*/.claude-plugin/types' \) -prune \
+    -o ! -type d ! -name .DS_Store ! -name '*.pyc' -print 2>/dev/null)" || return 1
+  printf '%s' "$out" | sed 's|^\./||'
+  return 0
+}
+skill_clone_unsafe_to_drop(){   # $1 = a .git directory -> why its history may hold the only copy of something, or nothing
+  local g="$1" out
+  if ! git --git-dir="$g" rev-parse --git-dir >/dev/null 2>&1; then
+    printf 'its .git could not be read as a repository, so what it holds is unknown'; return 0
+  fi
+  if git --git-dir="$g" rev-parse -q --verify refs/stash >/dev/null 2>&1; then
+    printf 'its git history holds a stash'; return 0
+  fi
+  # --all is every ref under refs/ plus HEAD, so a tag or a note counts as much as a branch, and
+  # --reflog adds every commit a reflog names. Anything it cannot read keeps the folder.
+  if ! out="$(git --git-dir="$g" rev-list -1 --all --reflog --not --remotes 2>/dev/null)"; then
+    printf 'its git history could not be read'; return 0
+  fi
+  [ -z "$out" ] || printf 'its git history holds commits that are not on any remote'
+  return 0
+}
+skill_retired_in(){   # $1 = a skills folder name -> the commit that deleted it from the shared config, when it is retired
+  have_git || return 0
+  git -C "$SYNC_REPO" cat-file -e "HEAD:payload/skills/$1" 2>/dev/null && return 0
+  git -C "$SYNC_REPO" log --format=%H --diff-filter=D -1 HEAD -- "payload/skills/$1" 2>/dev/null || true
+  return 0
+}
+clear_retired_skill_leftovers(){
+  local dir="$CLAUDE_HOME/skills" e base gone short own why
+  [ -d "$dir" ] || return 0
+  for e in "$dir"/*; do
+    [ -d "$e" ] || continue
+    # A symlinked skill folder points at somebody's work somewhere else.
+    [ -L "$e" ] && continue
+    base="${e##*/}"
+    case "$base" in .*) continue ;; esac
+    unmanaged_skill_entry "$base" && continue
+    [ -e "$e/SKILL.md" ] && continue
+    [ -e "$PAYLOAD/skills/$base" ] && continue
+    gone="$(skill_retired_in "$base")"
+    [ -n "$gone" ] || continue
+    short="${gone:0:8}"
+    if ! own="$(skill_folder_own_files "$e")"; then
+      echo "claude-sync: skills/$base was retired from the shared config in $short, but this folder could not be read in full, so it was left alone." >&2
+      continue
+    fi
+    if [ -n "$own" ]; then
+      echo "claude-sync: skills/$base was retired from the shared config in $short, and this folder was left alone because it still holds files the sync never carries, which may be yours. Delete it yourself once nothing there is: $(printf '%s\n' "$own" | awk 'NR <= 5' | paste -sd ' ' -)$([ "$(printf '%s\n' "$own" | wc -l | tr -d ' ')" -gt 5 ] && printf ' and more')." >&2
+      continue
+    fi
+    why=""
+    # A .git that is a link or a plain file (a worktree's or a separate git dir's pointer) names a
+    # repository kept elsewhere, whose state this folder cannot speak for, so it keeps the folder.
+    # Anything else that exists is asked of git itself, which refuses what it cannot read.
+    if [ -L "$e/.git" ] || [ -f "$e/.git" ]; then
+      why="its .git points at a repository kept somewhere else"
+    elif [ -e "$e/.git" ]; then
+      why="$(skill_clone_unsafe_to_drop "$e/.git")"
+    fi
+    if [ -n "$why" ]; then
+      echo "claude-sync: skills/$base was retired from the shared config in $short, and this folder was left alone because $why. Delete it yourself once nothing there is yours." >&2
+      continue
+    fi
+    if ! rm -rf "$e" 2>/dev/null || [ -e "$e" ]; then
+      echo "claude-sync: skills/$base is the leftover of a skill the shared config retired in $short, and removing it FAILED, so it is still here and will go on being reported as a skill that cannot load." >&2
+      continue
+    fi
+    record_applied removed "skills/$base"
+    echo "claude-sync: removed skills/$base, the leftover of a skill the shared config retired in $short: it held only a .git or other files the sync never carries, and nothing in that history was missing from its remote." >&2
+  done
   return 0
 }
 
@@ -4788,6 +4953,9 @@ KEEP
     # on (both held in the #638 section of tests/test-claude-sync.sh, #790).
     rsync -rlpgoDic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
+  # After the mirror, so the first pull after a retirement clears the folder the mirror just emptied
+  # rather than leaving it to be reported until the next one (claude-config#968).
+  clear_retired_skill_leftovers
   # Reported from $ahead (split in two below), not $keep: a merged rule file is held back too, but it
   # already had its own clearer "these were MERGED" line and listing it again here
   # would read as two different things happening to the same file.
@@ -4817,17 +4985,23 @@ UNLOADABLE
   done <<AHEAD
 $ahead
 AHEAD
+  # Once per new folder, like the refusal notice it sits beside (claude-config#968): the files stay
+  # kept on every apply until somebody acts, so a notice per apply repeats an unchanged condition
+  # (L36). The terminal line is still said every time. Recorded even when nothing is kept, so a
+  # folder that comes back later is news again.
+  local _kept_entries=""
   if ! is_blank "$unsendable"; then
     while IFS="$(printf '\t')" read -r _ue _ur; do
       [ -n "${_ue:-}" ] || continue
       local _files; _files="$(printf '%s' "$unsendable" | awk -v p="skills/$_ue" '$0 == p || index($0, p "/") == 1' | tr '\n' ' ')"
       is_blank "$_files" && continue
+      _kept_entries+="$_ue"$'\n'
       echo "claude-sync: this apply left these local files under skills/$_ue alone, but a send will NOT carry them, because $_ur, and a send refuses a skills entry that cannot load. Make it a loadable skill (a SKILL.md with a name and description in its frontmatter) and the next send carries it: ${_files% }" >&2
     done <<UNLOADABLE
 $unloadable_here
 UNLOADABLE
-    notify "kept local files a send will refuse: skills that cannot load"
   fi
+  unloadable_notice "kept local files a send will refuse" "$_kept_entries" "kept local files a send will refuse: skills that cannot load"
   if ! is_blank "$sendable"; then
     local keeplist; keeplist="$(printf '%s' "$sendable" | tr '\n' ' ')"
     # What this measured, not more. The old wording read as the COMPLETE set of what is waiting
