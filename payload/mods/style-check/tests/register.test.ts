@@ -211,7 +211,7 @@ test('a gh issue comment read from a body file is judged', withKit, async ($, on
 // Quoted, the commit is text: no message command runs, and nothing is scanned.
 const FIX = `Fix ${DASH} again`
 const READ_974 = new Map<string, string[][]>([
-  [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX], ['commit', '-m', `${FIX})`]]],
+  [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX]]],
   ['echo "made `git commit -F /tmp/msg.txt`"', [['git', 'commit', '-F', '/tmp/msg.txt'], ['echo', 'made `git commit -F /tmp/msg.txt`']]],
   [`cat <<EOF\n$(git commit -m "${FIX}")\nEOF`, [['git', 'commit', '-m', FIX], ['cat', '<<EOF']]],
   [`echo '$(git commit -m "${FIX}")'`, [['echo', `$(git commit -m "${FIX}")`]]],

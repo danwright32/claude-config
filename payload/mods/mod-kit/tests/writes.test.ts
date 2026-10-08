@@ -669,6 +669,27 @@ describe('writes: what the shell runs inside a command substitution (#965)', () 
     expect(paths("echo 'echo \"$(cat a >> b.md)\"' | zsh")).toEqual([`${CWD}/b.md`])
     expect(read("python3 - <<'EOF'\nprint('$(rm old.txt)')\nEOF").changes).toEqual([])
   })
+  // #975: a process substitution, <(...) or >(...), runs its commands as the command it sits in starts.
+  // In double quotes or a heredoc's body it is text.
+  test('a process substitution is read as the commands it runs; quoted, or in a heredoc body, it is text', () => {
+    expect(changed('diff <(rm old.txt) b.txt')).toEqual([`remove ${CWD}/old.txt`])
+    expect(paths('cat <(echo x > a.md) >(tee b.md)')).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+    // An operand that is a process substitution is a pipe, never a file.
+    expect(paths('echo x | tee >(cat > c.md)')).toEqual([`${CWD}/c.md`])
+    expect(changed('diff <(sort <(rm old.txt)) b.txt')).toEqual([`remove ${CWD}/old.txt`])
+    expect(changed("bash -c 'diff <(rm old.txt) b.txt'")).toEqual([`remove ${CWD}/old.txt`])
+    expect(changed('echo "<(rm old.txt)"')).toEqual([])
+    expect(changed('cat <<EOF\n<(rm old.txt)\nEOF')).toEqual([])
+    expect(changed("echo '<(rm old.txt)'")).toEqual([])
+  })
+  // #975: a shell fed an unquoted heredoc runs the body as the outer shell expanded it, so an escaped
+  // substitution there reaches it unescaped and runs; under a quoted delimiter it stays escaped.
+  test('a shell fed an unquoted heredoc runs an escaped substitution in it; quoted, it is text', () => {
+    expect(changed('bash <<EOF\necho \\$(rm old.txt)\nEOF')).toEqual([`remove ${CWD}/old.txt`])
+    expect(paths('sh <<EOF\necho \\`cat a >> b.md\\`\nEOF')).toEqual([`${CWD}/b.md`])
+    expect(changed("bash <<'EOF'\necho \\$(rm old.txt)\nEOF")).toEqual([])
+    expect(changed('cat <<EOF\necho \\$(rm old.txt)\nEOF')).toEqual([])
+  })
   test('a file the line names and a substitution also edits or copies onto keeps what the substitution says of it (lessons review of #972)', () => {
     expect(read("echo x > f.md; echo \"$(sed -i '' s/a/b/ f.md)\"").files).toEqual([{ word: 'f.md', path: `${CWD}/f.md`, edits: true }])
     expect(read('echo x > d; echo "$(cp /tmp/a.md d)"').files).toEqual([{ word: 'd', path: `${CWD}/d`, sources: ['/tmp/a.md'], mayBeFolder: true }])

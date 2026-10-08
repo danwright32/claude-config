@@ -100,7 +100,7 @@ describe('judge', () => {
 // ("the readings other guards' tests take as given"). Quoted, it is text.
 const TYPED = `${SYS}${KEY} "n"`
 const READ_974 = new Map<string, string[][]>([
-  [`x=$(osascript -e '${TYPED}')`, [['osascript', '-e', TYPED], ['-e', `${TYPED})`]]],
+  [`x=$(osascript -e '${TYPED}')`, [['osascript', '-e', TYPED]]],
   ['echo "`cliclick c:100,200`"', [['cliclick', 'c:100,200'], ['echo', '`cliclick c:100,200`']]],
   ["cat <<EOF\n$(open -a 'Google Chrome' report.html)\nEOF", [['open', '-a', 'Google Chrome', 'report.html'], ['cat', '<<EOF']]],
   ["echo '$(cliclick c:100,200)'", [['echo', '$(cliclick c:100,200)']]],
