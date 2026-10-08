@@ -70,6 +70,25 @@ du -x -d 2 -g ~ 2>/dev/null | sort -rn | head -30
 and report their sizes as yours. `-g` is gigabytes, which is the unit the answer is in. It is slow
 on a large home directory; let it finish rather than narrowing too early.
 
+**A `du` figure is an upper bound on what a folder costs, never a measurement of it.** `du` adds up
+the size of every file it reaches. On APFS a file can be a clone, a copy that shares every block
+with its original until one of them is written, and `du` counts each clone at its full size although
+it costs the disk almost nothing. A hard linked file is counted once inside one `du` run, but in
+full again by every separate run that reaches it, so two `du` commands over neighbouring folders
+can each claim the same bytes. Deleting a clone or one link of a file frees almost nothing.
+
+So a folder growing between two `du` readings is real growth only when `df`'s free space (step 1)
+fell by about the same amount over the same interval. When `du` says a folder grew by tens of
+gigabytes and `df` says the disk did not lose them, the folder is not the cause, however neatly its
+timing fits.
+
+**A known false lead: Chrome's code signing clones.** Chrome makes a clone of its whole app bundle
+under `/var/folders/*/*/X/com.google.Chrome.code_sign_clone` (the per user folder
+`getconf DARWIN_USER_CACHE_DIR` names, with `X` in place of its last `C`) each time it
+launches, and a Chrome that is force quit leaves its clone behind. On 2026-10-08 `du` counted 114 of them at about 1.5 GB
+each, apparently 60 GB of growth in five hours; deleting 90 of them freed 0 bytes by `df`. They are
+clones of Chrome.app, so they cost almost no real space. Rule this folder out rather than in.
+
 ### 4. The sync and backup clients, before anything else you find
 
 These are the ones that fill a disk while looking idle, and they are the first place to look
@@ -175,16 +194,30 @@ is actionable. "The disk is full and Caches is 40 GB" is not, because Caches was
 too.
 
 Name no cause you have not measured. A folder being large is not evidence it is the one filling the
-disk; a folder growing between two readings is.
+disk; a folder growing between two readings is, once `df` shows the disk lost about the same amount
+over the same interval (step 3 says why `du`'s growth alone can be no growth at all).
 
 ## Deleting anything
 
 Everything above is read only on purpose, except the one clearing command in step 5, which is
 Dan's to run once he has seen the size. Before removing anything:
 
-- Say what you propose to delete, how much it frees, and what regenerates it.
+- Say what you propose to delete, how much you predict it frees, and what regenerates it. The
+  prediction is a claim about `df`, not about `du`, which overstates anything holding clones or
+  hard links (step 3).
 - Stop the thing that is writing first. Deleting under an active writer frees space that is
   reclaimed within minutes and hides the cause.
 - Never delete from a sync or backup client's own store to free space. Change its scope or pause it
   in its own interface, because its store is the client's record of what it has done and removing
   it by hand leaves the client repairing itself, which writes more.
+
+Then confirm the gain. Take this reading just before the delete and again just after, and compare
+the difference with the prediction:
+
+```bash
+df -g /System/Volumes/Data
+```
+
+A gain far below the prediction means the diagnosis was wrong. Stop and go back to the readings
+rather than deleting more of the same thing: on 2026-10-08 ninety deletions went ahead on a `du`
+figure before anyone checked that the first had freed nothing.

@@ -88,6 +88,23 @@ n_sudo="$(grep -c '^sudo ' <<< "$CODE")"
 check "and the scan saw the sudo commands the skill does hand over" \
   "$([ "${n_sudo:-0}" -ge 2 ] && echo ok || echo "only $n_sudo sudo line(s) found")"
 
+# ---- 5. a du figure is checked against df before it names a cause or justifies a delete ----
+# On 2026-10-08 du showed 60 GB of growth in Chrome's code_sign_clone folders, and deleting 90 of
+# them freed nothing: they are APFS clones, which du counts at full size (claude-config#983). The
+# section on deleting must carry a df command to confirm the gain with, which is a command Claude
+# runs rather than a sentence it may skim, and the known false lead must stay named.
+delete_code="$(awk '
+  /^## / { in_section = ($0 ~ /^## Deleting anything/) ; next }
+  /^```/ { if (in_section) inside = !inside; next }
+  inside
+' "$SKILL")"
+check "the section on deleting carries a df command to confirm what a delete freed" \
+  "$(grep -qE '(^|[;&| ])df ' <<< "$delete_code" && echo ok || echo "no df command in a block under ## Deleting anything")"
+check "the skill says du counts APFS clones at full size" \
+  "$(grep -qi 'clone' "$SKILL" && grep -qi 'APFS' "$SKILL" && echo ok || echo "no mention of APFS clones")"
+check "and names Chrome's code_sign_clone folder as a known false lead" \
+  "$(grep -qF 'com.google.Chrome.code_sign_clone' "$SKILL" && echo ok || echo "code_sign_clone is not named")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
