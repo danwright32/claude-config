@@ -189,8 +189,9 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
 - It records the settlement for the issue this session's branch names (or the branch, when it
-  names none). When the branch names no issue, say on the default branch, add the issue
-  number to the metadata, `"issue": 978`, and Dan reads that issue in the question.
+  names none). When the branch names no issue, say on the default branch, add the number of
+  the issue this design is for, in this project, to the metadata as a number,
+  `"issue": <the issue number>`, and Dan reads that issue in the question.
 - Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
   subagent, and never write anything else to record it: the guard refuses all three, and a
   write to its record. Not yet, or an answer in his own words, records nothing: carry on.

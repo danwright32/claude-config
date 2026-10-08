@@ -68,7 +68,10 @@ if [[ -z "$missing" ]]; then ok; else bad "SKILL.md's last step does not ask the
 
 # The skill says what records the settlement, and what never does.
 grep -q 'Only Dan.s own choice of Settled records it' "$SKILL" && ok || bad "SKILL.md does not say only Dan's choice of Settled records it"
-grep -q '"issue": 978' "$SKILL" && ok || bad "SKILL.md does not show naming the issue in the metadata"
+grep -q '"issue": <the issue number>' "$SKILL" && ok || bad "SKILL.md does not show naming the issue in the metadata"
+# The skill reaches every project, so a literal number there is one project's issue, and the worked
+# example is what gets copied (L562): it names the issue by a placeholder, never a number (#987 review).
+grep -q -E '"issue": [0-9]' "$SKILL" && bad "SKILL.md shows a literal issue number in the metadata, which every project would copy" || ok
 
 # The check is seen to fail: a skill whose source drifted from the guard's is caught.
 sed "s/\"source\": \"$source_v\"/\"source\": \"design-done\"/" "$SKILL" > "$TMP/drifted.md"
