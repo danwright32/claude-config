@@ -1,0 +1,8 @@
+{
+  "name": "design-round-guard",
+  "version": "0.1.0",
+  "description": "Holds every edit that changes how a screen looks (style, screen and component files, SwiftUI views) until Dan has settled a design round for the issue or branch, or answered that design rounds are skipped for it.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
+}
