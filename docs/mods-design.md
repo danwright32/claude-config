@@ -1894,8 +1894,14 @@ the issue approved; what follows is that plan as built, with the readings taken 
   starts held. Reading where the plan is silent, the stricter way: on the default branch a record
   holds for that session only, since every later issue may be built there and a lasting skip would
   cover them all; and a skip is never single use, since the plan has it cover the rest of the issue.
-- **What counts.** The plan's list read literally, so a test file in `.tsx` counts (the plan accepts
-  that a logic only file sometimes does; Dan answers Skip them for that issue). `.htm` is read as
+- **What counts.** The plan's list read literally, except tests. Built, a test file in `.tsx` counted
+  too; Dan, on seeing the guard working on 2026-10-08, answered "On, but let tests through", so a test
+  file never counts: a `.test.` or `.spec.` part in its name, a `__tests__`, `tests` or `test` folder
+  above it, and for Swift a folder ending `Tests` or a name ending `Tests.swift`. The folders are read
+  on the path inside its checkout only, so a project checked out under a folder named tests is not
+  let through whole, and a name merely holding "test" (`latest.tsx`, `contest.css`) still counts.
+  Another logic only file in one of the listed shapes still counts, which the plan accepts: Dan
+  answers Skip them for that issue. `.htm` is read as
   `.html`. A `.swift` file counts when its text, as written or on disk, imports SwiftUI or declares a
   view, and when that text cannot be had. A removal or emptying of a look changing file counts; a
   stamp, mode change or folder does not, nor does removing a whole folder by its name (`rm -r
