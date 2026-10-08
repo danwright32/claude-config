@@ -568,11 +568,11 @@ test("a reply already carrying this repository's prefix is not doubled", async (
   expect(w.renames.map(r => r.args)).toEqual(['(overture) Fix export'])
 })
 
-test("a reply carrying another repository's prefix has it replaced", async ($, on) => {
-  const w = world(on, { repo: OVERTURE, replies: ['(claude-config) Fix export'] })
+test("a reply leading with a bracket of its own keeps it, after this repository's prefix", async ($, on) => {
+  const w = world(on, { repo: OVERTURE, replies: ['(v2) Fix export'] })
   await start($)
   await w.clock.advance(10 * MIN)
-  expect(w.renames.map(r => r.args)).toEqual(['(overture) Fix export'])
+  expect(w.renames.map(r => r.args)).toEqual(['(overture) (v2) Fix export'])
 })
 
 test('a session in no repository is named without a prefix', async ($, on) => {

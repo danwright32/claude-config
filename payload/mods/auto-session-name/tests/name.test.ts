@@ -135,35 +135,36 @@ test('a name that already carries the right prefix is never doubled', async () =
   expect(withRepo('overture', '(overture)')).toBe('(overture)')
 })
 
-test("a stale prefix from another repository is replaced by this one's", async () => {
-  expect(withRepo('overture', '(claude-config) Fix export')).toBe('(overture) Fix export')
-  expect(withRepo('bidspoke', '(repo-digest) (account_room) Fix export')).toBe('(bidspoke) Fix export')
-  expect(withRepo('bidspoke', '(sleep2) Fix export')).toBe('(bidspoke) Fix export')
-})
-
-test('brackets that are part of the name, not a repository, are kept', async () => {
-  // A capital, or a space, never appears in a repository slug, so these are the name's own.
+// A bracket at the start of a name is taken off only when it is this repository's own label. No
+// shape tells another repository's name from the name's own bracket ((v2), (q3), (wip), (overture)
+// all look alike), so none is guessed at: losing a word of the name is worse than a second
+// bracket, which /rename can take off (#948 review). A stale prefix never comes from this mod's
+// own name: it keeps the name unprefixed and reads the repository at naming time.
+test("any other bracket at the start is the name's own and is kept", async () => {
   expect(withRepo('overture', '(WIP) Fix export')).toBe('(overture) (WIP) Fix export')
-  expect(withRepo('overture', '(two parts) Fix export')).toBe('(overture) (two parts) Fix export')
-  // A plain lower case word reads the same as a tag Haiku wrote, so it is kept rather than lost
-  // (#948 review): only this repository's own label is taken as a prefix in that shape.
   expect(withRepo('overture', '(wip) Fix export')).toBe('(overture) (wip) Fix export')
   expect(withRepo('overture', '(draft) Fix export')).toBe('(overture) (draft) Fix export')
-  expect(withRepo('claude-config', '(overture) Fix export')).toBe('(claude-config) (overture) Fix export')
+  expect(withRepo('overture', '(v2) Fix export')).toBe('(overture) (v2) Fix export')
+  expect(withRepo('overture', '(q3) planning')).toBe('(overture) (q3) planning')
+  expect(withRepo('overture', '(2024) tax review')).toBe('(overture) (2024) tax review')
+  expect(withRepo('overture', '(two parts) Fix export')).toBe('(overture) (two parts) Fix export')
+  expect(withRepo('overture', '(claude-config) Fix export')).toBe('(overture) (claude-config) Fix export')
 })
 
-test('a reply carrying a repository prefix is cleaned to the name alone, and a prefix with no name is empty', async () => {
-  expect(cleanName('(claude-config) Fix export')).toEqual({ name: 'Fix export' })
-  expect(cleanName('"(repo-digest) Fix export."')).toEqual({ name: 'Fix export' })
-  expect(cleanName('(claude-config)')).toEqual({ refused: 'empty' })
+test('a reply is cleaned without touching a bracket at its start; the prefix is settled at naming', async () => {
+  expect(cleanName('(claude-config) Fix export')).toEqual({ name: '(claude-config) Fix export' })
+  expect(cleanName('"(v2) Fix export."')).toEqual({ name: '(v2) Fix export' })
   expect(cleanName('(WIP) Fix export')).toEqual({ name: '(WIP) Fix export' })
-  expect(cleanName('(wip) Fix export')).toEqual({ name: '(wip) Fix export' })
-  expect(cleanName('(draft) Fix export')).toEqual({ name: '(draft) Fix export' })
 })
 
-test('with no repository the name goes unprefixed, and a stale prefix still goes', async () => {
+test('with no repository the name goes as it is', async () => {
   expect(withRepo(null, 'Fix export')).toBe('Fix export')
-  expect(withRepo(null, '(claude-config) Fix export')).toBe('Fix export')
+  expect(withRepo(null, '(v2) Fix export')).toBe('(v2) Fix export')
+})
+
+test('the prompt asks for no bracket at the start, since the repository goes there', async () => {
+  const p = namePrompt([{ role: 'user', text: 'Fix the export', toolUses: [] }])
+  expect(p).toContain('Do not start the name with anything in brackets')
 })
 
 test('the prefix counts toward the 60 character cap, and the name is what gets shortened', async () => {
