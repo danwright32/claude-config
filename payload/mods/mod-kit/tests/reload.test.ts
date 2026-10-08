@@ -15,7 +15,7 @@ import type { On } from 'claude-code'
 const T0 = 1_791_000_000_000
 const MIN = 60_000
 
-type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number; noHooks?: boolean; noManifest?: boolean; manifestUnreadable?: boolean; nestedMs?: number }
+type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number; noHooks?: boolean; noManifest?: boolean; manifestUnreadable?: boolean; nestedMs?: number; hooksUnreadable?: boolean }
 
 // The mods folder beneath mod-kit: each mod's manifest and its files' times, wherever the folder is.
 const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[]; homeUnreadable?: boolean; duringTouch?: (name: string, now: number) => void }) => {
@@ -39,6 +39,7 @@ const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[];
     }
     const mod = mods[m.name] as Mod
     if (m.rest === '.claude-plugin') return { value: [{ name: 'plugin.json', kind: 'file', size: 1, mtimeMs: mod.touchedAt ?? mod.mtimeMs, isLink: false }, { name: 'types', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
+    if (m.rest === 'hooks' && mod.hooksUnreadable) throw new Error(`EACCES: permission denied, scandir '${e.path}'`)
     if (m.rest === 'hooks' && mod.noHooks) throw new Error(`ENOENT: no such file or directory, scandir '${e.path}'`)
     // A module may keep code in a folder of its own beneath hooks (#966): lib/, with one file.
     const lib = mod.nestedMs === undefined ? [] : [{ name: 'lib', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
@@ -406,4 +407,24 @@ test('a turn in a session where mod-kit has not started records where to look fr
   await w.clock.advance(10 * MIN)
   await turn($, w.clock)
   expect(w.argv).toEqual([])
+})
+
+// #977 review: a provider whose folder cannot be read is not judged, which is said once; it is
+// never touched itself, since that would reload a mod that was never unloaded, and once it can be
+// read its dependents that changed are asked again.
+test('a provider whose folder cannot be read is said once, never touched, and judged once it can be read', async ($, on) => {
+  const mods = delivery()
+  ;(mods['session-registry'] as Mod).hooksUnreadable = true
+  const w = world(on, { mods })
+  await start($)
+  for (let i = 0; i < 2; i++) {
+    await w.clock.advance(10 * MIN)
+    await turn($, w.clock)
+  }
+  expect(w.argv).toEqual([])
+  expect(w.logs.filter(l => l.includes('session-registry')).length).toBe(1)
+  ;(mods['session-registry'] as Mod).hooksUnreadable = false
+  await w.clock.advance(10 * MIN)
+  await turn($, w.clock)
+  expect(w.reached()).toEqual(['goal-tracker:.claude-plugin/plugin.json'])
 })

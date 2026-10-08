@@ -209,9 +209,11 @@ const atTurnStart = async ($: EngineInterface, turnStart: number) => {
     if (provider === 'mod-kit' || !mod) continue
     try {
       newest[provider] = await mod.newest()
+      saidAtTurns.delete(`provider:${provider}`)
     } catch (err) {
-      // Not judged, so looked at from the same time at the next turn.
-      pass.unread.push({ name: provider, text: `mod-kit could not tell at a turn's start whether ${provider} changed (${reason(err)}), so a mod that depends on it was not asked to load again. ${lost}` })
+      // Not judged, so looked at from the same time at the next turn. Said once, and never kept to
+      // be asked again itself: touching it would reload a mod that was never unloaded (#977 review).
+      sayOnce($, `provider:${provider}`, `mod-kit could not tell at a turn's start whether ${provider} changed (${reason(err)}), so a mod that depends on it was not asked to load again. ${lost}`)
     }
   }
   const { reloaded, at } = judgeProviders(newest, look, turnStart)
