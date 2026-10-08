@@ -55,6 +55,7 @@ const deps: { name: string; register: Register } = {
           },
           // The kit's other members, which these tests never reach: each refuses by name if one ever is.
           repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
+          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
