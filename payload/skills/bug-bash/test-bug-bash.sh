@@ -445,14 +445,26 @@ if [ -n "$token" ]; then
   echo "disable request successful" >&2
   exit 0
 fi
+# The anchor's rules and its address table are held apart, as pf holds them, so a flush of one
+# leaves the other.
+table="$FAKE/anchor.table"
 if [ -n "$file" ]; then
   [ -n "$anchor" ] || exit 0
   [ -e "$FAKE/knob-load-fails" ] && { echo "pfctl: unknown group _bugbash" >&2; exit 1; }
+  sed -n 's/^table <[^>]*> const { \(.*\) }$/\1/p' "$file" | tr -d ',' | tr ' ' '\n' | sed '/^$/d' > "$table"
+  # Fails after the table is in, before the rule.
+  [ -e "$FAKE/knob-load-fails-partway" ] && { echo "pfctl: rule expands to no valid combination" >&2; exit 1; }
   cp "$file" "$conf"
   exit 0
 fi
 if [ -n "$flush" ]; then
-  [ -n "$anchor" ] && rm -f "$conf"
+  if [ -n "$anchor" ]; then
+    case "$flush" in
+      rules) rm -f "$conf" ;;
+      Tables) rm -f "$table" ;;
+      *) rm -f "$conf" "$table" ;;
+    esac
+  fi
   exit 0
 fi
 case "$show" in
@@ -467,7 +479,7 @@ case "$show" in
     exit 0 ;;
 esac
 if [ "$tcmd" = show ]; then
-  [ -f "$conf" ] && sed -n 's/^table <[^>]*> const { \(.*\) }$/\1/p' "$conf" | tr -d ',' | tr ' ' '\n' | sed '/^$/d; s/^/   /'
+  [ -f "$table" ] && sed 's/^/   /' "$table"
   exit 0
 fi
 echo "stand in pfctl: unhandled call" >&2
@@ -514,7 +526,7 @@ for (const name of ['connect', 'createConnection']) {
 }
 JS
 reset_fake() {
-  rm -rf "$FAKE/state" "$FAKE/anchor.conf" "$FAKE/enabled" "$FAKE"/knob-* "$FAKE/pfctl.calls" "$FAKE/sudo.calls"
+  rm -rf "$FAKE/state" "$FAKE/anchor.conf" "$FAKE/anchor.table" "$FAKE/enabled" "$FAKE"/knob-* "$FAKE/pfctl.calls" "$FAKE/sudo.calls"
   mkdir -p "$FAKE/state"
   cp "$HELPER_SRC" "$FAKE/helper" 2>/dev/null
 }
@@ -532,7 +544,7 @@ EPROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy
 RECPORT="${PLAIN##*:}"
 eguard() { fakeenv bash "$GUARD" --read-only --proxy "$EPROXY" "$@" 2>&1; }
 owner_now() { cat "$FAKE/state/owner" 2>/dev/null || echo none; }
-nothing_loaded() { [ ! -e "$FAKE/anchor.conf" ] && [ ! -e "$FAKE/enabled" ] && [ "$(owner_now)" = none ]; }
+nothing_loaded() { [ ! -e "$FAKE/anchor.conf" ] && [ ! -e "$FAKE/anchor.table" ] && [ ! -e "$FAKE/enabled" ] && [ "$(owner_now)" = none ]; }
 if [ -z "$EPROXY" ]; then
   bad "the --egress proxy started" "$(cat "$TMP/proxy-e.out" 2>/dev/null)"
 else
@@ -576,6 +588,11 @@ else
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a rule pfctl will not load is refused, with pfctl's reason" 8 "unknown group _bugbash" "$rc" "$out"
   nothing_loaded && ok || bad "a rule that failed to load leaves nothing loaded"
+  # A load that fails after its address table went in leaves neither behind (lessons review of #938).
+  reset_fake; touch "$FAKE/knob-load-fails-partway"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule pfctl loads only part of is refused" 8 "no valid combination" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule that failed part way leaves no rule and no address table" "$(ls "$FAKE")"
   reset_fake; touch "$FAKE/knob-no-token"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a packet filter that will not switch on is refused" 8 "could not be switched on" "$rc" "$out"
@@ -839,6 +856,10 @@ grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the r
 # time setup and its self test are named where the skill sends Dan.
 grep -qF 'sudo -n -g _bugbash "$(command -v node)" ~/.claude/skills/bug-bash/read-only-proxy.js' "$DIR/SKILL.md" && grep -q -- '--egress' "$DIR/SKILL.md" && ok \
   || bad "SKILL.md starts a deployment's proxy in the _bugbash group with --egress"
+# Started through sudo, the pid the shell holds is sudo's, never the proxy's, so the skill must not
+# tell the reader to match proxy.json's pid against it (lessons review of #938, L321).
+! grep -q 'its `pid` is the process you started' "$DIR/SKILL.md" && grep -q 'ps -o ppid= -p' "$DIR/SKILL.md" && ok \
+  || bad "SKILL.md checks the proxy's pid as a child of the sudo it started, not as the sudo itself"
 grep -q 'one time setup.*claude-config#813' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && grep -q 'bash ~/.claude/skills/bug-bash/egress.sh selftest' "$DIR/SKILL.md" && ok \
   || bad "SKILL.md names the one time setup and its self test"
 

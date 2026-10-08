@@ -43,8 +43,9 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    every other program on this Mac a connection to the deployment for the length of the run, so a
    browser started some other way cannot reach it either. Start the proxy in the background, in
    the `_bugbash` group the rule lets through and with `--egress`, wait until
-   `<run dir>/proxy/proxy.json` exists and its `pid` is the process you started (it is written
-   once the proxy listens, and removed when it stops), then pass its `proxy` value:
+   `<run dir>/proxy/proxy.json` exists (it is written once the proxy listens, and removed when it
+   stops) and its `pid` is a child of the `sudo` you started (`ps -o ppid= -p <pid>` prints that
+   sudo's pid; the pid your shell holds is sudo's, never the proxy's), then pass its `proxy` value:
 
        sudo -n -g _bugbash "$(command -v node)" ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy" --egress
        bash ~/.claude/skills/bug-bash/target-guard.sh --read-only --proxy "<proxy>" "<url>"

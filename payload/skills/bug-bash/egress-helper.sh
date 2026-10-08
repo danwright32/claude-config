@@ -114,6 +114,13 @@ remove_rule() {
   rm -f "$STATE/owner" "$STATE/request" "$STATE/rules.conf"
 }
 
+# A load that failed part way: whatever pf took of it, rule or address table, goes again.
+undo_partial_load() {
+  "$PFCTL" -a "$ANCHOR" -F rules >/dev/null 2>&1
+  "$PFCTL" -a "$ANCHOR" -F Tables >/dev/null 2>&1
+  rm -f "$STATE/rules.conf"
+}
+
 do_load() {
   [ "$#" -ge 3 ] || die 2 "usage: load <owner pid> <port> <address>..."
   local owner="$1" port="$2" a list="" ports out token prior
@@ -138,16 +145,13 @@ do_load() {
   printf 'table <%s> const { %s }\nblock return out quick proto { tcp udp } from any to <%s> port { %s } group != %s\n' \
     "$TABLE" "$list" "$TABLE" "$ports" "$GROUP" > "$STATE/rules.conf"
   if ! out="$("$PFCTL" -a "$ANCHOR" -f "$STATE/rules.conf" 2>&1)"; then
-    "$PFCTL" -a "$ANCHOR" -F rules >/dev/null 2>&1
-    rm -f "$STATE/rules.conf"
+    undo_partial_load
     die 5 "pfctl would not load the rule: $(oneline "$out")"
   fi
   out="$("$PFCTL" -E 2>&1)"
   token="$(sed -n 's/^Token : \([0-9][0-9]*\).*$/\1/p' <<< "$out" | head -n 1)"
   if [ -z "$token" ]; then
-    "$PFCTL" -a "$ANCHOR" -F rules >/dev/null 2>&1
-    "$PFCTL" -a "$ANCHOR" -F Tables >/dev/null 2>&1
-    rm -f "$STATE/rules.conf"
+    undo_partial_load
     die 5 "the packet filter could not be switched on, so the rule was taken away again: $(oneline "$out")"
   fi
   echo "$token" > "$STATE/token"
