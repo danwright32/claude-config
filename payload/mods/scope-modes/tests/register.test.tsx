@@ -4,6 +4,8 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
+import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -51,6 +53,7 @@ const deps: { name: string; register: Register } = {
           pipeline: async (input: { command: string }) => kit('pipeline', input),
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
+          repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           bandRow: async (row: Row) => {
             built.ui.log('BAND ' + JSON.stringify(row))
             await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
@@ -217,6 +220,8 @@ type Opts = {
   caffeinateFails?: boolean
   /** The session is in no repository (#844). */
   noRepo?: boolean
+  /** The session's origin as $.session.repo() gives it (#951); by default git@github.com:o/r.git. */
+  remote?: string | null
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
@@ -385,8 +390,9 @@ const world = (on: On, o: Opts = {}) => {
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
     if (cmd === '__modkit') {
-      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[] }
+      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
+      if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
@@ -508,7 +514,7 @@ const world = (on: On, o: Opts = {}) => {
     if (o.cwdThrows) throw new Error('the folder could not be read')
     return { value: '/repo' } as never
   })
-  on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
+  on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: o.remote === undefined ? 'git@github.com:o/r.git' : o.remote, internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -1105,6 +1111,23 @@ test('only his answer to leave_pr_open leaves a PR open: a picker of Claude\'s o
   await call($ as never, leave(31, { repo: 'o/r' }, 'l4'))
   expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
   expect(w.toasts).toEqual([])
+})
+
+// With no repository named, leave_pr_open asks about the PR in the session's own, read from its
+// origin through mod-kit's one reader (#951), on the table every mod's reading is pinned on.
+test("leave_pr_open with no repository named reads the session's from its origin as mod-kit's reader does, on every shared case (#951)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Leave it open' })
+  w.o.gh = { ...merged(), others: [] }
+  await start($ as never, clock)
+  const got: { why: string; github: string | null }[] = []
+  for (const f of REPO_FIXTURES) {
+    w.o.remote = f.remote
+    const said = await call($ as never, leave(77))
+    const m = /^PR #77 in (\S+) could not be read/.exec(said)
+    got.push({ why: f.why, github: m ? (m[1] as string) : said.startsWith("This session's repository could not be read") ? null : `unexpected: ${said}` })
+  }
+  expect(got).toEqual(REPO_FIXTURES.map(f => ({ why: f.why, github: f.github })))
+  expect(w.asked).toEqual([])
 })
 
 test('leave_pr_open asks nothing about a PR it cannot read or that is not open, and records nothing (#917)', withDeps, async ($, on) => {

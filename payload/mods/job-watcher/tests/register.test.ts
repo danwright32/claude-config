@@ -27,6 +27,7 @@ const deps: { name: string; register: Register } = {
           git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
           clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },

@@ -42,6 +42,7 @@ const deps: { name: string; register: Register } = {
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
           // A folder with no .git entry the world names is none; one the world cannot read refuses.
+          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
           workingTree: async ({ path }: { path: string }) => {
             let dir = path.replace(/\/+$/, '') || '/'
             for (let looked = 0; looked < 64; looked++) {

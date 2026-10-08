@@ -95,12 +95,6 @@ const accountsOf = async ($: EngineInterface): Promise<Accounts> => {
   return { logins: [login], note: `could not list every gh account on this Mac (${all.error ?? 'it listed none'}), so only the active one counted as Dan's` }
 }
 
-// owner/name from the origin remote, ssh or https.
-const repoOf = (remote: string | null | undefined): string | undefined => {
-  const m = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote ?? '')
-  return m?.[1]
-}
-
 const pin = async ($: EngineInterface, c: IsItLiveCard): Promise<string | undefined> => {
   if (!c.requester || !c.message || c.sentAt !== undefined) return undefined
   try {
@@ -295,7 +289,9 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'live' }, async $ => {
-    const repo = repoOf((await $.session.repo())?.remote)
+    // owner/name from the session's origin, read by mod-kit's one reader (#951).
+    const here = await $.session.repo()
+    const repo = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
     if (!repo) return { text: 'This folder has no GitHub repository, so it has no cards.' }
     // Cards are kept under the name GitHub's own link gives the repository, which after a rename is
     // not the name a checkout's origin may still carry, so GitHub is asked for its name now (it

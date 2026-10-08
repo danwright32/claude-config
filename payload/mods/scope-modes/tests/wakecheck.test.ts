@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { GithubOf } from '../hooks/overnight.ts'
 import { wakeCheck, type Ran } from '../hooks/wakecheck.ts'
+import { githubRepo } from './mod-kit/hooks/repo.ts'
+
+// mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
+const github: GithubOf = async remote => githubRepo(remote)
 
 // Sleep mode phase 3 (#834): the wake check reads what really happened since sleep began, because a
 // text match always has a way around it. Each read is answered here by a stand in for gh, git and
@@ -24,18 +29,25 @@ const QUIET: World = {
   'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok('[]'),
   'gh run list -R o/claude-config --json workflowName,event,createdAt,url --limit 100': ok('[]'),
 }
-const check = async (over: World = {}) => {
+const check = async (over: World = {}, read: GithubOf = github) => {
   const world = { ...QUIET, ...over }
   const asked: string[] = []
   const r = await wakeCheck(async argv => {
     const key = argv.join(' ')
     asked.push(key)
     return world[key] ?? fail(`unexpected: ${key}`)
-  }, { since: SINCE, home: HOME })
+  }, { since: SINCE, home: HOME, github: read })
   return { ...r, asked }
 }
 
 describe('the wake check', () => {
+  // The config repository is read from the live sync clone's remotes by mod-kit's reader (#951): a
+  // reader that fails is said as not checked, never as a clone with no GitHub remote.
+  test('a remote reader that fails leaves LESSONS.md on GitHub unchecked, and says why', async () => {
+    const r = await check({}, async () => { throw new Error('mod-kit is not loaded') })
+    expect(r.unmeasured).toEqual(['LESSONS.md on GitHub was not checked: the config repository could not be read from ~/claude-config-sync (its remotes could not be read: mod-kit is not loaded)'])
+    expect(r.asked).not.toContain('gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z')
+  })
   test('a quiet night finds nothing and says every read was made', async () => {
     const r = await check()
     expect(r.hits).toEqual([])
@@ -111,7 +123,7 @@ describe('the wake check', () => {
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
     const world: World = { ...QUIET, 'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'Secret', updated_at: AFTER }])), 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]') }
-    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, repos: ['O/Private'] })
+    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'] })
     expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret"'])
     expect(r.unmeasured).toEqual([])
   })
@@ -124,7 +136,7 @@ describe('the wake check', () => {
         t += 25_000 // each read takes 25 s
         return QUIET[argv.join(' ')] ?? fail('unexpected')
       },
-      { since: SINCE, home: HOME, now: () => t, budgetMs: 60_000 },
+      { since: SINCE, home: HOME, github, now: () => t, budgetMs: 60_000 },
     )
     // Three GitHub reads use the 60 s; the local reads still run, and nothing after them on GitHub.
     expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
@@ -140,7 +152,7 @@ describe('the wake check', () => {
         t += 12_000 // each read takes 12 s
         return QUIET[argv.join(' ')] ?? fail('unexpected')
       },
-      { since: SINCE, home: HOME, now: () => t },
+      { since: SINCE, home: HOME, github, now: () => t },
     )
     // 30 s, 18 s and 6 s left as the three reads start; never more than 20 s for one read.
     expect(given).toEqual([20_000, 18_000, 6_000])

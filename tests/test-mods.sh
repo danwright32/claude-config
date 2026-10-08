@@ -176,6 +176,8 @@ cat > "$TSC" <<'STUB'
 echo "$*" >> "$TSC_LOG"
 # What a dependency's types said where the compiler read them (#840).
 for f in "$2"/.claude-plugin/types/*/index.d.ts; do [ -f "$f" ] && echo "DEP $(basename "$(dirname "$f")"): $(cat "$f")" >> "$TSC_LOG"; done
+# And the laid tsconfig it read, on one line (#951).
+[ -f "$2/.claude-plugin/types/tsconfig.json" ] && echo "CONF $(basename "$2"): $(tr -d ' \n' < "$2/.claude-plugin/types/tsconfig.json")" >> "$TSC_LOG"
 case "$2" in *crashing*) printf 'node:internal/modules/cjs/loader:1228\n  throw err;\nError: Cannot find module typescript\n'; exit 1 ;; esac
 case "$2" in *illtyped*) printf 'hooks/register.tsx(3,1): error TS2339: no such thing\nhooks/register.tsx(9,1): error TS2604: not a component\n'; exit 2 ;; esac
 # Every mod imports its own files as ./x.ts, which the tsconfig Claude Code lays does not allow, so
@@ -268,6 +270,27 @@ grep -q 'DEP elsewhere: export type P = "installed elsewhere"' "$TSC_LOG" && gre
 [ "$(cat "$TH4G/mods/provider/types/index.d.ts")" = 'export type P = "installed provider"' ] && [ -L "$TH4G/mods/dependent/.claude-plugin/types/provider/index.d.ts" ] \
   && check "and the installed copy is never written, through the laid link or otherwise" ok \
   || check "and the installed copy is never written, through the laid link or otherwise" "$(cat "$TH4G/mods/provider/types/index.d.ts")"
+# A dependency the change under review ADDS was never laid for the installed copy, so it is laid
+# here from the folder, types and tsconfig entry both, or the mod fails on every use of it until the
+# next install (#951). One the folder does not hold is left unlaid, never invented; one listed across
+# lines is read too.
+M4H="$TMPROOT/m4h"; mkmod "$M4H" adds-dep; mkmod "$M4H" provider
+mkdir -p "$M4H/provider/types"; printf 'export type P = "new"\n' > "$M4H/provider/types/index.d.ts"
+printf '{ "name": "adds-dep", "version": "0.1.0", "description": "x",\n  "dependencies": [\n    "provider",\n    "nowhere"\n  ]\n}\n' > "$M4H/adds-dep/.claude-plugin/plugin.json"
+TH4H="$TMPROOT/types-home-4h"; laid "$TH4H/mods/adds-dep"; laid "$TH4H/mods/provider"
+printf '{ "compilerOptions": { "types": ["claude-code"] } }\n' > "$TH4H/mods/adds-dep/.claude-plugin/types/tsconfig.json"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4H" CHECK_MODS_TS_DIR="$TSDIR" PATH="/usr/bin:/bin:$(dirname "$(command -v python3)")" bash "$CHECK" "$M4H" 2>&1)"; code=$?
+grep -q 'DEP provider: export type P = "new"' "$TSC_LOG" \
+  && check "a dependency the change adds is laid from the folder under review" ok || check "a dependency the change adds is laid from the folder under review" "$(cat "$TSC_LOG")"
+grep -q 'CONF adds-dep: .*"types":\["claude-code","provider"\]' "$TSC_LOG" \
+  && check "and named among the laid tsconfig's types" ok || check "and named among the laid tsconfig's types" "$(cat "$TSC_LOG")"
+! grep -q 'DEP nowhere' "$TSC_LOG" && ! grep -q '"nowhere"' "$TSC_LOG" \
+  && check "while one the folder does not hold is never invented" ok || check "while one the folder does not hold is never invented" "$(cat "$TSC_LOG")"
+printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types checked' \
+  && check "and the mod is type checked with it" ok || check "and the mod is type checked with it" "$out"
+[ ! -d "$TH4H/mods/adds-dep/.claude-plugin/types/provider" ] && grep -q '\["claude-code"\]' "$TH4H/mods/adds-dep/.claude-plugin/types/tsconfig.json" \
+  && check "and the installed copy's laid types are never written" ok || check "and the installed copy's laid types are never written" "$(ls "$TH4H/mods/adds-dep/.claude-plugin/types")"
 # Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
@@ -806,6 +829,36 @@ for m in tree-joined tree-bare tree-template; do
     || check "and names $m, pointing it at modkit.workingTree" "$out"
 done
 case "$out" in *clean-git-words*) check "and the names that merely start with .git still pass" "$out" ;; *) check "and the names that merely start with .git still pass" ok ;; esac
+# #951: reading a session's repository from its origin by hand, as four mods did before mod-kit's
+# one reader. Each copy as it stood fails the run, pointed at $.modkit.repo; a mod asking the kit,
+# or merely naming an address, passes.
+M9R="$TMPROOT/m9r"
+mkmodsrc "$M9R" clean-asks-kit 'const { github } = await $.modkit.repo({ root: r.root, remote: r.remote }); const url = "https://github.com/x/y.git"'
+mkmodsrc "$M9R" remote-regex 'const m = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote ?? "")'
+mkmodsrc "$M9R" remote-last-part 'let name = lastPart((repo.remote ?? "").trim(), /[/:]/).replace(/\.git$/i, "")'
+mkmodsrc "$M9R" remote-strip 'let t = s.trim().replace(/\.git$/, "").replace(/\/+$/, "")'
+out="$(bash "$SHARED" "$M9R" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a hand rolled reading of a remote fails the run" ok || check "a hand rolled reading of a remote fails the run" "exit=$code out=$out"
+for m in remote-regex remote-last-part remote-strip; do
+  printf '%s\n' "$out" | grep "$m keeps its own remote-reader" | grep -q 'modkit.repo(' && check "and names $m, pointing it at modkit.repo" ok \
+    || check "and names $m, pointing it at modkit.repo" "$out"
+done
+case "$out" in *clean-asks-kit*) check "a mod asking the kit, or naming an address, passes" "$out" ;; *) check "a mod asking the kit, or naming an address, passes" ok ;; esac
+# The one known exception (#961) covers scope-modes' gh argument reader in hooks/ghargs.ts alone:
+# it is printed as such on every run, and a copy anywhere else in scope-modes still fails.
+M9E="$TMPROOT/m9e"
+mkmodsrc "$M9E" scope-modes 'export const register = on => {}'
+printf '%s\n' 'export const normRepo = s => s.trim().replace(/\.git$/, "")' > "$M9E/scope-modes/hooks/ghargs.ts"
+out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "scope-modes' gh argument reader is a known exception, not a failure" ok \
+  || check "scope-modes' gh argument reader is a known exception, not a failure" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'scope-modes keeps its own remote-reader in hooks/ghargs.ts, a known exception until #961' \
+  && check "and is said on every run, with the issue that ends it" ok || check "and is said on every run, with the issue that ends it" "$out"
+printf '%s\n' 'const slug = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote)' > "$M9E/scope-modes/hooks/register.ts"
+out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a copy elsewhere in scope-modes still fails the run" ok || check "a copy elsewhere in scope-modes still fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'scope-modes keeps its own remote-reader at /hooks/register.ts:1' \
+  && check "named by its own file and line" ok || check "named by its own file and line" "$out"
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.

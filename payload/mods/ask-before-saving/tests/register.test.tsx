@@ -36,6 +36,7 @@ const modKit: { name: string; register: Register } = {
         },
         // A checkout cloned at /tmp/repo, a folder under /tmp/locked the disk cannot read, and no
         // other checkout in a temporary folder (#726).
+        repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/tmp/locked/')) throw new Error('EACCES: /tmp/locked')
           return path.startsWith('/tmp/repo/') ? '/tmp/repo' : null

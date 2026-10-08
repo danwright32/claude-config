@@ -37,6 +37,10 @@
 #             reading what a shell or interpreter runs, or     command $.modkit.pipeline({ command }) gives,
 #             judging inline code by what it can do (naming    read and judged once (#712: no build kept the
 #             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
+#   remote-reader                                               use $.modkit.repo({ root, remote }), whose
+#             reading a git remote's address by hand (a         github and name are the two questions the
+#             pattern taking a trailing .git off, or matching   copies asked (#951: four copies drifted on
+#             github.com before : or /, or splitting on [/:])   hosts, ports and a .git folder)
 #   press     a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -51,9 +55,10 @@
 #                                                               no mod can read is on
 #
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
-# on every run, with that issue, rather than failing the run or passing in silence (L129, L523). None
-# stands today: #712 moved the last (the collision guard's and no build's write readers, and the
-# collision guard's walk for a checkout).
+# on every run, with that issue, rather than failing the run or passing in silence (L129, L523). It
+# covers one named file of the mod, so a copy written anywhere else in it still fails. One stands:
+# scope-modes' gh argument reader (hooks/ghargs.ts) reads an address spelled as gh's -R, until #961
+# (see exception() below).
 #
 # A mod's tests may read with mod-kit's own readers rather than a stand-in (#730: a stand-in split
 # inside quotes): a test cannot import another mod's files, so each such file is a copy under the
@@ -112,12 +117,19 @@ PARTS=(
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
   "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
+  "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name)"
 )
 
-# $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
-# None today: #712 moved the last, so this answers nothing until a new one is named here.
+# $1 = mod  $2 = part -> "<issue> <file>": the issue that ends that mod's known exception for that
+# part, and the one file under its hooks/ the exception covers (a copy anywhere else in the mod still
+# fails the run); or nothing.
+#   scope-modes:remote-reader  normRepo in ghargs.ts reads a gh command's own repository argument,
+#   where owner/name alone is a repository (a different question from a git remote, L342), and
+#   parses an address spelled there by hand, because ghArgs is a synchronous reader inside the
+#   overnight judges and $.modkit answers asynchronously; #961 moves the gh reader into mod-kit.
 exception(){
   case "$1:$2" in
+    scope-modes:remote-reader) echo "#961 hooks/ghargs.ts" ;;
     *) ;;
   esac
 }
@@ -135,10 +147,13 @@ for d in "$dir"/*/; do
     label="${part%%|*}"; rest="${part#*|}"; pattern="${rest%|*}"; remedy="${rest##*|}"
     hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$sd/hooks" 2>/dev/null)"
     [ -n "$hits" ] || continue
-    until_issue="$(exception "$name" "$label")"
-    if [ -n "$until_issue" ]; then
-      echo "check-mod-shared-parts: $name keeps its own $label, a known exception until $until_issue moves it onto $remedy."
-      continue
+    exempt="$(exception "$name" "$label")"
+    if [ -n "$exempt" ]; then
+      until_issue="${exempt%% *}"; only="${exempt#* }"
+      covered="$(printf '%s\n' "$hits" | grep -F -- "$sd/$only:" || true)"
+      [ -n "$covered" ] && echo "check-mod-shared-parts: $name keeps its own $label in $only, a known exception until $until_issue moves it onto $remedy."
+      hits="$(printf '%s\n' "$hits" | grep -vF -- "$sd/$only:" || true)"
+      [ -n "$hits" ] || continue
     fi
     failed=1
     while IFS= read -r h; do
