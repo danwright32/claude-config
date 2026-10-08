@@ -21,6 +21,13 @@
 # the record's end decides). Every
 # answer comes back on stdout, never through a variable, since a caller reads it in a subshell.
 
+# This boot's start in seconds, from what `sysctl -n kern.boottime` prints ("{ sec = N, usec = M }
+# ..."): the number after the first `sec =`, as the mod's bootOf reads it, never the microseconds
+# after it. Nothing when the text names none. Held to the mod's cases in BOOT_FIXTURES (#838).
+sleep_boot_of() {
+  printf '%s\n' "${1:-}" | sed -n '1s/^[^0-9]*sec *= *\([0-9][0-9]*\).*/\1/p'
+}
+
 # The state on the first line and why on the second (empty but for unreadable).
 _sleep_read() {
   local file="${1:-$HOME/.claude/state/sleep/current.json}" now="${2:-}" boot="${3:-}" out
@@ -29,7 +36,7 @@ _sleep_read() {
     return 0
   fi
   [ -n "$now" ] || now="$(date +%s)000"
-  [ -n "$boot" ] || boot="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\).*/\1/p')"
+  [ -n "$boot" ] || boot="$(sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)")"
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'unreadable\npython3 is not installed, so the sleep record cannot be read\n'
     return 0
