@@ -285,7 +285,7 @@ grep -q 'DEP provider: export type P = "new"' "$TSC_LOG" \
   && check "a dependency the change adds is laid from the folder under review" ok || check "a dependency the change adds is laid from the folder under review" "$(cat "$TSC_LOG")"
 grep -q 'CONF adds-dep: .*"types":\["claude-code","provider"\]' "$TSC_LOG" \
   && check "and named among the laid tsconfig's types" ok || check "and named among the laid tsconfig's types" "$(cat "$TSC_LOG")"
-! grep -q 'DEP nowhere' "$TSC_LOG" && ! grep -q '"nowhere"' "$TSC_LOG" \
+[ "$(grep '^DEP ' "$TSC_LOG" | cut -d: -f1 | paste -sd, -)" = 'DEP provider' ] && ! grep -q '"nowhere"' "$TSC_LOG" \
   && check "while one the folder does not hold is never invented" ok || check "while one the folder does not hold is never invented" "$(cat "$TSC_LOG")"
 printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types checked' \
   && check "and the mod is type checked with it" ok || check "and the mod is type checked with it" "$out"
