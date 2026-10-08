@@ -173,12 +173,14 @@ type Targets = { files: string[]; guessed: string[] }
 // (withoutPythonText), so a script writing prose about CLAUDE.md to another file is not asked about.
 // Only a program the shell cannot have changed (on standard input from a quoted heredoc, or holding
 // no $ or backtick): in any other the shell may have run what its text holds. A program that runs a
-// process, or that cannot be found in the command as written, is read whole, as before.
+// process, or that cannot be found in the command as written, is read whole, as before. So is one a
+// command substitution runs (#974: the reader gives those since then), whose text the shell may have
+// changed as it read the line, and which was always read whole before.
 const mentionText = async ($: EngineInterface, command: string): Promise<string> => {
   let text = command
   for (const c of await $.modkit.pipeline({ command })) {
     const p = c.program
-    if (c.language !== 'python' || c.verdict?.does !== 'write files' || !p || !('text' in p) || !p.text || !text.includes(p.text)) continue
+    if (c.substitution || c.language !== 'python' || c.verdict?.does !== 'write files' || !p || !('text' in p) || !p.text || !text.includes(p.text)) continue
     const quoted = p.stdin === true && (c.heredocs ?? []).some(h => h.quoted && !h.replaced && h.fd === undefined)
     if (!quoted && /[$`]/.test(p.text)) continue
     text = text.split(p.text).join(withoutPythonText(p.text))
