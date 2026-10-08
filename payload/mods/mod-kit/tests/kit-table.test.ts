@@ -124,6 +124,16 @@ const ENTRIES: Entry[] = [
   {"method":"commands","input":{"command":"make >& notes.txt"},"want":[["make",">&","notes.txt"]]},
   {"method":"git","input":{"words":["make",">&","notes.txt"]},"want":null},
   {"method":"writes","input":{"command":"make >& notes.txt","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cat <<EOF\nnote $(echo done >> notes.txt)\nEOF"},"want":[["cat","<<EOF"]]},
+  {"method":"git","input":{"words":["cat","<<EOF"]},"want":null},
+  {"method":"writes","input":{"command":"cat <<EOF\nnote $(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo \"note `echo done >> notes.txt`\""},"want":[["echo","note `echo done >> notes.txt`"]]},
+  {"method":"git","input":{"words":["echo","note `echo done >> notes.txt`"]},"want":null},
+  {"method":"writes","input":{"command":"echo \"note `echo done >> notes.txt`\"","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cat <<'EOF'\nnote $(echo done >> notes.txt)\nEOF"},"want":[["cat","<<EOF"]]},
+  {"method":"writes","input":{"command":"cat <<'EOF'\nnote $(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo 'note `echo done >> notes.txt`'"},"want":[["echo","note `echo done >> notes.txt`"]]},
+  {"method":"writes","input":{"command":"echo 'note `echo done >> notes.txt`'","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
 ]
 
 const ask = (e: Entry): unknown => {
@@ -134,8 +144,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 114 entries', () => {
-    expect(ENTRIES.length).toBe(114)
+  test('holds 124 entries', () => {
+    expect(ENTRIES.length).toBe(124)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {
