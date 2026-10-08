@@ -1044,19 +1044,35 @@ Slate, which merge but never deploy, and where a merge itself deploys the green 
 Revised the same day: both sides are listed, and a repository on neither is asked about, never
 let through.
 
+Replaced on 2026-10-07 by the list Dan confirmed word for word. Wait overnight (no merge, no
+deploy, a green PR stays open until morning): `Try-Pennie/bidspoke`, `Try-Pennie/slate`, and every
+repository owned by `Halo-lab-Trypennie`, now and any made later (his words: "Move ANYTHING in
+halo-lab-trypennie to the wait list automatically. Nothing in that account should merge
+overnight"). Merge and deploy as in the daytime: `danwright32/claude-config`,
+`Try-Pennie/project-enrollment-tracker`, `Try-Pennie/paperboi`, `Try-Pennie/sonar`,
+`dwright-pennie/new-agent-onboarding`, `dwright-pennie/repo-digest`, `danwright32/overture`,
+`danwright32/ovation`, `danwright32/downbeat`, `danwright32/PostRoll`, `danwright32/backstage`,
+`PlayedItApp/playedit` and `nursedexapp/nursedex`. Any other repository (eavesly-web-app, for one)
+is still asked once at bedtime and closed if unanswered.
+
 - One shared file, `payload/mods/sleep-repos.json`, two lists: `mergeOnly` (`{ repo, mergeDeploys }`)
-  and `mayDeploy` (owner/name). It sits beside `account-room-nicknames.json` for the same reason: a
+  and `mayDeploy` (owner/name), and an optional third, `waitOwners` (owner names), every repository
+  under which waits overnight whether or not a list names it. It matches the owner in any case and
+  outranks both lists, so an entry under such an owner on either list is a conflict that waits, and
+  a repository under it is never asked about at bedtime (a bedtime answer for one is refused). A
+  `waitOwners` that is not a list of owner names makes the whole file untrusted, as any other bad
+  entry does. It sits beside `account-room-nicknames.json` for the same reason: a
   file under `mods/` is mirrored both ways, so an answer one Mac writes into the installed copy
   reaches the repository and the other Mac, and each repository is asked once. (The issue had the
   answer committed to the development checkout instead; a file the sync carries both ways needs no
   second writer.) Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
   unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
-  record whether a merge there deploys (L72). trypennie
-  (`Halo-lab-Trypennie/trypennie`), Bidspoke and Slate (`Try-Pennie/...`) and claude-config are all
-  `mergeDeploys: true`: Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
-  main, trypennie's deploy could not be read so it takes the strict answer, and a claude-config merge
-  reaches the live harness. `tests/test-sleep-repos.sh` holds the shipped file to the reader's shape
-  and to that decision.
+  record whether a merge there deploys (L72). Bidspoke and Slate are `mergeOnly` with
+  `mergeDeploys: true` (Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
+  main), the thirteen above are `mayDeploy`, and `waitOwners` is `["Halo-lab-Trypennie"]`.
+  `tests/test-sleep-repos.sh` holds the shipped file to the reader's shape and to exactly that
+  decision, including that a Halo-lab-Trypennie repository no list names, or named in another case,
+  waits; the mod's own tests prove the reader applies the owner rule that way.
 - At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
   neither list is asked about, one picker at a time, all of them sharing one 10 minute wait (a

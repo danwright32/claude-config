@@ -1,10 +1,23 @@
 {
   "v": 1,
+  "waitOwners": ["Halo-lab-Trypennie"],
   "mergeOnly": [
-    { "repo": "Halo-lab-Trypennie/trypennie", "mergeDeploys": true },
     { "repo": "Try-Pennie/bidspoke", "mergeDeploys": true },
-    { "repo": "Try-Pennie/slate", "mergeDeploys": true },
-    { "repo": "danwright32/claude-config", "mergeDeploys": true }
+    { "repo": "Try-Pennie/slate", "mergeDeploys": true }
   ],
-  "mayDeploy": []
+  "mayDeploy": [
+    "danwright32/claude-config",
+    "Try-Pennie/project-enrollment-tracker",
+    "Try-Pennie/paperboi",
+    "Try-Pennie/sonar",
+    "dwright-pennie/new-agent-onboarding",
+    "dwright-pennie/repo-digest",
+    "danwright32/overture",
+    "danwright32/ovation",
+    "danwright32/downbeat",
+    "danwright32/PostRoll",
+    "danwright32/backstage",
+    "PlayedItApp/playedit",
+    "nursedexapp/nursedex"
+  ]
 }
