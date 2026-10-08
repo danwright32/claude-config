@@ -2657,6 +2657,9 @@ echo 'BYTECODE' > "$CH/hooks/__pycache__/gh_issue_scan.cpython-314.pyc"
 echo 'BYTECODE' > "$CH/hooks/stray.pyc"
 mkskill "$CH/skills/plan-council/SKILL.md" 'SKILL custom'
 mkskill "$CH/skills/wrangler/SKILL.md" 'SKILL plugin-owned'   # should be EXCLUDED from sync
+# A skill's own per Mac file, the way the tracker skill keeps its write token (claude-config#675).
+# Anything named *.local.json belongs to the Mac that wrote it and must never reach the repository.
+printf '{"token":"MAC1-ONLY-VALUE"}\n' > "$CH/skills/plan-council/config.local.json"
 # A hook's instruction, in a SUBDIRECTORY of hooks/. The two Stop hooks keep their
 # instruction in hooks/review/*.md and point at it by a path resolved at run time
 # (claude-config#243), so an instruction that does not travel leaves the other Mac
@@ -2701,7 +2704,9 @@ check "payload has the hook script"         "[ -f '$REPO/payload/hooks/tdd-nudge
 check "payload has the nested hook instruction" "[ -f '$REPO/payload/hooks/review/issue-review.md' ]"
 check "payload EXCLUDES __pycache__ dir"    "[ ! -e '$REPO/payload/hooks/__pycache__' ]"
 check "payload EXCLUDES a stray .pyc"       "[ ! -e '$REPO/payload/hooks/stray.pyc' ]"
-check "payload has the agent"               "[ -f '$REPO/payload/agents/plan-redteam.md' ]"
+check "#675 payload EXCLUDES a skill's config.local.json" "[ ! -e '$REPO/payload/skills/plan-council/config.local.json' ]"
+check "#675 while the skill beside it still travels" "[ -f '$REPO/payload/skills/plan-council/SKILL.md' ]"
+check "payload has the agent"              "[ -f '$REPO/payload/agents/plan-redteam.md' ]"
 check "payload has the command"             "[ -f '$REPO/payload/commands/plannotator-last.md' ]"
 check "hooks fragment written"              "[ -f '$REPO/payload/settings.hooks.json' ]"
 check "fragment path is tokenized"          "grep -q '__CLAUDE_HOME__/hooks/tdd-nudge.sh' '$REPO/payload/settings.hooks.json'"
@@ -2714,6 +2719,11 @@ section "== pull into a DIFFERENT home (simulates other Mac) =="
 CH2="$WORK/dot-claude-2"
 mkdir -p "$CH2/skills/wrangler"
 mkskill "$CH2/skills/wrangler/SKILL.md" 'PLUGIN-LOCAL'   # plugin skill present on Mac 2
+# Mac 2's own copy of the per Mac file (#675). The payload never carries one, and the apply mirrors
+# with --delete, so only an exclusion on the RECEIVING side keeps it. Mac 2 already has the skill,
+# as a Mac holding a configured skill does: a folder with no SKILL.md is a different case entirely.
+mkskill "$CH2/skills/plan-council/SKILL.md" 'SKILL custom, an older copy'
+printf '{"token":"MAC2-ONLY-VALUE"}\n' > "$CH2/skills/plan-council/config.local.json"
 cat > "$CH2/settings.json" <<JSON
 { "model": "opus", "effortLevel": "high",
   "permissions": { "allow": ["MAC2-ONLY-KEEP-ME"] },
@@ -2727,6 +2737,8 @@ check "nested hook instruction arrived on Mac 2" "[ -f '$CH2/hooks/review/issue-
 check "and it arrived with its content intact"   "grep -q 'INSTRUCTION BODY' '$CH2/hooks/review/issue-review.md'"
 check "agent arrived on Mac 2"              "[ -f '$CH2/agents/plan-redteam.md' ]"
 check "Mac 2 plugin skill NOT deleted"      "[ -f '$CH2/skills/wrangler/SKILL.md' ]"
+check "#675 Mac 2's own config.local.json survives the pull" "grep -q 'MAC2-ONLY-VALUE' '$CH2/skills/plan-council/config.local.json'"
+check "#675 and Mac 1's never arrives" "! grep -rq 'MAC1-ONLY-VALUE' '$CH2/skills'"
 check "hooks merged into settings"          "jq -e '.hooks.UserPromptSubmit' '$CH2/settings.json' >/dev/null"
 check "hook path rewritten to Mac2 home"    "grep -q '$CH2/hooks/tdd-nudge.sh' <<< \"\$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' '$CH2/settings.json')\""
 check "no token left in settings"           "! grep -q '__CLAUDE_HOME__' '$CH2/settings.json'"
@@ -19700,6 +19712,8 @@ E27HB="$WORK/e627-homeB"; mkdir -p "$E27HB/hooks" "$E27HB/agents" "$E27HB/skills
 mkdir -p "$E27HB/agents/.claude-plugin/types" "$E27HB/hooks/__pycache__"
 printf 'declare module "x" {}\n' > "$E27HB/agents/.claude-plugin/types/x.d.ts"
 printf 'cache\n' > "$E27HB/hooks/__pycache__/notes.txt"
+# Nor is a per Mac *.local.json (#675): the send leaves it out, so a tree holding only one is empty.
+printf '{}\n' > "$E27HB/hooks/settings.local.json"
 out_627="$(CLAUDE_HOME="$E27HB" SYNC_REPO="$E27C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
 dbg "#627 the fresh Mac's send: $out_627"
 check "#627 a fresh Mac's empty hooks folder does not clear hooks from the shared repo" "git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1"
