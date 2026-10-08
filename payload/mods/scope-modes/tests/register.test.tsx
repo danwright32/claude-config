@@ -232,6 +232,8 @@ type Opts = {
   lsFails?: string
   /** Reading this session's folder throws (#836: after the unanswered list is written). */
   cwdThrows?: boolean
+  /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
+  promptFails?: number
   /** Opening the report in BBEdit failing (#837): the helper's words, and open -a BBEdit's. */
   openFails?: { helper?: string; open?: string }
 }
@@ -512,6 +514,10 @@ const world = (on: On, o: Opts = {}) => {
     return (outcome === true ? { isDelivered: true } : { isDelivered: false, reason: outcome.refused }) as never
   })
   on('prompt.submit', ($, e) => {
+    if (o.promptFails) {
+      o.promptFails--
+      throw new Error('the prompt could not be entered')
+    }
     w.prompts.push(e.text)
     return { text: e.text, context: e.context } as never
   })
@@ -1560,6 +1566,14 @@ test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he i
   expect(r.context?.join('\n')).toMatch(/Dan wrote while sleep mode is on, at 7:00 AM ET on Thu Jan 1\. Before anything else, ask him in one line whether he is up: "I'm up" or \/wake ends sleep mode in every session\./)
   expect(w.files[CURRENT]).toBeDefined()
   expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+test('the ask whether he is up counts as made only once its prompt went in, so a prompt that failed asks again (#837)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, promptFails: 1 })
+  await start($ as never, clock)
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  await expect(say($ as never, 'how is it going')).rejects.toThrow()
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
 })
 
 test('a message from Dan in the evening while asleep does not ask whether he is up (#837)', withDeps, async ($, on) => {

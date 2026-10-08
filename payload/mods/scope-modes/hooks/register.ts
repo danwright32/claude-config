@@ -2136,15 +2136,17 @@ export const register: Register = on => {
     }
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
+    let asking: string | undefined
     const sleeping = await sleepNow($)
     if (sleeping.state === 'asleep') {
       notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
       // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
-      // whether he is up, once a night in each session, and sleep goes on until he says so.
+      // whether he is up, once a night in each session, and sleep goes on until he says so. It counts
+      // as asked only once the prompt carrying it went in (below), so a prompt that failed asks again.
       if (isDans(e.origin) && askedUp !== sleeping.record.generation) {
         const now = await $.clock.now()
         if (isDaytimeEt(now)) {
-          askedUp = sleeping.record.generation
+          asking = sleeping.record.generation
           notes.push(awakeAsk(etWhen(now)))
         }
       }
@@ -2153,7 +2155,9 @@ export const register: Register = on => {
       notes.push(HOME_NOTE)
       await $.state.set(justHomeRef, false)
     }
-    return next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
+    const entered = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
+    if (asking !== undefined) askedUp = asking
+    return entered
   })
 
   // A message from the phone while home: one line at the end of the reply (picker, 2026-10-04).
