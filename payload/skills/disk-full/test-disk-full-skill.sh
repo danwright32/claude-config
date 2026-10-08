@@ -100,8 +100,16 @@ delete_code="$(awk '
 ' "$SKILL")"
 check "the section on deleting carries a df command to confirm what a delete freed" \
   "$(grep -qE '(^|[;&| ])df ' <<< "$delete_code" && echo ok || echo "no df command in a block under ## Deleting anything")"
-check "the skill says du counts APFS clones at full size" \
-  "$(grep -qi 'clone' "$SKILL" && grep -qi 'APFS' "$SKILL" && echo ok || echo "no mention of APFS clones")"
+# The confirming reading must be finer than whole gigabytes: a delete predicted to free 1.5 GB
+# cannot be told from zero or from 2 GB by df -g or df -h, so the check could never fail.
+df_line="$(grep -m 1 -E '(^|[;&| ])df ' <<< "$delete_code")"
+check "and that df reads in megabytes or kilobytes, fine enough to see a gain of a gigabyte or two" \
+  "$(grep -qE '(^|[;&| ])df (-[a-zA-Z]*[mk][a-zA-Z]*|-P)( |$)' <<< "$df_line" && echo ok || echo "the line is: $df_line")"
+# One paragraph must carry the whole explanation, never words scattered across the file: clone is
+# already in code_sign_clone, and APFS can be mentioned for any reason (L178).
+clone_para="$(awk -v RS= 'tolower($0) ~ /apfs/ && $0 ~ /`du`/ && tolower($0) ~ /full size/ && tolower($0) ~ /clones? / { print; exit }' "$SKILL")"
+check "the skill says, in one paragraph, that du counts APFS clones at full size" \
+  "$([ -n "$clone_para" ] && echo ok || echo "no paragraph names du, APFS clones and full size together")"
 check "and names Chrome's code_sign_clone folder as a known false lead" \
   "$(grep -qF 'com.google.Chrome.code_sign_clone' "$SKILL" && echo ok || echo "code_sign_clone is not named")"
 

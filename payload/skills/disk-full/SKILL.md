@@ -212,10 +212,11 @@ Dan's to run once he has seen the size. Before removing anything:
   it by hand leaves the client repairing itself, which writes more.
 
 Then confirm the gain. Take this reading just before the delete and again just after, and compare
-the difference with the prediction:
+the difference with the prediction. It is in megabytes because whole gigabytes cannot tell a gain
+of 1.5 GB from none at all:
 
 ```bash
-df -g /System/Volumes/Data
+df -m /System/Volumes/Data
 ```
 
 A gain far below the prediction means the diagnosis was wrong. Stop and go back to the readings
