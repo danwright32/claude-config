@@ -333,7 +333,7 @@ for d in "${mods[@]}"; do
       # A laid link whose installed file is gone is removed, never written through, which would make
       # that file in the installed mod (lessons review of #964). A tsconfig with no types list
       # includes every folder under its type roots already, so a list is only added to, never made.
-      if ! why="$("$py" - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
+      why="$("$py" - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
 import json, os, shutil, sys
 manifest, types, mods = sys.argv[1:4]
 try:
@@ -356,8 +356,11 @@ except Exception as e:
     print(f"laying a new dependency failed: {e}")
     sys.exit(1)
 PY
-)"; then
-        checked=""; copy_failed="$why"
+)"; prc=$?
+      if [ "$prc" -ne 0 ]; then
+        # A python3 that dies outside its own try (a crash, a failed import) says nothing, and is
+        # still the cause named, never taken for types that were not laid (L11).
+        checked=""; copy_failed="${why:-python3 exited $prc without saying why while laying its dependencies}"
       fi
     fi
   fi

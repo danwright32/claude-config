@@ -316,6 +316,11 @@ printf '%s\n' "$out" | grep 'plain ok' | grep -q 'types checked' \
   && check "with no python3, a mod with no dependencies is still type checked" ok || check "with no python3, a mod with no dependencies is still type checked" "$out"
 printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: .*no python3' \
   && check "while one with dependencies says its types were not checked, and why" ok || check "while one with dependencies says its types were not checked, and why" "$out"
+# A python3 that dies saying nothing is still the cause named, never "no types laid" (L11).
+SILENT_PY="$TMPROOT/silent-python"; printf '#!/bin/sh\nexit 3\n' > "$SILENT_PY"; chmod +x "$SILENT_PY"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4J" CHECK_MODS_TS_DIR="$TSDIR" CHECK_MODS_PYTHON="$SILENT_PY" PATH=/usr/bin:/bin bash "$CHECK" "$M4J" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: .*could not copy it to scratch (python3 exited 3 without saying why while laying its dependencies)' \
+  && check "a python3 that dies silently is named as the cause" ok || check "a python3 that dies silently is named as the cause" "$out"
 # Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
