@@ -832,8 +832,14 @@ fi
 # The one time setup: run as root only, and its sudoers grant is exactly the helper's verbs and the
 # _bugbash group, nothing more.
 SETUP="$DIR/egress-setup.sh"
-out="$(bash "$SETUP" 2>&1)"; rc=$?
-[ "$rc" = 2 ] && grep -q 'sudo bash ~/.claude/skills/bug-bash/egress-setup.sh' <<< "$out" && ok || bad "the setup, not run as root, refuses and names how to run it (rc $rc)" "$out"
+# Run with no arguments only when this suite is not root: as root it would really set the Mac up
+# (L2), so there it is left unmeasured rather than run (lessons review of #955).
+if [ "$(id -u)" = 0 ]; then
+  echo "UNMEASURED: this suite is running as root, so the setup's refusal of a non root run is not driven here"
+else
+  out="$(bash "$SETUP" 2>&1)"; rc=$?
+  [ "$rc" = 2 ] && grep -q 'sudo bash ~/.claude/skills/bug-bash/egress-setup.sh' <<< "$out" && ok || bad "the setup, not run as root, refuses and names how to run it (rc $rc)" "$out"
+fi
 grant="$(bash "$SETUP" --print-sudoers danielhankins-wright 2>&1)"
 want='danielhankins-wright ALL = (root) NOPASSWD: /usr/local/libexec/bug-bash-egress load *, /usr/local/libexec/bug-bash-egress unload, /usr/local/libexec/bug-bash-egress unload *, /usr/local/libexec/bug-bash-egress status
 danielhankins-wright ALL = (:_bugbash) NOPASSWD: ALL'
