@@ -160,8 +160,12 @@ export type Act = { kind: 'merge' | 'deploy' | 'push-default'; what: string; rep
  */
 export type Scripts = Record<string, Cmd[]> | null | { unreadable: string }
 
-/** What the judge knows about where a command runs: its default branch (or the usual names) and current branch. */
-export type Where = { defaultBranch: string | null; currentBranch: string | null; scripts: Scripts }
+/**
+ * What the judge knows about where a command runs: its default branch (null when none is named, so
+ * the usual names; why, when it could not be read, so any branch could be it) and current branch
+ * (null when it could not be read).
+ */
+export type Where = { defaultBranch: string | null | { unreadable: string }; currentBranch: string | null; scripts: Scripts }
 
 const isFlag = (w: string) => w.startsWith('-') && w !== '-'
 const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
@@ -193,12 +197,19 @@ const bodyDeploys = (body: Cmd[]): string | undefined => {
 
 const DEFAULTS = ['main', 'master']
 const strip = (ref: string) => ref.replace(/^\+/, '').replace(/^refs\/heads\//, '')
+// The default branch where a command runs: the one read, or main and master when none is named.
+const defaultsOf = (where: Where) => (typeof where.defaultBranch === 'string' && where.defaultBranch ? [where.defaultBranch] : DEFAULTS)
+// Why the default branch could not be read there, or undefined when it was (or none is named).
+const unreadDefault = (where: Where) => (where.defaultBranch !== null && typeof where.defaultBranch === 'object' ? where.defaultBranch.unreadable : undefined)
 
 // A push reaching the default branch: a refspec whose destination is it, every branch at once, or
 // no refspec at all from the default branch itself (push.default sends the current branch).
 const pushToDefault = (args: string[], where: Where): string | undefined => {
-  const defaults = where.defaultBranch ? [where.defaultBranch] : DEFAULTS
+  const defaults = defaultsOf(where)
   const isDefault = (b: string | null) => b !== null && defaults.includes(b)
+  // A default branch that could not be read makes every branch a push names possibly the default.
+  const unread = unreadDefault(where)
+  const unsure = (b: string) => (unread === undefined ? undefined : `push ${b} from a checkout whose default branch could not be read (${unread})`)
   if (args.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return 'push every branch, the default one included'
   // Flags taking a value, so the value is not read as the remote or a refspec.
   const valued = new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec'])
@@ -211,7 +222,7 @@ const pushToDefault = (args: string[], where: Where): string | undefined => {
   const refspecs = ops.slice(1)
   if (!refspecs.length) {
     if (where.currentBranch === null) return 'push from a branch that could not be read'
-    return isDefault(where.currentBranch) ? `push ${where.currentBranch} straight to GitHub` : undefined
+    return isDefault(where.currentBranch) ? `push ${where.currentBranch} straight to GitHub` : unsure(where.currentBranch)
   }
   for (const spec of refspecs) {
     const [src, dst] = spec.includes(':') ? (spec.split(':') as [string, string]) : [spec, spec]
@@ -219,6 +230,8 @@ const pushToDefault = (args: string[], where: Where): string | undefined => {
     const resolved = target === 'HEAD' ? where.currentBranch : target
     if (resolved === null) return 'push from a branch that could not be read'
     if (isDefault(resolved)) return `push ${resolved} straight to GitHub`
+    const why = unsure(resolved)
+    if (why) return why
   }
   return undefined
 }
@@ -259,8 +272,9 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
         if (/\/pulls\/\d+\/merge\/?$/.test(endpoint) || /\/merges\/?$/.test(endpoint)) out.push({ kind: 'merge', what: `merge through the GitHub API (${endpoint})`, repo: at })
         if (/\/dispatches\/?$/.test(endpoint)) out.push({ kind: 'deploy', what: `start a workflow through the GitHub API (${endpoint})`, repo: at })
         const ref = /\/git\/refs\/heads\/(.+?)\/?$/.exec(endpoint)?.[1]
-        const defaults = where.defaultBranch ? [where.defaultBranch] : DEFAULTS
-        if (ref && defaults.includes(ref)) out.push({ kind: 'push-default', what: `move ${ref} through the GitHub API`, repo: at })
+        const unread = unreadDefault(where)
+        if (ref && defaultsOf(where).includes(ref)) out.push({ kind: 'push-default', what: `move ${ref} through the GitHub API`, repo: at })
+        else if (ref && unread !== undefined) out.push({ kind: 'push-default', what: `move ${ref} through the GitHub API from a checkout whose default branch could not be read (${unread})`, repo: at })
       }
     }
   }

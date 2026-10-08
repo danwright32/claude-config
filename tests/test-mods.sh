@@ -575,7 +575,7 @@ mkmodsrc(){   # $1 = mods dir  $2 = mod name  $3 = the hooks module's source
   printf '%s\n' "$3" > "$1/$2/hooks/register.ts"
 }
 mkmodsrc "$M9" clean-mod "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
-mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'; if (name === 'tee') add(f); const hasGit = dir => built.fs.exists(\`\${dir}/.git\`); const P = /\\bchild_process\\b/"
+mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'; if (name === 'tee') add(f); const hasGit = dir => built.fs.exists(\`\${dir}/.git\`); const P = /\\bchild_process\\b/; const b = await run(['git', '-C', root, 'branch', '--show-current'])"
 # A mod that sends once and reports a refusal is what every sender looks like after #688, so it passes.
 # A pane drawn its own way (the goals pane: a live list read at each draw, not a card) is not a copy.
 mkmodsrc "$M9" clean-live-pane "on('ui.render', { component: 'Pane', requestId: 'goals' }, (\$, e) => <Text dimColor>{row.sentence}</Text>)"
@@ -907,6 +907,23 @@ for m in remote-regex remote-last-part remote-strip; do
     || check "and names $m, pointing it at modkit.repo" "$out"
 done
 case "$out" in *clean-asks-kit*) check "a mod asking the kit, or naming an address, passes" "$out" ;; *) check "a mod asking the kit, or naming an address, passes" ok ;; esac
+# #980: reading where a checkout stands by hand (its branch, its default branch, the issues a branch
+# names), as scope-modes and the collision guard did before mod-kit's one reader. Each copy as it
+# stood fails the run, pointed at $.modkit.branch; a mod asking the kit, or asking git which
+# worktrees hold a branch (a different question), passes.
+M9B="$TMPROOT/m9b"
+mkmodsrc "$M9B" clean-asks-branch 'const b = await $.modkit.branch({ path: cwd }); const wt = await run($, ["git", "-C", root, "worktree", "list", "--porcelain"])'
+mkmodsrc "$M9B" branch-show-current 'const b = await run($, ["git", "-C", cwd, "branch", "--show-current"])'
+mkmodsrc "$M9B" branch-origin-head 'const head = await run($, ["git", "-C", dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])'
+mkmodsrc "$M9B" branch-abbrev-ref 'const r = await run($, ["git", "rev-parse", "--abbrev-ref", "HEAD"])'
+mkmodsrc "$M9B" branch-issues 'export const issuesOfBranch = b => [...b.matchAll(/(?:^|[^0-9])(\d{2,6})(?=$|[^0-9])/g)].map(m => Number(m[1]))'
+out="$(bash "$SHARED" "$M9B" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a hand rolled reading of where a checkout stands fails the run" ok || check "a hand rolled reading of where a checkout stands fails the run" "exit=$code out=$out"
+for m in branch-show-current branch-origin-head branch-abbrev-ref branch-issues; do
+  printf '%s\n' "$out" | grep "$m keeps its own branch-reader" | grep -q 'modkit.branch(' && check "and names $m, pointing it at modkit.branch" ok \
+    || check "and names $m, pointing it at modkit.branch" "$out"
+done
+case "$out" in *clean-asks-branch*) check "a mod asking the kit for its branch, or git for its worktrees, passes" "$out" ;; *) check "a mod asking the kit for its branch, or git for its worktrees, passes" ok ;; esac
 # The one known exception (#961) covers scope-modes' gh argument reader in hooks/ghargs.ts alone:
 # it is printed as such on every run, and a copy anywhere else in scope-modes still fails.
 M9E="$TMPROOT/m9e"

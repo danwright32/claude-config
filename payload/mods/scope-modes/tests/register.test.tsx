@@ -6,6 +6,7 @@ import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
+import { branchAt } from './mod-kit/hooks/branch.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -72,7 +73,7 @@ const deps: { name: string; register: Register } = {
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
-          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
+          branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         },
@@ -223,6 +224,8 @@ type Opts = {
   noRepo?: boolean
   /** The session's origin as $.session.repo() gives it (#951); by default git@github.com:o/r.git. */
   remote?: string | null
+  /** mod-kit's branch reader fails (#980), with what it threw. */
+  branchReaderFails?: string
   /** mod-kit's repo reader fails (#979 review). */
   repoReaderFails?: boolean
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
@@ -312,7 +315,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: w.files[e.path] as string } as never
   })
   on('fs.exists', ($, e) => ({ value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
-  on('process.run', ($, e) => {
+  on('process.run', function answer($, e) {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
     const ops = a.filter(x => !x.startsWith('-'))
@@ -393,10 +396,19 @@ const world = (on: On, o: Opts = {}) => {
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
     if (cmd === '__modkit') {
-      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null }
+      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
       if (a[0] === 'repo' && o.repoReaderFails) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
+      // Where a checkout stands (#980), read by mod-kit's own reader asking this world's git. Every
+      // folder is a checkout of its own here, as the git answers below treat it, except the
+      // session's when it is in no repository.
+      if (a[0] === 'branch') {
+        if (o.branchReaderFails) return fail(1, o.branchReaderFails)
+        const walk = async (p: string) => (o.noRepo && p === '/repo' ? null : p)
+        const git = async (args: string[]) => ((await answer($, { ...e, argv: args })) as { value: { exitCode: number; stdout: string; stderr: string } }).value
+        return branchAt(input.path ?? '', walk, git).then(b => ok(b === null ? '' : JSON.stringify(b)))
+      }
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
@@ -900,13 +912,53 @@ test('a branch that cannot be read when winding down turns on is said, never rea
   const { w, clock } = world(on, { branch: '__fails' })
   await start($ as never, clock)
   await command($ as never, 'winddown')
-  expect((await stop($ as never)).block).toMatch(/what this session is working on could not be read \(fatal: not a git repository\)/)
+  // In mod-kit's words since #980, which say which read failed.
+  expect((await stop($ as never)).block).toMatch(/what this session is working on could not be read \(git could not read the branch: fatal: not a git repository\)/)
   await clock.advance(MIN)
   expect(w.toasts).toEqual([])
   // Once it can be read, the check goes on from there.
   w.o.branch = 'scope-modes-616'
   w.o.gh = merged('OPEN')
   expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
+})
+
+// What winding down finishes, pinned before it moved onto mod-kit's branch reader (#980): each
+// answer here is the one the mod gave reading git itself.
+test('winding down from a detached head has no branch to finish, and is not refused for it (#980)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: '' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+test('winding down on the branch origin/HEAD names has nothing to finish (#980)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'develop', defaultBranch: 'develop' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('winding down on main where origin/HEAD names develop finishes main as a branch of its own (#980)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', defaultBranch: 'develop' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for main yet\./)
+})
+
+test("winding down whose branch mod-kit's reader cannot give says so, never reads it as nothing to finish (#980)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branchReaderFails: 'mod-kit is not loaded' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/what this session is working on could not be read \(.*mod-kit is not loaded.*\)/)
+  expect(w.toasts).toEqual([])
+})
+
+test('winding down in no repository has nothing to finish (#980)', withDeps, async ($, on) => {
+  const { clock } = world(on, { noRepo: true })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
 })
 
 test('an answer from GitHub that is not what was asked for refuses the turn end rather than letting it through', withDeps, async ($, on) => {
@@ -2270,6 +2322,33 @@ test('asleep, the folder a command runs in decides its repository: a cd or git -
   expect(await call($ as never, bash('git --git-dir=/elsewhere/.git push'))).toMatch(/^Blocked overnight/)
   // The session's own folder is on its branch: an ordinary push.
   expect(await call($ as never, bash('git push'))).toBe('ran')
+})
+
+// The branches each folder is read for, pinned before the read moved onto mod-kit's branch reader (#980).
+test('asleep, the default branch is the one origin/HEAD names in the folder the push runs from (#980)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' }, branches: { '/other': 'feature-1' }, defaultBranch: 'develop' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git -C /other push origin develop'))).toMatch(/^Blocked overnight: this would push develop straight to GitHub/)
+  // main is not the default where origin/HEAD names develop.
+  expect(await call($ as never, bash('git -C /other push origin main'))).toBe('ran')
+  expect(await call($ as never, bash('git -C /other push'))).toBe('ran')
+})
+
+test('asleep, a push from a detached head is refused wherever it could reach the default branch (#980)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' }, branches: { '/other': '' }, defaultBranch: 'develop' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git -C /other push'))).toMatch(/^Blocked overnight: this would push from a branch that could not be read/)
+  expect(await call($ as never, bash('git -C /other push origin develop'))).toMatch(/^Blocked overnight/)
+  // Changed by #980: mod-kit's reader gives no default branch for a detached head, so a branch it
+  // names by HEAD:<branch> could be the default, and is refused rather than read as main or master.
+  expect(await call($ as never, bash('git -C /other push origin HEAD:feature-1'))).toMatch(/^Blocked overnight: this would push feature-1 from a checkout whose default branch could not be read \(a detached head names no branch\)/)
+})
+
+test("asleep, a folder whose branch mod-kit's reader cannot give is judged the strict way (#980)", withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' }, branchReaderFails: 'the disk cannot read /other' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git -C /other push origin feature-1'))).toMatch(/^Blocked overnight: this would push feature-1 from a checkout whose default branch could not be read \(the disk cannot read \/other\)/)
+  expect(await call($ as never, bash('git -C /other push'))).toMatch(/^Blocked overnight: this would push from a branch that could not be read/)
 })
 
 test('the bedtime questions share one 10 minute wait, so /sleep never blocks longer, and the ones not reached are closed and said', withDeps, async ($, on) => {

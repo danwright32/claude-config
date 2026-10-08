@@ -106,9 +106,6 @@ export function keptOpen(r: Reading): boolean {
   return !!pr && !isUnreadable(pr) && pr.state === 'OPEN' && !!r.leftOpen && !!pr.head && pr.head === r.leftOpen.head
 }
 
-/** The issue numbers a branch name carries (`scope-modes-616-621`, `feat/620-addon-notes`). */
-export const issuesOfBranch = (branch: string): number[] => [...branch.matchAll(/(?:^|[^0-9])(\d{2,6})(?=$|[^0-9])/g)].map(m => Number(m[1]))
-
 const ISSUE_REF = /(?:#|\bissue\s+)(\d+)\b/gi
 
 /**
