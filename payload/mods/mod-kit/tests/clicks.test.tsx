@@ -177,7 +177,10 @@ test('instead must be a list of text runs: a button or a malformed run in it is 
   const withInstead = (instead: unknown) => ({ ...row, lines: [[{ button: 'done', label: 'Done', instead }]] })
   expect(await run($, `show ${JSON.stringify(withInstead('type it'))}`)).toMatch(/refused: .*instead must be a list of text runs/)
   expect(await run($, `show ${JSON.stringify(withInstead([{ button: 'x', label: 'X' }]))}`)).toMatch(/refused: .*instead must be a list of text runs/)
-  expect(await run($, `show ${JSON.stringify(withInstead([{ text: 'a', wrap: 'yes' }]))}`)).toMatch(/refused: .*wrap must be true/)
+  // An instead run is drawn as one plain run beside its neighbours, so a layout field on it is refused
+  // rather than ignored (#946 review).
+  for (const field of [{ indent: 2 }, { whole: true }, { wrap: true }])
+    expect(await run($, `show ${JSON.stringify(withInstead([{ text: 'a', ...field }]))}`)).toMatch(/refused: .*an instead run takes no indent, whole or wrap/)
   expect(await run($, `show ${JSON.stringify({ ...row, lines: [[{ text: 'a', instead: [] }]] })}`)).toMatch(/refused: .*only a button can have instead/)
 })
 

@@ -55,7 +55,7 @@ export const fallbackOf = (p: ModKitBandButton): ModKitBandText[] | undefined =>
 
 /** The columns a button takes at most: its bracketed label, or the text drawn in its place where that is wider. */
 export const buttonWidth = (p: ModKitBandButton): number =>
-  Math.max(p.label.length + 2, (fallbackOf(p) ?? []).reduce((w, r) => w + (r.indent ?? 0) + r.text.length, 0)) + (p.indent ?? 0)
+  Math.max(p.label.length + 2, (fallbackOf(p) ?? []).reduce((w, r) => w + r.text.length, 0)) + (p.indent ?? 0)
 
 const insteadRefusal = (p: ModKitBandPart): string | undefined => {
   const instead = (p as { instead?: unknown }).instead
@@ -64,6 +64,10 @@ const insteadRefusal = (p: ModKitBandPart): string | undefined => {
   if (!Array.isArray(instead) || !instead.every(r => r && typeof r === 'object' && !('button' in r) && typeof (r as { text?: unknown }).text === 'string'))
     return `button "${p.button}": instead must be a list of text runs, drawn where a click cannot reach it`
   for (const r of instead as ModKitBandPart[]) {
+    // Drawn as one plain run beside its neighbours: a layout field would be ignored, so it is refused.
+    const run = r as { indent?: unknown; whole?: unknown; wrap?: unknown }
+    if (run.indent !== undefined || run.whole !== undefined || run.wrap !== undefined)
+      return `button "${p.button}" instead: an instead run takes no indent, whole or wrap; it is drawn as plain text where the button was`
     const why = partRefusal(r)
     if (why) return `button "${p.button}" instead: ${why}`
   }

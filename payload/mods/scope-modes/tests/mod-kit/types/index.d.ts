@@ -280,7 +280,8 @@ export type ModKitBandText = { text: string; href?: string; color?: string; bold
  * drawn in the button's place wherever a click may not reach it (#939): a terminal's main screen,
  * and Apple Terminal, whose tab only reports clicks while View > Allow Mouse Reporting is ticked,
  * which no mod can read. An empty list draws nothing there, for a button whose content sits beside
- * it as text. Left out, the button is drawn there as before (the rest of #939 changes that).
+ * it as text, and an instead run takes no indent, whole or wrap. Left out, the button is drawn there
+ * as before (the rest of #939 changes that).
  */
 export type ModKitBandButton = { button: string; label: string; hotkey?: string; plain?: true; indent?: number; instead?: ModKitBandText[] }
 export type ModKitBandPart = ModKitBandText | ModKitBandButton
