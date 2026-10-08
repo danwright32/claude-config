@@ -577,3 +577,85 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets(`node -e "require('fs').writeFileSync('a.md', 'x')"`)).toEqual(none)
   })
 })
+
+// #965: the shell runs a command substitution, $(...) or backticks, before the command it sits in,
+// and in an unquoted heredoc's body before the program fed that body starts. No reader reported its
+// writes, so every guard reading $.modkit.writes let a write to lasting memory, or to another
+// session's file, through unseen. A quoted delimiter stops the shell expanding the body: it is data.
+const MEM = `${HOME}/.claude/CLAUDE.md`
+const changed = (command: string, cwd = CWD) => read(command, cwd).changes.map(c => `${c.does} ${c.path ?? `(as written) ${c.word}`}`)
+describe('writes: what the shell runs inside a command substitution (#965)', () => {
+  const sub = '$(cat rules.md >> ~/.claude/CLAUDE.md)'
+  const tick = '`cat rules.md >> ~/.claude/CLAUDE.md`'
+  test('in an unquoted heredoc body, $(...) and backticks are read as the commands they are, whatever the body feeds', () => {
+    for (const s of [sub, tick]) {
+      for (const open of ['python3 - <<EOF', 'python3 -<<EOF', 'cat <<EOF', 'cat > out.md <<EOF', 'node <<EOF']) {
+        const command = `${open}\nprint("done ${s} now")\nEOF`
+        expect(`${command} => ${paths(command).join(', ')}`).toContain(MEM)
+      }
+      // <<- takes the leading tabs off the body and the delimiter line.
+      const tabbed = `python3 - <<-EOF\n\tprint("done ${s} now")\n\tEOF`
+      expect(`${tabbed} => ${paths(tabbed).join(', ')}`).toContain(MEM)
+    }
+    // Every change it makes, not only content: a removal, an in place edit.
+    expect(changed('cat <<EOF\nx $(rm old.txt) y\nEOF')).toEqual([`remove ${CWD}/old.txt`])
+    expect(paths('cat <<EOF\n`sed -i "" s/a/b/ notes.md`\nEOF')).toEqual([`${CWD}/notes.md`])
+  })
+  test('under a quoted or escaped delimiter the body is data, and an escaped $ or backtick in an unquoted one is text', () => {
+    for (const s of [sub, tick]) {
+      for (const open of ["python3 - <<'EOF'", 'python3 - <<"EOF"', 'python3 - <<\\EOF', "cat <<'EOF'", "cat <<-'EOF'"]) {
+        const command = `${open}\nprint("done ${s} now")\nEOF`
+        expect(`${command} => ${paths(command).join(', ')}`).toBe(`${command} => `)
+      }
+    }
+    expect(paths('cat <<EOF\n\\$(cat rules.md >> ~/.claude/CLAUDE.md) \\`cat rules.md >> ~/.claude/CLAUDE.md\\`\nEOF')).toEqual([])
+    // A backslash escaping itself leaves the $ after it live.
+    expect(paths('cat <<EOF\n\\\\$(cat rules.md >> ~/.claude/CLAUDE.md)\nEOF')).toEqual([MEM])
+    // Arithmetic runs no command: $((2 > 1)) compares, it writes no file named 1.
+    expect(paths('cat <<EOF\n$((2 > 1))\nEOF')).toEqual([])
+  })
+  test('nested substitutions, one spanning lines, and backticks inside $(...) are each read', () => {
+    expect(paths('cat <<EOF\n$(echo "$(cat a >> b.md)")\nEOF')).toEqual([`${CWD}/b.md`])
+    // Beside the word the reader already gave as written, with the backtick in it.
+    expect(paths('cat <<EOF\n$(echo `cat a >> c.md`)\nEOF')).toContain(`${CWD}/c.md`)
+    expect(paths('cat <<EOF\n`echo \\`cat a >> d.md\\``\nEOF')).toContain(`${CWD}/d.md`)
+    expect(paths('cat <<EOF\nx $(echo one > a.md\necho two > b.md) y\nEOF')).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+    // A ) quoted inside the substitution does not end it.
+    expect(paths('cat <<EOF\n$(echo ")" > e.md)\nEOF')).toEqual([`${CWD}/e.md`])
+    // A substitution inside arithmetic runs, and one whose $(( is closed by no )) is a command.
+    expect(paths('cat <<EOF\n$(( $(wc -l < a > f.md) + 1 ))\nEOF')).toEqual([`${CWD}/f.md`])
+    expect(paths('cat <<EOF\n$((echo hi) > g.md)\nEOF')).toEqual([`${CWD}/g.md`])
+  })
+  test('a body that ends early: a substitution never closed is read to the end of the body, and a heredoc never ended is still read', () => {
+    expect(changed('cat <<EOF\nx $(rm old.txt\nEOF')).toEqual([`remove ${CWD}/old.txt`])
+    expect(paths('cat <<EOF\nx `cat a >> g.md\nEOF')).toEqual([`${CWD}/g.md`])
+    expect(paths(`python3 - <<EOF\nprint("it's ${sub}")`)).toContain(MEM)
+    expect(paths(`python3 - <<-EOF\n\tprint("it's ${tick}")`)).toContain(MEM)
+  })
+  test('at the top level too, inside double quotes or none, never inside single quotes or a comment', () => {
+    expect(paths(`echo "${sub}"`)).toEqual([MEM])
+    expect(paths(`echo "${tick}"`)).toEqual([MEM])
+    expect(paths(`x=${sub}`)).toContain(MEM)
+    expect(paths(`echo '${sub}' '${tick}'`)).toEqual([])
+    expect(paths(`echo $'${sub}'`)).toEqual([])
+    expect(paths(`echo "\\${sub}"`)).toEqual([])
+    // A comment runs nothing (the words of one are still read as a command's, as they were).
+    expect(changed('echo hi # "$(rm old.txt)"')).toEqual([])
+  })
+  test('a heredoc inside a substitution is read as the shell reads it: an unquoted body runs, a quoted one, such as a commit message, is text', () => {
+    expect(changed('x=$(cat <<EOF\n$(rm old.txt)\nEOF\n)')).toEqual([`remove ${CWD}/old.txt`])
+    expect(read("git commit -m \"$(cat <<'EOF'\nWrite > notes.txt and rm -rf src (#965)\n$(rm old.txt)\nEOF\n)\"")).toEqual({ files: [], changes: [], unnamed: [] })
+    // A command after the heredoc, inside the same substitution, still runs.
+    expect(paths("x=$(cat <<'EOF'\nbody\nEOF\necho done > h.md)")).toContain(`${CWD}/h.md`)
+  })
+  test('a cd in the command leaves a relative path in a substitution unnamed, and a cd inside one ends with it', () => {
+    const r = read('cd /tmp/other && cat <<EOF\n$(cat a >> b.md) $(cat a >> ~/.claude/CLAUDE.md)\nEOF')
+    expect(r.files).toContainEqual({ word: 'b.md' })
+    expect(r.files).toContainEqual({ word: '~/.claude/CLAUDE.md', path: MEM })
+    expect(paths('echo "$(cd /tmp && echo x > a.txt)"; echo y > b.txt')).toEqual([`${CWD}/b.txt`, '/tmp/a.txt'])
+  })
+  test('a write the substitution runs whose files no word names is reported as one', () => {
+    const r = read("cat <<EOF\n$(python3 -c 'import os; os.remove(\"x.md\")')\nEOF")
+    expect(r.unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+  })
+})

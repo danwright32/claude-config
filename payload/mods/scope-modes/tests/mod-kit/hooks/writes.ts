@@ -1,5 +1,5 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git, pipeline, type Command } from './commands.ts'
+import { dropHeredocs, git, pipeline, type Command } from './commands.ts'
 import { codeTargets } from './code.ts'
 import { kindOf } from './program.ts'
 
@@ -17,8 +17,11 @@ import { kindOf } from './program.ts'
 //
 // Inline code is judged by the reader's per language judge (code.ts), which each command already
 // carries, and a shell fed its script is read as the commands it runs, so this keeps no list of
-// interpreters or write idioms of its own. What it does not report: a script run from a file
-// (python3 build.py), whose writes no word names and which are not guessed at (#654).
+// interpreters or write idioms of its own. A command substitution the shell runs, on the command line
+// or in an unquoted heredoc's body, is read as the command line it is (#965, commandWrites). What it
+// does not report: a script run from a file (python3 build.py), whose writes no word names and which
+// are not guessed at (#654); a substitution inside a shell's own script held in single quotes or a
+// quoted heredoc, which that shell runs; a process substitution.
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
@@ -401,7 +404,7 @@ const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
  * patch, a program that writes or runs a process or cannot be read, a script on standard input, a
  * command xargs gives its files), each with the files to read to find out, such as the patch.
  */
-export const writes = (cmds: readonly Command[], cwd: string, home: string): ModKitWrites => {
+export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => {
   const files: ModKitWrite[] = []
   const changes: ModKitChange[] = []
   const unnamed: ModKitWrites['unnamed'] = []
@@ -664,5 +667,146 @@ export const writes = (cmds: readonly Command[], cwd: string, home: string): Mod
   return { files, changes, unnamed }
 }
 
+// Command substitutions (#965). The shell runs the commands inside a $(...) or backticks before the
+// command they sit in, and in a heredoc whose delimiter is not quoted, before the program fed that
+// body starts: so `python3 - <<EOF` whose body held `$(cat rules.md >> ~/.claude/CLAUDE.md)` wrote
+// lasting memory while the reader, which drops a heredoc's body as text and keeps a substitution
+// inside the word it is in, reported nothing, and every guard reading it let the write through.
+
+// Where the ) closing a $( whose text starts at `from` stands, read as the shell reads that text: a
+// quote, a backslash, a backtick or a comment holds a ) that closes nothing. -1 when none closes
+// it, the text ending first. A case pattern's ) is taken for the close (`$(case x in a) ...)`): the
+// text after it is not read as run.
+const closing = (text: string, from: number): number => {
+  let depth = 1
+  for (let i = from; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '\\') i++
+    else if (c === "'") {
+      i = text.indexOf("'", i + 1)
+      if (i < 0) return -1
+    } else if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) {
+        if (text[i] === '\\') i++
+        else if (text[i] === '`') i = tickEnd(text, i + 1)
+        else if (text[i] === '$' && text[i + 1] === '(') i = closing(text, i + 2)
+        if (i < 0) return -1
+      }
+      if (i >= text.length) return -1
+    } else if (c === '`') {
+      i = tickEnd(text, i + 1)
+      if (i < 0) return -1
+    } else if (c === '#' && commentAt(text, i, from)) {
+      i = text.indexOf('\n', i)
+      if (i < 0) return -1
+    } else if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return i
+  }
+  return -1
+}
+// Where the backtick closing one whose text starts at `from` stands, -1 when none does.
+const tickEnd = (text: string, from: number): number => {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === '\\') i++
+    else if (text[i] === '`') return i
+  }
+  return -1
+}
+// A # begins a comment only where a word would begin.
+const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|()]/.test(text[i - 1] as string)
+
+/**
+ * The text of each command substitution the shell runs in `text`, outermost only (each is read as a
+ * command line of its own, which reads any inside it). In a heredoc's body (`body`) a quote is text
+ * and only a backslash before $, a backtick or a backslash escapes it; elsewhere nothing inside
+ * single quotes, $'...' or a comment runs. A $(( closed by )) is arithmetic, which runs only the
+ * substitutions inside it; one closed otherwise is a command. A substitution never closed, its body
+ * ending early, is read to the end of the text, the side that asks rather than passes. Inside
+ * backticks a backslash before $, a backtick or a backslash stands for that character.
+ */
+export const substitutions = (text: string, body: boolean): string[] => {
+  const out: string[] = []
+  let quoted = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (!body && !quoted) {
+      if (c === "'" || (c === '$' && text[i + 1] === "'")) {
+        // $'...' takes a backslash escape inside; '...' takes none.
+        const ansi = c === '$'
+        let j = ansi ? i + 2 : i + 1
+        for (; j < text.length && text[j] !== "'"; j++) if (ansi && text[j] === '\\') j++
+        i = j
+        continue
+      }
+      if (c === '#' && commentAt(text, i)) {
+        const nl = text.indexOf('\n', i)
+        i = nl < 0 ? text.length : nl
+        continue
+      }
+    }
+    if (!body && c === '"') {
+      quoted = !quoted
+      continue
+    }
+    if (c === '$' && text[i + 1] === '(') {
+      const inner = text[i + 2] === '(' ? closing(text, i + 3) : -1
+      if (inner >= 0 && text[inner + 1] === ')') {
+        out.push(...substitutions(text.slice(i + 3, inner), false))
+        i = inner + 1
+        continue
+      }
+      const end = closing(text, i + 2)
+      out.push(text.slice(i + 2, end < 0 ? text.length : end))
+      i = end < 0 ? text.length : end
+    } else if (c === '`') {
+      const end = tickEnd(text, i + 1)
+      out.push(text.slice(i + 1, end < 0 ? text.length : end).replace(/\\([$`\\])/g, '$1'))
+      i = end < 0 ? text.length : end
+    }
+  }
+  return out
+}
+
+// The words that change the folder a relative path is read against.
+const MOVES = new Set(['cd', 'pushd', 'popd'])
+
+// Each change in `from` that `into` lacks is added to it, as writes() keeps one: a path once, a tree
+// on either keeping the tree.
+const merge = (into: ModKitWrites, from: ModKitWrites) => {
+  for (const f of from.files) {
+    const had = into.files.find(x => (f.path ? x.path === f.path : !x.path && x.word === f.word))
+    if (!had) into.files.push(f)
+    else if (f.tree) had.tree = true
+  }
+  for (const c of from.changes) {
+    const had = into.changes.find(x => x.does === c.does && (c.path ? x.path === c.path : !x.path && x.word === c.word))
+    if (!had) into.changes.push(c)
+    else if (c.tree) had.tree = true
+  }
+  into.unnamed.push(...from.unnamed)
+}
+
+// A command line's changes with those of every substitution the shell runs in it (#965): in its
+// text outside the heredoc bodies, and in each body whose delimiter is unquoted, one never ended
+// included (the reader reads its lines as commands too, so they are read outside a body as well). A
+// substitution is read as a command line of its own, the same way, so one inside it is read too,
+// and a cd or a variable set inside it ends with it. Where the line changes folder, a relative path
+// a substitution names is left as written (it may run before the cd or after); a variable the line
+// sets is not followed into a substitution, so a path through one is left as written too.
+const lineWrites = (command: string, cwd: string | undefined, home: string): ModKitWrites => {
+  const cmds = pipeline(command, { assignments: true })
+  const out = writes(cmds, cwd, home)
+  const { text, heredocs, unended } = dropHeredocs(command)
+  const bodies = [...heredocs, ...(unended ? [unended] : [])].filter(h => !h.quoted).map(h => h.body)
+  const inner = [...substitutions(text, false), ...bodies.flatMap(b => substitutions(b, true))]
+  const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
+  for (const s of inner) merge(out, lineWrites(s, at, home))
+  return out
+}
+
 /** What a Bash call changes, read from its text: `$.modkit.writes`, and what its tests read. */
-export const commandWrites = (command: string, cwd: string, home: string): ModKitWrites => writes(pipeline(command, { assignments: true }), cwd, home)
+export const commandWrites = (command: string, cwd: string, home: string): ModKitWrites => lineWrites(command, cwd, home)
