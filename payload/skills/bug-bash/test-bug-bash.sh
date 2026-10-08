@@ -992,10 +992,13 @@ grep -qF 'sudo -n -g _bugbash "$(command -v node)" ~/.claude/skills/bug-bash/rea
 # What Dan runs if a site ever seems blocked is said in the skill (coordinator, #938).
 grep -q 'seems blocked.*bash ~/.claude/skills/bug-bash/egress.sh status' "$DIR/SKILL.md" && ok \
   || bad "SKILL.md says, in one line, what to run if a site ever seems blocked"
-# Started through sudo, the pid the shell holds is sudo's, never the proxy's, so the skill must not
-# tell the reader to match proxy.json's pid against it (lessons review of #938, L321).
-! grep -q 'its `pid` is the process you started' "$DIR/SKILL.md" && grep -q 'ps -o ppid= -p' "$DIR/SKILL.md" && ok \
-  || bad "SKILL.md checks the proxy's pid as a child of the sudo it started, not as the sudo itself"
+# Started through sudo, the pid the shell holds is sudo's, never the proxy's, and with sudo's own
+# pty the proxy is not even sudo's direct child, so the skill must not match proxy.json's pid against
+# either. It waits for proxy.json while the sudo it started is still running instead (lessons review
+# of #938, L321).
+! grep -q 'its `pid` is the process you started' "$DIR/SKILL.md" && ! grep -q 'ps -o ppid=' "$DIR/SKILL.md" \
+  && grep -q 'while the `sudo` you started is still running' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && ok \
+  || bad "SKILL.md judges a started proxy by its proxy.json appearing while its sudo still runs, never by a pid relation"
 grep -q 'one time setup.*claude-config#813' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && grep -q 'bash ~/.claude/skills/bug-bash/egress.sh selftest' "$DIR/SKILL.md" && ok \
   || bad "SKILL.md names the one time setup and its self test"
 
