@@ -49,6 +49,19 @@ and settles its own surfaces in rounds of its own before it is built.
    10 s (none given waits up to Claude Code's 30 s default) and a `$.model.complete` with none under
    10 s (a completion can take a minute), unless the noun races it against a shorter timer. Its first run found two in session-registry's
    engine.create code (a save's `mv` and the repository root lookup), now bounded at 5 s.
+5. **A mod that changes with mod-kit is loaded again after mod-kit reloads (#960).** Measured on
+   2026-10-08 (2.1.294) with throwaway mods in a session of their own: when one pull changes mod-kit
+   and a mod that starts hooking or calling something mod-kit only now provides, an open session can
+   reload that mod first, against the old mod-kit, idle or at a busy turn's end whatever order the
+   files were written in. Claude Code unloads it ("could not build $ ... unloaded" in the debug log,
+   while the transcript's notice says the previous version stays loaded), its tools leave the
+   session, and nothing retries it. A reload delivers `isInteractive` as the session's start did, so
+   a mod gating its setup on it was not the cause, though it was the first suspect. mod-kit's
+   `session.start`, at a reload, touches (`touch -c`, a time change alone) the manifest of every mod
+   that depends on it and changed since mod-kit last started in that session, which Claude Code
+   takes as a save and loads the mod again, now against the new mod-kit. Proven end to end on the
+   real mod-kit the same day: the dependent was unloaded, mod-kit reloaded and touched it, and it
+   loaded again with its tool. The other providers' dependents are #966.
 
 ## Guard surfaces (#607, #608, #609)
 
