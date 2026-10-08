@@ -328,22 +328,30 @@ if [[ -x "$REAL_CHROME" ]]; then
   # run that leaves its copy shows one on every attempt: three attempts tell the two apart.
   real_tmp="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)}"
   real_clones="$(cd "${real_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
-  # A TMPDIR moved elsewhere names no such folder, and an empty look would pass by default.
+  # A TMPDIR moved elsewhere names no such folder, so getconf is tried next.
   if [ ! -d "$real_clones" ]; then
     real_tmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
     real_clones="$(cd "${real_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
   fi
-  printf '<!doctype html><html><body><p>own copy</p></body></html>\n' > "$TMP/clone-probe.html"
-  left="not run"; page=""
-  for attempt in 1 2 3; do
-    ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.before"
-    page="$("$CHROME" --headless --disable-gpu --no-sandbox --dump-dom "file://$TMP/clone-probe.html" 2>/dev/null)"
-    ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.after"
-    left="$(LC_ALL=C comm -13 "$TMP/real-clones.before" "$TMP/real-clones.after" | tr '\n' ' ')"
-    [ -z "$left" ] && break
-  done
-  check "a real Chrome run hands back its page" "<p>own copy</p>" "$page"
-  check_eq "and leaves no copy of Chrome behind in $real_clones" "" "${left% }"
+  real_clones="${SWITCHER_TEST_CLONE_DIR:-$real_clones}"
+  # With no such folder there is nothing to look in, and an empty look would pass whether or not
+  # the folder was found in the right place, so that is said instead of passed.
+  if [ ! -d "$real_clones" ]; then
+    echo "UNMEASURED: no clone folder at $real_clones, so whether a real Chrome run leaves its copy behind was not measured"
+    unmeasured=1
+  else
+    printf '<!doctype html><html><body><p>own copy</p></body></html>\n' > "$TMP/clone-probe.html"
+    left="not run"; page=""
+    for attempt in 1 2 3; do
+      ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.before"
+      page="$("$CHROME" --headless --disable-gpu --no-sandbox --dump-dom "file://$TMP/clone-probe.html" 2>/dev/null)"
+      ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.after"
+      left="$(LC_ALL=C comm -13 "$TMP/real-clones.before" "$TMP/real-clones.after" | tr '\n' ' ')"
+      [ -z "$left" ] && break
+    done
+    check "a real Chrome run hands back its page" "<p>own copy</p>" "$page"
+    check_eq "and leaves no copy of Chrome behind in $real_clones" "" "${left% }"
+  fi
 fi
 
 probe() { # probe <page> -> the readout heading at the start and after each key
