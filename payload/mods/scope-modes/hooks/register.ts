@@ -1125,24 +1125,25 @@ const openReport = async ($: EngineInterface, path: string, fromPhone: boolean):
 const askSummaries = async ($: EngineInterface, record: SleepRecord | null, self: string): Promise<string> => {
   const others = (Array.isArray(record?.workers) ? record.workers : []).filter((w): w is string => typeof w === 'string' && w !== self)
   if (!others.length) return ''
-  let list
-  try {
-    list = await $.sessions.list()
-  } catch (err) {
-    return summariesSaid({ asked: 0, failed: [], closed: 0, unknown: `the session registry could not be read (${msg(err)})` })
-  }
-  const open = new Set(list.open.map(o => o.sessionId))
   const told = { asked: 0, failed: [] as string[], closed: 0 }
-  for (const id of others) {
-    if (!open.has(id)) {
-      if (list.unreadable.length) told.failed.push(`whether it is still open is not known (the session registry could not read ${list.unreadable.join(', ')})`)
-      else told.closed++
-      continue
+  // The record is already moved aside: anything that throws here is said in the reply, never
+  // allowed to take the wake's reply with it (lessons review of 7de29c2).
+  try {
+    const list = await $.sessions.list()
+    const open = new Set(list.open.map(o => o.sessionId))
+    for (const id of others) {
+      if (!open.has(id)) {
+        if (list.unreadable.length) told.failed.push(`whether it is still open is not known (the session registry could not read ${list.unreadable.join(', ')})`)
+        else told.closed++
+        continue
+      }
+      // mod-kit tries a refused send once more, so a refusal here is the second.
+      const sent = await $.session.send({ to: { sessionId: id }, text: SUMMARY_ASK })
+      if (sent.isDelivered) told.asked++
+      else told.failed.push(sent.reason)
     }
-    // mod-kit tries a refused send once more, so a refusal here is the second.
-    const sent = await $.session.send({ to: { sessionId: id }, text: SUMMARY_ASK })
-    if (sent.isDelivered) told.asked++
-    else told.failed.push(sent.reason)
+  } catch (err) {
+    return summariesSaid({ ...told, unknown: msg(err) })
   }
   return summariesSaid(told)
 }
@@ -1177,6 +1178,8 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
     const rm = await run($, ['rm', '-f', p.preparing])
     return said(rm.exitCode === 0 ? 'Sleep mode was not on. A sleep left half prepared was cleared, so /sleep can start again.' : `Sleep mode was not on, and a sleep left half prepared could not be cleared (${rm.stderr.trim() || `rm exited ${rm.exitCode}`}).`)
   }
+  // Read before the record moves, so a read that fails leaves sleep exactly as it was.
+  const self = await $.session.id()
   const moved = await moveAside($, 'woke')
   if ('gone' in moved) return said('Sleep mode was already woken by another session.')
   if ('error' in moved) return said(`Sleep mode could not be turned off (${moved.error}). It is still on.`)
@@ -1198,7 +1201,6 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
     // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
     s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
   }
-  const self = await $.session.id()
   const asked = await askSummaries($, record, self)
   if (asked) s += ` ${asked}`
   return { said: s, morning: await morningFor($, record, self) }
@@ -1835,14 +1837,20 @@ const tellOthers = async ($: EngineInterface, place: ScopeModesPlace): Promise<T
     return { told: 0, failed: [], unknown: `the session registry could not be read (${msg(err)})` }
   }
   const out: Told = { told: 0, failed: [] }
-  // A record that cannot be read may be a live session: said, never read as no session (L215).
-  if (list.unreadable.length) out.unknown = `the session registry could not read ${list.unreadable.join(', ')}`
-  for (const o of list.open) {
-    if (o.sessionId === list.selfId) continue
-    // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
-    const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: place === 'away' ? AWAY_TEXT : HOME_TEXT })
-    if (!sent.isDelivered) out.failed.push(sent.reason)
-    else out.told++
+  // A registry answer of the wrong shape is said as the others not told, never thrown past the
+  // caller: at wake that would lose the reply after the record had moved (#837 lessons review).
+  try {
+    // A record that cannot be read may be a live session: said, never read as no session (L215).
+    if (list.unreadable.length) out.unknown = `the session registry could not read ${list.unreadable.join(', ')}`
+    for (const o of list.open) {
+      if (o.sessionId === list.selfId) continue
+      // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
+      const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: place === 'away' ? AWAY_TEXT : HOME_TEXT })
+      if (!sent.isDelivered) out.failed.push(sent.reason)
+      else out.told++
+    }
+  } catch (err) {
+    out.unknown = `the session registry's answer could not be read (${msg(err)})`
   }
   return out
 }

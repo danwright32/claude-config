@@ -80,7 +80,14 @@ describe('morningPrompt: the summary and the morning pickers, on the session tha
     expect(none).not.toMatch(/AskUserQuestion/)
   })
   test('proposals that could not be read are said, pointing at the report', () => {
-    expect(morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })).toMatch(/The night's proposed issues and lessons could not be read \(EACCES\); they are in the night's report/)
+    expect(morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })).toMatch(/The night's proposed issues and lessons could not be read \(EACCES\)\. They are in the night's report under Proposed issues and Proposed lessons/)
+  })
+  test('proposals that could not be read still come with both pickers described, to be filled from the report', () => {
+    const p = morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })
+    expect(p).toContain('~/.claude/hooks/review/issue-review.md')
+    expect(p).toContain('~/.claude/hooks/durable-lesson-check.sh')
+    expect(p).toMatch(/Proposed issues and Proposed lessons/)
+    expect(p).not.toMatch(/there are no morning pickers/)
   })
   test('a lesson whose text holds a quote is still one valid metadata object', () => {
     const p = morningPrompt({ worker: true, issues: [], lessons: ['Say "never" once.'] })

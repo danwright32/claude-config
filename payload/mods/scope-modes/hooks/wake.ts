@@ -104,26 +104,29 @@ export const morningPrompt = (o: { worker: boolean; issues: ProposedIssue[]; les
       ? 'Dan is up: sleep mode is off. Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. Every other session that worked overnight was asked for its own.'
       : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise. Every session that worked overnight was asked for its own.',
   ]
-  if (o.unread !== undefined) {
-    out.push(`The night's proposed issues and lessons could not be read (${o.unread}); they are in the night's report under Proposed issues and Proposed lessons, so offer them from there in the pickers described here, or say plainly that you could not.`)
+  // Proposals that could not be read are still offered, from the report, in the same two pickers.
+  const fromReport = o.unread !== undefined
+  if (fromReport) {
+    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer them from there in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either.`)
   }
   if (o.bad) {
     out.push(`${o.bad === 1 ? "One line of the night's notes" : `${o.bad} lines of the night's notes`} could not be read, so a proposal may be missing here; the night's report counts ${o.bad === 1 ? 'it' : 'them'} too.`)
   }
-  if (!o.issues.length && !o.lessons.length) {
-    if (o.unread === undefined) out.push(o.bad ? 'No issue or lesson could be read from the notes, so there are no morning pickers.' : 'No issue or lesson was proposed overnight, so there are no morning pickers.')
+  if (!fromReport && !o.issues.length && !o.lessons.length) {
+    out.push(o.bad ? 'No issue or lesson could be read from the notes, so there are no morning pickers.' : 'No issue or lesson was proposed overnight, so there are no morning pickers.')
     return out.join('\n')
   }
-  out.push('Then the morning pickers. Nothing was filed and no lesson was added overnight: these were only proposed, and only Dan\'s selection files or adds any of them.')
-  if (o.issues.length) {
+  const where = fromReport ? 'in the report' : 'below'
+  out.push("Then the morning pickers. Nothing was filed and no lesson was added overnight: these were only proposed, and only Dan's selection files or adds any of them.")
+  if (fromReport || o.issues.length) {
     out.push(
-      'Proposed issues: offer them in ONE AskUserQuestion multiSelect picker exactly as the end of turn issue review offers findings, following ~/.claude/hooks/review/issue-review.md for the picker, the milestone and the labels. Each option\'s label begins with its number below, and its description ends with the bracket below as proposed (priority, then categories, then milestone), so Dan sees and can correct any of the three before anything is filed; where a part reads not proposed, choose it as the review does and show your choice. With more than four, ask in more than one picker, one after another, so none is dropped. File only what he selects, in the repository named, with gh issue create.',
+      `Proposed issues: offer them in ONE AskUserQuestion multiSelect picker exactly as the end of turn issue review offers findings, following ~/.claude/hooks/review/issue-review.md for the picker, the milestone and the labels. Each option's label begins with its number, and its description ends with the priority, labels and milestone proposed ${where}, in brackets in that order (like [p2, bug + ui-ux, Ungrouped]), so Dan sees and can correct any of the three before anything is filed; where one was not proposed, choose it as the review does and show your choice. With more than four, ask in more than one picker, one after another, so none is dropped. File only what he selects, in the repository named, with gh issue create.`,
       ...o.issues.map((i, k) => `1.${k + 1} ${i.repo ?? 'a repository not named'}: ${i.title ?? '(no title)'}${i.text ? `. ${i.text}` : ''} ${pickerTags(i)}`),
     )
   }
-  if (o.lessons.length) {
+  if (fromReport || o.lessons.length) {
     out.push(
-      'Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with the metadata given beside it, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan\'s Add to LESSONS.md.',
+      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>"}${fromReport ? '' : ' as given beside it'}, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan's Add to LESSONS.md.`,
       ...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${JSON.stringify({ source: 'durable-lesson', rule: l })}`),
     )
   }

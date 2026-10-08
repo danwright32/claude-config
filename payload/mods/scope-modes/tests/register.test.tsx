@@ -1536,6 +1536,16 @@ test('a worker that closed overnight, or that cannot be told, is said rather tha
   expect(w.sent.filter(x => x.text.startsWith('Dan is up')).map(x => x.to)).toEqual(['s2', 's3', 's3'])
 })
 
+test('a session registry that answers garbled never loses the wake reply: the summaries are said as not asked (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { registryGarbled: true, files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/^Sleep mode is off\..*The other sessions that worked overnight could not be asked for their summaries: .+\.$/s)
+  // Telling the others the place met the same answer, and says so rather than throwing.
+  expect(r.text).toMatch(/The other sessions could not be told: the session registry's answer could not be read \(.+?\)\. The night's report/)
+  expect(w.files[CURRENT]).toBeUndefined()
+})
+
 test('notes that cannot be read are said in the morning turn, pointing at the report (#837)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `not json\n${PROPOSED}` } })
   await start($ as never, clock)
