@@ -97,16 +97,19 @@ wait_at_gate() {
 }
 holder_of() { readlink "$1" 2>/dev/null; }
 is_dead() { [ -n "$1" ] && ! kill -0 "$1" 2>/dev/null; }
-# Removes the lock only while its holder is still $1, the dead pid this waiter saw.
+# Removes the lock only while its holder is still $1, the dead pid this waiter saw. Succeeds (0)
+# only when it removed it, so a waiter that found the takeover already under way waits its turn
+# rather than spending its whole budget in a burst (lessons review of #938).
 take_over() {
-  local guard="$LOCK_LINK.takeover" g
+  local guard="$LOCK_LINK.takeover" g removed=1
   if ! ln -s "$$" "$guard" 2>/dev/null; then
     g="$(holder_of "$guard")"
     if is_dead "$g" && [ "$(holder_of "$guard")" = "$g" ]; then rm -f "$guard"; fi
-    return 0
+    return 1
   fi
-  if [ "$(holder_of "$LOCK_LINK")" = "$1" ]; then rm -f "$LOCK_LINK"; fi
+  if [ "$(holder_of "$LOCK_LINK")" = "$1" ]; then rm -f "$LOCK_LINK" && removed=0; fi
   rm -f "$guard"
+  return "$removed"
 }
 release_lock() {
   if [ "$(holder_of "$LOCK_LINK")" = "$$" ]; then rm -f "$LOCK_LINK"; fi
@@ -123,8 +126,7 @@ lock() {
     holder="$(holder_of "$LOCK_LINK")"
     if is_dead "$holder"; then
       wait_at_gate
-      take_over "$holder"
-      continue
+      take_over "$holder" && continue
     fi
     sleep 0.1
   done

@@ -772,6 +772,19 @@ else
     || bad "two helpers racing for a stale lock are never inside at once, and both finish (rc $rca $rcb)" "$(cat "$FAKE/overlap" "$TMP/race-a.out" "$TMP/race-b.out" 2>/dev/null)"
   rm -f "$FAKE/knob-slow-load"
   fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+  # A waiter that finds the takeover itself under way waits its turn rather than spinning through
+  # its whole budget at once (lessons review of #938): the guard is held by a live process for five
+  # seconds, and the load still goes through once it is let go.
+  reset_fake
+  ln -s "$DEAD_PID" "$FAKE/state/held"
+  ln -s "$PROXY_PID" "$FAKE/state/held.takeover"
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >"$TMP/guard-wait.out" 2>&1 & gw=$!
+  sleep 5
+  rm -f "$FAKE/state/held.takeover"
+  for _ in $(seq 1 300); do kill -0 "$gw" 2>/dev/null || break; sleep 0.05; done
+  wait "$gw"; rc=$?
+  [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "a waiter outlasts a takeover under way and then loads (rc $rc)" "$(cat "$TMP/guard-wait.out")"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
 
   # The proxy takes its rule away when it stops.
   reset_fake
