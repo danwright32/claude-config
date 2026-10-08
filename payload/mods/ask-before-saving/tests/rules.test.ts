@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText } from '../hooks/rules.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -213,6 +213,70 @@ test('lasting memory a script or a patch mentions, read from its text', async ()
   expect(await mentioned('ls ~/.claude/projects/p/memory|wc -l&&cat ~/.claude/projects/q/memory>x', HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory', '~/.claude/projects/q/memory'])
 })
 
+// #940: a python heredoc that wrote only a test script was asked about as a save to the global
+// CLAUDE.md, because a comment the script added named that file in a sentence. In a python program
+// a path is a string that ends on it (a literal of its own, or one a quote closes inside code run as
+// text); a mention in a comment, or in a string that goes on past it, is text the program holds.
+// Tested on what it must keep as well as what it must drop (L104).
+test('in a python program, a mention in a comment or in a sentence is text, and one a string ends on is a path', async () => {
+  const { inCheckout } = checkouts()
+  const left = async (code: string) => {
+    const out = withoutPythonText(code)
+    // Only the mention's own characters change, so the program can be put back where it was read.
+    expect(out.length).toBe(code.length)
+    return mentioned(out, HOME, inCheckout)
+  }
+  // Text: dropped.
+  for (const code of [
+    "new='''\n# Dan's mods have the same standing as ~/.claude/CLAUDE.md. The CLI lists\n# each as `<name>@inline`.\n'''\nopen(p,'w').write(new)",
+    "# keep the rules in ~/.claude/CLAUDE.md short\nopen('x.txt','w').write('1')",
+    "s=s.replace('a', 'see ~/.claude/projects/p/memory/MEMORY.md for why')",
+    "open('notes.txt','w').write(\"\"\"It asked about CLAUDE.md again,\nand AGENTS.md too.\"\"\")",
+    // A backup's name goes on past the file name, so it is no lasting memory either.
+    "open('/Users/dan/.claude/CLAUDE.md.bak','w').write(s)",
+    // An escaped quote keeps the string open, and the program after it is read as code again.
+    "s='it\\'s in ~/.claude/CLAUDE.md now'\nopen('x.txt','w').write(s)",
+    "s=r'it\\'s in ~/.claude/CLAUDE.md now'\nopen('x.txt','w').write(s)",
+  ])
+    expect(`${code}: ${await left(code)}`).toBe(`${code}: `)
+  // Paths: kept.
+  for (const [code, file] of [
+    ["open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')", '~/.claude/CLAUDE.md'],
+    ["import os\nopen(os.path.expanduser(\"~/.claude/projects/p/memory/MEMORY.md\"),'a')", '~/.claude/projects/p/memory/MEMORY.md'],
+    ["from pathlib import Path\n(Path.home() / '.claude' / 'CLAUDE.md').write_text('x')", 'CLAUDE.md'],
+    ["d=os.path.join(root, 'AGENTS.md')", 'AGENTS.md'],
+    // Code held in a string and run: the path is closed by a quote inside it.
+    ["exec(\"open('/Users/dan/.claude/CLAUDE.md','a').write('x')\")", '~/.claude/CLAUDE.md'],
+    // A shell line held as text names its file inside quotes of its own.
+    ["new='''\nprintf '# rules' > \"$E27HA/CLAUDE.md\"\n'''", '$E27HA/CLAUDE.md'],
+    // An f-string's braces hold code, so nothing in one is taken for text.
+    ['open(f"{home}/.claude/CLAUDE.md is {mode}", "a")', '/.claude/CLAUDE.md'],
+    // The program after a string with an escaped quote is code again.
+    ["s='it\\'s here'\nopen('/Users/dan/.claude/AGENTS.md','a')", '~/.claude/AGENTS.md'],
+    ["s=r'it\\'s here'\nopen('/Users/dan/.claude/AGENTS.md','a')", '~/.claude/AGENTS.md'],
+    // A comment that is really inside a string is no comment.
+    ["s='# x'; open('/Users/dan/.claude/CLAUDE.md','a')", '~/.claude/CLAUDE.md'],
+  ])
+    expect(`${code}: ${await left(code as string)}`).toBe(`${code}: ${file}`)
+})
+
+// #940: where the file a command writes cannot be read from its words, the question rests on what
+// it mentions, and the refusal says so, naming the file it took to be written, so a misfire shows.
+test('a file taken from what a command mentions is marked as such, and its mentions can be read from other text', async () => {
+  const { inCheckout } = checkouts()
+  const read = { guessed: [] as string[] }
+  expect(await lastingFiles({ files: [{ word: '$F' }], unnamed: [] }, HOME, inCheckout, 'printf x >> "$F"; cat ~/.claude/CLAUDE.md', undefined, read)).toEqual(['~/.claude/CLAUDE.md'])
+  expect(read.guessed).toEqual(['~/.claude/CLAUDE.md'])
+  // A file the words name is never marked, whatever else the command mentions.
+  const named = { guessed: [] as string[] }
+  expect(
+    await lastingFiles({ files: [{ word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' }], unnamed: [] }, HOME, inCheckout, 'echo x >> CLAUDE.md', undefined, named),
+  ).toEqual(['~/Apps/slate/CLAUDE.md'])
+  expect(named.guessed).toEqual([])
+  // Mentions read from the text given, the command's with its program's prose taken out.
+  expect(await lastingFiles({ files: [{ word: '$F' }], unnamed: [] }, HOME, inCheckout, 'printf x >> "$F"; cat ~/.claude/CLAUDE.md', undefined, { text: 'printf x >> "$F"' })).toEqual([])
+})
+
 // Lessons review of #731: the hook's refusal read the failure's message with no guard, so a failure
 // that arrived without its error would make the refusal itself throw, and a hook that throws is
 // skipped: the save would go through unasked. The refusal is built from whatever arrives.
@@ -243,6 +307,14 @@ test("the instruction to ask names the file, asks for the rule in plain words, a
   expect(t).toContain('never the command')
   expect(t).toContain('send this same call again unchanged')
   expect(t).not.toContain('band')
+  expect(t).toContain('this writes lasting memory (~/.claude/CLAUDE.md)')
+  expect(t).not.toContain('may write')
+  // #940: a file taken from what the command mentions is said to be that, so a misfire shows.
+  const g = askInstruction('toolu_2', ['~/.claude/CLAUDE.md'], ['~/.claude/CLAUDE.md'])
+  expect(g).toContain('this may write lasting memory (~/.claude/CLAUDE.md)')
+  expect(g).toContain('its words do not name the file it writes, and they mention ~/.claude/CLAUDE.md')
+  expect(g).toContain('make the change with Edit or Write on that file')
+  expect(g).toContain('{"source": "ask-before-saving:toolu_2"}')
 })
 
 test('the three answers each say what they do, and a save id is read back only from its own source', () => {

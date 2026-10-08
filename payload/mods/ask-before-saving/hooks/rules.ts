@@ -68,10 +68,20 @@ const unread = (f: { word: string; path?: string }) => !f.path || THROUGH.test(f
  * harmless side). A target the words cannot name (a variable, a command's output, a pattern), and
  * one the reader followed through a variable to no lasting memory, is judged like a write the words
  * do not name at all: by the lasting memory the command mentions anywhere, an assignment such as
- * `F=<path>` included (#743). One that mentions none goes through (docs/mods-design.md).
+ * `F=<path>` included (#743), read from `read.text` where given: the command with the sentences
+ * its python programs hold taken out (#940). One that mentions none goes through
+ * (docs/mods-design.md).
  */
-export const lastingFiles = async (w: Writes, home: string, inCheckout: InCheckout, command: string, isSet: IsSet = ALWAYS_SET): Promise<string[]> => {
+export const lastingFiles = async (
+  w: Writes,
+  home: string,
+  inCheckout: InCheckout,
+  command: string,
+  isSet: IsSet = ALWAYS_SET,
+  read: MentionRead = {},
+): Promise<string[]> => {
   const out: string[] = []
+  const named: string[] = []
   const add = (s: string) => {
     if (!out.includes(s)) out.push(s)
   }
@@ -79,14 +89,27 @@ export const lastingFiles = async (w: Writes, home: string, inCheckout: InChecko
   for (const f of w.files) {
     const byName = !f.path && NAMES.has(f.word.split('/').pop() ?? '') && (await throughSettable(f.word, command, isSet))
     const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : byName && f.word
-    if (hit) add(hit)
+    if (hit) {
+      add(hit)
+      named.push(hit)
+    }
     // A target through a variable that can hold no path, one only a fresh temporary file sets or
     // nothing sets at all, reaches no lasting memory, so what the command mentions is not read for it
     // (#830: an issue body written to `$(mktemp)` named a memory path).
-    else if (unread(f) && (await throughSettable(f.word, command, isSet))) for (const m of (mentions ??= await mentioned(command, home, inCheckout, isSet))) add(m)
+    else if (unread(f) && (await throughSettable(f.word, command, isSet)))
+      for (const m of (mentions ??= await mentioned(read.text ?? command, home, inCheckout, isSet))) add(m)
   }
+  if (read.guessed) for (const m of out) if (!named.includes(m) && !read.guessed.includes(m)) read.guessed.push(m)
   return out
 }
+
+/**
+ * How a judgement reads what a command mentions (#940): `text`, the command with the sentences its
+ * programs hold taken out (withoutPythonText), when not the command itself; and `guessed`, where the
+ * files found only by what the command mentions are put, so the refusal can say that is what they
+ * are and a misfire shows.
+ */
+export type MentionRead = { text?: string; guessed?: string[] }
 
 /**
  * Whether a variable could hold a value when the command runs (#777). Each Bash call is a fresh
@@ -149,6 +172,63 @@ const throughSettable = async (word: string, text: string, isSet: IsSet): Promis
 // or one through a project's memory folder, ending where the shell ends a word (#743: the ; after
 // `F=<memory folder>/MEMORY.md;` was shown as part of the file).
 const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'";&|()<>`]+\/memory(?:\/[^\s'";&|()<>`]*)?|(?:[~\w.\/$-]*\/)?(?:CLAUDE|AGENTS|MEMORY|LESSONS)\.md\b/g
+
+/** Whether a text mentions any lasting memory at all, read as `mentioned` reads it. */
+export const mentionsAny = (text: string): boolean => text.search(MENTION) !== -1
+
+// The quotes a path can end at in code: a mention a quote closes is a string of its own, or one inside
+// code held as text (an exec's, a shell line written out), so it is a path, never a sentence.
+const CLOSES = new Set(["'", '"', '`'])
+
+/**
+ * Where a python program holds text rather than code: each comment, and each string literal's
+ * content, marked `code` for an f-string or a t-string, whose braces hold code. A backslash keeps a
+ * string open in a raw string too, as python reads it; a string with one quote ends at its line.
+ */
+const pythonText = (code: string): { from: number; to: number; code: boolean }[] => {
+  const out: { from: number; to: number; code: boolean }[] = []
+  let i = 0
+  while (i < code.length) {
+    const ch = code[i] as string
+    if (ch === '#') {
+      const end = code.indexOf('\n', i)
+      const to = end === -1 ? code.length : end
+      out.push({ from: i + 1, to, code: false })
+      i = to
+      continue
+    }
+    if (ch !== "'" && ch !== '"') {
+      i++
+      continue
+    }
+    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(code.slice(Math.max(0, i - 3), i))?.[1] ?? ''
+    const q = code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+    let j = i + q.length
+    while (j < code.length && !code.startsWith(q, j) && (q.length === 3 || code[j] !== '\n')) j += code[j] === '\\' ? 2 : 1
+    const to = Math.min(j, code.length)
+    out.push({ from: i + q.length, to, code: /[fFtT]/.test(prefix) })
+    i = to + (code.startsWith(q, to) ? q.length : 0)
+  }
+  return out
+}
+
+/**
+ * A python program's text with each mention of lasting memory that sits in text, not code, blanked
+ * (#940: a heredoc writing a test script was asked about as a save to the global CLAUDE.md, which a
+ * comment it added named in a sentence). A mention is text when it is in a comment, or in a plain
+ * string that goes on past it; one a quote closes is a path (a string of its own, or one inside code
+ * held as text, such as an exec's or a shell line's), and one in an f-string is code. Only the
+ * mention's characters change, so the program can be put back where it was read. It reads the text,
+ * not what the program does with it: a path cut out of a longer string at run time is not seen.
+ */
+export const withoutPythonText = (code: string): string => {
+  const text = pythonText(code).filter(s => !s.code)
+  return code.replace(MENTION, (m: string, at: number) => {
+    const end = at + m.length
+    const inText = text.some(s => at >= s.from && end <= s.to)
+    return inText && !CLOSES.has(code[end] ?? '') ? ' '.repeat(m.length) : m
+  })
+}
 
 /**
  * The lasting memory a write's text mentions, for the writes whose words name no file (a patch, an
@@ -421,14 +501,25 @@ export const addsLesson = (added: string, rule: string): boolean => {
 }
 
 /**
+ * What a refused save writes, as every refusal says it: the files, and for those taken from what the
+ * command mentions because its words do not name the file it writes, that this is so (#940), so a
+ * misfire shows as one. A message may claim only what its check measured (L11).
+ */
+export const writesWhat = (files: string[], guessed: string[] = []): string =>
+  guessed.length
+    ? `this may write lasting memory (${files.join(', ')}): its words do not name the file it writes, and they mention ${guessed.join(', ')}`
+    : `this writes lasting memory (${files.join(', ')})`
+
+/**
  * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,
  * naming the file and stating the rule in plain words (#777, Dan: "I don't really know what it's
  * asking"), and on For good send the same call again.
  */
-export const askInstruction = (id: string, files: string[]): string => {
+export const askInstruction = (id: string, files: string[], guessed: string[] = []): string => {
   const where = files.join(', ')
   return (
-    `Not saved yet: this writes lasting memory (${where}), so Dan decides first. ` +
+    `Not saved yet: ${writesWhat(files, guessed)}, so Dan decides first. ` +
+    (guessed.length ? `If it only quotes ${guessed.join(', ')} as text and writes another file, make the change with Edit or Write on that file instead. ` : '') +
     `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${where} and states the rule in one plain sentence, never the command or the raw text, ` +
     `such as "Save to ${files[0]} for good: <the rule>?", with the options ${FOR_GOOD}, ${THIS_SESSION} and ${NOT_AT_ALL}. ` +
     `If he answers ${FOR_GOOD}, send this same call again unchanged and it is saved. Until he answers, do not write it any other way.`
