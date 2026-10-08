@@ -180,6 +180,16 @@ fi
 is_test() {
   local f="$1"
   printf '%s' "$f" | grep -Eiq '(^|/)(tests?|spec|__tests__|__mocks__)/' && return 0
+  # Xcode test target folders (claude-config#930). Xcode names a test target's folder after the
+  # target, `<Name>Tests` (OvertureTests, OvertureHostedTests, OvertureUITests), and a shared
+  # helpers target is commonly `TestSupport`. A suite file in one whose own name does not end in
+  # Tests read as SOURCE, so an Overture push that only added cases to
+  # mac/OvertureTests/EngineDivergenceGate.swift was refused as untested and overridden.
+  #
+  # Deliberately CASE SENSITIVE and on a DIRECTORY segment that ENDS in the word, unlike the line
+  # above: matched case blind, every folder whose name ends in the letters "tests" (contests/)
+  # would count as a test directory, and a source file there could ride through the gate.
+  printf '%s' "$f" | grep -Eq '(^|/)[^/]*(Tests|TestSupport)/'         && return 0
   printf '%s' "$f" | grep -Eiq '\.(test|spec)\.[a-z0-9]+$'            && return 0
   # `test-foo.ts` / `test_foo.js` runnable test scripts (common in a scripts/
   # dir), but NOT test-only helpers like test-utils / test-setup / test-mocks.
