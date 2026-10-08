@@ -8,6 +8,7 @@ import {
   secretsFromEnvText,
   secretsFromEnvList,
 } from '../hooks/secrets.ts'
+import { commands } from './mod-kit/hooks/commands.ts'
 
 // Fixture values built at run time so this file holds no literal token shape of its own.
 const GH = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'
@@ -167,5 +168,22 @@ describe('value sources', () => {
   test('environment variables named like secrets are taken, short and path values are not', () => {
     const vals = secretsFromEnvList(`GITHUB_TOKEN=${KNOWN}\nHOME=/Users/x\nSSH_KEY_PATH=/Users/x/.ssh/id\nMY_SECRET=abc\n`)
     expect(vals).toEqual([KNOWN])
+  })
+})
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so a secret printed through $(...) or backticks is refused as one printed on the command line is.
+// Read here with a byte for byte copy of mod-kit's reader under tests/mod-kit (a mod cannot import
+// another mod's files), which tools/check-mod-shared-parts.sh holds to mod-kit's. Quoted, it is text.
+describe('a command substitution, read by the real reader (#974)', () => {
+  const judged = (raw: string) => blockedCommand(commands(raw), raw)
+  test('what a substitution runs is judged as a command of its own', () => {
+    expect(judged('echo "$(cat .env)"')).toBe('the secrets in .env')
+    expect(judged('echo `printenv`')).toBe('every environment variable')
+    expect(judged('cat <<EOF\n$(echo $GITHUB_TOKEN)\nEOF')).toBe('GITHUB_TOKEN')
+  })
+  test('in single quotes or a quoted heredoc it is text', () => {
+    expect(judged("echo '$(cat .env)' '`printenv`'")).toBeUndefined()
+    expect(judged("cat <<'EOF'\n$(cat .env)\nEOF")).toBeUndefined()
   })
 })

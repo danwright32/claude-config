@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { appNameOf, classify, judge } from '../hooks/keys.ts'
+import { commands } from './mod-kit/hooks/commands.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
 const KEY = 'key' + 'stroke'
@@ -90,5 +91,22 @@ describe('judge', () => {
   })
   test('the right app frontmost, alone, passes', () => {
     expect(judge(base)).toBeUndefined()
+  })
+})
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so synthetic input sent from inside $(...) or backticks is classified as it is on the command line.
+// Read here with a byte for byte copy of mod-kit's reader under tests/mod-kit (a mod cannot import
+// another mod's files), which tools/check-mod-shared-parts.sh holds to mod-kit's. Quoted, it is text.
+describe('a command substitution, read by the real reader (#974)', () => {
+  const kind = (raw: string) => classify(commands(raw), raw).kind
+  test('what a substitution runs is classified as a command of its own', () => {
+    expect(kind(`x=$(osascript -e '${SYS}${KEY} "n"')`)).toBe('input')
+    expect(kind('echo "`cliclick c:100,200`"')).toBe('input')
+    expect(kind(`cat <<EOF\n$(open -a 'Google Chrome' report.html)\nEOF`)).toBe('focus')
+  })
+  test('in single quotes or a quoted heredoc it is text', () => {
+    expect(kind("echo '$(cliclick c:100,200)'")).toBe('none')
+    expect(kind("cat <<'EOF'\n`cliclick c:100,200`\nEOF")).toBe('none')
   })
 })
