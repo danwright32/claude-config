@@ -136,6 +136,12 @@ head -n 1 "$SHIP/claude-code/index.d.ts" 2>/dev/null | grep -qE '^// Written by 
   || check "the shipped pinned types name the Claude Code build they came from" "$(head -n 1 "$SHIP/claude-code/index.d.ts" 2>&1)"
 grep -q 'interface BuiltinToolInputs' "$SHIP/claude-code-tools/index.d.ts" 2>/dev/null && grep -q 'interface McpToolInputs' "$SHIP/claude-code/index.d.ts" 2>/dev/null \
   && check "and carry the engine's API and the built-in tools' inputs" ok || check "and carry the engine's API and the built-in tools' inputs" "missing"
+# The two patterns that say an MCP list declares a tool, each seen matching one that does, so their
+# absence below is a measurement and not a pattern that matches nothing (L159).
+printf 'declare module "claude-code" {\n  interface McpToolInputs {\n    mcp__x__y: {}\n  }\n}\n' > "$T/declares.d.ts"
+grep -qE '^[[:space:]]*"?mcp__[A-Za-z0-9_-]+"?:' "$T/declares.d.ts" && grep -q 'McpToolInputs *{' "$T/declares.d.ts" \
+  && check "the patterns for a declared MCP tool match a list that declares one" ok \
+  || check "the patterns for a declared MCP tool match a list that declares one" "$(cat "$T/declares.d.ts")"
 [ -f "$SHIP/claude-code-mcp/index.d.ts" ] && ! grep -qE '^[[:space:]]*"?mcp__[A-Za-z0-9_-]+"?:' "$SHIP/claude-code-mcp/index.d.ts" && ! grep -q 'McpToolInputs *{' "$SHIP/claude-code-mcp/index.d.ts" \
   && check "and declare no MCP tool, so no session's connected tools enter a verdict" ok \
   || check "and declare no MCP tool, so no session's connected tools enter a verdict" "$(cat "$SHIP/claude-code-mcp/index.d.ts" 2>&1)"
