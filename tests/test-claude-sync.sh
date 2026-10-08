@@ -11017,6 +11017,20 @@ mkdir -p "$H968B/skills/another"; printf 'back again\n' > "$H968B/skills/another
 _968send >/dev/null
 check "#968 a folder that left and came back is new again, so it is posted" "[ \"\$(_968count)\" = 3 ]"
 
+# The pull's sibling notice, about local files it kept that a send will refuse, is the same shape:
+# the files stay kept on every apply until somebody acts, so it too is posted once per new folder.
+_968pull(){ env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" pull 2>&1 < /dev/null || true; }
+_968kept(){ grep -c 'kept local files a send will refuse' "$N968" 2>/dev/null || true; }
+p968a="$(_968pull)"; p968b="$(_968pull)"; p968c="$(_968pull)"
+dbg "#968 pulls: $p968a // $p968c"
+check "#968 each pull keeps the unloadable folder's files and says a send will not carry them" \
+  "line_has \"\$p968a\" 'skills/another' 'send will NOT carry' && line_has \"\$p968c\" 'skills/another' 'send will NOT carry'"
+check "#968 three pulls keeping the same files post that notice once" "[ \"\$(_968kept)\" = 1 ]"
+mkdir -p "$H968B/skills/second-draft"; printf 'more notes\n' > "$H968B/skills/second-draft/notes.md"
+_968pull >/dev/null; _968pull >/dev/null
+check "#968 a new folder of kept files posts it again, once" "[ \"\$(_968kept)\" = 2 ]"
+
 section "== a skill provided by both a plugin and the local folder is caught (#49) =="
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
 # cloudflare plugin, so each was listed twice in every session and both copies were paid for.

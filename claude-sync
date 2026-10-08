@@ -1427,8 +1427,8 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
 #
 # Prints "new" when the set holds a folder the last notice for this verb did not name, and records
 # the current set either way. A set that only SHRANK is not news, and a folder that left and came
-# back is. Keyed per verb, because "not sent" and "not applied to this Mac" are about different
-# folders. A record that cannot be read or written fails toward notifying (L42): a repeated notice
+# back is. Keyed per notice, because "not sent", "not applied to this Mac" and the apply's "kept
+# local files a send will refuse" are about different folders. A record that cannot be read or written fails toward notifying (L42): a repeated notice
 # is noise, a missing one is a broken skill nobody hears about.
 unloadable_notice_is_new(){   # $1 = the verb  $2 = the entries refused now, one per line
   local f="$UNLOADABLE_NOTIFIED_FILE" prev cur="/" e fresh="" tmp
@@ -4958,17 +4958,24 @@ UNLOADABLE
   done <<AHEAD
 $ahead
 AHEAD
+  # Once per new folder, like the refusal notice it sits beside (claude-config#968): the files stay
+  # kept on every apply until somebody acts, so a notice per apply repeats an unchanged condition
+  # (L36). The terminal line is still said every time. Recorded even when nothing is kept, so a
+  # folder that comes back later is news again.
+  local _kept_entries=""
   if ! is_blank "$unsendable"; then
     while IFS="$(printf '\t')" read -r _ue _ur; do
       [ -n "${_ue:-}" ] || continue
       local _files; _files="$(printf '%s' "$unsendable" | awk -v p="skills/$_ue" '$0 == p || index($0, p "/") == 1' | tr '\n' ' ')"
       is_blank "$_files" && continue
+      _kept_entries+="$_ue"$'\n'
       echo "claude-sync: this apply left these local files under skills/$_ue alone, but a send will NOT carry them, because $_ur, and a send refuses a skills entry that cannot load. Make it a loadable skill (a SKILL.md with a name and description in its frontmatter) and the next send carries it: ${_files% }" >&2
     done <<UNLOADABLE
 $unloadable_here
 UNLOADABLE
-    notify "kept local files a send will refuse: skills that cannot load"
   fi
+  local _kept_fresh; _kept_fresh="$(unloadable_notice_is_new "kept local files a send will refuse" "$_kept_entries")"
+  [ -n "$_kept_fresh" ] && notify "kept local files a send will refuse: skills that cannot load"
   if ! is_blank "$sendable"; then
     local keeplist; keeplist="$(printf '%s' "$sendable" | tr '\n' ' ')"
     # What this measured, not more. The old wording read as the COMPLETE set of what is waiting
