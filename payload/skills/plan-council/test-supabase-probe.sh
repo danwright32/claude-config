@@ -136,8 +136,13 @@ check "the skill runs uses-supabase.sh on the project" \
   "$(grep -qF 'uses-supabase.sh' "$COUNCIL" && echo ok || echo "not in $COUNCIL")"
 check "and passes usesSupabase in the workflow args" \
   "$(grep -qF 'usesSupabase:' "$COUNCIL" && echo ok || echo "not in $COUNCIL")"
-check "and warns on schemaState, saying not-applicable is no warning" \
-  "$(grep -qF 'schemaState' "$COUNCIL" && grep -qF 'not-applicable' "$COUNCIL" && ! grep -qF 'schemaReachable:false' "$COUNCIL" && echo ok || echo "step 4 still reads schemaReachable")"
+# Positive on the exact grounding sentence, rather than the old wording's absence, so the check is
+# satisfied only by the rule it is about (L178).
+grounding_line="$(grep -m 1 -F 'Check grounding next' "$COUNCIL")"
+check "and warns on schemaState being unreachable or unverified" \
+  "$(grep -qF 'its `schemaState` is `unreachable` or `unverified`' <<< "$grounding_line" && echo ok || echo "the line is: $grounding_line")"
+check "and says not-applicable is no warning" \
+  "$(grep -qF '`schemaState` of `not-applicable` means the project does not use Supabase' <<< "$grounding_line" && echo ok || echo "the line is: $grounding_line")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
