@@ -168,6 +168,16 @@ const LIVE_OK = ['--live', PET + '=' + sha(900) + '@2026-10-08T10:00:00Z'];
   check(/Sonar/.test(r.err) && /refused/i.test(r.err), 'the terminal names the refused repo', r.err);
 }
 
+// A merged_at that does not parse would compare false against every boundary and silently drop
+// the PR (L50), so it refuses the repo by PR number instead.
+{
+  const ws = workspace({ pulls: { [SONAR]: [pr(25, '2026-10-02T12:00:00Z'), pr(26, 'yesterday-ish')] } },
+    { repos: [{ name: 'Sonar', repo: SONAR }] }, { [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+  const s = repoOf(gather(ws), SONAR);
+  check(s && s.status === 'refused' && /#26/.test(s.reason) && /merged_at/.test(s.reason),
+    'a merged_at that does not parse refuses the repo by PR number, never drops the PR', s && JSON.stringify(s));
+}
+
 // Unreachable: GitHub fails for one repo.
 {
   const ws = workspace({

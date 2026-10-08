@@ -134,7 +134,13 @@ function mergedPulls(slug) {
     const batch = gh('repos/' + slug + '/pulls?state=closed&sort=created&direction=asc&per_page=' + PER_PAGE + '&page=' + page);
     if (!Array.isArray(batch)) throw new Unreachable('the pulls list for ' + slug + ' page ' + page + ' was not a list.');
     batch.forEach(function (p) {
-      if (p && p.merged_at) seen.set(p.number, p);
+      if (!p || !p.merged_at) return;
+      // A merged_at that does not parse compares false against every boundary, so the PR would
+      // drop out of every window with nothing said (L50). Refuse it by number instead.
+      if (Number.isNaN(Date.parse(p.merged_at)) || !/^\d{4}-\d{2}-\d{2}T/.test(p.merged_at)) {
+        refuse('#' + p.number + ' in ' + slug + ' has a merged_at GitHub sent as ' + JSON.stringify(p.merged_at) + ', which does not parse, so no window can place it.');
+      }
+      seen.set(p.number, p);
     });
     if (batch.length < PER_PAGE) {
       return Array.from(seen.values()).sort(function (a, b) { return Date.parse(a.merged_at) - Date.parse(b.merged_at) || a.number - b.number; });
