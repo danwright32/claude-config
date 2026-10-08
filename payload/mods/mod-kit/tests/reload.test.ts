@@ -15,10 +15,10 @@ import type { On } from 'claude-code'
 const T0 = 1_791_000_000_000
 const MIN = 60_000
 
-type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number; noHooks?: boolean }
+type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number; noHooks?: boolean; noManifest?: boolean; manifestUnreadable?: boolean }
 
 // The mods folder beneath mod-kit: each mod's manifest and its files' times, wherever the folder is.
-const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[]; homeUnreadable?: boolean }) => {
+const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[]; homeUnreadable?: boolean; duringTouch?: (name: string, now: number) => void }) => {
   const mods = init.mods
   const touched: string[] = []
   const argv: string[][] = []
@@ -44,12 +44,21 @@ const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[];
   })
   on('fs.exists', ($, e) => {
     const m = modOf(e.path)
-    return { value: !!m && !(m.rest === 'hooks' && (mods[m.name] as Mod).noHooks) } as never
+    const mod = m && (mods[m.name] as Mod)
+    return { value: !!mod && !(m.rest === 'hooks' && mod.noHooks) && !(m.rest === '.claude-plugin/plugin.json' && mod.noManifest) } as never
+  })
+  on('fs.stat', ($, e) => {
+    const m = modOf(e.path)
+    const mod = m && (mods[m.name] as Mod)
+    if (!mod || m.rest !== '.claude-plugin/plugin.json' || mod.noManifest) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'file', size: 1, mtimeMs: mod.touchedAt ?? mod.mtimeMs, isLink: false } } as never
   })
   on('fs.read', ($, e) => {
     const m = modOf(e.path)
     if (!m || m.rest !== '.claude-plugin/plugin.json') throw new Error(`ENOENT: ${e.path}`)
     const mod = mods[m.name] as Mod
+    if (mod.noManifest) throw new Error(`ENOENT: ${e.path}`)
+    if (mod.manifestUnreadable) throw new Error(`EACCES: permission denied, open '${e.path}'`)
     return { value: mod.manifest ?? JSON.stringify({ name: m.name, version: '0.1.0', ...(mod.deps ? { dependencies: mod.deps } : {}) }) } as never
   })
   on('process.run', async ($, e) => {
@@ -64,6 +73,7 @@ const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[];
     await clock.advance(5)
     const m = modOf(path)
     if (m) (mods[m.name] as Mod).touchedAt = clock.now()
+    if (m) init.duringTouch?.(m.name, clock.now())
     return r(0)
   })
   on('ui.log', ($, e) => {
@@ -217,4 +227,37 @@ test('a dependent with no hooks folder is passed over without a failure, and hol
   await start($)
   expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
   expect(w.logs.filter(l => l.includes('no-hooks'))).toEqual([])
+})
+
+// #967 review, third round. A manifest that is there but cannot be read is a mod that may be
+// unloaded, not a folder that is no mod: it is said and asked again. And a delivery landing while a
+// reload is still asking must not be lost: the next reload compares against the time the pass began,
+// with mod-kit's own touches told apart by the time each one left.
+test('a manifest that is there but cannot be read is said and asked again; a folder with none stays silent', async ($, on) => {
+  const mods = { ...delivery(), locked: { deps: ['mod-kit'], mtimeMs: T0 + 5 * MIN, manifestUnreadable: true }, 'not-a-mod': { mtimeMs: T0 + 5 * MIN, noManifest: true } }
+  const w = world(on, { mods })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await start($)
+  // The kit turns a throwing answer into a missing one, so the reason in the line is its own.
+  expect(w.logs.filter(l => l.includes('locked') && l.includes('could not be asked')).length).toBe(1)
+  expect(w.logs.filter(l => l.includes('not-a-mod'))).toEqual([])
+  ;(mods.locked as Mod).manifestUnreadable = false
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json', 'locked:.claude-plugin/plugin.json'])
+})
+
+test('a delivery that lands while a reload is asking is still asked about at the next reload', async ($, on) => {
+  const mods: Record<string, Mod> = { 'a-steps': { deps: ['mod-kit'], mtimeMs: T0 - 60 * MIN }, ...delivery() }
+  // a-steps is looked at first and is unchanged; while manual-steps is being touched, a delivery
+  // writes a-steps' module.
+  const w = world(on, { mods, duringTouch: (name, now) => { if (name === 'manual-steps') (mods['a-steps'] as Mod).mtimeMs = now } })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json', 'a-steps:.claude-plugin/plugin.json'])
 })
