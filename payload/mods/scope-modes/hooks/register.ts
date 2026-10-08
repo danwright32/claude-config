@@ -450,22 +450,32 @@ const askRepo = ($: EngineInterface, repo: string, path: string, waitMs: number)
 const githubOf = ($: EngineInterface): GithubOf => async remote => (await $.modkit.repo({ remote })).github
 
 // The one GitHub repository a folder's remotes name, lower case (repoFromRemotes): null for none,
-// more than one, or a read that fails (git's, or the reader's), which every caller takes as untold.
-const folderRepo = async ($: EngineInterface, dir: string): Promise<string | null> => {
+// more than one, or a folder git cannot read; `unread` when mod-kit's reader fails, kept apart so a
+// caller that must not drop a folder can say so (#979 review).
+const folderRepoRead = async ($: EngineInterface, dir: string): Promise<{ repo: string | null } | { unread: string }> => {
   const r = await run($, ['git', '-C', dir, 'remote', '-v'])
-  if (r.exitCode !== 0) return null
+  if (r.exitCode !== 0) return { repo: null }
   try {
-    return await repoFromRemotes(r.stdout, githubOf($))
-  } catch {
-    return null
+    return { repo: await repoFromRemotes(r.stdout, githubOf($)) }
+  } catch (err) {
+    return { unread: `the GitHub repository of ${dir} could not be read (${msg(err)})` }
   }
 }
+// The same for the callers that take any reading they cannot use as untold: the overnight rules
+// refuse a write whose repository cannot be resolved, and no build leaves the folder's untold.
+const folderRepo = async ($: EngineInterface, dir: string): Promise<string | null> => {
+  const f = await folderRepoRead($, dir)
+  return 'repo' in f ? f.repo : null
+}
 
-// The repositories the overnight workers are in, from each one's folder.
-const workerRepos = async ($: EngineInterface, roots: string[]): Promise<string[]> => {
+// The repositories the overnight workers are in, from each one's folder. A folder mod-kit's reader
+// cannot read is never dropped, which would leave its repository unasked at bedtime: it is said.
+const workerRepos = async ($: EngineInterface, roots: string[]): Promise<string[] | { unread: string }> => {
   const out = new Map<string, string>()
   for (const root of roots) {
-    const slug = await folderRepo($, root)
+    const f = await folderRepoRead($, root)
+    if ('unread' in f) return f
+    const slug = f.repo
     if (slug && !out.has(slug.toLowerCase())) out.set(slug.toLowerCase(), slug)
   }
   return [...out.values()]
@@ -998,6 +1008,10 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
       ownRoot = undefined
     }
     const worked = await workerRepos($, [...(ownRoot ? [ownRoot] : []), ...e.roots])
+    if (!Array.isArray(worked)) {
+      await releaseMarker($, p.preparing, claim.claimed)
+      return `Sleep mode did not start: ${worked.unread}.`
+    }
     // The before bed questions, one round of QUESTION_MS for them all. The repositories' first
     // (#843): an answer there is kept for every night after and covers every issue in it, while an
     // issue's answer covers one issue. Then the open questions on the queue's issues (#836).
