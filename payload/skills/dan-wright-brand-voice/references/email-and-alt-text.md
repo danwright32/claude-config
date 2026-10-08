@@ -101,7 +101,7 @@ Dan's proven cold pitch, kept here as a reference for voice and structure, not a
 Vary the phrasing and sentence shape draft to draft: don't always list all three venues, don't always say "nearly 10 years." Pull the credential and link in naturally, the way a person restates the same true fact differently each time. The opening is the exception, see below: Dan introduces himself every time, only the wording changes.
 
 ### Sentence one always introduces Dan, by name and by trade
-A cold reader does not know who is writing, so nothing else may come first: not a credential, not an observation, not the reason for writing. Every cold pitch starts from the shape of Dan's own proven opener, "My name is Dan and I'm a professional arts photographer here in NYC." Reword it every time rather than reproducing it ("My name is Dan, I'm an arts photographer here in New York", "I'm Dan Wright, a performing arts photographer based in New York"), but it must always carry both his name and what he does.
+A cold reader does not know who is writing, so nothing else may come first: not a credential, not an observation, not the reason for writing. Every cold pitch starts from the shape of Dan's own proven opener, "My name is Dan and I'm a professional arts photographer here in NYC." Reword it every time rather than reproducing it ("My name is Dan, I'm an arts photographer here in New York City", "I'm Dan Wright, a performing arts photographer based in NYC"), but it must always carry both his name and what he does.
 
 This replaced an earlier instruction not to lead with his name, which was invented to manufacture variety and produced emails that started talking before saying who was talking. Dan, 2026-07-31: "I should always introduce myself."
 
