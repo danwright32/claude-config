@@ -17,8 +17,9 @@
 #     is read where it is defined, and one that cannot be found is reported as unreadable.
 #   - `$.ui.ask` (as `$` or `built`), Claude Code's own question dialog: a person has no bound.
 #   - a promise made OUTSIDE a noun's code (in another hook, say) and kept in a variable, or in a
-#     map or list through .set, .push, .unshift or .add, whose name a noun's code reads: judged as
-#     above and named where it is made (#756).
+#     map or list through .set, .push, .unshift or .add, that a noun's code reads: judged as above
+#     and named where it is made (#756). The read must reach that same variable as the compiler's
+#     checker resolves both, so another function's variable sharing its name is not it (#915).
 # A wait is bounded too when the noun races it, `Promise.race([wait, timer])`, against a timer made
 # in another executor: one written in place, a constant holding one, or a call to a mod function
 # making one, its delay read through the call's own arguments (`sleep(5_000)`); likewise a helper
@@ -544,14 +545,27 @@ def is_timer(f, a, b, files, consts):
 
 
 def stored_in(code, at):
-    """The name a promise made at at is kept under: a variable it is assigned to, or the map or list
-    it is put in through .set, .push, .unshift or .add, or None."""
-    line = code[code.rfind("\n", 0, at) + 1 : at]
+    """Where a promise made at at is kept: (the name, its position) of a variable it is assigned to,
+    or of the map or list it is put in through .set, .push, .unshift or .add, or None."""
+    line_at = code.rfind("\n", 0, at) + 1
+    line = code[line_at:at]
     m = re.search(r"(?<![\w$.])(" + IDENT + r")\s*\.\s*(?:set|push|unshift|add)\s*\([^()]*$", line)
     if m:
-        return m.group(1)
+        return m.group(1), line_at + m.start(1)
     m = re.search(r"(?<![\w$.])(" + IDENT + r")\s*(?::[^=;]*)?(?<![=!<>])=\s*$", line)
-    return m.group(1) if m and m.group(1) not in KEYWORDS else None
+    return (m.group(1), line_at + m.start(1)) if m and m.group(1) not in KEYWORDS else None
+
+
+def declaration(f, at, name):
+    """The one declaration the identifier name at position at in f names, as the compiler's checker
+    resolves it (#915): (file, start) for one the mod declares, ("outside", name) for one it does not
+    (a global), or None when the checker finds no symbol for it at all."""
+    _, target = f.refs.get(at, ("ref", None))
+    if target is None:
+        return None
+    if len(target) > 2:
+        return target[1], target[2]
+    return "outside", name
 
 
 BY_PATH = resolve_all(mods)
@@ -666,10 +680,18 @@ for entry, folder, man, files in mods:
         for at in promises_in(f.code, 0, len(f.code)):
             if any(g.rel == f.rel and a <= at < b for g, a, b, _ in regions):
                 continue
-            kept = stored_in(f.code, at)
-            if not kept:
+            stored = stored_in(f.code, at)
+            if not stored:
                 continue
-            reads = [(g, pos) for g, pos in mentions_in_nouns(kept) if not is_raced(g, pos)]
+            kept, kept_at = stored
+            # A read of that same variable, as the compiler resolves both, never another variable
+            # sharing its name in another function (#915). Only a name the checker finds no symbol
+            # for, on either side, is matched by name, as before.
+            held = declaration(f, kept_at, kept)
+            reads = [
+                (g, pos) for g, pos in mentions_in_nouns(kept)
+                if not is_raced(g, pos) and (held is None or declaration(g, pos, kept) in (None, held))
+            ]
             if not reads:
                 continue
             finding = judge(f, at, files, consts)
