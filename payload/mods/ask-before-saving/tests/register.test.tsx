@@ -37,12 +37,12 @@ const modKit: { name: string; register: Register } = {
         },
         // A checkout cloned at /tmp/repo, a folder under /tmp/locked the disk cannot read, and no
         // other checkout in a temporary folder (#726).
-        repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/tmp/locked/')) throw new Error('EACCES: /tmp/locked')
           return path.startsWith('/tmp/repo/') ? '/tmp/repo' : null
         },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
@@ -579,9 +579,10 @@ test('every route that really writes lasting memory is still asked about, a sent
 })
 
 // In an unquoted heredoc the shell runs a command substitution or backticks in the body before the
-// program starts, and mod-kit's write reader does not report a write made there, so the mention is
-// the only thing that catches it: it is never taken for text. With the delimiter quoted the shell runs
-// nothing in the body, and the same words are a sentence the program writes to another file.
+// program starts, so a mention there is never taken for text. When #940 landed mod-kit's write reader
+// did not report a write made there and the mention was the only thing that caught it; since #965 it
+// does (the test after this one), and the mention still counts. With the delimiter quoted the shell
+// runs nothing in the body, and the same words are a sentence the program writes to another file.
 test('a substitution in an unquoted heredoc that writes lasting memory is still asked about; the same words under a quoted delimiter are text (#940)', withKit, async ($, on) => {
   const w = world($, on, { files: { [`${CWD}/rules.md`]: '- rule\n' } })
   const body = (open: string) => `${open}\nopen('notes.txt','w').write("done $(cat rules.md >> ~/.claude/CLAUDE.md) now")\nEOF`
@@ -595,6 +596,31 @@ test('a substitution in an unquoted heredoc that writes lasting memory is still 
   const quoted = [body("python3 - <<'EOF'"), ticks("python3 - <<'EOF'"), body('python3 - <<"EOF"'), body('python3 - <<\\EOF')]
   for (const command of quoted) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
   expect(w.ran.map(r => r.input.command)).toEqual(quoted)
+})
+
+// #965: mod-kit's write reader now reads the commands a substitution runs, in an unquoted heredoc's
+// body and at the top level, so such a save is asked about by the file it writes, also where nothing
+// else the command does was a write its words do not name, the case the mention never reached (cat
+// fed the body). Under a quoted delimiter, or inside single quotes, nothing runs and nothing is asked.
+test('a substitution that writes lasting memory, in an unquoted heredoc or at the top level, is asked about by the file it writes; quoted, it is text (#965)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/rules.md`]: '- rule\n' } })
+  const sub = '$(cat rules.md >> ~/.claude/CLAUDE.md)'
+  const tick = '`cat rules.md >> ~/.claude/CLAUDE.md`'
+  const asked = [
+    `cat <<EOF\ndone ${sub} now\nEOF`,
+    `cat > notes.txt <<EOF\ndone ${tick} now\nEOF`,
+    `python3 - <<EOF\nopen('notes.txt','w').write("done ${sub} now")\nEOF`,
+    `echo "done ${sub} now"`,
+  ]
+  for (const command of asked) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain('this writes lasting memory (~/.claude/CLAUDE.md)')
+  }
+  expect(w.ran).toEqual([])
+  const text = [`cat <<'EOF'\ndone ${sub} now\nEOF`, `cat > notes.txt <<"EOF"\ndone ${tick} now\nEOF`, `echo 'done ${sub} now' > notes.txt`]
+  for (const command of text) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.map(r => r.input.command)).toEqual(text)
 })
 
 test('a write whose file cannot be read from the command is still asked about, and the refusal says which file it took to be written and why (#940)', withKit, async ($, on) => {
