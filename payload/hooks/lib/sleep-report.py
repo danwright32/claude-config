@@ -506,8 +506,9 @@ def github_done(record, notes):
         prs, why_p = gh_list(repo, "pr", since, deadline)
         issues, why_i = gh_list(repo, "issue", since, deadline)
         noted = [n for n in notes if n["kind"] == "done" and n.get("repo") == repo]
-        for why in [w for w in (why_p, why_i) if w]:
-            flags.append("Done could not be read from GitHub for %s: %s.%s" % (repo, why, " What its sessions noted as done is under Done, unchecked." if noted else ""))
+        unread = unread_line(repo, [(name, why) for name, why in (("PRs", why_p), ("issues", why_i)) if why])
+        if unread:
+            flags.append(unread + (" What its sessions noted as done is under Done, unchecked." if noted else ""))
         # A note is unchecked only when the list that would check it failed: a PR note by the PR
         # list, an issue only note by the issue list, so the list that answered never repeats it.
         done.extend("%s%s: %s (as noted, unchecked)" % (where(n), ", PR #%s" % n["pr"] if n.get("pr") is not None else "", text_of(n))
@@ -544,6 +545,19 @@ def github_done(record, notes):
                     asked.add(("issue", n["issue"]))
                     confirm(repo, "issue", n["issue"], since, deadline, done, flags)
     return {"done": done, "flags": flags}
+
+
+def unread_line(repo, failed):
+    """One line for a repository whose reads failed, naming each (#926): a reason shared by both is
+    said once, and different reasons are each said beside their read. None when nothing failed."""
+    if not failed:
+        return None
+    names = " and ".join(name for name, _ in failed)
+    names = names[0].upper() + names[1:]
+    whys = {why for _, why in failed}
+    if len(whys) == 1:
+        return "%s could not be read from GitHub for %s: %s." % (names, repo, failed[0][1])
+    return "%s could not be read from GitHub for %s (%s)." % (names, repo, "; ".join("%s: %s" % f for f in failed))
 
 
 def confirm(repo, what, number, since, deadline, done, flags):
