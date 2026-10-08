@@ -109,6 +109,25 @@ check "without psql the command fails, rather than reading as a run that changed
 check "and says psql is not installed" \
   "$(grep -qi 'psql is not installed' <<< "$out" && echo ok || echo "said: $out")"
 
+# An env file written with `export` must still be read.
+W2="$TMP/project-export"; mkdir -p "$W2"
+printf 'export DATABASE_URL=postgresql://user:%s@db.example.invalid:5432/postgres\n' "$SECRET" > "$W2/.env.local"
+rm -f "$TMP/psql-args"
+out="$(cd "$W2" && PATH="$TMP/bin-with" /bin/bash -c "$psql_line" 2>&1)"; rc=$?
+check "an env file written as export DATABASE_URL=... is read too" \
+  "$([ "$rc" -eq 0 ] && grep -qx "postgresql://user:$SECRET@db.example.invalid:5432/postgres" "$TMP/psql-args" 2>/dev/null && echo ok || echo "exit $rc, said: $out, psql got: $(cat "$TMP/psql-args" 2>/dev/null)")"
+
+# No such variable: psql must NOT run, because an empty connection argument makes psql fall back to
+# its default local database, which is a different database from the one meant (L75).
+W3="$TMP/project-unset"; mkdir -p "$W3"
+printf 'OTHER=1\n' > "$W3/.env.local"
+rm -f "$TMP/psql-args"
+out="$(cd "$W3" && PATH="$TMP/bin-with" /bin/bash -c "$psql_line" 2>&1)"; rc=$?
+check "with no DATABASE_URL in the env file, psql is never started" \
+  "$([ "$rc" -ne 0 ] && [ ! -f "$TMP/psql-args" ] && echo ok || echo "exit $rc, said: $out")"
+check "and the refusal says the variable is not set" \
+  "$(grep -qi 'DATABASE_URL is not set' <<< "$out" && echo ok || echo "said: $out")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

@@ -36,10 +36,10 @@ Try in order, and record which one works in the project's memory so future sessi
 3. **psql, only where it is installed** (it was not on Daniels-MacBook-Pro-2 on 2026-10-08). Write the SQL to a file, then run it with the connection string read from the project's env file inside the command, so the command text never holds it. Use the variable name and env file the project actually uses (`DATABASE_URL` in `.env.local` here; `.dev.vars` and other names exist):
 
    ```bash
-   if command -v psql >/dev/null; then psql "$(sed -n 's/^DATABASE_URL=//p' .env.local | head -n 1 | tr -d "\"'")" -X -1 -v ON_ERROR_STOP=1 -f change.sql; else echo "psql is not installed, so nothing ran"; false; fi
+   if ! command -v psql >/dev/null; then echo "psql is not installed, so nothing ran"; false; elif url="$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=//p' .env.local | head -n 1 | tr -d "\"'")"; [ -z "$url" ]; then echo "DATABASE_URL is not set in .env.local, so nothing ran"; false; else psql "$url" -X -1 -v ON_ERROR_STOP=1 -f change.sql; fi
    ```
 
-   `-1` runs the file as one transaction and `ON_ERROR_STOP=1` stops at the first error, so a failure leaves nothing half applied. The connection string is still visible to other processes on this Mac while psql runs; it never reaches the transcript.
+   `-1` runs the file as one transaction and `ON_ERROR_STOP=1` stops at the first error, so a failure leaves nothing half applied. An empty connection string is refused before psql starts, because psql given an empty one connects to its default local database instead. The connection string is still visible to other processes on this Mac while psql runs; it never reaches the transcript.
 
 4. **No write path exists:** hand Dan exactly one copy-paste block per statement, following the hand-off rules in the global CLAUDE.md, and the SQL must print its own result (counts, RETURNING) so he has something concrete to paste back.
 

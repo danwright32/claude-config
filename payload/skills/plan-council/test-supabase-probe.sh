@@ -53,6 +53,12 @@ check "a supabase folder means it uses Supabase (exit 0, prints yes)" \
 check "and it names the evidence" \
   "$(grep -q 'supabase' <<< "$OUT" && echo ok || echo "said: $OUT")"
 
+# A project reached through a symlink is walked, not read as the link alone.
+ln -s "$P" "$TMP/linked-project"
+uses "$TMP/linked-project"
+check "a project folder given as a symlink is followed, not read as no" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
 P="$TMP/with-client"; mkdir -p "$P"; printf '{"dependencies":{"@supabase/supabase-js":"2.45.0"}}\n' > "$P/package.json"
 uses "$P"
 check "a dependency on an @supabase package means it uses Supabase" \
