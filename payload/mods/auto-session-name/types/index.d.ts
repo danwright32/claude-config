@@ -36,6 +36,7 @@ export type AutoSessionNameRecord = {
    * The name Haiku made for this session, kept once made so an attempt that takes over from one a
    * reload cut off (while /rename waited) uses it rather than asking Haiku again: at most one Haiku
    * call per session (#701). Absent on a record written before it was added, which reads as none.
+   * Kept without the repository prefix, which is put on when the name is set (#945).
    */
   madeName?: string | null
   /**
