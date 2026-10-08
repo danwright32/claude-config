@@ -1112,6 +1112,8 @@ test('leave_pr_open asks nothing about a PR it cannot read or that is not open, 
   expect(await call($ as never, leave(77, { repo: 'o/r' }))).toBe('PR #77 in o/r could not be read (no pull requests found), so Dan was not asked and nothing was recorded: winding down still waits on it.')
   expect(await call($ as never, leave(31, { repo: 'not a repo' }))).toBe('"not a repo" is not a repository (owner/name), so Dan was not asked and nothing was recorded.')
   expect(await call($ as never, leave(0, { repo: 'o/r' }))).toBe('"0" is not a PR number, so Dan was not asked and nothing was recorded.')
+  // Dan is never asked to leave a PR open for no stated reason.
+  expect(await call($ as never, leave(31, { repo: 'o/r', why: '  ' }))).toBe('Say what PR #31 would stay open for, so Dan can decide. He was not asked and nothing was recorded.')
   expect(w.asked).toEqual([])
 })
 

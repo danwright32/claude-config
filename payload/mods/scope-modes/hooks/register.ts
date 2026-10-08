@@ -1826,7 +1826,9 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (named && !/^[\w.-]+\/[\w.-]+$/.test(named)) return `"${named}" is not a repository (owner/name), so Dan was not asked and nothing was recorded.`
   const repo = named || (await sessionSlug($))
   if (!repo) return "This session's repository could not be read, so name the PR's repository (owner/name). Dan was not asked and nothing was recorded."
-  const why = String(input.why ?? '').trim().replace(/[.?]+$/, '') || 'no reason given'
+  // Dan decides from the reason, so a PR is never put to him without one.
+  const why = String(input.why ?? '').trim().replace(/[.?]+$/, '')
+  if (!why) return `Say what PR #${number} would stay open for, so Dan can decide. He was not asked and nothing was recorded.`
   const pr = `PR #${number} in ${repo}`
   const unread = (reason: string) => `${pr} could not be read (${reason}), so Dan was not asked and nothing was recorded: winding down still waits on it.`
   const res = await $.process.run(['gh', 'pr', 'view', String(number), '--repo', repo, '--json', 'number,state,url,headRefOid'], { timeoutMs: RUN_MS }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
