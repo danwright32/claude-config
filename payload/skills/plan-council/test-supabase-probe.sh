@@ -77,6 +77,11 @@ check "a SUPABASE variable in an env file means it uses Supabase" \
 check "and the env file's value is never printed" \
   "$(grep -q 'abc.supabase.co' <<< "$OUT" && echo "printed: $OUT" || echo ok)"
 
+P="$TMP/nested-env"; mkdir -p "$P/apps/api"; printf 'SUPABASE_SERVICE_ROLE_KEY=not-a-real-key\n' > "$P/apps/api/.env"
+uses "$P"
+check "a SUPABASE variable in a nested app's env file counts too" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
 P="$TMP/swift"; mkdir -p "$P/Sources/App"; printf '// swift-tools-version:5.9\n' > "$P/Package.swift"
 printf 'let note = "we chose not to use supabase"\n' > "$P/Sources/App/Note.swift"
 uses "$P"

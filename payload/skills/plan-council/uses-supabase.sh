@@ -13,16 +13,19 @@
 #   1  no
 #   2  could not tell (no folder given, or not a folder), and the probe should run as before
 #
-# Evidence, any one of:
-#   - a `supabase` folder anywhere in the top three levels: the CLI's config and migrations, or an app's own
-#     client folder such as src/lib/supabase, which is evidence too. A false yes only restores the
-#     probe every project had before, so the walk errs that way rather than toward a false no (L93)
-#   - a package.json in the top three levels depending on an @supabase/ package
-#   - an env file (.env, .env.*, .dev.vars) at the root setting a variable whose name holds SUPABASE
+# Evidence, any one of, anywhere in the top three levels of the project:
+#   - a `supabase` folder: the CLI's config and migrations, or an app's own client folder such as
+#     src/lib/supabase, which is evidence too. A false yes only restores the probe every project
+#     had before, so the walk errs that way rather than toward a false no (L93)
+#   - a package.json depending on an @supabase/ package
+#   - an env file (.env, .env.*, .dev.vars) setting a variable whose name holds SUPABASE, at the
+#     root or in a nested app
 # Source code that merely mentions the word is not evidence, and anything under node_modules or .git
 # is skipped: a dependency's own copy says nothing about this project. The walk is bounded at three
-# levels so a large tree costs a few directory reads, not a crawl (L493). Env files are only ever
-# matched by variable NAME with grep -q, so no value is printed (L222).
+# levels so a large tree costs a few directory reads, not a crawl (L493); evidence only deeper than
+# that reads as no, and then the plan simply carries no schema warning, which is the state every
+# project was in before the probe existed. Env files are only ever matched by variable NAME with
+# grep -q, so no value is printed (L222).
 set -uo pipefail
 
 dir="${1:-}"
@@ -38,19 +41,15 @@ while IFS= read -r path; do
     */supabase) found="${path#"$dir"/} folder"; break ;;
     */package.json)
       if grep -q '"@supabase/' "$path" 2>/dev/null; then found="${path#"$dir"/} depends on an @supabase package"; break; fi ;;
+    *)
+      # An env file, matched by variable NAME only.
+      if grep -q -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*SUPABASE[A-Za-z0-9_]*[[:space:]]*=' "$path" 2>/dev/null; then
+        found="${path#"$dir"/} sets a SUPABASE variable"; break
+      fi ;;
   esac
 done <<EOF
-$(find "$dir" -maxdepth 3 \( -name node_modules -o -name .git \) -prune -o \( \( -name supabase -type d \) -o \( -name package.json -type f \) \) -print 2>/dev/null)
+$(find "$dir" -maxdepth 3 \( -name node_modules -o -name .git \) -prune -o \( \( -name supabase -type d \) -o \( -type f \( -name package.json -o -name .env -o -name '.env.*' -o -name .dev.vars \) \) \) -print 2>/dev/null)
 EOF
-
-if [ -z "$found" ]; then
-  for env in "$dir"/.env "$dir"/.env.* "$dir"/.dev.vars; do
-    [ -f "$env" ] || continue
-    if grep -q -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*SUPABASE[A-Za-z0-9_]*[[:space:]]*=' "$env" 2>/dev/null; then
-      found="${env#"$dir"/} sets a SUPABASE variable"; break
-    fi
-  done
-fi
 
 if [ -n "$found" ]; then
   echo "yes: $found"
