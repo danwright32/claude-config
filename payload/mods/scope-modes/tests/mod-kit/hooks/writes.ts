@@ -18,15 +18,18 @@ import { kindOf } from './program.ts'
 // Inline code is judged by the reader's per language judge (code.ts), which each command already
 // carries, and a shell fed its script is read as the commands it runs, so this keeps no list of
 // interpreters or write idioms of its own. A command substitution the shell runs, on the command line,
-// in an unquoted heredoc's body or in a shell's own script, is read as the command line it is (#965,
-// #974, commandWrites). What it does not report: a script run from a file (python3 build.py), whose
-// writes no word names and which are not guessed at (#654); a process substitution.
+// in an unquoted heredoc's body or in a shell's own script, and a process substitution, is read as
+// the command line it is (#965, #974, #975, commandWrites). What it does not report: a script run
+// from a file (python3 build.py), whose writes no word names and which are not guessed at (#654).
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
 const HOME_VAR = /^\$(?:HOME|\{HOME\})(?=\/|$)/
 
 const isDevice = (p: string) => p === '/dev' || p.startsWith('/dev/')
+// A process substitution given as an operand (`tee >(cmd)`) is a pipe the shell names under /dev/fd,
+// never a file; what it runs is read apart (#975).
+const isPipe = (word: string) => /^[<>]\(/.test(word)
 
 // A variable the command set before a write is read as its value, as the shell reads it, so the
 // write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
@@ -422,7 +425,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true }, shown?: string) => {
     // Where a find -exec's {} stood, the write reaches every file under that folder (#760).
     const tree = foundRoots.includes(word)
-    if (!word || isDevice(path ?? word)) return
+    if (!word || isPipe(word) || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
     if (seen.has(key)) {
@@ -447,7 +450,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
     tree = tree || foundRoots.includes(word)
     const path = absolutePath(word, dir, home)
-    if (!word || isDevice(path ?? word)) return
+    if (!word || isPipe(word) || isDevice(path ?? word)) return
     const written = asWritten.get(word) ?? word
     // A path changed the same way twice is kept once, a tree on either keeping the tree.
     const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))

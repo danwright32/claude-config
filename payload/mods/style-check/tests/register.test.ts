@@ -46,6 +46,7 @@ const kit: { name: string; register: Register } = {
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
           repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
+          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
           clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
@@ -210,7 +211,7 @@ test('a gh issue comment read from a body file is judged', withKit, async ($, on
 // Quoted, the commit is text: no message command runs, and nothing is scanned.
 const FIX = `Fix ${DASH} again`
 const READ_974 = new Map<string, string[][]>([
-  [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX], ['commit', '-m', `${FIX})`]]],
+  [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX]]],
   ['echo "made `git commit -F /tmp/msg.txt`"', [['git', 'commit', '-F', '/tmp/msg.txt'], ['echo', 'made `git commit -F /tmp/msg.txt`']]],
   [`cat <<EOF\n$(git commit -m "${FIX}")\nEOF`, [['git', 'commit', '-m', FIX], ['cat', '<<EOF']]],
   [`echo '$(git commit -m "${FIX}")'`, [['echo', `$(git commit -m "${FIX}")`]]],
