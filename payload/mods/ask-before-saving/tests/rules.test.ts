@@ -318,6 +318,13 @@ test("the instruction to ask names the file, asks for the rule in plain words, a
   expect(g).toContain('its words do not name the file it writes, and they mention ~/.claude/CLAUDE.md')
   expect(g).toContain('make the change with Edit or Write on that file')
   expect(g).toContain('{"source": "ask-before-saving:toolu_2"}')
+  // A file the words name beside one taken from a mention: each said as what it is (lessons review
+  // of #963: both were called uncertain).
+  const both = askInstruction('toolu_3', ['~/Apps/a/CLAUDE.md', '~/.claude/CLAUDE.md'], ['~/.claude/CLAUDE.md'])
+  expect(both).toContain(
+    'this writes lasting memory (~/Apps/a/CLAUDE.md) and may write ~/.claude/CLAUDE.md: its words do not name every file it writes, and they mention ~/.claude/CLAUDE.md',
+  )
+  expect(both).toContain('names ~/Apps/a/CLAUDE.md, ~/.claude/CLAUDE.md')
 })
 
 test('the three answers each say what they do, and a save id is read back only from its own source', () => {

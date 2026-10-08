@@ -507,10 +507,14 @@ export const addsLesson = (added: string, rule: string): boolean => {
  * command mentions because its words do not name the file it writes, that this is so (#940), so a
  * misfire shows as one. A message may claim only what its check measured (L11).
  */
-export const writesWhat = (files: string[], guessed: string[] = []): string =>
-  guessed.length
-    ? `this may write lasting memory (${files.join(', ')}): its words do not name the file it writes, and they mention ${guessed.join(', ')}`
-    : `this writes lasting memory (${files.join(', ')})`
+export const writesWhat = (files: string[], guessed: string[] = []): string => {
+  const named = files.filter(f => !guessed.includes(f))
+  const maybe = guessed.join(', ')
+  if (!guessed.length) return `this writes lasting memory (${files.join(', ')})`
+  // A file the words name beside one taken from a mention: each said as what it is (lessons review of #963).
+  if (named.length) return `this writes lasting memory (${named.join(', ')}) and may write ${maybe}: its words do not name every file it writes, and they mention ${maybe}`
+  return `this may write lasting memory (${maybe}): its words do not name the file it writes, and they mention ${maybe}`
+}
 
 /**
  * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,
