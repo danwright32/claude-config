@@ -37,10 +37,14 @@ TABLE='bug_bash_targets'
 GROUP='_bugbash'
 MAX_ADDRESSES=32
 
+TAKEOVER_GATE=""
 if [ "$(id -u)" = 0 ]; then
   PFCTL=/sbin/pfctl
   STATE=/var/run/bug-bash-egress
 else
+  # Test only: parks this helper just after it has found the lock's holder dead, until the named
+  # file exists, so the suite can stage two helpers racing to take over one stale lock.
+  TAKEOVER_GATE="${BUG_BASH_EGRESS_TEST_TAKEOVER_GATE:-}"
   # Not root: only the test suite runs it this way, with a stand in pfctl and a state directory of
   # its own. Nothing done here can change the real packet filter, which only root can.
   PFCTL="${BUG_BASH_EGRESS_PFCTL:-}"
@@ -73,22 +77,54 @@ sha256_of() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -d' ' -f1
 }
 
-# One load or unload at a time. The holder's pid is recorded, so a lock left by a helper that died
-# is taken over rather than waited on for ever.
+# One load or unload at a time. The lock, $STATE/held, is a symbolic link whose target is the
+# holder's pid, so the lock and the record of who holds it come into being in one atomic step
+# (`ln -s` refuses when the link exists): there is never a lock with no holder on it. A lock whose
+# holder has died is taken over, but only under a second lock, held.takeover, and only after
+# reading the holder again inside it, so a waiter that found the holder dead a moment ago can never
+# remove a lock another waiter has taken since (lessons review of #938). A takeover lock left by a
+# helper that died inside it, a window of two file operations, is cleared the same way.
+LOCK_LINK=""
+wait_at_gate() {
+  [ -n "$TAKEOVER_GATE" ] || return 0
+  touch "$TAKEOVER_GATE.seen"
+  local _
+  for _ in $(seq 1 200); do [ -e "$TAKEOVER_GATE" ] && return 0; sleep 0.05; done
+}
+holder_of() { readlink "$1" 2>/dev/null; }
+is_dead() { [ -n "$1" ] && ! kill -0 "$1" 2>/dev/null; }
+# Removes the lock only while its holder is still $1, the dead pid this waiter saw.
+take_over() {
+  local guard="$LOCK_LINK.takeover" g
+  if ! ln -s "$$" "$guard" 2>/dev/null; then
+    g="$(holder_of "$guard")"
+    if is_dead "$g" && [ "$(holder_of "$guard")" = "$g" ]; then rm -f "$guard"; fi
+    return 0
+  fi
+  if [ "$(holder_of "$LOCK_LINK")" = "$1" ]; then rm -f "$LOCK_LINK"; fi
+  rm -f "$guard"
+}
+release_lock() {
+  if [ "$(holder_of "$LOCK_LINK")" = "$$" ]; then rm -f "$LOCK_LINK"; fi
+}
 lock() {
   mkdir -p "$STATE" && chmod 700 "$STATE" || die 5 "could not make $STATE"
+  LOCK_LINK="$STATE/held"
   local _ holder
   for _ in $(seq 1 100); do
-    if mkdir "$STATE/lock" 2>/dev/null; then
-      echo $$ > "$STATE/lock/pid"
-      trap 'rm -rf "$STATE/lock"' EXIT
+    if ln -s "$$" "$LOCK_LINK" 2>/dev/null; then
+      trap release_lock EXIT
       return 0
     fi
-    holder="$(cat "$STATE/lock/pid" 2>/dev/null)"
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$STATE/lock"; continue; fi
+    holder="$(holder_of "$LOCK_LINK")"
+    if is_dead "$holder"; then
+      wait_at_gate
+      take_over "$holder"
+      continue
+    fi
     sleep 0.1
   done
-  die 6 "another load or unload of the rule has not finished after 10 s (lock $STATE/lock, pid ${holder:-unknown})."
+  die 6 "another load or unload of the rule has not finished after 10 s (lock $LOCK_LINK, held by pid ${holder:-unknown})."
 }
 
 # Takes the rule away and releases this rule's pf reference. Whether the rule is gone is judged by
@@ -135,13 +171,13 @@ do_load() {
   ports="$port"
   case "$port" in 80|443) ports="80, 443" ;; esac
   lock
-  if [ -f "$STATE/owner" ]; then
-    prior="$(cat "$STATE/owner")"
-    if [ "$prior" != "$owner" ] && is_pid "$prior" && kill -0 "$prior" 2>/dev/null; then
-      die 4 "another read only run holds the rule (its proxy, pid $prior, is still running; $(cat "$STATE/request" 2>/dev/null)). End that run first."
-    fi
-    remove_rule || die 5 "could not take away the rule left by pid $prior, so a new one was not loaded."
+  prior="$(cat "$STATE/owner" 2>/dev/null)"
+  if [ -n "$prior" ] && [ "$prior" != "$owner" ] && is_pid "$prior" && kill -0 "$prior" 2>/dev/null; then
+    die 4 "another read only run holds the rule (its proxy, pid $prior, is still running; $(cat "$STATE/request" 2>/dev/null)). End that run first."
   fi
+  # Whatever is on record goes first, owner or none (a helper killed part way leaves a rule, or a
+  # pf reference, with no owner), so nothing an earlier load took is overwritten and lost.
+  remove_rule || die 5 "could not take away the rule already loaded${prior:+ (left by pid $prior)}, so a new one was not loaded."
   printf 'table <%s> const { %s }\nblock return out quick proto { tcp udp } from any to <%s> port { %s } group != %s\n' \
     "$TABLE" "$list" "$TABLE" "$ports" "$GROUP" > "$STATE/rules.conf"
   if ! out="$("$PFCTL" -a "$ANCHOR" -f "$STATE/rules.conf" 2>&1)"; then
@@ -166,8 +202,14 @@ do_unload() {
   [ -z "$owner" ] || is_pid "$owner" || die 2 "the owner must be a process id, got: $owner"
   lock
   holder="$(cat "$STATE/owner" 2>/dev/null)"
-  if [ -n "$owner" ] && [ -n "$holder" ] && [ "$holder" != "$owner" ]; then
-    echo "left in place: the rule belongs to pid $holder, not $owner"
+  # For one process, only a rule on record as that process's. Anything else (another run's, or one
+  # with no owner on file) is left for an unload with no owner, which takes whatever is there.
+  if [ -n "$owner" ] && [ "$holder" != "$owner" ]; then
+    if [ -n "$holder" ]; then
+      echo "left in place: the rule belongs to pid $holder, not $owner"
+    else
+      echo "left in place: no rule is on record for pid $owner"
+    fi
     return 0
   fi
   remove_rule || die 5 "the rule is still loaded."

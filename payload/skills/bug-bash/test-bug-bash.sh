@@ -371,7 +371,7 @@ expect "a proxy address the launcher would refuse is refused by the guard" 7 "no
 # _bugbash group) can stand behind; this one was not, so the run is refused before any rule is
 # loaded. The run that is allowed is driven in the egress section below.
 out="$(bash "$GUARD" --read-only --proxy "$PROXY" "https://app.example.com/" 2>&1)"; rc=$?
-expect "a deployed site behind a proxy not started for a deployment is refused" 8 "\-\-egress" "$rc" "$out"
+expect "a deployed site behind a proxy not started for a deployment is refused" 8 "--egress" "$rc" "$out"
 out="$(BUG_BASH_PROXY="$PROXY" bash "$GUARD" --read-only "https://app.example.com/" 2>&1)"; rc=$?
 expect "the proxy named by BUG_BASH_PROXY is the one judged" 8 "proxy at $PROXY was not started" "$rc" "$out"
 # The guard's own check went only to the probe name, which resolves nowhere, and was refused there.
@@ -450,6 +450,24 @@ fi
 table="$FAKE/anchor.table"
 if [ -n "$file" ]; then
   [ -n "$anchor" ] || exit 0
+  # Hangs until killed, recording the helper that called it, so the suite can kill a helper while
+  # it holds the lock.
+  if [ -e "$FAKE/knob-hang-load" ]; then
+    for p in "$PPID" "$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')"; do
+      grep -q "$FAKE/helper" <<< "$(ps -o command= -p "$p" 2>/dev/null)" && echo "$p" >> "$FAKE/hang.pids"
+    done
+    echo $$ >> "$FAKE/hang.pids"
+    touch "$FAKE/hung"
+    sleep 30
+    exit 1
+  fi
+  # A load that takes a while, and records it when two are ever inside at once.
+  if [ -e "$FAKE/knob-slow-load" ]; then
+    mkdir "$FAKE/inside" 2>/dev/null || echo OVERLAP >> "$FAKE/overlap"
+    touch "$FAKE/entered"
+    sleep 1
+    rmdir "$FAKE/inside" 2>/dev/null
+  fi
   [ -e "$FAKE/knob-load-fails" ] && { echo "pfctl: unknown group _bugbash" >&2; exit 1; }
   sed -n 's/^table <[^>]*> const { \(.*\) }$/\1/p' "$file" | tr -d ',' | tr ' ' '\n' | sed '/^$/d' > "$table"
   # Fails after the table is in, before the rule.
@@ -584,7 +602,7 @@ else
   # Refused, each by name, and each leaving nothing loaded behind it.
   reset_fake
   out="$(PATH="$FAKE/bin:$PATH" bash "$GUARD" --read-only --proxy "$PROXY" "https://app.example.com/" 2>&1)"; rc=$?
-  expect "a proxy not started with --egress is refused for a deployment" 8 "\-\-egress" "$rc" "$out"
+  expect "a proxy not started with --egress is refused for a deployment" 8 "--egress" "$rc" "$out"
   [ ! -e "$FAKE/sudo.calls" ] && ok || bad "a refusal for a proxy not started for a deployment loads nothing" "$(cat "$FAKE/sudo.calls")"
   reset_fake; touch "$FAKE/knob-sudo-refuses"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
@@ -663,6 +681,51 @@ else
   [ "$rc" = 2 ] && grep -q 'port' <<< "$out" && ok || bad "the helper refuses a port out of range (rc $rc)" "$out"
   out="$(env -u BUG_BASH_EGRESS_PFCTL bash "$HELPER_SRC" status 2>&1)"; rc=$?
   [ "$rc" = 2 ] && grep -q 'through sudo' <<< "$out" && ok || bad "the helper, not root and not under test, refuses and says to use sudo (rc $rc)" "$out"
+
+  # A load clears whatever an earlier helper left on record, its pf reference included, even with
+  # no owner on file (a helper killed part way) (lessons review of #938).
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1
+  rm -f "$FAKE/state/owner"; echo 7777 > "$FAKE/state/token"
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$DEAD_PID" >/dev/null 2>&1
+  grep -q -- '-X 7777' "$FAKE/pfctl.calls" && ok || bad "a load releases the pf reference a helper killed part way left behind" "$(cat "$FAKE/pfctl.calls")"
+  # An unload for one process touches nothing it cannot show that process holds.
+  rm -f "$FAKE/state/owner"
+  out="$(fakeenv bash "$EGRESS" unload 12345 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && [ -e "$FAKE/anchor.conf" ] && grep -q 'left in place' <<< "$out" && ok \
+    || bad "an unload for a pid with no rule on record leaves the anchor alone (rc $rc)" "$out"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+  # A second --egress proxy that refuses to start never listened, so it holds no rule and unloads
+  # nothing as it exits (lessons review of #938).
+  reset_fake
+  PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress >"$TMP/second-e.out" 2>&1 & second=$!
+  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
+  [ "$rc" = 3 ] && ! grep -q 'unload' "$FAKE/sudo.calls" 2>/dev/null && ok \
+    || bad "a --egress proxy that never listened unloads nothing as it exits (rc $rc)" "$(cat "$FAKE/sudo.calls" 2>/dev/null)"
+
+  # Two helpers racing to take over one stale lock: exactly one is inside at a time. The lock is
+  # left stale the way it happens, by killing a helper while it holds it; the first waiter is
+  # parked just after finding that holder dead, the second then takes the lock over and goes
+  # inside, and only then is the first let go (lessons review of #938).
+  reset_fake; rm -f "$FAKE/overlap" "$FAKE/entered" "$FAKE/hung" "$FAKE/hang.pids" "$FAKE"/go*
+  touch "$FAKE/knob-hang-load"
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1 & hl=$!
+  for _ in $(seq 1 200); do [ -e "$FAKE/hung" ] && break; sleep 0.05; done
+  for p in $(cat "$FAKE/hang.pids" 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
+  wait "$hl" 2>/dev/null
+  rm -f "$FAKE/knob-hang-load"; touch "$FAKE/knob-slow-load"
+  BUG_BASH_EGRESS_TEST_TAKEOVER_GATE="$FAKE/go" fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >"$TMP/race-b.out" 2>&1 & rb=$!
+  for _ in $(seq 1 200); do [ -e "$FAKE/go.seen" ] && break; sleep 0.05; done
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >"$TMP/race-a.out" 2>&1 & ra=$!
+  for _ in $(seq 1 200); do [ -e "$FAKE/entered" ] && break; sleep 0.05; done
+  touch "$FAKE/go"
+  for _ in $(seq 1 400); do kill -0 "$ra" 2>/dev/null || kill -0 "$rb" 2>/dev/null || break; sleep 0.05; done
+  wait "$ra"; rca=$?; wait "$rb"; rcb=$?
+  [ -e "$FAKE/go.seen" ] && [ -s "$FAKE/hang.pids" ] && [ ! -e "$FAKE/overlap" ] && [ "$rca" = 0 ] && [ "$rcb" = 0 ] && ok \
+    || bad "two helpers racing for a stale lock are never inside at once, and both finish (rc $rca $rcb)" "$(cat "$FAKE/overlap" "$TMP/race-a.out" "$TMP/race-b.out" 2>/dev/null)"
+  rm -f "$FAKE/knob-slow-load"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
 
   # The proxy takes its rule away when it stops.
   reset_fake

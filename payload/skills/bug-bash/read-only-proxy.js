@@ -295,8 +295,9 @@ claimStateDir().then(makeAuthority).then(
 process.on('exit', () => {
   if (wroteState) removeState()
   // The egress rule loaded for this process goes with it. Scoped to this pid, so a rule another run
-  // holds is left alone; a failure is said, since the rule would go on refusing the site.
-  if (EGRESS) {
+  // holds is left alone; a failure is said, since the rule would go on refusing the site. A proxy
+  // that never listened was never judged by the guard, so no rule was loaded for it.
+  if (EGRESS && wroteState) {
     try {
       execFileSync('bash', [path.join(__dirname, 'egress.sh'), 'unload', String(process.pid)], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20_000 })
     } catch (e) {
