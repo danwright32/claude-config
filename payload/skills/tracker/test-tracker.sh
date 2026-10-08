@@ -77,9 +77,34 @@ check_eq "and the same scan finds a planted one, while ignoring config.local.jso
 example_keys="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(sorted(d)))' "$DIR/config.example.json" 2>&1)"
 check_eq "config.example.json carries url and token" "token,url" "$example_keys"
 
+# --- SKILL.md's worked examples obey SKILL.md's own rules ---------------------
+# An example that breaks a rule teaches the inverse with the rule's authority (L562). The rule:
+# Skills Used never lists Claude Code. Every `tracker.sh append '<json>'` example is parsed.
+example_verdict="$(python3 - "$DIR/SKILL.md" <<'PY'
+import json, re, sys
+found = 0
+for m in re.finditer(r"tracker\.sh append '(\{.*?\})'", open(sys.argv[1]).read()):
+    try:
+        row = json.loads(m.group(1))
+    except Exception:
+        print("unparseable example"); continue
+    found += 1
+    if "claude code" in str(row.get("Skills Used", "")).lower():
+        print("an example lists Claude Code under Skills Used")
+print("examples=%d" % found)
+PY
+)"
+check "SKILL.md carries a worked append example to judge" "examples=1" "$example_verdict"
+check_not "and no worked example lists Claude Code under Skills Used, which the rule forbids" "Claude Code" "$example_verdict"
+check_not "and every worked example is valid JSON" "unparseable" "$example_verdict"
+
 # --- config.local.json never travels ------------------------------------------
 # Git: the skill's own ignore file keeps it out of every commit.
-check "the skill's .gitignore names config.local.json" "config.local.json" "$(cat "$DIR/.gitignore" 2>/dev/null)"
+gitignored(){ # gitignored <file name>; prints yes when a pattern in the skill's .gitignore matches it
+  python3 -c 'import fnmatch,sys; ps=[l.strip() for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]; print("yes" if any(fnmatch.fnmatch(sys.argv[2], p) for p in ps) else "no")' "$DIR/.gitignore" "$1" 2>&1
+}
+check_eq "the skill's .gitignore leaves out config.local.json" "yes" "$(gitignored config.local.json)"
+check_eq "and does not leave out the files the skill ships" "no no no" "$(gitignored tracker.sh) $(gitignored config.example.json) $(gitignored SKILL.md)"
 
 # --- a sandbox copy of the skill, and a curl that reaches nothing -------------
 SK="$TMP/skill"
@@ -116,13 +141,18 @@ write_local "$GOOD_URL" "$GOOD_TOKEN"
 run headers
 check_eq "a configured skill's headers call succeeds" 0 "$RC"
 check_eq "and reaches curl exactly once" 1 "$(curl_calls)"
-check "and asks the configured web app" "FAKEDEPLOYMENT" "$(cat "$CURL_LOG")"
-check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
+check "and asks the configured web app" "FAKEDEPLOYMENT" "$(grep '^ARGS:' "$CURL_LOG")"
+check "as a POST whose body asks for the headers" '"action": "headers"' "$(grep '^STDIN:' "$CURL_LOG")"
+check "with the key in that body" "\"key\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "$CURL_LOG")"
+check "the body goes as POST data" "--data @-" "$(grep '^ARGS:' "$CURL_LOG")"
+check_not "and never puts the token on curl's command line or in the address" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
+check_not "and the address carries no query string at all" "?" "$(grep '^ARGS:' "$CURL_LOG")"
 run append '{"Project Name":"x"}'
 check_eq "a configured skill's append succeeds" 0 "$RC"
 check_eq "and reaches curl exactly once" 1 "$(curl_calls)"
-check "and sends the token in the request body" "\"token\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "$CURL_LOG")"
-check "and the row with it" '"Project Name": "x"' "$(grep '^STDIN:' "$CURL_LOG")"
+check "and sends the key in the request body" "\"key\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "$CURL_LOG")"
+check "and the row with it" '"data": {"Project Name": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
+check_not "and never under the old field name the first script read" '"token"' "$(grep '^STDIN:' "$CURL_LOG")"
 check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
 
 # --- every refusal names its cause, and reaches nothing -----------------------
@@ -158,6 +188,9 @@ check "and calls it a placeholder" "placeholder" "$OUT"
 write_local "$GOOD_URL" ""
 refuses "an empty token" "token" headers
 check "and calls it empty" "empty" "$OUT"
+
+write_local "$GOOD_URL" "short_token_0123456789"
+refuses "a token shorter than the web app accepts" "shorter than 32" headers
 
 python3 -c 'import json,sys; json.dump({"url":sys.argv[2]}, open(sys.argv[1],"w"))' "$SK/config.local.json" "$GOOD_URL"
 refuses "a config with no token key" "token" headers
@@ -202,6 +235,109 @@ printf '{ not json' > "$SK/config.local.json"
 run new-token
 if [ "$RC" -ne 0 ]; then ok; else bad "new-token over an unreadable config refuses rather than overwriting it"; fi
 check_eq "and leaves that file as it was" "{ not json" "$(cat "$SK/config.local.json")"
+
+# --- a run killed mid write leaves the token only where nothing syncs ---------
+# new-token writes a temporary copy and renames it over config.local.json. A run killed between
+# the two leaves that copy behind, holding the new token, so its name must be one the skill's
+# .gitignore and claude-sync's mirror (every *.local.json) both leave out.
+write_local "$GOOD_URL" "$GOOD_TOKEN"
+export TRACKER_TEST_STOP_BEFORE_RENAME=1
+run new-token
+unset TRACKER_TEST_STOP_BEFORE_RENAME
+if [ "$RC" -ne 0 ]; then ok; else bad "the stopped new-token run reports failure (got $RC)"; fi
+check "a run stopped before the rename leaves config.local.json as it was" "$GOOD_TOKEN" "$(cat "$SK/config.local.json")"
+leftovers="$(python3 - "$SK" "$DIR/.gitignore" <<'PY'
+import fnmatch, os, stat, sys
+sk, gitignore = sys.argv[1], sys.argv[2]
+shipped = {"tracker.sh", "config.example.json", "apps-script.gs", "config.local.json"}
+patterns = [l.strip() for l in open(gitignore) if l.strip() and not l.startswith("#")]
+for name in sorted(os.listdir(sk)):
+    if name in shipped:
+        continue
+    mode = format(os.stat(os.path.join(sk, name)).st_mode & 0o777, "o")
+    ignored = any(fnmatch.fnmatch(name, p) for p in patterns)
+    print("%s synced=%s ignored=%s mode=%s" % ("leftover", "no" if name.endswith(".local.json") else "YES", "yes" if ignored else "NO", mode))
+PY
+)"
+check "the stopped run did leave its temporary copy behind (the case under test happened)" "leftover" "$leftovers"
+check_not "and that copy's name is one claude-sync leaves out (*.local.json)" "synced=YES" "$leftovers"
+check_not "and one the skill's .gitignore leaves out" "ignored=NO" "$leftovers"
+check_not "and it is readable by its owner only" "mode=6" "$(grep -v 'mode=600' <<< "$leftovers")"
+
+# --- the web app itself (apps-script.gs), run under node with fake Google services ---
+# The script's own logic, not a reading of its text (L638): each case evaluates the shipped file,
+# with its TOKEN line set the way Dan sets it, against stubs that record every append.
+if ! command -v node >/dev/null 2>&1; then
+  bad "node is not on PATH, so apps-script.gs could not be run. Install node; this is UNMEASURED, not passed."
+else
+  cat > "$TMP/gs-harness.js" <<'JS'
+const fs = require('fs'), vm = require('vm');
+const [src, token, requestJson, method] = process.argv.slice(2);
+let code = fs.readFileSync(src, 'utf8');
+if (token !== '-') {
+  const before = code;
+  code = code.replace(/^const TOKEN = '[^']*';/m, "const TOKEN = '" + token + "';");
+  if (code === before) { console.log(JSON.stringify({ harness: 'no TOKEN line to set' })); process.exit(0); }
+}
+const appended = [];
+const sheet = {
+  getLastColumn: () => 2,
+  getRange: () => ({ getValues: () => [['Project Name', 'Date Started']] }),
+  appendRow: (r) => appended.push(r),
+  getLastRow: () => 1 + appended.length,
+};
+const ctx = {
+  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getSheetByName: () => sheet }) },
+  ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (s) => ({ setMimeType: () => s }) },
+  Utilities: { formatDate: () => '2026-01-01' },
+  Session: { getScriptTimeZone: () => 'UTC' },
+  JSON,
+};
+vm.createContext(ctx);
+vm.runInContext(code, ctx);
+const out = method === 'GET'
+  ? ctx.doGet({ parameter: JSON.parse(requestJson) })
+  : ctx.doPost({ postData: { contents: requestJson } });
+console.log(JSON.stringify({ response: JSON.parse(out), appended: appended.length }));
+JS
+  GS="$DIR/apps-script.gs"
+  # Built from parts so this file never holds a token shaped run of its own.
+  REAL="abcdefghijklmnop""0123456789ABCDEFGHIJKLMN"
+  gs(){ node "$TMP/gs-harness.js" "$GS" "$1" "$2" "${3:-POST}" 2>&1; }
+
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"action\":\"headers\"}")"
+  check "web app, real token: the right key asks for the headers" '"ok":true,"headers":["Project Name","Date Started"]' "$r"
+  check "and appends nothing" '"appended":0' "$r"
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"data\":{\"Project Name\":\"x\"}}")"
+  check "web app, real token: the right key appends a row" '"ok":true' "$r"
+  check "exactly one" '"appended":1' "$r"
+  for case in "wrong key|{\"key\":\"nope\",\"data\":{\"a\":1}}" \
+              "no key|{\"data\":{\"a\":1}}" \
+              "the right value under the first version's field name|{\"token\":\"$REAL\",\"data\":{\"a\":1}}" \
+              "the placeholder as the key|{\"key\":\"$GS_TOKEN\",\"data\":{\"a\":1}}"; do
+    r="$(gs "$REAL" "${case#*|}")"
+    check "web app, real token, ${case%%|*}: refused as a bad token" '"error":"bad token"' "$r"
+    check "web app, real token, ${case%%|*}: appends nothing" '"appended":0' "$r"
+  done
+  r="$(gs "$REAL" "{\"key\":\"$REAL\"}")"
+  check "web app: the right key with neither action nor data is refused" '"ok":false' "$r"
+  check "and appends nothing, never an empty dated row" '"appended":0' "$r"
+  r="$(gs "$REAL" "{\"token\":\"$REAL\"}" GET)"
+  check "web app: a GET is refused even with the right token in its address" '"ok":false' "$r"
+  check_not "and reveals no headers" "Project Name" "$r"
+
+  # Fails closed: the shipped placeholder, or a token too short to be real, refuses everything,
+  # including a caller that sends that very placeholder as its key.
+  for tok in "-|the shipped placeholder" "short0123|a short token"; do
+    t="${tok%%|*}"; key="$t"; [ "$t" = "-" ] && key="$GS_TOKEN"
+    r="$(gs "$t" "{\"key\":\"$key\",\"action\":\"headers\"}")"
+    check "web app with ${tok#*|} as TOKEN: refuses even the matching key" '"error":"token not set' "$r"
+    check_not "and reveals no headers" "Project Name" "$r"
+    r="$(gs "$t" "{\"key\":\"$key\",\"data\":{\"a\":1}}")"
+    check "web app with ${tok#*|} as TOKEN: refuses an append" '"ok":false' "$r"
+    check "and appends nothing" '"appended":0' "$r"
+  done
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

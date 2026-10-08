@@ -10,8 +10,8 @@ Append a row to the personal project-tracker Google Sheet
 (`1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w`) without leaving the terminal.
 
 Writes go through a Google Apps Script web app bound to the sheet (a token-guarded
-POST endpoint), so no Google credentials are stored locally and the skill works from
-any project on any machine.
+POST endpoint, the token always in the request body, never the address), so no Google
+credentials are stored locally and the skill works from any project on any machine.
 
 ## Usage
 
@@ -55,16 +55,22 @@ placeholder.
 When the token may have been seen (it was once committed to this public repository,
 claude-config#675), replace it in both places:
 
-1. Run `bash tracker.sh new-token`. It keeps the `url` already in `config.local.json` and
-   replaces only the token.
+1. Run `bash tracker.sh new-token`. It keeps the `url` already in `config.local.json` (or
+   creates the file from the example) and replaces only the token.
 2. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
    command in setup step 2.
 3. In the sheet's **Extensions, Apps Script**, replace the value inside the quotes on the
-   `const TOKEN = '...';` line with the new `token` from `config.local.json`, and save.
+   `const TOKEN = '...';` line with the new `token` from `config.local.json`, and save. If the
+   deployed script predates claude-config#675 (it reads the key from the address, and its body
+   field is `token`), paste the whole current `apps-script.gs` first, then set the line: this
+   skill speaks only to the current script, and the two refuse each other with `bad token`.
 4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
-   The `/exec` URL stays the same.
+   The `/exec` URL stays the same; if `config.local.json` has no `url` yet, copy it from this
+   dialog into the file and save.
 5. Verify with `bash tracker.sh headers`. A `bad token` answer means the script and the file
-   still disagree, or the new version was not deployed.
+   still disagree, or the new version was not deployed. A `token not set` answer means the
+   deployed script still holds the placeholder: it refuses everything until the TOKEN line is
+   changed.
 
 `config.local.json` is per Mac and never synced, so a second Mac needs the same file: copy it
 across by hand (AirDrop), never through the repository.
@@ -106,7 +112,7 @@ across by hand (AirDrop), never through the repository.
    *Project Name, Date Started, Date Completed, Problem/Goal, My Actions, Outcome/Results,
    When to Check Results, Skills Used, Link*, but always re-read via `headers` in case they change.
    ```
-   bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":"2026-05-20","Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"Claude Code"}'
+   bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":"2026-05-20","Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"TypeScript, Next.js, Supabase/Postgres, session auth"}'
    ```
 6. **Confirm**: the script returns `{"ok":true,"rowNumber":N,"row":[...]}`. Tell the user the
    row was added and summarize what went in. If `ok` is false, surface the `error`.

@@ -3,14 +3,23 @@
  *
  * Deploy: Deploy > New deployment > Web app
  *   Execute as: Me
- *   Who has access: Anyone   (the TOKEN below guards writes)
+ *   Who has access: Anyone   (the TOKEN below guards every request)
  * Copy the resulting /exec URL into the skill's config.local.json.
  *
- * GET  ?token=...                     -> { ok, headers: [...] }
- * POST { token, data: { Header: val } } -> appends a row, returns { ok, rowNumber, row }
+ * Every request is a POST with the key in its BODY, never the address, so Google's request
+ * logs never record it (claude-config#675):
+ *   POST { key, action: "headers" }               -> { ok, headers: [...] }
+ *   POST { key, data: { Header: val } }           -> appends a row, returns { ok, rowNumber, row }
+ * The body field is "key", not "token": the first version of this script read "token", so a
+ * caller written for one version is refused by the other rather than half understood.
+ *
+ * Until TOKEN below is changed from the placeholder, every request is refused: the placeholder
+ * is public, in the repository this file comes from.
  */
 
 const TOKEN = 'REPLACE_WITH_A_LONG_RANDOM_STRING';
+const TOKEN_PLACEHOLDER = 'REPLACE_WITH_A_LONG_RANDOM_STRING';
+const TOKEN_MIN_LENGTH = 32;
 const SHEET_NAME = ''; // leave blank to use the first sheet
 
 function getSheet_() {
@@ -30,10 +39,19 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// Fails closed: a TOKEN never changed from the public placeholder, or too short to be a real
+// one, refuses every request whatever the caller sends.
+function tokenProblem_(given) {
+  if (typeof TOKEN !== 'string' || TOKEN === TOKEN_PLACEHOLDER || TOKEN.length < TOKEN_MIN_LENGTH) {
+    return 'token not set: replace the TOKEN line in this script, then deploy a new version';
+  }
+  if (typeof given !== 'string' || given !== TOKEN) return 'bad token';
+  return '';
+}
+
+// GET carries its parameters in the address, which is logged, so it is refused outright.
 function doGet(e) {
-  const p = (e && e.parameter) || {};
-  if (p.token !== TOKEN) return json_({ ok: false, error: 'bad token' });
-  return json_({ ok: true, headers: headers_(getSheet_()) });
+  return json_({ ok: false, error: 'use POST with the key in the body' });
 }
 
 function doPost(e) {
@@ -43,11 +61,17 @@ function doPost(e) {
   } catch (err) {
     return json_({ ok: false, error: 'bad json' });
   }
-  if (body.token !== TOKEN) return json_({ ok: false, error: 'bad token' });
+  if (!body || typeof body !== 'object') return json_({ ok: false, error: 'bad json' });
+  const problem = tokenProblem_(body.key);
+  if (problem) return json_({ ok: false, error: problem });
 
   const sheet = getSheet_();
   const heads = headers_(sheet);
-  const data = body.data || {};
+  if (body.action === 'headers') return json_({ ok: true, headers: heads });
+  if (!body.data || typeof body.data !== 'object') {
+    return json_({ ok: false, error: 'nothing to append: send action "headers" or a data object' });
+  }
+  const data = body.data;
 
   const norm = function (s) { return String(s).trim().toLowerCase(); };
   const byHeader = {};
