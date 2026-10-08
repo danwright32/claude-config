@@ -6,7 +6,7 @@ noise, and writes one condensed friction_<name>.txt per project to --out.
 
 Usage: extract_friction.py [--days 14] [--min-sessions 3] --out <dir>
 """
-import argparse, glob, json, os, re, time
+import argparse, glob, json, os, re, sys, time
 from datetime import datetime
 
 BASE = os.path.expanduser("~/.claude/projects")
@@ -54,6 +54,8 @@ def discover(cutoff, min_sessions):
 
 
 def condense(name, files, out_dir):
+    """Write one project's friction file. Returns the transcripts that could not be read."""
+    unreadable = []
     out_lines = []
     stats = {"sessions": 0, "user_msgs": 0, "interrupts": 0, "tool_errors": 0}
     for f in files:
@@ -66,8 +68,8 @@ def condense(name, files, out_dir):
                 for line in fh:
                     try:
                         rec = json.loads(line)
-                    except Exception:
-                        continue
+                    except json.JSONDecodeError:
+                        continue  # a torn or partial line; the rest of the transcript still counts
                     if rec.get("isSidechain"):
                         continue
                     ts = (rec.get("timestamp") or "")[:16]
@@ -103,8 +105,9 @@ def condense(name, files, out_dir):
                     n_user += 1
                     stats["user_msgs"] += 1
                     session_lines.append(f"  [{ts}] USER: {clip(t)}")
-        except Exception as e:
+        except OSError as e:
             session_lines.append(f"  READ-ERROR: {e}")
+            unreadable.append((f, e))
         if not session_lines and not err_counts:
             continue
         stats["sessions"] += 1
@@ -124,23 +127,34 @@ def condense(name, files, out_dir):
         fh.write(header)
         fh.write("\n".join(out_lines))
     print(f"{header.strip()} -> {path} ({os.path.getsize(path) // 1024}KB)")
+    return unreadable
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=14)
     ap.add_argument("--min-sessions", type=int, default=3)
     ap.add_argument("--out", required=True)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     cutoff = time.time() - args.days * 86400
     projects = discover(cutoff, args.min_sessions)
     if not projects:
         print("No project transcript dirs matched the window.")
-        return
+        return 0
+    unreadable = []
     for name, files in projects.items():
-        condense(name, files, args.out)
+        unreadable += condense(name, files, args.out)
+    # Every file that could be read is already written. A transcript that could not be is a hole
+    # in the audit, so the run says which and fails rather than reading as complete (#677).
+    if unreadable:
+        print(f"extract_friction: {len(unreadable)} transcript(s) could not be read, so the friction "
+              f"files above are missing their sessions:", file=sys.stderr)
+        for f, e in unreadable:
+            print(f"  {f}: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

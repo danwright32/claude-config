@@ -17,7 +17,7 @@ Files in this folder:
 | `template.html` | The page. Fill every double-brace slot; keep the CSS. |
 | `recommended.json` | Every coffee ever recommended. Read before recommending, append after. |
 | `runs/last-run.json` | What "since last time" is measured against. Written ONLY by `analyze.py --record`; every other invocation leaves it alone. |
-| `test-coffee-profile.sh` | The suite. Run it after any change to `analyze.py`. |
+| `tests/` | The tests. Run them after any change to `analyze.py` (below). |
 
 ## 1. Get the numbers
 
@@ -135,7 +135,7 @@ URL and kind. Never remove or edit an existing entry.
 Run the suite if `analyze.py` was touched:
 
 ```
-bash ~/.claude/skills/coffee-profile/test-coffee-profile.sh
+python3 ~/.claude/hooks/lib/skill-python-tests.py ~/.claude/skills/coffee-profile
 ```
 
 End with the artifact link, the six recommendations, and the one-line

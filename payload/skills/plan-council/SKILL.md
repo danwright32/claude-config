@@ -70,9 +70,9 @@ Build a markdown body (final plan, rival options + scores, overruled dissent, id
 
     bash ~/.claude/skills/plan-council/post-discussion.sh "<owner/name>" "<title>" <body-file> "<milestone title, optional>"
 
-It tries a GitHub Discussion first, then a tracking issue, then a local `PLAN-<slug>.md`, and prints one line: `DISCUSSION <url>`, `ISSUE <url>`, or `FILE <path>`. Tell the user which happened (and, if it fell back, that enabling Discussions on the repo would give a nicer home next time).
+It tries a GitHub Discussion first, then a tracking issue (with a priority, a `planning` label and a milestone), then a `PLAN-<slug>.md` at the project's root, and prints one line: `DISCUSSION <url>`, `ISSUE <url>`, or `FILE <path>`. Tell the user which happened (and, if it fell back, that enabling Discussions on the repo would give a nicer home next time). If it exits non-zero, the plan landed nowhere: say so, with the reason it printed, and that the plan is still in the body file.
 
-If it fell back to an issue and also printed `NO-MILESTONE <url> ...`, that issue has no milestone yet, because the plan's milestone does not exist until step 5. **Carry that URL to step 5 and attach it there.** Do not leave it orphaned.
+If it fell back to an issue and also printed `MILESTONE-PENDING <url> ...`, that issue is waiting in the catch-all milestone `Ungrouped`, because the plan's milestone does not exist until step 5. **Carry that URL to step 5 and move it there.**
 
 ## 4. Present + decide  (user)
 Open with any CAVEATS before the summary: the user must never mistake a partly-checked plan for a clean one:
@@ -97,7 +97,7 @@ Once the plan is approved, offer to turn it into a GitHub milestone with one iss
        bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>             # create
 
 3. Relay the milestone URL it prints. Same helper backs `/plan-lite` and `/milestone`, so milestones look identical across all three paths. The helper reuses an existing milestone with that title rather than creating a second one, and stops to ask if the title closely resembles an open milestone.
-4. If step 3 printed `NO-MILESTONE <url>`, adopt that tracking issue into the milestone now, so the plan record lives with the work it describes:
+4. If step 3 printed `MILESTONE-PENDING <url>`, move that tracking issue into the milestone now, so the plan record lives with the work it describes:
 
        gh issue edit <url> --milestone "<milestone title>"
 

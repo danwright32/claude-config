@@ -685,6 +685,14 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
+need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
+through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's alone:
+`python3 payload/hooks/lib/skill-python-tests.py payload/skills/<skill>`. Beside it,
+`test-skill-integrity.sh` fails on a relative link in a skill's markdown that reaches no file and on
+a file shaped like a test that nothing runs, and `test-skill-helper-exits.sh` on a skill helper that
+can report success when it failed (claude-config#676, #677).
+
 ### Proving a check would notice
 
 A guard is only real once it has been seen to fail. That was done by hand here, by editing a
