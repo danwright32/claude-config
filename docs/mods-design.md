@@ -914,7 +914,12 @@ changing it:
   issue released `free` on purpose is judged against its branch and pull request afresh.
 - Every wait on GitHub (each `gh` call, or the injected source) has a deadline,
   `SLEEP_GH_TIMEOUT` (60 seconds), and the worktree's fetch has `SLEEP_FETCH_TIMEOUT` (120): a hung
-  read refuses the queue or gives the issue back, and its whole process group is stopped.
+  read refuses the queue or gives the issue back, and its whole process group is stopped. The
+  suite's hang checks give their stand-ins a 2 second deadline, and on a busy machine a stand-in
+  may not have started by then, so each names the file its stand-in writes on starting
+  (`SLEEP_DEADLINE_FROM`, #950) and the deadline counts from that file appearing. Unset, as on a
+  real night, nothing changes; a command that never writes it has its deadline armed after
+  `SLEEP_DEADLINE_FROM_WAIT` seconds (20), saying so.
 - Unanswered before bed questions are read from `~/.claude/state/sleep/unanswered/GENERATION`, one
   `owner/repo#N` a line, which phase 6 (#836) writes.
 - Claims differ from the plan's wording in one way: the plan said a directory holding the session
