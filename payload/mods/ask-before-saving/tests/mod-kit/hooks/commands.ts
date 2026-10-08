@@ -89,8 +89,9 @@ type Heredoc = { at: number; body: string; quoted: boolean }
 // (#698). <<- takes the leading tabs off its body, as the shell does. A heredoc that never ends is
 // given as `unended` too, its body to the end of the text, since the shell still reads that body
 // (and expands it, unless its delimiter was quoted) as well as its lines being read as commands here
-// (#965). The write reader reads what the shell runs inside each body (writes.ts).
-export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; unended?: Omit<Heredoc, 'at'> } => {
+// (#965). What the shell runs inside each body is read by readLine (#974), so the unended one says
+// where its << stands too.
+export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; unended?: Heredoc } => {
   const out: string[] = []
   const heredocs: Heredoc[] = []
   const open: { end: string; tabs: boolean; at: number; quoted: boolean }[] = []
@@ -120,7 +121,7 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
     offset += line.length + 1
   }
   const h = open[0]
-  return { text: [...out, ...unended].join('\n'), heredocs, ...(h ? { unended: { body: body.join('\n'), quoted: h.quoted } } : {}) }
+  return { text: [...out, ...unended].join('\n'), heredocs, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted } } : {}) }
 }
 
 // Words, split on separators outside quotes. A quoted script spanning lines stays one word. Each
@@ -522,7 +523,7 @@ const printfText = (args: readonly string[]): string | undefined => {
  * runs instead, and what the program can do. `xargs` marks a command xargs runs, giving it
  * operands from its own input that no word names; `found` the folders find starts from, on a
  * command its -exec runs, whose {} this reader writes as one of them and stands for everything
- * under it.
+ * under it. `substitution` marks a command the shell runs inside a command substitution (#974).
  */
 export type Command = {
   words: string[]
@@ -534,7 +535,15 @@ export type Command = {
   program?: Program
   script?: Script
   verdict?: CodeVerdict
+  substitution?: true
 }
+
+/**
+ * A command line as readLine reads it: each command, and in its place the commands of each
+ * substitution the shell runs (`sub`), kept together so a reader that scopes what happens inside one
+ * (the write reader: a cd inside one ends with it) can tell where it ends. `pipeline` flattens it.
+ */
+export type Line = (Command | { sub: Line })[]
 
 // What feeds the commands of one read: the command a | feeds them from, what is on their standard
 // input, and whether xargs runs them, each given to every command no | of its own feeds.
@@ -562,13 +571,13 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // each reading what feeds the shell (#730: a heredoc or here-string feeding a -c), unless the shell
 // reads its script there, when what they read is the rest of that script. What a find -exec runs
 // is read after it, as a command of its own.
-const emit = (words: string[], fed: Fed, feed: Feed, out: Command[], opts: ReadOptions) => {
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
   if (kind === 'shell' && program && 'text' in program) {
     const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
-    out.push(...pipeline(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: feed.found } : {}) }))
+    out.push(...readLine(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: feed.found } : {}) }))
     // The shell's own output redirects send everything its script prints to a file, which the
     // script's commands never name (#760: `bash -c 'make' > build.log` wrote a build.log no reader
     // saw). They are given as a command of their own, the shell and those redirects, so every
@@ -604,17 +613,45 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Command[], opts: ReadO
 
 /**
  * Each simple command a Bash call would run, with what a pipe feeds it, the body of each heredoc
- * that feeds it, and what it runs, if anything. A heredoc inside a word ("$(cat <<'EOF' ... )")
- * feeds no command here, and one that never ends has no body: its lines are read as commands.
- * `opts` asks for more than the commands that run (ReadOptions); `outer` is what feeds the commands
- * of a shell's script, read as the commands it runs.
+ * that feeds it, and what it runs, if anything, as `readLine` reads them, flattened: the commands of
+ * each command substitution the shell runs (#974) come before the command they sit in, each marked
+ * `substitution`. A heredoc inside a word ("$(cat <<'EOF' ... )") feeds the command inside the
+ * substitution, never the one the word is in, and one that never ends has no body: its lines are
+ * read as commands. `opts` asks for more than the commands that run (ReadOptions).
  */
-export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}): Command[] => {
-  const out: Command[] = []
-  const { text, heredocs } = dropHeredocs(cmd)
+export const pipeline = (cmd: string, opts: ReadOptions = {}): Command[] => flatten(readLine(cmd, opts))
+const flatten = (line: Line, inside = false): Command[] => line.flatMap(c => ('sub' in c ? flatten(c.sub, true) : [inside ? { ...c, substitution: true as const } : c]))
+
+/**
+ * A command line read as its commands, each command substitution the shell runs in it given in its
+ * place as the commands it runs (Line), read as a command line of its own, so one nested inside it
+ * is read too (#974). The shell runs a substitution before the command it sits in: one in the
+ * command's words (never inside single quotes, $'...' or a comment), and one in the body of a
+ * heredoc feeding it whose delimiter is unquoted, a body that never ends included (#965). A
+ * substitution reads what the line's own commands are fed from outside it. `outer` is what feeds
+ * the commands of a shell's script, read as the commands it runs.
+ */
+export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}): Line => {
+  const out: Line = []
+  const { text, heredocs, unended } = dropHeredocs(cmd)
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   const read = split(text)
   const begun = read.map(r => begins(r.words, r.starts))
+  // Each substitution, by the command it sits in: the last one starting at or before it.
+  const ran = new Map<number, string[]>()
+  const place = (at: number, sub: string) => {
+    let k = 0
+    read.forEach((r, j) => {
+      if ((r.starts[0] ?? 0) <= at) k = j
+    })
+    ran.set(k, [...(ran.get(k) ?? []), sub])
+  }
+  for (const s of substitutions(text, false)) place(s.at, s.text)
+  for (const h of [...heredocs, ...(unended ? [unended] : [])]) if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, s.text)
+  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}) }
+  const runSubs = (k: number) => {
+    for (const s of ran.get(k) ?? []) out.push({ sub: readLine(s, opts, subFeed) })
+  }
   const fedOf = (b: Begun): Fed => {
     const fed: Fed = []
     // The last redirect onto standard input is what the command reads there, as in the shell: a
@@ -636,6 +673,7 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     return fed
   }
   read.forEach((r, k) => {
+    runSubs(k)
     const b = begun[k] as Begun
     if (b.words.length === 0) {
       // A command that only sets variables runs nothing, so it is no command, unless the reader
@@ -655,6 +693,112 @@ export const pipeline = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     if (outer.found) feed = { ...feed, found: outer.found }
     emit(b.words, fedOf(b), feed, out, opts)
   })
+  return out
+}
+
+// Command substitutions (#965, #974). The shell runs the commands inside a $(...) or backticks
+// before the command they sit in, and in a heredoc whose delimiter is not quoted, before the program
+// fed that body starts: so `python3 - <<EOF` whose body held `$(cat rules.md >> ~/.claude/CLAUDE.md)`
+// wrote lasting memory, and `echo $(git push)` pushed, while the reader, which drops a heredoc's
+// body as text and kept a substitution inside the word it is in, gave neither.
+
+// Where the ) closing a $( whose text starts at `from` stands, read as the shell reads that text: a
+// quote, a backslash, a backtick or a comment holds a ) that closes nothing. -1 when none closes
+// it, the text ending first. A case pattern's ) is taken for the close (`$(case x in a) ...)`): the
+// text after it is not read as run.
+const closing = (text: string, from: number): number => {
+  let depth = 1
+  for (let i = from; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '\\') i++
+    else if (c === "'") {
+      i = text.indexOf("'", i + 1)
+      if (i < 0) return -1
+    } else if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) {
+        if (text[i] === '\\') i++
+        else if (text[i] === '`') i = tickEnd(text, i + 1)
+        else if (text[i] === '$' && text[i + 1] === '(') i = closing(text, i + 2)
+        if (i < 0) return -1
+      }
+      if (i >= text.length) return -1
+    } else if (c === '`') {
+      i = tickEnd(text, i + 1)
+      if (i < 0) return -1
+    } else if (c === '#' && commentAt(text, i, from)) {
+      i = text.indexOf('\n', i)
+      if (i < 0) return -1
+    } else if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return i
+  }
+  return -1
+}
+// Where the backtick closing one whose text starts at `from` stands, -1 when none does.
+const tickEnd = (text: string, from: number): number => {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === '\\') i++
+    else if (text[i] === '`') return i
+  }
+  return -1
+}
+// A # begins a comment only where a word would begin.
+const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|()]/.test(text[i - 1] as string)
+
+/**
+ * Each command substitution the shell runs in `text`: its text and where its $ or backtick stands,
+ * outermost only (each is read as a command line of its own, which reads any inside it). In a
+ * heredoc's body (`body`) a quote is text and only a backslash before $, a backtick or a backslash
+ * escapes it; elsewhere nothing inside single quotes, $'...' or a comment runs. A $(( closed by ))
+ * is arithmetic, which runs only the substitutions inside it; one closed otherwise is a command. A
+ * substitution never closed, its body ending early, is read to the end of the text, the side that
+ * asks rather than passes. Inside backticks a backslash before $, a backtick or a backslash stands
+ * for that character.
+ */
+export const substitutions = (text: string, body: boolean): { text: string; at: number }[] => {
+  const out: { text: string; at: number }[] = []
+  let quoted = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (!body && !quoted) {
+      if (c === "'" || (c === '$' && text[i + 1] === "'")) {
+        // $'...' takes a backslash escape inside; '...' takes none.
+        const ansi = c === '$'
+        let j = ansi ? i + 2 : i + 1
+        for (; j < text.length && text[j] !== "'"; j++) if (ansi && text[j] === '\\') j++
+        i = j
+        continue
+      }
+      if (c === '#' && commentAt(text, i)) {
+        const nl = text.indexOf('\n', i)
+        i = nl < 0 ? text.length : nl
+        continue
+      }
+    }
+    if (!body && c === '"') {
+      quoted = !quoted
+      continue
+    }
+    if (c === '$' && text[i + 1] === '(') {
+      const inner = text[i + 2] === '(' ? closing(text, i + 3) : -1
+      if (inner >= 0 && text[inner + 1] === ')') {
+        const from = i + 3
+        out.push(...substitutions(text.slice(from, inner), false).map(s => ({ text: s.text, at: from + s.at })))
+        i = inner + 1
+        continue
+      }
+      const end = closing(text, i + 2)
+      out.push({ text: text.slice(i + 2, end < 0 ? text.length : end), at: i })
+      i = end < 0 ? text.length : end
+    } else if (c === '`') {
+      const end = tickEnd(text, i + 1)
+      out.push({ text: text.slice(i + 1, end < 0 ? text.length : end).replace(/\\([$`\\])/g, '$1'), at: i })
+      i = end < 0 ? text.length : end
+    }
+  }
   return out
 }
 

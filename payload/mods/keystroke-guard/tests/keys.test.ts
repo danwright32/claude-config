@@ -92,3 +92,29 @@ describe('judge', () => {
     expect(judge(base)).toBeUndefined()
   })
 })
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so synthetic input sent from inside $(...) or backticks is classified as it is on the command line.
+// Each command below is classified by what mod-kit's reader gives for it, written out here (a mod
+// cannot import another mod's files) and held to the real reader by mod-kit's commands.test.ts
+// ("the readings other guards' tests take as given"). Quoted, it is text.
+const TYPED = `${SYS}${KEY} "n"`
+const READ_974 = new Map<string, string[][]>([
+  [`x=$(osascript -e '${TYPED}')`, [['osascript', '-e', TYPED], ['-e', `${TYPED})`]]],
+  ['echo "`cliclick c:100,200`"', [['cliclick', 'c:100,200'], ['echo', '`cliclick c:100,200`']]],
+  ["cat <<EOF\n$(open -a 'Google Chrome' report.html)\nEOF", [['open', '-a', 'Google Chrome', 'report.html'], ['cat', '<<EOF']]],
+  ["echo '$(cliclick c:100,200)'", [['echo', '$(cliclick c:100,200)']]],
+  ["cat <<'EOF'\n`cliclick c:100,200`\nEOF", [['cat', '<<EOF']]],
+])
+describe('a command substitution, as mod-kit reads it (#974)', () => {
+  const kind = (raw: string) => classify(READ_974.get(raw) as string[][], raw).kind
+  test('what a substitution runs is classified as a command of its own', () => {
+    expect(kind(`x=$(osascript -e '${TYPED}')`)).toBe('input')
+    expect(kind('echo "`cliclick c:100,200`"')).toBe('input')
+    expect(kind(`cat <<EOF\n$(open -a 'Google Chrome' report.html)\nEOF`)).toBe('focus')
+  })
+  test('in single quotes or a quoted heredoc it is text', () => {
+    expect(kind("echo '$(cliclick c:100,200)'")).toBe('none')
+    expect(kind("cat <<'EOF'\n`cliclick c:100,200`\nEOF")).toBe('none')
+  })
+})

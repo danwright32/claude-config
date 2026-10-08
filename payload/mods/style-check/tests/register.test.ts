@@ -3,29 +3,35 @@ import type { On, Register } from 'claude-code'
 
 // A stand-in for mod-kit: an inline plugin cannot reach this file's variables, so it reports each
 // card as a transcript line the world collects.
-// Its command reader is a small stand-in for the real one (a mod cannot import another mod's
-// files), enough for the commands below; the real reader is tested in mod-kit.
+// Its command reader asks the world (`__modkit`), which answers with a small stand-in for the real
+// reader, enough for most commands below; where what the real reader gives matters (#974), a test
+// gives the world that reading, written out (a mod cannot import another mod's files) and held to
+// the real reader by mod-kit's commands.test.ts ("the readings other guards' tests take as given").
+const standIn = (cmd: string): string[][] =>
+  cmd
+    .split(/&&|;|\n/)
+    .map(part => {
+      const words: string[] = []
+      // A word may mix bare and quoted parts (X="a b" is one word), as the shell's are.
+      for (const m of part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)) words.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
+      while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) words.shift()
+      return words
+    })
+    .filter(w => w.length > 0)
 const kit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
-    const read = (cmd: string): string[][] =>
-      cmd
-        .split(/&&|;|\n/)
-        .map(part => {
-          const words: string[] = []
-          // A word may mix bare and quoted parts (X="a b" is one word), as the shell's are.
-          for (const m of part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)) words.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
-          while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) words.shift()
-          return words
-        })
-        .filter(w => w.length > 0)
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       return {
         ...built,
         modkit: {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
-          commands: async ({ command }: { command: string }) => read(command),
+          commands: async (input: { command: string }) => {
+            const r = await built.process.run(['__modkit', 'commands', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
           // A stand-in for mod-kit's git reader, enough for the commands below.
           git: async ({ words }: { words: string[] }) => {
             if ((words[0] ?? '').split('/').pop() !== 'git') return undefined
@@ -65,7 +71,7 @@ const BAD = `const label = "Loading ${DASH} please wait"`
 
 type Run = { argv: readonly string[]; stdin: string }
 
-const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown> } = {}) => {
+const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown>; reads?: ReadonlyMap<string, string[][]> } = {}) => {
   const runs: Run[] = []
   const reached: string[] = []
   const toasts: string[] = []
@@ -75,6 +81,14 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Rec
   mock.env(on, { HOME: '/Users/x' })
   mock.store(on, opts.store ?? {})
   on('process.run', ($, e) => {
+    // The kit's command reader asking: answered, and never counted as a run of the scanner.
+    if (e.argv[0] === '__modkit') {
+      const { command } = JSON.parse(e.argv[2] as string) as { command: string }
+      // A test giving readings has one for every command it runs, never the stand-in's (L143).
+      const read = opts.reads ? opts.reads.get(command) : standIn(command)
+      if (!read) return { value: { exitCode: 1, stdout: '', stderr: `no reading given for ${command}`, isStdoutTruncated: false, isStderrTruncated: false } }
+      return { value: { exitCode: 0, stdout: JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const stdin = e.init?.stdin ?? ''
     runs.push({ argv: e.argv, stdin })
     if (opts.scanner === 'crash') {
@@ -189,6 +203,28 @@ test('a gh issue comment read from a body file is judged', withKit, async ($, on
   const w = world(on, { files: { '/tmp/b.md': `note ${DASH}\n` } })
   await $.tool.call({ tool: 'Bash', command: 'gh issue comment 12 --body-file /tmp/b.md' } as never)
   expect(w.reached).not.toContain('Bash')
+})
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so a commit inside $(...) or backticks has its message judged as one on the command line does.
+// Quoted, the commit is text: no message command runs, and nothing is scanned.
+const FIX = `Fix ${DASH} again`
+const READ_974 = new Map<string, string[][]>([
+  [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX], ['commit', '-m', `${FIX})`]]],
+  ['echo "made `git commit -F /tmp/msg.txt`"', [['git', 'commit', '-F', '/tmp/msg.txt'], ['echo', 'made `git commit -F /tmp/msg.txt`']]],
+  [`cat <<EOF\n$(git commit -m "${FIX}")\nEOF`, [['git', 'commit', '-m', FIX], ['cat', '<<EOF']]],
+  [`echo '$(git commit -m "${FIX}")'`, [['echo', `$(git commit -m "${FIX}")`]]],
+  [`cat <<'EOF'\n\`git commit -m "${FIX}"\`\nEOF`, [['cat', '<<EOF']]],
+])
+test('a commit a command substitution runs is judged; quoted, it is text (#974)', withKit, async ($, on) => {
+  const w = world(on, { files: { '/tmp/msg.txt': `Subject ${DASH} body\n` }, reads: READ_974 })
+  const [judged, text] = [[...READ_974.keys()].slice(0, 3), [...READ_974.keys()].slice(3)]
+  for (const command of judged) {
+    expect(`${command}: ${refused(await $.tool.call({ tool: 'Bash', command } as never))}`).toContain('Blocked: this text has a dash or emoji')
+  }
+  expect(w.reached).toEqual([])
+  for (const command of text) await $.tool.call({ tool: 'Bash', command } as never)
+  expect(w.reached).toEqual(['Bash', 'Bash'])
 })
 
 test('an ordinary command is not scanned at all', withKit, async ($, on) => {
