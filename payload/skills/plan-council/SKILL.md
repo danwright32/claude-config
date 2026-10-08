@@ -57,11 +57,18 @@ It prints one line, the absolute path of an exact copy of the script, and refuse
         roles: [ { key: "architect", brief: "…" }, { key: "backend", brief: "…" } ],
         projectDir: "<absolute path to the repo>",
         repo: "<owner/name>",
-        lessonIndexFiles: [ "<every file `ls ~/.claude/LESSONS-INDEX-*.md` lists>" ]
+        lessonIndexFiles: [ "<every file `ls ~/.claude/LESSONS-INDEX-*.md` lists>" ],
+        usesSupabase: <true or false from uses-supabase.sh, below; omitted when it could not tell>
       }
     }
 
 Pass that printed path exactly as it is: the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`.
+
+Before the call, find out whether the project uses Supabase, so the preflight probes the schema only where there is one:
+
+    bash ~/.claude/skills/plan-council/uses-supabase.sh "<absolute path to the repo>"; echo "exit $?"
+
+Add `usesSupabase: true` to the args on exit 0, `usesSupabase: false` on exit 1, and leave it out on exit 2 (it could not tell, so the preflight probes as it always did). On `false` the workflow skips the schema probe and reports the schema as `not-applicable` rather than unreachable.
 
 It starts with a **preflight** that confirms it can actually reach your code and database, then runs with real independent subagents: independent first-passes → distill to 2-3 rival whole options → champion + red-team each → score against the criteria and pick the survivor → synthesize the winner (grafting the runner-up's best ideas, recording overruled dissent and the ideal-vs-doable gap) → **reality-check** against the actual codebase/schema, alongside a **lessons audit** that reads every `~/.claude/LESSONS-INDEX-*.md` file (never the full `LESSONS.md`, too large to read whole), looks up the full entry of any lesson it cites, and flags anywhere the plan repeats a mistake already paid for on a past project → **fix-and-reverify**: if either check finds a problem (a broken file path, or a design that repeats a recorded defect), it corrects the plan *inline* and re-runs both checks (up to 2 rounds), so the plan you read carries neither known-wrong citations nor known-bad designs. The rival options always span a **cost spread** (at least one free/cheapest; a paid option only when clearly better), and every product / scope / cost trade-off, including free-vs-paid: is **escalated to you, not locked by the panel**. It returns `{ plan, selection, options, advocacy, realityCheck, lessonsAudit, preflight, rcRounds, … }`.
 
@@ -81,7 +88,7 @@ Open with any CAVEATS before the summary: the user must never mistake a partly-c
   - `violations` non-empty after the fix rounds → LEAD with them, each with its lesson id and the part of the plan at fault. These are mistakes already paid for on a past project, so they are not stylistic notes.
   - `verdict: "could-not-audit"`, or `indexFilesRead` missing any file you passed in `lessonIndexFiles`, or `lessonsSeen: 0` → say plainly that the plan was **never checked** against the lessons. Unaudited is not clean, and it must never be reported as "no issues found".
   - Clean audit → one line saying it was checked against the recorded lessons and how many were considered. Do not inflate this into a guarantee.
-- **Check grounding next:** if `preflight` reported `repoReadable:false` or `schemaReachable:false`, lead with that too, warn the user the plan may be partly ungrounded and name the unreachable source (e.g. "Supabase wasn't connected for this project, so the data parts are best-effort"). A confident plan built blind is the main risk.
+- **Check grounding next:** if `preflight` reported `repoReadable:false`, or its `schemaState` is `unreachable` or `unverified`, lead with that too, warn the user the plan may be partly ungrounded and name the unreachable source (e.g. "Supabase wasn't connected for this project, so the data parts are best-effort"). A confident plan built blind is the main risk. A `schemaState` of `not-applicable` means the project does not use Supabase: say nothing about the schema then, because it is not a gap. A `preflight` of `null` means the probe never ran, so neither the code nor the schema was confirmed reachable: say that.
 - Give a plain-language summary: the recommended plan, why it won over the alternatives, the ideal-vs-doable gap, and the reality-check verdict, especially anything the reality-check found **broken**.
 - If the workflow returned **escalatedDecisions** (genuine values trade-offs only the user should make), present them with **AskUserQuestion**, never bury them in prose.
 - Link the GitHub Discussion (or note the fallback artifact).

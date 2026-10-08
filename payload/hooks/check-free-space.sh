@@ -63,7 +63,24 @@
 #   FREE_SPACE_RECOVERY_GB    a rise larger than this means the disk recovered, so no rate
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 #   FREE_SPACE_SYMBOL_CACHE   the macOS symbol cache folder to look for (default the real one)
+#
+# ONE ARGUMENT, --report (claude-config#683). The disk-full skill's rate step reads this check
+# rather than measuring a rate a second way: its own copy used awk strftime, which macOS awk does
+# not have, and a five minute foreground sleep the Bash tool refuses. Without --report a disk with
+# room prints nothing, which is right for a warning run on every prompt and useless to somebody
+# triaging. With it, every verdict says how much is left and then either the rate or exactly why
+# there is none (first reading, span too short, a recovery, not falling). The exit codes are the
+# same four either way. Anything else on the command line is refused rather than ignored, because a
+# mistyped flag would otherwise run the quiet mode and read as a report with nothing in it (L320).
 set -uo pipefail
+
+REPORT=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --report) REPORT=1 ;;
+    *) echo "claude-sync: check-free-space.sh does not know the argument '$_arg' (the only one is --report), so it measured nothing."; exit 2 ;;
+  esac
+done
 
 GIB=$((1024 * 1024 * 1024))
 
@@ -195,12 +212,20 @@ EOF
 
 # The other end of the span is the start of the current segment: the oldest reading when nothing
 # recovered, the reading the disk recovered TO when something did.
-if [ "$recovered" -eq 1 ] && [ "$seg_n" -lt 3 ]; then
+# Why no rate is stated, kept for --report, which owes the reader the reason (L540: an absent
+# answer carries a measured reason, never membership by failing to match the good case).
+no_rate_clause=""
+if [ -z "$kept" ]; then
   oldest_t=""
+  no_rate_clause=" No rate yet: this is the first reading in the last $WINDOW_HOURS hour(s), so there is nothing to compare it with."
+elif [ "$recovered" -eq 1 ] && [ "$seg_n" -lt 3 ]; then
+  oldest_t=""
+  no_rate_clause=" No rate: free space went back up by more than $RECOVERY_GB GB within the last $WINDOW_HOURS hour(s), which is space being given back, and too few readings have been taken since then to state a trend."
 elif [ -n "$seg_t" ] && [ "$seg_t" -lt "$now" ]; then
   oldest_t="$seg_t"; oldest_b="$seg_b"
 else
   oldest_t=""
+  no_rate_clause=" No rate: there is no earlier reading to compare with."
 fi
 
 # ---------- the rate, when there is one worth stating ----------
@@ -209,6 +234,11 @@ falling_fast=0
 if [ -n "$oldest_t" ]; then
   span=$((now - oldest_t))
   fall=$((oldest_b - free_bytes))
+  if [ "$span" -lt $((MIN_SPAN_MIN * 60)) ]; then
+    no_rate_clause=" No rate yet: the readings span only $((span / 60)) minute(s), and a rate is stated only over at least $MIN_SPAN_MIN minutes."
+  elif [ "$fall" -le 0 ]; then
+    no_rate_clause=" It is not falling: there is as much free space now as there was $((span / 60)) minute(s) ago, or more."
+  fi
   if [ "$span" -ge $((MIN_SPAN_MIN * 60)) ] && [ "$fall" -gt 0 ]; then
     rate_gb=$(( (fall * 3600 / span) / GIB ))
     # Seconds rather than hours, so a fall that empties the disk inside an hour is not rounded down
@@ -253,8 +283,12 @@ symbol_cache_note(){
   echo '```'
 }
 
+# The reason there is no rate is said only under --report. The prompt warning keeps the sentence it
+# always had, so a notice on every prompt does not grow a clause nobody asked for.
+[ "$REPORT" -eq 1 ] || no_rate_clause=""
+
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
-  echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause Nothing here says what is using it."
+  echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause$no_rate_clause Nothing here says what is using it."
   symbol_cache_note
   exit 3
 fi
@@ -265,4 +299,7 @@ if [ "$falling_fast" -eq 1 ]; then
   exit 4
 fi
 
+if [ "$REPORT" -eq 1 ]; then
+  echo "claude-sync: $free_gb GB free on $VOLUME, above the $FLOOR_GB GB floor.$rate_clause$no_rate_clause"
+fi
 exit 0
