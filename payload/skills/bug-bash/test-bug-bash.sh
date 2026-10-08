@@ -367,14 +367,467 @@ expect "a proxy address the launcher would refuse is refused by the guard" 7 "no
 # The guard holds no copy of the proxy's health path or answer: it asks the launcher (L370).
 ! grep -Eq '__bug-bash-proxy__|bug-bash-read-only' "$GUARD" && ok || bad "target-guard.sh holds no copy of the proxy's health path or answer"
 : > "$TMP/proxy/requests.log"
+# A deployment also needs the egress rule, which only a proxy started for it (--egress, in the
+# _bugbash group) can stand behind; this one was not, so the run is refused before any rule is
+# loaded. The run that is allowed is driven in the egress section below.
 out="$(bash "$GUARD" --read-only --proxy "$PROXY" "https://app.example.com/" 2>&1)"; rc=$?
-expect "a deployed site with read only is allowed behind the proxy" 0 "^READ-ONLY https://app.example.com/ via $PROXY" "$rc" "$out"
+expect "a deployed site behind a proxy not started for a deployment is refused" 8 "--egress" "$rc" "$out"
 out="$(BUG_BASH_PROXY="$PROXY" bash "$GUARD" --read-only "https://app.example.com/" 2>&1)"; rc=$?
-expect "the proxy can be named by BUG_BASH_PROXY" 0 "^READ-ONLY https://app.example.com/ via $PROXY" "$rc" "$out"
+expect "the proxy named by BUG_BASH_PROXY is the one judged" 8 "proxy at $PROXY was not started" "$rc" "$out"
 # The guard's own check went only to the probe name, which resolves nowhere, and was refused there.
 probe_log="$(cat "$TMP/proxy/requests.log" 2>/dev/null)"
 grep -q '^REFUSED POST http://bug-bash-probe.invalid/write$' <<< "$probe_log" && ! grep -q 'example.com' <<< "$probe_log" && ok \
   || bad "the guard's write probe goes only to a name that resolves nowhere, and is refused" "$probe_log"
+
+# ---------------------------------------------------------------- the egress rule (#813)
+# A read only run against a deployment also keeps every OTHER browser on this Mac off the target:
+# a pf rule, in an anchor of its own, refuses every connection to the target's addresses that does
+# not come from the _bugbash group the read only proxy runs in. Driven here only through a stand in
+# sudo and a stand in pfctl (L2): the stand in sudo runs nothing as root, refuses to run at all as
+# root, and grants only what the real sudoers entry grants. app.example.com is made to resolve to
+# this machine by a stub on node's resolver, so nothing here reaches a real site.
+EGRESS="$DIR/egress.sh"
+HELPER_SRC="$DIR/egress-helper.sh"
+ANCHOR='com.apple/000.bug-bash-read-only'
+FAKE="$TMP/fakepf"
+mkdir -p "$FAKE/bin" "$FAKE/state"
+cat > "$FAKE/bin/sudo" <<'SH'
+#!/bin/bash
+# A stand in for sudo: it escalates nothing, and refuses whatever the real grant would not allow.
+FAKE="$(cd "$(dirname "$0")/.." && pwd)"
+printf 'sudo %s\n' "$*" >> "$FAKE/sudo.calls"
+[ "$(id -u)" != 0 ] || { echo "stand in sudo: refusing to run as root, where the helper would reach the real pfctl" >&2; exit 70; }
+[ -e "$FAKE/knob-sudo-refuses" ] && { echo "sudo: a password is required" >&2; exit 1; }
+[ "${1:-}" = -n ] || { echo "stand in sudo: called without -n, which would prompt" >&2; exit 64; }
+shift
+if [ "${1:-}" = -g ]; then
+  [ "${2:-}" = _bugbash ] || { echo "stand in sudo: group ${2:-} is not granted" >&2; exit 1; }
+  shift 2
+  # The group switch is simulated: a process started "in" the group reports the group's id, and the
+  # stand in packet filter lets it through.
+  if [ "$*" = "id -g" ] && [ -e "$FAKE/knob-exempt-gid" ]; then cat "$FAKE/knob-exempt-gid"; exit 0; fi
+  FAKE_IN_GROUP=1 exec "$@"
+fi
+[ "${1:-}" = /usr/local/libexec/bug-bash-egress ] || { echo "stand in sudo: ${1:-nothing} is not granted" >&2; exit 1; }
+shift
+BUG_BASH_EGRESS_PFCTL="$FAKE/bin/pfctl" BUG_BASH_EGRESS_STATE="$FAKE/state" exec bash "$FAKE/helper" "$@"
+SH
+cat > "$FAKE/bin/pfctl" <<'SH'
+#!/bin/bash
+# A stand in for pfctl, holding one anchor's rules in a file and printing them back as pfctl does:
+# one line per protocol and port, the group by number.
+FAKE="$(cd "$(dirname "$0")/.." && pwd)"
+printf 'pfctl %s\n' "$*" >> "$FAKE/pfctl.calls"
+anchor="" file="" flush="" show="" tcmd="" token="" enable=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -a) anchor="$2"; shift 2 ;;
+    -f) file="$2"; shift 2 ;;
+    -F) flush="$2"; shift 2 ;;
+    -s) show="$2"; shift 2 ;;
+    -t) shift 2 ;;
+    -T) tcmd="$2"; shift 2 ;;
+    -E) enable=1; shift ;;
+    -X) token="$2"; shift 2 ;;
+    *) echo "stand in pfctl: unknown argument $1" >&2; exit 64 ;;
+  esac
+done
+conf="$FAKE/anchor.conf"
+gid="$(cat "$FAKE/knob-pf-gid" 2>/dev/null || id -g)"
+if [ "$enable" = 1 ]; then
+  [ -e "$FAKE/knob-no-token" ] && { echo "pfctl: DIOCSTARTREF: Operation not permitted" >&2; exit 1; }
+  echo 4242 > "$FAKE/enabled"
+  printf 'No ALTQ support in kernel\nALTQ related functions disabled\npf enabled\nToken : 4242\n' >&2
+  exit 0
+fi
+if [ -n "$token" ]; then
+  [ "$token" = 4242 ] && rm -f "$FAKE/enabled"
+  echo "disable request successful" >&2
+  exit 0
+fi
+# The anchor's rules and its address table are held apart, as pf holds them, so a flush of one
+# leaves the other.
+table="$FAKE/anchor.table"
+if [ -n "$file" ]; then
+  [ -n "$anchor" ] || exit 0
+  # Hangs until killed, recording the helper that called it, so the suite can kill a helper while
+  # it holds the lock.
+  if [ -e "$FAKE/knob-hang-load" ]; then
+    for p in "$PPID" "$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')"; do
+      grep -q "$FAKE/helper" <<< "$(ps -o command= -p "$p" 2>/dev/null)" && echo "$p" >> "$FAKE/hang.pids"
+    done
+    echo $$ >> "$FAKE/hang.pids"
+    touch "$FAKE/hung"
+    sleep 30
+    exit 1
+  fi
+  # A load that takes a while, and records it when two are ever inside at once.
+  if [ -e "$FAKE/knob-slow-load" ]; then
+    mkdir "$FAKE/inside" 2>/dev/null || echo OVERLAP >> "$FAKE/overlap"
+    touch "$FAKE/entered"
+    sleep 1
+    rmdir "$FAKE/inside" 2>/dev/null
+  fi
+  [ -e "$FAKE/knob-load-fails" ] && { echo "pfctl: unknown group _bugbash" >&2; exit 1; }
+  sed -n 's/^table <[^>]*> const { \(.*\) }$/\1/p' "$file" | tr -d ',' | tr ' ' '\n' | sed '/^$/d' > "$table"
+  # Fails after the table is in, before the rule.
+  [ -e "$FAKE/knob-load-fails-partway" ] && { echo "pfctl: rule expands to no valid combination" >&2; exit 1; }
+  cp "$file" "$conf"
+  exit 0
+fi
+if [ -n "$flush" ]; then
+  # A flush pfctl answers with an error and leaves the rule where it was.
+  [ -e "$FAKE/knob-flush-fails" ] && [ "$flush" = rules ] && { echo "pfctl: DIOCXBEGIN: Device busy" >&2; exit 1; }
+  if [ -n "$anchor" ]; then
+    case "$flush" in
+      rules) rm -f "$conf" ;;
+      Tables) rm -f "$table" ;;
+      *) rm -f "$conf" "$table" ;;
+    esac
+  fi
+  exit 0
+fi
+case "$show" in
+  info) if [ -e "$FAKE/enabled" ]; then echo "Status: Enabled for 0 days 00:00:01"; else echo "Status: Disabled"; fi; exit 0 ;;
+  rules)
+    if [ -z "$anchor" ]; then [ -e "$FAKE/knob-unanchored" ] || echo 'anchor "com.apple/*" all'; exit 0; fi
+    [ -f "$conf" ] || exit 0
+    ports="$(sed -n 's/.* port { \([^}]*\) }.*/\1/p' "$conf" | tr -d ',')"
+    # Knobs that make the loaded rule read back short: no udp half, or another port.
+    protos="tcp udp"; [ -e "$FAKE/knob-pf-no-udp" ] && protos=tcp
+    [ -e "$FAKE/knob-pf-port" ] && ports="$(cat "$FAKE/knob-pf-port")"
+    # pfctl may print the group by name rather than number.
+    [ -e "$FAKE/knob-pf-group-name" ] && gid="$(cat "$FAKE/knob-pf-group-name")"
+    for proto in $protos; do for p in $ports; do
+      echo "block return out quick proto $proto from any to <bug_bash_targets> port = $p group != $gid"
+    done; done
+    exit 0 ;;
+esac
+if [ "$tcmd" = show ]; then
+  [ -f "$table" ] && sed 's/^/   /' "$table"
+  exit 0
+fi
+echo "stand in pfctl: unhandled call" >&2
+exit 64
+SH
+chmod +x "$FAKE/bin/sudo" "$FAKE/bin/pfctl"
+cat > "$TMP/dns-stub.js" <<'JS'
+// Test only: app.example.com resolves to this machine, so nothing in the suite reaches a real site.
+const dns = require('dns')
+const real = dns.lookup
+dns.lookup = function (host, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = {} }
+  if (host !== 'app.example.com') return real.call(dns, host, opts, cb)
+  const all = [{ address: '127.0.0.1', family: 4 }]
+  process.nextTick(() => (opts && opts.all ? cb(null, all) : cb(null, all[0].address, 4)))
+}
+JS
+# A stand in for the packet filter itself: while the stand in pfctl holds a rule, a node process
+# here is refused a connection to an address and port the rule names, unless the stand in sudo
+# started it "in" the _bugbash group. knob-pf-inert makes it enforce nothing, as a rule pf never
+# consults would.
+cat > "$TMP/pf-stub.js" <<'JS'
+const net = require('net')
+const fs = require('fs')
+const path = require('path')
+const dir = process.env.FAKE_PF_DIR
+const blocked = (host, port) => {
+  if (!dir || process.env.FAKE_IN_GROUP === '1' || fs.existsSync(path.join(dir, 'knob-pf-inert'))) return false
+  let conf
+  try { conf = fs.readFileSync(path.join(dir, 'anchor.conf'), 'utf8') } catch { return false }
+  const t = /table <[^>]*> const \{ ([^}]*) \}/.exec(conf)
+  const p = /port \{ ([^}]*) \}/.exec(conf)
+  return !!t && !!p && t[1].split(', ').includes(host) && p[1].split(', ').map(Number).includes(Number(port))
+}
+for (const name of ['connect', 'createConnection']) {
+  const real = net[name]
+  net[name] = function (...args) {
+    const o = typeof args[0] === 'object' ? args[0] : { port: args[0], host: typeof args[1] === 'string' ? args[1] : 'localhost' }
+    if (!blocked(o.host, o.port)) return real.apply(this, args)
+    const s = new net.Socket()
+    process.nextTick(() => s.emit('error', Object.assign(new Error('connect ECONNREFUSED (stand in packet filter)'), { code: 'ECONNREFUSED' })))
+    return s
+  }
+}
+JS
+reset_fake() {
+  rm -rf "$FAKE/state" "$FAKE/anchor.conf" "$FAKE/anchor.table" "$FAKE/enabled" "$FAKE"/knob-* "$FAKE/pfctl.calls" "$FAKE/sudo.calls"
+  mkdir -p "$FAKE/state"
+  cp "$HELPER_SRC" "$FAKE/helper" 2>/dev/null
+}
+fakeenv() { PATH="$FAKE/bin:$PATH" FAKE_PF_DIR="$FAKE" NODE_OPTIONS="--require $TMP/dns-stub.js --require $TMP/pf-stub.js" "$@"; }
+reset_fake
+# The suite's own sudo is the stand in, never the real one (L2).
+[ "$(PATH="$FAKE/bin:$PATH" command -v sudo)" = "$FAKE/bin/sudo" ] && ok || bad "the egress tests reach the stand in sudo, not the real one"
+
+# A proxy started for a deployment: --egress, so it takes the rule away when it stops.
+mkdir -p "$TMP/proxy-e"
+PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress >"$TMP/proxy-e.out" 2>&1 & EPROXY_PID=$!
+BG_PIDS="$BG_PIDS $EPROXY_PID"
+for _ in $(seq 1 200); do grep -q "\"pid\":$EPROXY_PID" "$TMP/proxy-e/proxy.json" 2>/dev/null && break; kill -0 "$EPROXY_PID" 2>/dev/null || break; sleep 0.05; done
+EPROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy-e/proxy.json" 2>/dev/null)"
+RECPORT="${PLAIN##*:}"
+eguard() { fakeenv bash "$GUARD" --read-only --proxy "$EPROXY" "$@" 2>&1; }
+owner_now() { cat "$FAKE/state/owner" 2>/dev/null || echo none; }
+nothing_loaded() { [ ! -e "$FAKE/anchor.conf" ] && [ ! -e "$FAKE/anchor.table" ] && [ ! -e "$FAKE/enabled" ] && [ "$(owner_now)" = none ]; }
+if [ -z "$EPROXY" ]; then
+  bad "the --egress proxy started" "$(cat "$TMP/proxy-e.out" 2>/dev/null)"
+else
+  out="$(curl -s --noproxy '*' --max-time 5 "$EPROXY/__bug-bash-proxy__/health")"
+  grep -q "\"pid\":$EPROXY_PID" <<< "$out" && grep -q '"egress":true' <<< "$out" && grep -q "\"egid\":$(id -g)" <<< "$out" && ok \
+    || bad "the proxy's health answer says its pid, its group and that it was started for a deployment" "$out"
+
+  # Allowed: the rule is loaded for the proxy, holds the target's addresses, and is in force (a
+  # direct connection to the target's port is refused; nothing listens on the dead port, which is
+  # what the rule's refusal looks like from here).
+  reset_fake
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a deployment behind the proxy and the egress rule is allowed" 0 "^READ-ONLY https://app.example.com:$dead_port/ via $EPROXY" "$rc" "$out"
+  [ "$(owner_now)" = "$EPROXY_PID" ] && grep -q '^table <bug_bash_targets> const { 127.0.0.1 }$' "$FAKE/anchor.conf" 2>/dev/null \
+    && grep -q "port { $dead_port } group != _bugbash$" "$FAKE/anchor.conf" && [ -e "$FAKE/enabled" ] && ok \
+    || bad "the rule loaded holds the target's addresses and port, lets only _bugbash through, and is owned by the proxy" "$(cat "$FAKE/anchor.conf" 2>/dev/null) owner $(owner_now)"
+  out="$(BUG_BASH_PROXY="$EPROXY" fakeenv bash "$GUARD" --read-only "https://app.example.com:$dead_port/" 2>&1)"; rc=$?
+  expect "the proxy can be named by BUG_BASH_PROXY" 0 "^READ-ONLY https://app.example.com:$dead_port/ via $EPROXY" "$rc" "$out"
+  # http and https on their usual ports are one site: the rule covers both.
+  reset_fake
+  out="$(eguard "https://app.example.com/")"; rc=$?
+  expect "a deployment on the usual https port is allowed" 0 "^READ-ONLY https://app.example.com/ via" "$rc" "$out"
+  grep -q 'port { 80, 443 } group' "$FAKE/anchor.conf" 2>/dev/null && ok || bad "a site on 443 has 80 refused too" "$(cat "$FAKE/anchor.conf" 2>/dev/null)"
+  # A site that is up (the recorder) and behind a rule in force: the direct connection is refused.
+  reset_fake
+  out="$(eguard "http://app.example.com:$RECPORT/")"; rc=$?
+  expect "a live site behind a rule in force is allowed" 0 "^READ-ONLY http://app.example.com:$RECPORT/ via" "$rc" "$out"
+  # Only the bug bash's own anchor is ever loaded or flushed: never the system's ruleset.
+  unscoped="$(grep -E -- '-[fF] ' "$FAKE/pfctl.calls" | grep -v -- "-a $ANCHOR ")"
+  [ -z "$unscoped" ] && grep -q -- "-a $ANCHOR -f" "$FAKE/pfctl.calls" && ok || bad "every pfctl load and flush names the bug bash anchor" "$unscoped"
+
+  # Refused, each by name, and each leaving nothing loaded behind it.
+  reset_fake
+  out="$(PATH="$FAKE/bin:$PATH" bash "$GUARD" --read-only --proxy "$PROXY" "https://app.example.com/" 2>&1)"; rc=$?
+  expect "a proxy not started with --egress is refused for a deployment" 8 "--egress" "$rc" "$out"
+  [ ! -e "$FAKE/sudo.calls" ] && ok || bad "a refusal for a proxy not started for a deployment loads nothing" "$(cat "$FAKE/sudo.calls")"
+  reset_fake; touch "$FAKE/knob-sudo-refuses"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a Mac without the one time setup is refused, naming the setup" 8 "one time setup on claude-config#813" "$rc" "$out"
+  reset_fake; touch "$FAKE/knob-load-fails"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule pfctl will not load is refused, with pfctl's reason" 8 "unknown group _bugbash" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule that failed to load leaves nothing loaded"
+  # A load that fails after its address table went in leaves neither behind (lessons review of #938).
+  reset_fake; touch "$FAKE/knob-load-fails-partway"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule pfctl loads only part of is refused" 8 "no valid combination" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule that failed part way leaves no rule and no address table" "$(ls "$FAKE")"
+  reset_fake; touch "$FAKE/knob-no-token"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a packet filter that will not switch on is refused" 8 "could not be switched on" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule loaded into a filter that would not switch on is taken away again" "$(cat "$FAKE/anchor.conf" 2>/dev/null)"
+  reset_fake; touch "$FAKE/knob-unanchored"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a system ruleset that never consults the anchor is refused" 8 "com.apple" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule found not in force is taken away again (unanchored)"
+  # The rule must read back for UDP too (a browser speaking HTTP/3 goes over UDP, which the direct
+  # connection check cannot see) and for the target's own port (lessons review of #938).
+  reset_fake; touch "$FAKE/knob-pf-no-udp"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule that reads back without its UDP half is refused" 8 "udp" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule found not in force is taken away again (no udp)"
+  reset_fake; echo 9 > "$FAKE/knob-pf-port"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule that reads back for another port is refused" 8 "port $dead_port" "$rc" "$out"
+  # A rule that reads back with the group by name is judged by that group's id (lessons review of
+  # #938): the proxy's own group by name is allowed, a group that does not resolve is refused.
+  reset_fake; id -gn > "$FAKE/knob-pf-group-name"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule naming the proxy's group by name is allowed" 0 "^READ-ONLY" "$rc" "$out"
+  reset_fake; echo no_such_group_813 > "$FAKE/knob-pf-group-name"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule naming a group that does not resolve is refused" 8 "no_such_group_813" "$rc" "$out"
+  reset_fake; echo 4242 > "$FAKE/knob-pf-gid"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a proxy not running in the group the rule lets through is refused" 8 "sudo -n -g _bugbash" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule found not in force is taken away again (group)"
+  # The rule does not hold: a direct connection to the target got through. The connection sends
+  # nothing, so the site records no request from the check.
+  reset_fake; touch "$FAKE/knob-pf-inert"
+  before="$(wc -l < "$TMP/plain.log")"
+  out="$(eguard "http://app.example.com:$RECPORT/")"; rc=$?
+  expect "a rule that does not stop a direct connection is refused" 8 "got through" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule found not in force is taken away again (direct connection)"
+  [ "$(wc -l < "$TMP/plain.log")" = "$before" ] && ok || bad "the check's direct connection sends the site no request"
+  # The helper installed as root is a copy: one that differs from this checkout's is refused (L423).
+  reset_fake; echo '# changed' >> "$FAKE/helper"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "an installed helper that differs from this one is refused, naming the setup" 8 "setup again" "$rc" "$out"
+  # One rule at a time: a live run's rule is never replaced; a dead one's is.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule held by another live run is refused, not replaced" 8 "another read only run" "$rc" "$out"
+  [ "$(owner_now)" = "$PROXY_PID" ] && [ -e "$FAKE/anchor.conf" ] && ok || bad "the other run's rule is left in place" "owner $(owner_now)"
+  out="$(fakeenv bash "$EGRESS" unload 99999999 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "an unload by a process that does not hold the rule leaves it" "$out"
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$DEAD_PID" >/dev/null 2>&1
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule left by a run whose proxy is gone is replaced" 0 "^READ-ONLY" "$rc" "$out"
+  [ "$(owner_now)" = "$EPROXY_PID" ] && ok || bad "the replaced rule belongs to this run's proxy" "owner $(owner_now)"
+
+  # An unload says it worked only when the rule is gone, judged by reading the anchor back: here a
+  # rule left with no owner on file (a helper that died part way) and a flush pfctl refuses.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1
+  rm -f "$FAKE/state/owner"; touch "$FAKE/knob-flush-fails"
+  out="$(fakeenv bash "$EGRESS" unload 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] && grep -q 'still loaded' <<< "$out" && ok || bad "an unload that leaves the rule loaded says so, owner or none (rc $rc)" "$out"
+  rm -f "$FAKE/knob-flush-fails"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+
+  # The helper runs as root, so it takes nothing it has not checked the shape of.
+  reset_fake
+  out="$(BUG_BASH_EGRESS_PFCTL="$FAKE/bin/pfctl" BUG_BASH_EGRESS_STATE="$FAKE/state" bash "$HELPER_SRC" load 123 443 '1.2.3.4 } pass out all' 2>&1)"; rc=$?
+  [ "$rc" = 2 ] && grep -q 'not an IP address' <<< "$out" && [ ! -e "$FAKE/pfctl.calls" ] && ok || bad "the helper refuses an address that is not one, before pfctl (rc $rc)" "$out"
+  out="$(BUG_BASH_EGRESS_PFCTL="$FAKE/bin/pfctl" BUG_BASH_EGRESS_STATE="$FAKE/state" bash "$HELPER_SRC" load 123 99999 1.2.3.4 2>&1)"; rc=$?
+  [ "$rc" = 2 ] && grep -q 'port' <<< "$out" && ok || bad "the helper refuses a port out of range (rc $rc)" "$out"
+  out="$(env -u BUG_BASH_EGRESS_PFCTL bash "$HELPER_SRC" status 2>&1)"; rc=$?
+  [ "$rc" = 2 ] && grep -q 'through sudo' <<< "$out" && ok || bad "the helper, not root and not under test, refuses and says to use sudo (rc $rc)" "$out"
+
+  # A load clears whatever an earlier helper left on record, its pf reference included, even with
+  # no owner on file (a helper killed part way) (lessons review of #938).
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1
+  rm -f "$FAKE/state/owner"; echo 7777 > "$FAKE/state/token"
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$DEAD_PID" >/dev/null 2>&1
+  grep -q -- '-X 7777' "$FAKE/pfctl.calls" && ok || bad "a load releases the pf reference a helper killed part way left behind" "$(cat "$FAKE/pfctl.calls")"
+  # An unload for one process touches nothing it cannot show that process holds: a live run's rule
+  # stays. A rule with no owner on file is a leftover (a load writes its owner before it lets go of
+  # the lock), so that one is swept.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" unload 12345 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && [ -e "$FAKE/anchor.conf" ] && [ "$(owner_now)" = "$PROXY_PID" ] && grep -q 'left in place' <<< "$out" && ok \
+    || bad "an unload for another pid leaves a live run's rule alone (rc $rc)" "$out"
+  rm -f "$FAKE/state/owner"
+  out="$(fakeenv bash "$EGRESS" unload 12345 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && nothing_loaded && ok || bad "a rule with no owner on file is swept as a leftover by the next call (rc $rc)" "$out"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+
+  # The owner check runs on its own: every call first removes a rule whose owner has died, or whose
+  # pid now belongs to something that is not the read only proxy, so a proxy killed outright cannot
+  # leave this Mac refused the site for good (coordinator, #938). Here a --egress proxy is SIGKILLed
+  # holding the rule, and the next call, a plain status, sweeps it and says so.
+  reset_fake
+  mkdir -p "$TMP/proxy-k"
+  PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-k" --egress >"$TMP/proxy-k.out" 2>&1 & kp=$!
+  for _ in $(seq 1 200); do grep -q "\"pid\":$kp" "$TMP/proxy-k/proxy.json" 2>/dev/null && break; sleep 0.05; done
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$kp" >/dev/null 2>&1
+  [ "$(owner_now)" = "$kp" ] && ok || bad "the rule is loaded for the proxy about to be killed" "owner $(owner_now)"
+  kill -9 "$kp" 2>/dev/null; wait "$kp" 2>/dev/null
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && nothing_loaded && grep -q "Removed a rule left by pid $kp" <<< "$out" && grep -q 'No bug bash egress rule is loaded' <<< "$out" && ok \
+    || bad "a SIGKILLed proxy's rule is swept by the next call, which says so (rc $rc)" "$out"
+  # A pid that is alive but no longer the proxy (reused by something else) counts as gone too.
+  sleep 30 & other=$!
+  BG_PIDS="$BG_PIDS $other"
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$other" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"
+  nothing_loaded && ok || bad "a rule whose owner pid now runs something other than the proxy is swept" "$out"
+  kill "$other" 2>/dev/null
+  # A program that merely names the proxy's file (an editor, a pager) is not the proxy either.
+  bash -c 'sleep 30; :' read-only-proxy.js & namer=$!
+  BG_PIDS="$BG_PIDS $namer"
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$namer" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"
+  nothing_loaded && ok || bad "a rule whose owner only mentions the proxy's file is swept" "$(ps -o command= -p "$namer") | $out"
+  kill "$namer" 2>/dev/null
+  # A live run's rule is reported, with who holds it, and left.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && grep -q "loaded.*pid $PROXY_PID" <<< "$out" && grep -q "$dead_port" <<< "$out" && [ "$(owner_now)" = "$PROXY_PID" ] && ok \
+    || bad "status names a live run's rule and its holder, and leaves it (rc $rc)" "$out"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+  # A second --egress proxy that refuses to start never listened, so it holds no rule and unloads
+  # nothing as it exits (lessons review of #938).
+  reset_fake
+  PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress >"$TMP/second-e.out" 2>&1 & second=$!
+  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
+  [ "$rc" = 3 ] && ! grep -q 'unload' "$FAKE/sudo.calls" 2>/dev/null && ok \
+    || bad "a --egress proxy that never listened unloads nothing as it exits (rc $rc)" "$(cat "$FAKE/sudo.calls" 2>/dev/null)"
+
+  # Two helpers racing to take over one stale lock: exactly one is inside at a time. The lock is
+  # left stale the way it happens, by killing a helper while it holds it; the first waiter is
+  # parked just after finding that holder dead, the second then takes the lock over and goes
+  # inside, and only then is the first let go (lessons review of #938).
+  reset_fake; rm -f "$FAKE/overlap" "$FAKE/entered" "$FAKE/hung" "$FAKE/hang.pids" "$FAKE"/go*
+  touch "$FAKE/knob-hang-load"
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1 & hl=$!
+  for _ in $(seq 1 200); do [ -e "$FAKE/hung" ] && break; sleep 0.05; done
+  for p in $(cat "$FAKE/hang.pids" 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
+  wait "$hl" 2>/dev/null
+  rm -f "$FAKE/knob-hang-load"; touch "$FAKE/knob-slow-load"
+  BUG_BASH_EGRESS_TEST_TAKEOVER_GATE="$FAKE/go" fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >"$TMP/race-b.out" 2>&1 & rb=$!
+  for _ in $(seq 1 200); do [ -e "$FAKE/go.seen" ] && break; sleep 0.05; done
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >"$TMP/race-a.out" 2>&1 & ra=$!
+  for _ in $(seq 1 200); do [ -e "$FAKE/entered" ] && break; sleep 0.05; done
+  touch "$FAKE/go"
+  for _ in $(seq 1 400); do kill -0 "$ra" 2>/dev/null || kill -0 "$rb" 2>/dev/null || break; sleep 0.05; done
+  wait "$ra"; rca=$?; wait "$rb"; rcb=$?
+  [ -e "$FAKE/go.seen" ] && [ -s "$FAKE/hang.pids" ] && [ ! -e "$FAKE/overlap" ] && [ "$rca" = 0 ] && [ "$rcb" = 0 ] && ok \
+    || bad "two helpers racing for a stale lock are never inside at once, and both finish (rc $rca $rcb)" "$(cat "$FAKE/overlap" "$TMP/race-a.out" "$TMP/race-b.out" 2>/dev/null)"
+  rm -f "$FAKE/knob-slow-load"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+  # A waiter that finds the takeover itself under way waits its turn rather than spinning through
+  # its whole budget at once (lessons review of #938): the guard is held by a live process for five
+  # seconds, and the load still goes through once it is let go.
+  reset_fake
+  ln -s "$DEAD_PID" "$FAKE/state/held"
+  ln -s "$PROXY_PID" "$FAKE/state/held.takeover"
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >"$TMP/guard-wait.out" 2>&1 & gw=$!
+  sleep 5
+  rm -f "$FAKE/state/held.takeover"
+  for _ in $(seq 1 300); do kill -0 "$gw" 2>/dev/null || break; sleep 0.05; done
+  wait "$gw"; rc=$?
+  [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "a waiter outlasts a takeover under way and then loads (rc $rc)" "$(cat "$TMP/guard-wait.out")"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+
+  # The proxy takes its rule away when it stops.
+  reset_fake
+  out="$(eguard "https://app.example.com:$dead_port/")"
+  kill "$EPROXY_PID" 2>/dev/null
+  for _ in $(seq 1 200); do kill -0 "$EPROXY_PID" 2>/dev/null || break; sleep 0.05; done
+  nothing_loaded && grep -q -- '-X 4242' "$FAKE/pfctl.calls" && ok \
+    || bad "a stopped --egress proxy takes its rule away and releases its pf reference" "$(cat "$TMP/proxy-e.out") $(cat "$FAKE/pfctl.calls" 2>/dev/null)"
+fi
+
+# The self test Dan runs once after setup: it fails closed, by name, where it cannot prove the rule.
+reset_fake; touch "$FAKE/knob-sudo-refuses"
+out="$(fakeenv bash "$EGRESS" selftest 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'claude-config#813' <<< "$out" && ok || bad "the self test on a Mac without the setup fails and names it (rc $rc)" "$out"
+reset_fake; echo 4242 > "$FAKE/knob-exempt-gid"; echo 4242 > "$FAKE/knob-pf-gid"; touch "$FAKE/knob-pf-inert"
+out="$(fakeenv bash "$EGRESS" selftest 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'got through' <<< "$out" && ok || bad "the self test fails when the rule does not stop a direct connection (rc $rc)" "$out"
+nothing_loaded && ok || bad "a failed self test takes its rule away"
+# Where the (stand in) filter does hold, the self test passes, and leaves nothing behind: no rule,
+# and no listener still answering on its port. Run in the background with a deadline, since a
+# listener left holding the output open would otherwise hold the suite too.
+reset_fake; echo 4242 > "$FAKE/knob-exempt-gid"; echo 4242 > "$FAKE/knob-pf-gid"
+fakeenv bash "$EGRESS" selftest > "$TMP/selftest.out" 2>&1 & st=$!
+for _ in $(seq 1 300); do kill -0 "$st" 2>/dev/null || break; sleep 0.05; done
+if kill -0 "$st" 2>/dev/null; then kill "$st" 2>/dev/null; rc=hung; else wait "$st"; rc=$?; fi
+out="$(cat "$TMP/selftest.out")"
+[ "$rc" = 0 ] && grep -q '^PASS' <<< "$out" && grep -q '^exempt: ' <<< "$out" && ok || bad "the self test passes where the rule blocks and exempts (rc $rc)" "$out"
+nothing_loaded && ok || bad "a passed self test takes its rule away"
+st_port="$(sed -n 's/^loaded: the rule for 127.0.0.1 port \([0-9]*\)$/\1/p' <<< "$out")"
+if [ -n "$st_port" ]; then
+  python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(1 if s.connect_ex(("127.0.0.1",int(sys.argv[1]))) == 0 else 0)' "$st_port" && ok \
+    || bad "a passed self test stops its listener (port $st_port still answers)"
+else
+  bad "the self test says which port its listener was on" "$out"
+fi
 
 # Hosts that only look local are not local.
 out="$(PATH="$TMP/bin:$PATH" bash "$GUARD" "http://localhost.example.com/" 2>&1)"; rc=$?
@@ -553,6 +1006,22 @@ out="$(node -e 'const m = require(process.argv[1]); console.log(typeof m.MARK, t
 [ "$out" = "string string" ] && ! grep -Eq "^const (MARK|HEALTH) =" "$PROXY_JS" && ok \
   || bad "the proxy takes its health path and answer from explorer-browser.js, never a copy of its own" "$out"
 grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the read only proxy for a read only run"
+# A deployment's proxy is started for it, in the group the egress rule lets through, and the one
+# time setup and its self test are named where the skill sends Dan.
+grep -qF 'sudo -n -g _bugbash "$(command -v node)" ~/.claude/skills/bug-bash/read-only-proxy.js' "$DIR/SKILL.md" && grep -q -- '--egress' "$DIR/SKILL.md" && ok \
+  || bad "SKILL.md starts a deployment's proxy in the _bugbash group with --egress"
+# What Dan runs if a site ever seems blocked is said in the skill (coordinator, #938).
+grep -q 'seems blocked.*bash ~/.claude/skills/bug-bash/egress.sh status' "$DIR/SKILL.md" && ok \
+  || bad "SKILL.md says, in one line, what to run if a site ever seems blocked"
+# Started through sudo, the pid the shell holds is sudo's, never the proxy's, and with sudo's own
+# pty the proxy is not even sudo's direct child, so the skill must not match proxy.json's pid against
+# either. It waits for proxy.json while the sudo it started is still running instead (lessons review
+# of #938, L321).
+! grep -q 'its `pid` is the process you started' "$DIR/SKILL.md" && ! grep -q 'ps -o ppid=' "$DIR/SKILL.md" \
+  && grep -q 'while the `sudo` you started is still running' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && ok \
+  || bad "SKILL.md judges a started proxy by its proxy.json appearing while its sudo still runs, never by a pid relation"
+grep -q 'one time setup.*claude-config#813' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && grep -q 'bash ~/.claude/skills/bug-bash/egress.sh selftest' "$DIR/SKILL.md" && ok \
+  || bad "SKILL.md names the one time setup and its self test"
 
 # ---------------------------------------------------------------- the proxy's address does not outlive it
 # A second proxy started on a directory a live one is using refuses, and leaves the live one's
