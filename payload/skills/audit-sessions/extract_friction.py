@@ -57,7 +57,7 @@ def condense(name, files, out_dir):
     """Write one project's friction file. Returns the transcripts that could not be read."""
     unreadable = []
     out_lines = []
-    stats = {"sessions": 0, "user_msgs": 0, "interrupts": 0, "tool_errors": 0}
+    stats = {"sessions": 0, "user_msgs": 0, "interrupts": 0, "tool_errors": 0, "odd_records": 0}
     for f in files:
         sid = os.path.basename(f)[:8]
         session_lines = []
@@ -70,44 +70,49 @@ def condense(name, files, out_dir):
                         rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue  # a torn or partial line; the rest of the transcript still counts
-                    if not isinstance(rec, dict):
-                        continue  # valid JSON that is not a record (null, a number, a list)
-                    if rec.get("isSidechain"):
-                        continue
-                    ts = (rec.get("timestamp") or "")[:16]
-                    if rec.get("type") != "user":
-                        continue
-                    message = rec.get("message")
-                    content = message.get("content") if isinstance(message, dict) else None
-                    if isinstance(content, list):
-                        for b in content:
-                            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
-                                et = b.get("content")
-                                et = et if isinstance(et, str) else txt(et)
-                                key = re.sub(r"\d+", "N", (et or "")[:80])
-                                err_counts[key] = err_counts.get(key, 0) + 1
-                                if len(err_samples) < 8:
-                                    err_samples.append(clip(et or "", 300))
-                                stats["tool_errors"] += 1
-                    t = txt(content)
-                    if not t:
-                        continue
-                    if "<command-name>" in t:
-                        m = re.search(r"<command-name>(.*?)</command-name>", t)
-                        if m:
-                            session_lines.append(f"  [{ts}] SLASH: {m.group(1)}")
-                        continue
-                    if t.startswith("<local-command") or "<local-command-stdout>" in t:
-                        continue
-                    if "[Request interrupted by user" in t:
-                        stats["interrupts"] += 1
-                        session_lines.append(f"  [{ts}] INTERRUPT: {clip(t, 300)}")
-                        continue
-                    if t.startswith("<") and "system-reminder" in t[:60]:
-                        continue
-                    n_user += 1
-                    stats["user_msgs"] += 1
-                    session_lines.append(f"  [{ts}] USER: {clip(t)}")
+                    try:
+                        if not isinstance(rec, dict):
+                            continue  # valid JSON that is not a record (null, a number, a list)
+                        if rec.get("isSidechain"):
+                            continue
+                        ts = (rec.get("timestamp") or "")[:16]
+                        if rec.get("type") != "user":
+                            continue
+                        message = rec.get("message")
+                        content = message.get("content") if isinstance(message, dict) else None
+                        if isinstance(content, list):
+                            for b in content:
+                                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
+                                    et = b.get("content")
+                                    et = et if isinstance(et, str) else txt(et)
+                                    key = re.sub(r"\d+", "N", (et or "")[:80])
+                                    err_counts[key] = err_counts.get(key, 0) + 1
+                                    if len(err_samples) < 8:
+                                        err_samples.append(clip(et or "", 300))
+                                    stats["tool_errors"] += 1
+                        t = txt(content)
+                        if not t:
+                            continue
+                        if "<command-name>" in t:
+                            m = re.search(r"<command-name>(.*?)</command-name>", t)
+                            if m:
+                                session_lines.append(f"  [{ts}] SLASH: {m.group(1)}")
+                            continue
+                        if t.startswith("<local-command") or "<local-command-stdout>" in t:
+                            continue
+                        if "[Request interrupted by user" in t:
+                            stats["interrupts"] += 1
+                            session_lines.append(f"  [{ts}] INTERRUPT: {clip(t, 300)}")
+                            continue
+                        if t.startswith("<") and "system-reminder" in t[:60]:
+                            continue
+                        n_user += 1
+                        stats["user_msgs"] += 1
+                        session_lines.append(f"  [{ts}] USER: {clip(t)}")
+                    except (TypeError, AttributeError, ValueError):
+                        # A record whose fields have shapes no transcript was seen to have. Counted
+                        # and shown in the header, so a skipped record is never a silent one.
+                        stats["odd_records"] += 1
         except OSError as e:
             session_lines.append(f"  READ-ERROR: {e}")
             unreadable.append((f, e))
@@ -124,7 +129,9 @@ def condense(name, files, out_dir):
             out_lines.extend(f"  ERRSAMPLE: {s}" for s in err_samples[:4])
     header = (f"PROJECT: {name} | {stats['sessions']} sessions w/ activity, "
               f"{stats['user_msgs']} user msgs, {stats['interrupts']} interrupts, "
-              f"{stats['tool_errors']} tool errors\n")
+              f"{stats['tool_errors']} tool errors"
+              + (f", {stats['odd_records']} odd records skipped" if stats["odd_records"] else "")
+              + "\n")
     path = os.path.join(out_dir, f"friction_{name}.txt")
     with open(path, "w") as fh:
         fh.write(header)

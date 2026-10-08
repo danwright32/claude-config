@@ -57,6 +57,19 @@ def test_lines_that_are_json_but_not_a_record_are_skipped_too():
     assert "1 user msgs" in out
 
 
+def test_a_record_with_fields_of_odd_shapes_is_skipped_counted_and_said():
+    odd = [
+        json.dumps({"type": "user", "timestamp": 7, "message": {"content": "a number for a time"}}),
+        json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": 5}]}}),
+    ]
+    def make(project):
+        (project / "a.jsonl").write_text("\n".join(odd + [json.dumps(USER)]) + "\n")
+    code, out, err, written = run(make)
+    assert code == 0, err
+    assert "1 user msgs" in out
+    assert "2 odd records skipped" in out
+
+
 def test_a_transcript_that_cannot_be_read_fails_the_run_and_is_named():
     def make(project):
         (project / "a.jsonl").write_text(json.dumps(USER) + "\n")
