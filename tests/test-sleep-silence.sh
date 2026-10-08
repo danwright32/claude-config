@@ -163,7 +163,7 @@ while IFS=$'\t' read -r route reason; do
 done < "$EXEMPT"
 
 # ---- 2. the shell routes, run asleep and awake ----
-BOOT="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\).*/\1/p')"
+BOOT="$(sysctl -n kern.boottime 2>/dev/null | python3 -c 'import re, sys; m = re.search(r"\bsec\s*=\s*(\d+)", sys.stdin.read()); print(m.group(1) if m else "")')"
 [ -n "$BOOT" ] || BOOT=1   # no sysctl (Linux CI): sleep.sh skips the boot check, so any boot will do
 NOW_MS="$(( $(date +%s) * 1000 ))"
 STUBS="$WORK/stubs"; mkdir -p "$STUBS"

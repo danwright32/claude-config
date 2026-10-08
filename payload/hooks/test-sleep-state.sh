@@ -57,10 +57,28 @@ while IFS=$'\t' read -r name path now boot want; do
   fi
 done < "$cases"
 
-# The real defaults: the record under $HOME, now from the clock and this boot from sysctl.
+# This boot as sysctl prints it, read by the shell exactly as the mod's bootOf reads it, on the same
+# committed cases (BOOT_FIXTURES, before SLEEP_FIXTURES in the same file).
+boots="$WORK/boots.tsv"
+if ! sed -n '/^export const BOOT_FIXTURES = /,/^]/p' "$FIXTURES" | sed '1s/^export const BOOT_FIXTURES = //' |
+  python3 -c '
+import json, sys
+for f in json.load(sys.stdin):
+    print("\t".join([f["name"], json.dumps(f["text"]), "" if f["boot"] is None else str(f["boot"])]))
+' > "$boots" || [ ! -s "$boots" ]; then
+  check_eq "the boot fixtures in $FIXTURES read as JSON" yes no
+else
+  while IFS=$'\t' read -r name text want; do
+    check_eq "boot fixture: $name" "$want" "$(sleep_boot_of "$(python3 -c 'import json,sys; sys.stdout.write(json.loads(sys.argv[1]))' "$text")")"
+  done < "$boots"
+fi
+
+# The real defaults: the record under $HOME, now from the clock and this boot from sysctl. The boot
+# the record is written with is read here by the mod's rule (bootOf's pattern, in python), never by
+# the shell's own reader, so a shell that misreads sysctl cannot agree with itself (L70).
 mkdir -p "$WORK/home/.claude/state/sleep"
 check_eq "no record under HOME is none" none "$(HOME="$WORK/home" sleep_state)"
-real_boot="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\).*/\1/p')"
+real_boot="$(sysctl -n kern.boottime 2>/dev/null | python3 -c 'import re, sys; m = re.search(r"\bsec\s*=\s*(\d+)", sys.stdin.read()); print(m.group(1) if m else "")')"
 if [ -n "$real_boot" ]; then
   printf '{"v":1,"until":%s000,"bootTime":%s}' "$(( $(date +%s) + 3600 ))" "$real_boot" > "$WORK/home/.claude/state/sleep/current.json"
   check_eq "a record of this boot, ending in an hour, is asleep with every default read live" asleep "$(HOME="$WORK/home" sleep_state)"

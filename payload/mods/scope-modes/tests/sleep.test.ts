@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { bootOf, etWhen, isDaytimeEt, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
-import { SLEEP_FIXTURES } from './sleep-fixtures.ts'
+import { BOOT_FIXTURES, SLEEP_FIXTURES } from './sleep-fixtures.ts'
 
 type Fixture = { name: string; text: string | null; now: number; boot: number | null; state: string }
 
@@ -98,4 +98,10 @@ describe('bootOf: this boot, from sysctl kern.boottime', () => {
     expect(bootOf('')).toBeNull()
     expect(bootOf('sysctl: unknown oid')).toBeNull()
   })
+  // The shell's sleep_boot_of is held to the same cases in payload/hooks/test-sleep-state.sh (L26).
+  for (const f of BOOT_FIXTURES as { name: string; text: string; boot: number | null }[]) {
+    test(`the fixture the shell shares: ${f.name}`, () => {
+      expect(bootOf(f.text)).toBe(f.boot)
+    })
+  }
 })

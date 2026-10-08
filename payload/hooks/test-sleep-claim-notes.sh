@@ -47,7 +47,7 @@ git -c init.defaultBranch=main init -q "$WORK/repo"
 git -C "$WORK/repo" config remote.origin.url https://github.com/danwright32/demo.git
 ROOT="$WORK/repo"
 
-boot="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\).*/\1/p')"
+boot="$(sysctl -n kern.boottime 2>/dev/null | python3 -c 'import re, sys; m = re.search(r"\bsec\s*=\s*(\d+)", sys.stdin.read()); print(m.group(1) if m else "")')"
 [ -n "$boot" ] || boot=1
 printf '{"v":1,"generation":"g1","since":%s,"until":%s,"night":"2026-10-07","bootTime":%s,"report":"%s/report.md","startedBy":{"sessionId":"s1","cwd":"%s"},"workers":["s1"],"placeBefore":"home"}' \
   "$((NOW - 1000))" "$((NOW + 3600000))" "$boot" "$WORK" "$ROOT" > "$SLEEPDIR/current.json"
