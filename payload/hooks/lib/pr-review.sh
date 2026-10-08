@@ -60,7 +60,10 @@
 # claude-config #567 (82 KB, 7 of 7 full files) took 231 s and was clean. 600 is about 2.6 times the
 # slower. The FIRST attempt at that measurement took 390 s and 600 s and reviewed nothing: the
 # headless claude ran Dan's global hooks, and the answer was the end of turn issue review of the
-# session. Hence --settings disableAllHooks in the runner, and the `unparsed` outcome.
+# session. Hence --settings disableAllHooks in the runner, and the `unparsed` outcome. And, measured
+# 2026-10-08 (claude-config#804), the reviewer answered through Claude Code's built in ReportFindings
+# tool in 6 of about 10 rounds on one pull request, leaving no finding line to read, so the runner
+# also disallows that tool and the text it parses is the review's only channel.
 #
 # Environment: AI_REVIEW_STATE_DIR (shared with the push review), PR_REVIEW_DEADLINE_SECONDS,
 # PR_REVIEW_MAX_BYTES, AI_REVIEW_MODEL, AI_REVIEW_LESSONS_DIR.

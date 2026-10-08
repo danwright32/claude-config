@@ -43,6 +43,15 @@
 #     30 s default), and any `$.model.complete`, since the noun's 10 s keeps running through them
 #     (#802).
 #
+# Work a noun's code hands to a timer (`$.clock.after(0, ...)`, `setTimeout`) runs after the noun has
+# answered, unless the timer sits inside a promise the noun builds (it may be waiting on it), so it is
+# not the noun's code: neither the code written in the timer's arguments nor what it
+# calls is read as the noun's (#939). Measured live on 2026-10-08 (2.1.294, a throwaway plugin in a
+# headless `claude -p`, no user settings): a noun hook that started 13 s of `$.process.run` on
+# `$.clock.after(0, ...)` answered at once, and the timer's work finished 13,010 ms later, whole. A
+# mod-kit button's press is such a noun (modkit.press), and a switch or a compact behind it takes longer
+# than 10 s, so each publisher takes the press at once and does its work on a timer.
+#
 # What it does not read: a promise stored any other way (inside an object, returned through a
 # chain of variables), a member of a race reached through a variable rather than written in the
 # race, and how long an engine `$` call other than these takes. A hook has its own 10 s budget,
@@ -569,6 +578,29 @@ def declaration(f, at, name):
 
 
 BY_PATH = resolve_all(mods)
+
+
+def deferred_spans(f, start, end):
+    """The argument spans of each timer a region starts (#939): what runs after the noun answered.
+    A timer inside a promise the region builds is not: the promise may be what the noun waits on,
+    so the timer's work may be what the noun's answer waits for (lessons review of #952)."""
+    held = []
+    for m in re.finditer(r"(?<![\w$.])new\s+Promise\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
+        open_at = start + m.end() - 1
+        close = closing(f.code, open_at)
+        if close is not None:
+            held.append((open_at, close))
+    out = []
+    for m in re.finditer(r"(?:\.\s*clock\s*\.\s*after|(?<![\w$.])setTimeout)\s*\(", f.code[start:end]):
+        open_at = start + m.end() - 1
+        if any(a <= open_at < b for a, b in held):
+            continue
+        close = closing(f.code, open_at)
+        if close is not None:
+            out.append((f.rel, open_at, close))
+    return out
+
+
 for entry, folder, man, files in mods:
     consts = constants(files)
     # The noun code: the engine.create hooks and hooks on a noun's event, then every function of the
@@ -586,13 +618,22 @@ for entry, folder, man, files in mods:
                 if found:
                     todo.append((*found, handler.group(1)))
     regions = []
+    deferred = []
+
+    def is_deferred(f, at):
+        return any(rel == f.rel and a <= at < b for rel, a, b in deferred)
+
     while todo:
         f, start, end, name = todo.pop()
         if (f.rel, start, end) in seen:
             continue
         seen.add((f.rel, start, end))
         regions.append((f, start, end, name))
+        deferred += deferred_spans(f, start, end)
         for m in re.finditer(r"(?<![\w$.])(" + IDENT + r")\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
+            # Called from a timer the region starts: it runs after the noun answered (#939).
+            if is_deferred(f, start + m.start()):
+                continue
             if m.group(1) not in KEYWORDS:
                 found = resolve(files, f, start + m.start(), m.group(1))
                 if found:
@@ -600,7 +641,7 @@ for entry, folder, man, files in mods:
         # A function handed over as a shorthand property (`{ wait }`, a noun's method) is that
         # function's code too, as the compiler resolves the name (#895).
         for at, (role, _) in f.refs.items():
-            if role == "short" and start <= at < end:
+            if role == "short" and start <= at < end and not is_deferred(f, at):
                 short = re.match(IDENT, f.code[at:])
                 found = resolve(files, f, at, short.group(0)) if short else None
                 if found:
@@ -654,7 +695,7 @@ for entry, folder, man, files in mods:
     judged = set()
     for f, start, end, name in regions:
         for at in promises_in(f.code, start, end):
-            if (f.rel, at) in judged:
+            if (f.rel, at) in judged or is_deferred(f, at):
                 continue
             # A promise inside a helper written within this region is judged as that helper's, by
             # the calls reaching it, never by this outer one's (#895).
@@ -706,7 +747,7 @@ for entry, folder, man, files in mods:
     for f, start, end, _ in regions:
         for m in re.finditer(r"\.\s*ui\s*\.\s*ask\s*\(", f.code[start:end]):
             at = start + m.start()
-            if (f.rel, at) in judged:
+            if (f.rel, at) in judged or is_deferred(f, at):
                 continue
             judged.add((f.rel, at))
             report(
@@ -723,7 +764,7 @@ for entry, folder, man, files in mods:
     for f, start, end, _ in regions:
         for m in re.finditer(r"\.\s*process\s*\.\s*run\s*\(", f.code[start:end]):
             at = start + m.start()
-            if (f.rel, at) in judged or is_raced(f, at):
+            if (f.rel, at) in judged or is_raced(f, at) or is_deferred(f, at):
                 continue
             judged.add((f.rel, at))
             args = call_args(f.code, start + m.end() - 1) or []
@@ -737,7 +778,7 @@ for entry, folder, man, files in mods:
             )
         for m in re.finditer(r"\.\s*model\s*\.\s*complete\s*\(", f.code[start:end]):
             at = start + m.start()
-            if (f.rel, at) in judged or is_raced(f, at):
+            if (f.rel, at) in judged or is_raced(f, at) or is_deferred(f, at):
                 continue
             judged.add((f.rel, at))
             # Judged like process.run, by the timeoutMs in its request (lessons review of #802).

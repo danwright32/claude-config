@@ -270,6 +270,8 @@ test('context above 70% brings the Compact row, which compacts when pressed, and
   expect(await shown(ui as never)).toBe('ctx 74% ')
   expect((await ui.find({ type: 'Button', key: 'status-bar:compact' }))?.props).toMatchObject({ label: 'Compact' })
   await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
+  // The press is taken at once and the compact runs just after, outside a noun's 10 s (#939).
+  await clock.settle()
   expect(compacts).toHaveLength(1)
   expect(toasts).toEqual([])
   await measure($, 20)
@@ -302,11 +304,13 @@ test('a Compact that does not run says why in a toast, rather than nothing', wit
   const ui = await $.ui.mount(band)
   const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
   await press({ key: 'status-bar:compact' })
+  await clock.settle()
   expect(toasts).toEqual(['Compact did not run: Not enough messages to compact.'])
   w.compact = () => {
     throw new Error('compaction failed')
   }
   await press({ key: 'status-bar:compact' })
+  await clock.settle()
   // A compaction that throws is still said, with whatever reason reached the mod.
   expect(toasts).toHaveLength(2)
   expect(toasts[1]).toMatch(/^Compact did not run: \S/)

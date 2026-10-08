@@ -153,11 +153,44 @@ const weekly = async ($: EngineInterface) => {
   }
 }
 
+// #939: whether a click on the button reaches this mod where it is drawn, asked of mod-kit, the one
+// answer every mod shares. One that cannot be asked draws the typed way, which always works: a
+// drawing writes nothing, so it is not said here.
+type ClickSite = { surface: string; viewport?: { isFullscreen?: boolean } }
+type ModKitClickable = { clickable: (site: ClickSite) => Promise<boolean> }
+const clickable = async ($: EngineInterface, e: ClickSite) => {
+  try {
+    // Spelled as add-on notes' noun is above, so it type checks before Claude Code has laid mod-kit's
+    // contract beside this mod (the dependency is new with #939).
+    return await ($ as unknown as { modkit: ModKitClickable }).modkit.clickable(e)
+  } catch {
+    return false
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(PROJECT, folderName(e.cwd))
-    if (e.isInteractive) await weekly($)
+    if (e.isInteractive) {
+      await weekly($)
+      // What the button does, typed, where a click cannot land (#939).
+      await $.command.register({ name: 'simpler', description: 'Ask for the latest long answer again in 2 to 3 plain sentences' })
+    }
     return next(e)
+  })
+
+  on('command.run', { command: 'simpler' }, async $ => {
+    if (!(await $.state.get(OFFER)).value) return { text: 'There is no long answer to make simpler right now.' }
+    // Asked once this command has returned: a prompt cannot be sent from inside command.run, which
+    // holds the turn. A refused ask is a toast, as a press's is.
+    try {
+      $.clock.after(0, () => {
+        void press($).catch(err => $.ui.toast(`Simpler could not ask for the short version: ${why(err)}`))
+      })
+    } catch (err) {
+      return { text: `Simpler could not ask for the short version: ${why(err)}` }
+    }
+    return { text: 'Asking for the short version.' }
   })
 
   // The latest answer decides: one that earns the button replaces the last, one that does not
@@ -176,12 +209,18 @@ export const register: Register = on => {
 
   // Gone once Dan types: the first edit of the prompt box, or a message he sends from elsewhere.
   on('prompt.edit', async ($, e, next) => {
-    if ((await $.state.get(OFFER)).value) await $.state.set(OFFER, null)
+    // Spelling "/simpler" is pressing the button where a click cannot land (#939), not typing past
+    // it, so the box as this edit leaves it being a start of that command keeps the offer.
+    const after = (e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end)).trim()
+    const isPressing = after !== '' && '/simpler'.startsWith(after)
+    if (!isPressing && (await $.state.get(OFFER)).value) await $.state.set(OFFER, null)
     return next(e)
   })
   on('prompt.submit', async ($, e, next) => {
     const byDan = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
-    if (byDan && (await $.state.get(OFFER)).value) await $.state.set(OFFER, null)
+    // Typing /simpler is pressing the button (#939), never typing past it.
+    const isPress = /^\/simpler\s*$/.test(e.text.trim())
+    if (byDan && !isPress && (await $.state.get(OFFER)).value) await $.state.set(OFFER, null)
     return next(e)
   })
 
@@ -197,8 +236,16 @@ export const register: Register = on => {
     if (!offer) return next(e)
     const resume = await resumeOf($, e.props.text)
     if (!sameReply(offer.head, resume ? resume.rest : e.props.text)) return next(e)
-    const { Box, Button } = $.ui.resolve(e)
-    const button = <Button key="simpler" label="Simpler" onPress={() => press($)} />
+    const { Box, Button, Text } = $.ui.resolve(e)
+    // Where a click cannot land (Apple Terminal, the main screen) a button would do nothing, so the
+    // command that does the same is drawn in its place (#939).
+    const button = (await clickable($, e)) ? (
+      <Button key="simpler" label="Simpler" onPress={() => press($)} />
+    ) : (
+      <Text key="simpler-typed">
+        <Text dimColor>type: </Text>/simpler
+      </Text>
+    )
     if (!resume) {
       return (
         <Box flexDirection="column">
