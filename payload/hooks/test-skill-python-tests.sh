@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # send-gate: scans skills/ hooks/lib/skill-python-tests.py
+# runs: hooks/lib/skill-python-tests.py over payload/skills
 # Runs every Python test file a skill ships, found from disk, and proves the runner that does it
 # can fail (claude-config#676).
 #
@@ -136,6 +137,11 @@ run "$TMP/twins"
 run "$TMP/no-such-folder"
 [ "$rc" -eq 2 ] && grep -q 'no-such-folder' <<< "$out" && ok \
   || bad "a folder that does not exist is refused by name, not treated as empty (rc=$rc)" "$out"
+
+# --- a timeout that is not a number is refused by name, never a traceback -----------------------
+out="$(SKILL_PY_TESTS_TIMEOUT=soon python3 "$RUNNER" "$TMP/good" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && grep -q 'SKILL_PY_TESTS_TIMEOUT' <<< "$out" && ! grep -q 'Traceback' <<< "$out" && ok \
+  || bad "a timeout that is not a number is refused, naming the variable (rc=$rc)" "$out"
 
 # --- the runner writes no bytecode into the skills it reads --------------------------------------
 left="$(find "$TMP" \( -name '__pycache__' -o -name '*.pyc' \) -print)"

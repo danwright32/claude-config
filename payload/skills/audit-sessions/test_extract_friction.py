@@ -47,6 +47,16 @@ def test_a_malformed_line_is_skipped_and_the_rest_is_read():
     assert "1 user msgs" in out
 
 
+def test_lines_that_are_json_but_not_a_record_are_skipped_too():
+    odd = ["null", "[1, 2]", "7", json.dumps({"type": "user", "message": "a bare string"})]
+    def make(project):
+        (project / "a.jsonl").write_text("\n".join(odd + [json.dumps(USER)]) + "\n")
+    code, out, err, written = run(make)
+    assert code == 0, err
+    assert written == ["friction_demo.txt"]
+    assert "1 user msgs" in out
+
+
 def test_a_transcript_that_cannot_be_read_fails_the_run_and_is_named():
     def make(project):
         (project / "a.jsonl").write_text(json.dumps(USER) + "\n")

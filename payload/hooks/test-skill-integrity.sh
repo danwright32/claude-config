@@ -149,9 +149,20 @@ for never in test-gamma.sh tests.md; do
   has "$out" "$never" && bad "it does not flag $never" "$out" || ok
 done
 
-# A suite naming the Python runner covers every test_*.py; a suite naming a file covers that file,
-# by its path under skills/ from anywhere, or by its own name from inside the skill.
-printf 'python3 "$DIR/lib/skill-python-tests.py" "$SKILLS"\nbash "$SKILLS/gamma/healthcheck.sh"\n' > "$U/hooks/test-runner.sh"
+# A suite that only TALKS about the Python runner, in a comment and in a message, runs nothing, so
+# it covers nothing: this suite's own text is exactly that, and deleting the real runner suite must
+# still leave the Python tests reported as unrun (L673).
+printf '# skill-python-tests.py runs them\necho "see skill-python-tests.py"\n' > "$U/hooks/test-talker.sh"
+out="$(python3 "$AUDIT" unrun "$U/skills" "$U" 2>&1)"; rc=$?
+has "$out" "gamma/scripts/test_thing.py" && ok || bad "a suite that only mentions the runner does not cover the Python tests" "$out"
+rm -f "$U/hooks/test-talker.sh"
+
+# The suite that runs the runner declares it on a line of its own, and runs it from a code line. The
+# declaration is assembled from pieces so this file never holds it whole and cannot answer for it.
+DECL="# runs: hooks/lib/skill-python-tests.py"" over payload/skills"
+# A suite naming a file covers that file, by its path under skills/ from anywhere, or by its own
+# name from inside the skill.
+printf '%s\nRUNNER="$DIR/lib/skill-python-tests.py"\npython3 "$RUNNER" "$SKILLS"\nbash "$SKILLS/gamma/healthcheck.sh"\n' "$DECL" > "$U/hooks/test-runner.sh"
 printf 'node check.spec.ts\n' > "$U/skills/delta/test-delta.sh"
 out="$(python3 "$AUDIT" unrun "$U/skills" "$U" 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && ok || bad "with some files covered the rest still fail (rc=$rc)" "$out"

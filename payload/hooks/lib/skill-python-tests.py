@@ -118,7 +118,15 @@ def main(argv: list) -> int:
               f"folder with no tests.", file=sys.stderr)
         return 2
 
-    timeout = float(os.environ.get("SKILL_PY_TESTS_TIMEOUT", "300"))
+    raw_timeout = os.environ.get("SKILL_PY_TESTS_TIMEOUT", "300")
+    try:
+        timeout = float(raw_timeout)
+        if timeout <= 0:
+            raise ValueError
+    except ValueError:
+        print(f"skill-python-tests: SKILL_PY_TESTS_TIMEOUT must be a number of seconds above 0, "
+              f"not {raw_timeout!r}.", file=sys.stderr)
+        return 2
     files = [p for f in argv for p in find_test_files(os.path.abspath(f))]
     total_pass = total_fail = 0
     if not files:

@@ -16,7 +16,8 @@ links  Every relative link in every markdown file of every skill reaches a file 
 
 unrun  Every file shaped like a test is run by something. A `test-*.sh` is found by
        run-all-tests.sh. A `test_*.py` or `*_test.py` is run by hooks/lib/skill-python-tests.py,
-       but only while some suite actually invokes that runner. Anything else shaped like a test
+       but only while a suite declares `# runs: hooks/lib/skill-python-tests.py over payload/skills`
+       on a line of its own and names the runner outside a comment. Anything else shaped like a test
        (`*.test.js`, `*.spec.ts`, `test_*.sh`, `healthcheck*.sh` and the like) counts as run only
        when a `test-*.sh` suite names it: by its path under the skills folder from anywhere in the
        repository, or by its path inside the skill from a suite that lives in that skill. Suites in
@@ -153,6 +154,17 @@ SHAPED = re.compile(
     r"^(?:test[_-].+\." + CODE_EXT + r"|.+[._-](?:test|spec)\." + CODE_EXT + r"|healthcheck.*\.sh)$"
 )
 RUNNER_NAME = "skill-python-tests.py"
+# The suite that runs the runner over the skills says so on a line of its own. A mention anywhere
+# was not enough: a comment or a fixture naming the runner would answer for it, so deleting the real
+# suite left every Python test reported as run (the PR #936 lessons review). The declaration must
+# stand alone AND the same suite must name the runner on a line that is not a comment.
+RUNNER_DECLARATION = re.compile(r"^# runs: hooks/lib/skill-python-tests\.py over payload/skills$", re.M)
+
+
+def runs_the_runner(text: str) -> bool:
+    if not RUNNER_DECLARATION.search(text):
+        return False
+    return any(RUNNER_NAME in line and not line.lstrip().startswith("#") for line in text.splitlines())
 
 
 def is_suite(name: str) -> bool:
@@ -192,7 +204,7 @@ def cmd_unrun(argv) -> int:
     if not skills:
         return refuse(f"{folder} holds no skills, so there was nothing to check. Refusing to pass it.")
     suites = list(repo_suites(root))
-    runner_invoked = any(RUNNER_NAME in text for _, text in suites)
+    runner_invoked = any(runs_the_runner(text) for _, text in suites)
     checked = unrun = 0
     for skill in skills:
         skill_dir = os.path.abspath(os.path.join(folder, skill))
@@ -226,7 +238,6 @@ def cmd_unrun(argv) -> int:
 # exits
 # ------------------------------------------------------------------------------------------------
 RUN_LIKE = {"run"}            # return a CompletedProcess: its .returncode must be read
-INT_LIKE = {"call", "system"}  # return the status itself: it must be used
 POPEN = {"Popen"}
 BROAD = {"Exception", "BaseException"}
 

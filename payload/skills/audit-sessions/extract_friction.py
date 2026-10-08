@@ -70,12 +70,15 @@ def condense(name, files, out_dir):
                         rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue  # a torn or partial line; the rest of the transcript still counts
+                    if not isinstance(rec, dict):
+                        continue  # valid JSON that is not a record (null, a number, a list)
                     if rec.get("isSidechain"):
                         continue
                     ts = (rec.get("timestamp") or "")[:16]
                     if rec.get("type") != "user":
                         continue
-                    content = (rec.get("message") or {}).get("content")
+                    message = rec.get("message")
+                    content = message.get("content") if isinstance(message, dict) else None
                     if isinstance(content, list):
                         for b in content:
                             if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
