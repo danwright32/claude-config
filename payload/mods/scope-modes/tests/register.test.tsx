@@ -226,6 +226,8 @@ type Opts = {
   remote?: string | null
   /** mod-kit's branch reader fails (#980), with what it threw. */
   branchReaderFails?: string
+  /** The session's folder, /repo unless said: a linked worktree of /repo, whose main working tree stays /repo (#980 review). */
+  cwd?: string
   /** mod-kit's repo reader fails (#979 review). */
   repoReaderFails?: boolean
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
@@ -528,7 +530,7 @@ const world = (on: On, o: Opts = {}) => {
   })
   on('session.cwd', () => {
     if (o.cwdThrows) throw new Error('the folder could not be read')
-    return { value: '/repo' } as never
+    return { value: o.cwd ?? '/repo' } as never
   })
   on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: o.remote === undefined ? 'git@github.com:o/r.git' : o.remote, internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -952,6 +954,19 @@ test("winding down whose branch mod-kit's reader cannot give says so, never read
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/what this session is working on could not be read \(.*mod-kit is not loaded.*\)/)
   expect(w.toasts).toEqual([])
+})
+
+// $.session.repo().root, which winding down read its checkout from before #980, is the project's
+// main working tree even in a linked worktree (Claude Code resolves a worktree's .git file to its
+// canonical root), so the target's checkout is mod-kit's `main`, never the worktree's own folder.
+test('winding down from a linked worktree reads the main working tree, as $.session.repo() named it (#980 review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: '/repo/.claude/worktrees/wt', branch: 'main' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await stop($ as never)
+  const statuses = w.runs.filter(r => r.includes('status') && r.includes('--porcelain'))
+  expect(statuses.length).toBeGreaterThan(0)
+  expect(statuses.every(r => r[2] === '/repo')).toBe(true)
 })
 
 test('winding down in no repository has nothing to finish (#980)', withDeps, async ($, on) => {
