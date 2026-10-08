@@ -176,9 +176,11 @@ const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'";&|()<>`]+\/memory(?:\/[
 /** Whether a text mentions any lasting memory at all, read as `mentioned` reads it. */
 export const mentionsAny = (text: string): boolean => text.search(MENTION) !== -1
 
-// The quotes a path can end at in code: a mention a quote closes is a string of its own, or one inside
-// code held as text (an exec's, a shell line written out), so it is a path, never a sentence.
-const CLOSES = new Set(["'", '"', '`'])
+// The quotes a path can end at in python code: a mention a quote closes is a string of its own, or one
+// inside python held as text and run (an exec's), so it is a path, never a sentence. A backtick is no
+// quote in python: one closing a mention is markdown in a sentence, or a shell substitution held as
+// text, which a program that runs no process only writes.
+const CLOSES = new Set(["'", '"'])
 
 /**
  * Where a python program holds text rather than code: each comment, and each string literal's

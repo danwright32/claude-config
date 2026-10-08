@@ -164,15 +164,6 @@ const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
   }
 }
 
-// Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
-// call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
-// patch, an inline script) is judged by the lasting memory its text and any patch file it reads
-// mention, and so is a target they cannot name, such as a variable (#743, lastingFiles); a mention
-// through a variable nothing can set is none (#777). An inline program whose text names every file it
-// writes is judged by those files alone (#830). A file in a temporary folder counts inside a
-// checkout there, found by mod-kit's one walk for it (#726). A file that exists and cannot be read,
-// or a disk that cannot say whether a temporary file is in a checkout, fails the hook, and the hook
-// fails closed.
 // The files a call would save lasting memory to, and among them those taken only from what a Bash
 // command mentions, since its words do not name the file it writes (#940), which the refusal says.
 type Targets = { files: string[]; guessed: string[] }
@@ -195,6 +186,15 @@ const mentionText = async ($: EngineInterface, command: string): Promise<string>
   return text
 }
 
+// Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
+// call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
+// patch, an inline script) is judged by the lasting memory its text and any patch file it reads
+// mention, and so is a target they cannot name, such as a variable (#743, lastingFiles); a mention
+// through a variable nothing can set is none (#777), nor is one a python program only holds as text
+// (#940, mentionText). An inline program whose text names every file it writes is judged by those
+// files alone (#830). A file in a temporary folder counts inside a checkout there, found by mod-kit's
+// one walk for it (#726). A file that exists and cannot be read, or a disk that cannot say whether a
+// temporary file is in a checkout, fails the hook, and the hook fails closed.
 const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { cwd, home }: Where): Promise<Targets> => {
   const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   if (tool !== 'Bash') {

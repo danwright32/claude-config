@@ -566,8 +566,6 @@ test('every route that really writes lasting memory is still asked about, a sent
     "python3 - <<'EOF'\nimport os\n# costs $5\nopen(os.path.expanduser('~/.claude/CLAUDE.md'),'a').write('- rule')\nEOF",
     "python3 - <<'EOF'\n# costs $5\nexec(\"open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\")\nEOF",
     "python3 -c \"open('/Users/dan/.claude/CLAUDE.md','a').write('\\$5 - rule')\"",
-    // A program the shell expands first (an unquoted heredoc): what its sentences hold may run.
-    "python3 - <<EOF\nopen('notes.txt','w').write(\"done $(cat rules.md >> ~/.claude/CLAUDE.md) now\")\nEOF",
     // A program that runs a process: its text is read whole, sentences included.
     "python3 - <<'EOF'\nimport subprocess\nsubprocess.run('echo rule >> ~/.claude/CLAUDE.md; echo done', shell=True)\nEOF",
   ]
@@ -577,6 +575,25 @@ test('every route that really writes lasting memory is still asked about, a sent
     expect(`${command}: ${why}`).toContain('~/.claude/CLAUDE.md')
   }
   expect(w.ran).toEqual([])
+})
+
+// In an unquoted heredoc the shell runs a command substitution or backticks in the body before the
+// program starts, and mod-kit's write reader does not report a write made there, so the mention is
+// the only thing that catches it: it is never taken for text. With the delimiter quoted the shell runs
+// nothing in the body, and the same words are a sentence the program writes to another file.
+test('a substitution in an unquoted heredoc that writes lasting memory is still asked about; the same words under a quoted delimiter are text (#940)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/rules.md`]: '- rule\n' } })
+  const body = (open: string) => `${open}\nopen('notes.txt','w').write("done $(cat rules.md >> ~/.claude/CLAUDE.md) now")\nEOF`
+  const ticks = (open: string) => `${open}\nopen('notes.txt','w').write("done \`cat rules.md >> ~/.claude/CLAUDE.md\` now")\nEOF`
+  for (const command of [body('python3 - <<EOF'), ticks('python3 - <<EOF'), body('python3 - <<-EOF')]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain('~/.claude/CLAUDE.md')
+  }
+  expect(w.ran).toEqual([])
+  const quoted = [body("python3 - <<'EOF'"), ticks("python3 - <<'EOF'"), body('python3 - <<"EOF"'), body('python3 - <<\\EOF')]
+  for (const command of quoted) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.map(r => r.input.command)).toEqual(quoted)
 })
 
 test('a write whose file cannot be read from the command is still asked about, and the refusal says which file it took to be written and why (#940)', withKit, async ($, on) => {

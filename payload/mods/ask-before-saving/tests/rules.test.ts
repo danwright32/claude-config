@@ -237,6 +237,9 @@ test('in a python program, a mention in a comment or in a sentence is text, and 
     // An escaped quote keeps the string open, and the program after it is read as code again.
     "s='it\\'s in ~/.claude/CLAUDE.md now'\nopen('x.txt','w').write(s)",
     "s=r'it\\'s in ~/.claude/CLAUDE.md now'\nopen('x.txt','w').write(s)",
+    // Markdown backticks in a sentence, and a shell substitution held as text: no quote in python.
+    "open('x.md','w').write('Rules live in `~/.claude/CLAUDE.md` for every session.')",
+    "open('x.sh','w').write('echo `cat ~/.claude/CLAUDE.md`')",
   ])
     expect(`${code}: ${await left(code)}`).toBe(`${code}: `)
   // Paths: kept.
