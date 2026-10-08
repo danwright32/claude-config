@@ -1419,14 +1419,14 @@ every wrapped row however wide the band is. A button may carry `instead`, a list
 its place wherever a click may not reach it (#939, `clicksReach` in hooks/band.ts): a terminal not
 in the fullscreen layout, Apple Terminal (its per tab Allow Mouse Reporting switch cannot be read),
 and a terminal whose name or layout is unknown. An empty list draws nothing there. A button without
-`instead` is drawn there as "type: /press <mod> <button>", mod-kit's `/press` command, which presses
-a button showing in the band or a pane the way a click does: a click (the Button's own press) and a
-typed /press both raise `modkit.press`, which the publisher answers. The command presses only a
-button showing now, and does so once it has returned, since a press may send a prompt, which
-command.run cannot; a press nothing answers is said. A mod drawing its own Button outside the band
-and a pane asks `$.modkit.clickable(e)` for the same answer. The steps card answers `modkit.press`
-first; the other mods are moved onto it in the rest of #939, and until then their clicks still reach
-their `ui.press` hooks.
+`instead` is still drawn there as a button, until every mod answers `modkit.press` (the rest of
+#939). mod-kit's `/press <mod> <button>` presses a button showing in the band or a pane the way a
+click does: a click (the Button's own press) and a typed /press both raise `modkit.press`, which the
+publisher answers; a mod still answering in a `ui.press` hook takes its click there, so its Button's
+own press never runs. The command presses only a button showing now, and does so once it has
+returned, since a press may send a prompt, which command.run cannot; a press nothing answers is said.
+A mod drawing its own Button outside the band and a pane asks `$.modkit.clickable(e)` for the same
+answer.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a

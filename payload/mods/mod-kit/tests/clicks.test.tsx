@@ -99,7 +99,7 @@ test('clicksReach: only a terminal in the fullscreen layout that is not Apple Te
   for (const surface of ['desktop', 'vscode', 'mobile'] as const) expect(clicksReach({ surface, isFullscreen: false, terminal: 'Apple_Terminal' })).toBe(true)
 })
 
-test('in Apple Terminal, even fullscreen, no button is drawn: one with instead is that text, one without says the /press that presses it', withPublisher, async ($, on) => {
+test('in Apple Terminal, even fullscreen, a button with instead is drawn as that text and is no Button at all; one without keeps its Button for now', withPublisher, async ($, on) => {
   engine(on)
   mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
   expect(await run($, `show ${JSON.stringify(row)}`)).toBe('done')
@@ -113,9 +113,10 @@ test('in Apple Terminal, even fullscreen, no button is drawn: one with instead i
     expect(shown).toContain('step 1 done')
     expect((await ui.find({ type: 'Text', text: 'type: ' }))?.props).toMatchObject({ dimColor: true })
     expect(shown).toContain('https://dash.cloudflare.com/waf')
-    expect(await ui.find({ type: 'Button', key: 'publisher:compact' })).toBeUndefined()
-    expect(shown).toContain('/press publisher compact')
-    expect(await ui.find({ type: 'Button' })).toBeUndefined()
+    // Lessons review of #946: a typed /press reaches only a mod answering modkit.press, so until every
+    // mod does (the rest of #939), a button with no instead keeps its Button rather than a dead line.
+    expect((await ui.find({ type: 'Button', key: 'publisher:compact' }))?.props.label).toBe('Compact')
+    expect(shown.join('')).not.toContain('/press')
     await ui.unmount()
   }
 })
@@ -285,10 +286,8 @@ test('$.modkit.clickable gives a mod drawing its own Button the same answer', wi
   expect(await ask({ surface: 'terminal' })).toBe('clickable false')
 })
 
-test('a left rule over a wrapping line counts a button by the longer of its label and the text drawn in its place', () => {
+test('a left rule over a wrapping line counts a button by the longer of its label and its instead text', () => {
   const long = [{ text: 'type: ' }, { text: 'step 12 done, a long phrase' }]
   const n = mostRows([[{ text: 'x', wrap: true }, { button: 'done', label: 'Done', instead: long }]])
   expect(n).toBeGreaterThanOrEqual(1 + 'type: step 12 done, a long phrase'.length)
-  // With no instead, the /press line drawn in its place.
-  expect(mostRows([[{ text: 'x', wrap: true }, { button: 'compact', label: 'Go' }]], 'status-bar')).toBeGreaterThanOrEqual(1 + 'type: /press status-bar compact'.length)
 })

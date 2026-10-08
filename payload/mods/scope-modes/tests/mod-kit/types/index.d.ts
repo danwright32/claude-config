@@ -161,9 +161,9 @@ export type ModKit = {
    * A press on a band or pane button (#939), raised by mod-kit and answered by the publisher's hook
    * on this event: `on('modkit.press', ($, e, next) => e.element === 'handoff:use' ? (act(), { value:
    * { isAnswered: true } }) : next(e))`. One path for both ways a button is pressed: a click where
-   * the surface reports one, and `/press <mod> <button>`, which mod-kit draws in the button's place
-   * where a click cannot land. Answer here rather than in a `ui.press` hook, which a click alone
-   * reaches, so a typed press never misses a handler a click would reach (#939). Unanswered, `isAnswered` is false and mod-kit says nothing answered it.
+   * the surface reports one, and `/press <mod> <button>`. Answer here rather than in a `ui.press`
+   * hook, which a click alone reaches, so a typed press never misses a handler a click would reach.
+   * Unanswered, `isAnswered` is false and mod-kit says nothing answered it.
    */
   press: (input: ModKitPress) => Promise<{ isAnswered: boolean }>
   /**
@@ -279,8 +279,8 @@ export type ModKitBandText = { text: string; href?: string; color?: string; bold
  * the label (`1: 7 days`), or the label alone when it has no hotkey (#667). `instead` is the text
  * drawn in the button's place wherever a click may not reach it (#939): a terminal's main screen,
  * and Apple Terminal, whose tab only reports clicks while View > Allow Mouse Reporting is ticked,
- * which no mod can read. Left out, mod-kit draws "type: /press <mod> <button>" there, which presses
- * it the same way; an empty list draws nothing, for a button whose content sits beside it as text.
+ * which no mod can read. An empty list draws nothing there, for a button whose content sits beside
+ * it as text. Left out, the button is drawn there as before (the rest of #939 changes that).
  */
 export type ModKitBandButton = { button: string; label: string; hotkey?: string; plain?: true; indent?: number; instead?: ModKitBandText[] }
 export type ModKitBandPart = ModKitBandText | ModKitBandButton

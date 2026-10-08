@@ -174,10 +174,11 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
   const part = (p: ModKitBandPart, i: number) => {
     // Where a click may not land, a button that says what to draw instead is that text, never a
     // control that looks pressable and does nothing (#939).
-    if ('button' in p && !isClickable)
+    const instead = 'button' in p && !isClickable ? fallbackOf(p) : undefined
+    if ('button' in p && instead)
       return (
         <Box key={`instead:${row.mod}:${p.button}`} flexDirection="row" flexShrink={0} paddingLeft={p.indent}>
-          {fallbackOf(row.mod, p).map((r, k) => run(r, `${p.button}:${k}`))}
+          {instead.map((r, k) => run(r, `${p.button}:${k}`))}
         </Box>
       )
     const drawn =
@@ -230,7 +231,7 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
     return (
       <Box key={key} flexDirection="column">
         <Box key={`${key}:rule`} position="absolute" top={0} bottom={0} left={0} width={1} overflow="hidden" flexDirection="column">
-          <Text color={color}>{Array.from({ length: mostRows(row.lines, row.mod) }, () => '│').join('\n')}</Text>
+          <Text color={color}>{Array.from({ length: mostRows(row.lines) }, () => '│').join('\n')}</Text>
         </Box>
         <Box key={`${key}:lines`} flexDirection="column" paddingLeft={2} flexGrow={1}>
           {lines}

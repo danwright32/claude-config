@@ -41,19 +41,16 @@ export const clicksReach = (site: ClickSite): boolean => {
   return typeof site.terminal === 'string' && site.terminal !== '' && site.terminal !== 'Apple_Terminal'
 }
 
-/** What Dan types to press `mod`'s button `button` where a click cannot land (#939): mod-kit's /press. */
-export const pressCommand = (mod: string, button: string): string => `/press ${mod} ${button}`
-
 /**
- * What is drawn in a button's place where a click may not reach it: the publisher's `instead`, or
- * else the /press command that presses it the same way, so no button anywhere is left dead (#939).
+ * What is drawn in a button's place where a click may not reach it: the publisher's `instead`. A
+ * button without one is still drawn as a button there, as before; the rest of #939 gives every
+ * button a typed fallback once every publisher answers modkit.press, which a typed press raises.
  */
-export const fallbackOf = (mod: string, p: ModKitBandButton): ModKitBandText[] =>
-  p.instead ?? [{ text: 'type: ', dim: true }, { text: pressCommand(mod, p.button) }]
+export const fallbackOf = (p: ModKitBandButton): ModKitBandText[] | undefined => p.instead
 
 /** The columns a button takes at most: its bracketed label, or the text drawn in its place where that is wider. */
-export const buttonWidth = (p: ModKitBandButton, mod = ''): number =>
-  Math.max(p.label.length + 2, fallbackOf(mod, p).reduce((w, r) => w + (r.indent ?? 0) + r.text.length, 0)) + (p.indent ?? 0)
+export const buttonWidth = (p: ModKitBandButton): number =>
+  Math.max(p.label.length + 2, (fallbackOf(p) ?? []).reduce((w, r) => w + (r.indent ?? 0) + r.text.length, 0)) + (p.indent ?? 0)
 
 const insteadRefusal = (p: ModKitBandPart): string | undefined => {
   const instead = (p as { instead?: unknown }).instead
@@ -103,9 +100,9 @@ export const wraps = (l: ModKitBandLine): boolean => Array.isArray(l) && l.some(
  * holds at least one. What a left rule must reach down (#734); it is laid over the row's height and
  * clipped to it, so the bound only has to be no smaller than the truth.
  */
-export const mostRows = (lines: ModKitBandLine[], mod = ''): number =>
+export const mostRows = (lines: ModKitBandLine[]): number =>
   lines.reduce(
-    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? buttonWidth(p, mod) : (p.indent ?? 0) + p.text.length), 0)) : 1),
+    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? buttonWidth(p) : (p.indent ?? 0) + p.text.length), 0)) : 1),
     0,
   )
 
