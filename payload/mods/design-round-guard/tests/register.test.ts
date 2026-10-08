@@ -44,6 +44,9 @@ const modKit: { name: string; register: Register } = {
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
         git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+        gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
+        ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
+        linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
         bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
         clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
@@ -222,6 +225,19 @@ test('a file that does not change the look passes untouched, with nothing asked 
   const b = await call($, { tool: 'Bash', command: "printf 'x\\n' >> /w/slate/lib/date.ts" })
   expect(refusalOf(b)).toBe('')
   expect(w.ran.length).toBe(2)
+})
+
+// Dan, 2026-10-08: "On, but let tests through".
+test('a test of a screen passes with no answer recorded, while the screen beside it is still held', withKit, async ($, on) => {
+  const w = world($, on)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/app/page.test.tsx', content: 'test("renders", () => {})\n' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: "echo 'x' > /w/slate/app/__tests__/Header.tsx" }))).toBe('')
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  // A name only holding "test" is no test.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/app/latest.tsx', content: 'x' }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/styles/contest.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
+  expect(w.ran.map(x => String(x.input.file_path ?? x.input.command))).toEqual(['/w/slate/app/page.test.tsx', "echo 'x' > /w/slate/app/__tests__/Header.tsx"])
+  expect(Object.keys(w.store)).toEqual([])
 })
 
 test('a look changing Write is refused, naming the file and both ways on, with the grey card for Dan', withKit, async ($, on) => {

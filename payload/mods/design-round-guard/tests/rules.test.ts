@@ -37,6 +37,35 @@ test('style, screen and component files, the Tailwind config and design tokens c
     expect(lookKind(p)).toBe(null)
 })
 
+// Dan, 2026-10-08, on seeing the guard: "On, but let tests through". A test of a screen does not
+// change how it looks, so a test file is never held, by the usual markers of one.
+test('a test file is not look changing, by its .test. or .spec. part, a test folder, or a Swift test target', () => {
+  for (const p of [
+    '/r/app/page.test.tsx',
+    '/r/components/Button.spec.jsx',
+    '/r/src/Card.test.svelte',
+    '/r/src/__tests__/Header.tsx',
+    '/r/tests/fixtures/index.html',
+    '/r/test/styles/site.css',
+    '/r/payload/mods/x/tests/register.test.tsx',
+    '/r/OvationTests/MainViewTests.swift',
+    '/r/Sources/App/RowTests.swift',
+    '/r/Tests/Helpers.swift',
+  ])
+    expect(lookKind(p)).toBe(null)
+  // A name merely holding "test" elsewhere is no test file, and neither is a folder whose name only contains it.
+  for (const [p, kind] of [
+    ['/r/app/latest.tsx', 'screen'],
+    ['/r/styles/contest.css', 'style'],
+    ['/r/attestation/Form.jsx', 'screen'],
+    ['/r/testimonials/Quote.tsx', 'screen'],
+    ['/r/Views/TestimonialView.swift', 'swift'],
+  ] as const)
+    expect(lookKind(p)).toBe(kind)
+  // A folder ending Tests marks a Swift test target only: a web file there is still a screen.
+  expect(lookKind('/r/AppTests/page.tsx')).toBe('screen')
+})
+
 test('a Swift file is a SwiftUI view when it imports SwiftUI or declares a view body', () => {
   expect(isSwiftUI('import SwiftUI\n\nstruct Main: View {}')).toBe(true)
   expect(isSwiftUI('struct Row: View {\n  var body: some View { Text("x") }\n}')).toBe(true)

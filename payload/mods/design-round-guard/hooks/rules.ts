@@ -27,8 +27,24 @@ const TOKENS = /^(design[-_.]?)?tokens(\.[\w-]+)*\.(json|jsonc|js|cjs|mjs|ts|css
 
 export type LookKind = 'style' | 'screen' | 'tailwind' | 'tokens' | 'swift'
 
-/** What kind of look changing file a path is, or null for one that is not; a Swift file still needs its text read (isSwiftUI). */
+/**
+ * Whether a path is a test file, by the usual markers (Dan, 2026-10-08, on seeing the guard: "On,
+ * but let tests through"): a `.test.` or `.spec.` part in its name, or a `__tests__`, `tests` or
+ * `test` folder above it; and for Swift, a test target's folder ending `Tests` or a name ending
+ * `Tests.swift`. A name merely holding "test" (latest.tsx, contest.css) is no test.
+ */
+export const isTestPath = (path: string): boolean => {
+  const parts = path.split('/').filter(Boolean)
+  const base = parts.pop() ?? ''
+  if (/\.(test|spec)\./i.test(base)) return true
+  if (parts.some(p => p === '__tests__' || p === 'tests' || p === 'test')) return true
+  if (/\.swift$/i.test(base)) return /Tests\.swift$/.test(base) || parts.some(p => /Tests$/.test(p))
+  return false
+}
+
+/** What kind of look changing file a path is, or null for one that is not (a test file included); a Swift file still needs its text read (isSwiftUI). */
 export const lookKind = (path: string): LookKind | null => {
+  if (isTestPath(path)) return null
   const base = (path.split('/').pop() ?? '').toLowerCase()
   if (TAILWIND.test(base)) return 'tailwind'
   if (TOKENS.test(base)) return 'tokens'
