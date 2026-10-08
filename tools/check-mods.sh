@@ -317,6 +317,40 @@ for d in "${mods[@]}"; do
         fi
       done
     fi
+    # A dependency the change under review ADDS was never laid, since the installed copy did not list
+    # it, so the mod would be checked without it and fail on every use until the next install (#951:
+    # auto-session-name's first use of mod-kit). One this folder holds is laid here as Claude Code
+    # lays it: its types beside the others, and its name among the tsconfig's types.
+    # The manifest is read whole, a list across lines included, so python3 reads it; without one,
+    # no dependency can be said to be laid, so the check is not claimed (L490).
+    if [ -n "$checked" ] && ! command -v python3 >/dev/null 2>&1; then
+      checked=""; copy_failed="no python3 to read its dependencies with"
+    elif [ -n "$checked" ]; then
+      if ! why="$(python3 - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
+import json, os, shutil, sys
+manifest, types, mods = sys.argv[1:4]
+try:
+    deps = json.load(open(manifest)).get("dependencies", [])
+    for dep in deps:
+        laid, ours = os.path.join(types, dep, "index.d.ts"), os.path.join(mods, dep, "types", "index.d.ts")
+        if os.path.exists(laid) or not os.path.isfile(ours):
+            continue
+        os.makedirs(os.path.dirname(laid), exist_ok=True)
+        shutil.copyfile(ours, laid)
+        conf = os.path.join(types, "tsconfig.json")
+        c = json.load(open(conf))
+        listed = c.setdefault("compilerOptions", {}).setdefault("types", [])
+        if dep not in listed:
+            listed.append(dep)
+        json.dump(c, open(conf, "w"), indent=2)
+except Exception as e:
+    print(f"laying a new dependency's types failed: {e}")
+    sys.exit(1)
+PY
+)"; then
+        checked=""; copy_failed="$why"
+      fi
+    fi
   fi
   if [ -n "$copy_failed" ]; then
     # Types were laid; what failed is the scratch copy, which is the cause said (L11).
