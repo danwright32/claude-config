@@ -82,7 +82,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other' }
   const store: Record<string, unknown> = {}
-  const ctl = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
   const dialog: Dialog = {}
@@ -139,7 +139,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: store[e.key] } as never
   })
   on('store.set', ($, e) => {
-    if (ctl.storeSetFails) throw new Error('disk full')
+    if (ctl.storeSetFails || (ctl.storeSetFailKey !== undefined && e.key.includes(ctl.storeSetFailKey))) throw new Error('disk full')
     store[e.key] = e.value
     return { value: undefined } as never
   })
@@ -323,6 +323,36 @@ test('when Skip them cannot be recorded, or Dan answers in his own words, he can
   expect(refusalOf(await call($, PAGE))).toBe('')
   // Once it is recorded, that call waits on nobody: asking about it again is refused.
   expect(refusalOf(await askSkip($, w, why, SKIP_YES))).toContain('No look changing edit is waiting')
+})
+
+// Lessons review of #991: a refused call left waiting after Dan settled its issue could still be asked
+// about, and his Skip them would overwrite the settlement with a skip.
+test('a refused call whose issue Dan has since settled is not asked about, and his settlement stands', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  await askSettled($, w, SETTLED_YES)
+  const asked = w.asked.length
+  const late = await askSkip($, w, why, SKIP_YES)
+  expect(refusalOf(late)).toContain('already has his answer')
+  expect(w.asked.length).toBe(asked)
+  expect(w.store['record:/w/slate|issue:978']).toMatchObject({ kind: 'settled' })
+  expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
+// Lessons review of #991: a branch naming two issues whose second record failed was told nothing was
+// recorded, though the first was.
+test('when only some of the issues can be recorded, Claude is told which were and which were not', withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = '41-52-both'
+  const why = refusalOf(await call($, PAGE))
+  w.ctl.storeSetFailKey = 'issue:52'
+  const answered = contextOf(await askSkip($, w, why, SKIP_YES))
+  expect(answered).toContain('recorded for issue #41 in slate')
+  expect(answered).toContain('not for issue #52 in slate')
+  expect(Object.keys(w.store)).toEqual(['record:/w/slate|issue:41'])
+  const still = refusalOf(await call($, PAGE))
+  expect(still).toContain('issue #52 in slate')
+  expect(still).not.toContain('issue #41')
 })
 
 test('nothing Claude writes itself records a no or a settlement', withKit, async ($, on) => {

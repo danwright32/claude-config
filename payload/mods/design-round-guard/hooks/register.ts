@@ -312,15 +312,29 @@ export const register: Register = on => {
     }
     // What Claude is told beside Dan's answer, in the dialog's own result; a refusal carries none.
     const say = (r: Awaited<ReturnType<typeof next>>, text: string) => (r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), text] })
-    // Dan's answer kept for each subject, or why it could not be.
-    const record = async (subjects: readonly DesignRoundSubject[], kind: DesignRoundRecord['kind']): Promise<string | undefined> => {
+    // Dan's answer kept for each subject, one at a time: what was kept, and, when a write failed,
+    // what was not and why, so a branch naming two issues is never told neither was kept when one
+    // was (lessons review of #991).
+    const record = async (subjects: readonly DesignRoundSubject[], kind: DesignRoundRecord['kind']): Promise<{ done: DesignRoundSubject[]; left: DesignRoundSubject[]; why?: string }> => {
+      const done: DesignRoundSubject[] = []
       try {
         const now = await $.clock.now()
-        for (const s of subjects) await $.store.set(s.key, { kind, at: now, label: s.label } satisfies DesignRoundRecord)
-        return undefined
+        for (const s of subjects) {
+          await $.store.set(s.key, { kind, at: now, label: s.label } satisfies DesignRoundRecord)
+          done.push(s)
+        }
+        return { done, left: [] }
       } catch (err) {
-        return message(err)
+        return { done, left: subjects.filter(s => !done.includes(s)), why: message(err) }
       }
+    }
+    // What Claude is told when a write failed: what was recorded, if anything, and what stays blocked.
+    const partly = (answer: string, kept: { done: DesignRoundSubject[]; left: DesignRoundSubject[]; why?: string }) => {
+      const left = listed(kept.left.map(x => x.label))
+      const head = kept.done.length
+        ? `Dan answered ${answer}; it was recorded for ${listed(kept.done.map(x => x.label))}, but not for ${left} (${kept.why})`
+        : `Dan answered ${answer}, but it could not be recorded (${kept.why})`
+      return `${head}, so edits that change the look on ${left} stay blocked. Tell him, and ask again.`
     }
 
     const decide = async () => {
@@ -334,16 +348,24 @@ export const register: Register = on => {
         if (questions.length !== 1) return { deny: 'Ask Dan one question: "Skip design rounds for this issue?".' }
         if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
           return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
-        const s = listed(waiting.subjects.map(x => x.label))
-        const { r, chosen, none } = await asked(skipQuestion(waiting.files, waiting.subjects), skipOptions(waiting.subjects))
+        // Only what still has no answer of his is asked about and recorded: a subject he has since
+        // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
+        const open: DesignRoundSubject[] = []
+        for (const x of waiting.subjects) if (!recordOf(await $.store.get(x.key))) open.push(x)
+        if (!open.length) {
+          await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+          return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }
+        }
+        const s = listed(open.map(x => x.label))
+        const { r, chosen, none } = await asked(skipQuestion(waiting.files, open), skipOptions(open))
         if (chosen === undefined) return none ? say(r, none) : r
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
         // (lessons review of #991).
         if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to its closing question.`)
         if (chosen !== SKIP_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded, so edits that change the look on ${s} stay blocked. Act on what he said.`)
-        const failed = await record(waiting.subjects, 'skipped')
-        if (failed !== undefined) return say(r, `Dan answered ${SKIP_YES}, but it could not be recorded (${failed}), so edits that change the look on ${s} stay blocked. Tell him, and ask again.`)
+        const kept = await record(open, 'skipped')
+        if (kept.why !== undefined) return say(r, partly(SKIP_YES, kept))
         await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
         const again = waiting.agent
           ? 'The refused change was a subagent\'s: tell that agent, or a new one, to make it again.'
@@ -376,8 +398,8 @@ export const register: Register = on => {
       if (chosen === undefined) return none ? say(r, none) : r
       if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: nothing is recorded. Keep going with design rounds.`)
       if (chosen !== SETTLED_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded; act on what he said.`)
-      const failed = await record(subjects, 'settled')
-      if (failed !== undefined) return say(r, `Dan answered ${SETTLED_YES}, but it could not be recorded (${failed}), so edits that change the look on ${s} stay blocked. Tell him, and ask again.`)
+      const kept = await record(subjects, 'settled')
+      if (kept.why !== undefined) return say(r, partly(SETTLED_YES, kept))
       return say(r, `Dan answered ${SETTLED_YES}: the design is recorded as settled for ${s}, and edits that change the look go ahead there. Now write the settled design file the design rounds skill describes.`)
     }
     try {
