@@ -1759,6 +1759,35 @@ and the band question is removed rather than kept beside it (L29). Three defects
     `CLAUDE.md` (`cat ~/.claude/CLAUDE.md > notes.txt`) is still no save. The other way round is
     the known over reach: `cat ~/.claude/CLAUDE.md > "$OUT"` is asked about, showing the file it
     reads, which is the harmless side.
+- **A sentence a program writes is not a target** (#940, decided at build 2026-10-08). A python
+  heredoc that wrote only a test script was asked about as a save to `~/.claude/CLAUDE.md`: a
+  comment it added named that file in a sentence, and since the program held a `$` and backticks,
+  mod-kit could not name the file it writes, so every mention in the command counted (L673). Now:
+  - In a python program that only writes files (mod-kit's verdict, which reads a process first), a
+    mention in a comment, or in a plain string that goes on past it, is text, and is not read as a
+    target. A mention a quote closes is still a path, whether a string of its own
+    (`open('~/.claude/CLAUDE.md', 'a')`) or one inside code held as text (an `exec`'s, a shell line
+    written out), and so is any mention in an f-string, whose braces hold code. The program is found
+    in the command as written and the mentions blanked there; one that cannot be found as written
+    is read whole, as before.
+  - Only a program the shell cannot have changed: on standard input from a quoted heredoc, or one
+    holding no `$` or backtick. In any other the shell may have run what a sentence holds
+    (`"$(cat x >> ~/.claude/CLAUDE.md)"` or the same in backticks, in an unquoted heredoc), so it is
+    read whole. That matters beyond this rule: mod-kit's write reader does not report a write made
+    by such a substitution, so the mention is the only thing that catches it, and a test holds the
+    unquoted case asked about and the same words under a quoted delimiter let through. So is a
+    program that runs a process, which may hand a sentence to a shell, and every other language. A
+    backtick is no quote in python, so one closing a mention (markdown in a sentence) leaves it text.
+  - **Chosen: read from the text, not from what the program does with it.** A path cut out of a
+    longer string at run time (a split, a slice) is not seen; tracing values through a program is
+    not something a reading of its text can do, and every route that names the path as a path is
+    still asked about.
+  - A file taken from what the command mentions, because its words do not name the file it
+    writes, is said to be that in the refusal: "this may write lasting memory (X): its words do not
+    name the file it writes, and they mention X", with the way out for a misfire (make the change
+    with Edit or Write on the file it really writes, which is judged by that file alone). A file
+    the words name is said plainly, as before; what a patch file names is what it writes, so it is
+    said plainly too.
 - **The permanent words** (#705) count only as an instruction to Claude in Dan's own message, typed
   or from his phone: "from now on" anywhere, "always" or "never" leading the message, a sentence, a
   line or what a colon introduces (after an opening word such as "ok", "also" or "and"), or after

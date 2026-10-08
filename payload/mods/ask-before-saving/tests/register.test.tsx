@@ -3,6 +3,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVAL_MS } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is refused until
 // Dan answers, his own permanent words skip the question, and each answer does what the spec says.
@@ -45,7 +46,12 @@ const modKit: { name: string; register: Register } = {
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
         git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
-        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+        // #940: what each command runs, read with the same copy, so a python program's own text is judged.
+        pipeline: async (input: { command: string }) => {
+          const r = await built.process.run(['__modkit', 'pipeline', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
         bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
         clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
@@ -137,6 +143,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
       const input = JSON.parse(String(e.argv[2])) as { command: string; cwd: string; home: string }
       const out = JSON.stringify(commandWrites(input.command, input.cwd, input.home))
       return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'pipeline') {
+      const input = JSON.parse(String(e.argv[2])) as { command: string }
+      return { value: { exitCode: 0, stdout: JSON.stringify(pipeline(input.command)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] !== '/usr/bin/printenv') throw new Error(`unexpected command: ${e.argv.join(' ')}`)
     printenv.push(String(e.argv[1]))
@@ -514,6 +524,88 @@ test('a command whose real write target cannot be read is still asked about when
   const named = refusalOf(await call($, { tool: 'Bash', command: `python3 - <<'EOF'\nopen('${HOME}/.claude/projects/q/memory/MEMORY.md','a').write('- rule')\nEOF` }))
   expect(named).toContain(ASKS)
   expect(named).toContain('~/.claude/projects/q/memory/MEMORY.md')
+  expect(w.ran).toEqual([])
+})
+
+// #940: a python heredoc that wrote only a test script was asked about as a save to the global
+// CLAUDE.md: a comment it added named that file in a sentence, and since the program's text holds a
+// $ and backticks, the reader could not name the file it writes, so every mention counted. The
+// command from that session, cut to what matters.
+const ISSUE_940 =
+  "python3 - <<'EOF'\np='scripts/test-claude-plugin-scope.sh'\ns=open(p).read()\n" +
+  'old=\'\'\'APPROVED="superpowers@superpowers-dev"\n\'\'\'\n' +
+  "new=old+'''\n# Dan's own mods, exempt by WHERE they come from rather than by name.\n" +
+  '# A mod is loaded into every session as his config, the same standing as ~/.claude/CLAUDE.md. The CLI lists\n' +
+  '# each as `<name>@inline` at session scope.\nOWN_MODS_DIR="$HOME/.claude/mods/"\n\'\'\'\n' +
+  "assert s.count(old)==1; s=s.replace(old,new)\nopen(p,'w').write(s)\nEOF\nscripts/test-claude-plugin-scope.sh 2>&1 | tail -2"
+test('a python heredoc whose text only names lasting memory in a sentence, writing another file, goes straight through (#940)', withKit, async ($, on) => {
+  const w = world($, on)
+  // The real reader names no file for it, so what the command mentions is what is judged.
+  expect(commandWrites(ISSUE_940, CWD, HOME).unnamed.map(u => u.targets)).toEqual([undefined])
+  expect(refusalOf(await call($, { tool: 'Bash', command: ISSUE_940 }))).toBe('')
+  expect(w.ran.map(r => r.input.command)).toEqual([ISSUE_940])
+  quietOnMain(w)
+  // The positive control, the same program writing that file itself (L159): still asked about.
+  const real = ISSUE_940.replace("open(p,'w')", "open('/Users/dan/.claude/CLAUDE.md','a')")
+  expect(real).not.toBe(ISSUE_940)
+  expect(refusalOf(await call($, { tool: 'Bash', command: real }))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
+
+test('every route that really writes lasting memory is still asked about, a sentence naming it beside it or not (#940)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/rules.md`]: '- rule\n' } })
+  const routes = [
+    "echo '- rule' >> ~/.claude/CLAUDE.md",
+    "echo '- rule' | tee -a ~/.claude/CLAUDE.md",
+    'cp rules.md ~/.claude/CLAUDE.md',
+    'mv rules.md ~/.claude/CLAUDE.md',
+    "sed -i '' 's/a/b/' ~/.claude/CLAUDE.md",
+    "cat >> ~/.claude/CLAUDE.md <<'EOF'\n- Keep ~/.claude/CLAUDE.md short. It costs $5 a line.\nEOF",
+    // Python whose files the reader cannot name (a $ in its text), judged by what it mentions.
+    "python3 - <<'EOF'\n# costs $5, see ~/.claude/CLAUDE.md first\nopen('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\nEOF",
+    "python3 - <<'EOF'\nimport os\n# costs $5\nopen(os.path.expanduser('~/.claude/CLAUDE.md'),'a').write('- rule')\nEOF",
+    "python3 - <<'EOF'\n# costs $5\nexec(\"open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\")\nEOF",
+    "python3 -c \"open('/Users/dan/.claude/CLAUDE.md','a').write('\\$5 - rule')\"",
+    // A program that runs a process: its text is read whole, sentences included.
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run('echo rule >> ~/.claude/CLAUDE.md; echo done', shell=True)\nEOF",
+  ]
+  for (const command of routes) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain('~/.claude/CLAUDE.md')
+  }
+  expect(w.ran).toEqual([])
+})
+
+// In an unquoted heredoc the shell runs a command substitution or backticks in the body before the
+// program starts, and mod-kit's write reader does not report a write made there, so the mention is
+// the only thing that catches it: it is never taken for text. With the delimiter quoted the shell runs
+// nothing in the body, and the same words are a sentence the program writes to another file.
+test('a substitution in an unquoted heredoc that writes lasting memory is still asked about; the same words under a quoted delimiter are text (#940)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/rules.md`]: '- rule\n' } })
+  const body = (open: string) => `${open}\nopen('notes.txt','w').write("done $(cat rules.md >> ~/.claude/CLAUDE.md) now")\nEOF`
+  const ticks = (open: string) => `${open}\nopen('notes.txt','w').write("done \`cat rules.md >> ~/.claude/CLAUDE.md\` now")\nEOF`
+  for (const command of [body('python3 - <<EOF'), ticks('python3 - <<EOF'), body('python3 - <<-EOF')]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain('~/.claude/CLAUDE.md')
+  }
+  expect(w.ran).toEqual([])
+  const quoted = [body("python3 - <<'EOF'"), ticks("python3 - <<'EOF'"), body('python3 - <<"EOF"'), body('python3 - <<\\EOF')]
+  for (const command of quoted) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.map(r => r.input.command)).toEqual(quoted)
+})
+
+test('a write whose file cannot be read from the command is still asked about, and the refusal says which file it took to be written and why (#940)', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, { tool: 'Bash', command: `python3 - <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('${MEM}')\nEOF` }))
+  expect(why).toContain(ASKS)
+  expect(why).toContain(`this may write lasting memory (${MEM})`)
+  expect(why).toContain(`its words do not name the file it writes, and they mention ${MEM}`)
+  // A file the words name is said plainly.
+  const named = refusalOf(await call($, { tool: 'Bash', command: "echo '- rule' >> ~/.claude/CLAUDE.md" }))
+  expect(named).toContain('this writes lasting memory (~/.claude/CLAUDE.md)')
+  expect(named).not.toContain('may write')
   expect(w.ran).toEqual([])
 })
 
