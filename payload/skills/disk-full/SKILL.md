@@ -87,7 +87,9 @@ under `/var/folders/*/*/X/com.google.Chrome.code_sign_clone` (the per user folde
 `getconf DARWIN_USER_CACHE_DIR` names, with `X` in place of its last `C`) each time it
 launches, and a Chrome that is force quit leaves its clone behind. On 2026-10-08 `du` counted 114 of them at about 1.5 GB
 each, apparently 60 GB of growth in five hours; deleting 90 of them freed 0 bytes by `df`. They are
-clones of Chrome.app, so they cost almost no real space. Rule this folder out rather than in.
+clones of Chrome.app, so they cost almost no real space. Rule this folder out rather than in. Most
+of those came from design rounds' headless Chrome, which since claude-config#988 is told not to make
+one (`--disable-features=MacAppCodeSignClone`, in `skills/design-rounds/headless-dom.sh`).
 
 ### 4. The sync and backup clients, before anything else you find
 
