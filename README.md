@@ -678,6 +678,12 @@ Every push/sync scans the payload and aborts if it finds a credential shape.
 Accept a known string by adding the sha256 of the matched text to
 `.secret-allowlist`, or bypass once with `SYNC_SKIP_SECRET_SCAN=1`.
 
+`tests/test-payload-secret-scan.sh` runs that same scan, cut out of `claude-sync` by name, over
+the payload git would carry, so a file that would block every send fails CI before it merges. A
+placeholder in a shipped template is the usual cause: a key named `token`, `secret`, `password` or
+`api_key` followed by 24 or more letters, digits, `_`, `+`, `/` or `-` reads as a credential, so
+write placeholders with spaces or angle brackets (`<set by tracker.sh new-token>`).
+
 ## Tests
 
 ```bash
