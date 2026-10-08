@@ -55,7 +55,7 @@ bash ~/.claude/hooks/check-free-space.sh --report; echo "exit $?"
 It adds a reading to that history and says how much is left, then either the rate and how long
 until zero, or why it states no rate yet (the first reading, readings too close together, free
 space having gone back up, or not falling at all). Judge it by the exit code, not the wording:
-0 means there is room and zero is more than six hours out, 3 under the 20 GB floor, 4 falling fast
+0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the 20 GB floor, 4 falling fast
 enough to reach zero within six hours, and 2 that it could not measure, which is not the same as
 fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
 rather than waiting inside a command.

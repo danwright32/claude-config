@@ -14,8 +14,10 @@
 #   2  could not tell (no folder given, or not a folder), and the probe should run as before
 #
 # Evidence, any one of:
-#   - a `supabase` folder (the CLI's config and migrations) at the root or up to two levels down
-#   - a package.json up to two levels down depending on an @supabase/ package
+#   - a `supabase` folder anywhere in the top three levels: the CLI's config and migrations, or an app's own
+#     client folder such as src/lib/supabase, which is evidence too. A false yes only restores the
+#     probe every project had before, so the walk errs that way rather than toward a false no (L93)
+#   - a package.json in the top three levels depending on an @supabase/ package
 #   - an env file (.env, .env.*, .dev.vars) at the root setting a variable whose name holds SUPABASE
 # Source code that merely mentions the word is not evidence, and anything under node_modules or .git
 # is skipped: a dependency's own copy says nothing about this project. The walk is bounded at three

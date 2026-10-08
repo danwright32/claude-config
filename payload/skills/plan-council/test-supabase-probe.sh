@@ -63,6 +63,13 @@ uses "$P"
 check "so does one in a nested app's package.json" \
   "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
 
+# Deliberate: an app's own client folder is evidence too, and a false yes only restores the probe
+# every project had before this change, which is the harmless direction (L93).
+P="$TMP/client-folder"; mkdir -p "$P/src/lib/supabase"; printf 'export {}\n' > "$P/src/lib/supabase/client.ts"
+uses "$P"
+check "an app's own src/lib/supabase folder counts as using Supabase" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
 P="$TMP/env-only"; mkdir -p "$P"; printf 'NEXT_PUBLIC_SUPABASE_URL=https://abc.supabase.co\n' > "$P/.env.local"
 uses "$P"
 check "a SUPABASE variable in an env file means it uses Supabase" \
