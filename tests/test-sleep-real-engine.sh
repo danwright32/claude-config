@@ -67,9 +67,10 @@ unmeasured() { echo "UNMEASURED: $1"; printf 'SUITE-RESULT passed=%d failed=%d\n
 # The session driver itself, which needs only python3 and so runs everywhere, CI included: a session
 # that exits without reading its input must still end in a summary naming that, never a traceback
 # with no summary, which would leave every check after it judging an empty answer (lessons review
-# of d547970). A message bigger than a pipe holds makes the write fail every time, not by a race.
+# of d547970). A message bigger than a pipe holds (64 KiB) makes the write fail every time, not by a
+# race, and it stays under the 128 KiB Linux allows one argument (CI's runner refused 200,000).
 DRV_TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-sleep-real-engine-driver.XXXXXX")"
-DRV_SAID="$(python3 "$DIR/sleep-real-engine-session.py" "$DRV_TMP/out.jsonl" 30 1 "$(python3 -c 'print("x" * 200000)')" -- /bin/sh -c 'exit 3' 2>"$DRV_TMP/err")"
+DRV_SAID="$(python3 "$DIR/sleep-real-engine-session.py" "$DRV_TMP/out.jsonl" 30 1 "$(python3 -c 'print("x" * 100000)')" -- /bin/sh -c 'exit 3' 2>"$DRV_TMP/err")"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["exit"] == 3 and d["results"] == 0 and "input" in d.get("input_error", "") else 1)' "$DRV_SAID" 2>/dev/null \
   && check "the session driver says a session that stopped reading its input, with a summary" ok \
   || check "the session driver says a session that stopped reading its input, with a summary" "said: ${DRV_SAID:-nothing}; stderr: $(head -c 300 "$DRV_TMP/err")"
@@ -231,7 +232,7 @@ session() {
 }
 result_text() { python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["texts"]; print(t[int(sys.argv[2])] if len(t) > int(sys.argv[2]) else "")' "$1.summary" "$2"; }
 jget() { python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
+d = json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): d = d.get(k) if isinstance(d, dict) else None
 print(json.dumps(d) if not isinstance(d, str) else d)' "$1" "$2" 2>/dev/null; }
 uuid() { uuidgen | tr 'A-Z' 'a-z'; }
