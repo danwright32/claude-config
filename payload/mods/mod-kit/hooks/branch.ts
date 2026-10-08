@@ -36,6 +36,18 @@ const tryRun = async (run: Run, argv: string[]) => {
 }
 
 /**
+ * Where the checkout an absolute path sits in stands, as `$.modkit.branch` answers: the checkout
+ * found by `walk` (the kit's one walk for a `.git` entry), then read by `readBranch`. A walk that
+ * finds none is null, and git is asked nothing.
+ */
+export const branchAt = async (path: string, walk: (path: string) => Promise<string | null | undefined>, run: Run): Promise<ModKitBranch | null> => {
+  const root = await walk(path)
+  // Undefined and null alike: no checkout never reaches git as `git -C null` (#985 review).
+  if (root == null) return null
+  return readBranch(root, run)
+}
+
+/**
  * Where the checkout at `root` stands, asked of git (three reads at once, so the whole answer is
  * bounded by the slowest one). A branch git cannot read, a detached head, or a main working tree
  * git does not name is `unreadable`, saying which, never a guess: a reader deciding what an edit

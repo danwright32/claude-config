@@ -7,7 +7,7 @@ import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
 import { sendTwice } from './send.ts'
 import { githubRepo, repoName } from './repo.ts'
-import { readBranch } from './branch.ts'
+import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
 
@@ -281,11 +281,12 @@ export const register: Register = (on, options) => {
       pipeline: async ({ command }) => pipeline(command),
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
       repo: async ({ root, remote }) => ({ github: githubRepo(remote), name: repoName({ root, remote }) }),
-      branch: async ({ path }) => {
-        const root = await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))
-        if (root === undefined) return null
-        return readBranch(root, argv => built.process.run(argv, { timeoutMs: 3_000 }))
-      },
+      branch: async ({ path }) =>
+        branchAt(
+          path,
+          p => workingTree(p, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`)),
+          argv => built.process.run(argv, { timeoutMs: 3_000 }),
+        ),
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)

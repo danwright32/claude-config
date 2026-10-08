@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { isDefaultBranch, issuesOfBranch, mainOf, readBranch, type Run } from '../hooks/branch.ts'
+import { branchAt, isDefaultBranch, issuesOfBranch, mainOf, readBranch, type Run } from '../hooks/branch.ts'
 
 // Where a checkout stands (#978), read once by the kit for every mod: its main working tree, branch,
 // default branch and the issues the branch names. Each git read is the test's.
@@ -24,6 +24,19 @@ const gitSays = (says: { branch?: ReturnType<typeof ok>; worktrees?: ReturnType<
   }
   return { run, asked }
 }
+
+// #985 review, three times: the walk for a checkout answers undefined for none, and a null from it
+// must read the same way, never reach git as `git -C null`.
+test('a walk that finds no checkout, as undefined or as null, answers null and asks git nothing', async () => {
+  for (const none of [undefined, null]) {
+    const g = gitSays({})
+    expect(await branchAt('/tmp/backup/page.tsx', async () => none, g.run)).toBe(null)
+    expect(g.asked).toEqual([])
+  }
+  const g = gitSays({})
+  expect(await branchAt('/r/app/page.tsx', async () => '/r', g.run)).toMatchObject({ root: '/r', branch: '978-design-round-guard' })
+  expect(g.asked.length).toBe(3)
+})
 
 test('the issues a branch names: every run of 2 to 6 digits on its own', () => {
   expect(issuesOfBranch('978-design-round-guard')).toEqual([978])
