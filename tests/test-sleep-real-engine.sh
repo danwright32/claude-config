@@ -218,6 +218,8 @@ d=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): d = d.get(k) if isinstance(d, dict) else None
 print(json.dumps(d) if not isinstance(d, str) else d)' "$1" "$2" 2>/dev/null; }
 uuid() { uuidgen | tr 'A-Z' 'a-z'; }
+# The first N characters of a value, for a failure's evidence, without a pipe that can stop early (L183).
+clip() { local v="$1"; printf '%s' "${v:0:${2:-300}}"; }
 # Every Bash call a session's stream shows: the command, a tab, what came back.
 calls() { python3 - "$1" <<'PY'
 import json, sys
@@ -270,7 +272,7 @@ grep -q '^scope-modes: Sleep mode is on until' <<<"$SLEEP_SAID" && check "/sleep
   && check "the record keeps where Dan was before sleep (away here)" ok \
   || check "the record keeps where Dan was before sleep (away here)" "placeBefore=$(jget "$REC" placeBefore)"
 # Every listed repository is checked with GitHub at bedtime; gh failing here, each must close (#843).
-python3 - "$REC" "$HOME/.claude/mods/sleep-repos.json" <<'PY' && check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" ok || check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" "$(jget "$REC" repos | head -c 300)"
+python3 - "$REC" "$HOME/.claude/mods/sleep-repos.json" <<'PY' && check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" ok || check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" "$(clip "$(jget "$REC" repos)" 300)"
 import json, sys
 rec, lists = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
 named = {e if isinstance(e, str) else e.get('repo') for k in ('mergeOnly', 'mayDeploy') for e in lists.get(k, [])}
@@ -291,12 +293,16 @@ S2="$(uuid)"
 echo "-- two banned pushes (session $S2)"
 session "$WORK/s2.jsonl" 180 1 "$S2" --allowedTools Bash -- "BAN-STEP: run the two pushes."
 BAN="$(calls "$WORK/s2.jsonl")"
-grep -F 'git push --force origin HEAD:refs/heads/scratch-forced' <<<"$BAN" | grep -q 'sleep mode is on and Dan bans this while he sleeps' \
-  && check "a force push while asleep is refused by the overnight ban list (#834)" ok \
-  || check "a force push while asleep is refused by the overnight ban list (#834)" "calls: $(head -c 400 <<<"$BAN")"
-grep -F 'git push origin HEAD:main' <<<"$BAN" | grep -q 'Blocked overnight' \
-  && check "a push to the default branch while asleep is refused (#843)" ok \
-  || check "a push to the default branch while asleep is refused (#843)" "calls: $(head -c 400 <<<"$BAN")"
+FORCED="$(grep -F 'git push --force origin HEAD:refs/heads/scratch-forced' <<<"$BAN")"
+case "$FORCED" in
+  *'sleep mode is on and Dan bans this while he sleeps'*) check "a force push while asleep is refused by the overnight ban list (#834)" ok ;;
+  *) check "a force push while asleep is refused by the overnight ban list (#834)" "calls: $(clip "$BAN" 400)" ;;
+esac
+TO_MAIN="$(grep -F 'git push origin HEAD:main' <<<"$BAN")"
+case "$TO_MAIN" in
+  *'Blocked overnight'*) check "a push to the default branch while asleep is refused (#843)" ok ;;
+  *) check "a push to the default branch while asleep is refused (#843)" "calls: $(clip "$BAN" 400)" ;;
+esac
 [ "$(git -C "$WORK/sleepdemo.git" for-each-ref --format='%(refname) %(objectname)')" = "refs/heads/main $SEED" ] \
   && check "and origin is exactly as it was" ok \
   || check "and origin is exactly as it was" "$(git -C "$WORK/sleepdemo.git" for-each-ref --format='%(refname) %(objectname)' | tr '\n' ' ')"
@@ -310,21 +316,21 @@ P0="$(uuid)"
 echo "-- permission prompts, not a worker (session $P0)"
 session "$WORK/p0.jsonl" 180 1 "$P0" --settings "$HOOKS_JSON" -- "PERMISSION-STEP: run the two commands."
 if [ ! -s "$WORK/permission-hook.log" ]; then
-  unmeasured_parts+=("a worker's permission prompt: no PermissionRequest reached the settings hook in a headless session ($(calls "$WORK/p0.jsonl" | head -c 300)), so approval overnight is measured only by the mod's own suite")
+  unmeasured_parts+=("a worker's permission prompt: no PermissionRequest reached the settings hook in a headless session ($(clip "$(calls "$WORK/p0.jsonl")" 300)), so approval overnight is measured only by the mod's own suite")
 else
   [ ! -e "$REPO/allowed-overnight.txt" ] && [ ! -e "$REPO/denied-by-settings.txt" ] \
     && check "control: a session that is not a worker gets no prompt approved while asleep" ok \
-    || check "control: a session that is not a worker gets no prompt approved while asleep" "$(ls "$REPO"); $(calls "$WORK/p0.jsonl" | head -c 300)"
+    || check "control: a session that is not a worker gets no prompt approved while asleep" "$(ls "$REPO"); $(clip "$(calls "$WORK/p0.jsonl")" 300)"
   P1="$(uuid)"
   enrol "$P1"
   echo "-- permission prompts, a worker (session $P1, enrolled)"
   session "$WORK/p1.jsonl" 180 1 "$P1" --settings "$HOOKS_JSON" -- "PERMISSION-STEP: run the two commands."
   [ ! -e "$REPO/denied-by-settings.txt" ] \
     && check "a command a settings PermissionRequest hook denies stays refused for a worker asleep (#834)" ok \
-    || check "a command a settings PermissionRequest hook denies stays refused for a worker asleep (#834)" "the file was made: $(calls "$WORK/p1.jsonl" | head -c 300)"
+    || check "a command a settings PermissionRequest hook denies stays refused for a worker asleep (#834)" "the file was made: $(clip "$(calls "$WORK/p1.jsonl")" 300)"
   [ -e "$REPO/allowed-overnight.txt" ] \
     && check "and a worker's own permission prompt with nothing against it is approved (#834)" ok \
-    || check "and a worker's own permission prompt with nothing against it is approved (#834)" "$(calls "$WORK/p1.jsonl" | head -c 300)"
+    || check "and a worker's own permission prompt with nothing against it is approved (#834)" "$(clip "$(calls "$WORK/p1.jsonl")" 300)"
   # This worker claims nothing and notes nothing, so the driver's circuit breaker lets it go.
   [ "$(jget "$STATE/driver/$GEN/$P1.json" stopped)" = 'circuit breaker: 3 blocks in a row with no new commit, claim or note' ] \
     && check "a worker that makes no progress is let go by the circuit breaker after 3 blocks (#844)" ok \
@@ -337,12 +343,11 @@ enrol "$W1"
 echo "-- the worker (session $W1, enrolled)"
 session "$WORK/w1.jsonl" 600 1 "$W1" --allowedTools Bash Read -- "WORKER-STEP: sleep mode is on and this session is enrolled to work overnight."
 DRIVER="$STATE/driver/$GEN/$W1.json"
-[ -f "$DRIVER" ] || DRIVER="$(ls "$STATE"/driver/*/"$W1".json 2>/dev/null | head -1)"
-BLOCKS="$(jget "${DRIVER:-/nonexistent}" blocks)"
-case "$BLOCKS" in ''|null|0) check "the driver blocked the worker's Stop and kept it going (#844)" "driver record: $(head -c 400 "${DRIVER:-/nonexistent}" 2>&1)" ;; *) check "the driver blocked the worker's Stop and kept it going (#844)" ok ;; esac
+BLOCKS="$(jget "$DRIVER" blocks)"
+case "$BLOCKS" in ''|null|0) check "the driver blocked the worker's Stop and kept it going (#844)" "driver record: $(head -c 400 "$DRIVER" 2>&1)" ;; *) check "the driver blocked the worker's Stop and kept it going (#844)" ok ;; esac
 grep -q '^issues' "$WORK/source.log" 2>/dev/null \
   && check "the worker ran sleep-queue.sh next, which read the queue" ok \
-  || check "the worker ran sleep-queue.sh next, which read the queue" "the stand-in source was never asked: $(calls "$WORK/w1.jsonl" | head -c 400)"
+  || check "the worker ran sleep-queue.sh next, which read the queue" "the stand-in source was never asked: $(clip "$(calls "$WORK/w1.jsonl")" 400)"
 KINDS="$(python3 - "$NOTES" "$W1" <<'PY'
 import json, sys
 for line in open(sys.argv[1]):
@@ -361,7 +366,7 @@ grep -q '^stopped' <<<"$KINDS" && check "the worker stopped with a note when not
   || check "and the driver let it stop on that note, not on a breaker or a limit" "stopped=$(jget "${DRIVER:-/nonexistent}" stopped)"
 git -C "$WORK/sleepdemo.git" cat-file -e "refs/heads/sleep/1:hello.txt" 2>/dev/null \
   && check "the work landed on the claim's own branch on origin" ok \
-  || check "the work landed on the claim's own branch on origin" "origin has $(git -C "$WORK/sleepdemo.git" for-each-ref --format='%(refname)' | tr '\n' ' '); calls: $(calls "$WORK/w1.jsonl" | grep hello | head -c 300)"
+  || check "the work landed on the claim's own branch on origin" "origin has $(git -C "$WORK/sleepdemo.git" for-each-ref --format='%(refname)' | tr '\n' ' '); calls: $(clip "$(calls "$WORK/w1.jsonl" | grep hello)" 300)"
 [ "$(git -C "$REPO" branch --show-current)" = main ] \
   && check "the primary checkout was never switched off main (H7)" ok \
   || check "the primary checkout was never switched off main (H7)" "it is on $(git -C "$REPO" branch --show-current)"
@@ -409,7 +414,7 @@ for path in glob.glob(os.path.join(sys.argv[1], '*', sys.argv[2] + '.jsonl')):
 PY
 )"
 [ -n "$MORNING" ] && check "/wake submits the morning instruction as a turn of its own (#837)" ok \
-  || check "/wake submits the morning instruction as a turn of its own (#837)" "no turn holding 'Dan is up' in the waking session's transcript; results: $(cat "$WORK/s3.jsonl.summary" | head -c 300)"
+  || check "/wake submits the morning instruction as a turn of its own (#837)" "no turn holding 'Dan is up' in the waking session's transcript; results: $(head -c 300 "$WORK/s3.jsonl.summary")"
 grep -q '1.1 danwright32/sleepdemo: Add goodbye.txt' <<<"$MORNING" \
   && check "and it offers the worker's proposed issue for the morning picker" ok \
   || check "and it offers the worker's proposed issue for the morning picker" "$(head -c 400 <<<"$MORNING")"

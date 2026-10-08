@@ -1271,8 +1271,8 @@ it may ask you a few questions, one at a time:
   most work first. Each answer is posted on its issue as your dated decision.
 
 Every question has "Go to sleep now", which asks nothing more, and an issue's question also has
-"Skip this one". The questions share one 10 minute wait;
-anything you leave unanswered gets the strictest choice for the night (no merge, no deploy, and an
+"Skip this one". The questions share one 10 minute wait (a chosen
+limit, not a measurement); anything you leave unanswered gets the strictest choice for the night (no merge, no deploy, and an
 issue whose question is unanswered is not worked) and is listed again in the morning report.
 `/sleep` refuses when the Mac is on battery, so plug it in first. It keeps the Mac awake until the
 night ends, and the band above the prompt shows ASLEEP in every session.
@@ -1295,7 +1295,8 @@ banned below. It writes for you only into the report: a question it needs you to
 issue or lesson, or anything it noticed. An issue that takes two attempts or two hours of work is
 parked for the morning. A session that makes no progress for three turn ends in a row, or for 20
 minutes, is let go with a note. A usage limit or an overloaded server is waited out (5, 10, 20 and
-40 minutes, then hourly, all night, each wait in the report). Work stops when the weekly usage
+40 minutes, then hourly, all night, each wait in the report). These limits are chosen, not
+measurements. Work stops when the weekly usage
 reaches 95 percent; if it is already there when sleep starts, each session stops at its first turn
 end and the report says why.
 
