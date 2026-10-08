@@ -496,6 +496,8 @@ case "$show" in
     # Knobs that make the loaded rule read back short: no udp half, or another port.
     protos="tcp udp"; [ -e "$FAKE/knob-pf-no-udp" ] && protos=tcp
     [ -e "$FAKE/knob-pf-port" ] && ports="$(cat "$FAKE/knob-pf-port")"
+    # pfctl may print the group by name rather than number.
+    [ -e "$FAKE/knob-pf-group-name" ] && gid="$(cat "$FAKE/knob-pf-group-name")"
     for proto in $protos; do for p in $ports; do
       echo "block return out quick proto $proto from any to <bug_bash_targets> port = $p group != $gid"
     done; done
@@ -633,6 +635,14 @@ else
   reset_fake; echo 9 > "$FAKE/knob-pf-port"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a rule that reads back for another port is refused" 8 "port $dead_port" "$rc" "$out"
+  # A rule that reads back with the group by name is judged by that group's id (lessons review of
+  # #938): the proxy's own group by name is allowed, a group that does not resolve is refused.
+  reset_fake; id -gn > "$FAKE/knob-pf-group-name"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule naming the proxy's group by name is allowed" 0 "^READ-ONLY" "$rc" "$out"
+  reset_fake; echo no_such_group_813 > "$FAKE/knob-pf-group-name"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule naming a group that does not resolve is refused" 8 "no_such_group_813" "$rc" "$out"
   reset_fake; echo 4242 > "$FAKE/knob-pf-gid"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a proxy not running in the group the rule lets through is refused" 8 "sudo -n -g _bugbash" "$rc" "$out"

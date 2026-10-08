@@ -46,6 +46,17 @@ PROBE_TIMEOUT_MS=3000
 fail() { echo "$*" >&2; exit 1; }
 need_node() { command -v node >/dev/null 2>&1 || fail "node is not on PATH, and resolving the target and probing it both need it."; }
 is_number() { [ -n "$1" ] && [ -z "$(tr -d '0-9' <<< "$1")" ]; }
+# A group's id from its name: the directory service on macOS, the group database elsewhere.
+group_id() {
+  local g=""
+  if command -v dscl >/dev/null 2>&1; then
+    g="$(dscl . -read "/Groups/$1" PrimaryGroupID 2>/dev/null | awk '{ print $2 }')"
+  fi
+  if [ -z "$g" ] && command -v getent >/dev/null 2>&1; then
+    g="$(getent group "$1" 2>/dev/null | cut -d: -f3)"
+  fi
+  printf '%s' "$g"
+}
 sha256_of() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -d' ' -f1
 }
@@ -120,7 +131,14 @@ cmd_check() {
   grep -qx 'anchored yes' <<< "$status" || fail "the system's packet filter rules (/etc/pf.conf) no longer consult the com.apple anchors, so the rule would never be read."
   rules="$(grep '^rule block return out quick proto [a-z]* from any to <bug_bash_targets> ' <<< "$status")"
   [ -n "$rules" ] || fail "the egress rule is not loaded for $host."
-  lets="$(sed -n 's/.* group != \([0-9][0-9]*\).*/\1/p' <<< "$rules" | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  lets="$(sed -n 's/.* group != \([^ ]*\).*/\1/p' <<< "$rules" | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  # pfctl may print the group by name: judge it by that group's id.
+  if [ -n "$lets" ] && ! is_number "$lets" && [ -z "$(tr -d 'A-Za-z0-9_.-' <<< "$lets")" ]; then
+    local named
+    named="$(group_id "$lets")"
+    is_number "$named" || fail "the rule lets through group $lets, which does not resolve to a group id on this Mac."
+    lets="$named"
+  fi
   if [ "$lets" != "$egid" ]; then
     fail "the rule lets through group ${lets:-none}, but the read only proxy runs as group $egid, so it would be refused too. Start the proxy in the $GROUP group: sudo -n -g $GROUP \"\$(command -v node)\" ~/.claude/skills/bug-bash/read-only-proxy.js --state <run dir>/proxy --egress"
   fi
