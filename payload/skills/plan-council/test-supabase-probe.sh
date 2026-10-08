@@ -128,8 +128,21 @@ check "probe only when Supabase is used or unknown; state is not-applicable, rea
 
 check "the grounding gap is decided by the schema state, not the raw boolean" \
   "$(grep -q 'schemaState(a, preflight)' "$WF" && ! grep -q '!preflight.schemaReachable' "$WF" && echo ok || echo "the gap test still reads schemaReachable directly")"
-check "and the state is returned with the preflight, for the skill to read" \
-  "$(grep -qE 'return \{[^}]*preflight: \{ \.\.\.preflight, schemaState' "$WF" && echo ok || echo "not in the return")"
+# The returned preflight carries the state for the skill to read, and a probe that NEVER RAN stays
+# null: spreading null into an object would make it look like a probe that ran and read nothing
+# (L98, L11), and on usesSupabase:false would even look not applicable and quiet.
+pr="$(grep -E '^const preflightResult = ' "$WF")"
+cat > "$TMP/result.js" <<JS
+$fns
+$pr
+const ran = preflightResult({ repoReadable: true, notes: '' }, { usesSupabase: false })
+console.log([preflightResult(null, { usesSupabase: false }), preflightResult(null, {}), ran.repoReadable, ran.schemaState].join(','))
+JS
+res="$(node "$TMP/result.js" 2>&1)"
+check "a probe that ran is returned with its schemaState, and one that never ran stays null" \
+  "$([ "$res" = ",,true,not-applicable" ] && echo ok || echo "got: $res")"
+check "and the workflow returns that, not a spread of whatever came back" \
+  "$(grep -qE '^return \{[^}]*preflight: preflightResult\(preflight, a\)' "$WF" && echo ok || echo "not in the return")"
 
 # ---- 3. the skill runs the detector, passes its answer, and warns only on a real gap ----
 check "the skill runs uses-supabase.sh on the project" \

@@ -192,6 +192,9 @@ if (a.mode === 'revise') {
 const probesSchema = (args) => args.usesSupabase !== false
 const schemaState = (args, pf) => !probesSchema(args) ? 'not-applicable' : (!pf || typeof pf.schemaReachable !== 'boolean') ? 'unverified' : (pf.schemaReachable ? 'reachable' : 'unreachable')
 const preflightPrompt = (args, feat, dir) => `Quick grounding probe for planning "${feat}". Project directory: ${dir}.\n(1) Can you actually read this project's source files and its CLAUDE.md? Try listing/reading one or two.\n` + (probesSchema(args) ? `(2) Can you reach the live database schema via the Supabase MCP tools? Try one cheap call.\nReport a boolean for each plus a short note on anything you could NOT access.` : `Skip any database probe: nothing in this project shows it uses a hosted database, so report only that boolean plus a short note on anything you could NOT read.`) + ` Be honest: a "false" here is valuable, not a failure.`
+// What the run returns as `preflight`: the probe's answer plus its schemaState, or null when the
+// probe never ran, so a dead probe is never dressed up as one that ran and read nothing (L98).
+const preflightResult = (pf, args) => pf ? { ...pf, schemaState: schemaState(args, pf) } : null
 const preflightSchema = (args) => ({ type: 'object', additionalProperties: false, required: probesSchema(args) ? ['repoReadable', 'schemaReachable', 'notes'] : ['repoReadable', 'notes'], properties: probesSchema(args) ? { repoReadable: { type: 'boolean' }, schemaReachable: { type: 'boolean' }, notes: { type: 'string' } } : { repoReadable: { type: 'boolean' }, notes: { type: 'string' } } })
 phase('Preflight')
 const preflight = await agent(
@@ -371,4 +374,4 @@ while ((stillBroken() || stillViolating()) && rcRounds < 2) {
   lessonsAudit = normalizeAudit(auditN)
 }
 
-return { feature, criteria, preflight: { ...preflight, schemaState: pfSchema }, options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, lessonsAudit, rcRounds }
+return { feature, criteria, preflight: preflightResult(preflight, a), options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, lessonsAudit, rcRounds }
