@@ -5583,6 +5583,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   to 0%, and every flip was a real change to write: 236 commits to one readings file in an hour,
   until three writes in a row lost GitHub's sha check.)
   SHORT: A newest-wins merge must judge newness by when the value was true at its source, never when this copy read it, or a stale read wins.
+- **L1019. A memory address (Swift's ObjectIdentifier, Python's id(), a raw pointer) identifies an object only while it lives, and the allocator hands the same address to the next object, which then inherits whatever was recorded under it. Key a record on a stored identity, or hold the object weakly and check it is the same one, never on its address alone.** (overture#4609, 2026-10-08)
+  SHORT: A memory address names an object only while it lives; the next one reuses it and inherits its record, so key on a stored identity, never an address.
 
 ## Security and privacy
 
