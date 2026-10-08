@@ -244,6 +244,34 @@ test("a session's repository is read as $.modkit.repo: its GitHub repository and
   expect(await ask({ remote: 'https://gitlab.com/team/thing.git' })).toEqual({ github: null, name: 'thing' })
 })
 
+// #961: a gh command, a repository as gh spells one and a github.com link, each read by the kit for
+// every mod. The reader stands in for a mod, naming the noun and its input.
+const ghReader: { name: string; register: Register } = {
+  name: 'gh-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const { noun, input } = JSON.parse(String((e as { command?: string }).command)) as { noun: 'gh' | 'ghRepo' | 'linkRepo'; input: never }
+      const answer = noun === 'gh' ? await $.modkit.gh(input) : noun === 'ghRepo' ? await $.modkit.ghRepo(input) : await $.modkit.linkRepo(input)
+      return { deny: JSON.stringify(answer === undefined ? 'none' : answer) }
+    })
+  },
+}
+
+test('a gh command, a repository gh names and a github.com link are read as $.modkit.gh, ghRepo and linkRepo', { plugins: [ghReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const ask = async (noun: string, input: unknown) => {
+    const r = (await $.tool.call({ tool: 'Bash', command: JSON.stringify({ noun, input }) } as never)) as { deny?: string; text?: string }
+    return JSON.parse(r.deny ?? r.text ?? 'null')
+  }
+  expect(await ask('gh', { words: ['gh', '-R', 'O/R', 'pr', 'merge', '5', '--squash'] })).toEqual({ sub: 'pr', act: 'merge', flags: [{ name: '-R', value: 'O/R' }, { name: '--squash', value: true }], positionals: ['5'], named: 'o/r', unreadable: false })
+  expect((await ask('gh', { words: ['gh', 'api', '-X', 'PUT', 'repos/o/r/pulls/5/merge'] })).api).toEqual({ method: 'PUT', endpoint: 'repos/o/r/pulls/5/merge', fields: [], input: false, repo: 'o/r', query: null })
+  expect(await ask('gh', { words: ['git', 'status'] })).toBe('none')
+  expect(await ask('ghRepo', { spelling: 'git@github.com:O/R.git' })).toBe('o/r')
+  expect(await ask('ghRepo', { spelling: 'https://gitlab.com/o/r' })).toBeNull()
+  expect(await ask('linkRepo', { link: 'https://github.com/Owner/Repo/pull/5' })).toBe('Owner/Repo')
+  expect(await ask('linkRepo', { link: 'https://gitlab.com/o/r/pull/5' })).toBeNull()
+})
+
 // Any mod's own tool result drawn as the boxed card (#663), from plain data: a title whose runs can
 // carry colour (a state word leading it), then body lines. The blocked card is one use of it.
 // A plugin in a test runs in its own environment, so the card is spelled inside the hook.

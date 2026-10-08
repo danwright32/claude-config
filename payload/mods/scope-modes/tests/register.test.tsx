@@ -4,7 +4,9 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
@@ -53,7 +55,10 @@ const deps: { name: string; register: Register } = {
           pipeline: async (input: { command: string }) => kit('pipeline', input),
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
+          gh: async (input: { words: string[] }) => kit('gh', input),
           repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
+          ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
+          linkRepo: async (input: { link: string }) => kit('linkRepo', input),
           bandRow: async (row: Row) => {
             built.ui.log('BAND ' + JSON.stringify(row))
             await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
@@ -202,6 +207,8 @@ type Opts = {
   reportFails?: Record<string, string>
   /** HOME stops reading once a note is written, so the final render's own setup throws. */
   homeGoneAfterNote?: boolean
+  /** The session's GH_REPO, unset by default (#961). */
+  ghRepoEnv?: string
   /** What this session's usage reads, or a read that throws. */
   usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
   /** /repo is a linked worktree rather than a primary checkout (#834). */
@@ -225,6 +232,9 @@ type Opts = {
   remote?: string | null
   /** mod-kit's repo reader fails (#979 review). */
   repoReaderFails?: boolean
+  /** mod-kit's readers of a repository gh spells and of a github.com link fail (#961). */
+  ghRepoReaderFails?: boolean
+  linkReaderFails?: boolean
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
@@ -297,7 +307,10 @@ const world = (on: On, o: Opts = {}) => {
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
-  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' && !w.homeGone ? '/Users/x' : undefined }) as never)
+  on('env.get', ($, e) => {
+    const name = (e as unknown as { name: string }).name
+    return { value: name === 'HOME' && !w.homeGone ? '/Users/x' : name === 'GH_REPO' ? w.o.ghRepoEnv : undefined } as never
+  })
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
   let driverWrites = 0
@@ -393,11 +406,15 @@ const world = (on: On, o: Opts = {}) => {
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
     if (cmd === '__modkit') {
-      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null }
+      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; spelling?: string; link?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
       if (a[0] === 'repo' && o.repoReaderFails) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
-      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
+      if (a[0] === 'ghRepo' && o.ghRepoReaderFails) return fail(1, 'mod-kit is not loaded')
+      if (a[0] === 'ghRepo') return ok(JSON.stringify(ghRepo(input.spelling)))
+      if (a[0] === 'linkRepo' && o.linkReaderFails) return fail(1, 'mod-kit is not loaded')
+      if (a[0] === 'linkRepo') return ok(JSON.stringify(linkRepo(input.link)))
+      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
@@ -1115,6 +1132,46 @@ test('only his answer to leave_pr_open leaves a PR open: a picker of Claude\'s o
   await call($ as never, leave(31, { repo: 'o/r' }, 'l4'))
   expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
   expect(w.toasts).toEqual([])
+})
+
+// #961: the branch's own PR is matched to Dan's choice by the repository its link names, read by
+// mod-kit's one reader of a github.com link, on the table every reading of a link is pinned on. The
+// session's own repository is another, so a link naming none is never taken for o/r.
+test("the branch's own PR is matched to Dan's choice to leave it open by the repository its link names, on every shared case (#961)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Leave it open' })
+  const own = (url: string) => ({ ...merged('OPEN'), pr: { ...merged('OPEN').pr, url, headRefOid: 'ccc3333' }, others: [] })
+  w.o.gh = own('https://github.com/o/r/pull/12')
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, leave(12, { repo: 'o/r' }))
+  w.o.remote = 'git@github.com:x/y.git'
+  const got: { why: string; settled: boolean }[] = []
+  for (const f of LINK_FIXTURES) {
+    w.o.gh = own(f.link)
+    await command($ as never, 'winddown')
+    got.push({ why: f.why, settled: (await stop($ as never)).block === undefined })
+  }
+  expect(got).toEqual(LINK_FIXTURES.map(f => ({ why: f.why, settled: f.repo?.toLowerCase() === 'o/r' })))
+})
+
+test("a PR link mod-kit cannot read refuses the turn end rather than finish winding down (#961)", withDeps, async ($, on) => {
+  const { clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, linkReaderFails: true })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the finish check failed \(.*mod-kit is not loaded/)
+})
+
+test('asleep, GH_REPO is read as gh reads it, and one that cannot be read refuses a write naming no repository (#961)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s9'] }) }, ghRepoEnv: 'https://github.com/Other/X.git' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to other\/x from a checkout of o\/r/)
+  w.o.ghRepoEnv = 'git@github.com:O/R.git'
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toBe('ran')
+  w.o.ghRepoEnv = 'nonsense'
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to GitHub where the repository it reaches could not be resolved/)
+  w.o.ghRepoEnv = 'o/r'
+  w.o.ghRepoReaderFails = true
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to GitHub where the repository it reaches could not be resolved/)
 })
 
 // With no repository named, leave_pr_open asks about the PR in the session's own, read from its

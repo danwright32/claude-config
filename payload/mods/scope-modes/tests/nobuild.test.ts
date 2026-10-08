@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { inScratch, noBuildRefusal, type Cmd } from '../hooks/nobuild.ts'
-import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { inScratch, noBuildRefusal } from '../hooks/nobuild.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { readCommands } from './read.ts'
 
 // Commands as mod-kit hands them over, read by mod-kit's own reader: a byte for byte copy under
 // tests/mod-kit, which tools/check-mod-shared-parts.sh holds to mod-kit's own (a test cannot import
@@ -26,13 +26,7 @@ const line = (items: (string[] | '|')[]) => {
   })
   return out
 }
-const run = (command: string) => {
-  const commands: Cmd[] = pipeline(command).map(c => {
-    const g = git(c.words)
-    return g ? { ...c, git: { sub: g.sub, args: g.args } } : c
-  })
-  return noBuildRefusal({ tool: 'Bash', input: { command }, commands, writes: commandWrites(command, CWD, HOME) })
-}
+const run = (command: string) => noBuildRefusal({ tool: 'Bash', input: { command }, commands: readCommands(command), writes: commandWrites(command, CWD, HOME) })
 const bash = (...items: (string[] | '|')[]) => run(line(items))
 const tool = (name: string, input: Record<string, unknown>) => noBuildRefusal({ tool: name, input, commands: [], writes: { files: [], changes: [], unnamed: [] } })
 const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/0a1b/scratchpad'
@@ -230,6 +224,11 @@ describe('still refused, beside what the audit opened up (#702)', () => {
     expect(what(bash(['gh', 'api', 'graphql', '-f', 'query=mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }']))).toBe('call the GitHub API to run mergePullRequest')
     expect(what(bash(['gh', 'api', 'graphql', '-f', 'query=mutation { createIssue(input: {}) { clientMutationId } closePullRequest(input: {}) { clientMutationId } }']))).toBe('call the GitHub API to run closePullRequest')
     expect(what(bash(['gh', 'api', 'graphql', '-F', 'query=@mutation.graphql']))).toBe('call the GitHub API with a query that could not be read')
+  })
+  test('a gh api call the mod was given no gh reading for cannot be judged (#961)', () => {
+    const command = `gh api graphql -f 'query={ viewer { login } }'`
+    const unread = readCommands(command).map(({ gh: _gh, ...c }) => c)
+    expect(what(noBuildRefusal({ tool: 'Bash', input: { command }, commands: unread, writes: commandWrites(command, CWD, HOME) }))).toBe('call the GitHub API in a way that could not be read')
   })
   test('SQL that writes, around a string or a comment', () => {
     expect(what(bash(['psql', '$DB', '-c', "UPDATE jobs SET status = 'select'"]))).toBe('change data with SQL')

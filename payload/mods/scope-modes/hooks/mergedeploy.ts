@@ -1,5 +1,4 @@
-import { ghApi, ghArgs, graphqlQuery, hasFlag, normRepo } from './ghargs.ts'
-import { deployWith, operations, runnerScript, type Cmd } from './nobuild.ts'
+import { deployWith, hasFlag, operations, runnerScript, runsHelper, type Cmd } from './nobuild.ts'
 import { resolveDir } from './overnight.ts'
 
 // Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
@@ -166,17 +165,9 @@ export type Where = { defaultBranch: string | null; currentBranch: string | null
 const isFlag = (w: string) => w.startsWith('-') && w !== '-'
 const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 // The merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them, by
-// ghargs.ts (one reader, L613): the repository it names, undefined for none, null for one that
-// cannot be read.
-const helperRepo = (words: string[]): string | null | undefined => {
-  const at = words.findIndex(w => /(?:^|\/)merge-when-ready\.sh$/.test(w))
-  const a = ghArgs(['gh', 'pr', 'merge', ...words.slice(at + 1)])
-  return a.unreadable ? null : a.named
-}
-const repoOfEndpoint = (endpoint: string | undefined) => {
-  const m = /^\/?(?:https:\/\/api\.github\.com\/)?\/?repos\/([^/]+\/[^/?#]+)/.exec(endpoint ?? '')
-  return m ? normRepo(m[1] as string) : undefined
-}
+// mod-kit's one reader (L613, #961), asked once per command: the repository it names, undefined for
+// none, null for one that cannot be read, or that no reading was given for.
+const helperRepo = (c: Cmd): string | null | undefined => (!c.mergeHelper || c.mergeHelper.unreadable ? null : c.mergeHelper.named)
 const MERGE_MUTATION = /^(?:mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)$/
 // Mutations that write a branch directly, which can be the default branch: refused everywhere, as a push to it is.
 const BRANCH_MUTATION = /^(?:createCommitOnBranch|updateRef|updateRefs|createRef|deleteRef)$/
@@ -229,26 +220,29 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
   const words = c.words
   const cmd = name(words[0])
   // The merge helper merges by gh inside a script the reader never sees, so it is a merge by its name.
-  if (words.some(w => /(?:^|\/)merge-when-ready\.sh$/.test(w))) out.push({ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: helperRepo(words) })
+  if (runsHelper(words)) out.push({ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: helperRepo(c) })
   if (c.git?.sub === 'push') {
     const p = pushToDefault(c.git.args, where)
     if (p) out.push({ kind: 'push-default', what: p })
   }
   if (cmd === 'gh') {
-    // Read by ghargs.ts, the one reading of gh's arguments in this mod (#834): joined and clustered
-    // flags, a PR link naming its repository, and a flag before the subcommand it cannot read, which
-    // reaches a repository that cannot be told (null).
-    const a = ghArgs(words)
+    // Read by mod-kit's one reading of gh's arguments (#834, #961), asked once per command: joined
+    // and clustered flags, a PR link naming its repository, and a flag before the subcommand it
+    // cannot read, which reaches a repository that cannot be told (null). A command it gave no
+    // reading for cannot be read either.
+    const a = c.gh ?? { sub: '', act: '', flags: [], positionals: [], named: null, unreadable: true }
     const { sub, act } = a
     const repo = a.unreadable ? null : a.named
     if (a.unreadable) out.push({ kind: 'merge', what: 'run a gh command whose flags cannot be read', repo: null })
     if (sub === 'pr' && act === 'merge') out.push({ kind: 'merge', what: `merge a PR${hasFlag(a, '--auto') ? ' (auto merge)' : ''}`, repo })
     if (sub === 'workflow' && act === 'run') out.push({ kind: 'deploy', what: 'run a workflow (gh workflow run)', repo })
-    if (sub === 'api') {
-      const { method, endpoint } = ghApi(a)
-      const at = repoOfEndpoint(endpoint) ?? repo
+    if (sub === 'api' && a.api) {
+      const { method, endpoint, query: doc } = a.api
+      // The repository its endpoint names as gh reaches it, else the one the command names; an
+      // endpoint whose repository cannot be read is one that cannot be told (null), never the
+      // command's or the checkout's (#961).
+      const at = a.api.repo === undefined ? repo : a.api.repo
       if (endpoint === 'graphql') {
-        const doc = graphqlQuery(a)
         const fields = doc === null ? null : operations(doc).filter(o => o.kind === 'mutation').flatMap(o => (o.spreads ? ['...'] : o.fields))
         if (fields === null) out.push({ kind: 'merge', what: 'call the GitHub API with a query that could not be read', repo: at })
         else {

@@ -907,21 +907,32 @@ for m in remote-regex remote-last-part remote-strip; do
     || check "and names $m, pointing it at modkit.repo" "$out"
 done
 case "$out" in *clean-asks-kit*) check "a mod asking the kit, or naming an address, passes" "$out" ;; *) check "a mod asking the kit, or naming an address, passes" ok ;; esac
-# The one known exception (#961) covers scope-modes' gh argument reader in hooks/ghargs.ts alone:
-# it is printed as such on every run, and a copy anywhere else in scope-modes still fails.
+# #961 moved scope-modes' gh argument reader into mod-kit, so its copy in hooks/ghargs.ts fails the
+# run like any other, never named as a known exception again (L373: the exception's premise is spent).
 M9E="$TMPROOT/m9e"
 mkmodsrc "$M9E" scope-modes 'export const register = on => {}'
 printf '%s\n' 'export const normRepo = s => s.trim().replace(/\.git$/, "")' > "$M9E/scope-modes/hooks/ghargs.ts"
 out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
-[ "$code" -eq 0 ] && check "scope-modes' gh argument reader is a known exception, not a failure" ok \
-  || check "scope-modes' gh argument reader is a known exception, not a failure" "exit=$code out=$out"
-printf '%s\n' "$out" | grep -q 'scope-modes keeps its own remote-reader in hooks/ghargs.ts, a known exception until #961' \
-  && check "and is said on every run, with the issue that ends it" ok || check "and is said on every run, with the issue that ends it" "$out"
-printf '%s\n' 'const slug = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote)' > "$M9E/scope-modes/hooks/register.ts"
-out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
-[ "$code" -eq 1 ] && check "a copy elsewhere in scope-modes still fails the run" ok || check "a copy elsewhere in scope-modes still fails the run" "exit=$code out=$out"
-printf '%s\n' "$out" | grep -q 'scope-modes keeps its own remote-reader at /hooks/register.ts:1' \
-  && check "named by its own file and line" ok || check "named by its own file and line" "$out"
+[ "$code" -eq 1 ] && check "after #961 scope-modes keeping its gh argument reader's address parsing fails the run" ok \
+  || check "after #961 scope-modes keeping its gh argument reader's address parsing fails the run" "exit=$code out=$out"
+case "$out" in *'known exception'*) check "and is never named as a known exception" "$out" ;; *) check "and is never named as a known exception" ok ;; esac
+printf '%s\n' "$out" | grep 'scope-modes keeps its own remote-reader at /hooks/ghargs.ts:1' | grep -q 'modkit.ghRepo(' \
+  && check "named by its own file and line, and pointed at modkit.ghRepo" ok || check "named by its own file and line, and pointed at modkit.ghRepo" "$out"
+# #961: reading a github.com link's repository by hand, as is it live and scope-modes did four ways
+# (no end, an end, a case, a search through gh's output). Each fails the run, pointed at
+# $.modkit.linkRepo; a mod asking the kit, or taking api.github.com off an endpoint, passes.
+M9L="$TMPROOT/m9l"
+mkmodsrc "$M9L" clean-asks-link 'const repo = await $.modkit.linkRepo({ link: url }); const ep = e.replace(/^https:\/\/api\.github\.com\//, "")'
+mkmodsrc "$M9L" link-open 'const repoOfUrl = url => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/.exec(url ?? "")?.[1]'
+mkmodsrc "$M9L" link-anchored 'const repoOfLink = url => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+$/i.exec(url ?? "")?.[1]'
+mkmodsrc "$M9L" link-class 'const LINK = /^(?:https?:\/\/)?(?:www\.)?github\.com\/[^/]+\/[^/]+/i'
+out="$(bash "$SHARED" "$M9L" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a hand rolled reading of a github.com link fails the run" ok || check "a hand rolled reading of a github.com link fails the run" "exit=$code out=$out"
+for m in link-open link-anchored link-class; do
+  printf '%s\n' "$out" | grep "$m keeps its own link-reader" | grep -q 'modkit.linkRepo(' && check "and names $m, pointing it at modkit.linkRepo" ok \
+    || check "and names $m, pointing it at modkit.linkRepo" "$out"
+done
+case "$out" in *clean-asks-link*) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" "$out" ;; *) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" ok ;; esac
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.
