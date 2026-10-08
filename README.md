@@ -639,8 +639,9 @@ holding no `SKILL.md` and two loose markdown files) and every one of the 43 real
 
 The terminal line is said on every run, but the desktop notification is posted once per new folder:
 the same set refused again posts nothing, a folder joining it posts again, and a set that only
-shrinks is not news. The pull's notice about kept local files a send will refuse works the same
-way. The record is `.unloadable-notified` in the sync clone (claude-config#968).
+shrinks is not news. A folder counts as told only once a notification was really posted, so one
+held by the sleep record, turned off or failed is posted on the next run instead. The pull's notice
+about kept local files a send will refuse works the same way. The record is `.unloadable-notified` in the sync clone (claude-config#968).
 
 A skill installed as a git clone keeps its `.git` when the shared config retires it, because the
 mirror never touches `.git`, so the retirement used to leave a folder holding nothing else, reported

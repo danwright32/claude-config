@@ -265,14 +265,26 @@ COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.
 # asleep (sleep mode, claude-config#841): what it would have said goes to the log instead, for the
 # morning. The sleep record is read through the tool's own copy of lib/sleep.sh, the one predicate
 # every hook asks, and a record (or a lib) that cannot be read counts as awake, so it notifies.
+# NOTIFY_POSTED says whether the last call really POSTED, for a caller that records a notice as
+# delivered (notify_posted below); notify itself never fails the run.
+NOTIFY_POSTED=0
 notify(){
+  NOTIFY_POSTED=0
   [ "${SYNC_NO_NOTIFY:-0}" = "1" ] && return 0
   if [ -f "$SYNC_SELF_PAYLOAD/hooks/lib/sleep.sh" ] && ( . "$SYNC_SELF_PAYLOAD/hooks/lib/sleep.sh" && sleep_active "$CLAUDE_HOME/state/sleep/current.json" ); then
     sync_log_line "not shown, Dan is asleep: $1"
     return 0
   fi
   local n="${SYNC_NOTIFIER:-terminal-notifier}"
-  command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 || true
+  command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 && NOTIFY_POSTED=1
+  return 0
+}
+# notify, answering whether the notification was really POSTED: not when notifications are off,
+# when the sleep record held it for the morning, or when the notifier is missing or failed. So one
+# nobody saw is tried again rather than recorded as told (claude-config#968, L368).
+notify_posted(){
+  notify "$1"
+  [ "$NOTIFY_POSTED" = 1 ]
 }
 # The log the scheduled and watch jobs write to (their launch agents point stdout and stderr here).
 # A line appended directly, with its own time, for an event that must leave a record whichever entry
@@ -1409,13 +1421,15 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
     fi
     named+="  skills/$entry: $reason"$'\n'
   done < <(unloadable_skill_entries "$1")
-  # Recorded before the early return, so a set that empties is remembered as empty and the same
+  # Recorded even when nothing is refused, so a set that empties is remembered as empty and the same
   # folder turning up again later is news again.
-  local fresh; fresh="$(unloadable_notice_is_new "$2" "$entries")"
-  [ -z "$named" ] && return 0
+  if [ -z "$named" ]; then
+    unloadable_notice "$2" "" "skills that cannot load were not $2"
+    return 0
+  fi
   echo "claude-sync: these entries under skills/ cannot load, so they were NOT $2 and nothing else about this run was affected:" >&2
   printf '%s' "$named" >&2
-  [ -n "$fresh" ] && notify "skills that cannot load were not $2"
+  unloadable_notice "$2" "$entries" "skills that cannot load were not $2"
   return 0
 }
 
@@ -1425,35 +1439,39 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
 # not changed: the alert that teaches people to dismiss alerts (L36). The terminal line above is
 # still said on every run, because it goes to the log and costs nobody anything.
 #
-# Prints "new" when the set holds a folder the last notice for this verb did not name, and records
-# the current set either way. A set that only SHRANK is not news, and a folder that left and came
-# back is. Keyed per notice, because "not sent", "not applied to this Mac" and the apply's "kept
-# local files a send will refuse" are about different folders. A record that cannot be read or written fails toward notifying (L42): a repeated notice
-# is noise, a missing one is a broken skill nobody hears about.
-unloadable_notice_is_new(){   # $1 = the verb  $2 = the entries refused now, one per line
-  local f="$UNLOADABLE_NOTIFIED_FILE" prev cur="/" e fresh="" tmp
+# Posts $3 when the set holds a folder the last notice under this key did not name, then records
+# which folders have now been told about. A set that only SHRANK is not news, and a folder that left
+# and came back is. Keyed per notice, because "not sent", "not applied to this Mac" and the apply's
+# "kept local files a send will refuse" are about different folders.
+#
+# A folder counts as told only once the notification was really POSTED (L368). When it was not
+# (notifications off, the sleep record holding it for the morning, a notifier missing or failing),
+# only the folders already told about are kept in the record, so the new ones are news again on
+# the next run: otherwise a condition that began at night is never seen. A record that cannot be
+# read or written fails toward notifying (L42): a repeated notice is noise, a missing one is a
+# broken skill nobody hears about.
+unloadable_notice(){   # $1 = the key  $2 = the entries refused now, one per line  $3 = the message
+  local f="$UNLOADABLE_NOTIFIED_FILE" prev cur="/" told="/" e fresh="" tmp
   prev="$(awk -F'\t' -v k="$1" '$1 == k { print $2 }' "$f" 2>/dev/null || true)"
   # Joined with a slash, which no folder name can contain, so a name with a space cannot match part
   # of another.
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     cur+="$e/"
-    case "$prev" in *"/$e/"*) ;; *) fresh=new ;; esac
+    case "$prev" in *"/$e/"*) told+="$e/" ;; *) fresh=new ;; esac
   done <<ENTRIES
 $2
 ENTRIES
-  tmp="$(mktemp "$f.XXXXXX" 2>/dev/null)" || tmp=""
-  if [ -n "$tmp" ]; then
-    if { awk -F'\t' -v k="$1" '$1 != k' "$f" 2>/dev/null || true
-         [ "$cur" = / ] || printf '%s\t%s\n' "$1" "$cur"; } > "$tmp"; then
-      mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; fresh=new; }
-    else
-      rm -f "$tmp"; fresh=new
-    fi
-  elif [ "$cur" != / ]; then
-    fresh=new
+  if [ -n "$fresh" ] && ! notify_posted "$3"; then
+    cur="$told"
   fi
-  printf '%s' "$fresh"
+  tmp="$(mktemp "$f.XXXXXX" 2>/dev/null)" || return 0
+  if { awk -F'\t' -v k="$1" '$1 != k' "$f" 2>/dev/null || true
+       [ "$cur" = / ] || printf '%s\t%s\n' "$1" "$cur"; } > "$tmp"; then
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
   return 0
 }
 
@@ -4974,8 +4992,7 @@ AHEAD
 $unloadable_here
 UNLOADABLE
   fi
-  local _kept_fresh; _kept_fresh="$(unloadable_notice_is_new "kept local files a send will refuse" "$_kept_entries")"
-  [ -n "$_kept_fresh" ] && notify "kept local files a send will refuse: skills that cannot load"
+  unloadable_notice "kept local files a send will refuse" "$_kept_entries" "kept local files a send will refuse: skills that cannot load"
   if ! is_blank "$sendable"; then
     local keeplist; keeplist="$(printf '%s' "$sendable" | tr '\n' ' ')"
     # What this measured, not more. The old wording read as the COMPLETE set of what is waiting

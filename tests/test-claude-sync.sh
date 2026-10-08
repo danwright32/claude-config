@@ -11031,6 +11031,27 @@ mkdir -p "$H968B/skills/second-draft"; printf 'more notes\n' > "$H968B/skills/se
 _968pull >/dev/null; _968pull >/dev/null
 check "#968 a new folder of kept files posts it again, once" "[ \"\$(_968kept)\" = 2 ]"
 
+# A folder counts as told only once a notification was really POSTED (L368). One the notifier
+# failed to post, or one not shown at all (notifications off, or the sleep record holding them for
+# the morning), is still news on the next run, or a condition that began at night is never seen.
+F968BAD="$WORK/968-notifier-fails"; N968BAD="$WORK/968-notified-fails.log"; : > "$N968BAD"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\nexit 1\n' "$N968BAD" > "$F968BAD"; chmod +x "$F968BAD"
+mkdir -p "$H968B/skills/third-draft"; printf 'notes\n' > "$H968B/skills/third-draft/notes.md"
+env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968BAD" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" send >/dev/null 2>&1 < /dev/null || true
+check "#968 the failing notifier really was asked to post the notice" \
+  "grep -q 'skills that cannot load were not sent' '$N968BAD'"
+_968send >/dev/null
+check "#968 a notice the notifier failed to post is posted on the next send" "[ \"\$(_968count)\" = 4 ]"
+mkdir -p "$H968B/skills/fourth-draft"; printf 'notes\n' > "$H968B/skills/fourth-draft/notes.md"
+env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_NOTIFIER="$F968" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" send >/dev/null 2>&1 < /dev/null || true
+check "#968 a send with notifications off posts nothing" "[ \"\$(_968count)\" = 4 ]"
+_968send >/dev/null
+check "#968 and the next send that can notify posts it" "[ \"\$(_968count)\" = 5 ]"
+_968send >/dev/null
+check "#968 once" "[ \"\$(_968count)\" = 5 ]"
+
 section "== a skill provided by both a plugin and the local folder is caught (#49) =="
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
 # cloudflare plugin, so each was listed twice in every session and both copies were paid for.
