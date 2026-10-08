@@ -11052,6 +11052,18 @@ check "#968 and the next send that can notify posts it" "[ \"\$(_968count)\" = 5
 _968send >/dev/null
 check "#968 once" "[ \"\$(_968count)\" = 5 ]"
 
+# An empty folder the pull clears from the payload (#62) is gone, not a skill somebody has to fix, so
+# it is not a reason for a notification on its own.
+H968P="$WORK/968-prune-home"; R968P="$WORK/968-prune-repo"; N968P="$WORK/968-prune-notified.log"; : > "$N968P"
+mkdir -p "$H968P" "$R968P/payload/skills/hollow968"; echo '{"hooks":{}}' > "$H968P/settings.json"
+F968P="$WORK/968-prune-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$N968P" > "$F968P"; chmod +x "$F968P"
+out968p="$(CLAUDE_HOME="$H968P" SYNC_REPO="$R968P" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968P" bash "$SCRIPT" pull 2>&1 < /dev/null || true)"
+check "#968 the pull cleared the empty payload folder and said so" \
+  "[ ! -d '$R968P/payload/skills/hollow968' ] && grep -q 'hollow968' <<< \"\$out968p\""
+check "#968 and posted no notification for a folder it just cleared" \
+  "! grep -q 'skills that cannot load' '$N968P'"
+
 section "== a skill provided by both a plugin and the local folder is caught (#49) =="
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
 # cloudflare plugin, so each was listed twice in every session and both copies were paid for.

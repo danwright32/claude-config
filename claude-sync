@@ -1403,7 +1403,6 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
   local entry reason named="" entries=""
   while IFS="$(printf '\t')" read -r entry reason; do
     [ -n "${entry:-}" ] || continue
-    entries+="$entry"$'\n'
     # An entry holding NO FILES has nothing to lose, and git cannot carry the deletion of an empty
     # directory, so hand-deleting it on one Mac leaves the other reporting it for ever. Clear it
     # here and the reports stop. Anything holding a file is refused and LEFT ALONE, however
@@ -1419,6 +1418,9 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
       named+="  skills/$entry: $reason, and it held no files at all, so it was removed from the payload and will stop being reported"$'\n'
       continue
     fi
+    # Only an entry still standing counts toward the notification: a pruned one is gone, not a skill
+    # somebody has to fix, so the line above is all it gets (claude-config#968).
+    entries+="$entry"$'\n'
     named+="  skills/$entry: $reason"$'\n'
   done < <(unloadable_skill_entries "$1")
   # Recorded even when nothing is refused, so a set that empties is remembered as empty and the same
