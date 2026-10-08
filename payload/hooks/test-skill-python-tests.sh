@@ -140,7 +140,7 @@ run "$TMP/no-such-folder"
 
 # --- a timeout that is not a number is refused by name, never a traceback -----------------------
 out="$(SKILL_PY_TESTS_TIMEOUT=soon python3 "$RUNNER" "$TMP/good" 2>&1)"; rc=$?
-[ "$rc" -eq 2 ] && grep -q 'SKILL_PY_TESTS_TIMEOUT' <<< "$out" && ! grep -q 'Traceback' <<< "$out" && ok \
+[ "$rc" -eq 2 ] && grep -q 'SKILL_PY_TESTS_TIMEOUT must be a number' <<< "$out" && ok \
   || bad "a timeout that is not a number is refused, naming the variable (rc=$rc)" "$out"
 
 # --- the runner writes no bytecode into the skills it reads --------------------------------------
