@@ -2456,7 +2456,7 @@ test("a park the watchdog could not make is said at the next Stop with the queue
   await clock.advance(MIN)
   expect(w.released.length).toBe(1)
   w.o.claims = ''
-  framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7, so park it yourself\.$/)
+  framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(120 minutes of active work on it, past the 2 hours an issue gets\), so end its claim yourself with `bash ~\/\.claude\/hooks\/lib\/sleep-queue\.sh release \/repo 7 s1 parked '120 minutes of active work on it, past the 2 hours an issue gets'`, then claim the next issue\.$/)
 })
 
 test("a claim the Stop could not end is said with the queue's answer only as data (#922)", withDeps, async ($, on) => {
@@ -2464,7 +2464,11 @@ test("a claim the Stop could not end is said with the queue's answer only as dat
   const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 3, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
   const { clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, releaseFails: QUEUE_REFUSED })
   await start($ as never, clock)
-  framedOnce((await stop($ as never)).block ?? '', /^The claim on #7 could not be ended, so end it yourself\.$/)
+  const block = (await stop($ as never)).block ?? ''
+  // One instruction about #7, never contradicted by the sentence a successful release would give (#925).
+  expect(block).not.toContain('claim is ended')
+  expect(block).not.toContain('You hold no issue')
+  framedOnce(block, /^The driver could not park #7 \(attempt 3: an issue is parked after 2 attempts in a night\), so end its claim yourself with `bash ~\/\.claude\/hooks\/lib\/sleep-queue\.sh release \/repo 7 s1 parked 'attempt 3: an issue is parked after 2 attempts in a night'`, then claim the next issue\.$/)
 })
 
 test('an API error that stops the night ends the claim in hand through the queue (#844)', withDeps, async ($, on) => {
