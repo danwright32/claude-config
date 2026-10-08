@@ -774,20 +774,29 @@ export const substitutions = (text: string, body: boolean): string[] => {
 // The words that change the folder a relative path is read against.
 const MOVES = new Set(['cd', 'pushd', 'popd'])
 
-// Each change in `from` that `into` lacks is added to it, as writes() keeps one: a path once, a tree
-// on either keeping the tree.
+// Each change in `from` that `into` lacks is added to it: a path once, keeping what either says of it
+// (a tree, an in place edit, a copy's sources and that it may land in a folder), so a substitution
+// that edits or copies onto a file the line also writes is not reported as a plain write (lessons
+// review of #972). A write its words do not name is kept once, since a heredoc never ended is read
+// both as a body and as commands.
 const merge = (into: ModKitWrites, from: ModKitWrites) => {
   for (const f of from.files) {
     const had = into.files.find(x => (f.path ? x.path === f.path : !x.path && x.word === f.word))
-    if (!had) into.files.push(f)
-    else if (f.tree) had.tree = true
+    if (!had) {
+      into.files.push(f)
+      continue
+    }
+    if (f.tree) had.tree = true
+    if (f.edits) had.edits = true
+    if (f.mayBeFolder) had.mayBeFolder = true
+    if (f.sources?.length) had.sources = [...new Set([...(had.sources ?? []), ...f.sources])]
   }
   for (const c of from.changes) {
     const had = into.changes.find(x => x.does === c.does && (c.path ? x.path === c.path : !x.path && x.word === c.word))
     if (!had) into.changes.push(c)
     else if (c.tree) had.tree = true
   }
-  into.unnamed.push(...from.unnamed)
+  for (const u of from.unnamed) if (!into.unnamed.some(x => JSON.stringify(x) === JSON.stringify(u))) into.unnamed.push(u)
 }
 
 // A command line's changes with those of every substitution the shell runs in it (#965): in its

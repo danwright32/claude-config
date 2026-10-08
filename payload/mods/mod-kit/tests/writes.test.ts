@@ -657,5 +657,11 @@ describe('writes: what the shell runs inside a command substitution (#965)', () 
   test('a write the substitution runs whose files no word names is reported as one', () => {
     const r = read("cat <<EOF\n$(python3 -c 'import os; os.remove(\"x.md\")')\nEOF")
     expect(r.unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+    // Once, also where a heredoc never ended is read both as a body and as commands (lessons review of #972).
+    expect(read("cat <<EOF\n$(python3 -c 'import os; os.remove(\"x.md\")')").unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
+  })
+  test('a file the line names and a substitution also edits or copies onto keeps what the substitution says of it (lessons review of #972)', () => {
+    expect(read("echo x > f.md; echo \"$(sed -i '' s/a/b/ f.md)\"").files).toEqual([{ word: 'f.md', path: `${CWD}/f.md`, edits: true }])
+    expect(read('echo x > d; echo "$(cp /tmp/a.md d)"').files).toEqual([{ word: 'd', path: `${CWD}/d`, sources: ['/tmp/a.md'], mayBeFolder: true }])
   })
 })
