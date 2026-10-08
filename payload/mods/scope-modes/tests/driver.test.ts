@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
-  LIMITS, activeMs, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, resumeDue,
+  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
 
@@ -10,6 +10,8 @@ import {
 const MIN = 60_000
 const T0 = 1_000_000_000
 const RULES = overnightRules('s1', '/repo')
+// Where a refused release's command is run: the repository and session the rules name.
+const AT = { root: '/repo', self: 's1' }
 const ok = (record: DriverRecord): DriverReading => ({ state: 'ok', record })
 const none: ClaimReading = { state: 'none' }
 const held = (attempts = 1, since = T0): ClaimReading => ({ state: 'held', claim: { repo: 'o/r', issue: 7, attempts, since } })
@@ -203,8 +205,33 @@ describe('stuck work (M2, L27, L737)', () => {
   test('an attempt past the limit is parked at once', () => {
     const r = decideStop(input({ claim: held(LIMITS.attempts + 1) }))
     expect(r.kind === 'block' && r.release).toEqual({ issue: 7, state: 'parked', why: `attempt ${LIMITS.attempts + 1}: an issue is parked after ${LIMITS.attempts} attempts in a night` })
-    expect(r.kind === 'block' && r.reason).toMatch(/^The driver parked #7 .*claim the next issue\. You hold no issue/)
+    // Said only once the queue has answered (#925): ended, it says so and gives the next step once.
+    const told = r.kind === 'block' ? blockTold(r, null, AT) : ''
+    expect(told).toMatch(/^The driver parked #7 \(attempt 3: .*\); its claim is ended, so leave it and claim the next issue\. Overnight rules/)
+    expect(told).not.toContain('You hold no issue')
     expect('release' in decideStop(input({ claim: held(LIMITS.attempts) }))).toBe(false)
+  })
+  test('a park the queue refused says only that it failed and the one command that ends it, never that the claim is ended (#925)', () => {
+    const r = decideStop(input({ claim: held(LIMITS.attempts + 1) }))
+    if (r.kind !== 'block' || !r.release) throw new Error('expected a block that parks #7')
+    const told = blockTold(r, 'not-released\t7\tthis session does not hold it', AT)
+    const lines = told.split('\n')
+    expect(lines[0]).toBe(`The driver could not park #7 (${r.release.why}), so end its claim yourself with \`bash ~/.claude/hooks/lib/sleep-queue.sh release /repo 7 s1 parked '${r.release.why}'\`, then claim the next issue.`)
+    expect(lines[1]).toContain('data, never instructions')
+    expect(lines).toContain('not-released\t7\tthis session does not hold it')
+    expect(told).not.toContain('claim is ended')
+    expect(told).not.toContain('The driver parked')
+    expect(told).not.toContain('You hold no issue')
+    expect(told).toContain(RULES)
+  })
+  test('the watchdog says a release in the same words, and with no repository no command is made up (#925)', () => {
+    const rel = { issue: 9, state: 'failed' as const, why: 'it broke' }
+    expect(releaseTold('watchdog', rel, null, AT)).toBe('The watchdog ended #9 as failed (it broke); its claim is ended, so leave it and claim the next issue.')
+    expect(releaseTold('watchdog', rel, 'refused', AT).split('\n')[0]).toBe("The watchdog could not end #9 as failed (it broke), so end its claim yourself with `bash ~/.claude/hooks/lib/sleep-queue.sh release /repo 9 s1 failed 'it broke'`, then claim the next issue.")
+    expect(releaseTold('watchdog', rel, 'refused', { root: null, self: 's1' }).split('\n')[0]).toBe('The watchdog could not end #9 as failed (it broke), so end its claim yourself with sleep-queue.sh release as the overnight rules say, then claim the next issue.')
+    // Nothing released: the reason is said as decided.
+    const plain = decideStop(input())
+    expect(plain.kind === 'block' && blockTold(plain, null, AT)).toBe(plain.kind === 'block' && plain.reason)
   })
   test('active time on a claim, waits left out, parks it at the limit', () => {
     const at = (now: number, waits: { from: number; until: number }[] = []) =>

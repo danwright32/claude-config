@@ -269,6 +269,7 @@ echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-view-o_r-39.fail"
 echo '[{"number":5,"title":"Half","url":"u","mergedAt":"2026-10-08T03:40:00.123-04:00"}]' > "$FAKE/gh-pr-o_q"
 echo 'HTTP 500' > "$FAKE/gh-issue-o_q.fail"
 echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-o_s.fail"
+echo 'HTTP 503: Service Unavailable' > "$FAKE/gh-issue-o_s.fail"
 : > "$FAKE/calls"
 out="$(NOW=$WOKE py render --record "$SLEEPDIR/ended/g6.json" --final 2>&1)"; rc=$?
 check_eq "the final render succeeds though one repo could not be read" 0 "$rc"
@@ -288,10 +289,11 @@ check_eq "one PR noted twice is read by its number once" 1 "$(grep -c '\[pr\] \[
 check_eq "and flagged once" 1 "$(printf '%s\n' "$r" | grep -c 'PR #39 was noted done')"
 has "with only the issue list failing, the PR list still checks a PR note" "o/q PR #5 Half, merged 3:40 AM ET" "$r"
 lacks "and the PR is not repeated as unchecked" "PR #5: Half read (as noted, unchecked)" "$r"
-has "the failed issue list is said" "Done could not be read from GitHub for o/q: HTTP 500" "$r"
+has "the failed issue list is said, naming the read that failed (#926)" "Issues could not be read from GitHub for o/q: HTTP 500." "$r"
 has "a done note naming no repo is kept, said as unchecked" "a repo not named: Tidied the scratch notes (as noted, unchecked: it names no repo GitHub can be asked about)" "$r"
 has "a done note naming no PR or issue is kept, said as unchecked" "o/r: Answered a review (as noted, unchecked: it names no PR or issue)" "$r"
-has "a repo GitHub could not answer for is said" "Done could not be read from GitHub for o/s: HTTP 502: Bad Gateway" "$r"
+has "a repo whose two reads failed for different reasons is one line giving each reason (#926)" "PRs and issues could not be read from GitHub for o/s (PRs: HTTP 502: Bad Gateway; issues: HTTP 503: Service Unavailable)." "$r"
+check_eq "and is said once, never once per read (#926)" 1 "$(printf '%s\n' "$r" | grep -c 'could not be read from GitHub for o/s')"
 calls="$(cat "$FAKE/calls")"
 has "gh is asked for merged PRs with an explicit limit" "[pr] [list] [-R] [o/r] [--state] [merged]" "$calls"
 has "with the limit" "[--limit] [200]" "$calls"
@@ -373,7 +375,8 @@ fi
 : > "$FAKE/calls"
 NOW=$WOKE SLEEP_REPORT_GH_TOTAL_S=0 py render --record "$SLEEPDIR/ended/g6.json" --final >/dev/null 2>&1
 r="$(report_of g6)"
-has "a repo past the bound is said as not read" "Done could not be read from GitHub for o/r: the report ran out of its 0 seconds for GitHub before reaching it" "$r"
+has "a repo past the bound is said as not read, naming both reads (#926)" "PRs and issues could not be read from GitHub for o/r: the report ran out of its 0 seconds for GitHub before reaching it." "$r"
+check_eq "in one line per repository, never one per read (#926)" 1 "$(printf '%s\n' "$r" | grep -c 'could not be read from GitHub for o/r')"
 check_eq "and gh was not asked at all" "" "$(cat "$FAKE/calls")"
 
 # ---- paid usage with nothing to read, and the healthy night ----
