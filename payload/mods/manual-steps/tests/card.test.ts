@@ -203,7 +203,7 @@ describe('cardLines', () => {
       'Cloudflare WAF  waiting on you',
       '1. Create the API token  already done before this card',
       '2. Turn on the rule  [done]',
-      'Where: https://dash.cloudflare.com/waf  [copy-link]',
+      'Where: [copy-link]', 'https://dash.cloudflare.com/waf',
       'What to do: Security, WAF, Custom rules, Deploy',
       'ip.src eq 1.2.3.4  [copy]',
       '3. Purge the cache',
@@ -211,9 +211,9 @@ describe('cardLines', () => {
     // The step to do is bold in the terminal's own text colour; its details sit under its title.
     expect(l[2]?.[0]).toMatchObject({ bold: true })
     expect(l[2]?.[0]?.color).toBeUndefined()
-    expect(l.slice(3, 6).every(x => x[0]?.indent === 3)).toBe(true)
+    expect(l.slice(3, 7).every(x => x[0]?.indent === 3)).toBe(true)
     // A later step is plain: not bold, not dim.
-    expect(l[6]).toEqual([{ text: '3. Purge the cache' }])
+    expect(l[7]).toEqual([{ text: '3. Purge the cache' }])
   })
 
   // #734: a long click path or exact location wraps under its step rather than being cut at the edge
@@ -228,7 +228,7 @@ describe('cardLines', () => {
     })
     const l = lines(c) as (P & { wrap?: boolean })[][]
     expect(l.find(x => x[1]?.text?.startsWith('Settings'))?.[1]?.wrap).toBe(true)
-    expect(l.find(x => x[1]?.text?.startsWith('https://'))?.[1]?.wrap).toBe(true)
+    expect(l.find(x => x[0]?.text?.startsWith('https://'))?.[0]?.wrap).toBe(true)
     expect(l.find(x => x[0]?.text === 'ip.src eq 1.2.3.4')?.[0]?.wrap).toBe(true)
     const at = made({ heading: 'x', steps: [step({ url: undefined, location: 'Salesforce desktop app, Setup, Object Manager, Account, Fields' })] })
     expect((lines(at) as (P & { wrap?: boolean })[][]).find(x => x[1]?.text?.startsWith('Salesforce'))?.[1]?.wrap).toBe(true)
@@ -248,6 +248,19 @@ describe('cardLines', () => {
     ])
     // The words to type are the very prompt a press of Done sends, so Claude reads both the same way.
     expect(buttons[0]?.instead?.map(r => r.text).join('')).toBe('type: step 2 done')
+  })
+
+  // #939, Dan 2026-10-08: a Google Sheets link showed as "https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV..."
+  // with Copy link dead, so he could neither copy nor read it. The link is on a line of its own under
+  // "Where:", nothing beside it, wrapping whole under its own first character, so a terminal can
+  // select all of it; Copy link sits beside the label instead.
+  test('a long link is on its own line under Where:, whole and wrapping, with Copy link beside the label', () => {
+    const url = `https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV${'x'.repeat(120)}/edit?gid=0#gid=0`
+    const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Open the sheet' })] })) as (P & { href?: string; wrap?: true; label?: string })[][]
+    expect(l[2]).toEqual([WHERE, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[3]).toEqual([{ text: url, href: url, wrap: true, indent: 3 }])
+    // The whole address is the line's only text: never cut, nothing to select around it.
+    expect(l[3]?.map(p => p.text).join('')).toBe(url)
   })
 
   // #939: a docked pane asks to be as wide as its widest line, so the words drawn in Done's place,
@@ -357,9 +370,10 @@ describe('cardLines', () => {
   test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
-    expect(l[2]).toEqual([WHERE, { text: url, href: url, wrap: true }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[2]).toEqual([WHERE, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[3]).toEqual([{ text: url, href: url, wrap: true, indent: 3 }])
     // The click path is not a link.
-    expect(l[3]?.[1]?.href).toBeUndefined()
+    expect(l[4]?.[1]?.href).toBeUndefined()
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]
     // Text, never a link; it wraps rather than being cut (#734).
     expect(at[2]).toEqual([WHERE, { text: 'Keychain Access, login', wrap: true }])
@@ -391,9 +405,9 @@ describe('cardLines', () => {
     const c = made({ heading: 'x', steps: [step({ clicks: actions, value: 'claude --resume' })] })
     expect(c.steps[0]?.clicks).toEqual(actions)
     const l = lines(c)
-    expect(l[3]).toEqual([WHAT])
-    expect(l.slice(4, 8)).toEqual(actions.map((a, k) => [{ text: `${k + 1}. `, whole: true, indent: 5 }, { text: a, wrap: true }]))
-    expect(l.map(textOf).slice(3, 9)).toEqual([
+    expect(l[4]).toEqual([WHAT])
+    expect(l.slice(5, 9)).toEqual(actions.map((a, k) => [{ text: `${k + 1}. `, whole: true, indent: 5 }, { text: a, wrap: true }]))
+    expect(l.map(textOf).slice(4, 10)).toEqual([
       'What to do: ',
       '1. Open Terminal',
       '2. Paste the command and press Return',
@@ -420,11 +434,11 @@ describe('cardLines', () => {
     expect('refusal' in r && r.refusal).toMatch(/^Step 1 .*clicks/)
   })
 
-  test('a step with a link gets "Where:" on the link line', () => {
+  test('a step with a link gets "Where:" on the line above the link', () => {
     const l = lines(made({ heading: 'x', steps: [step({ clicks: 'Security, WAF' })] })) as (P & { href?: string })[][]
     expect(l[2]?.[0]).toEqual(WHERE)
-    expect(l[2]?.[1]?.href).toBe('https://dash.cloudflare.com/waf')
-    expect(l[3]?.[0]).toEqual(WHAT)
+    expect(l[3]?.[0]?.href).toBe('https://dash.cloudflare.com/waf')
+    expect(l[4]?.[0]).toEqual(WHAT)
   })
 
   test('a value of several lines shows on one line, and the indent follows the number width', () => {

@@ -12,7 +12,7 @@ const FIRST_BLOCK = 'There are two options here, and the trade-off is speed.'
 
 // Everything beneath the mod: the clock, a store that can be made to fail, the engine's own
 // drawing of a reply, the prompt box, submits, toasts and transcript lines.
-const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; drop?: string; submitThrows?: boolean } = {}) => {
+const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; drop?: string; submitThrows?: boolean; noClicks?: true } = {}) => {
   const clock = mock.clock(on, { now: opts.now ?? 100 * DAY })
   const store: Record<string, unknown> = { ...(opts.store ?? {}) }
   const fail = { get: false, set: false, keys: false }
@@ -56,7 +56,7 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
   // The folders on this Mac every session shares, for the weekly count's claim: mkdir makes one or
   // says it exists, rmdir takes it away, stat reads its age. `mkdirFails` stands for a folder that
   // cannot be made at all (a full or unwritable disk).
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, { HOME: '/Users/x', ...(opts.noClicks ? { NO_CLICKS: '1' } : {}) })
   const dirs = new Map<string, number>()
   const disk = { mkdirFails: '' }
   on('process.run', ($, e) => {
@@ -93,11 +93,44 @@ const type = ($: Engine, inputText: string) =>
 const submitAs = ($: Engine, origin: PromptOrigin) =>
   ($.prompt as unknown as { submit: (e: unknown) => Promise<unknown> }).submit({ text: 'hi', wait: false, origin })
 
+// mod-kit, standing in (#939): Simpler asks it whether a click lands where the button is drawn. It
+// answers no while NO_CLICKS is 1, as the real one does in Apple Terminal or on the main screen.
+// The kit's other members, which these tests never reach, each refuse by name if one ever is.
+const modKit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const never = (name: string) => async () => {
+        throw new Error(`mod-kit's ${name} is not stood in by these tests`)
+      }
+      const modkit = {
+        clickable: async () => (await built.env.get('NO_CLICKS')) !== '1',
+        press: never('press'),
+        bandRow: never('bandRow'),
+        clearBandRow: never('clearBandRow'),
+        pane: never('pane'),
+        clearPane: never('clearPane'),
+        screen: never('screen'),
+        blocked: never('blocked'),
+        card: never('card'),
+        commands: never('commands'),
+        writes: never('writes'),
+        git: never('git'),
+        pipeline: never('pipeline'),
+        workingTree: never('workingTree'),
+      }
+      return { ...built, modkit }
+    })
+  },
+}
+const KIT = { plugins: [modKit] }
+
 // The drawing's leaves in document order: each Text's words and each Button's label.
 const leaves = async (ui: { findAll: (q: object) => Promise<{ type: string; text: string }[]> }) =>
   (await ui.findAll({})).filter(n => n.type === 'Text' || n.type === 'Button').map(n => n.text)
 
-test('the threshold: a long answer gets the button at the top of its reply, on every surface', async ($, on) => {
+test('the threshold: a long answer gets the button at the top of its reply, on every surface', KIT, async ($, on) => {
   world(on)
   await start($)
   await answer($, LONG)
@@ -159,7 +192,7 @@ const OPENING = '+ add-on: Adding a direct link to the commission and carrying o
 // mod cannot choose, so a long reply opening with the resume line must get both, drawn the same way,
 // whichever of the two sits outermost: the dim line opening the reply, the button under it, the answer.
 for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as const) {
-  test(`a long reply opening with the add-on line gets the dim line, then the button, with add-on notes ${where} Simpler`, { plugins: [AddonNotes(tier)] }, async ($, on) => {
+  test(`a long reply opening with the add-on line gets the dim line, then the button, with add-on notes ${where} Simpler`, { plugins: [modKit, AddonNotes(tier)] }, async ($, on) => {
     world(on)
     await start($)
     await answer($, `${OPENING}\n\n${LONG}`)
@@ -172,7 +205,7 @@ for (const [where, tier] of [['above', 'prepend'], ['beneath', 'append']] as con
   })
 }
 
-test('with add-on notes not loaded, a reply opening with that line is one answer, the button above it all', async ($, on) => {
+test('with add-on notes not loaded, a reply opening with that line is one answer, the button above it all', KIT, async ($, on) => {
   world(on)
   await start($)
   await answer($, `${OPENING}\n\n${LONG}`)
@@ -181,7 +214,7 @@ test('with add-on notes not loaded, a reply opening with that line is one answer
   await ui.unmount()
 })
 
-test('an add-on notes that cannot read the line still leaves the button on the reply, said in the debug log', { plugins: [AddonNotes('append', addonNotesBroken)] }, async ($, on) => {
+test('an add-on notes that cannot read the line still leaves the button on the reply, said in the debug log', { plugins: [modKit, AddonNotes('append', addonNotesBroken)] }, async ($, on) => {
   const w = world(on)
   await start($)
   await answer($, `${OPENING}\n\n${LONG}`)
@@ -192,7 +225,7 @@ test('an add-on notes that cannot read the line still leaves the button on the r
   await ui.unmount()
 })
 
-test('the threshold: a short answer gets no button, and the engine draws the reply', async ($, on) => {
+test('the threshold: a short answer gets no button, and the engine draws the reply', KIT, async ($, on) => {
   world(on)
   await start($)
   expect(judge(SHORT)).toBeNull()
@@ -205,7 +238,7 @@ test('the threshold: a short answer gets no button, and the engine draws the rep
   }
 })
 
-test('the button is only on the first block of the latest answer', async ($, on) => {
+test('the button is only on the first block of the latest answer', KIT, async ($, on) => {
   world(on)
   await start($)
   await answer($, LONG)
@@ -217,7 +250,7 @@ test('the button is only on the first block of the latest answer', async ($, on)
   await earlier.unmount()
 })
 
-test('a newer short answer takes the button away; an aborted turn does too; a subagent turn does not', async ($, on) => {
+test('a newer short answer takes the button away; an aborted turn does too; a subagent turn does not', KIT, async ($, on) => {
   world(on)
   await start($)
   await answer($, LONG)
@@ -236,7 +269,7 @@ test('a newer short answer takes the button away; an aborted turn does too; a su
   await ui.unmount()
 })
 
-test('disappears once Dan types', async ($, on) => {
+test('disappears once Dan types', KIT, async ($, on) => {
   world(on)
   await start($)
   await answer($, LONG)
@@ -249,7 +282,7 @@ test('disappears once Dan types', async ($, on) => {
   await ui.unmount()
 })
 
-test("disappears when Dan sends from the phone, not when a background task's notice arrives", async ($, on) => {
+test("disappears when Dan sends from the phone, not when a background task's notice arrives", KIT, async ($, on) => {
   world(on)
   await start($)
   await answer($, LONG)
@@ -263,7 +296,7 @@ test("disappears when Dan sends from the phone, not when a background task's not
   await ui.unmount()
 })
 
-test('pressing it submits the request as Dan, logs the press with the kind, and takes the button away', async ($, on) => {
+test('pressing it submits the request as Dan, logs the press with the kind, and takes the button away', KIT, async ($, on) => {
   const w = world(on)
   await start($)
   await answer($, LONG)
@@ -279,7 +312,28 @@ test('pressing it submits the request as Dan, logs the press with the kind, and 
   await ui.unmount()
 })
 
-test('a refused submit says why and puts the button back; the press is still counted', async ($, on) => {
+// #939: where a click cannot land (Apple Terminal, the main screen) a [ Simpler ] button would do
+// nothing, so the command that presses it is drawn instead, and typing it asks as the press does.
+test('where a click cannot land there is no button, "type: /simpler" instead, and /simpler asks as the press does', KIT, async ($, on) => {
+  const w = world(on, { noClicks: true })
+  await start($)
+  await answer($, LONG)
+  const ui = await mountReply($, 'terminal')
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect((await leaves(ui)).join('')).toContain('type: /simpler')
+  // Dan typing the command is not Dan typing past the button.
+  await ($.prompt as unknown as { submit: (e: unknown) => Promise<unknown> }).submit({ text: '/simpler', wait: false, origin: { kind: 'composer' } })
+  const run = ($ as unknown as { command: { run: (e: object) => Promise<{ text?: string }> } }).command.run
+  expect((await run({ command: 'simpler' }))?.text).toBe('Asking for the short version.')
+  await w.clock.advance(1)
+  expect(w.toasts).toEqual([])
+  expect(w.submits).toEqual([{ text: '/simpler', asUser: undefined }, { text: requestText('Bidspoke'), asUser: true }])
+  // Asked once: the offer is gone, so a second /simpler says there is nothing to make simpler.
+  expect((await run({ command: 'simpler' }))?.text).toBe('There is no long answer to make simpler right now.')
+  await ui.unmount()
+})
+
+test('a refused submit says why and puts the button back; the press is still counted', KIT, async ($, on) => {
   const w = world(on, { drop: 'a hook refused it' })
   await start($)
   await answer($, LONG)
@@ -291,7 +345,7 @@ test('a refused submit says why and puts the button back; the press is still cou
   await ui.unmount()
 })
 
-test('a submit that throws says why and puts the button back', async ($, on) => {
+test('a submit that throws says why and puts the button back', KIT, async ($, on) => {
   const w = world(on, { submitThrows: true })
   await start($)
   await answer($, LONG)
@@ -304,7 +358,7 @@ test('a submit that throws says why and puts the button back', async ($, on) => 
   await ui.unmount()
 })
 
-test('a press the store cannot record still asks, and says the count will miss it', async ($, on) => {
+test('a press the store cannot record still asks, and says the count will miss it', KIT, async ($, on) => {
   const w = world(on)
   await start($)
   await answer($, LONG)
@@ -317,7 +371,7 @@ test('a press the store cannot record still asks, and says the count will miss i
   await ui.unmount()
 })
 
-test('without a project name the request asks for an example from this project', async ($, on) => {
+test('without a project name the request asks for an example from this project', KIT, async ($, on) => {
   const w = world(on)
   await answer($, LONG)
   const ui = await mountReply($, 'terminal')
@@ -326,14 +380,14 @@ test('without a project name the request asks for an example from this project',
   await ui.unmount()
 })
 
-test('the weekly count: the first session starts the week and says nothing', async ($, on) => {
+test('the weekly count: the first session starts the week and says nothing', KIT, async ($, on) => {
   const w = world(on)
   await start($)
   expect(w.logs).toEqual([])
   expect(w.store.reportedAt).toBe(100 * DAY)
 })
 
-test('the weekly count: nothing before a week, then one line naming the kinds pressed since the last count', async ($, on) => {
+test('the weekly count: nothing before a week, then one line naming the kinds pressed since the last count', KIT, async ($, on) => {
   const since = 100 * DAY - REPORT_EVERY_MS
   const w = world(on, {
     now: 100 * DAY - 1,
@@ -357,20 +411,20 @@ test('the weekly count: nothing before a week, then one line naming the kinds pr
   expect(w.logs).toHaveLength(1)
 })
 
-test('the weekly count says so when Simpler was not pressed', async ($, on) => {
+test('the weekly count says so when Simpler was not pressed', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
   await start($)
   expect(w.logs).toEqual(['Simpler was not pressed in the last 8 days.'])
 })
 
-test('the weekly count is not shown in a session nobody is at', async ($, on) => {
+test('the weekly count is not shown in a session nobody is at', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 0 } })
   await start($, false)
   expect(w.logs).toEqual([])
   expect(w.store.reportedAt).toBe(0)
 })
 
-test('a press log that cannot be read is named, and the count is tried again next session', async ($, on) => {
+test('a press log that cannot be read is named, and the count is tried again next session', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 0 } })
   w.fail.keys = true
   await start($)
@@ -385,7 +439,7 @@ test('a press log that cannot be read is named, and the count is tried again nex
 // #701: "once a week, at a session start". Two sessions started together once the week is up each
 // read the last count's time before either records the new one, so the count is claimed on this Mac
 // before it is shown, and read again under the claim.
-test('the weekly count: two sessions starting at once once the week is up show it once', async ($, on) => {
+test('the weekly count: two sessions starting at once once the week is up show it once', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
   await Promise.all([start($), start($)])
   expect(w.logs).toEqual(['Simpler was not pressed in the last 8 days.'])
@@ -394,7 +448,7 @@ test('the weekly count: two sessions starting at once once the week is up show i
   expect([...w.dirs.keys()]).toEqual([])
 })
 
-test('the weekly count: a claim another session holds means it is being shown there, so this one says nothing', async ($, on) => {
+test('the weekly count: a claim another session holds means it is being shown there, so this one says nothing', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
   w.dirs.set(CLAIM, 100 * DAY - 60_000)
   await start($)
@@ -403,7 +457,7 @@ test('the weekly count: a claim another session holds means it is being shown th
   expect(w.store.reportedAt).toBe(100 * DAY - 8 * DAY)
 })
 
-test('the weekly count: a claim left by a session that died holding it is taken over once it is old', async ($, on) => {
+test('the weekly count: a claim left by a session that died holding it is taken over once it is old', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
   w.dirs.set(CLAIM, 100 * DAY - 11 * 60_000)
   await start($)
@@ -412,7 +466,7 @@ test('the weekly count: a claim left by a session that died holding it is taken 
   expect([...w.dirs.keys()]).toEqual([])
 })
 
-test('the weekly count: a claim that cannot be made at all still shows the count, said in the debug log', async ($, on) => {
+test('the weekly count: a claim that cannot be made at all still shows the count, said in the debug log', KIT, async ($, on) => {
   const w = world(on, { store: { reportedAt: 100 * DAY - 8 * DAY } })
   w.disk.mkdirFails = 'mkdir: weekly.lock: Permission denied'
   await start($)
@@ -420,7 +474,7 @@ test('the weekly count: a claim that cannot be made at all still shows the count
   expect(w.debug.filter(l => /could not claim the weekly count.*Permission denied/.test(l))).toHaveLength(1)
 })
 
-test('the weekly count: a session that gets the claim after the count was recorded says nothing', async ($, on) => {
+test('the weekly count: a session that gets the claim after the count was recorded says nothing', KIT, async ($, on) => {
   const since = 100 * DAY - 8 * DAY
   const w = world(on, { store: { reportedAt: since } })
   // Another session records the count between this one's first read and its claim.

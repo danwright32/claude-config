@@ -2389,18 +2389,24 @@ export const register: Register = on => {
     return refused ?? go()
   })
 
-  // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it.
-  on('ui.press', { plugin: 'mod-kit' }, async ($, e, next) => {
+  // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it. Pressed
+  // by a click or by /press (#939): mod-kit raises both as modkit.press.
+  on('modkit.press', ($, e, next) => {
     const prefix = `${MOD}:held-`
     if (!e.element.startsWith(prefix)) return next(e)
     const id = e.element.slice(prefix.length)
-    const held = await heldOf($)
-    const item = held.find(h => h.id === id)
-    if (!item) return { element: e.element }
-    await $.state.set(heldRef, held.filter(h => h.id !== id))
-    await showHeld($)
-    await $.prompt.submit({ text: `Dan is back and picked this from what was held while he was away: ${item.label}. ${item.prompt}` })
-    return { element: e.element }
+    // Taken at once and done just after: a noun's call is cut off at 10 s (#744).
+    $.clock.after(0, () => {
+      void (async () => {
+        const held = await heldOf($)
+        const item = held.find(h => h.id === id)
+        if (!item) return
+        await $.state.set(heldRef, held.filter(h => h.id !== id))
+        await showHeld($)
+        await $.prompt.submit({ text: `Dan is back and picked this from what was held while he was away: ${item.label}. ${item.prompt}` })
+      })().catch(err => $.ui.toast(`That held row did not finish: ${msg(err)}`))
+    })
+    return { value: { isAnswered: true } }
   })
 
   // Sleep mode phase 3 (#834, Dan's decision 7): overnight, Claude Code's own permission prompts in

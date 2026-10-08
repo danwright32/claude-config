@@ -295,7 +295,10 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
     // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location
     // wrapping beside it never takes the label with it (#872).
     const lead = (text: string): CardPart => ({ text, bold: true, whole: true, indent })
-    if (s.url) lines.push([lead(WHERE), { text: s.url, href: s.url, wrap: true }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    // The link on a line of its own under the label, nothing beside it, wrapping whole under its own
+    // first character, so a terminal can select every character of it where Copy link cannot be
+    // pressed (#939: a Google Sheets link was cut at the edge). Copy link sits beside the label.
+    if (s.url) lines.push([lead(WHERE), { button: 'copy-link', label: 'Copy link', instead: [] }], [{ text: s.url, href: s.url, wrap: true, indent }])
     // A long location or click path wraps under its step rather than being cut at the edge (#734):
     // mod-kit's left rule reaches down every row it takes. It wraps beside its label, so the rows it
     // continues on sit under its own first word.

@@ -483,19 +483,16 @@ export const register: Register = on => {
     return { result: done ? 'Every step is finished, so the card is gone.' : `Step ${String(input.step)} recorded; ${left(out.card)}.` }
   })
 
-  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:done' }, async ($, e) => {
-    await pressDone($)
-    return { element: e.element }
-  })
-  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy' }, async ($, e) => {
-    await pressCopy($, 'value', e.surface)
-    return { element: e.element }
-  })
-  // Takes the whole address where the terminal draws no hyperlinks (#708). In Apple Terminal, where a
-  // click may not land, mod-kit draws no Copy link and the link wraps whole to be selected (#939).
-  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy-link' }, async ($, e) => {
-    await pressCopy($, 'url', e.surface)
-    return { element: e.element }
+  // The card's buttons, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
+  // Copy link takes the whole address where the terminal draws no hyperlinks (#708). Where a click
+  // may not land, mod-kit draws no Copy link and the link wraps whole to be selected.
+  on('modkit.press', async ($, e, next) => {
+    const field = e.element === 'manual-steps:copy' ? 'value' : e.element === 'manual-steps:copy-link' ? 'url' : undefined
+    if (e.element !== 'manual-steps:done' && !field) return next(e)
+    // Done and Copy each finish well inside a noun's 10 s (#744): a state change, then a prompt sent
+    // or a copy, so the press is answered once its work is done.
+    await (field ? pressCopy($, field, e.surface) : pressDone($))
+    return { value: { isAnswered: true } }
   })
 
   on('command.run', { command: 'steps' }, async $ => {

@@ -35,6 +35,9 @@ const modKit: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => true,
       }
       return { ...built, modkit }
     })
@@ -49,7 +52,7 @@ const modKit: { name: string; register: Register } = {
               <Box key={`${r.id}${n}`} flexDirection="row">
                 {l.map((p, i) =>
                   p.button ? (
-                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={() => undefined} />
+                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} />
                   ) : (
                     <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim}>
                       {p.text}
@@ -267,6 +270,8 @@ test('context above 70% brings the Compact row, which compacts when pressed, and
   expect(await shown(ui as never)).toBe('ctx 74% ')
   expect((await ui.find({ type: 'Button', key: 'status-bar:compact' }))?.props).toMatchObject({ label: 'Compact' })
   await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
+  // The press is taken at once and the compact runs just after, outside a noun's 10 s (#939).
+  await clock.settle()
   expect(compacts).toHaveLength(1)
   expect(toasts).toEqual([])
   await measure($, 20)
@@ -281,11 +286,13 @@ test('a Compact that does not run says why in a toast, rather than nothing', wit
   const ui = await $.ui.mount(band)
   const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
   await press({ key: 'status-bar:compact' })
+  await clock.settle()
   expect(toasts).toEqual(['Compact did not run: Not enough messages to compact.'])
   w.compact = () => {
     throw new Error('compaction failed')
   }
   await press({ key: 'status-bar:compact' })
+  await clock.settle()
   // A compaction that throws is still said, with whatever reason reached the mod.
   expect(toasts).toHaveLength(2)
   expect(toasts[1]).toMatch(/^Compact did not run: \S/)

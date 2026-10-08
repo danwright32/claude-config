@@ -62,6 +62,9 @@ const deps: { name: string; register: Register } = {
           // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
           // token; mod-kit's own tests prove the real one asks the secret guard.
           screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
+          // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+          press: async () => ({ isAnswered: false }),
+          clickable: async () => true,
           // The kit's other members, which these tests never reach: each refuses by name if one ever is.
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
@@ -95,7 +98,7 @@ const deps: { name: string; register: Register } = {
             r.lines.map((l, n) =>
               Array.isArray(l) ? (
                 <Box key={`${r.id}${n}`} flexDirection="row">
-                  {l.map((p, i) => (p.button ? <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={() => undefined} /> : <Text key={String(i)}>{p.text}</Text>))}
+                  {l.map((p, i) => (p.button ? <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} /> : <Text key={String(i)}>{p.text}</Text>))}
                 </Box>
               ) : (
                 <Text key={`${r.id}${n}`}>----</Text>
@@ -1250,6 +1253,8 @@ test('away holds a browser opened by another tool, the Artifact open action and 
   await command($ as never, 'home')
   const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
   await ui.press({ key: 'scope-modes:held-1' })
+  // The press is taken at once and its work done just after, outside a noun's 10 s (#939).
+  await clock.settle()
   await ui.unmount()
   expect(w.prompts).toEqual([
     'Dan is back and picked this from what was held while he was away: Open https://x.dev/a in the Playwright browser. Do it now. What was held: mcp__playwright__browser_navigate {"url":"https://x.dev/a"}',
@@ -1331,12 +1336,14 @@ test('coming home: one boxed card of what was held, nothing opens until a button
 
   const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
   await ui.press({ key: 'scope-modes:held-1' })
+  await clock.settle()
   expect(w.prompts.filter(p => p.startsWith('Dan is back'))).toEqual([
     'Dan is back and picked this from what was held while he was away: Open report.html in Google Chrome. Do it now. What was held: open -a "Google Chrome" /tmp/report.html',
   ])
   const after = w.bands[w.bands.length - 1] as Row
   expect(after.lines).toEqual([[{ text: 'Held while you were away', color: 'warning' }], [{ text: 'Type into Overture ' }, { button: 'held-2', label: 'Do it' }]])
   await ui.press({ key: 'scope-modes:held-2' })
+  await clock.settle()
   expect(w.cleared).toContain('held')
   await ui.unmount()
 })

@@ -130,8 +130,8 @@ export type ModKit = {
    * same id (it keeps its place). Claude Code gives the band ONE drawing, so no mod but mod-kit
    * hooks it (tools/check-mod-shared-parts.sh); every mod publishes its rows here and mod-kit draws
    * them in the settled order of the slots. Rejects a slot not in that list, or a row with no mod or
-   * id. A Button in the row is drawn with the key `<mod>:<button>`; its press reaches the publisher
-   * through `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`.
+   * id. A Button in the row is drawn with the key `<mod>:<button>`; its press, clicked or typed with
+   * /press, reaches the publisher through `on('modkit.press', ...)` with that element (#939).
    */
   bandRow: (row: ModKitBandRow) => Promise<void>
   /** Takes this mod's row with that id out of the band. Clearing a row that is not there is fine. */
@@ -142,8 +142,7 @@ export type ModKit = {
    * closes the pane itself; publishing again replaces what it shows. No mod but mod-kit draws a
    * card in a pane (tools/check-mod-shared-parts.sh); a pane drawn its own way, such as the goals
    * pane's live list, is the mod's. A Button is keyed `<mod>:<button>` and its press
-   * reaches the publisher through `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`,
-   * as in the band. Rejects a pane with no mod or id, lines or a frame of the wrong shape, and a pane
+   * reaches the publisher through `on('modkit.press', ...)`, as in the band. Rejects a pane with no mod or id, lines or a frame of the wrong shape, and a pane
    * id another mod already draws (Claude Code keys a pane by its id alone).
    */
   pane: (pane: ModKitPane) => Promise<void>
@@ -158,7 +157,28 @@ export type ModKit = {
    * secret guard is not loaded. One that fails to answer refuses the call, with a card (L42).
    */
   screen: (call: ModKitCall) => Promise<{ deny: string } | null>
+  /**
+   * A press on a band or pane button (#939), raised by mod-kit and answered by the publisher's hook
+   * on this event: `on('modkit.press', ($, e, next) => e.element === 'handoff:use' ? (act(), { value:
+   * { isAnswered: true } }) : next(e))`. One path for both ways a button is pressed: a click where
+   * the surface reports one, and `/press <mod> <button>`, which mod-kit draws in the button's place
+   * where a click cannot land. No mod but mod-kit hooks `ui.press` for mod-kit's buttons
+   * (tools/check-mod-shared-parts.sh), so a typed press never misses a handler a click would reach.
+   * Unanswered, `isAnswered` is false and mod-kit says nothing answered it.
+   */
+  press: (input: ModKitPress) => Promise<{ isAnswered: boolean }>
+  /**
+   * Whether a click on a Button a mod draws itself reaches it on the surface `e` names (#939): the
+   * one answer, so a mod drawing its own Button (outside the band and a pane) shows it only where a
+   * click lands and says what to do instead elsewhere. Pass the render hook's `e`.
+   */
+  clickable: (site: ModKitClickSite) => Promise<boolean>
 }
+
+/** A press on a button mod-kit drew: its `<mod>:<button>` key, the surface it came from, and how. */
+export type ModKitPress = { element: string; surface: string; how: 'click' | 'typed' }
+/** Where a Button is drawn, as a render hook's `e` carries it. */
+export type ModKitClickSite = { surface: string; viewport?: { isFullscreen?: boolean } }
 
 /** A tool call as a `tool.call` hook receives it: the tool, the call's id, and its arguments beside them. Plain data. */
 export type ModKitCall = { tool: string; tool_use_id?: string } & Record<string, unknown>
@@ -260,7 +280,8 @@ export type ModKitBandText = { text: string; href?: string; color?: string; bold
  * the label (`1: 7 days`), or the label alone when it has no hotkey (#667). `instead` is the text
  * drawn in the button's place wherever a click may not reach it (#939): a terminal's main screen,
  * and Apple Terminal, whose tab only reports clicks while View > Allow Mouse Reporting is ticked,
- * which no mod can read. An empty list draws nothing there. Left out, the button is drawn everywhere.
+ * which no mod can read. Left out, mod-kit draws "type: /press <mod> <button>" there, which presses it
+ the same way; an empty list draws nothing, for a button whose content sits beside it as text.
  */
 export type ModKitBandButton = { button: string; label: string; hotkey?: string; plain?: true; indent?: number; instead?: ModKitBandText[] }
 export type ModKitBandPart = ModKitBandText | ModKitBandButton

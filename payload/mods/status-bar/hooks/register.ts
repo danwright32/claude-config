@@ -248,7 +248,7 @@ const publish = () =>
     const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now })
     const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now, isWorking: turnRunning })
     const compact = due
-      ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact' }]
+      ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }]
       : []
     try {
       const lookKey = JSON.stringify(look)
@@ -421,22 +421,15 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('ui.press', { plugin: 'mod-kit', element: 'status-bar:compact' }, async ($, e) => {
-    let r: { skip?: string } | undefined
-    try {
-      r = (await $.session.compact()) as { skip?: string }
-    } catch (err) {
-      $.ui.toast(`Compact did not run: ${msg(err)}`)
-      return { element: e.element }
-    }
-    if (r && typeof r.skip === 'string') {
-      $.ui.toast(`Compact did not run: ${r.skip}`)
-      return { element: e.element }
-    }
-    // Reset here as well: this mod's own call does not pass through its own session.compact hook
-    // (the engine skips the calling plugin, measured in the tests), and resetting twice changes nothing.
-    await cacheReplaced($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
-    return { element: e.element }
+  // Compact, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
+  on('modkit.press', ($, e, next) => {
+    if (e.element !== 'status-bar:compact') return next(e)
+    // Taken at once and done just after: a noun's call is cut off at 10 s (#744), and compacting
+    // runs a model call that takes longer.
+    $.clock.after(0, () => {
+      void compactNow($).catch(err => $.ui.toast(`Compact did not run: ${msg(err)}`))
+    })
+    return { value: { isAnswered: true } }
   })
 
   on('session.end', async ($, e, next) => {
@@ -452,4 +445,22 @@ export const register: Register = on => {
     }
     return next(e)
   })
+}
+
+// What Compact does, pressed or typed (#939).
+const compactNow = async ($: EngineInterface) => {
+  let r: { skip?: string } | undefined
+  try {
+    r = (await $.session.compact()) as { skip?: string }
+  } catch (err) {
+    $.ui.toast(`Compact did not run: ${msg(err)}`)
+    return
+  }
+  if (r && typeof r.skip === 'string') {
+    $.ui.toast(`Compact did not run: ${r.skip}`)
+    return
+  }
+  // Reset here as well: this mod's own call does not pass through its own session.compact hook
+  // (the engine skips the calling plugin, measured in the tests), and resetting twice changes nothing.
+  await cacheReplaced($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
 }

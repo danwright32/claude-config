@@ -39,6 +39,9 @@ const modKit: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => (await built.env.get("NO_CLICKS")) !== "1",
       }
       return { ...built, modkit }
     })
@@ -52,7 +55,7 @@ const modKit: { name: string; register: Register } = {
             r.lines.map((l, n) => (
               <Box key={`${r.id}${n}`} flexDirection="row">
                 {l.map((p, i) =>
-                  p.button ? <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={() => undefined} /> : <Text key={String(i)} color={p.color}>{p.text}</Text>,
+                  p.button ? <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} /> : <Text key={String(i)} color={p.color}>{p.text}</Text>,
                 )}
               </Box>
             )),
@@ -95,6 +98,9 @@ const modKitToday: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => true,
       }
       return { ...built, modkit }
     })
@@ -155,6 +161,8 @@ type World = {
   openFails: boolean
   /** A pane opened unasked waits undrawn, as Claude Code does below 144 terminal columns. */
   openWaits: boolean
+  // #939: the surface reports no clicks (Apple Terminal, the main screen), as mod-kit answers clickable there.
+  noClicks?: true
   /** The reason Claude Code gives for a waiting pane. */
   openReason: string
   /** `claude auth login` cannot even be started. */
@@ -188,7 +196,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const runs: string[][] = []
   const opened: string[] = []
   const closed: string[] = []
-  mock.env(on, { HOME })
+  mock.env(on, { HOME, ...(init.noClicks ? { NO_CLICKS: "1" } : {}) })
   const clock = mock.clock(on, { now: T0 })
   // Folders that exist: made by mkdir -p, or holding a file.
   const dirs = new Set<string>()
@@ -602,6 +610,8 @@ test('Dismiss hides the card for this session only: nothing shared is written, s
   const before = { ...w.files }
   delete before[OWN]
   await ui.press({ key: 'account-room:dismiss', plugin: 'mod-kit' })
+  // The press is taken at once and its work done just after, outside a noun's 10 s (#939).
+  await clock.settle()
   expect(await shown(ui)).toBe('engine band')
   await measure($, clock, limits(98, 50))
   expect(await shown(ui)).toBe('engine band')
@@ -614,13 +624,20 @@ test('Dismiss hides the card for this session only: nothing shared is written, s
 
 test('Switch shows its progress with elapsed seconds, and with no logout route set up it stops red, opening no sign in page', NO_ROUTE, async ($, on) => {
   const { clock, runs } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  // Every band the card was published in: the press's work runs on a timer (#939), so the progress
+  // line and the red one it gives way to both land in one advance of the clock.
+  const published: string[] = []
+  on('state.set', async ($, e, next) => {
+    const w = e as unknown as { plugin?: string; key?: string; value?: unknown }
+    if (w.plugin === 'mod-kit' && w.key === 'band') published.push(JSON.stringify(w.value))
+    return next(e)
+  })
   await start($, clock)
   const ui = await mountBand($ as never)
   await measure($, clock, limits(97, 50))
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
-  expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 0s/)
-  expect(await ui.find({ type: 'Button', key: 'account-room:switch' })).toBeUndefined()
   await clock.advance(1)
+  expect(published.some(b => b.includes('Switching to Work: signing claude.ai out in the browser\u2026 0s') && !b.includes('"button":"switch"'))).toBe(true)
   // Nothing was attempted, so the card says that, never that claude.ai was asked (#736).
   expect(await shown(ui)).toMatch(/^No sign out was attempted: no browser logout route is set up\. Nothing was changed\./)
   expect((await ui.find({ type: 'Text', text: 'No sign out was attempted: no browser logout route is set up. Nothing was changed.' }))?.props).toMatchObject({ color: 'error' })
@@ -908,6 +925,21 @@ test('a sign in that does not finish says why, and the card comes back', { ...wi
   await clock.settle()
   expect(toasts).toEqual(['Switch did not finish: Login cancelled'])
   expect(await shown(ui)).toMatch(/^This account is low\. Work has room/)
+  await ui.unmount()
+})
+
+// #939: where a click cannot land (Apple Terminal, the main screen), Save and Skip would be buttons
+// that do nothing, so they are not drawn; Enter and Esc, which the dialog names, still answer it.
+test('where a click cannot land the nickname dialog draws no Save or Skip, and Enter still saves', withKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') }, noClicks: true })
+  await start($, clock)
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Button', key: 'save' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', key: 'skip' })).toBeUndefined()
+  expect(await shown(ui)).toMatch(/Enter to save/)
+  await ui.input({ key: 'nickname', text: 'Work', kind: 'submit' })
+  const names = JSON.parse(w.files[NICKNAMES] as string) as { names: Record<string, { name: string | null }> }
+  expect(names.names[await accountKey('acct-work', 'org-1')]?.name).toBe('Work')
   await ui.unmount()
 })
 

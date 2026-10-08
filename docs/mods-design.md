@@ -1235,8 +1235,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   its own, since on a terminal without hyperlinks a Link with text is drawn as the text then the
   address, which would show it twice. The click path and an exact location are text, one line
   each, and wrap at the edge rather than being cut (#734), the amber rule reaching down every row
-  they take; since #939 the link and the value wrap too, so either can be selected whole where Copy
-  link and Copy cannot be pressed. Docked
+  they take. Since #939 the link and the value wrap too, so either can be selected whole where Copy
+  link and Copy cannot be pressed, and the link stands on a line of its own under "Where:", Copy
+  link beside the label, so nothing else is selected with it (Dan, 2026-10-08: a Google Sheets link
+  read "https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV..." and could be neither read nor
+  copied). Docked
   beside a fullscreen transcript, the pane asks to be as wide as the card's widest line other than
   the link, up to 80 columns, so a click path wraps less there; a width Dan drags it to wins (open:
   Copy link on every link rather than only a long one, and the 80 column cap).
@@ -1384,9 +1387,9 @@ the run's text is the address, so a terminal without hyperlinks does not draw it
 holding a control character is refused, since one could end the hyperlink's sequence early) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
 survey's row: the hotkey in the accent colour, a colon, the label, `1: 7 days`, or the label alone
 with no hotkey, #667). A button is Claude Code's own, drawn with the
-key `<mod>:<button>`, and its press reaches the publisher through
-`on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`, since a closure cannot
-cross from one mod to another. The rows live in mod-kit's `$.state`, so a reload keeps them, and
+key `<mod>:<button>`, and its press reaches the publisher through mod-kit's `modkit.press` event,
+`on('modkit.press', ...)` with that element, since a closure cannot cross from one mod to another
+(#939; before it, `ui.press`). The rows live in mod-kit's `$.state`, so a reload keeps them, and
 they yield to a survey. Later mods that need more than lines of runs add that shape to mod-kit
 rather than drawing the band themselves.
 
@@ -1416,14 +1419,23 @@ every wrapped row however wide the band is. A button may carry `instead`, a list
 its place wherever a click may not reach it (#939, `clicksReach` in hooks/band.ts): a terminal not
 in the fullscreen layout, Apple Terminal (its per tab Allow Mouse Reporting switch cannot be read),
 and a terminal whose name or layout is unknown. An empty list draws nothing there. A button without
-`instead` is drawn everywhere as before; every mod other than manual steps still draws its band
-buttons that way, so they can be as dead in Apple Terminal as the steps card's were.
+`instead` is drawn there as "type: /press <mod> <button>", mod-kit's `/press` command, which presses
+a button showing in the band or a pane the way a click does: a click (the Button's own press) and a
+typed /press both raise `modkit.press`, which the publisher answers, so no button anywhere is left
+dead and no publisher can answer a click alone. The command presses only a button showing now, and
+does so once it has returned, since a press may send a prompt, which command.run cannot. A press's
+work that can outlast a noun's 10 s (a switch, a compact, a held row's replay) is taken at once and
+done on `$.clock.after(0, ...)` (measured 2026-10-08: such work outlives the noun, whole). A mod
+drawing its own Button outside the band and a pane (Simpler above an answer, the nickname dialog's
+Save and Skip) asks `$.modkit.clickable(e)` first and draws the typed way where it answers false
+(`/simpler`; Enter and Esc). `tools/check-mod-shared-parts.sh` fails a mod hooking `ui.press` for
+mod-kit's buttons, and a hooks file drawing `<Button` that never asks `$.modkit.clickable`.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
 band row's lines and frame with no slot, since a pane holds one card. mod-kit draws it with the very
 function that draws a band row, so the steps card cannot read differently in the pane and the band
-as cards gain shapes, and a button in it reaches the publisher by the same `ui.press` key.
+as cards gain shapes, and a button in it reaches the publisher by the same `modkit.press` key.
 `$.modkit.clearPane({ mod, id })` stops it, after which Claude Code draws a still open pane itself.
 Claude Code keys a pane by its id alone, so a pane id another mod already draws is refused rather
 than taken over. `tools/check-mod-shared-parts.sh` fails any other mod that draws a card's parts

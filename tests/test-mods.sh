@@ -524,6 +524,31 @@ for want in 'collision-guard keeps its own write-reader' 'collision-guard keeps 
 done
 printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'modkit.pipeline(' \
   && check "and points a mod judging code its own way at what modkit.pipeline gives" ok || check "and points a mod judging code its own way at what modkit.pipeline gives" "$out"
+# #939: a button must work where it is drawn. A mod-kit button's press reaches its mod through
+# modkit.press, which a click and a typed /press both raise, so a mod hooking ui.press for one is
+# reached by a click alone and fails the run. A mod drawing its own Button must ask
+# $.modkit.clickable in that file, or it shows a button a click may not reach (Apple Terminal).
+M9P="$TMPROOT/m9p"
+mkmodsrc "$M9P" mod-kit "export const register = on => { on('ui.press', { plugin: 'mod-kit' }, h) }"
+mkmodsrc "$M9P" presses-single "export const register = on => { on('ui.press', { plugin: 'mod-kit', element: 'presses-single:go' }, h) }"
+mkmodsrc "$M9P" presses-double "export const register = on => { on(\"ui.press\", { plugin: \"mod-kit\" }, h) }"
+mkmodsrc "$M9P" own-button-unasked "export const draw = (\$, e, Button) => <Button key=\"go\" label=\"Go\" onPress={go} />"
+mkmodsrc "$M9P" own-button-asked "export const draw = async (\$, e, Button, Text) => ((await \$.modkit.clickable(e)) ? <Button key=\"go\" label=\"Go\" onPress={go} /> : <Text>type: /go</Text>)"
+mkmodsrc "$M9P" own-button-cast "export const draw = async (\$, e, Button) => ((await (\$ as unknown as K).modkit.clickable(e)) ? <Button key=\"go\" label=\"Go\" onPress={go} /> : null)"
+mkmodsrc "$M9P" own-press "export const register = on => { on('modkit.press', h); on('ui.press', { plugin: 'own-press' }, mine) }"
+mkmodsrc "$M9P" press-in-comment "// a mod used to hook 'ui.press' for mod-kit's buttons; <Button> is drawn by mod-kit
+export const register = on => { on('modkit.press', h) }"
+out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#939: hooking ui.press for mod-kit's buttons, or an unasked Button, fails the run" ok \
+  || check "#939: hooking ui.press for mod-kit's buttons, or an unasked Button, fails the run" "exit=$code out=$out"
+for want in 'presses-single keeps its own press' 'presses-double keeps its own press' 'own-button-unasked draws its own Button'; do
+  case "$out" in *"$want"*) check "and names: $want" ok ;; *) check "and names: $want" "$out" ;; esac
+done
+printf '%s\n' "$out" | grep 'presses-single keeps its own press' | grep -q "on('modkit.press'" \
+  && check "and points a mod at modkit.press" ok || check "and points a mod at modkit.press" "$out"
+for clean in 'mod-kit ' own-button-asked own-button-cast own-press press-in-comment; do
+  case "$out" in *"check-mod-shared-parts: $clean"*) check "#939: $clean passes" "$out" ;; *) check "#939: $clean passes" ok ;; esac
+done
 # #712, #730: a mod's tests may read with mod-kit's own readers, through a copy under tests/mod-kit
 # (a test cannot import another mod's files), held byte for byte to mod-kit's (L422). A copy that
 # differs fails, naming the cp that brings it back; running that cp passes (L406); a copy of a file
@@ -1505,9 +1530,44 @@ export const keep = (id: string) => {
   pending.set(id, new Promise(resolve => waiters.set(id, resolve)))
 }
 TS
+  # #939: work a noun's hook hands to a timer runs after the noun answered (measured live on
+  # 2026-10-08, 2.1.294: 13 s of process.run started on $.clock.after(0, ...) from a noun hook finished
+  # whole), so neither what the timer's arguments say nor what they call is the noun's code. The same
+  # helper awaited in the hook itself is.
+  mknounmod "$M12W" timer-defers timed <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+export const register = on => {
+  on('timed.press', ($, e, next) => {
+    $.clock.after(0, () => {
+      void slow($)
+    })
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" timer-inline-code timedinline <<'TS'
+export const register = on => {
+  on('timedinline.press', ($, e, next) => {
+    setTimeout(() => {
+      void $.process.run(['/bin/sleep', '13'])
+    }, 0)
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" awaited-not-deferred awaited <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+export const register = on => {
+  on('awaited.press', async ($, e, next) => {
+    await slow($)
+    $.clock.after(0, () => undefined)
+    return { value: true }
+  })
+}
+TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"40 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"43 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1523,14 +1583,14 @@ TS
       && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
       || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
   done
-  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5; do
+  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
       && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
       || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
   done
   printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
     && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
-  for m in short-process process-in-hook shorthand-timeout model-timed; do
+  for m in short-process process-in-hook shorthand-timeout model-timed timer-defers timer-inline-code; do
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
   done
   ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
@@ -1540,7 +1600,7 @@ TS
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method; do rm -rf "${M12W:?}/$m"; done
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred; do rm -rf "${M12W:?}/$m"; done
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
     || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"

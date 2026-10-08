@@ -1,4 +1,4 @@
-import type { ModKitBandButton, ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane } from '../types/index.d.ts'
+import type { ModKitBandButton, ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitBandText, ModKitPane } from '../types/index.d.ts'
 
 // The band above the prompt, composed once for every mod (docs/mods-design.md, "The band, shared
 // by every mod", settled with Dan 2026-10-04). Status rows on top, then the account room card (#659)
@@ -41,9 +41,19 @@ export const clicksReach = (site: ClickSite): boolean => {
   return typeof site.terminal === 'string' && site.terminal !== '' && site.terminal !== 'Apple_Terminal'
 }
 
-/** The columns a button takes at most: its bracketed label, or its `instead` text where that is wider. */
-export const buttonWidth = (p: ModKitBandButton): number =>
-  Math.max(p.label.length + 2, (p.instead ?? []).reduce((w, r) => w + (r.indent ?? 0) + r.text.length, 0)) + (p.indent ?? 0)
+/** What Dan types to press `mod`'s button `button` where a click cannot land (#939): mod-kit's /press. */
+export const pressCommand = (mod: string, button: string): string => `/press ${mod} ${button}`
+
+/**
+ * What is drawn in a button's place where a click may not reach it: the publisher's `instead`, or
+ * else the /press command that presses it the same way, so no button anywhere is left dead (#939).
+ */
+export const fallbackOf = (mod: string, p: ModKitBandButton): ModKitBandText[] =>
+  p.instead ?? [{ text: 'type: ', dim: true }, { text: pressCommand(mod, p.button) }]
+
+/** The columns a button takes at most: its bracketed label, or the text drawn in its place where that is wider. */
+export const buttonWidth = (p: ModKitBandButton, mod = ''): number =>
+  Math.max(p.label.length + 2, fallbackOf(mod, p).reduce((w, r) => w + (r.indent ?? 0) + r.text.length, 0)) + (p.indent ?? 0)
 
 const insteadRefusal = (p: ModKitBandPart): string | undefined => {
   const instead = (p as { instead?: unknown }).instead
@@ -93,9 +103,9 @@ export const wraps = (l: ModKitBandLine): boolean => Array.isArray(l) && l.some(
  * holds at least one. What a left rule must reach down (#734); it is laid over the row's height and
  * clipped to it, so the bound only has to be no smaller than the truth.
  */
-export const mostRows = (lines: ModKitBandLine[]): number =>
+export const mostRows = (lines: ModKitBandLine[], mod = ''): number =>
   lines.reduce(
-    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? buttonWidth(p) : (p.indent ?? 0) + p.text.length), 0)) : 1),
+    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? buttonWidth(p, mod) : (p.indent ?? 0) + p.text.length), 0)) : 1),
     0,
   )
 
