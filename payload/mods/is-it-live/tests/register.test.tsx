@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
 // Is it live (claude-config#617) in a session: Claude hands the card tool what it found after a
 // merge, the mod confirms the merge with GitHub itself, keeps the card, toasts it, and pins any
@@ -38,6 +40,9 @@ const modKit: { name: string; register: Register } = {
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
+        // #951: the session's repository, asked of the world (a plugin in a test runs in its own
+        // environment), which reads with a byte for byte copy of mod-kit's own reader.
+        repo: async (input: { root?: string | null; remote: string | null }) => JSON.parse((await built.process.run(['__modkit', 'repo', JSON.stringify(input)])).stdout),
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
@@ -45,7 +50,6 @@ const modKit: { name: string; register: Register } = {
         git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
         pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
         workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
-        repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
       }
@@ -103,7 +107,7 @@ const withKit = { plugins: [modKit] }
 const T0 = 1_800_000_000_000
 const REPO = 'danwright32/slate'
 type Gh = { exitCode: number; stdout: string; stderr?: string }
-type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; repoName: Gh; remote: string; copied: boolean; stored?: Record<string, unknown> }
+type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; repoName: Gh; remote: string | null; copied: boolean; stored?: Record<string, unknown> }
 
 // GitHub, the clipboard, the store, toasts and Claude Code's own band beneath the mod.
 const world = (on: On, init: Partial<World> = {}) => {
@@ -125,6 +129,11 @@ const world = (on: On, init: Partial<World> = {}) => {
   mock.clock(on, { now: T0 })
   mock.store(on, w.stored)
   on('process.run', ($, e) => {
+    // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
+    if (e.argv[0] === '__modkit') {
+      const input = JSON.parse(e.argv[2] as string) as { root?: string | null; remote: string | null }
+      return { value: { exitCode: 0, stdout: JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     runs.push([...e.argv])
     const a = e.argv.join(' ')
     const g = a.startsWith('gh pr view')
@@ -609,4 +618,19 @@ test('the answer tells Claude that Dan has already seen the card, so the reply d
   const said = ((await card($, CARD)).context ?? []).join(' ')
   expect(said).toContain('Dan has already seen this card')
   expect(said).toContain('do not restate')
+})
+
+// /live reads the session's GitHub repository from its origin through mod-kit's one reader (#951),
+// on the table every mod's reading is pinned on: the repository it asks GitHub about, or none.
+test("/live reads the session's GitHub repository from its origin as mod-kit's reader does, on every shared case (#951)", withKit, async ($, on) => {
+  const { w, runs } = world(on)
+  const got: { why: string; github: string | null }[] = []
+  for (const f of REPO_FIXTURES) {
+    w.remote = f.remote
+    runs.length = 0
+    const said = await live($)
+    const asked = runs.find(r => r.slice(0, 3).join(' ') === 'gh repo view')
+    got.push({ why: f.why, github: asked ? (asked[3] as string) : said.startsWith('This folder has no GitHub repository') ? null : `unexpected: ${said}` })
+  }
+  expect(got).toEqual(REPO_FIXTURES.map(f => ({ why: f.why, github: f.github })))
 })

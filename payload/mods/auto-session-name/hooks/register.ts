@@ -160,7 +160,8 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   let unread = ''
   let label: string | null = null
   try {
-    label = repoLabel(await $.session.repo())
+    const repo = await $.session.repo()
+    label = repo ? repoLabel((await $.modkit.repo({ root: repo.root, remote: repo.remote })).name) : null
   } catch (err) {
     unread = errText(err)
   }
