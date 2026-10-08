@@ -4,6 +4,7 @@ import type { ModKit, ModKitBandButton, ModKitBandLine, ModKitBandPart, ModKitBa
 import { clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
+import { dependsOn, newestFile } from './dependents.ts'
 import { sendTwice } from './send.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
@@ -40,6 +41,57 @@ const screenFailed = (call: ModKitCall, why: string): { deny: string } => {
 const band = { plugin: 'mod-kit', key: 'band' } as const
 // What each mod's side pane shows (#690), there for the same reason.
 const panes = { plugin: 'mod-kit', key: 'panes' } as const
+// When this mod last started in this session (#960), there for the same reason: a reload reads it.
+const started = { plugin: 'mod-kit', key: 'started' } as const
+
+// #960, measured 2026-10-08 with throwaway mods in a session of its own. When one delivery changes
+// mod-kit and a mod that starts using something mod-kit only now provides (the steps card hooking
+// modkit.press, #946), an open session reloads the dependent first, in a busy session at its turn's
+// end whatever order the files were written in. Built against the mod-kit still loaded, which lacks
+// the new member, it is unloaded: its tools go ("MCP server removed from the configuration") although
+// Claude Code's notice says the previous version stays loaded, and nothing retries it once mod-kit
+// has reloaded. A save to its folder does, so at its own reload mod-kit touches the manifest of every
+// mod that depends on it and changed since mod-kit last started in this session. A touch changes the
+// time alone: the sync compares content, so it carries nothing, and nothing a delivery is writing
+// can be overwritten with an older copy. A mod that had loaded is loaded once more, which is harmless.
+// The session's own start loads every mod as it is on disk, so it only records the time.
+const reloadDependents = async ($: EngineInterface) => {
+  const now = await $.clock.now()
+  const before = (await $.state.get(started)).value
+  await $.state.set(started, now)
+  if (before === undefined) return
+  const home = $.plugin.root.replace(/\/+[^/]+\/*$/, '')
+  const lost = 'If its tools or commands are missing in this session, a new session brings them back.'
+  let entries: Awaited<ReturnType<EngineInterface['fs']['list']>>
+  try {
+    entries = await $.fs.list(home)
+  } catch (err) {
+    $.ui.log(`mod-kit reloaded, but the mods folder ${home} could not be read (${String((err as Error)?.message ?? err)}), so a mod that changed with it was not asked to load again. ${lost}`)
+    return
+  }
+  const touched: string[] = []
+  for (const entry of entries) {
+    if (entry.kind !== 'dir' || entry.name === 'mod-kit') continue
+    const dir = `${home}/${entry.name}`
+    let manifest: string
+    try {
+      manifest = await $.fs.read(`${dir}/.claude-plugin/plugin.json`)
+    } catch {
+      continue // no manifest: not a mod, so nothing loads it
+    }
+    try {
+      if (!dependsOn(manifest).includes('mod-kit')) continue
+      const files = [...(await $.fs.list(`${dir}/.claude-plugin`)), ...(await $.fs.list(`${dir}/hooks`))]
+      if (newestFile(files) <= before) continue
+      const r = await $.process.run(['touch', '-c', `${dir}/.claude-plugin/plugin.json`])
+      if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `touch exited ${r.exitCode}`)
+      touched.push(entry.name)
+    } catch (err) {
+      $.ui.log(`mod-kit reloaded, but ${entry.name}, which depends on it, could not be asked to load again (${String((err as Error)?.message ?? err)}). ${lost}`)
+    }
+  }
+  if (touched.length) $.ui.log(`mod-kit reloaded, so these mods that changed with it load again: ${touched.join(', ')}`, { to: 'debug' })
+}
 
 export const register: Register = (on, options) => {
   registerBand(on, options)
@@ -299,6 +351,12 @@ const registerBand: Register = on => {
   // that command. Only a button showing now is pressed, so an old line typed again presses nothing.
   on('session.start', async ($, e, next) => {
     if (e.isInteractive) await $.command.register({ name: 'press', description: 'Press a button in the band or a pane: /press <mod> <button>, as the band shows it', argumentHint: '<mod> <button>' })
+    // #960: at a reload, the mods that changed with mod-kit are asked to load again.
+    try {
+      await reloadDependents($)
+    } catch (err) {
+      $.ui.log(`mod-kit could not check which mods to load again after it started (${String((err as Error)?.message ?? err)}). If a mod's tools or commands are missing in this session, a new session brings them back.`)
+    }
     return next(e)
   })
   on('command.run', { command: 'press' }, async ($, e) => {
