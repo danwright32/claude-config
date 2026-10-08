@@ -62,6 +62,10 @@ describe('the block', () => {
     expect(RULES).toContain('sleep-queue.sh release /repo <issue> s1 done|parked|failed')
     expect(RULES).toMatch(/never from what you say/)
   })
+  test('a question for Dan is noted with its repository, issue and text, the fields the before bed questions read (#836)', () => {
+    expect(RULES).toContain('a question about an issue (kind question, with repo as owner/name, issue as its number, and text)')
+    expect(RULES).toMatch(/asked before bed next time/)
+  })
   test('says which issue is held, and writes a heartbeat naming it', () => {
     const r = decideStop(input({ claim: held() }))
     expect(r.kind === 'block' && r.reason).toMatch(/^You hold #7 in o\/r \(attempt 1\): carry on with it\./)

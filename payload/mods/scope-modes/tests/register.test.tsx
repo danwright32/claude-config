@@ -3,6 +3,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { repoQuestion } from '../hooks/mergedeploy.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -219,6 +220,16 @@ type Opts = {
   claimsGate?: Promise<void>
   /** Which writes of the driver's counter fail, counted from 1 (#844). */
   driverWriteFails?: number[]
+  /** Dan's answer to each before bed question about an issue (#836), by the question as the dialog shows it: null never answers, a promise answers when it settles, '__dismissed' throws. */
+  issueAnswers?: Record<string, string | null | Promise<string>>
+  /** Each issue's labels as gh reads them (#836). */
+  issueLabels?: Record<number, string[]>
+  /** gh issue view failing, with its stderr (#836). */
+  issueViewFails?: string
+  /** gh issue comment failing on an issue, with its stderr (#836). */
+  commentFails?: Record<number, string>
+  /** ls of a folder failing for a reason other than the folder being absent (#836). */
+  lsFails?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -240,6 +251,10 @@ const world = (on: On, o: Opts = {}) => {
     /** Every mv, ln and rm, in order, as the Mac saw them (#843). */
     fileOps: [] as string[][],
     asked: [] as string[],
+    /** The choices each question offered, in the order asked (#836). */
+    askedOptions: [] as string[][],
+    /** Every comment posted on an issue (#836). */
+    comments: [] as { repo: string; issue: string; body: string }[],
     tools: [] as string[],
     logs: [] as string[],
     files: { ...o.files } as Record<string, string>,
@@ -281,6 +296,13 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'mv' || cmd === 'ln' || cmd === 'rm') w.fileOps.push(argv)
     if (cmd === 'sysctl') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
     if (cmd === 'mkdir') return ok()
+    // A folder's names, from the files beneath it (#836).
+    if (cmd === 'ls') {
+      const dir = String(ops[ops.length - 1]).replace(/\/+$/, '')
+      if (o.lsFails) return fail(1, `ls: ${dir}: ${o.lsFails}`)
+      const names = [...new Set(Object.keys(w.files).filter(f => f.startsWith(`${dir}/`)).map(f => f.slice(dir.length + 1).split('/')[0] as string))].sort()
+      return names.length ? ok(`${names.join('\n')}\n`) : fail(1, `ls: ${dir}: No such file or directory`)
+    }
     if (cmd === 'mv') {
       const [from, to] = ops as [string, string]
       if (!(from in w.files)) return fail(1, `mv: rename ${from} to ${to}: No such file or directory`)
@@ -424,7 +446,15 @@ const world = (on: On, o: Opts = {}) => {
         return other ? ok(JSON.stringify(other)) : fail(1, 'no pull requests found')
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
-      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN' }))
+      if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFails) return fail(1, o.issueViewFails)
+      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })) }))
+      // A decision posted on an issue (#836): gh prints the new comment's link.
+      if (a[0] === 'issue' && a[1] === 'comment') {
+        const repo = a[a.indexOf('--repo') + 1] as string
+        if (o.commentFails?.[Number(a[2])]) return fail(1, o.commentFails[Number(a[2])])
+        w.comments.push({ repo, issue: a[2] as string, body: a[a.indexOf('--body') + 1] as string })
+        return ok(`https://github.com/${repo}/issues/${a[2]}#issuecomment-1\n`)
+      }
     }
     return fail(1, `unexpected: ${argv.join(' ')}`)
   })
@@ -482,8 +512,20 @@ const world = (on: On, o: Opts = {}) => {
   on('tool.call', ($, e) => {
     // $.ui.ask raises the AskUserQuestion dialog as a tool call; Dan answers it here.
     if (e.tool === 'AskUserQuestion') {
-      const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
+      const first = (e as unknown as { questions: { question: string; options?: unknown[] }[] }).questions[0]
+      const q = String(first?.question)
       w.asked.push(q)
+      w.askedOptions.push((first?.options ?? []).map(x => (x && typeof x === 'object' ? String((x as { label?: unknown }).label) : String(x))))
+      // A before bed question about an issue (#836), answered as the test says.
+      if (o.issueAnswers && Object.prototype.hasOwnProperty.call(o.issueAnswers, q)) {
+        const given = o.issueAnswers[q]
+        const qs = (e as unknown as { questions: unknown[] }).questions
+        const reply = (a: string) => ({ result: { questions: qs, answers: { [q]: a } }, text: `answered ${a}` })
+        if (given === null || given === undefined) return new Promise(() => undefined) as never
+        if (given === '__dismissed') throw new Error('the dialog was dismissed')
+        if (typeof given === 'string') return reply(given) as never
+        return given.then(reply) as never
+      }
       if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return new Promise(() => undefined) as never
       // An answer Dan gives only when the test lets it go: after the wait, as late as it likes (#843).
       if (q.endsWith('what may Claude do?') && o.repoAnswerLate) {
@@ -1194,14 +1236,15 @@ test('another mod holds its own item while away, and is told nothing was held at
 
 const SLEEP = '/Users/x/.claude/state/sleep'
 const CURRENT = `${SLEEP}/current.json`
-// The writes of the record itself, leaving out the caffeinate hold's process number (#844).
-const recordWrites = (w: { fsWrites: string[] }) => w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing'))
+// The writes of the record itself, leaving out the caffeinate hold's process number (#844) and the
+// night's unanswered list (#836).
+const recordWrites = (w: { fsWrites: string[] }) => w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
 const recordOf = (w: { files: Record<string, string> }) => JSON.parse(w.files[CURRENT] as string) as Record<string, unknown>
 const asleepRecord = (extra: Record<string, unknown> = {}) =>
-  JSON.stringify({ v: 1, generation: 'g0', since: T0 - 5 * MIN, until: UNTIL, night: '1969-12-31', bootTime: BOOT, report: '/Users/x/Downloads/sleep-report-1969-12-31.md', startedBy: { sessionId: 's9', cwd: '/other' }, workers: ['s9'], placeBefore: 'home', ...extra })
+  JSON.stringify({ v: 1, generation: 'g0', since: T0 - 5 * MIN, until: UNTIL, night: '1969-12-31', bootTime: BOOT, report: '/Users/x/Downloads/Sleep report 1969-12-31.md', startedBy: { sessionId: 's9', cwd: '/other' }, workers: ['s9'], placeBefore: 'home', ...extra })
 const interactive = (sessionId: string): Session => ({ sessionId, extra: { 'scope-modes': { isInteractive: true } } })
 
 // The shared merge and deploy lists (#843), as installed with the payload.
@@ -1223,7 +1266,7 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     until: UNTIL,
     night: '1969-12-31',
     bootTime: BOOT,
-    report: '/Users/x/Downloads/sleep-report-1969-12-31.md',
+    report: '/Users/x/Downloads/Sleep report 1969-12-31.md',
     startedBy: { sessionId: 's1', cwd: '/repo' },
     workers: ['s1', 's2'],
     placeBefore: 'home',
@@ -1232,19 +1275,21 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
   expect(recordWrites(w).length).toBe(1)
   expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT].sort())
+  // The record, and the night's list of issues whose before bed question went unanswered (#836): none tonight.
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/unanswered/${T0}-s1`].sort())
+  expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
+  expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.")
   // The report is started at once from the record just placed, so it exists from the first minute (#835).
   expect(w.reports).toEqual([{ op: 'start', record: CURRENT }])
   expect(w.runs.some(r => r[0] === 'python3')).toBe(false)
 })
 
 test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { reportFails: { start: 'the report could not be written to /Users/x/Downloads/sleep-report-1969-12-31.md (Permission denied)' } })
+  const { w, clock } = world(on, { reportFails: { start: 'the report could not be written to /Users/x/Downloads/Sleep report 1969-12-31.md (Permission denied)' } })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(r.text).toMatch(/ The night's report could not be started: the report could not be written to \/Users\/x\/Downloads\/sleep-report-1969-12-31\.md \(Permission denied\)\.$/)
+  expect(r.text).toMatch(/ The night's report could not be started: the report could not be written to \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md \(Permission denied\)\.$/)
   expect(lastModes(w)).toEqual(['ASLEEP'])
 })
 
@@ -1280,7 +1325,8 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   // The other finds the first one's record, or its preparing marker while it is still settling the night.
   expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid'))).toEqual([CURRENT])
+  // The record, and the one night's unanswered list beside it (#836).
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/unanswered/${T0}-s1`])
   // Each attempt writes its own marker, so one attempt's cleanup never removes the other's.
   expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
 })
@@ -1315,7 +1361,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/sleep-report-1969-12-31.md.")
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.")
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
@@ -1465,7 +1511,7 @@ test('a wake whose report cannot be finished says each thing that failed, and is
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
   // A usage hook that throws is skipped by the engine, so the read fails with the engine's own words.
-  expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/sleep-report-1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\.$/)
+  expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\.$/)
   expect(w.files[CURRENT]).toBeUndefined()
   // The woke note is still written, without a usage reading it does not have.
   expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'woke', at: T0, by: 's1' })
@@ -2268,4 +2314,251 @@ test('a bedtime answer is written beside the record, never as a half file in the
   await command($ as never, 'sleep')
   expect(JSON.parse(w.files[LISTS_PATH] as string).mayDeploy).toEqual(['o/r'])
   expect(w.fsWrites.filter(f => f.startsWith('/Users/x/.claude/mods/'))).toEqual([])
+})
+
+// ---- Sleep mode phase 6 (#836): the before bed questions about the queue's issues ----
+
+const UNANSWERED = `${SLEEP}/unanswered/${T0}-s1`
+const NOTES_OLD = `${SLEEP}/notes/g-old.jsonl`
+const ANSWERED = `${SLEEP}/answered/`
+const noted = (n: Record<string, unknown>, at = T0 - 2 * 24 * 60 * MIN) => JSON.stringify({ v: 1, generation: 'g-old', at, by: 's7', ...n })
+// A night's notes from earlier: questions sessions noted about issues, and two that name no issue.
+const OLD_NOTES = [
+  noted({ kind: 'question', repo: 'o/r', issue: 12, text: 'Keep the old flag?' }),
+  noted({ kind: 'question', repo: 'o/r', issue: 14, text: 'Keep the old flag?' }),
+  noted({ kind: 'question', repo: 'o/r', issue: 12, text: 'Which copy?', options: ['Short', 'Long'] }),
+  noted({ kind: 'question', repo: 'o/r', issue: 20, text: 'Rename it?' }),
+  // Not a worker's repository, so not in tonight's queue.
+  noted({ kind: 'question', repo: 'o/other', issue: 5, text: 'Elsewhere?' }),
+  // A refused question names only a folder, and a closed repository is phase 7's own question.
+  noted({ kind: 'question', cwd: '/repo', questions: ['Merge PR #31?'] }),
+  noted({ kind: 'question', repo: 'o/r', questions: ['Overnight in o/r, what may Claude do?'] }),
+].join('\n')
+const ONE_NOTE = noted({ kind: 'question', repo: 'o/r', issue: 20, text: 'Rename it?' })
+const LISTED = () => listsFile([{ repo: 'o/r', mergeDeploys: false }])
+const morningQuestions = (w: { appended: { line: string }[] }) =>
+  w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && n.issue !== undefined)
+const answeredRecords = (w: { files: Record<string, string> }) => Object.keys(w.files).filter(f => f.startsWith(ANSWERED) && f.endsWith('.json'))
+
+test("the open questions on the queue's issues are asked one at a time after the repository question, most unblocking first, and each answer is posted on its issue as a dated decision", withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: listsFile([]), [NOTES_OLD]: OLD_NOTES },
+    githubRepos: { default: ['o/r'] },
+    repoAnswer: 'Allowed to deploy',
+    issueAnswers: { 'o/r#12 and #14: Keep the old flag?': 'Drop it', 'o/r#20: Rename it?': 'Skip this one', 'o/r#12: Which copy?': 'Short' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  // The repository first: its answer lasts every night and covers every issue there. Then the
+  // question two issues wait on; then issue 20's, its only one, before issue 12's second.
+  expect(w.asked).toEqual([repoQuestion('o/r'), 'o/r#12 and #14: Keep the old flag?', 'o/r#20: Rename it?', 'o/r#12: Which copy?'])
+  expect(w.askedOptions.slice(1)).toEqual([
+    ['Skip this one', 'Go to sleep now'],
+    ['Skip this one', 'Go to sleep now'],
+    ['Short', 'Long', 'Skip this one', 'Go to sleep now'],
+  ])
+  // Every question carries Go to sleep now, the repository question too.
+  expect(w.askedOptions[0]).toContain('Go to sleep now')
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#12', 'o/r#14', 'o/r#12'])
+  expect(w.comments[0]?.body).toBe('**Decision from Dan, 1969-12-31 (ET)**, answered before bed as sleep mode started.\n\n> Keep the old flag?\n\nAnswer: Drop it')
+  expect(w.comments[2]?.body).toMatch(/> Which copy\?\n\nAnswer: Short$/)
+  // The issue whose question was skipped is left out of tonight's queue, in the file it reads.
+  expect(w.files[UNANSWERED]).toBe('o/r#20\n')
+  // Written before the record, so no worker reads a queue without it.
+  const listed = w.fileOps.findIndex(op => op[0] === 'mv' && op[2] === UNANSWERED)
+  const placed = w.fileOps.findIndex(op => op[0] === 'ln' && op[2] === CURRENT)
+  expect(listed).toBeGreaterThan(-1)
+  expect(placed).toBeGreaterThan(listed)
+  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. 1 question left for the morning, so tonight the queue skips o/r#20.'))
+  // The one left is noted for the morning report as the same question, so it is asked again next time.
+  expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text])).toEqual([['o/r', 20, 'Rename it?']])
+  // Every answer posted is kept, one record per issue and question.
+  expect(answeredRecords(w).length).toBe(3)
+})
+
+test('a question answered and posted on an earlier night is not asked again', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE }, githubRepos: { default: ['o/r'] }, issueAnswers: { 'o/r#20: Rename it?': 'Yes, to Ledger' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#20: Rename it?'])
+  expect(w.files[UNANSWERED]).toBe('')
+  await command($ as never, 'wake')
+  w.asked.length = 0
+  w.comments.length = 0
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(w.comments).toEqual([])
+})
+
+test('Go to sleep now asks nothing more: every question left is its issue skipped tonight, and nothing is posted', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES },
+    githubRepos: { default: ['o/r'] },
+    issueAnswers: { 'o/r#12 and #14: Keep the old flag?': 'Go to sleep now' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#12 and #14: Keep the old flag?'])
+  expect(w.comments).toEqual([])
+  expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(r.text).toMatch(asRegExp(' 3 questions left for the morning, so tonight the queue skips o/r#12, o/r#14 and o/r#20.'))
+})
+
+test('Go to sleep now on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [NOTES_OLD]: OLD_NOTES }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Go to sleep now' })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual([repoQuestion('o/r')])
+  expect(recordOf(w).repos).toEqual({ mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'Dan chose to go to sleep before answering about o/r' }] })
+  // Nothing is written into the shared file: the question is asked again next time.
+  expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [], mayDeploy: [] })
+  expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
+})
+
+test('the ten minutes are shared with the repository questions: once they run out the rest are not asked, and a late answer is still posted for the nights after', withDeps, async ($, on) => {
+  let answer = (_: string) => undefined as void
+  const late = new Promise<string>(r => {
+    answer = r
+  })
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES },
+    githubRepos: { default: ['o/r'] },
+    issueAnswers: { 'o/r#12 and #14: Keep the old flag?': late },
+  })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(10 * MIN)
+  const r = await pending
+  expect(w.asked).toEqual(['o/r#12 and #14: Keep the old flag?'])
+  expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
+  expect(r.text).toMatch(asRegExp(' 3 questions left for the morning, so tonight the queue skips o/r#12, o/r#14 and o/r#20.'))
+  // Dan answers after sleep began: the decision is posted, and the issue stays out of tonight's queue.
+  answer('Drop it')
+  await clock.settle()
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#12', 'o/r#14'])
+  expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
+  expect(answeredRecords(w).length).toBe(2)
+})
+
+test('an answer that could not be posted leaves its issue out tonight, is said, and is noted for the morning; it is asked again next time', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE },
+    githubRepos: { default: ['o/r'] },
+    issueAnswers: { 'o/r#20: Rename it?': 'Yes' },
+    commentFails: { 20: 'HTTP 502: Bad Gateway' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  const said = 'Your answer on o/r#20 ("Yes") could not be posted (HTTP 502: Bad Gateway), so the issue is skipped tonight and the question is asked again next time.'
+  expect(w.files[UNANSWERED]).toBe('o/r#20\n')
+  expect(r.text).toMatch(asRegExp(` ${said}`))
+  // Nothing reached an issue, so nothing is said to have been posted.
+  expect(r.text).not.toMatch(/Before bed/)
+  expect(answeredRecords(w)).toEqual([])
+  const notes = w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>)
+  expect(notes.filter(n => n.kind === 'finding').map(n => n.text)).toEqual([said])
+  expect(morningQuestions(w).map(n => [n.issue, n.text])).toEqual([[20, 'Rename it?']])
+})
+
+test('a question on a closed issue is not asked', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES },
+    githubRepos: { default: ['o/r'] },
+    gh: { pr: null, issues: { 12: 'CLOSED', 14: 'CLOSED' } },
+    issueAnswers: { 'o/r#20: Rename it?': 'Skip this one' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#20: Rename it?'])
+  expect(w.files[UNANSWERED]).toBe('o/r#20\n')
+})
+
+test('a question whose issue cannot be read from GitHub is asked rather than dropped', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE },
+    githubRepos: { default: ['o/r'] },
+    issueViewFails: 'error connecting to api.github.com',
+    issueAnswers: { 'o/r#20: Rename it?': 'Skip this one' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#20: Rename it?'])
+})
+
+test('a more urgent issue is asked about first when nothing else separates two questions', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: {
+      [LISTS_PATH]: LISTED(),
+      [NOTES_OLD]: [noted({ kind: 'question', repo: 'o/r', issue: 3, text: 'Old p3?' }, T0 - 9 * MIN), noted({ kind: 'question', repo: 'o/r', issue: 4, text: 'New p0?' }, T0 - 1 * MIN)].join('\n'),
+    },
+    githubRepos: { default: ['o/r'] },
+    issueLabels: { 3: ['priority-p3'], 4: ['bug', 'priority-p0'] },
+    issueAnswers: { 'o/r#4: New p0?': 'Skip this one', 'o/r#3: Old p3?': 'Skip this one' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#4: New p0?', 'o/r#3: Old p3?'])
+})
+
+test('a question dismissed or that could not be shown leaves its issue out, said as dismissed, never as unanswered (L11)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE }, githubRepos: { default: ['o/r'] }, issueAnswers: { 'o/r#20: Rename it?': '__dismissed' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.files[UNANSWERED]).toBe('o/r#20\n')
+  expect(r.text).toMatch(asRegExp(' 1 question left for the morning, so tonight the queue skips o/r#20. The question on o/r#20 was dismissed or could not be shown ('))
+})
+
+test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ['{"kind":"question"', ONE_NOTE].join('\n') },
+    githubRepos: { default: ['o/r'] },
+    issueAnswers: { 'o/r#20: Rename it?': 'Skip this one' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#20: Rename it?'])
+  expect(r.text).toMatch(asRegExp(' 1 line of earlier notes could not be read, so a question in it may not have been asked.'))
+})
+
+test('a notes folder that cannot be listed is said, and sleep still starts', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES }, githubRepos: { default: ['o/r'] }, lsFails: 'Permission denied' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(r.text).toMatch(asRegExp(` Questions from earlier nights could not be read (ls: ${SLEEP}/notes: Permission denied), so none were asked.`))
+})
+
+test('no notes yet is no question, and nothing is said about questions', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(r.text).not.toMatch(/question|Before bed/)
+  expect(w.files[UNANSWERED]).toBe('')
+})
+
+test('with no one at this session to ask, every open question on a worker\'s repository leaves its issue out tonight', withDeps, async ($, on) => {
+  // This session is not interactive; another, which is, works in o/r overnight.
+  const { w, clock } = world(on, { open: [{ ...interactive('s2'), repoRoot: '/repo' }], files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES }, githubRepos: { default: ['o/r'] } })
+  await ($ as unknown as $T).session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false } as never)
+  await clock.settle()
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
+})
+
+test('an unanswered list that cannot be written stops sleep starting, since the queue would work issues waiting on Dan (L42)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE },
+    githubRepos: { default: ['o/r'] },
+    issueAnswers: { 'o/r#20: Rename it?': 'Skip this one' },
+    mvFails: 'Read-only file system',
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode did not start: the list of issues whose before bed question went unanswered could not be written \(mv: rename .* Read-only file system\)\.$/)
+  expect(CURRENT in w.files).toBe(false)
+  expect(`${SLEEP}/preparing` in w.files).toBe(false)
 })
