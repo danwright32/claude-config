@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { issuesOfBranch, keptOpen, leftOpenFor, newWork, outstanding, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { keptOpen, leftOpenFor, newWork, outstanding, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
 const bash = (...lines: string[][]) => newWork({ tool: 'Bash', input: {}, commands: lines.map(words => ({ words, git: gitOf(words) })), issues: [616] })
@@ -32,14 +32,6 @@ describe('newWork: starting new work is denied while winding down', () => {
     expect(bash(['git', 'commit', '-m', 'fix the check'], ['git', 'push'])).toBeUndefined()
     expect(bash(['gh', 'pr', 'merge', '12', '--squash'])).toBeUndefined()
     expect(bash(['git', 'checkout', 'main'], ['git', 'branch', '-D', 'scope-modes-616'])).toBeUndefined()
-  })
-})
-
-describe('issuesOfBranch', () => {
-  test('the issue numbers a branch name carries', () => {
-    expect(issuesOfBranch('scope-modes-616-621')).toEqual([616, 621])
-    expect(issuesOfBranch('feat/620-addon-notes')).toEqual([620])
-    expect(issuesOfBranch('main')).toEqual([])
   })
 })
 

@@ -249,4 +249,21 @@ describe('what a command does, by effect', () => {
     expect(kinds('git push origin master', { ...ON_BRANCH, defaultBranch: null })).toEqual(['push-default'])
     expect(kinds('gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc')).toEqual(['push-default'])
   })
+
+  // #980: mod-kit's branch reader gives no default branch for a checkout whose branch it cannot
+  // read (a detached head among them), so any branch named could be the default: judged the strict
+  // way, never as main or master alone, which would let a push to a develop default through.
+  test('a checkout whose default branch could not be read: every branch a push names could be the default', () => {
+    const unread: Where = { defaultBranch: { unreadable: 'a detached head names no branch' }, currentBranch: null, scripts: null }
+    expect(acts('git push origin HEAD:feature-1', unread)).toEqual([{ kind: 'push-default', what: 'push feature-1 from a checkout whose default branch could not be read (a detached head names no branch)' }])
+    expect(acts('git push origin develop', unread).map(a => a.what)).toEqual(['push develop from a checkout whose default branch could not be read (a detached head names no branch)'])
+    // main is a default on any reading, and said as one.
+    expect(acts('git push origin main', unread).map(a => a.what)).toEqual(['push main straight to GitHub'])
+    expect(acts('git push', unread).map(a => a.what)).toEqual(['push from a branch that could not be read'])
+    expect(acts('git push', { ...unread, currentBranch: 'fix-843' }).map(a => a.what)).toEqual(['push fix-843 from a checkout whose default branch could not be read (a detached head names no branch)'])
+    expect(kinds('gh api -X PATCH repos/o/r/git/refs/heads/develop -f sha=abc', unread)).toEqual(['push-default'])
+    // Read, a default other than main or master is the only one.
+    expect(kinds('git push origin feature-1', { ...unread, defaultBranch: 'develop' })).toEqual([])
+    expect(kinds('gh api -X PATCH repos/o/r/git/refs/heads/feature-1 -f sha=abc', { ...unread, defaultBranch: 'develop' })).toEqual([])
+  })
 })

@@ -54,7 +54,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
-import { issuesOfBranch, keptOpen, leftOpenFor, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
+import { keptOpen, leftOpenFor, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
 // bar holds ONE list of modes for the band's amber line (no build or winding down, and away, can be
@@ -723,13 +723,18 @@ const mergeDeployRefusal = async ($: EngineInterface, night: unknown, commands: 
     if (known) return known
     // The folder's repository as phase 3 reads it (repoFromRemotes): none, or more than one, is untold.
     const own = (await folderRepo($, dir)) ?? undefined
-    let defaultBranch: string | null = null
+    let defaultBranch: Place['defaultBranch'] = null
     let currentBranch: string | null = null
     if (needs.branch) {
-      const head = await run($, ['git', '-C', dir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
-      defaultBranch = head.exitCode === 0 ? head.stdout.trim().replace(/^origin\//, '') || null : null
-      const cur = await run($, ['git', '-C', dir, 'branch', '--show-current'])
-      currentBranch = cur.exitCode === 0 && cur.stdout.trim() ? cur.stdout.trim() : null
+      // Read by mod-kit's one reader of where a checkout stands (#980). A folder in no checkout has
+      // neither branch. One whose branch it cannot give (a detached head among them) gives no
+      // default either, so that is said rather than taken as main or master (L42).
+      const b = await $.modkit.branch({ path: dir }).catch((err: unknown) => ({ unreadable: msg(err) }))
+      if (b && 'unreadable' in b) defaultBranch = { unreadable: b.unreadable }
+      else if (b) {
+        defaultBranch = b.defaultBranch
+        currentBranch = b.branch
+      }
     }
     let scripts: Scripts = null
     if (needs.scripts) {
@@ -1609,32 +1614,29 @@ const releaseAwake = async ($: EngineInterface, dir: string) => {
   }
 }
 
-// What winding down finishes: the branch this session is on, read when it turns on. Not in a
-// repository is an answer (nothing to finish); a read that fails is not, and is said (L11).
+// mod-kit's words for a checkout on no branch. Its branch reader holds a detached head unreadable,
+// since a reader deciding what an edit may do must not guess; winding down asks something else,
+// what to finish, and a detached head has no branch to finish (as it had before #980). The tests
+// read with a byte for byte copy of mod-kit's reader, so a change to these words fails them.
+const DETACHED = 'a detached head names no branch'
+
+// What winding down finishes: the branch this session is on, read when it turns on, by mod-kit's one
+// reader of where a checkout stands (#980). Not in a repository is an answer (nothing to finish); a
+// read that fails is not, and is said (L11).
 type TargetRead = ScopeModesTarget | null | { unreadable: string }
 const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
-  let repo
+  let b
   try {
-    repo = await $.session.repo()
+    b = await $.modkit.branch({ path: await $.session.cwd() })
   } catch (err) {
     return { unreadable: msg(err) }
   }
-  if (!repo) return null
-  let cwd: string
-  try {
-    cwd = await $.session.cwd()
-  } catch (err) {
-    return { unreadable: msg(err) }
-  }
-  const b = await run($, ['git', '-C', cwd, 'branch', '--show-current'])
-  if (b.exitCode !== 0) return { unreadable: b.stderr.trim() || `git exited ${b.exitCode}` }
-  const branch = b.stdout.trim()
-  // origin/HEAD is often never set locally, so its absence falls back to the usual names.
-  const head = await run($, ['git', '-C', repo.root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
-  const defaultBranch = head.exitCode === 0 ? head.stdout.trim().replace(/^origin\//, '') : undefined
-  // A detached head has no branch to finish.
-  const isDefault = !branch || (defaultBranch ? branch === defaultBranch : ['main', 'master'].includes(branch))
-  return { root: repo.root, branch, isDefault, issues: issuesOfBranch(branch), pr: null }
+  if (!b) return null
+  // The checkout winding down reads (gh's folder, the branch and worktree lists, uncommitted work)
+  // is the project's main working tree, as $.session.repo().root named it before #980: Claude Code
+  // resolves a linked worktree to its main tree there, and mod-kit's `main` is that same folder.
+  if ('unreadable' in b) return b.unreadable === DETACHED ? { root: b.main ?? b.root, branch: '', isDefault: true, issues: [], pr: null } : { unreadable: b.unreadable }
+  return { root: b.main, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null }
 }
 
 type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences?: { number?: number }[] }
