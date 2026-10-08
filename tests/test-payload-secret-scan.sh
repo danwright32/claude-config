@@ -50,9 +50,10 @@ esac
 # "SCAN-RC=<n>" last. Run in a subshell with the override switched off explicitly: a
 # SYNC_SKIP_SECRET_SCAN inherited from whoever started this suite would pass everything (L439).
 run_scan(){
+  # Locals, which scan_secrets sees through bash's dynamic scope and which go when this returns.
+  local PAYLOAD="$1" SYNC_REPO="$2"
   (
     unset SYNC_SKIP_SECRET_SCAN
-    PAYLOAD="$1"; SYNC_REPO="$2"
     die(){ printf 'REFUSED: %s\n' "$*"; exit 1; }
     eval "$BLANK_SRC"
     eval "$SCAN_SRC"
