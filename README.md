@@ -1264,37 +1264,45 @@ accident, and a listing for a hook that has gone fails too. This part reads only
 `claude` binary is found, the list is compared with that build's own routes, and a difference fails.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed once per checkout
-with `npm ci --prefix tools/typescript`; `TSC_BIN` overrides it, and `tsc` on the path is the last
-resort). Claude Code lays a mod's types only in the copy it loads, `~/.claude/mods/<mod>/.claude-plugin/types/`,
-which the mirror never carries, so a mod in `payload/mods` is checked in a scratch copy beside the
-types laid for its installed copy. It allows the `./x.ts` imports every mod uses itself
+with `npm ci --prefix tools/typescript`, and on CI before the suites; `TSC_BIN` overrides it, and
+`tsc` on the path is the last resort). The types it checks against come from this repository alone
+(#953), never from an installed copy: Claude Code lays a mod's types only in the copy it loads, and
+their MCP part lists whatever tools the session had connected when that copy last reloaded, so a
+check that borrowed them gave the same tree a different verdict from one hour to the next
+(manual-steps' matchers on its own tools failed on 2026-10-08 with no change to manual-steps) and
+none at all where nothing was installed. Each mod is checked in a scratch copy beside
+`tools/typescript/claude-code-types/`: one Claude Code build's engine API (`claude-code/`) and
+built-in tools (`claude-code-tools/`), whose first line names the build, an MCP list declaring no
+tool (`claude-code-mcp/`, so the engine's own fallback accepts every `mcp__<server>__<tool>` name
+with loose arguments; a misspelled name of that shape is not caught, which it only ever was while
+its server was connected), and a `tsconfig.json` to which each mod's dependencies are added. Any
+types laid in the mod's own folder are replaced, never written through. A dependency's contract is
+the file its own `plugin.json` names as `types`, read from the folder under review (#840), so a
+change made to a mod and its dependency in one PR is checked as one; a dependency the folder does
+not hold fails the mod by name. None of this needs Claude Code, so the type check runs before the
+`claude` lookup and holds on CI's runner too, where a type error fails the run rather than hiding
+behind the UNMEASURED exit. The check allows the `./x.ts` imports every mod uses itself
 (`--allowImportingTsExtensions`), since the laid tsconfig does not, so no mod needs its own copy of
 that setting. Errors fail the run with the mod named and counted, except a mod listed in
 `tools/typescript/known-type-errors.tsv` (empty since #822 fixed the errors the first run found,
 2026-10-05, in 12 mods), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it, so fixing one error makes no room for a new one. A compiler
-that exits without any type error is said as that, never as 0 errors. Where no compiler or no laid
-types are found, each mod's line says its types were not checked and why, and the run ends with one
-UNMEASURED line counting them and naming the install command, which is not a failure. CI never
-reaches the type check: it has no Claude Code, so `check-mods.sh` stops at its own UNMEASURED exit
-(3) before any mod is validated, and there are no laid types to check against; that line names the
-strict type check as UNMEASURED too (#833). A mod's laid types hold each of its dependencies'
-`types/index.d.ts` as installed, so a dependency `payload/mods` also holds has its types read from
-there instead (#840): a mod is checked against the contract under review, never the installed one,
-which would fail a change made to both in one PR and pass one that breaks a dependent until the
-next install. Claude Code's own types, and a dependency the folder does not hold, keep what was laid. The pinned compiler and its record are therefore
-enforced only on a Mac with Claude Code and the compiler installed, and `claude-sync status` names
-a sync clone where the pinned version is not installed, with its `npm ci` command (the apply does
-not install it, which would put npm and the network on every pull). The laid types describe the
-Claude Code build that laid them, so `tools/typescript/claude-code-version` records the build the
-record was measured on (2.1.292, 2026-10-07, all 19 mods clean; 2.1.291 before it). The move to
-2.1.292 failed one uncast stand-in short of members. Nineteen other stand-ins returned their object
-cast to `never`, which passes any shape; removing those casts showed eight of them, in seven mods,
-hiding a missing member or a parameter narrower than the real one. Every one is now returned uncast,
-typed with the real noun's types, and `check-mods.sh` refuses such a cast in any mod
-file, by file and line, without needing Claude Code (#833). Every run that checks types says
-which build they came from against that one, and on a different build each type failure names both,
-so newer types are not read as a regression in a mod; it still fails, because a real regression
-looks the same. Once the record is right on a new build, write that build's version into the file.
+that exits without any type error is said as that, never as 0 errors. Where no compiler is found,
+each mod's line says its types were not checked and why, and the run says UNMEASURED, counting them
+and naming the install command, which is not a failure. `claude-sync status` names a sync clone
+where the pinned compiler is not installed, with its `npm ci` command (the apply does not install
+it, which would put npm and the network on every pull). The pinned types are Claude Code 2.1.294's
+(2026-10-08, all 19 mods clean). A run on a Mac with another build says so and changes no verdict;
+to move the pin, run `bash tools/refresh-claude-code-types.sh` once a mod has loaded on the new build
+(it copies the engine and built-in tool types from `~/.claude/mods/mod-kit/.claude-plugin/types`, or
+a laid folder named as its argument, cuts the tsconfig's types back to the three, never takes the
+session's MCP list, and leaves out every line that is wholly a comment but the engine's first, since
+comments carry no types and Claude Code's carry dashes and words the push gates refuse, refusing
+outright where such a character sits in what is kept), then run `tests/test-mods.sh` and
+commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
+returned their object cast to `never`, which passes any shape; removing those casts showed eight of
+them, in seven mods, hiding a missing member or a parameter narrower than the real one. Every one is
+now returned uncast, typed with the real noun's types, and `check-mods.sh` refuses such a cast in
+any mod file, by file and line, without needing Claude Code (#833).
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
