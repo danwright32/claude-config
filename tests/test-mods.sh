@@ -1446,9 +1446,68 @@ export const register = on => {
   })
 }
 TS
+  # A promise kept in a variable is linked to a noun's read of that same variable as the compiler
+  # resolves it, never to a read of another variable sharing its name (#915). Two functions each hold
+  # a local `expired`, and only the one outside every noun's code waits; the noun reads its own.
+  mknounmod "$M12W" same-name-variable roster <<'TS'
+const waiters = new Map()
+function watch(id: string) {
+  const expired = new Promise(resolve => waiters.set(id, resolve))
+  return expired
+}
+export const register = on => {
+  on('session.start', async ($, e, next) => {
+    void watch('start')
+    return next(e)
+  })
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      roster: {
+        list: async () => {
+          const expired = new Promise(resolve => resolve(['a']))
+          return expired
+        },
+      },
+    }
+  })
+}
+TS
+  # A parameter is its own variable too: one function's parameter keeping a waiting promise is not a
+  # noun's parameter of the same name (#915).
+  mknounmod "$M12W" same-name-parameter shelf <<'TS'
+const waiters = new Map()
+function keep(store: Map<string, Promise<string>>) {
+  store.set('x', new Promise(resolve => waiters.set('x', resolve)))
+}
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, shelf: { get: (store: Map<string, string>) => store.get('x') } }
+  })
+}
+TS
+  # ... and one kept in another file of the mod and imported by the noun is still that noun's read.
+  mknounmod "$M12W" kept-in-other-file later <<'TS'
+import { pending } from './store.ts'
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, later: { wait: ({ id }) => pending.get(id) } }
+  })
+}
+TS
+  cat > "$M12W/kept-in-other-file/hooks/store.ts" <<'TS'
+export const pending = new Map<string, Promise<string>>()
+const waiters = new Map<string, (v: string) => void>()
+export const keep = (id: string) => {
+  pending.set(id, new Promise(resolve => waiters.set(id, resolve)))
+}
+TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"37 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"40 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1459,7 +1518,7 @@ TS
   printf '%s\n' "$out" | grep -F 'lost-executor/hooks/register.ts:4' | grep -q 'cannot be read' \
     && check "an executor that cannot be found is reported as unreadable, never passed" ok \
     || check "an executor that cannot be found is reported as unreadable, never passed" "$out"
-  for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5; do
+  for at in made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 kept-in-other-file/hooks/store.ts:4; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'which a noun returns' \
       && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
       || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
@@ -1477,11 +1536,11 @@ TS
   ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
     && check "a local helper is judged by its own calls, never a same-named one's (#895)" ok \
     || check "a local helper is judged by its own calls, never a same-named one's (#895)" "$out"
-  for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl crlf-local unresolved-import multi-declarator; do
+  for m in bounded commented outside-any-noun raced-short kept-unread same-local-calm out-of-scope-local param-shadows-top param-typed-return local-function-decl crlf-local unresolved-import multi-declarator same-name-variable same-name-parameter; do
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method; do rm -rf "${M12W:?}/$m"; done
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method; do rm -rf "${M12W:?}/$m"; done
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
     || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
