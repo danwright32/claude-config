@@ -28,7 +28,7 @@ import {
   type NightRepos,
   type Scripts,
 } from './mergedeploy.ts'
-import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from './overnight.ts'
+import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
 import { wakeCheck } from './wakecheck.ts'
 import {
   answerKey,
@@ -445,12 +445,37 @@ const askRepo = ($: EngineInterface, repo: string, path: string, waitMs: number)
     }
   })
 
-// The repositories the overnight workers are in, from each one's folder.
-const workerRepos = async ($: EngineInterface, roots: string[]): Promise<string[]> => {
+// One remote's GitHub repository, read by mod-kit's one reader (#951): every folder's remotes here
+// and the session's own origin are read by it, never by a pattern of this mod's.
+const githubOf = ($: EngineInterface): GithubOf => async remote => (await $.modkit.repo({ remote })).github
+
+// The one GitHub repository a folder's remotes name, lower case (repoFromRemotes): null for none,
+// more than one, or a folder git cannot read; `unread` when mod-kit's reader fails, kept apart so a
+// caller that must not drop a folder can say so (#979 review).
+const folderRepoRead = async ($: EngineInterface, dir: string): Promise<{ repo: string | null } | { unread: string }> => {
+  const r = await run($, ['git', '-C', dir, 'remote', '-v'])
+  if (r.exitCode !== 0) return { repo: null }
+  try {
+    return { repo: await repoFromRemotes(r.stdout, githubOf($)) }
+  } catch (err) {
+    return { unread: `the GitHub repository of ${dir} could not be read (${msg(err)})` }
+  }
+}
+// The same for the callers that take any reading they cannot use as untold: the overnight rules
+// refuse a write whose repository cannot be resolved, and no build leaves the folder's untold.
+const folderRepo = async ($: EngineInterface, dir: string): Promise<string | null> => {
+  const f = await folderRepoRead($, dir)
+  return 'repo' in f ? f.repo : null
+}
+
+// The repositories the overnight workers are in, from each one's folder. A folder mod-kit's reader
+// cannot read is never dropped, which would leave its repository unasked at bedtime: it is said.
+const workerRepos = async ($: EngineInterface, roots: string[]): Promise<string[] | { unread: string }> => {
   const out = new Map<string, string>()
   for (const root of roots) {
-    const r = await run($, ['git', '-C', root, 'remote', '-v'])
-    const slug = r.exitCode === 0 ? (repoFromRemotes(r.stdout) ?? undefined) : undefined
+    const f = await folderRepoRead($, root)
+    if ('unread' in f) return f
+    const slug = f.repo
     if (slug && !out.has(slug.toLowerCase())) out.set(slug.toLowerCase(), slug)
   }
   return [...out.values()]
@@ -697,8 +722,7 @@ const mergeDeployRefusal = async ($: EngineInterface, night: unknown, commands: 
     const known = read.get(dir)
     if (known) return known
     // The folder's repository as phase 3 reads it (repoFromRemotes): none, or more than one, is untold.
-    const remotes = await run($, ['git', '-C', dir, 'remote', '-v'])
-    const own = remotes.exitCode === 0 ? (repoFromRemotes(remotes.stdout) ?? undefined) : undefined
+    const own = (await folderRepo($, dir)) ?? undefined
     let defaultBranch: string | null = null
     let currentBranch: string | null = null
     if (needs.branch) {
@@ -798,7 +822,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   }
   let found
   try {
-    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos })
+    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, github: githubOf($) })
   } catch (err) {
     found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`] }
   }
@@ -820,10 +844,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
 // What the overnight rules ask of the disk (#834): the one GitHub repository a folder's remotes
 // name, and whether a folder is a primary checkout. A read that fails is null, which refuses.
 const lookOf = ($: EngineInterface): Look => ({
-  repoOf: async dir => {
-    const r = await run($, ['git', '-C', dir, 'remote', '-v'])
-    return r.exitCode === 0 ? repoFromRemotes(r.stdout) : null
-  },
+  repoOf: dir => folderRepo($, dir),
   isPrimary: async dir => {
     const r = await run($, ['git', '-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'])
     return r.exitCode === 0 ? primaryFrom(r.stdout) : null
@@ -987,6 +1008,10 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
       ownRoot = undefined
     }
     const worked = await workerRepos($, [...(ownRoot ? [ownRoot] : []), ...e.roots])
+    if (!Array.isArray(worked)) {
+      await releaseMarker($, p.preparing, claim.claimed)
+      return `Sleep mode did not start: ${worked.unread}.`
+    }
     // The before bed questions, one round of QUESTION_MS for them all. The repositories' first
     // (#843): an answer there is kept for every night after and covers every issue in it, while an
     // issue's answer covers one issue. Then the open questions on the queue's issues (#836).
@@ -1321,14 +1346,19 @@ const saveDriver = async ($: EngineInterface, en: Enrolled, d: DriverRecord): Pr
 }
 
 // The session's repository: its root, and owner/name from its origin, lower case as the queue keeps it.
+// The origin is read by mod-kit's one reader (#951); a reading that fails leaves the root known.
 const repoOf = async ($: EngineInterface): Promise<{ root: string | null; slug: string | null }> => {
+  let r: Awaited<ReturnType<EngineInterface['session']['repo']>>
   try {
-    const r = await $.session.repo()
-    if (!r) return { root: null, slug: null }
-    const slug = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(r.remote ?? '')?.[1]?.toLowerCase() ?? null
-    return { root: r.root, slug }
+    r = await $.session.repo()
   } catch {
     return { root: null, slug: null }
+  }
+  if (!r) return { root: null, slug: null }
+  try {
+    return { root: r.root, slug: (await $.modkit.repo({ root: r.root, remote: r.remote })).github?.toLowerCase() ?? null }
+  } catch {
+    return { root: r.root, slug: null }
   }
 }
 
@@ -1706,10 +1736,12 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
 }
 
 const openedOf = async ($: EngineInterface) => (await $.state.get(openedRef)).value ?? []
-// owner/name of the session folder's origin, ssh or https, or undefined when it cannot be read.
+// owner/name of the session folder's origin, in the case written, read by mod-kit's one reader
+// (#951); undefined when it names none or cannot be read.
 const sessionSlug = async ($: EngineInterface): Promise<string | undefined> => {
   try {
-    return /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec((await $.session.repo())?.remote ?? '')?.[1]
+    const r = await $.session.repo()
+    return (r ? (await $.modkit.repo({ root: r.root, remote: r.remote })).github : null) ?? undefined
   } catch {
     return undefined
   }

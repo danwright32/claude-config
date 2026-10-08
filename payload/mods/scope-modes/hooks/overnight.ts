@@ -55,14 +55,22 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
 export { normRepo }
 
-/** `git remote -v`'s answer as the one GitHub repository it names; null for none or more than one (a fork's upstream is where gh may send a call). */
-export const repoFromRemotes = (text: string): string | null => {
+/** Reads one remote's address as its GitHub owner/name, or null: mod-kit's one reader, $.modkit.repo (#951). */
+export type GithubOf = (remote: string) => Promise<string | null>
+
+/**
+ * `git remote -v`'s answer as the one GitHub repository it names, lower case; null for none or more
+ * than one (a fork's upstream is where gh may send a call). Each address is read by `github`, never
+ * here: a remote is read as git reads it, where owner/name alone is a local path (#951).
+ */
+export const repoFromRemotes = async (text: string, github: GithubOf): Promise<string | null> => {
   const found = new Set<string>()
   for (const line of text.split('\n')) {
-    const url = line.split(/\s+/)[1]
+    // `name<TAB>address (fetch)`: the address whole, spaces in a local path included.
+    const url = (line.split('\t')[1] ?? '').replace(/ \((?:fetch|push)\)\s*$/, '').trim()
     if (!url) continue
-    const r = normRepo(url)
-    found.add(r ?? `not github: ${url}`)
+    const r = await github(url)
+    found.add(r === null ? `not github: ${url}` : r.toLowerCase())
   }
   return found.size === 1 ? ([...found][0] as string).startsWith('not github') ? null : ([...found][0] as string) : null
 }

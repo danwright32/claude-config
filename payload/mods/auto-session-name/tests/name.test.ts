@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cleanName, hasExchange, namePrompt, renameOutcome, repoLabel, withRepo } from '../hooks/name.ts'
+import { repoName } from './mod-kit/hooks/repo.ts'
+import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
 // The two long dashes, built from their code points so this file holds neither character.
 const EM = String.fromCharCode(0x2014)
@@ -90,8 +92,9 @@ test('the rename command answer is read by the shapes the built-in /rename print
   expect(renameOutcome('something new')).toBe('unknown')
 })
 
-// The session's repository, as $.session.repo() answers it (#945).
-const at = (root: string, remote: string | null = null) => ({ root, remote })
+// The session's repository, as $.session.repo() answers it (#945), named as $.modkit.repo names it:
+// its byte for byte copy (#951).
+const at = (root: string, remote: string | null = null) => repoName({ root, remote })
 
 test('the repository is named by its origin, lower case, in any spelling of the remote', async () => {
   expect(repoLabel(at('/Users/x/Apps/claude-config', 'git@github.com:danwright32/claude-config.git'))).toBe('claude-config')
@@ -100,6 +103,13 @@ test('the repository is named by its origin, lower case, in any spelling of the 
   expect(repoLabel(at('/Users/x/Apps/local', 'ssh://git@gitlab.example.com:2222/team/Sub/Thing.git'))).toBe('thing')
   // The origin names the repository even where the checkout folder is called something else.
   expect(repoLabel(at('/Users/x/Apps/old-folder-name', 'git@github.com:danwright32/PostRoll.git'))).toBe('postroll')
+})
+
+// The name is mod-kit's reading of the repository (#951), on the table every mod's reading is
+// pinned on, as this mod labels it: lower case.
+test("the label is mod-kit's name for the repository, lower case, on every shared case (#951)", async () => {
+  const got = REPO_FIXTURES.map(f => ({ why: f.why, label: repoLabel(at(f.root, f.remote)) }))
+  expect(got).toEqual(REPO_FIXTURES.map(f => ({ why: f.why, label: f.name?.toLowerCase() ?? null })))
 })
 
 test('with no origin the checkout folder names it, and with no repository there is no name', async () => {
