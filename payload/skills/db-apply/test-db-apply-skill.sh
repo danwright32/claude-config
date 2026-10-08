@@ -128,6 +128,13 @@ check "with no DATABASE_URL in the env file, psql is never started" \
 check "and the refusal says the variable is not set" \
   "$(grep -qi 'DATABASE_URL is not set' <<< "$out" && echo ok || echo "said: $out")"
 
+# No env file at all is its own cause, named as such rather than blamed on the variable (L11).
+W4="$TMP/project-no-env"; mkdir -p "$W4"
+rm -f "$TMP/psql-args"
+out="$(cd "$W4" && PATH="$TMP/bin-with" /bin/bash -c "$psql_line" 2>&1)"; rc=$?
+check "with no env file, psql is never started and the refusal names the missing file" \
+  "$([ "$rc" -ne 0 ] && [ ! -f "$TMP/psql-args" ] && grep -qi 'no .env.local here' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

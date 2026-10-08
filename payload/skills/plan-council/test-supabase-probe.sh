@@ -53,6 +53,12 @@ check "a supabase folder means it uses Supabase (exit 0, prints yes)" \
 check "and it names the evidence" \
   "$(grep -q 'supabase' <<< "$OUT" && echo ok || echo "said: $OUT")"
 
+# A project whose own folder is NAMED supabase is not evidence by its name alone.
+mkdir -p "$TMP/named/supabase"; printf 'x\n' > "$TMP/named/supabase/README.md"
+uses "$TMP/named/supabase"
+check "a project folder that is itself named supabase is not counted for its name" \
+  "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC, said: $OUT")"
+
 # A project reached through a symlink is walked, not read as the link alone.
 ln -s "$P" "$TMP/linked-project"
 uses "$TMP/linked-project"

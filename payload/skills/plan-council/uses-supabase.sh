@@ -27,6 +27,7 @@
 # project was in before the probe existed. Env files are only ever matched by variable NAME with
 # grep -q, so no value is printed (L222). `find -H` follows the folder given when it is a symlink;
 # without it find lists the link alone, walks nothing, and a Supabase project reads as no.
+# `-mindepth 1` keeps the project folder itself out, so one merely NAMED supabase is not evidence.
 set -uo pipefail
 
 dir="${1:-}"
@@ -49,7 +50,7 @@ while IFS= read -r path; do
       fi ;;
   esac
 done <<EOF
-$(find -H "$dir" -maxdepth 3 \( -name node_modules -o -name .git \) -prune -o \( \( -name supabase -type d \) -o \( -type f \( -name package.json -o -name .env -o -name '.env.*' -o -name .dev.vars \) \) \) -print 2>/dev/null)
+$(find -H "$dir" -mindepth 1 -maxdepth 3 \( -name node_modules -o -name .git \) -prune -o \( \( -name supabase -type d \) -o \( -type f \( -name package.json -o -name .env -o -name '.env.*' -o -name .dev.vars \) \) \) -print 2>/dev/null)
 EOF
 
 if [ -n "$found" ]; then
