@@ -33,13 +33,18 @@ export type ClickSite = { surface: string; isFullscreen: boolean | undefined; te
  * Terminal only while the tab's View > Allow Mouse Reporting is ticked, a switch cmd R flips and no
  * mod can read: off in Dan's tab when the steps card's Done did nothing (measured 2026-10-08). So a
  * terminal is trusted only when it is fullscreen, named, and not Apple Terminal; anything unmeasured
- * is taken as a click that may not land, since a dead control is worse than a typed fallback.
+ * is taken as a click that may not land, since a dead control is worse than a typed fallback. A
+ * multiplexer (tmux, screen) is unknown too: it names itself, not the terminal behind it.
  */
 export const clicksReach = (site: ClickSite): boolean => {
   if (site.surface !== 'terminal') return true
   if (site.isFullscreen !== true) return false
-  return typeof site.terminal === 'string' && site.terminal !== '' && site.terminal !== 'Apple_Terminal'
+  return typeof site.terminal === 'string' && site.terminal !== '' && !UNSURE_TERMINALS.has(site.terminal)
 }
+
+// Terminals a click may not reach through: Apple Terminal (its per tab switch), and the multiplexers,
+// which name themselves rather than the terminal behind them, Apple Terminal among those (#946 review).
+const UNSURE_TERMINALS = new Set(['Apple_Terminal', 'tmux', 'screen'])
 
 /**
  * What is drawn in a button's place where a click may not reach it: the publisher's `instead`. A

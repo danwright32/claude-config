@@ -90,6 +90,9 @@ test('clicksReach: only a terminal in the fullscreen layout that is not Apple Te
   expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'ghostty' })).toBe(true)
   // Apple Terminal reports clicks only while a per tab switch is on, which no mod can read.
   expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'Apple_Terminal' })).toBe(false)
+  // A multiplexer names itself, not the terminal behind it, which may be Apple Terminal (#946 review).
+  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'tmux' })).toBe(false)
+  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'screen' })).toBe(false)
   // The main screen reports no clicks in any terminal.
   expect(clicksReach({ surface: 'terminal', isFullscreen: false, terminal: 'iTerm.app' })).toBe(false)
   // Not measured, or a terminal that could not be read: taken as a click that may not land.
