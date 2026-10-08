@@ -26,7 +26,6 @@ const LEAD_IN = /^\(([^()]+)\)(?:\s+|$)/
 // Room for the name: a label is cut to this, so with `(` and `) ` at least 26 of the 60 characters
 // stay the name's.
 const LABEL_CHARS = 30
-const WORKTREES = '/.claude/worktrees/'
 
 /**
  * The name with this repository's prefix taken off its front, however many times it is there, in
@@ -53,23 +52,13 @@ export const cleanName = (reply: string): Cleaned => {
   return { name }
 }
 
-// The last part of a path or a remote (`git@host:o/r.git`, `https://host/o/r/`), trailing slashes off.
-const lastPart = (s: string, separators: RegExp): string => s.replace(/\/+$/, '').split(separators).pop() ?? ''
-
 /**
- * The repository a session runs in, as its prefix label (#945): the origin's repository name, else
- * the checkout folder's name, in lower case with brackets removed; null outside a repository. A
- * worktree under `.claude/worktrees/` names its parent: the engine already gives the main working
- * tree as `root`, and the folder is cut here too so the label never rests on that alone.
+ * The repository a session runs in, as its prefix label (#945): its name as mod-kit's one reader
+ * gives it ($.modkit.repo, #951: the origin's name on any host, else the checkout folder, a worktree
+ * naming its parent), in lower case with brackets removed; null outside a repository.
  */
-export const repoLabel = (repo: { root: string; remote: string | null } | null): string | null => {
-  if (!repo) return null
-  let name = lastPart((repo.remote ?? '').trim(), /[/:]/).replace(/\.git$/i, '')
-  if (!name) {
-    const root = repo.root.replace(/\/+$/, '')
-    const at = `${root}/`.indexOf(WORKTREES)
-    name = lastPart(at >= 0 ? root.slice(0, at) : root, /\//)
-  }
+export const repoLabel = (name: string | null): string | null => {
+  if (!name) return null
   const label = name.toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, LABEL_CHARS).trim()
   return label || null
 }
