@@ -2722,7 +2722,7 @@ mkskill "$CH2/skills/wrangler/SKILL.md" 'PLUGIN-LOCAL'   # plugin skill present 
 # Mac 2's own copy of the per Mac file (#675). The payload never carries one, and the apply mirrors
 # with --delete, so only an exclusion on the RECEIVING side keeps it. Mac 2 already has the skill,
 # as a Mac holding a configured skill does: a folder with no SKILL.md is a different case entirely.
-mkskill "$CH2/skills/plan-council/SKILL.md" 'SKILL custom, an older copy'
+mkskill "$CH2/skills/plan-council/SKILL.md" 'MAC2 OLDER COPY'
 printf '{"token":"MAC2-ONLY-VALUE"}\n' > "$CH2/skills/plan-council/config.local.json"
 cat > "$CH2/settings.json" <<JSON
 { "model": "opus", "effortLevel": "high",
@@ -2732,6 +2732,9 @@ JSON
 export CLAUDE_HOME="$CH2"
 bash "$SCRIPT" pull >/dev/null 2>&1
 check "skill arrived on Mac 2"              "[ -f '$CH2/skills/plan-council/SKILL.md' ]"
+# Mac 2 already held an older copy (#675), so presence alone proves nothing: the CONTENT must be
+# the one the payload carried.
+check "#675 and it replaced Mac 2's older copy" "grep -q 'SKILL custom' '$CH2/skills/plan-council/SKILL.md' && ! grep -q 'MAC2 OLDER COPY' '$CH2/skills/plan-council/SKILL.md'"
 check "hook script arrived on Mac 2"        "[ -f '$CH2/hooks/tdd-nudge.sh' ]"
 check "nested hook instruction arrived on Mac 2" "[ -f '$CH2/hooks/review/issue-review.md' ]"
 check "and it arrived with its content intact"   "grep -q 'INSTRUCTION BODY' '$CH2/hooks/review/issue-review.md'"
