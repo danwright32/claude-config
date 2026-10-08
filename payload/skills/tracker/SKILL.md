@@ -6,8 +6,11 @@ trigger: /tracker
 
 # /tracker
 
-Append a row to the personal project-tracker Google Sheet
-(`1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w`) without leaving the terminal.
+Append a row to the personal project-tracker Google Sheet, **Dan Work Project Tracker**
+(https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit,
+owned by Dan's personal Google account), without leaving the terminal. Drive also holds
+a second sheet named "Dan Work Project Tracker", and it is not the one: always open the sheet
+by this link, never by searching Drive for the name (Dan confirmed this one on 2026-10-08).
 
 Writes go through a Google Apps Script web app bound to the sheet (a token-guarded
 POST endpoint, the token always in the request body, never the address), so no Google
@@ -33,7 +36,9 @@ chat. Walk the user through this once:
    and writes a fresh random token into it, printing only the file's path, never the token.
 2. Tell the user BBEdit is about to come forward, then open the file for them:
    `/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window ~/.claude/skills/tracker/config.local.json`
-3. Open the sheet, then **Extensions, Apps Script**.
+3. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
+   name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
+   Then **Extensions, Apps Script**.
 4. Delete any boilerplate and paste the entire contents of `apps-script.gs` (in this skill dir).
 5. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING` with the `token` value from
    `config.local.json` in BBEdit, keeping the single quotes around it.
@@ -59,7 +64,9 @@ claude-config#675), replace it in both places:
    creates the file from the example) and replaces only the token.
 2. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
    command in setup step 2.
-3. In the sheet's **Extensions, Apps Script**, replace the value inside the quotes on the
+3. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
+   name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
+   In its **Extensions, Apps Script**, replace the value inside the quotes on the
    `const TOKEN = '...';` line with the new `token` from `config.local.json`, and save. If the
    deployed script predates claude-config#675 (it reads the key from the address, and its body
    field is `token`), paste the whole current `apps-script.gs` first, then set the line: this
