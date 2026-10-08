@@ -608,7 +608,7 @@ else
   [ ! -e "$FAKE/sudo.calls" ] && ok || bad "a refusal for a proxy not started for a deployment loads nothing" "$(cat "$FAKE/sudo.calls")"
   reset_fake; touch "$FAKE/knob-sudo-refuses"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
-  expect "a Mac without the one time setup is refused, naming the setup" 8 "one time setup on claude-config#813" "$rc" "$out"
+  expect "a Mac without the one time setup is refused, naming the setup" 8 "sudo bash ~/.claude/skills/bug-bash/egress-setup.sh" "$rc" "$out"
   reset_fake; touch "$FAKE/knob-load-fails"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a rule pfctl will not load is refused, with pfctl's reason" 8 "unknown group _bugbash" "$rc" "$out"
@@ -806,7 +806,7 @@ fi
 # The self test Dan runs once after setup: it fails closed, by name, where it cannot prove the rule.
 reset_fake; touch "$FAKE/knob-sudo-refuses"
 out="$(fakeenv bash "$EGRESS" selftest 2>&1)"; rc=$?
-[ "$rc" -ne 0 ] && grep -q 'claude-config#813' <<< "$out" && ok || bad "the self test on a Mac without the setup fails and names it (rc $rc)" "$out"
+[ "$rc" -ne 0 ] && grep -q 'egress-setup.sh' <<< "$out" && ok || bad "the self test on a Mac without the setup fails and names it (rc $rc)" "$out"
 reset_fake; echo 4242 > "$FAKE/knob-exempt-gid"; echo 4242 > "$FAKE/knob-pf-gid"; touch "$FAKE/knob-pf-inert"
 out="$(fakeenv bash "$EGRESS" selftest 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && grep -q 'got through' <<< "$out" && ok || bad "the self test fails when the rule does not stop a direct connection (rc $rc)" "$out"
@@ -828,6 +828,27 @@ if [ -n "$st_port" ]; then
 else
   bad "the self test says which port its listener was on" "$out"
 fi
+
+# The one time setup: run as root only, and its sudoers grant is exactly the helper's verbs and the
+# _bugbash group, nothing more.
+SETUP="$DIR/egress-setup.sh"
+out="$(bash "$SETUP" 2>&1)"; rc=$?
+[ "$rc" = 2 ] && grep -q 'sudo bash ~/.claude/skills/bug-bash/egress-setup.sh' <<< "$out" && ok || bad "the setup, not run as root, refuses and names how to run it (rc $rc)" "$out"
+grant="$(bash "$SETUP" --print-sudoers danielhankins-wright 2>&1)"
+want='danielhankins-wright ALL = (root) NOPASSWD: /usr/local/libexec/bug-bash-egress load *, /usr/local/libexec/bug-bash-egress unload, /usr/local/libexec/bug-bash-egress unload *, /usr/local/libexec/bug-bash-egress status
+danielhankins-wright ALL = (:_bugbash) NOPASSWD: ALL'
+[ "$(grep -v '^#' <<< "$grant")" = "$want" ] && ok || bad "the sudoers grant is exactly the helper's verbs as root and the _bugbash group as yourself" "$grant"
+if command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ]; then
+  printf '%s\n' "$grant" > "$TMP/sudoers.check"
+  out="$(PATH="$PATH:/usr/sbin" visudo -cf "$TMP/sudoers.check" 2>&1)" && ok || bad "the sudoers grant parses" "$out"
+else
+  echo "UNMEASURED: visudo is not on this machine, so the sudoers grant's syntax was not checked"
+fi
+out="$(bash "$SETUP" --print-sudoers 'x ALL=(ALL) ALL' 2>&1)"; rc=$?
+[ "$rc" = 2 ] && ok || bad "the setup refuses a user name that is not one (rc $rc)" "$out"
+# The helper it installs is the one in this directory, under the path the grant names.
+grep -q 'install -o root -g wheel -m 755 "$HERE/egress-helper.sh" "$HELPER"' "$SETUP" && grep -q '^HELPER=/usr/local/libexec/bug-bash-egress$' "$SETUP" && ok \
+  || bad "the setup installs this directory's egress-helper.sh at the path the grant names"
 
 # Hosts that only look local are not local.
 out="$(PATH="$TMP/bin:$PATH" bash "$GUARD" "http://localhost.example.com/" 2>&1)"; rc=$?
@@ -1020,7 +1041,7 @@ grep -q 'seems blocked.*bash ~/.claude/skills/bug-bash/egress.sh status' "$DIR/S
 ! grep -q 'its `pid` is the process you started' "$DIR/SKILL.md" && ! grep -q 'ps -o ppid=' "$DIR/SKILL.md" \
   && grep -q 'while the `sudo` you started is still running' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && ok \
   || bad "SKILL.md judges a started proxy by its proxy.json appearing while its sudo still runs, never by a pid relation"
-grep -q 'one time setup.*claude-config#813' <<< "$(tr '\n' ' ' < "$DIR/SKILL.md" | tr -s ' ')" && grep -q 'bash ~/.claude/skills/bug-bash/egress.sh selftest' "$DIR/SKILL.md" && ok \
+grep -q 'sudo bash ~/.claude/skills/bug-bash/egress-setup.sh' "$DIR/SKILL.md" && grep -q 'bash ~/.claude/skills/bug-bash/egress.sh selftest' "$DIR/SKILL.md" && ok \
   || bad "SKILL.md names the one time setup and its self test"
 
 # ---------------------------------------------------------------- the proxy's address does not outlive it

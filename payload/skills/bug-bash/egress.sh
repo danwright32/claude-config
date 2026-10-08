@@ -41,8 +41,7 @@ set -uo pipefail
 HELPER=/usr/local/libexec/bug-bash-egress
 GROUP=_bugbash
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The setup adds a sudo grant, so it waits on Dan's sign off (claude-config#813) before it ships.
-SETUP_CMD='the one time setup on claude-config#813, which waits on his sign off'
+SETUP_CMD='sudo bash ~/.claude/skills/bug-bash/egress-setup.sh'
 SELFTEST_CMD='bash ~/.claude/skills/bug-bash/egress.sh selftest'
 PROBE_TIMEOUT_MS=3000
 
