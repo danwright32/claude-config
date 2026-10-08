@@ -45,7 +45,7 @@ check_eq() { # check_eq <description> <expected> <actual>
 # --- the shipped files hold no token ----------------------------------------
 # A token is a long run of letters AND digits. Bounded by anything that is not part of an
 # identifier, so the sheet id in SKILL.md (which carries a hyphen) is not one, and the
-# placeholders (which carry underscores) are not either. Every file the skill ships is
+# placeholders (which carry spaces or underscores) are not either. Every file the skill ships is
 # read, never a list of the ones that held it last time (L96). config.local.json is the
 # one file that is meant to hold it, and it never ships.
 shipped_secret_lines(){ # $1 = a skill directory; prints file:line for each token shaped run
