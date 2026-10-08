@@ -201,6 +201,20 @@ cat > "$FAKE_CHROME" <<'FAKE'
 #!/bin/bash
 # A stand in for Chrome: prints a page (or nothing) and then never exits, as Chrome's teardown does.
 echo "$*" > "$FAKE_ARGS"
+# A Chrome that copies itself on launch into the per user code sign clone folder, as Chrome 154
+# does, and holds the copy open while it runs (#988).
+if [ -n "${FAKE_CLONE_MADE:-}" ]; then
+  clone="$(mktemp -d "$HEADLESS_DOM_CLONE_DIR/code_sign_clone.XXXXXX")"
+  : > "$clone/Google Chrome"
+  exec 7< "$clone/Google Chrome"
+  echo "$clone" > "$FAKE_CLONE_MADE"
+  # Another Chrome's copy, made while this one runs and held by nothing in this run.
+  [ -n "${FAKE_FOREIGN_MADE:-}" ] && mktemp -d "$HEADLESS_DOM_CLONE_DIR/code_sign_clone.XXXXXX" > "$FAKE_FOREIGN_MADE"
+  # Waits, bounded, for a process outside this run to open the copy as well.
+  if [ -n "${FAKE_WAIT_HELD:-}" ]; then
+    n=0; while [ ! -e "$FAKE_WAIT_HELD" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+  fi
+fi
 # A Chrome that gives up at once: half a page, a clean exit, nothing left running.
 [ "${FAKE_QUIT:-no}" = yes ] && { printf '<html><head></head><body><p>half'; exit 0; }
 # Its helper starts, and is recorded, before the page is printed: the wrapper may stop it the
@@ -212,6 +226,10 @@ wait
 FAKE
 chmod +x "$FAKE_CHROME"
 export FAKE_ARGS="$TMP/fake-args" FAKE_CHILD="$TMP/fake-child"
+# The stand ins copy themselves into a folder of this suite's own, never the real per user one.
+CLONES="$TMP/clones"
+mkdir -p "$CLONES"
+export HEADLESS_DOM_CLONE_DIR="$CLONES"
 child_state(){ local c; c="$(cat "$FAKE_CHILD" 2>/dev/null)"; [ -n "$c" ] || { echo "never started"; return; }; kill -0 "$c" 2>/dev/null && echo alive || echo gone; }
 t0=$SECONDS
 dom="$(HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>/dev/null)"; rc=$?
@@ -237,12 +255,95 @@ check_eq "a Chrome that exits 0 with no complete page fails" "1" "$([ "$rc" -ne 
 check "and says why" "ended without a complete page" "$(cat "$TMP/quit.err")"
 check_eq "and prints nothing as though it were a page" "" "$dom"
 
+# --- the copy of itself Chrome makes on each launch is not left behind (#988) ---
+#
+# Chrome copies its app bundle into a per user code sign clone folder on every launch and removes
+# the copy only on a normal quit, which a headless dump never reaches, so every run left one: 114
+# of them on 2026-10-08. Chrome is told not to make the copy, and should one appear anyway, the copy
+# THIS run's Chrome held is removed after the kill, and nothing else in that folder ever is.
+check "Chrome is told not to copy itself" "--disable-features=MacAppCodeSignClone" "$(cat "$FAKE_ARGS")"
+HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --disable-features=Translate --dump-dom file:///x.html >/dev/null 2>&1
+check "and a caller's own disabled features are kept beside it" "--disable-features=Translate,MacAppCodeSignClone" "$(cat "$FAKE_ARGS")"
+check_eq "in the one switch Chrome reads, never a second that would replace the first" "1" "$(grep -o -e '--disable-features=' "$FAKE_ARGS" | wc -l | tr -d ' ')"
+
+clone_state(){ # clone_state <file naming a clone> -> there, gone, or never made
+  local c; c="$(cat "$1" 2>/dev/null)"
+  [ -n "$c" ] || { echo "never made"; return; }
+  [ -e "$c" ] && echo there || echo gone
+}
+if ! command -v lsof >/dev/null 2>&1; then
+  echo "UNMEASURED: no lsof here, so removing a killed Chrome's own copy was not tested"
+  unmeasured=1
+else
+  mkdir "$CLONES/code_sign_clone.before"
+  : > "$CLONES/code_sign_clone.before/Google Chrome"
+  dom="$(FAKE_CLONE_MADE="$TMP/clone-made" FAKE_FOREIGN_MADE="$TMP/foreign-made" HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/clone.err")"; rc=$?
+  check_eq "a Chrome that copied itself still hands back its page" "0 <p>made</p>" "$rc $(printf '%s' "$dom" | grep -o '<p>made</p>')"
+  check_eq "and its own copy is removed once it is killed" "gone" "$(clone_state "$TMP/clone-made")"
+  check_eq "a copy another Chrome made during the run is left alone" "there" "$(clone_state "$TMP/foreign-made")"
+  check_eq "and so is one that was there before the run, with what is in it" "1" "$([ -e "$CLONES/code_sign_clone.before/Google Chrome" ] && echo 1 || echo 0)"
+  check_eq "and nothing else in the folder was touched" "2" "$(ls -1 "$CLONES" | wc -l | tr -d ' ')"
+
+  # Past the deadline it is killed the same way, and its copy goes the same way.
+  dom="$(FAKE_PAGE=no FAKE_CLONE_MADE="$TMP/late-clone-made" HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=2 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>/dev/null)"; rc=$?
+  check_eq "a Chrome killed at the deadline fails with 124" "124" "$rc"
+  check_eq "and its own copy is removed too" "gone" "$(clone_state "$TMP/late-clone-made")"
+
+  # A copy something outside this run still has open is in use, so it stays though this run's
+  # Chrome made it.
+  holder(){ # holder <file naming the clone> <ready file>: opens that clone and keeps it open
+    local n=0
+    while [ ! -s "$1" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+    [ -s "$1" ] || exit 1
+    exec 7< "$(cat "$1")/Google Chrome"
+    : > "$2"
+    exec sleep 60
+  }
+  holder "$TMP/shared-made" "$TMP/held" &
+  hpid=$!
+  dom="$(FAKE_CLONE_MADE="$TMP/shared-made" FAKE_WAIT_HELD="$TMP/held" HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/shared.err")"; rc=$?
+  check_eq "the copy was open outside the run while Chrome ran" "1" "$([ -e "$TMP/held" ] && echo 1 || echo 0)"
+  check_eq "a copy still open elsewhere is left alone" "there" "$(clone_state "$TMP/shared-made")"
+  check "and that is said" "still in use" "$(cat "$TMP/shared.err")"
+  kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+
+  # Without lsof nothing can be shown to be this run's own, so nothing is removed, and it says so.
+  dom="$(HEADLESS_DOM_LSOF=no-such-lsof FAKE_CLONE_MADE="$TMP/blind-made" HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/blind.err")"; rc=$?
+  check_eq "with no lsof a copy is left in place" "there" "$(clone_state "$TMP/blind-made")"
+  check "and that is said, naming what is missing" "no-such-lsof" "$(cat "$TMP/blind.err")"
+fi
+unset HEADLESS_DOM_CLONE_DIR
+
 REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 CHROME="$REAL_CHROME"
 if [[ -x "$REAL_CHROME" ]]; then
   CHROME="$TMP/chrome"
   printf '#!/bin/bash\nHEADLESS_DOM_CHROME=%q exec bash %q "$@"\n' "$REAL_CHROME" "$HEADLESS_DOM" > "$CHROME"
   chmod +x "$CHROME"
+
+  # And once on the real Chrome: a run leaves the real per user clone folder as it found it (#988).
+  # The folder is found here from TMPDIR, and in headless-dom.sh from getconf, so the two do not
+  # share one lookup (L70). Other sessions' Chromes add copies to that folder at any moment, and
+  # can only ever ADD them, so a run that shows nothing new proves this run made none, while a
+  # run that leaves its copy shows one on every attempt: three attempts tell the two apart.
+  real_tmp="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)}"
+  real_clones="$(cd "${real_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
+  # A TMPDIR moved elsewhere names no such folder, and an empty look would pass by default.
+  if [ ! -d "$real_clones" ]; then
+    real_tmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
+    real_clones="$(cd "${real_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
+  fi
+  printf '<!doctype html><html><body><p>own copy</p></body></html>\n' > "$TMP/clone-probe.html"
+  left="not run"; page=""
+  for attempt in 1 2 3; do
+    ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.before"
+    page="$("$CHROME" --headless --disable-gpu --no-sandbox --dump-dom "file://$TMP/clone-probe.html" 2>/dev/null)"
+    ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.after"
+    left="$(LC_ALL=C comm -13 "$TMP/real-clones.before" "$TMP/real-clones.after" | tr '\n' ' ')"
+    [ -z "$left" ] && break
+  done
+  check "a real Chrome run hands back its page" "<p>own copy</p>" "$page"
+  check_eq "and leaves no copy of Chrome behind in $real_clones" "" "${left% }"
 fi
 
 probe() { # probe <page> -> the readout heading at the start and after each key
