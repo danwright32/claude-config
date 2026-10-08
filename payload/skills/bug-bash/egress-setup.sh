@@ -54,7 +54,11 @@ user="${SUDO_USER:-}"
   || die 2 "run it with sudo from your own account, so it knows whose runs to allow: $RUN_CMD"
 
 if [ "${1:-}" = --remove ]; then
-  [ -x "$HELPER" ] && "$HELPER" unload >/dev/null 2>&1
+  # The rule goes first, or nothing goes: with the helper deleted, a rule still loaded could only be
+  # removed with pfctl by hand or a reboot.
+  if [ -x "$HELPER" ] && ! why="$("$HELPER" unload 2>&1)"; then
+    die 1 "the egress rule could not be taken away ($why), so nothing was removed. Run this again once it can be."
+  fi
   rm -f "$SUDOERS" "$HELPER"
   if dscl . -read "/Groups/$GROUP" >/dev/null 2>&1; then dseditgroup -o delete "$GROUP" || die 1 "could not delete the $GROUP group."; fi
   echo "Removed: the sudoers entry, the helper and the $GROUP group."
