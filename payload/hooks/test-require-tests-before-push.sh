@@ -100,6 +100,25 @@ want_nottest "web/contests/entry.ts"
 want_source  "mac/TestSupportive/Thing.swift"
 want_nottest "mac/TestSupportive/Thing.swift"
 
+# --- the Test or Tests filename suffix is a WORD, not four letters ---
+# The suffix rule for JVM, .NET and Swift test files was matched case blind, so any source file whose
+# name merely ended in the letters "test" or "tests" counted as a test: Latest.swift and
+# Contests.swift each satisfied the zero test floor for an unrelated source change riding beside
+# them. It now needs Test or Tests as a word: capitalised (FooTests, FooTest), or lower case after a
+# separator (foo_test), or the whole name.
+want_test "mac/OvertureTests/FooTests.swift"
+want_test "src/main/FooTest.kt"
+want_test "app/src/test/WidgetTest.java"
+want_test "Tests/BarTests.cs"
+want_test "lib/parser_test.scala"
+want_test "pkg/Tests.swift"
+want_source  "src/Latest.swift"
+want_nottest "src/Latest.swift"
+want_source  "src/Contests.swift"
+want_nottest "src/Contests.swift"
+want_source  "lib/Manifest.kt"
+want_nottest "lib/Manifest.kt"
+
 # --- existing conventions must still register (regression) ---
 want_test "src/components/Foo.test.ts"
 want_test "src/components/Foo.spec.tsx"
