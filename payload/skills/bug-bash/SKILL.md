@@ -61,10 +61,12 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    killed outright is removed by the next egress call of any kind.
    If a site ever seems blocked on this Mac, Dan runs `bash ~/.claude/skills/bug-bash/egress.sh status`: it removes a rule whose run has ended and says whether one is still loaded, and for whom.
 
-   The rule needs a one time setup on each Mac, which needs Dan's password and his sign off on
-   the sudo grant it adds (claude-config#813). Until that is done the guard refuses every read only
-   run against a deployment, so stop and tell him; after it, he runs
-   `bash ~/.claude/skills/bug-bash/egress.sh selftest` and the run waits for its `PASS`.
+   The rule needs a one time setup on each Mac, which needs Dan's password. Until it is done the
+   guard refuses every read only run against a deployment, naming it, so stop and hand him exactly
+   these two commands, then wait for the self test's `PASS`:
+
+       sudo bash ~/.claude/skills/bug-bash/egress-setup.sh
+       bash ~/.claude/skills/bug-bash/egress.sh selftest
 
    A local build has no real users, so a read only run against one needs the proxy (started
    plainly, `node ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy"`) but not
