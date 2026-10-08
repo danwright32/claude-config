@@ -8,9 +8,10 @@
 // launches for itself, a second context, and every WebSocket message pass it by (lessons review of
 // PR #798, L27). So the rule is also enforced here, outside the browser: a local proxy that
 // explorer-browser.js launches every read only browser through, which forwards a request only when
-// it reads. That covers every context and every socket of such a browser. It does not cover a
-// browser launched some other way, which never meets this proxy: only an egress rule on the machine
-// could, and the skill's own instruction is all that stands there.
+// it reads. That covers every context and every socket of such a browser. A browser launched some
+// other way never meets this proxy; against a deployment the egress rule covers it (egress.sh):
+// started with --egress, in the _bugbash group, this proxy is the one process that rule lets
+// through to the site, and it takes the rule away as it stops.
 //
 // What it forwards: GET, HEAD and OPTIONS (the CORS preflight a cross origin read needs), the one
 // list explorer-browser.js reads by. What it refuses, without a byte reaching the site: every other
@@ -25,8 +26,9 @@
 // passed through blind.
 //
 // Once listening it writes <dir>/proxy.json: { "proxy": "http://127.0.0.1:<port>", "pid", "ca" }.
-// GET <proxy>/__bug-bash-proxy__/health answers { "proxy": "bug-bash-read-only" }, which is how
-// target-guard.sh and explorer-browser.js know it is this proxy that is up. Every request is logged,
+// GET <proxy>/__bug-bash-proxy__/health answers { "proxy": "bug-bash-read-only", "pid", "egid",
+// "egress" }, which is how target-guard.sh and explorer-browser.js know it is this proxy that is up,
+// and how the guard knows which process the egress rule is for and which group it must let through. Every request is logged,
 // one line each, to <dir>/requests.log as `<verdict> <method> <origin><path>`, the query string and
 // fragment left out (they can carry tokens, L741).
 //
@@ -44,7 +46,7 @@ const net = require('net')
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
-const { execFile } = require('child_process')
+const { execFile, execFileSync } = require('child_process')
 // The read predicate, the health path and its answer are the launcher's, so the two cannot drift.
 const { isRead, MARK, HEALTH, proxyAnswers } = require('./explorer-browser.js')
 
@@ -55,6 +57,9 @@ function argOf(name) {
   const i = process.argv.indexOf(name)
   return i > 0 ? process.argv[i + 1] : undefined
 }
+// Started for a run against a deployment: the guard loads the egress rule for this process, and
+// this process takes it away as it stops.
+const EGRESS = process.argv.includes('--egress')
 const stateDir = argOf('--state')
 if (!stateDir) {
   console.error('read-only-proxy: give --state <dir>, where proxy.json, the certificates and requests.log go.')
@@ -214,7 +219,7 @@ tunnelled.on('clientError', (_e, socket) => socket.destroy())
 const server = http.createServer((req, res) => {
   if (req.url === HEALTH) {
     res.writeHead(200, { 'content-type': 'application/json' })
-    return res.end(JSON.stringify({ proxy: MARK }))
+    return res.end(JSON.stringify({ proxy: MARK, pid: process.pid, egid: process.getegid(), egress: EGRESS }))
   }
   let u
   try {
@@ -289,5 +294,15 @@ claimStateDir().then(makeAuthority).then(
 )
 process.on('exit', () => {
   if (wroteState) removeState()
+  // The egress rule loaded for this process goes with it. Scoped to this pid, so a rule another run
+  // holds is left alone; a failure is said, since the rule would go on refusing the site.
+  if (EGRESS) {
+    try {
+      execFileSync('bash', [path.join(__dirname, 'egress.sh'), 'unload', String(process.pid)], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20_000 })
+    } catch (e) {
+      const why = (e.stderr && String(e.stderr).trim()) || e.message
+      console.error(`read-only-proxy: could not take the egress rule away (${why}). Remove it with: bash ~/.claude/skills/bug-bash/egress.sh unload`)
+    }
+  }
 })
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0))

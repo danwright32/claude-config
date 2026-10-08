@@ -39,17 +39,33 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    it, or a dev server it recognises (Next.js, Vite and what serves through it, webpack's): a first
    compile reads as a dead link. Against a deployment Dan names, only ever run it with
    `--read-only`, behind the read only proxy, which refuses every request that could change
-   something and every WebSocket, outside the browser. Start it in the background, wait until
+   something and every WebSocket, outside the browser, and behind the egress rule, which refuses
+   every other program on this Mac a connection to the deployment for the length of the run, so a
+   browser started some other way cannot reach it either. Start the proxy in the background, in
+   the `_bugbash` group the rule lets through and with `--egress`, wait until
    `<run dir>/proxy/proxy.json` exists and its `pid` is the process you started (it is written
    once the proxy listens, and removed when it stops), then pass its `proxy` value:
 
-       node ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy"
+       sudo -n -g _bugbash "$(command -v node)" ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy" --egress
        bash ~/.claude/skills/bug-bash/target-guard.sh --read-only --proxy "<proxy>" "<url>"
 
-   The guard refuses (exit 7) unless that proxy answers and refuses a test write. It prints
+   The guard refuses (exit 7) unless that proxy answers and refuses a test write, then loads the
+   egress rule and refuses (exit 8, naming why) unless it is in force. It prints
    `READ-ONLY <url> via <proxy>`; every explorer then gets `BUG_BASH_PROXY=<proxy>` and launches
    with `readOnly: true`, and every finding is at most a risk. `<run dir>/proxy/requests.log`
-   lists what was forwarded and refused. Stop the proxy (the `pid` in proxy.json) when the run ends.
+   lists what was forwarded and refused. Stop the proxy (the `pid` in proxy.json) when the run
+   ends: it takes the egress rule away as it stops. Until then Dan's own browser cannot reach that
+   site either (nor, on a shared hosting address, its neighbours there); a proxy killed outright
+   leaves the rule, which `bash ~/.claude/skills/bug-bash/egress.sh unload` removes.
+
+   The rule needs a one time setup on each Mac, which needs Dan's password and his sign off on
+   the sudo grant it adds (claude-config#813). Until that is done the guard refuses every read only
+   run against a deployment, so stop and tell him; after it, he runs
+   `bash ~/.claude/skills/bug-bash/egress.sh selftest` and the run waits for its `PASS`.
+
+   A local build has no real users, so a read only run against one needs the proxy (started
+   plainly, `node ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy"`) but not
+   the rule.
 
 ## 3. Explore (at most 4 agents at a time)
 
@@ -62,7 +78,8 @@ output directory `<scratchpad>/bug-bash/<run>/explorer-<n>/`. Tell each explorer
   with `chromium` from the project's own `node_modules/playwright`. In a read only run it
   refuses to start unless the read only proxy in `BUG_BASH_PROXY` answers, sends everything through
   it, and aborts every request that is not a read before it leaves. A browser launched any other
-  way never meets the proxy, so launch none. Never the Playwright MCP browser (one browser for the whole session; the
+  way never meets the proxy (against a deployment the egress rule refuses it the site; against a
+  local build nothing does), so launch none. Never the Playwright MCP browser (one browser for the whole session; the
   `playwright-subagent-gate` hook refuses it) and never Claude in Chrome (Dan's real browser and
   sign ins). Measured on 2026-10-05: four such browsers launched at once ran in 1.2 to 1.5 s, and a
   cookie set in one was absent from the other three.
