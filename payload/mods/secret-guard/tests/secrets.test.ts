@@ -169,3 +169,28 @@ describe('value sources', () => {
     expect(vals).toEqual([KNOWN])
   })
 })
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so a secret printed through $(...) or backticks is refused as one printed on the command line is.
+// Each command below is judged by what mod-kit's reader gives for it, written out here (a mod cannot
+// import another mod's files) and held to the real reader by mod-kit's commands.test.ts ("the
+// readings other guards' tests take as given"). Quoted, it is text.
+const READ_974 = new Map<string, string[][]>([
+  ['echo "$(cat .env)"', [['cat', '.env'], ['echo', '$(cat .env)']]],
+  ['echo `printenv`', [['printenv'], ['echo', '`printenv`']]],
+  ['cat <<EOF\n$(echo $GITHUB_TOKEN)\nEOF', [['echo', '$GITHUB_TOKEN'], ['cat', '<<EOF']]],
+  ["echo '$(cat .env)' '`printenv`'", [['echo', '$(cat .env)', '`printenv`']]],
+  ["cat <<'EOF'\n$(cat .env)\nEOF", [['cat', '<<EOF']]],
+])
+describe('a command substitution, as mod-kit reads it (#974)', () => {
+  const judged = (raw: string) => blockedCommand(READ_974.get(raw) as string[][], raw)
+  test('what a substitution runs is judged as a command of its own', () => {
+    expect(judged('echo "$(cat .env)"')).toBe('the secrets in .env')
+    expect(judged('echo `printenv`')).toBe('every environment variable')
+    expect(judged('cat <<EOF\n$(echo $GITHUB_TOKEN)\nEOF')).toBe('GITHUB_TOKEN')
+  })
+  test('in single quotes or a quoted heredoc it is text', () => {
+    expect(judged("echo '$(cat .env)' '`printenv`'")).toBeUndefined()
+    expect(judged("cat <<'EOF'\n$(cat .env)\nEOF")).toBeUndefined()
+  })
+})

@@ -179,9 +179,22 @@ substitution never closed is read to the end of its text, the side that asks. A 
 <<'EOF' ... EOF)"` names nothing. Two readings are knowingly loose: where the command changes folder
 (`cd`, `pushd`, `popd`) a relative path in a substitution is left as written, since it may run
 before the change or after; and a variable the command sets is not followed into a substitution,
-so a path through one stays as written. Not read yet: a substitution inside a shell's own script
-held in single quotes or a quoted heredoc (`bash -c '... $(...)'`, `bash <<'EOF'`), which that
-shell runs, and a process substitution (`<(...)`).
+so a path through one stays as written. Not read yet: a process substitution (`<(...)`).
+
+Since #974 the substitutions are read once, by the command reader, and both readers build on that
+one reading (L613). `readLine` (mod-kit `hooks/commands.ts`) gives a command line as its commands
+with, in the place of the command each sits in, the commands of each substitution the shell runs
+there, kept together; `pipeline` and `commands` flatten it, so every guard judging the commands a
+line runs (no build's `git commit`, `git push` and `npm publish`, the style check's commit message,
+the secret guard, the keystroke guard, the collision guard's checkout) sees one run inside `$(...)`
+or backticks, before the command it sits in and marked `substitution`. The write reader reads the
+same tree, scoping each substitution as above. Because the reader reads a shell's own script as the
+commands that shell runs, a substitution inside one (`bash -c '... $(...)'`, `sh <<'EOF'`, a script
+piped into a shell) is read too. Ask before saving reads a python program a substitution runs whole
+when it looks for what a command mentions (#940), as it did before the reader gave such programs.
+One consequence is deliberate: the secret guard now refuses a secret read inside a substitution
+whose output is captured rather than printed (`X=$(cat .env)`), since the reader cannot tell the two
+apart, the side that fails closed (L42).
 
 What #712 brought into it, from the two copies it replaced. Beside `files`, the files content goes
 into, it reports `changes`: a file removed (`rm`, `unlink`, `rmdir`, a `mv`'s source, `find

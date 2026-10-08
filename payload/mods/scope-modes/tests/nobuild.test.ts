@@ -657,3 +657,23 @@ describe('no build: what a command substitution changes (#965)', () => {
     expect(run("echo \"$(cat <<'EOF'\nWrite > /repo/app.ts\nEOF\n)\"")).toBeUndefined()
   })
 })
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so a git commit, git push or npm publish inside $(...) or backticks is refused as one on the
+// command line is. Quoted, the word or the body is text, and nothing runs.
+describe('no build: what a command substitution runs (#974)', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test('on the command line, nested, in an unquoted heredoc body or a shell script, it is refused like any other command', () => {
+    expect(what(run('echo "done: $(git commit -m x)"'))).toBe('run git commit')
+    expect(what(run('echo `git push origin main`'))).toBe('run git push')
+    expect(what(run('x=$(npm publish)'))).toBe('run npm publish')
+    expect(what(run('echo $(echo $(git push))'))).toBe('run git push')
+    expect(what(run('cat <<EOF\nnote $(git commit -m x)\nEOF'))).toBe('run git commit')
+    expect(what(run("bash -c 'echo `git push`'"))).toBe('run git push')
+  })
+  test('in single quotes or under a quoted delimiter it is text, and the commit message idiom goes through', () => {
+    expect(run("echo 'done: $(git commit -m x)' '`git push`'")).toBeUndefined()
+    expect(run("cat <<'EOF'\nnote $(git commit -m x) `npm publish`\nEOF")).toBeUndefined()
+    expect(run("echo \"$(cat <<'EOF'\nthen $(git push)\nEOF\n)\"")).toBeUndefined()
+  })
+})
