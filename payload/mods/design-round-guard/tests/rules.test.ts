@@ -82,6 +82,7 @@ test("the guard's own record in the plugin store is recognised, and nothing else
   expect(isOwnRecord('/Users/dan/.claude/plugins/store/design-round-guard_inline-ab12.json')).toBe(true)
   expect(isOwnRecord('/Users/dan/.claude/plugins/store/simpler_inline-dc77.json')).toBe(false)
   expect(isOwnRecord('/Users/dan/Apps/x/design-round-guard.json')).toBe(false)
+  expect(isOwnRecord('$D/design-round-guard_inline-x.json')).toBe(true)
 })
 
 test('a branch naming an issue is keyed by the issue, one naming none by the branch, the default branch by this session only', () => {

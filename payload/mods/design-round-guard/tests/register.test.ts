@@ -34,7 +34,7 @@ const modKit: { name: string; register: Register } = {
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
-          for (const root of ['/w/slate-wt', '/w/slate', '/w/other']) if (path === root || path.startsWith(root + '/')) return root
+          for (const root of ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
           return null
         },
         branch: async (input: { path: string }) => ask('branch', input),
@@ -83,7 +83,7 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 // as `dialog` says), every call that ran, every card drawn and every git command asked.
 const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
-  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other' }
+  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
   const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
@@ -108,7 +108,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       if (branch === undefined || branch === 'UNREADABLE') return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }
       return { exitCode: 0, stdout: `${branch}\n`, stderr: '' }
     }
-    if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree /w/${tree === '/w/other' ? 'other' : 'slate'}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
+    if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree ${tree === '/w/slate-wt' ? '/w/slate' : tree}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
     if (sub === 'symbolic-ref --short refs/remotes/origin/HEAD') return { exitCode: 0, stdout: 'origin/main\n', stderr: '' }
     throw new Error(`unexpected git: ${argv.join(' ')}`)
   }
@@ -122,7 +122,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     // mod-kit's branch reader, read here with its copy, over the checkouts the stand-in's walk finds.
     if (cmd === '__modkit' && args[0] === 'branch') {
       const { path } = JSON.parse(String(args[1])) as { path: string }
-      const root = ['/w/slate-wt', '/w/slate', '/w/other'].find(r => path === r || path.startsWith(r + '/'))
+      const root = ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
       return ok(JSON.stringify(root === undefined ? null : await readBranch(root, git)))
     }
     if (cmd === '__modkit' && args[0] === 'repo') {
@@ -238,6 +238,18 @@ test('a test of a screen passes with no answer recorded, while the screen beside
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/styles/contest.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
   expect(w.ran.map(x => String(x.input.file_path ?? x.input.command))).toEqual(['/w/slate/app/page.test.tsx', "echo 'x' > /w/slate/app/__tests__/Header.tsx"])
   expect(Object.keys(w.store)).toEqual([])
+})
+
+// Lessons review of #991: the test markers were read over the whole path, so a project checked out
+// under a folder named tests had every screen in it let through.
+test('a test folder counts only inside the project: a project checked out under one is still held', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, { tool: 'Write', file_path: '/w/tests/shop/app/page.tsx', content: 'x' }))
+  expect(why).toContain('issue #77 in shop')
+  expect(refusalOf(await call($, { tool: 'Bash', command: "echo 'a{}' > /w/tests/shop/app/site.css" }))).toContain('issue #77 in shop')
+  // Its own tests still pass.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/tests/shop/app/__tests__/page.tsx', content: 'x' }))).toBe('')
+  expect(w.ran.length).toBe(1)
 })
 
 test('a look changing Write is refused, naming the file and both ways on, with the grey card for Dan', withKit, async ($, on) => {
@@ -392,6 +404,11 @@ test('nothing Claude writes itself records a no or a settlement', withKit, async
     { tool: 'Bash', command: `python3 -c "open('${HOME}/.claude/plugins/store/design-round-guard_inline-x.json','w').write('{}')"` },
     // A program whose words cannot name the file it writes, only mention the store.
     { tool: 'Bash', command: `node -e "require('fs').writeFileSync(process.env.HOME + '/.claude/plugins/store/' + process.argv[1], '{}')" design-round-guard_inline-x.json` },
+    // Lessons review of #991: a destination the reader cannot follow (a folder from a command's
+    // output), whose file is the guard's record by its name.
+    { tool: 'Bash', command: `D=$(dirname "$(ls ~/.claude/plugins/store/*.json | head -1)"); echo '{}' > "$D/design-round-guard_inline-x.json"` },
+    // And one whose file name is not the record's, while the command names the record's folder.
+    { tool: 'Bash', command: `D=$(echo ~/.claude/plugins/store); F=$(ls "$D" | grep design); echo '{}' > "$D/$F"` },
   ]) {
     const r = refusalOf(await call($, forged))
     expect(r).toContain("design round guard's own record")

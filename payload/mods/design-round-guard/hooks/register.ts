@@ -18,7 +18,8 @@ import {
   isOwnRecord,
   isSwiftUI,
   listed,
-  lookKind,
+  isTestPath,
+  shapeKind,
   mentionedLookFiles,
   mentionsStore,
   refusal,
@@ -103,7 +104,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
     for (const t of texts) for (const m of mentionedLookFiles(t)) targets.push({ path: resolvePath(m, at.cwd, at.home), word: m })
   }
-  return { targets, storeMentioned: w.unnamed.length > 0 && mentionsStore(command) }
+  // A write the words do not name, or a destination the reader could not follow, may be the record
+  // when the command names the plugin store at all: refused, failing closed as ask before saving does
+  // for lasting memory (lessons review of #991).
+  const unfollowed = w.unnamed.length > 0 || targets.some(t => !t.path)
+  return { targets, storeMentioned: unfollowed && mentionsStore(command) }
 }
 
 // Whether a Swift file is a SwiftUI view: the text the call carries, beside the file as it is now.
@@ -154,8 +159,9 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
   if (!TOOLS.has(tool)) return { pass: true }
   const at = await whereOf($)
   const { targets, storeMentioned } = await targetsOf($, tool, input, at)
-  const own = targets.find(t => t.path && isOwnRecord(t.path))
-  if (own?.path) return { forged: own.path }
+  // By its path, or by its name where the reader could not follow the folder (lessons review of #991).
+  const own = targets.find(t => isOwnRecord(t.path ?? t.word))
+  if (own) return { forged: own.path ?? own.word }
   if (storeMentioned) return { forged: 'the plugin store, which this command names' }
 
   // The look changing files, each with the checkout it is in; a file in none is in no project.
@@ -163,7 +169,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
   const unsureFiles: string[] = []
   let why = ''
   for (const t of targets) {
-    const kind = lookKind(t.path ?? t.word)
+    const kind = shapeKind(t.path ?? t.word)
     if (kind === null) continue
     if (!t.path) {
       unsureFiles.push(t.word)
@@ -180,6 +186,9 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
       continue
     }
     if (tree === null) continue
+    // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
+    // inside its project, so a folder named tests above the checkout lets nothing through.
+    if (isTestPath(relTo(t.path, tree))) continue
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)

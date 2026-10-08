@@ -43,8 +43,14 @@ export const isTestPath = (path: string): boolean => {
 }
 
 /** What kind of look changing file a path is, or null for one that is not (a test file included); a Swift file still needs its text read (isSwiftUI). */
-export const lookKind = (path: string): LookKind | null => {
-  if (isTestPath(path)) return null
+export const lookKind = (path: string): LookKind | null => (isTestPath(path) ? null : shapeKind(path))
+
+/**
+ * The kind of look changing file a path's shape is, before asking whether it is a test: the guard
+ * asks that of the path inside its project (`isTestPath` on the part below the checkout), so a
+ * project checked out under a folder named tests is not let through whole (lessons review of #991).
+ */
+export const shapeKind = (path: string): LookKind | null => {
   const base = (path.split('/').pop() ?? '').toLowerCase()
   if (TAILWIND.test(base)) return 'tailwind'
   if (TOKENS.test(base)) return 'tokens'
@@ -65,13 +71,13 @@ export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
   for (const m of text.matchAll(/[\w./~@+-]+\.[A-Za-z]+\b/g)) {
     const word = m[0].replace(/^[.]+(?=[^./])/, '')
-    if (lookKind(word) !== null && !out.includes(word)) out.push(word)
+    if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
   }
   return out
 }
 
-/** Whether a path is this mod's own store file, which only Dan's answers may write. */
-export const isOwnRecord = (path: string): boolean => /\/plugins\/store\/design-round-guard[_.]/.test(path)
+/** Whether a path is this mod's own store file, which only Dan's answers may write: in the plugin store, or by its name wherever its folder could not be followed. */
+export const isOwnRecord = (path: string): boolean => /\/plugins\/store\/design-round-guard[_.]/.test(path) || /(^|\/)design-round-guard_[^/]*$/.test(path)
 
 /** A command naming the plugin store at all, judged where its words do not name what it writes. */
 export const mentionsStore = (text: string): boolean => /plugins\/store/.test(text)
