@@ -34,11 +34,14 @@ import {
   lastingMemory,
   madePermanent,
   mentioned,
+  mentionsAny,
   resolvePath,
   ruleOf,
   saveIdOf,
   saveKey,
   stands,
+  withoutPythonText,
+  writesWhat,
 } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
@@ -109,7 +112,7 @@ type ScopeModes = {
 // modes, which reads the one sleep record, and refused without asking him. Answers the refusal, or
 // null while awake. Scope modes not loaded, or a check that fails, is awake: the save is asked about
 // as usual, and a question while asleep is refused by scope modes itself.
-const whileAsleep = async ($: EngineInterface, files: string[], rule: string): Promise<string | null> => {
+const whileAsleep = async ($: EngineInterface, { files, guessed }: Targets, rule: string): Promise<string | null> => {
   // The noun is spelled out at each call, as the engine requires.
   try {
     if (!(await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep())) return null
@@ -117,7 +120,7 @@ const whileAsleep = async ($: EngineInterface, files: string[], rule: string): P
     return null
   }
   const where = files.join(', ')
-  const head = `Not saved: this writes lasting memory (${where}), and Dan is asleep (sleep mode), so he is not asked tonight.`
+  const head = `Not saved: ${writesWhat(files, guessed)}, and Dan is asleep (sleep mode), so he is not asked tonight.`
   const tail = 'Do not write it any other way; carry on with the rest of the work.'
   try {
     const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.sleepNote({ kind: 'save', files, rule })
@@ -161,25 +164,50 @@ const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
   }
 }
 
+// The files a call would save lasting memory to, and among them those taken only from what a Bash
+// command mentions, since its words do not name the file it writes (#940), which the refusal says.
+type Targets = { files: string[]; guessed: string[] }
+
+// A Bash command as its mentions are read (#940): each python program in it that only writes files,
+// found in the command as written, with the lasting memory its comments and sentences name taken out
+// (withoutPythonText), so a script writing prose about CLAUDE.md to another file is not asked about.
+// Only a program the shell cannot have changed (on standard input from a quoted heredoc, or holding
+// no $ or backtick): in any other the shell may have run what its text holds. A program that runs a
+// process, or that cannot be found in the command as written, is read whole, as before.
+const mentionText = async ($: EngineInterface, command: string): Promise<string> => {
+  let text = command
+  for (const c of await $.modkit.pipeline({ command })) {
+    const p = c.program
+    if (c.language !== 'python' || c.verdict?.does !== 'write files' || !p || !('text' in p) || !p.text || !text.includes(p.text)) continue
+    const quoted = p.stdin === true && (c.heredocs ?? []).some(h => h.quoted && !h.replaced && h.fd === undefined)
+    if (!quoted && /[$`]/.test(p.text)) continue
+    text = text.split(p.text).join(withoutPythonText(p.text))
+  }
+  return text
+}
+
 // Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
 // call is read by mod-kit's one reader of what a command writes; a write its words do not name (a
 // patch, an inline script) is judged by the lasting memory its text and any patch file it reads
 // mention, and so is a target they cannot name, such as a variable (#743, lastingFiles); a mention
-// through a variable nothing can set is none (#777). An inline program whose text names every file it
-// writes is judged by those files alone (#830). A file in a temporary folder counts inside a
-// checkout there, found by mod-kit's one walk for it (#726). A file that exists and cannot be read,
-// or a disk that cannot say whether a temporary file is in a checkout, fails the hook, and the hook
-// fails closed.
-const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { cwd, home }: Where): Promise<string[]> => {
+// through a variable nothing can set is none (#777), nor is one a python program only holds as text
+// (#940, mentionText). An inline program whose text names every file it writes is judged by those
+// files alone (#830). A file in a temporary folder counts inside a checkout there, found by mod-kit's
+// one walk for it (#726). A file that exists and cannot be read, or a disk that cannot say whether a
+// temporary file is in a checkout, fails the hook, and the hook fails closed.
+const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { cwd, home }: Where): Promise<Targets> => {
   const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   if (tool !== 'Bash') {
     const abs = resolvePath(String(input.file_path ?? ''), cwd, home)
-    return (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : []
+    return { files: (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : [], guessed: [] }
   }
   const command = String(input.command ?? '')
   const isSet = await isSetIn($, home)
   const w = await $.modkit.writes({ command, cwd, home })
-  const out = await lastingFiles(w, home, inCheckout, command, isSet)
+  // Read only where the command mentions lasting memory at all, the one case it can change anything.
+  const text = mentionsAny(command) ? await mentionText($, command) : command
+  const guessed: string[] = []
+  const out = await lastingFiles(w, home, inCheckout, command, isSet, { text, guessed })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files, never by every path
     // its text quotes (#830: a heredoc editing a test file quoted a memory path as test data).
@@ -187,11 +215,18 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
       for (const t of u.targets) if ((await lastingMemory(t, home, inCheckout)) && !out.includes(display(t, home))) out.push(display(t, home))
       continue
     }
-    const texts = [command]
-    for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
-    for (const t of texts) for (const m of await mentioned(t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
+    // What the command mentions is a guess at the file; what a patch it reads names is what it writes.
+    for (const m of await mentioned(text, home, inCheckout, isSet))
+      if (!out.includes(m)) {
+        out.push(m)
+        guessed.push(m)
+      }
+    for (const f of u.inputs) {
+      if (!(await $.fs.exists(f))) continue
+      for (const m of await mentioned(await $.fs.read(f), home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
+    }
   }
-  return out
+  return { files: out, guessed }
 }
 
 // What would be saved, as the rule's text: a new file's whole text, the lines a rewrite adds, an
@@ -325,8 +360,10 @@ const lapsedNote = (x: AskBeforeSavingApproval) =>
     : `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
 // What a subagent is told when its write would save lasting memory: refused, never asked (#777).
-const agentRefusal = (where: string) =>
-  `Not saved: this would write lasting memory (${where}), which only the main session may do, after asking Dan; a subagent never asks him. ` +
+const agentRefusal = ({ files, guessed }: Targets) =>
+  (guessed.length
+    ? `Not saved: ${writesWhat(files, guessed)}. Only the main session may write it, after asking Dan; a subagent never asks him. `
+    : `Not saved: this would write lasting memory (${files.join(', ')}), which only the main session may do, after asking Dan; a subagent never asks him. `) +
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
 
@@ -352,9 +389,9 @@ export const register: Register = on => {
     // lasting memory, and never asked about. One the tool.check hook beneath must let through.
     if (e.agentId !== undefined) {
       const at = await whereOf($)
-      const files = await lastingTargets($, tool, input, at)
-      if (files.length) {
-        const where = files.join(', ')
+      const targets = await lastingTargets($, tool, input, at)
+      if (targets.files.length) {
+        const where = targets.files.join(', ')
         const listed = (await $.agent.list()).some(a => a.id === e.agentId)
         // Claude Code's own background loop (the memory writer): the main session decides with Dan.
         if (!listed)
@@ -363,7 +400,7 @@ export const register: Register = on => {
             `A background loop of Claude Code's (the memory writer, or another agent no list names) tried to save to ${where} and was refused, so nothing was saved. ` +
               `What it would have saved: ${await savedText($, tool, input, at)}. If it is worth keeping, save it yourself, and you will be told how to ask Dan first.`,
           )
-        return { deny: agentRefusal(where) }
+        return { deny: agentRefusal(targets) }
       }
       const key = saveKey(tool, input, at.cwd, at.home)
       fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
@@ -383,7 +420,7 @@ export const register: Register = on => {
     let files: string[] = []
     if (madePermanent((await $.state.get(promptRef)).value)) {
       const at = await whereOf($)
-      files = await lastingTargets($, tool, input, at)
+      files = (await lastingTargets($, tool, input, at)).files
       if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
     }
     let r: Awaited<ReturnType<typeof next>>
@@ -479,7 +516,8 @@ export const register: Register = on => {
     const at = await whereOf($)
     const key = saveKey(tool, input, at.cwd, at.home)
     if (approved.delete(key) || fromAgent.has(key)) return next(e)
-    const files = await lastingTargets($, tool, input, at)
+    const targets = await lastingTargets($, tool, input, at)
+    const { files } = targets
     if (!files.length) return next(e)
     // A save Dan answered For good, sent again: on to the settings hooks and the permission check
     // beneath (the auto mode classifier among them), never asked about again.
@@ -503,14 +541,14 @@ export const register: Register = on => {
 
     // Dan is asleep (#841): he is not asked tonight. The save goes to his morning report instead,
     // and nothing waits on an answer.
-    const asleep = await whileAsleep($, files, await savedText($, tool, input, at))
+    const asleep = await whileAsleep($, targets, await savedText($, tool, input, at))
     if (asleep !== null) return { decision: 'deny', reason: asleep }
 
     const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
     const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
-    const ask = askInstruction(id, files)
+    const ask = askInstruction(id, files, targets.guessed)
     const late = lapsed ?? lesson.lapsed
     return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(next.error) }))
