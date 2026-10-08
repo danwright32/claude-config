@@ -7153,17 +7153,21 @@ payload_rebuilt_by_send(){   # $1 = path relative to the payload
   return 1
 }
 
-SET_ASIDE_HELD=""; SET_ASIDE_KEPT=""
+# Three lists, because three different things were established about them and one sentence covering
+# all of them would claim for each what was only checked for some (L11): HELD were compared with the
+# live file and it holds them, REBUILT were not compared at all (a deletion has no content, and a
+# rebuilt file is written over by the next send), KEPT hold something the live file does not.
+SET_ASIDE_HELD=""; SET_ASIDE_REBUILT=""; SET_ASIDE_KEPT=""
 set_aside_payload_edits(){   # $@ = paths under payload/, relative to the repo
   local p rel wt live view copy sfx n
-  SET_ASIDE_HELD=""; SET_ASIDE_KEPT=""
+  SET_ASIDE_HELD=""; SET_ASIDE_REBUILT=""; SET_ASIDE_KEPT=""
   sfx="$(conflict_suffix)"
   # First every copy that is needed, made and READ BACK, and only then is anything reverted. A copy
   # that cannot be made stops the run here with the clone exactly as it was found.
   for p in "$@"; do
     rel="${p#payload/}"; wt="$SYNC_REPO/$p"; live="$CLAUDE_HOME/$rel"
-    [ -f "$wt" ] || { SET_ASIDE_HELD+="$rel "; continue; }   # a deletion: no content of its own
-    if payload_rebuilt_by_send "$rel"; then SET_ASIDE_HELD+="$rel "; continue; fi
+    [ -f "$wt" ] || { SET_ASIDE_REBUILT+="$rel "; continue; }   # a deletion: no content of its own
+    if payload_rebuilt_by_send "$rel"; then SET_ASIDE_REBUILT+="$rel "; continue; fi
     view="$(scratch_file)" || die "could not make a scratch file to compare $p with this Mac's own copy, so nothing was set aside, nothing was received, and nothing in $SYNC_REPO was changed."
     if tokenized_path "$rel"; then detok < "$wt" > "$view"; else cp "$wt" "$view"; fi
     if [ -f "$live" ] && is_blank "$(only_in_first "$view" "$live")"; then
@@ -7206,7 +7210,9 @@ pending_edits_cause(){
       ''|*[!0-9]*) when="" ;;
       *) when=" $(age_in_words "$(( now - when ))")" ;;
     esac
-    printf 'the secret scan refused a send from this clone%s (possible secret in: %s), so the edits that send staged were left uncommitted in %s' "$when" "${found:-?}" "$SYNC_REPO"
+    # Two measured facts side by side, never "so": whether THESE edits are the ones that send staged
+    # is not something the record can tell, since a hand edit made after it reads the same (L11).
+    printf 'the secret scan last refused a send from this clone%s (possible secret in: %s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-?}" "$SYNC_REPO"
     return 0
   fi
   printf '%s holds uncommitted edits no send has committed (a send that stopped before committing leaves them, and so does an edit made there by hand)' "$SYNC_REPO"
@@ -7215,7 +7221,10 @@ pending_edits_cause(){
 # The sentence saying what was set aside, and where each piece of it now lives.
 report_set_aside(){   # $1 = why they were set aside, a clause
   local cause; cause="$(pending_edits_cause)"
-  echo "claude-sync: ${cause}. $1, so they were set aside rather than be stopped by them: $(printf '%s%s' "$SET_ASIDE_HELD" "$SET_ASIDE_KEPT" | sed 's/ $//')." >&2
+  echo "claude-sync: ${cause}. $1, so they were set aside rather than be stopped by them: $(printf '%s%s%s' "$SET_ASIDE_HELD" "$SET_ASIDE_REBUILT" "$SET_ASIDE_KEPT" | sed 's/ $//')." >&2
+  if ! is_blank "$SET_ASIDE_REBUILT"; then
+    echo "claude-sync: these hold nothing of their own to lose, being deletions or files rebuilt from this Mac's own config by every send: ${SET_ASIDE_REBUILT% }" >&2
+  fi
   if ! is_blank "$SET_ASIDE_HELD"; then
     # Not "they go out on the next send": where the other Mac changed the same file, the apply below
     # may keep the other Mac's version and set this one beside it. What happens to each is the

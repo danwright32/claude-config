@@ -11998,7 +11998,7 @@ check "#947 the pull goes through"                       "[ \"\$rs_rc\" -eq 0 ] 
 check "#947 the shared repo's commit landed in the clone" "[ \"\$(git -C '$RFRB' rev-parse HEAD)\" = '$rs_upstream' ]"
 check "#947 and its change reached this Mac's config"     "grep -qx 'other edited on A' '$RFHB/agents/other.md'"
 check "#947 the pull names the refused send as the cause and what it did about it" \
-  "line_has \"\$out_rs2\" 'secret scan refused a send' 'agents/leak.md' 'set aside' 'agents/shared.md'"
+  "line_has \"\$out_rs2\" 'secret scan last refused a send' 'agents/leak.md' 'set aside' 'agents/shared.md'"
 # Both Macs changed shared.md: the other Mac's version is applied and this Mac's is kept beside it,
 # the existing outcome for any unsent edit the other Mac also changed, and said as such.
 check "#947 the edit both Macs made is kept, not lost"    "grep -qx 'shared edited on B' '$RFHB/agents/shared.md.conflict-rsmac'"
@@ -12029,7 +12029,7 @@ dbg "pull over a hand edit: rc=$rs_rc $out_rs4"
 check "#947 a hand edit in the clone does not stop the pull" "[ \"\$rs_rc\" -eq 0 ] && grep -qx 'other edited on A again' '$RFHB/agents/other.md'"
 check "#947 the hand edit is kept beside the live file"      "grep -qx 'hand edit in the clone' '$RFHB/agents/other.md.conflict-rsmac'"
 check "#947 and named as kept"                               "line_has \"\$out_rs4\" 'agents/other.md' 'other.md.conflict-rsmac'"
-check "#947 without claiming a refused send"                 "! grep -q 'secret scan refused' <<< \"\$out_rs4\""
+check "#947 without claiming a refused send"                 "! grep -q 'secret scan last refused' <<< \"\$out_rs4\""
 # The shared settings file is edited in the repo and never staged from this Mac, so an uncommitted
 # edit to it in the clone is the only copy there is. It is kept, not reverted as if a send rebuilt it.
 rfs_shared_head="$(git -C "$RFRA" show HEAD:payload/settings.shared.json 2>/dev/null || printf '{}')"
@@ -12127,6 +12127,10 @@ check "#947 never that it sent"                              "! grep -q 'sent lo
 check "#947 and the run still fails"                         "[ \"\$rs_rc\" -ne 0 ]"
 rs_self_log="$(git -C "$RFUB" log --all -p 2>/dev/null)"
 check "#947 with nothing it refused sent"                    "! grep -q \"\$rs_secret\" <<< \"\$rs_self_log\""
+# The hooks fragment is rebuilt by every send and is never compared with a live file, so it may not
+# be listed among the edits "this Mac's own config still holds" (L11): it gets its own sentence.
+check "#947 a file a send rebuilds is said to be rebuilt"   "line_has \"\$out_rs8\" 'rebuilt from this Mac' 'settings.hooks.json'"
+check "#947 not claimed as held by the live config"         "! grep -q 'still holds each of them.*settings.hooks.json' <<< \"\$out_rs8\""
 
 
 section "== a send is stamped from what happened, not from which command ran (#79 #82) =="
