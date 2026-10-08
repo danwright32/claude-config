@@ -117,7 +117,7 @@ If Dan ever says he is talking to a client about a specific event, that override
 
    **The markdown card is the only source of truth.** Authoring the HTML separately is how the two documents drift, and the one he reads in the lobby is the one that goes stale. It has already happened once. Edit the markdown, re-run the script.
 
-   The shell holds styles and a `<!--CARD-->` placeholder. Touch it only to change how the card looks, never what it says. Tests live in `scripts/test_render_card.py`; run them after any change to either file.
+   The shell holds styles and a `<!--CARD-->` placeholder. Touch it only to change how the card looks, never what it says. Tests live in `scripts/test_render_card.py`; run them after any change to either file with `python3 ~/.claude/hooks/lib/skill-python-tests.py ~/.claude/skills/reel-plan`.
 
 4b-ii. **Push the card into Apple Notes. This is the version he actually uses at the venue.**
 

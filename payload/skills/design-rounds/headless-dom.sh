@@ -18,7 +18,8 @@
 #                          on stderr and exits 124, with nothing on stdout
 #
 # Exit 0 with the page; 124 when no complete page came within the deadline; Chrome's own exit code
-# when it ended without one.
+# when it ended without one, or 1 when that code was 0. Nothing is printed on stdout unless the page
+# is complete.
 set -u
 REAL="${HEADLESS_DOM_CHROME:?headless-dom.sh: set HEADLESS_DOM_CHROME to the Chrome binary}"
 LIMIT="${HEADLESS_DOM_DEADLINE:-60}"
@@ -54,6 +55,13 @@ fi
 if [ "$state" = late ]; then
   echo "headless-dom.sh: Chrome gave no complete page within ${LIMIT}s (HEADLESS_DOM_DEADLINE) and was ended. Its last words: $(tail -n 3 "$work/err" | tr '\n' ' ')" >&2
   exit 124
+fi
+# Ended on its own without a whole page: a failure whatever its exit status, because handing back
+# half a page with a clean status reads as success to every caller (claude-config#677).
+if [ "$state" = ended ] && ! grep -q '</html>' "$work/out" 2>/dev/null; then
+  echo "headless-dom.sh: Chrome ended without a complete page (exit $rc). Its last words: $(tail -n 3 "$work/err" | tr '\n' ' ')" >&2
+  [ "$rc" -ne 0 ] && exit "$rc"
+  exit 1
 fi
 cat "$work/out"
 exit "$rc"

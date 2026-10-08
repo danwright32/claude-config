@@ -201,6 +201,8 @@ cat > "$FAKE_CHROME" <<'FAKE'
 #!/bin/bash
 # A stand in for Chrome: prints a page (or nothing) and then never exits, as Chrome's teardown does.
 echo "$*" > "$FAKE_ARGS"
+# A Chrome that gives up at once: half a page, a clean exit, nothing left running.
+[ "${FAKE_QUIT:-no}" = yes ] && { printf '<html><head></head><body><p>half'; exit 0; }
 # Its helper starts, and is recorded, before the page is printed: the wrapper may stop it the
 # moment the page is complete, so nothing after the page is sure to run.
 sleep 300 &
@@ -228,6 +230,12 @@ check_eq "within a second or two of it" "1" "$([ "$took" -le 5 ] && echo 1 || ec
 check "and says why, naming the deadline" "no complete page within 2s (HEADLESS_DOM_DEADLINE)" "$(cat "$TMP/late.err")"
 check_eq "and nothing is printed as though it were a page" "" "$dom"
 check_eq "and is ended too" "gone" "$(child_state)"
+# A Chrome that EXITS 0 without a complete page is a failure too: handing back half a page with a
+# clean status read as success to every caller (claude-config#677).
+dom="$(FAKE_QUIT=yes HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/quit.err")"; rc=$?
+check_eq "a Chrome that exits 0 with no complete page fails" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo "0 (exit $rc)")"
+check "and says why" "ended without a complete page" "$(cat "$TMP/quit.err")"
+check_eq "and prints nothing as though it were a page" "" "$dom"
 
 REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 CHROME="$REAL_CHROME"

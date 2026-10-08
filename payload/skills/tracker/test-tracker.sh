@@ -115,10 +115,12 @@ cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Records its arguments and whatever arrived on stdin, then answers like the web app.
 { printf 'ARGS:'; printf ' %s' "$@"; printf '\n'; printf 'STDIN:'; cat; printf '\n'; } >> "$CURL_LOG"
-printf '{"ok":true}'
+printf '%s' "$FAKE_ANSWER"
+exit "${FAKE_CURL_RC:-0}"
 STUB
 chmod +x "$TMP/bin/curl"
 export CURL_LOG
+export FAKE_ANSWER='{"ok":true}'
 
 GOOD_URL="https://script.google.com/macros/s/FAKEDEPLOYMENT/exec"
 GOOD_TOKEN="test_token_0123456789_abcdef_not_real"
@@ -154,6 +156,23 @@ check "and sends the key in the request body" "\"key\": \"$GOOD_TOKEN\"" "$(grep
 check "and the row with it" '"data": {"Project Name": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
 check_not "and never under the old field name the first script read" '"token"' "$(grep '^STDIN:' "$CURL_LOG")"
 check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
+
+# --- the web app's own refusal is a failure, never a printed success (claude-config#677) ---
+# The Apps Script answers HTTP 200 for its refusals too, so curl --fail passes them: the answer
+# itself has to be read.
+FAKE_ANSWER='{"ok":false,"error":"bad token"}' run headers
+if [ "$RC" -eq 1 ]; then ok; else bad "a refused headers call exits 1 (got $RC)"; fi
+check "and names the web app's own error" "bad token" "$OUT"
+FAKE_ANSWER='{"ok":false,"error":"bad json"}' run append '{"Project Name":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "a refused append exits 1 (got $RC)"; fi
+check "and names the web app's own error" "bad json" "$OUT"
+FAKE_ANSWER='<html><body>Sign in to continue</body></html>' run append '{"Project Name":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "an answer that is not JSON (a sign in page) exits 1 (got $RC)"; fi
+check "and says it was not the JSON the web app sends" "not the JSON" "$OUT"
+FAKE_ANSWER='' FAKE_CURL_RC=22 run headers
+if [ "$RC" -ne 0 ]; then ok; else bad "a request curl could not complete fails (got $RC)"; fi
+check "and says the web app could not be reached" "could not reach" "$OUT"
+check_not "no failure prints the configured token" "$GOOD_TOKEN" "$OUT"
 
 # --- every refusal names its cause, and reaches nothing -----------------------
 refuses(){ # refuses <description> <expected words in the message> <args...>

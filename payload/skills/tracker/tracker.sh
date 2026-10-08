@@ -125,8 +125,28 @@ post(){   # $1 = the request body without its key, as a JSON object
   # NOTE: no -X POST. --data makes the first request a POST; Apps Script 302-redirects
   # to a googleusercontent URL that only serves GET, so curl must switch to GET on the
   # redirect. -X POST would force a re-POST there and return 405.
-  printf '%s' "$payload" | curl -fsSL "$URL" -H 'Content-Type: application/json' --data @-
-  echo
+  local answer
+  if ! answer="$(printf '%s' "$payload" | curl -fsSL "$URL" -H 'Content-Type: application/json' --data @-)"; then
+    echo "tracker.sh: could not reach the web app (curl failed). Nothing was recorded." >&2
+    exit 1
+  fi
+  # The web app answers HTTP 200 for its refusals too ({"ok":false,"error":"bad token"}), so
+  # curl --fail cannot see them: the answer is read here, and anything but {"ok":true,...} is a
+  # failure naming the web app's own error (claude-config#677).
+  python3 -c '
+import json, sys
+body = sys.argv[1]
+try:
+    reply = json.loads(body)
+except ValueError:
+    sys.stderr.write("tracker.sh: the answer was not the JSON the web app sends, so nothing is known to have happened. It began: %r\n" % body[:200])
+    sys.exit(1)
+if not isinstance(reply, dict) or reply.get("ok") is not True:
+    why = reply.get("error") if isinstance(reply, dict) else None
+    sys.stderr.write("tracker.sh: the web app refused: %s\n" % (why or body[:200]))
+    sys.exit(1)
+print(body)
+' "$answer"
 }
 
 case "${1:-}" in
