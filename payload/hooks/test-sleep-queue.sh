@@ -48,7 +48,7 @@ cat > "$WORK/source.sh" <<EOF
 #!/bin/sh
 echo "\$*" >> "$WORK/source.log"
 [ -f "$FX/fail-\$1" ] && { cat "$FX/fail-\$1" >&2; exit 1; }
-[ -f "$FX/hang-\$1" ] && { echo \$\$ > "$FX/hang.pid"; exec sleep 30; }
+[ -f "$FX/hang-\$1" ] && { date +%s > "$FX/hang.started"; echo \$\$ > "$FX/hang.pid"; exec sleep 30; }
 case "\$1" in
   accounts) cat "$FX/accounts" ;;
   issues) cat "$FX/issues.json" ;;
@@ -179,30 +179,78 @@ check_eq "a failed fetch refuses" 3 "$rc"
 check_has "with what the source said" "HTTP 502 from api.github.com" "$out"
 rm -f "$FX/fail-issues"
 
+# ---- deadlines ----
+# A hang check gives its stand-in a 2s deadline (a setting, not measured), and on a busy machine the
+# stand-in may not even have started by then: it is stopped before it can say it ran, and the check
+# reads that as never ran (#950). So each hang check names the file its stand-in writes on starting,
+# SLEEP_DEADLINE_FROM, and the deadline counts from that file appearing: the check measures the
+# deadline, not the scheduler (L290). Each stand-in records when it started, then its pid, then
+# only waits.
+hang_stub(){ # path prefix: a stand-in writing prefix.started and prefix.pid, then hanging
+  printf '#!/bin/sh\ndate +%%s > "%s.started"\necho $$ > "%s.pid"\nexec sleep 30\n' "$2" "$2" > "$1"
+  chmod +x "$1"
+}
+ran_and_stopped(){ # prefix: whether its stand-in wrote its pid, and whether that process is gone
+  local hp
+  hp="$(cat "$1.pid" 2>/dev/null)"
+  printf '%s %s\n' "$([ -n "$hp" ] && echo ran || echo never)" "$([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo running || echo stopped)"
+}
+inside_hang(){ # prefix end: yes when end came well before the stand-in's 30s hang, counted from its start
+  local s
+  s="$(cat "$1.started" 2>/dev/null)"
+  [ -n "$s" ] || { echo "no, it never started"; return; }
+  [ $(($2 - s)) -lt 15 ] && echo yes || echo "no, $(($2 - s))s after it started"
+}
+# A stand-in that takes 2s to say it started (its own sleep, not measured), as one on a loaded
+# machine does.
+printf '#!/bin/sh\nsleep 2\ndate +%%s > "%s.started"\necho $$ > "%s.pid"\nexec sleep 30\n' "$WORK/slow" "$WORK/slow" > "$WORK/bin/slow-start"
+chmod +x "$WORK/bin/slow-start"
+# The control (L1): counted from launch, a 1s deadline (set here, not measured) stops it before it
+# can say it ran, which is the flake. And the seam is off unless a test sets it.
+out="$(_sq_deadline 1 "$WORK/bin/slow-start" 2>&1)"; rc=$?
+check_eq "counted from launch, a deadline shorter than the start stops the stand-in" 142 "$rc"
+check_eq "before it ever says it ran" "never stopped" "$(ran_and_stopped "$WORK/slow")"
+# Counted from the start it reports, the same deadline lets it run, then stops it.
+rm -f "$WORK/slow.pid" "$WORK/slow.started"
+out="$(SLEEP_DEADLINE_FROM="$WORK/slow.pid" _sq_deadline 1 "$WORK/bin/slow-start" 2>&1)"; rc=$?
+t1=$(date +%s)
+check_eq "counted from the reported start, it is still stopped at its deadline" 142 "$rc"
+check_has "saying so" "took longer than 1s and was stopped" "$out"
+check_eq "after it ran, and it is stopped" "ran stopped" "$(ran_and_stopped "$WORK/slow")"
+check_eq "well inside its hang" yes "$(inside_hang "$WORK/slow" "$t1")"
+# A command that finishes without ever writing the file is not held for it.
+t0=$(date +%s)
+out="$(SLEEP_DEADLINE_FROM="$WORK/never-written" _sq_deadline 30 sh -c 'exit 5' 2>&1)"; rc=$?
+t1=$(date +%s)
+check_eq "a command ending before it writes the file keeps its own exit" 5 "$rc"
+check_eq "and is not held for the file" yes "$([ $((t1 - t0)) -lt 10 ] && echo yes || echo "no, $((t1 - t0))s")"
+# One that hangs and never writes it still meets a deadline, armed once the wait for the start ends
+# (SLEEP_DEADLINE_FROM_WAIT, 20s unless set, a setting and not measured), and says why it counted
+# from then (L110, L11).
+out="$(SLEEP_DEADLINE_FROM="$WORK/never-written" SLEEP_DEADLINE_FROM_WAIT=1 _sq_deadline 1 sleep 30 2>&1)"; rc=$?
+check_eq "a hang that never says it started is still stopped" 142 "$rc"
+check_has "saying it never said it had started" "never said it had started within 1s" "$out"
+
 # A read from GitHub that hangs is stopped at its deadline and refuses the queue, saying so (L110).
 touch "$FX/hang-prs"
-t0=$(date +%s)
-out="$(SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
+out="$(SLEEP_DEADLINE_FROM="$FX/hang.pid" SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
 t1=$(date +%s)
 rm -f "$FX/hang-prs"
 check_eq "a hung GitHub read refuses the queue" 3 "$rc"
 check_has "saying it was stopped at its deadline" "took longer than 2s and was stopped" "$out"
-check_eq "well inside the hang" yes "$([ $((t1 - t0)) -lt 20 ] && echo yes || echo "no, $((t1 - t0))s")"
-hp="$(cat "$FX/hang.pid" 2>/dev/null)"
-check_eq "the hung read really ran, and is stopped with it" "ran stopped" "$([ -n "$hp" ] && echo ran || echo never) $([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo running || echo stopped)"
+check_eq "well inside the hang" yes "$(inside_hang "$FX/hang" "$t1")"
+check_eq "the hung read really ran, and is stopped with it" "ran stopped" "$(ran_and_stopped "$FX/hang")"
 
 # The real gh path (no injected source) with a stand-in gh that hangs: the very first call is
 # stopped at the deadline and named as that, never read as no account seeing the repository.
 mkdir -p "$WORK/hangbin"
-printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$WORK/hanggh.pid" > "$WORK/hangbin/gh"; chmod +x "$WORK/hangbin/gh"
-t0=$(date +%s)
-out="$(PATH="$WORK/hangbin:$PATH" SLEEP_QUEUE_SOURCE= SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
+hang_stub "$WORK/hangbin/gh" "$WORK/hanggh"
+out="$(PATH="$WORK/hangbin:$PATH" SLEEP_QUEUE_SOURCE= SLEEP_DEADLINE_FROM="$WORK/hanggh.pid" SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
 t1=$(date +%s)
 check_eq "a hung gh refuses the queue" 3 "$rc"
 check_has "named as GitHub not answering in time" "GitHub did not answer within 2s" "$out"
-check_eq "within one deadline, not the hang" yes "$([ $((t1 - t0)) -lt 15 ] && echo yes || echo "no, $((t1 - t0))s")"
-hp="$(cat "$WORK/hanggh.pid" 2>/dev/null)"
-check_eq "the stand-in gh really ran, and is stopped" "ran stopped" "$([ -n "$hp" ] && echo ran || echo never) $([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo running || echo stopped)"
+check_eq "within one deadline, not the hang" yes "$(inside_hang "$WORK/hanggh" "$t1")"
+check_eq "the stand-in gh really ran, and is stopped" "ran stopped" "$(ran_and_stopped "$WORK/hanggh")"
 
 # The goal's issues, in the goal's order, still judged by every exclusion but priority.
 printf '{"number":12,"title":"Theirs","labels":[],"author":{"login":"somebody-else"},"state":"OPEN"}' > "$FX/issue-12.json"
@@ -466,16 +514,16 @@ check_eq "a separate git folder puts the worktree beside the checkout" "$WORK/se
 # ssh one whose ssh is a script that only waits, so nothing leaves this machine.
 git clone -q "$WORK/demo.git" "$WORK/hangrepo"
 git -C "$WORK/hangrepo" config remote.origin.url git@github.com:danwright32/demo.git
-printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$WORK/hang.pid" > "$WORK/bin/hang-ssh"; chmod +x "$WORK/bin/hang-ssh"
-t0=$(date +%s)
-out="$(GIT_SSH_COMMAND="$WORK/bin/hang-ssh" SLEEP_FETCH_TIMEOUT=2 sleep_worktree "$WORK/hangrepo" 33 2>&1)"; rc=$?
+hang_stub "$WORK/bin/hang-ssh" "$WORK/hang"
+# Its deadline counts from the ssh saying it started, as the hang checks above do (#950).
+out="$(GIT_SSH_COMMAND="$WORK/bin/hang-ssh" SLEEP_DEADLINE_FROM="$WORK/hang.pid" SLEEP_FETCH_TIMEOUT=2 sleep_worktree "$WORK/hangrepo" 33 2>&1)"; rc=$?
 t1=$(date +%s)
 check_eq "a hung fetch gives the issue back" 2 "$rc"
 check_has "saying it was stopped at its deadline" "took longer than 2s and was stopped" "$out"
-check_eq "and returns well inside the hang" yes "$([ $((t1 - t0)) -lt 20 ] && echo yes || echo "no, $((t1 - t0))s")"
-hp="$(cat "$WORK/hang.pid" 2>/dev/null)"
-check_eq "the hung fetch's ssh really ran" yes "$([ -n "$hp" ] && echo yes || echo no)"
-check_eq "and is stopped with it, not left running" no "$([ -n "$hp" ] && kill -0 "$hp" 2>/dev/null && echo yes || echo no)"
+check_eq "and returns well inside the hang" yes "$(inside_hang "$WORK/hang" "$t1")"
+ras="$(ran_and_stopped "$WORK/hang")"
+check_eq "the hung fetch's ssh really ran" ran "${ras% *}"
+check_eq "and is stopped with it, not left running" stopped "${ras#* }"
 git init -q --bare "$WORK/bare.git"
 out="$(sleep_worktree "$WORK/bare.git" 32 2>&1)"; rc=$?
 check_eq "a bare repository is refused for good" 1 "$rc"
