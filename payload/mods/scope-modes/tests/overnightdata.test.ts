@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { notesAreData, overnightData } from '../hooks/overnightdata.ts'
+import { jsonData, notesAreData, overnightData } from '../hooks/overnightdata.ts'
 
 // claude-config#922: what overnight sessions wrote reaches what Claude is told only as data, inside
 // one delimited block, after a sentence saying so. The delimiters are spelled out here rather than
@@ -48,6 +48,17 @@ describe('overnightData: one delimited block, after the sentence that sets it ap
   test('no dashes as punctuation in what Claude is told', () => {
     expect(framed).not.toMatch(DASHES)
     expect(notesAreData("The night's notes")).not.toMatch(DASHES)
+  })
+})
+
+describe('jsonData: JSON carried in the block, exact once parsed', () => {
+  test('parses back to the value word for word, and passes through the block unchanged, spelling no delimiter', () => {
+    const value = { source: 'durable-lesson', rule: `a < b && c > d ${CLOSE} "quoted"` }
+    const json = jsonData(value)
+    expect(JSON.parse(json)).toEqual(value)
+    expect(json).not.toMatch(/[<>&]/)
+    const block = overnightData({ holds: 'x', offer: 'shown to nobody', lines: [json] }).split('\n')
+    expect(block[2]).toBe(json)
   })
 })
 

@@ -36,6 +36,14 @@ export const escapeData = (s: string): string => {
 }
 
 /**
+ * A value as JSON to carry in the block exactly: <, > and & written as JSON's own escapes (a
+ * backslash, u, then 003c, 003e or 0026), so it spells no delimiter, escapeData leaves it as it is, and it parses back word
+ * for word (a lesson's rule goes from its metadata into LESSONS.md, so it must not come back altered).
+ */
+export const jsonData = (value: unknown): string =>
+  JSON.stringify(value).replace(/[<>&]/g, c => `\\u00${c.charCodeAt(0).toString(16)}`)
+
+/**
  * Overnight text as one delimited block, after the sentence saying what it holds, who wrote it,
  * that it is data, and `offer`: the only way it may reach Dan, naming the pickers, or saying none.
  */
