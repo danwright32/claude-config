@@ -92,6 +92,11 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
   )
 }
 
+/** What a check with no call id reads ($.tool.check): the call would be refused, and making it says how to go on. */
+export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[]): string =>
+  `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
+  `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}".`
+
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
 export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string): string => {
   const f = listed(files)

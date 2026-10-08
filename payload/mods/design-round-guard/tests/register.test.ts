@@ -451,6 +451,22 @@ test('the settled question may name the issue when the branch does not, and Dan 
   expect(refusalOf(await call($, PAGE))).toBe('')
 })
 
+// Lessons review of #991: a check asked with no call id ($.tool.check, a preview of what a call would
+// meet) was let through unjudged. It is judged like a call, refused when the call would be, and since
+// it runs nothing, no card is drawn and nothing waits on Dan.
+test('a check asked with no call id is judged like the call: refused for a look changing file, with no card and nothing waiting', withKit, async ($, on) => {
+  const w = world($, on)
+  const ask = async (input: Record<string, unknown>) => (await $.tool.check({ tool: String(input.tool), input: { ...input, tool: undefined } } as never)) as { decision: string; reason?: string }
+  const held = await ask(PAGE)
+  expect(held.decision).toBe('deny')
+  expect(held.reason).toContain('app/page.tsx')
+  expect(held.reason).toContain('issue #978 in slate')
+  expect((await ask(ROUTE)).decision).toBe('allow')
+  expect(w.cards).toEqual([])
+  // Nothing waits under an id the check never had.
+  expect(refusalOf(await call($, { tool: 'AskUserQuestion', questions: [{ question: 'Skip design rounds for this issue?', header: 'x', options: [], multiSelect: false }], metadata: { source: 'design-round-guard:' } }))).toContain('No look changing edit is waiting')
+})
+
 test('a call a settings hook refuses is refused by that hook, never turned into a question', withKit, async ($, on) => {
   const w = world($, on)
   w.ctl.settingsRefuse = true

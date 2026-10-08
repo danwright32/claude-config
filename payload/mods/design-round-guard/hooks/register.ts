@@ -13,6 +13,7 @@ import {
   agentRefusal,
   cannotCheck,
   card,
+  checked,
   forged,
   isOwnRecord,
   isSwiftUI,
@@ -198,7 +199,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
     }
     session ??= await $.session.id()
     const subjects = subjectsOf({ ...place, session })
-    let lacking: DesignRoundSubject[] = []
+    const lacking: DesignRoundSubject[] = []
     try {
       for (const s of subjects) if (!recordOf(await $.store.get(s.key))) lacking.push(s)
     } catch (err) {
@@ -207,7 +208,6 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
     if (!lacking.length) continue
     missingFiles.push(...shown)
     for (const s of lacking) if (!missing.some(m => m.key === s.key)) missing.push(s)
-    lacking = []
   }
   if (unsureFiles.length) return { unsure: unsureFiles, why }
   if (missing.length) return { missing: { files: missingFiles, subjects: missing } }
@@ -247,6 +247,14 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
   return call.agent ? agentRefusal(files, subjects, call.id) : refusal(call.id, files, subjects)
 }
 
+// What a check with no call id is told: the refusal the call would meet, with no id to ask Dan under.
+const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
+  if ('forged' in v) return forged(v.forged)
+  if ('unsure' in v) return unsure(v.unsure, v.why)
+  if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why)
+  return checked(v.missing.files, v.missing.subjects)
+}
+
 type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown }; agentId?: string }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
 
@@ -271,11 +279,14 @@ export const register: Register = on => {
   // untouched; one that is refused goes to the settings hooks first, so a call one of them refuses is
   // refused in its words and never turned into a question for Dan.
   on('tool.check', async ($, e, next) => {
-    if (!TOOLS.has(e.tool) || e.tool_use_id === undefined || fromAgent.has(e.tool_use_id)) return next(e)
+    if (!TOOLS.has(e.tool) || (e.tool_use_id !== undefined && fromAgent.has(e.tool_use_id))) return next(e)
     const v = await judge($, e.tool, (e.input ?? {}) as Record<string, unknown>)
     if ('pass' in v) return next(e)
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
+    // A check asked with no call id ($.tool.check) runs nothing: it is answered as the call would be,
+    // with no card drawn and nothing left waiting on Dan (lessons review of #991).
+    if (e.tool_use_id === undefined) return { decision: 'deny', reason: previewed(v) }
     return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false }) }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(message(next.error)) }))
 
