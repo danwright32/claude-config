@@ -408,7 +408,12 @@ def exits_python(path: str, rel: str):
     return findings
 
 
-GH_CREATE = re.compile(r"(?:^|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)gh\s+issue\s+create\b")
+# In command position: the start of a line however indented, after an operator (`;`, `&&`, `||`,
+# `|`, `(`, `$(`, `!`), or after a keyword that starts a command. A command position anchored to
+# column 0 alone missed every indented call inside a block (the PR #936 lessons review).
+GH_CREATE = re.compile(
+    r"(?:^|[;&|(!]|\$\(|\b(?:then|do|else|if|elif|while|until|time|exec|command)\b)\s*gh\s+issue\s+create\b"
+)
 
 
 def shell_commands(text: str):

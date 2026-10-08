@@ -175,15 +175,23 @@ gh issue create --repo "$repo" --title "$t" \
   --milestone "$m" \
   --label priority-p2 --label planning
 gh issue create --repo "$repo" --title "$t" --milestone "$m" "${label_args[@]}"
+if [ -n "$repo" ]; then
+    gh issue create --repo "$repo" --title "$t"
+fi
+if ! gh issue create --repo "$repo" --title "$t"; then exit 1; fi
+[ -n "$repo" ] && gh issue create --repo "$repo" --title "$t"
 SH
 scan
 [ "$rc" -eq 1 ] && ok || bad "a script filing issues without their fields fails the scan (rc=$rc)" "$out"
 fires S1 3 "an issue with no milestone and no labels"
 fires S1 4 "an issue with a milestone and no labels"
+fires S1 10 "an indented call inside a block"
+fires S1 12 "a call after if !"
+fires S1 13 "a call after &&"
 has "$out" "$FILE:2:" && bad "a comment naming the command is not a call" "$out" || ok
 has "$out" "$FILE:5:" && bad "labels given on a continuation line count" "$out" || ok
 has "$out" "$FILE:8:" && bad "labels passed through an array count" "$out" || ok
-has "$out" "findings=2" && ok || bad "exactly the two bare calls are flagged" "$out"
+has "$out" "findings=5" && ok || bad "exactly the five bare calls are flagged" "$out"
 
 # --- nothing to scan is not a pass -------------------------------------------------------------
 mkdir -p "$TMP/none"
