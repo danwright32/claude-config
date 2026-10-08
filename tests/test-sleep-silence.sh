@@ -163,7 +163,9 @@ while IFS=$'\t' read -r route reason; do
 done < "$EXEMPT"
 
 # ---- 2. the shell routes, run asleep and awake ----
-BOOT="$(sysctl -n kern.boottime 2>/dev/null | python3 -c 'import re, sys; m = re.search(r"\bsec\s*=\s*(\d+)", sys.stdin.read()); print(m.group(1) if m else "")')"
+# This boot by sleep.sh's sleep_boot_of, the one shell rule, held to the mod's BOOT_FIXTURES and to
+# the mod's own reading of the live sysctl by test-sleep-state.sh.
+BOOT="$(bash -c '. "$1" && sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)"' _ "$HOOKS/lib/sleep.sh")"
 [ -n "$BOOT" ] || BOOT=1   # no sysctl (Linux CI): sleep.sh skips the boot check, so any boot will do
 NOW_MS="$(( $(date +%s) * 1000 ))"
 STUBS="$WORK/stubs"; mkdir -p "$STUBS"

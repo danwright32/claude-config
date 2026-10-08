@@ -73,6 +73,11 @@ DRV_SAID="$(python3 "$DIR/sleep-real-engine-session.py" "$DRV_TMP/out.jsonl" 30 
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["exit"] == 3 and d["results"] == 0 and "input" in d.get("input_error", "") else 1)' "$DRV_SAID" 2>/dev/null \
   && check "the session driver says a session that stopped reading its input, with a summary" ok \
   || check "the session driver says a session that stopped reading its input, with a summary" "said: ${DRV_SAID:-nothing}; stderr: $(head -c 300 "$DRV_TMP/err")"
+# And a session's last line counts even when it ends without a newline (lessons review of 80ece53).
+DRV_SAID="$(python3 "$DIR/sleep-real-engine-session.py" "$DRV_TMP/out2.jsonl" 30 1 -- /bin/sh -c 'printf "%s" "{\"type\":\"result\",\"result\":\"last\"}"' 2>"$DRV_TMP/err")"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["results"] == 1 and d["texts"] == ["last"] else 1)' "$DRV_SAID" 2>/dev/null \
+  && check "the session driver counts a last result line with no newline after it" ok \
+  || check "the session driver counts a last result line with no newline after it" "said: ${DRV_SAID:-nothing}; stderr: $(head -c 300 "$DRV_TMP/err")"
 rm -rf "$DRV_TMP"
 
 if [ "${SLEEP_REAL_ENGINE:-}" = 0 ]; then

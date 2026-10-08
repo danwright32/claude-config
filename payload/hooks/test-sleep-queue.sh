@@ -77,7 +77,9 @@ git -C "$WORK/repo" config remote.origin.url https://github.com/danwright32/demo
 git -C "$WORK/repo" config url."$WORK/demo.git".insteadOf https://github.com/danwright32/demo.git
 ROOT="$WORK/repo"
 
-boot="$(sysctl -n kern.boottime 2>/dev/null | python3 -c 'import re, sys; m = re.search(r"\bsec\s*=\s*(\d+)", sys.stdin.read()); print(m.group(1) if m else "")')"
+# This boot by sleep.sh's sleep_boot_of, the one shell rule, held to the mod's BOOT_FIXTURES and to
+# the mod's own reading of the live sysctl by test-sleep-state.sh.
+boot="$(bash -c '. "$1" && sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)"' _ "$DIR/lib/sleep.sh")"
 [ -n "$boot" ] || boot=1
 asleep(){ printf '{"v":1,"generation":"g1","since":%s,"until":%s,"night":"2026-10-07","bootTime":%s,"workers":[]}' "$((NOW - 1000))" "$((NOW + 3600000))" "$boot" > "$HOME/.claude/state/sleep/current.json"; }
 awake(){ rm -f "$HOME/.claude/state/sleep/current.json"; }

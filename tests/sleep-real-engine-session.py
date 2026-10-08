@@ -61,6 +61,24 @@ def main(argv):
             except BrokenPipeError:
                 pass
 
+    # One line the session printed: a result is counted, and the next message sent once it lands.
+    def take(line):
+        nonlocal results, cost, sent
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            return
+        if not isinstance(msg, dict) or msg.get('type') != 'result':
+            return
+        results += 1
+        texts.append(msg.get('result'))
+        cost += float(msg.get('total_cost_usd') or 0)
+        if sent < len(messages):
+            send(messages[sent])
+            sent += 1
+        elif results >= want:
+            close_input()
+
     with open(out_path, 'ab') as out:
         if messages:
             send(messages[0])
@@ -83,20 +101,11 @@ def main(argv):
                 buf += chunk
                 while b'\n' in buf:
                     line, buf = buf.split(b'\n', 1)
-                    try:
-                        msg = json.loads(line)
-                    except ValueError:
-                        continue
-                    if msg.get('type') != 'result':
-                        continue
-                    results += 1
-                    texts.append(msg.get('result'))
-                    cost += float(msg.get('total_cost_usd') or 0)
-                    if sent < len(messages):
-                        send(messages[sent])
-                        sent += 1
-                    elif results >= want:
-                        close_input()
+                    take(line)
+        # The last line counts even when the session ended it without a newline.
+        if eof and buf.strip():
+            take(buf)
+            buf = b''
     if timed_out:
         close_input()
         try:
@@ -116,7 +125,10 @@ def main(argv):
             proc.wait(timeout=max(1.0, end - time.monotonic()))
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait()
     summary = {'results': results, 'texts': texts, 'cost_usd': round(cost, 4), 'exit': proc.returncode, 'timed_out': timed_out}
     if input_error:
