@@ -8621,6 +8621,10 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Cross-system reliability
 
+- **L1020. A GitHub Actions concurrency group holds one running and one pending run, and a third arrival cancels the pending one even with cancel-in-progress set to false, so a workflow that must handle every event (every commit on main, every finished CI run) keys its group on that event's own identity, never one constant name.**
+  (danwright32/ovation#688, 2026-10-08)
+  SHORT: A concurrency group keeps one pending run and a third arrival cancels it, so key a must-see-every-event workflow's group on the event.
+
 - **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its
   whole serialized form, because a record routinely carries provenance that changes on every run
   (a timestamp, a run id, a commit), so the check fires every time, the work repeats, and any

@@ -222,6 +222,8 @@ type Opts = {
   noRepo?: boolean
   /** The session's origin as $.session.repo() gives it (#951); by default git@github.com:o/r.git. */
   remote?: string | null
+  /** mod-kit's repo reader fails (#979 review). */
+  repoReaderFails?: boolean
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
@@ -392,6 +394,7 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === '__modkit') {
       const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
+      if (a[0] === 'repo' && o.repoReaderFails) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
@@ -2004,6 +2007,17 @@ test('a worker repository on neither list is asked about at bedtime, and the ans
   expect(r.text).not.toMatch(/No merge and no deploy/)
   expect(await call($ as never, bash('npx wrangler deploy'))).toBe('ran')
   expect(await call($ as never, bash('gh pr merge 12 --squash'))).toBe('ran')
+})
+
+// #979 review: a worker's repository mod-kit's reader cannot read is never dropped as if it named
+// no GitHub remote, which would leave it unasked: sleep does not start, and says why.
+test("a worker repository mod-kit's reader cannot read stops sleep starting, never dropped unasked", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Allowed to deploy', repoReaderFails: true })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode did not start: the GitHub repository of \S+ could not be read \(mod-kit is not loaded\)\.$/)
+  expect(w.asked).toEqual([])
+  expect(w.files[CURRENT]).toBeUndefined()
 })
 
 test('a question left unanswered for 10 minutes closes that repository for the night, says so, and notes it for the morning', withDeps, async ($, on) => {
