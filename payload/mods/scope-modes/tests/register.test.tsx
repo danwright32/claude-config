@@ -140,7 +140,7 @@ const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown> }
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
 // unless headRefName says otherwise) and by `gh pr view` only by its own number.
-type GhPr = { number: number; state: string; url?: string; headRefName?: string; closingIssuesReferences: { number: number }[] }
+type GhPr = { number: number; state: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences: { number: number }[] }
 // `others` are PRs GitHub also holds, found only by `gh pr view` by number (#856).
 type Gh = { pr: GhPr | null; others?: GhPr[]; issues: Record<number, string>; fails?: string }
 type Opts = {
@@ -948,7 +948,7 @@ test('turned on from the default branch, winding down finishes the PRs this sess
   expect((await stop($ as never)).block).toBeUndefined()
   expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
   // GitHub was asked about PR #31 in the repository its link names.
-  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName')).toBe(true)
+  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName,headRefOid')).toBe(true)
 })
 
 // #856: winding down finalizes everything the session has open. A session whose own branch PR was
@@ -957,6 +957,8 @@ const FINALIZE = [
   /Winding down finalizes everything this session has open/,
   /every PR (it|this session) opened is merged, never left open waiting on Dan/,
   /When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers/,
+  // #917: the one way a PR stays open, and only on his answer.
+  /A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open/,
 ]
 
 test('a session whose own PR is finished is not finished while a PR it opened is still open (#856)', withDeps, async ($, on) => {
@@ -1017,6 +1019,100 @@ test('the winding down note, its command context and the Stop reason all say to 
   const block = (await stop($ as never)).block ?? ''
   for (const [where, text] of [['command', ran], ['note', note], ['stop', block]] as const)
     for (const want of FINALIZE) expect({ where, ok: want.test(text) }).toEqual({ where, ok: true })
+})
+
+// ---- A PR Dan chose to leave open (#917) ----
+// On 2026-10-07 Dan chose twice, through a picker, to leave a partner repository's PR for its
+// reviewer, and winding down refused every turn end anyway. His own answer to leave_pr_open,
+// recorded against the PR and its head, settles it; nothing else does, and a new push asks again.
+const LEAVE = 'mcp__scope-modes__leave_pr_open'
+const WHY = "awaiting Denys's review"
+const leave = (pr: number, extra: Record<string, unknown> = {}, id = 'l1') => ({ tool: LEAVE, pr, why: WHY, tool_use_id: id, ...extra }) as never
+const openPr = (number: number, head: string) => ({ number, state: 'OPEN', url: `https://github.com/o/r/pull/${number}`, headRefName: `fix-${number}`, headRefOid: head, closingIssuesReferences: [] })
+
+test('a PR Dan chose to leave open settles winding down and is listed as left open by his choice; a new push asks again (#917)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/31\n', ask: 'Leave it open' })
+  w.o.gh = { ...merged(), others: [openPr(31, 'aaa1111')] }
+  await start($ as never, clock)
+  expect(w.tools).toContain('leave_pr_open')
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  // Nobody decided yet: #856's default holds.
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 is not merged yet\./)
+  const r = await call($ as never, leave(31, { repo: 'o/r' }))
+  expect(w.asked).toEqual(["Leave PR #31 in o/r open (awaiting Denys's review)? Winding down stops waiting on it until it is pushed to again."])
+  expect(w.askedOptions).toEqual([['Leave it open', 'Merge it']])
+  expect(r).toBe('Dan chose to leave PR #31 in o/r open at aaa1111: winding down counts it settled until it is pushed to again.')
+  expect(w.runs.some(a => a.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,headRefOid')).toBe(true)
+  // Pushed to since he chose: not carried over to commits he never saw.
+  w.o.gh = { ...merged(), others: [openPr(31, 'bbb2222')] }
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 has new commits since Dan chose to leave it open: merge it, or ask him again \(mcp__scope-modes__leave_pr_open\)\./)
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  // Asked again at the new head, his answer settles it, and the finish says what was left open.
+  await call($ as never, leave(31, { repo: 'o/r' }, 'l2'))
+  expect(w.asked.length).toBe(2)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(["Wind down finished: safe to close this session. Left open by your choice: PR #31 in o/r (awaiting Denys's review)."])
+})
+
+test("a PR left open by Dan's choice is listed apart from what is outstanding, and the branch's own PR can be left open too (#917)", withDeps, async ($, on) => {
+  const own = { ...merged('OPEN'), pr: { ...merged('OPEN').pr, headRefOid: 'ccc3333' } }
+  const { w, clock } = world(on, { created: 'https://github.com/o/r/pull/31\n', ask: 'Leave it open' })
+  w.o.gh = { ...own, others: [openPr(31, 'aaa1111')] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  await call($ as never, leave(31, { repo: 'o/r' }))
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: PR #12 is not merged yet\. Left open by Dan's choice: PR #31 in o\/r \(awaiting Denys's review\)\. /)
+  expect(block).not.toMatch(/PR #31 is not merged/)
+  // The branch's own PR, its repository the session's own when none is named.
+  const r = await call($ as never, leave(12, { why: 'the client signs off next week' }, 'l2'))
+  expect(r).toMatch(/^Dan chose to leave PR #12 in o\/r open at ccc3333/)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual([
+    "Wind down finished: safe to close this session. Left open by your choice: PR #12 in o/r (the client signs off next week); PR #31 in o/r (awaiting Denys's review).",
+  ])
+})
+
+test('only his answer to leave_pr_open leaves a PR open: a picker of Claude\'s own, a merge answer or anything typed records nothing (#917)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { created: 'https://github.com/o/r/pull/31\n', ask: 'Leave it open' })
+  w.o.gh = { ...merged('OPEN'), others: [openPr(31, 'aaa1111')] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  // The same words through Claude's own picker are never read as his choice: that would be inferred.
+  await call($ as never, { tool: 'AskUserQuestion', questions: [{ question: 'Leave PR #31 open for Denys?', options: [{ label: 'Leave it open' }, { label: 'Merge it' }] }], tool_use_id: 'q1' } as never)
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+  // Asked through leave_pr_open, a merge answer records nothing.
+  w.o.ask = 'Merge it'
+  expect(await call($ as never, leave(31, { repo: 'o/r' }))).toBe('Dan said merge it: winding down waits on PR #31 in o/r until it is merged.')
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+  // Anything typed is not a choice to leave it open either.
+  w.o.ask = 'hold on, ask Denys first'
+  expect(await call($ as never, leave(31, { repo: 'o/r' }, 'l2'))).toBe('Dan did not choose to leave PR #31 in o/r open, so winding down still waits on it. He wrote: hold on, ask Denys first')
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+  // A later merge answer withdraws an earlier choice to leave it open.
+  w.o.ask = 'Leave it open'
+  await call($ as never, leave(31, { repo: 'o/r' }, 'l3'))
+  expect((await stop($ as never)).block).not.toMatch(/PR #31 is not merged yet/)
+  w.o.ask = 'Merge it'
+  await call($ as never, leave(31, { repo: 'o/r' }, 'l4'))
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+  expect(w.toasts).toEqual([])
+})
+
+test('leave_pr_open asks nothing about a PR it cannot read or that is not open, and records nothing (#917)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Leave it open' })
+  w.o.gh = { ...merged(), others: [{ ...openPr(31, 'aaa1111'), state: 'MERGED' }] }
+  await start($ as never, clock)
+  expect(await call($ as never, leave(31, { repo: 'o/r' }))).toBe('PR #31 in o/r is MERGED, so there is nothing to leave open. Nothing was asked.')
+  expect(await call($ as never, leave(77, { repo: 'o/r' }))).toBe('PR #77 in o/r could not be read (no pull requests found), so Dan was not asked and nothing was recorded: winding down still waits on it.')
+  expect(await call($ as never, leave(31, { repo: 'not a repo' }))).toBe('"not a repo" is not a repository (owner/name), so Dan was not asked and nothing was recorded.')
+  expect(await call($ as never, leave(0, { repo: 'o/r' }))).toBe('"0" is not a PR number, so Dan was not asked and nothing was recorded.')
+  expect(w.asked).toEqual([])
 })
 
 test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
@@ -1796,6 +1892,16 @@ test('while asleep no build is not switched by asking Dan (#841)', withDeps, asy
   expect(w.asked).toEqual([])
   expect(lastModes(w)).toEqual(['ASLEEP', 'NO BUILD'])
   expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'question', questions: ['Claude wants to edit app.ts. Switch to build?'] })
+})
+
+test('while asleep no PR is left open by asking Dan: the question waits for his morning report (#917, #841)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, ask: 'Leave it open' })
+  w.o.gh = { ...merged(), others: [openPr(31, 'aaa1111')] }
+  await start($ as never, clock)
+  const r = await call($ as never, leave(31, { repo: 'o/r' }))
+  expect(r).toBe('Dan is asleep (sleep mode), so he was not asked and nothing was recorded: winding down still waits on PR #31 in o/r. The question is noted for his morning report.')
+  expect(w.asked).toEqual([])
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'question', questions: ["Leave PR #31 in o/r open (awaiting Denys's review)? Winding down stops waiting on it until it is pushed to again."] })
 })
 
 // Another mod (the goal tracker, ask before saving) asking the noun whether the Mac is asleep, and

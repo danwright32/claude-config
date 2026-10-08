@@ -11,6 +11,11 @@ export type ScopeModesHeld = { id: string; label: string; prompt: string }
 export type ScopeModesTarget = { root: string; branch: string; isDefault: boolean; issues: number[]; pr: number | null; closes?: number[] }
 /** A PR this session opened (a `gh pr create` by the session or any of its agents), in the repository its link names. */
 export type ScopeModesOpened = { repo: string; number: number; closes?: number[] }
+/**
+ * A PR Dan himself chose to leave open (#917), from his answer to leave_pr_open: the repository and
+ * number, the head commit it was on when he answered (a new push asks again), and why, as asked.
+ */
+export type ScopeModesLeftOpen = { repo: string; number: number; head: string; why: string }
 
 /** Called from another mod (manual steps, #614, holds its items here while Dan is away): await it. */
 export type ScopeModes = {
@@ -57,6 +62,8 @@ declare module 'claude-code' {
       target: ScopeModesTarget | null | { unreadable: string }
       /** The PRs this session opened, which winding down finishes when the session's own branch has none (#702). */
       opened: ScopeModesOpened[]
+      /** The PRs Dan chose to leave open (#917), which winding down counts settled at that head. */
+      leftOpen: ScopeModesLeftOpen[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
     }

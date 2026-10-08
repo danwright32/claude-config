@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { ScopeModes, ScopeModesHeld, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
+import type { ScopeModes, ScopeModesHeld, ScopeModesLeftOpen, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
@@ -54,7 +54,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
-import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
+import { issuesOfBranch, keptOpen, leftOpenFor, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
 // bar holds ONE list of modes for the band's amber line (no build or winding down, and away, can be
@@ -87,13 +87,17 @@ const heldSeqRef = { plugin: 'scope-modes', key: 'heldSeq' } as const
 const targetRef = { plugin: 'scope-modes', key: 'target' } as const
 const justHomeRef = { plugin: 'scope-modes', key: 'justHome' } as const
 const openedRef = { plugin: 'scope-modes', key: 'opened' } as const
+const leftOpenRef = { plugin: 'scope-modes', key: 'leftOpen' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
 let ticking = false
 let statusNoted = false
 // One finish check at a time: the turn end and the minute's tick share whichever is running.
-let checking: Promise<string[] | null> | undefined
+let checking: Promise<Checked | null> | undefined
+// What the finish check found: what is still to do, and the PRs settled by being left open on
+// Dan's own choice (#917), said apart from what is outstanding.
+type Checked = { left: string[]; kept: string[] }
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
 
@@ -1603,7 +1607,7 @@ const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
   return { root: repo.root, branch, isDefault, issues: issuesOfBranch(branch), pr: null }
 }
 
-type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; closingIssuesReferences?: { number?: number }[] }
+type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences?: { number?: number }[] }
 
 type IsItLiveNoun = { verdict: (q: { repo: string; pr: number }) => Promise<{ state: DeployState } | null> }
 
@@ -1629,7 +1633,7 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
 // The PR a reading found, and the issues it closes, which the caller keeps for later checks; its
 // link, when GitHub gave one, is what tells it apart from a PR this session opened (#856).
 type Found = { number: number; closes: number[]; url?: string }
-const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName'
+const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefOid'
 
 // What the finish check reads for one PR: the branch's own (found by its head) or one named by
 // number, in `repo` when given (a PR this session opened, read in the repository its link names).
@@ -1669,7 +1673,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
         const s = (JSON.parse(v.stdout) as { state?: string }).state
         issues.push({ number: ref.number, state: s === 'CLOSED' ? 'CLOSED' : 'OPEN' })
       }
-      r.pr = { number: pr.number, state, issues }
+      r.pr = { number: pr.number, state, ...(typeof pr.headRefOid === 'string' && pr.headRefOid ? { head: pr.headRefOid } : {}), issues }
       prUrl = typeof pr.url === 'string' ? pr.url : undefined
       found = { number: pr.number, closes: issues.map(i => i.number), url: prUrl }
     }
@@ -1721,20 +1725,26 @@ const keepFound = async ($: EngineInterface, t: ScopeModesTarget, found: Found |
   return kept
 }
 
-// What is still to do, or null when winding down is not on.
-const check = ($: EngineInterface): Promise<string[] | null> => {
+const leftOpenOf = async ($: EngineInterface) => (await $.state.get(leftOpenRef)).value ?? []
+// owner/name a PR's link names, or undefined for no link.
+const repoOfLink = (url: string | undefined) => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+$/i.exec(url ?? '')?.[1]
+// How a PR left open on Dan's choice is listed: by number, repository and the reason he was asked about.
+const keptLine = (d: ScopeModesLeftOpen) => `PR #${d.number} in ${d.repo} (${d.why})`
+
+// What is still to do and what Dan chose to leave open, or null when winding down is not on.
+const check = ($: EngineInterface): Promise<Checked | null> => {
   if (checking) return checking
-  checking = (async () => {
+  checking = (async (): Promise<Checked | null> => {
     if ((await scopeOf($)) !== 'WINDING DOWN') return null
     let t = (await $.state.get(targetRef)).value ?? null
     if (t && 'unreadable' in t) {
       const again = await readTarget($)
       await $.state.set(targetRef, again)
-      if (again && 'unreadable' in again) return [`what this session is working on could not be read (${again.unreadable})`]
+      if (again && 'unreadable' in again) return { left: [`what this session is working on could not be read (${again.unreadable})`], kept: [] }
       t = again
     }
     // Outside a repository there is no PR, branch or deploy to finish.
-    if (!t) return []
+    if (!t) return { left: [], kept: [] }
     // A check that throws must refuse the turn end: a Stop hook that fails is skipped, which would
     // let the turn end unfinished (L42).
     try {
@@ -1749,7 +1759,18 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
       }
       const { reading, found } = await readWind($, t)
       t = await keepFound($, t, found)
-      const left = outstanding(reading)
+      // A PR is left open only on Dan's own answer to leave_pr_open, recorded against its repository,
+      // number and head (#917); with none recorded, #856's default holds and it is outstanding.
+      const choices = await leftOpenOf($)
+      const kept: string[] = []
+      const toDo = (r: Reading, repo: string | undefined) => {
+        const pr = r.pr
+        const d = repo && pr && !('unreadable' in pr) ? leftOpenFor(choices, repo, pr.number) : undefined
+        const withChoice = d ? { ...r, leftOpen: d } : r
+        if (d && keptOpen(withChoice)) kept.push(keptLine(d))
+        return outstanding(withChoice)
+      }
+      const left = toDo(reading, repoOfLink(found?.url) ?? (choices.length ? await sessionSlug($) : undefined))
       // Winding down finalizes everything the session has open, so every PR this session opened is
       // outstanding until merged, whether or not the session's own branch has a PR (#856: a session
       // whose branch PR was finished parked three PRs it had opened "waiting on you"). An agent's in a
@@ -1771,12 +1792,12 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
         }
-        left.push(...outstanding(one.reading))
+        left.push(...toDo(one.reading, o.repo))
       }
       // One unreadable GitHub answers every read the same way, said once.
-      return [...new Set(left)]
+      return { left: [...new Set(left)], kept }
     } catch (err) {
-      return [`the finish check failed (${msg(err)})`]
+      return { left: [`the finish check failed (${msg(err)})`], kept: [] }
     }
   })().finally(() => {
     checking = undefined
@@ -1784,11 +1805,64 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
   return checking
 }
 
-const finish = async ($: EngineInterface) => {
+const finish = async ($: EngineInterface, kept: readonly string[]) => {
   await $.state.set(scopeRef, null)
   await $.state.set(targetRef, null)
   await showModes($)
-  $.ui.toast('Wind down finished: safe to close this session.')
+  $.ui.toast(`Wind down finished: safe to close this session.${kept.length ? ` Left open by your choice: ${kept.join('; ')}.` : ''}`)
+}
+
+// leave_pr_open (#917): asks Dan whether a PR stays open, and records only his own "Leave it open",
+// against the PR's repository, number and the head commit read before he was asked, so a push after
+// his answer is asked about again. Any other answer withdraws an earlier choice: with none, winding
+// down waits on the PR until it is merged (#856). Nothing is asked while Dan is asleep (#841), nor
+// about a PR that cannot be read or is not open, and then nothing is recorded.
+const LEAVE_IT_OPEN = 'Leave it open'
+const MERGE_IT = 'Merge it'
+const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): Promise<string> => {
+  const number = Number(input.pr)
+  if (!Number.isInteger(number) || number <= 0) return `"${String(input.pr ?? '')}" is not a PR number, so Dan was not asked and nothing was recorded.`
+  const named = String(input.repo ?? '').trim()
+  if (named && !/^[\w.-]+\/[\w.-]+$/.test(named)) return `"${named}" is not a repository (owner/name), so Dan was not asked and nothing was recorded.`
+  const repo = named || (await sessionSlug($))
+  if (!repo) return "This session's repository could not be read, so name the PR's repository (owner/name). Dan was not asked and nothing was recorded."
+  const why = String(input.why ?? '').trim().replace(/[.?]+$/, '') || 'no reason given'
+  const pr = `PR #${number} in ${repo}`
+  const unread = (reason: string) => `${pr} could not be read (${reason}), so Dan was not asked and nothing was recorded: winding down still waits on it.`
+  const res = await $.process.run(['gh', 'pr', 'view', String(number), '--repo', repo, '--json', 'number,state,url,headRefOid'], { timeoutMs: RUN_MS }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
+  if (res.exitCode !== 0) return unread(res.stderr.trim() || `gh exited ${res.exitCode}`)
+  let read: PrJson
+  try {
+    read = JSON.parse(res.stdout) as PrJson
+  } catch {
+    return unread('GitHub answered something that is not JSON')
+  }
+  if (read.state !== 'OPEN') return `${pr} is ${String(read.state ?? 'in a state GitHub did not give')}, so there is nothing to leave open. Nothing was asked.`
+  const head = typeof read.headRefOid === 'string' ? read.headRefOid : ''
+  if (!head) return unread('GitHub gave no head commit')
+  const question = `Leave ${pr} open (${why})? Winding down stops waiting on it until it is pushed to again.`
+  const sleeping = await sleepNow($)
+  if (sleeping.state === 'asleep') {
+    const failed = await noteQuestion($, [question])
+    return `Dan is asleep (sleep mode), so he was not asked and nothing was recorded: winding down still waits on ${pr}. ${
+      failed === null ? 'The question is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put it in your final message.`
+    }`
+  }
+  let answer: string
+  try {
+    answer = await $.ui.ask(question, [LEAVE_IT_OPEN, MERGE_IT])
+  } catch (err) {
+    return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
+  }
+  const others = (await leftOpenOf($)).filter(d => !(d.number === number && d.repo.toLowerCase() === repo.toLowerCase()))
+  if (answer === LEAVE_IT_OPEN) {
+    await $.state.set(leftOpenRef, [...others, { repo, number, head, why }])
+    return `Dan chose to leave ${pr} open at ${head.slice(0, 7)}: winding down counts it settled until it is pushed to again.`
+  }
+  // Only his "Leave it open" leaves it open: a merge answer or anything typed withdraws an earlier one.
+  await $.state.set(leftOpenRef, others)
+  if (answer === MERGE_IT) return `Dan said merge it: winding down waits on ${pr} until it is merged.`
+  return `Dan did not choose to leave ${pr} open, so winding down still waits on it. He wrote: ${answer}`
 }
 
 const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
@@ -1930,7 +2004,9 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
 
 // What winding down means, said the same way in its note, its command's context and the Stop
 // reason (#856): a session read "start nothing new" as permission to park a PR needing Dan.
-const FINALIZE_ALL = 'Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan.'
+// #917: the one way a PR stays open, and only on Dan's own answer, never Claude's reading of one.
+const FINALIZE_ALL =
+  "Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again."
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
@@ -2017,13 +2093,27 @@ export const register: Register = on => {
         'While no build is on, ask Dan whether to switch to build. Name the change you would make. Only his yes turns no build off; call it once after a no build refusal, never again for the same change after a no.',
       inputSchema: { type: 'object', properties: { change: { type: 'string', description: 'What you would change, as a short phrase ("edit app.ts to fix the date parse")' } }, required: ['change'] },
     })
+    await $.tool.register({
+      name: 'leave_pr_open',
+      description:
+        "Ask Dan whether an open PR stays open rather than being merged, for when he may want it left (a reviewer outside this session, say). Only his \"Leave it open\" is recorded, against the PR's current head, and winding down then counts it settled until it is pushed to again. Every other PR is merged; never call this to end a turn sooner.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pr: { type: 'number', description: 'The PR number' },
+          repo: { type: 'string', description: "The PR's repository as owner/name; this session's own when left out" },
+          why: { type: 'string', description: 'What it would stay open for, as a short phrase ("awaiting Denys\'s review")' },
+        },
+        required: ['pr', 'why'],
+      },
+    })
     if (!ticking) {
       ticking = true
       // Winding down ends itself once it is live, watched each minute rather than only at turn end.
       $.clock.every(MIN, async () => {
         try {
-          const left = await check($)
-          if (left && left.length === 0) await finish($)
+          const c = await check($)
+          if (c && c.left.length === 0) await finish($, c.kept)
         } catch (err) {
           $.ui.log(`scope-modes: the wind down check failed: ${msg(err)}`, { to: 'debug' })
         }
@@ -2234,6 +2324,14 @@ export const register: Register = on => {
       return { result: text, text }
     }
 
+    if (tool === 'mcp__scope-modes__leave_pr_open') {
+      // Answered here, after mod-kit's screen, as switch_to_build is (#707): the reason is shown to Dan.
+      const refused = await $.modkit.screen(e)
+      if (refused) return refused
+      const text = await leavePrOpen($, input)
+      return { result: text, text }
+    }
+
     // A call that may open a PR is watched whatever mode is on, so winding down later knows what this
     // session opened. The words are a cheap first look; the reader decides.
     const raw = tool === 'Bash' ? String(input.command ?? '') : ''
@@ -2374,14 +2472,16 @@ export const register: Register = on => {
     // An enrolled session while the Mac sleeps is the overnight driver's (#844): kept working, or let go with a note.
     const driven = await driveStop($)
     if (driven !== 'not-driven') return driven ?? next(e)
-    const left = await check($)
-    if (left === null) return next(e)
-    if (left.length === 0) {
-      await finish($)
+    const c = await check($)
+    if (c === null) return next(e)
+    if (c.left.length === 0) {
+      await finish($, c.kept)
       return next(e)
     }
+    // A PR Dan chose to leave open is said apart, never as outstanding (#917).
+    const kept = c.kept.length ? ` Left open by Dan's choice: ${c.kept.join('; ')}.` : ''
     return {
-      block: `Winding down is not finished: ${left.join('; ')}. ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
+      block: `Winding down is not finished: ${c.left.join('; ')}.${kept} ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
     }
   })
 
@@ -2402,6 +2502,7 @@ export const register: Register = on => {
     await $.state.set(scopeRef, null)
     await $.state.set(targetRef, null)
     await $.state.set(openedRef, [] as ScopeModesOpened[])
+    await $.state.set(leftOpenRef, [] as ScopeModesLeftOpen[])
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)
     await $.state.set(heldRef, [] as ScopeModesHeld[])

@@ -740,6 +740,21 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   waiting on Dan, and when a decision or sign off is needed Claude asks him right then with an
   AskUserQuestion picker, one question at a time, and merges once he answers. Asking is never new
   work, so AskUserQuestion is never refused while winding down.
+- A PR Dan chose to leave open (#917). On 2026-10-07 a session asked Dan twice through a picker
+  and he chose both times to leave a partner repository's PR for its reviewer, and winding down
+  still refused every turn end. The one way a PR stays open is Dan's own answer to the mod's
+  `leave_pr_open` tool, never a reading of anything else: it reads the PR's head commit first, asks
+  "Leave PR #N in owner/name open (why)? Winding down stops waiting on it until it is pushed to
+  again." with Leave it open or Merge it, and records only his Leave it open, as `leftOpen` (the
+  repository, number, that head and why). The finish check matches each PR it reads against that
+  record by repository and number and compares its head: the same head is settled, said apart as
+  "Left open by Dan's choice" in the turn end refusal and the finish toast; a new head is
+  outstanding ("has new commits since Dan chose to leave it open"), so his answer never covers
+  commits he was not asked about; a head GitHub did not give is outstanding and says so. With no
+  record, #856's default holds. Any answer but Leave it open withdraws an earlier one. A picker
+  Claude asks itself through AskUserQuestion is never read as his choice, since which PR it was
+  about and what the answer meant would be inferred. Nothing is asked about a PR that cannot be
+  read or is not open, and while Dan is asleep the question is noted for his morning report.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app
   forward, cliclick and Peekaboo. Since the milestone audit (#702) also an AppleScript dialog
   (`display dialog`, `display alert`, `choose file` and the like; a notification banner takes no

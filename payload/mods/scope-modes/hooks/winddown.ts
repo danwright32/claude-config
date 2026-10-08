@@ -1,12 +1,22 @@
+import type { ScopeModesLeftOpen } from '../types/index.d.ts'
 import type { Cmd } from './nobuild.ts'
 
 // Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
 // or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
 // what blocks this issue's merge or deploy is allowed; starting new work is denied. Asking Dan
 // (AskUserQuestion) is never new work: winding down finalizes everything the session has open, so a
-// PR needing his sign off is asked about and merged, never parked waiting on him (#856).
+// PR needing his sign off is asked about and merged, never parked waiting on him (#856). The one
+// exception is Dan's own answer (#917): a PR he chose to leave open, recorded from his answer to
+// leave_pr_open against the commit the PR was on, is settled until it is pushed to again.
 
 export type Refusal = { what: string }
+
+/** Dan's own answer that a PR stays open (#917), recorded where he gave it, against its head commit. */
+export type LeftOpen = ScopeModesLeftOpen
+
+/** Dan's choice about this PR, by repository (in any case) and number, or undefined when he made none. */
+export const leftOpenFor = (all: readonly LeftOpen[], repo: string, number: number): LeftOpen | undefined =>
+  all.find(d => d.number === number && d.repo.toLowerCase() === repo.toLowerCase())
 type Unreadable = { unreadable: string }
 const isUnreadable = (v: unknown): v is Unreadable => !!v && typeof v === 'object' && 'unreadable' in v
 
@@ -15,7 +25,10 @@ export type Reading = {
   branch: string
   /** Whether the branch is the repository's default branch, where no PR is expected. */
   isDefault: boolean
-  pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; issues: { number: number; state: 'OPEN' | 'CLOSED' }[] } | null | Unreadable
+  /** `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none. */
+  pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[] } | null | Unreadable
+  /** Dan's choice to leave this PR open, when he made one (#917); never inferred. */
+  leftOpen?: LeftOpen
   branchHere: boolean | Unreadable
   branchOnGitHub: boolean | Unreadable
   worktreeOnBranch: boolean | Unreadable
@@ -55,7 +68,15 @@ export const outstanding = (r: Reading): string[] => {
     else if (r.dirty) out.push('there are uncommitted changes')
     return out
   }
-  if (r.pr.state === 'OPEN') return [`PR #${r.pr.number} is not merged yet`]
+  if (r.pr.state === 'OPEN') {
+    const d = r.leftOpen
+    // Nobody decided: #856's default, an open PR is outstanding until merged.
+    if (!d) return [`PR #${r.pr.number} is not merged yet`]
+    if (keptOpen(r)) return []
+    if (!r.pr.head) return [`PR #${r.pr.number}'s latest commit could not be read, so Dan's choice to leave it open cannot be matched to it`]
+    // His answer was about the commits he was asked about, never ones pushed since.
+    return [`PR #${r.pr.number} has new commits since Dan chose to leave it open: merge it, or ask him again (mcp__scope-modes__leave_pr_open)`]
+  }
   if (r.pr.state === 'CLOSED') return [`PR #${r.pr.number} was closed without merging; ask Dan what to do`]
   const d = r.deploy
   if (d === null) out.push(`PR #${r.pr.number} has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)`)
@@ -77,6 +98,12 @@ export const outstanding = (r: Reading): string[] => {
   }
   for (const i of r.pr.issues) if (i.state !== 'CLOSED') out.push(`issue #${i.number} is still open`)
   return out
+}
+
+/** Whether this reading is a PR still open on Dan's own choice, made at the commit it is on now (#917). */
+export function keptOpen(r: Reading): boolean {
+  const pr = r.pr
+  return !!pr && !isUnreadable(pr) && pr.state === 'OPEN' && !!r.leftOpen && !!pr.head && pr.head === r.leftOpen.head
 }
 
 /** The issue numbers a branch name carries (`scope-modes-616-621`, `feat/620-addon-notes`). */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { issuesOfBranch, newWork, outstanding, type Reading } from '../hooks/winddown.ts'
+import { issuesOfBranch, keptOpen, leftOpenFor, newWork, outstanding, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
 const bash = (...lines: string[][]) => newWork({ tool: 'Bash', input: {}, commands: lines.map(words => ({ words, git: gitOf(words) })), issues: [616] })
@@ -99,5 +99,45 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
   test('a reading that failed is never read as done (L215)', () => {
     expect(outstanding({ ...merged, pr: { unreadable: 'gh: HTTP 502' } })).toEqual(['the PR could not be read (gh: HTTP 502)'])
     expect(outstanding({ ...merged, branchOnGitHub: { unreadable: 'could not reach origin' } })).toEqual(['whether scope-modes-616 is gone from GitHub could not be read (could not reach origin)'])
+  })
+})
+
+// #917: a PR Dan himself chose to leave open is settled, recorded from his own answer against the
+// PR's head, so a new push asks again. Nobody's decision keeps #856's default: not merged yet.
+describe('a PR Dan chose to leave open (#917)', () => {
+  const choice: LeftOpen = { repo: 'o/r', number: 12, head: 'aaa1111', why: "awaiting Denys's review" }
+  const open = (head?: string): Reading => ({ ...merged, pr: { number: 12, state: 'OPEN', head, issues: [{ number: 616, state: 'OPEN' }] }, deploy: null })
+  test('left open by Dan at the head it has now is settled, its open issue and branch included', () => {
+    const r = { ...open('aaa1111'), leftOpen: choice }
+    expect(outstanding(r)).toEqual([])
+    expect(keptOpen(r)).toBe(true)
+  })
+  test('nobody decided: still not merged yet (#856)', () => {
+    expect(outstanding(open('aaa1111'))).toEqual(['PR #12 is not merged yet'])
+    expect(keptOpen(open('aaa1111'))).toBe(false)
+  })
+  test('pushed to since Dan chose: asked again, never carried over to the new commits', () => {
+    const r = { ...open('bbb2222'), leftOpen: choice }
+    expect(outstanding(r)).toEqual(['PR #12 has new commits since Dan chose to leave it open: merge it, or ask him again (mcp__scope-modes__leave_pr_open)'])
+    expect(keptOpen(r)).toBe(false)
+  })
+  test('a head GitHub did not give cannot be matched to his choice, and says so (L11)', () => {
+    const r = { ...open(undefined), leftOpen: choice }
+    expect(outstanding(r)).toEqual(["PR #12's latest commit could not be read, so Dan's choice to leave it open cannot be matched to it"])
+    expect(keptOpen(r)).toBe(false)
+  })
+  test('a choice about a PR since merged or closed changes nothing about finishing it', () => {
+    const done = { number: 12, state: 'MERGED' as const, head: 'aaa1111', issues: [{ number: 616, state: 'CLOSED' as const }] }
+    expect(outstanding({ ...merged, pr: done, leftOpen: choice })).toEqual([])
+    expect(keptOpen({ ...merged, pr: done, leftOpen: choice })).toBe(false)
+    expect(outstanding({ ...merged, pr: done, deploy: null, leftOpen: choice })).toEqual(['PR #12 has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)'])
+    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', head: 'aaa1111', issues: [] }, leftOpen: choice })).toEqual(['PR #12 was closed without merging; ask Dan what to do'])
+  })
+  test('found by repository and number: the same number in another repository is another PR', () => {
+    const all: LeftOpen[] = [choice, { ...choice, repo: 'o/other', number: 31 }]
+    expect(leftOpenFor(all, 'O/R', 12)).toEqual(choice)
+    expect(leftOpenFor(all, 'o/other', 12)).toBeUndefined()
+    expect(leftOpenFor(all, 'o/r', 31)).toBeUndefined()
+    expect(leftOpenFor([], 'o/r', 12)).toBeUndefined()
   })
 })
