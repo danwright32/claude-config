@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Cmd } from '../hooks/nobuild.ts'
-import { actsOf, addAnswer, HOLD_MERGES, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Scripts, type Where } from '../hooks/mergedeploy.ts'
+import { actsOf, addAnswer, HOLD_MERGES, isListed, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Scripts, type Where } from '../hooks/mergedeploy.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 
 // Sleep mode phase 7 (#843). Commands are read by mod-kit's own reader (its byte for byte copy
@@ -114,6 +114,59 @@ describe('what each repository may do tonight', () => {
     expect(refusalOf(merge, loud)).toBe('a merge in Try-Pennie/slate deploys, so it is never merged overnight')
     // A direct push to a default branch is refused in every repository, deploying ones included.
     for (const p of [deploy, quiet, loud]) expect(refusalOf(push, p)).toMatch(/never made overnight/)
+  })
+})
+
+describe('an owner whose every repository waits overnight (waitOwners)', () => {
+  // Dan, 2026-10-07: "Move ANYTHING in halo-lab-trypennie to the wait list automatically. Nothing
+  // in that account should merge overnight". Waiting is no merge and no deploy.
+  const OWNED = JSON.stringify({
+    v: 1,
+    waitOwners: ['Halo-lab-Trypennie'],
+    mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }, { repo: 'Halo-lab-Trypennie/quiet', mergeDeploys: false }],
+    mayDeploy: ['o/deploys', 'Halo-lab-Trypennie/listed'],
+  })
+  const night = nightRepos(readRepoLists(OWNED), [])
+  const waits = (repo: string) => {
+    const p = policyOf(night, repo)
+    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, p)).toMatch(/every repository owned by Halo-lab-Trypennie waits overnight/)
+    expect(refusalOf({ kind: 'deploy', what: 'deploy' }, p)).toMatch(/neither merges nor deploys/)
+  }
+  test('a repository under that owner that no list names, one added later, waits', () => {
+    waits('Halo-lab-Trypennie/added-next-year')
+  })
+  test('the owner matches in any case', () => {
+    waits('halo-lab-trypennie/trypennie')
+    waits('HALO-LAB-TRYPENNIE/Trypennie')
+    const shouty = nightRepos(readRepoLists(OWNED.replace('"Halo-lab-Trypennie"]', '"HALO-LAB-trypennie"]')), [])
+    expect(policyOf(shouty, 'Halo-lab-Trypennie/trypennie')).toMatchObject({ kind: 'closed' })
+  })
+  test('a mayDeploy or merge only entry under that owner is a conflict, and it still waits', () => {
+    waits('Halo-lab-Trypennie/listed')
+    waits('Halo-lab-Trypennie/quiet')
+  })
+  test('only that owner: another owner, and a name that merely starts with it, keep their lists', () => {
+    expect(policyOf(night, 'o/deploys')).toEqual({ kind: 'deploy', repo: 'o/deploys' })
+    expect(policyOf(night, 'Halo-lab-Trypennie-other/x')).toMatchObject({ kind: 'closed', why: 'Halo-lab-Trypennie-other/x is on neither list in mods/sleep-repos.json' })
+  })
+  test('a repository under that owner is decided, so it is never asked about at bedtime, and an answer for it is refused', () => {
+    const r = readRepoLists(OWNED)
+    expect('lists' in r && isListed(r.lists, 'halo-lab-trypennie/new')).toBe(true)
+    expect(addAnswer(OWNED, 'Halo-lab-Trypennie/new', MAY_DEPLOY)).toEqual({ why: 'Halo-lab-Trypennie/new is already listed' })
+  })
+  test('a waitOwners that is not a list of owner names closes every repository, never a partial rule', () => {
+    const why = (t: string) => {
+      const r = readRepoLists(t)
+      return 'why' in r ? r.why : 'read'
+    }
+    expect(why('{"v":1,"waitOwners":"Halo-lab-Trypennie","mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.json has a waitOwners that is not a list')
+    expect(why('{"v":1,"waitOwners":["Halo-lab-Trypennie/trypennie"],"mergeOnly":[],"mayDeploy":[]}')).toMatch(/waitOwners entry that is not an owner name/)
+    expect(why('{"v":1,"mergeOnly":[],"mayDeploy":[]}')).toBe('read')
+  })
+  test('the record carries the owners, and a record from before them still reads', () => {
+    expect(night.waitOwners).toEqual(['Halo-lab-Trypennie'])
+    expect(nightRepos(readRepoLists(LISTS), []).waitOwners).toBeUndefined()
+    expect(policyOf({ mayDeploy: [], mergeOnly: [], closed: [], waitOwners: 'Halo-lab-Trypennie' }, 'o/x')).toMatchObject({ kind: 'closed', why: 'the sleep record carries no merge and deploy lists' })
   })
 })
 

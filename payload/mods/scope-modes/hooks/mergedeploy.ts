@@ -11,6 +11,12 @@ import { resolveDir } from './overnight.ts'
 // deploys (`mergeDeploys: true`), or whose file does not say (`unknown`, L72), is refused the merge too, leaving the
 // green PR open for the morning (Dan's decision 6, 2026-10-06).
 //
+// A third, optional list, `waitOwners`, names GitHub owners every one of whose repositories waits
+// overnight, no merge and no deploy, including ones no list names and ones made later (Dan,
+// 2026-10-07: "Move ANYTHING in halo-lab-trypennie to the wait list automatically. Nothing in that
+// account should merge overnight"). It matches the owner in any case and outranks both lists, so an
+// entry under such an owner on either list is a conflict that waits (L42).
+//
 // Everything without an answer fails closed, no merge and no deploy for the night (L42): a file
 // missing or unreadable, a repository on both lists or on neither, an entry GitHub does not know,
 // a question at bedtime left unanswered, and a repository first met after sleep began. /sleep reads
@@ -27,18 +33,24 @@ import { resolveDir } from './overnight.ts'
  */
 export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown' }
 /** The shared file, as read. */
-export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[] }
+export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[]; waitOwners: string[] }
 /** A repository closed for the night, and why, for the refusal and the morning report. */
 export type ClosedRepo = { repo: string; why: string }
 /** What the sleep record carries for the night (`repos`): the lists as settled at bedtime. */
-export type NightRepos = { mayDeploy: string[]; mergeOnly: RepoEntry[]; closed: ClosedRepo[]; listWhy?: string }
+export type NightRepos = { mayDeploy: string[]; mergeOnly: RepoEntry[]; closed: ClosedRepo[]; waitOwners?: string[]; listWhy?: string }
 
 /** What a repository may do tonight. */
 export type Policy = { kind: 'deploy'; repo: string } | { kind: 'merge-only'; repo: string; mergeDeploys: boolean | 'unknown' } | { kind: 'closed'; repo?: string; why: string }
 
 export const REPO_LIST_FILE = 'mods/sleep-repos.json'
 const SLUG = /^[\w.-]+\/[\w.-]+$/
+const OWNER = /^[\w.-]+$/
 const key = (repo: string) => repo.toLowerCase()
+/** The owner of `repo` when it is one of `owners`, in any case; else undefined. */
+const waitingOwner = (owners: string[], repo: string): string | undefined => {
+  const owner = key(repo.split('/')[0] ?? '')
+  return owners.find(o => key(o) === owner)
+}
 
 /** The shared file's text (null when there is none) as lists, or why it cannot be trusted at all. */
 export const readRepoLists = (text: string | null): { lists: RepoLists } | { why: string } => {
@@ -66,7 +78,15 @@ export const readRepoLists = (text: string | null): { lists: RepoLists } | { why
     // Unsaid is the strict answer: a merge is taken to deploy until the file says it does not (L72).
     mergeOnly.push({ repo: o.repo, mergeDeploys: o.mergeDeploys === undefined ? 'unknown' : o.mergeDeploys })
   }
-  return { lists: { mayDeploy, mergeOnly } }
+  const waitOwners: string[] = []
+  if (r.waitOwners !== undefined) {
+    if (!Array.isArray(r.waitOwners)) return { why: `${REPO_LIST_FILE} has a waitOwners that is not a list` }
+    for (const e of r.waitOwners) {
+      if (typeof e !== 'string' || !OWNER.test(e)) return { why: `${REPO_LIST_FILE} has a waitOwners entry that is not an owner name: ${JSON.stringify(e)}` }
+      waitOwners.push(e)
+    }
+  }
+  return { lists: { mayDeploy, mergeOnly, waitOwners } }
 }
 
 /** Every repository the lists name, once each, for the bedtime check that GitHub knows them. */
@@ -76,8 +96,9 @@ export const listedRepos = (lists: RepoLists): string[] => {
   return [...seen.values()]
 }
 
-/** Whether a repository is on either list. */
-export const isListed = (lists: RepoLists, repo: string): boolean => listedRepos(lists).some(r => key(r) === key(repo))
+/** Whether the file decides a repository: on either list, or under an owner that waits. */
+export const isListed = (lists: RepoLists, repo: string): boolean =>
+  waitingOwner(lists.waitOwners, repo) !== undefined || listedRepos(lists).some(r => key(r) === key(repo))
 
 /**
  * The night's lists as the sleep record carries them, from the file as read at bedtime, the
@@ -94,22 +115,34 @@ export const nightRepos = (read: { lists: RepoLists } | { why: string }, closed:
     mayDeploy: read.lists.mayDeploy.filter(r => !shut.has(key(r))),
     mergeOnly: read.lists.mergeOnly.filter(e => !shut.has(key(e.repo))),
     closed: [...shut.values()],
+    ...(read.lists.waitOwners.length ? { waitOwners: read.lists.waitOwners } : {}),
   }
 }
 
 const isNight = (n: unknown): n is NightRepos => {
   const o = n as NightRepos | null
-  return !!o && typeof o === 'object' && Array.isArray(o.mayDeploy) && Array.isArray(o.mergeOnly) && Array.isArray(o.closed)
+  return (
+    !!o &&
+    typeof o === 'object' &&
+    Array.isArray(o.mayDeploy) &&
+    Array.isArray(o.mergeOnly) &&
+    Array.isArray(o.closed) &&
+    (o.waitOwners === undefined || (Array.isArray(o.waitOwners) && o.waitOwners.every(w => typeof w === 'string')))
+  )
 }
 
 /**
  * What `repo` may do tonight, from the lists the sleep record carries. No lists (a record written
- * before this phase), a repository that could not be told, and one on neither list are all closed.
+ * before this phase), a repository that could not be told, one under an owner that waits, and one
+ * on neither list are all closed.
  */
 export const policyOf = (night: unknown, repo: string | undefined): Policy => {
   if (!isNight(night)) return { kind: 'closed', ...(repo ? { repo } : {}), why: 'the sleep record carries no merge and deploy lists' }
   if (!repo) return { kind: 'closed', why: 'which repository this reaches could not be told' }
   if (night.listWhy) return { kind: 'closed', repo, why: night.listWhy }
+  // Before either list: an owner that waits outranks any entry under it.
+  const owner = waitingOwner(night.waitOwners ?? [], repo)
+  if (owner) return { kind: 'closed', repo, why: `every repository owned by ${owner} waits overnight (waitOwners in ${REPO_LIST_FILE})` }
   const shut = night.closed.find(c => key(c.repo) === key(repo))
   if (shut) return { kind: 'closed', repo, why: shut.why }
   if (night.mayDeploy.some(r => key(r) === key(repo))) return { kind: 'deploy', repo }
