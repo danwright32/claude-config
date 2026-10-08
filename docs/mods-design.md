@@ -179,7 +179,14 @@ substitution never closed is read to the end of its text, the side that asks. A 
 <<'EOF' ... EOF)"` names nothing. Two readings are knowingly loose: where the command changes folder
 (`cd`, `pushd`, `popd`) a relative path in a substitution is left as written, since it may run
 before the change or after; and a variable the command sets is not followed into a substitution,
-so a path through one stays as written. Not read yet: a process substitution (`<(...)`).
+so a path through one stays as written. Since #975 a process substitution (`<(...)`, `>(...)`) is
+read the same way, outside double quotes and heredoc bodies, where it is text; given as an operand
+(`tee >(cmd)`) it is a pipe, never a file. A program fed an unquoted heredoc (`bash <<EOF`) reads the
+body as the shell expanded it, the backslash taken off an escaped `$`, backtick or backslash and an
+escaped line end joined, so `\$(rm x)` there reaches a shell as `$(rm x)` and is read as run; a
+quoted body is read as written. And a substitution is one word with the word it sits in, its spaces,
+quotes and redirects included, where before `x=$(npm publish)` also gave a command named `publish)`
+and `$(echo > a.md)` a file named `a.md)`.
 
 Since #974 the substitutions are read once, by the command reader, and both readers build on that
 one reading (L613). `readLine` (mod-kit `hooks/commands.ts`) gives a command line as its commands

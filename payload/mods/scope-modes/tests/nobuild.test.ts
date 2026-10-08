@@ -677,3 +677,32 @@ describe('no build: what a command substitution runs (#974)', () => {
     expect(run("echo \"$(cat <<'EOF'\nthen $(git push)\nEOF\n)\"")).toBeUndefined()
   })
 })
+
+// #975: a write inside a script a second shell runs (its -c, a quoted heredoc or a script on standard
+// input), redirect or substitution, and one inside a process substitution, <(...) or >(...), is read
+// by mod-kit's write reader, so no build refuses it. A quoted heredoc fed to a program that is not a
+// shell is data.
+describe('no build: a write in a shell script or a process substitution (#975)', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test("in a shell's -c, a quoted heredoc it runs, a script piped to it, or a process substitution, it is refused", () => {
+    const writes = [
+      "bash -c 'echo x > /repo/app.ts'",
+      "sh -c 'echo \"$(rm /repo/app.ts)\"'",
+      "zsh -c 'echo \"`echo x >> /repo/app.ts`\"'",
+      "bash <<'EOF'\necho x > /repo/app.ts\nEOF",
+      "sh <<'EOF'\nx=$(rm /repo/app.ts)\nEOF",
+      // Unquoted, the outer shell takes the escape off, and the shell fed the body runs it.
+      'bash <<EOF\necho \\$(rm /repo/app.ts)\nEOF',
+      "echo 'rm /repo/app.ts' | bash",
+      'diff <(rm /repo/app.ts) b.txt',
+      'tee >(cat > /repo/app.ts) < b.txt',
+    ]
+    for (const command of writes) expect(`${command}: ${what(run(command))}`).toMatch(/: (write to|remove) app\.ts$/)
+  })
+  test('a quoted heredoc fed to a program that is not a shell, and a process substitution in double quotes, are text', () => {
+    expect(run("cat > /dev/null <<'EOF'\necho x > /repo/app.ts $(rm /repo/app.ts) <(rm /repo/app.ts)\nEOF")).toBeUndefined()
+    expect(run("python3 - <<'EOF'\nprint('$(rm /repo/app.ts)')\nEOF")).toBeUndefined()
+    expect(run('echo "<(rm /repo/app.ts)"')).toBeUndefined()
+    expect(run("bash <<'EOF'\necho \\$(rm /repo/app.ts)\nEOF")).toBeUndefined()
+  })
+})

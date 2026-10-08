@@ -214,9 +214,14 @@ const split = (cmd: string): Split[] => {
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
     if (quote) {
+      const sub = quote === '"' && c !== '<' && c !== '>' ? subEnd(cmd, i) : undefined
       if (c === quote) quote = undefined
       else if (c === '\\' && quote === '"' && i + 1 < cmd.length) word += cmd[++i]
-      else word += c
+      else if (sub !== undefined) {
+        // In double quotes too, a quote inside a substitution belongs to it, never closing these.
+        word += cmd.slice(i, sub + 1)
+        i = sub
+      } else word += c
       continue
     }
     // A clause's pattern is no command: its words are dropped at the ) that ends it, and an esac
@@ -243,7 +248,16 @@ const split = (cmd: string): Split[] => {
       inWord = false
       closeCase(at)
     }
-    if (c === '"' || c === "'") {
+    const sub = subEnd(cmd, i)
+    if (sub !== undefined) {
+      // A substitution is part of the word it sits in, its spaces, quotes and redirects included
+      // (#974: `x=$(npm publish)` gave a command named `publish)`); what it runs is read apart, by
+      // readLine. A process substitution is a word of its own.
+      if (c === '<' || c === '>') endWord()
+      begin(i)
+      word += cmd.slice(i, sub + 1)
+      i = sub
+    } else if (c === '"' || c === "'") {
       quote = c
       begin(i)
     } else if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
@@ -409,6 +423,12 @@ const onStdin = (w: string): boolean => {
   const m = INPUT_WORD.exec(w)
   return !!m && Number(m[1] || '0') === 0
 }
+// An unquoted heredoc's body as the program it feeds receives it (#975): the shell takes the
+// backslash off an escaped $, backtick or backslash and joins a line ended by a backslash, so a shell
+// fed `\$(rm x)` runs it. Any other backslash stays. What a substitution there prints is not known, so
+// its text stays as written; the substitution itself is read where the body is (readLine).
+const expandedBody = (body: string): string => body.replace(/\\([$`\\]|\n)/g, (_m, c: string) => (c === '\n' ? '' : c))
+
 // What a command's own redirects put on its standard input, the last one winning as in the shell:
 // a heredoc's body (or, when the reader has none, a heredoc it cannot read), a here-string's text, a
 // file. Another descriptor's (3<file) is not standard input.
@@ -427,8 +447,8 @@ const ownStdin = (words: readonly string[], fed: Fed): Stdin | undefined => {
       if (mine) s = { text }
     } else if (op.startsWith('<<')) {
       if (!rest) i++
-      const body = fed.find(f => f.word === at)?.body
-      if (mine) s = body !== undefined ? { text: body } : { unreadable: 'fed by a heredoc' }
+      const h = fed.find(f => f.word === at)
+      if (mine) s = h !== undefined ? { text: h.quoted ? h.body : expandedBody(h.body) } : { unreadable: 'fed by a heredoc' }
     } else {
       const file = rest || (words[++i] ?? '')
       if (mine && file && !file.startsWith('&')) s = { files: [file] }
@@ -741,11 +761,19 @@ const tickEnd = (text: string, from: number): number => {
   }
   return -1
 }
+// Where a substitution starting at `i` ($(, a backtick, <( or >() ends, its last character's place,
+// the text's last when it never closes; undefined when none starts there. For the word reader (split).
+const subEnd = (text: string, i: number): number | undefined => {
+  const c = text[i]
+  const end = c === '`' ? tickEnd(text, i + 1) : (c === '$' || c === '<' || c === '>') && text[i + 1] === '(' ? closing(text, i + 2) : undefined
+  return end === undefined ? undefined : end < 0 ? text.length - 1 : end
+}
 // A # begins a comment only where a word would begin.
 const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|()]/.test(text[i - 1] as string)
 
 /**
- * Each command substitution the shell runs in `text`: its text and where its $ or backtick stands,
+ * Each command substitution the shell runs in `text`, a process substitution (`<(...)`, `>(...)`,
+ * never in double quotes or a body) included: its text and where its $, backtick, < or > stands,
  * outermost only (each is read as a command line of its own, which reads any inside it). In a
  * heredoc's body (`body`) a quote is text and only a backslash before $, a backtick or a backslash
  * escapes it; elsewhere nothing inside single quotes, $'...' or a comment runs. A $(( closed by ))
@@ -790,6 +818,12 @@ export const substitutions = (text: string, body: boolean): { text: string; at: 
         i = inner + 1
         continue
       }
+      const end = closing(text, i + 2)
+      out.push({ text: text.slice(i + 2, end < 0 ? text.length : end), at: i })
+      i = end < 0 ? text.length : end
+    } else if ((c === '<' || c === '>') && text[i + 1] === '(' && !body && !quoted) {
+      // A process substitution (#975) runs its commands as the command it sits in starts; in double
+      // quotes or a heredoc's body it is text.
       const end = closing(text, i + 2)
       out.push({ text: text.slice(i + 2, end < 0 ? text.length : end), at: i })
       i = end < 0 ? text.length : end
