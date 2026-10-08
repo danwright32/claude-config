@@ -179,6 +179,27 @@ test('the working tree a path sits in is shared as $.modkit.workingTree, a look 
   expect(await ask('relative/CLAUDE.md')).toBe('refused: a working tree is found from an absolute path, not relative/CLAUDE.md')
 })
 
+// #951: a session's repository, read once by the kit for every mod: the GitHub repository and the
+// name, each its own answer. The reader stands in for a mod, handing the kit what
+// $.session.repo() gives.
+const repoReader: { name: string; register: Register } = {
+  name: 'repo-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => ({ deny: JSON.stringify(await $.modkit.repo(JSON.parse(String((e as { command?: string }).command)))) }))
+  },
+}
+
+test("a session's repository is read as $.modkit.repo: its GitHub repository and its name, each its own answer", { plugins: [repoReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const ask = async (repo: unknown) => {
+    const r = (await $.tool.call({ tool: 'Bash', command: JSON.stringify(repo) } as never)) as { deny?: string; text?: string }
+    return JSON.parse(r.deny ?? r.text ?? 'null')
+  }
+  expect(await ask({ root: '/Users/x/Apps/folder', remote: 'git@github.com:danwright32/Overture.git' })).toEqual({ github: 'danwright32/Overture', name: 'Overture' })
+  expect(await ask({ root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: null })).toEqual({ github: null, name: 'claude-config' })
+  expect(await ask({ remote: 'https://gitlab.com/team/thing.git' })).toEqual({ github: null, name: 'thing' })
+})
+
 // Any mod's own tool result drawn as the boxed card (#663), from plain data: a title whose runs can
 // carry colour (a state word leading it), then body lines. The blocked card is one use of it.
 // A plugin in a test runs in its own environment, so the card is spelled inside the hook.

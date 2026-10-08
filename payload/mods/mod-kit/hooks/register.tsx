@@ -5,6 +5,7 @@ import { clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, pa
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
+import { githubRepo, repoName } from './repo.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
 
@@ -90,6 +91,7 @@ export const register: Register = (on, options) => {
       git: async ({ words }) => git(words),
       pipeline: async ({ command }) => pipeline(command),
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
+      repo: async ({ root, remote }) => ({ github: githubRepo(remote), name: repoName({ root, remote }) }),
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)
