@@ -262,17 +262,25 @@ check_eq "and prints nothing as though it were a page" "" "$dom"
 # of them on 2026-10-08. Chrome is told not to make the copy, and should one appear anyway, the copy
 # THIS run's Chrome held is removed after the kill, and nothing else in that folder ever is.
 check "Chrome is told not to copy itself" "--disable-features=MacAppCodeSignClone" "$(cat "$FAKE_ARGS")"
-HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --disable-features=Translate --dump-dom file:///x.html >/dev/null 2>&1
-check "and a caller's own disabled features are kept beside it" "--disable-features=Translate,MacAppCodeSignClone" "$(cat "$FAKE_ARGS")"
+HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --disable-features=Translate --dump-dom --disable-features=Foo file:///x.html >/dev/null 2>&1
+check "and every one of a caller's own disabled features is kept beside it" "--disable-features=Translate,Foo,MacAppCodeSignClone" "$(cat "$FAKE_ARGS")"
 check_eq "in the one switch Chrome reads, never a second that would replace the first" "1" "$(grep -o -e '--disable-features=' "$FAKE_ARGS" | wc -l | tr -d ' ')"
+check "and the caller's other arguments are kept in their order" "--headless --dump-dom file:///x.html" "$(cat "$FAKE_ARGS")"
 
 clone_state(){ # clone_state <file naming a clone> -> there, gone, or never made
   local c; c="$(cat "$1" 2>/dev/null)"
   [ -n "$c" ] || { echo "never made"; return; }
   [ -e "$c" ] && echo there || echo gone
 }
+# Removal is only ever armed inside this user's own per user temp folder (the parent of getconf
+# DARWIN_USER_TEMP_DIR, by real path), so this suite's folder must sit there for it to be tested.
+user_root="$(t="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)" && [ -n "$t" ] && cd "${t%/}/.." 2>/dev/null && pwd -P)"
+clones_real="$(cd "$CLONES" && pwd -P)"
 if ! command -v lsof >/dev/null 2>&1; then
   echo "UNMEASURED: no lsof here, so removing a killed Chrome's own copy was not tested"
+  unmeasured=1
+elif [ -z "$user_root" ] || [ "${clones_real#"$user_root"/}" = "$clones_real" ]; then
+  echo "UNMEASURED: this suite's temp folder $clones_real is not inside a per user temp folder (${user_root:-none found}), so removing a killed Chrome's own copy was not tested"
   unmeasured=1
 else
   mkdir "$CLONES/code_sign_clone.before"
@@ -312,6 +320,22 @@ else
   check_eq "with no lsof a copy is left in place" "there" "$(clone_state "$TMP/blind-made")"
   check "and that is said, naming what is missing" "no-such-lsof" "$(cat "$TMP/blind.err")"
 fi
+
+# Nothing is ever removed outside this user's own per user temp folder (L5, L211): not from a
+# folder elsewhere, and not when that per user folder cannot be found at all, where a failed
+# lookup must not leave a path built on nothing (it once made /X/... at the disk root).
+outside="$(mktemp -d /tmp/headless-dom-988-outside.XXXXXX)"
+dom="$(HEADLESS_DOM_CLONE_DIR="$outside" FAKE_CLONE_MADE="$TMP/outside-made" HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/outside.err")"; rc=$?
+check_eq "a copy in a folder outside the per user temp folder is left in place" "there" "$(clone_state "$TMP/outside-made")"
+check "and that is said" "not inside this user's own temp folder" "$(cat "$TMP/outside.err")"
+rm -rf "$outside"
+mkdir -p "$TMP/fakebin"
+printf '#!/bin/bash\necho /nonexistent-988/T/\n' > "$TMP/fakebin/getconf"
+chmod +x "$TMP/fakebin/getconf"
+dom="$(PATH="$TMP/fakebin:$PATH" FAKE_CLONE_MADE="$TMP/rootless-made" HEADLESS_DOM_CHROME="$FAKE_CHROME" HEADLESS_DOM_DEADLINE=30 bash "$HEADLESS_DOM" --headless --dump-dom file:///x.html 2>"$TMP/rootless.err")"; rc=$?
+check_eq "with no per user temp folder to be found the page still comes back" "0 <p>made</p>" "$rc $(printf '%s' "$dom" | grep -o '<p>made</p>')"
+check_eq "and a copy is left in place" "there" "$(clone_state "$TMP/rootless-made")"
+check "and that is said" "none found" "$(cat "$TMP/rootless.err")"
 unset HEADLESS_DOM_CLONE_DIR
 
 REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"

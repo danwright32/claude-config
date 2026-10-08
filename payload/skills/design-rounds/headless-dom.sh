@@ -21,20 +21,22 @@
 #     Chrome sat until its 10 s teardown watchdog (exit 2), left its copy and orphaned its network
 #     helper; SIGTERM ended it in 0.2 s (exit 0) but left the copy and orphaned a renderer.
 #   - --disable-features=MacAppCodeSignClone stops the copy being made at all, and the page is
-#     dumped as before. So that is passed, merged into any --disable-features the caller gives,
-#     because a second --disable-features replaces the first (measured: given ours and then
+#     dumped as before. So that is passed, in one switch with every --disable-features the caller
+#     gives, because a second --disable-features replaces the first (measured: given ours and then
 #     --disable-features=Translate, Chrome made its copy; given the two in one switch, it did not).
 # Should a copy appear anyway (a later Chrome renaming the feature), the copy THIS run's Chrome
 # holds open is removed after it is killed: new since the run began, held by this Chrome's pid
 # while it is stopped, and held by no process once it is gone. Anything else in that folder,
-# another Chrome's copy or one still in use, is never touched (L5). A Chrome that ends by itself
-# is not inspected, since a dead process holds nothing to tell its copy by.
+# another Chrome's copy or one still in use, is never touched (L5), and nothing outside this
+# user's own per user temp folder ever is, whatever the folder was given as. A Chrome that ends
+# by itself is not inspected, since a dead process holds nothing to tell its copy by.
 #
 #   HEADLESS_DOM_CHROME    the Chrome binary to run (required)
 #   HEADLESS_DOM_DEADLINE  seconds to wait for a complete page, default 60; past it this prints why
 #                          on stderr and exits 124, with nothing on stdout
 #   HEADLESS_DOM_CLONE_DIR the folder Chrome copies itself into, default as above (tests point it
-#                          at a folder of their own)
+#                          at a folder of their own). Copies are only ever removed when it exists
+#                          and sits inside this user's own per user temp folder, by real path.
 #   HEADLESS_DOM_LSOF      the lsof to tell this run's copy by, default lsof
 #
 # Exit 0 with the page; 124 when no complete page came within the deadline; Chrome's own exit code
@@ -48,29 +50,46 @@ KILL_TREE="$HERE/../../hooks/lib/kill-tree.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/headless-dom.XXXXXX")" || { echo "headless-dom.sh: could not make a scratch folder" >&2; exit 1; }
 trap 'rm -rf "$work"' EXIT
 
-# The folder Chrome copies itself into, by its real path: lsof reports /private/var where TMPDIR
-# says /var. Empty where there is none (no getconf DARWIN_USER_TEMP_DIR off a Mac).
+# This user's own per user temp folder, the parent of getconf DARWIN_USER_TEMP_DIR, by its real
+# path (lsof reports /private/var where TMPDIR says /var). Built only from a lookup that succeeded,
+# never from an empty one, which would put the folder below at the disk root; empty off a Mac.
+user_root=""
+user_tmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
+if [ -n "$user_tmp" ] && r="$(cd "${user_tmp%/}/.." 2>/dev/null && pwd -P)" && [ -n "$r" ] && [ "$r" != / ] && [ -O "$r" ]; then
+  user_root="$r"
+fi
+# The folder Chrome copies itself into, by real path, and only when it exists now. Removal is armed
+# only when it also sits inside user_root, so nothing outside that folder is ever removed (L5).
 clone_dir=""
+clone_armed=no
 if [ -n "${HEADLESS_DOM_CLONE_DIR:-}" ]; then
-  clone_dir="$(cd "$HEADLESS_DOM_CLONE_DIR" 2>/dev/null && pwd -P)"
+  want="$HEADLESS_DOM_CLONE_DIR"
+elif [ -n "$user_root" ]; then
+  want="$user_root/X/com.google.Chrome.code_sign_clone"
 else
-  user_tmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
-  [ -n "$user_tmp" ] && clone_dir="$(cd "${user_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
+  want=""
+fi
+if [ -n "$want" ] && d="$(cd "$want" 2>/dev/null && pwd -P)" && [ -n "$d" ]; then
+  clone_dir="$d"
+  if [ -n "$user_root" ]; then
+    case "$clone_dir/" in "$user_root"/?*) clone_armed=yes ;; esac
+  fi
 fi
 LSOF="${HEADLESS_DOM_LSOF:-lsof}"
 list_clones(){ ls -1 "$clone_dir" 2>/dev/null | grep '^code_sign_clone\.' | LC_ALL=C sort; }
 [ -n "$clone_dir" ] && list_clones > "$work/clones.before"
 
-# Told not to copy itself, inside the caller's own --disable-features when there is one.
+# Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled
+# too: a second such switch replaces the first, so two would silently drop one caller's list.
 args=()
-merged=no
+features=""
 for a in "$@"; do
   case "$a" in
-    --disable-features=*) args+=("$a,MacAppCodeSignClone"); merged=yes ;;
+    --disable-features=*) [ -n "${a#--disable-features=}" ] && features="$features${a#--disable-features=}," ;;
     *) args+=("$a") ;;
   esac
 done
-[ "$merged" = yes ] || args=(--disable-features=MacAppCodeSignClone ${args[@]+"${args[@]}"})
+args=("--disable-features=${features}MacAppCodeSignClone" ${args[@]+"${args[@]}"})
 
 "$REAL" --user-data-dir="$work/profile" --no-first-run --no-default-browser-check "${args[@]}" > "$work/out" 2> "$work/err" &
 pid=$!
@@ -96,7 +115,9 @@ else
   if [ -n "$clone_dir" ]; then
     list_clones > "$work/clones.after"
     fresh="$(LC_ALL=C comm -13 "$work/clones.before" "$work/clones.after")"
-    if [ -n "$fresh" ] && ! command -v "$LSOF" >/dev/null 2>&1; then
+    if [ -n "$fresh" ] && [ "$clone_armed" != yes ]; then
+      echo "headless-dom.sh: copies of Chrome new since this run began in $clone_dir: $(printf '%s\n' "$fresh" | wc -l | tr -d ' '). That folder is not inside this user's own temp folder (${user_root:-none found}), so none was removed." >&2
+    elif [ -n "$fresh" ] && ! command -v "$LSOF" >/dev/null 2>&1; then
       echo "headless-dom.sh: copies of Chrome new since this run began in $clone_dir: $(printf '%s\n' "$fresh" | wc -l | tr -d ' '). $LSOF is not here to tell which is this run's, so none was removed." >&2
     elif [ -n "$fresh" ]; then
       for n in $fresh; do
@@ -112,6 +133,9 @@ else
     case "$n" in */*) continue ;; esac
     copy="$clone_dir/$n"
     [ -d "$copy" ] && [ ! -L "$copy" ] || continue
+    # Read again at the act: the copy must still resolve to itself inside user_root (L157).
+    [ "$(cd "$copy" 2>/dev/null && pwd -P)" = "$copy" ] || continue
+    case "$copy" in "$user_root"/?*/?*) ;; *) continue ;; esac
     users="$("$LSOF" -n -P -t +D "$copy" 2>/dev/null | sort -u | tr '\n' ' ')"
     if [ -n "$users" ]; then
       echo "headless-dom.sh: left Chrome's copy $copy, still in use by pid ${users% }." >&2
