@@ -91,26 +91,26 @@ lock() {
   die 6 "another load or unload of the rule has not finished after 10 s (lock $STATE/lock, pid ${holder:-unknown})."
 }
 
-# Takes the rule away and releases this rule's pf reference. Fails (1) only when the rule itself
-# could not be flushed; a reference that will not release is reported and forgotten, since a token
-# pf no longer knows can never be released.
+# Takes the rule away and releases this rule's pf reference. Whether the rule is gone is judged by
+# reading the anchor back, never by the flush's exit code or by whether an owner is on file (a
+# helper killed part way leaves a rule with none). Fails (1) when a rule is still there; a
+# reference that will not release is reported and forgotten, since a token pf no longer knows can
+# never be released.
 remove_rule() {
-  local out bad=0 had_rule=0
-  [ -f "$STATE/owner" ] && had_rule=1
-  if ! out="$("$PFCTL" -a "$ANCHOR" -F rules 2>&1)" && [ "$had_rule" = 1 ]; then
-    echo "bug-bash-egress: pfctl would not remove the rule: $(oneline "$out")" >&2
-    bad=1
-  fi
-  if ! out="$("$PFCTL" -a "$ANCHOR" -F Tables 2>&1)" && [ "$had_rule" = 1 ]; then
-    echo "bug-bash-egress: pfctl would not remove the rule's address table: $(oneline "$out")" >&2
-    bad=1
+  local out why=""
+  out="$("$PFCTL" -a "$ANCHOR" -F rules 2>&1)" || why="$(oneline "$out")"
+  out="$("$PFCTL" -a "$ANCHOR" -F Tables 2>&1)" || why="${why:+$why; }$(oneline "$out")"
+  if [ -n "$("$PFCTL" -a "$ANCHOR" -s rules 2>/dev/null)" ]; then
+    echo "bug-bash-egress: pfctl would not remove the rule${why:+: $why}" >&2
+    # Its pf reference is kept while the rule stands, so pf is never switched off under a rule
+    # that is still on record as loaded.
+    return 1
   fi
   if [ -f "$STATE/token" ]; then
     out="$("$PFCTL" -X "$(cat "$STATE/token")" 2>&1)" \
       || echo "bug-bash-egress: pfctl would not release the rule's pf reference: $(oneline "$out")" >&2
     rm -f "$STATE/token"
   fi
-  [ "$bad" = 0 ] || return 1
   rm -f "$STATE/owner" "$STATE/request" "$STATE/rules.conf"
 }
 

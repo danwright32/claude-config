@@ -118,12 +118,23 @@ cmd_check() {
   [ "$got" = "$want" ] || fail "the egress helper installed on this Mac is not this version of it, so what it loads is not what this check expects. It needs Dan to run the setup again: $SETUP_CMD"
   grep -qx 'enabled yes' <<< "$status" || fail "the packet filter is off, so the rule is loaded but does nothing."
   grep -qx 'anchored yes' <<< "$status" || fail "the system's packet filter rules (/etc/pf.conf) no longer consult the com.apple anchors, so the rule would never be read."
-  rules="$(grep '^rule block return out quick proto tcp .*<bug_bash_targets>' <<< "$status")"
+  rules="$(grep '^rule block return out quick proto [a-z]* from any to <bug_bash_targets> ' <<< "$status")"
   [ -n "$rules" ] || fail "the egress rule is not loaded for $host."
   lets="$(sed -n 's/.* group != \([0-9][0-9]*\).*/\1/p' <<< "$rules" | sort -u | tr '\n' ' ' | sed 's/ $//')"
   if [ "$lets" != "$egid" ]; then
     fail "the rule lets through group ${lets:-none}, but the read only proxy runs as group $egid, so it would be refused too. Start the proxy in the $GROUP group: sudo -n -g $GROUP \"\$(command -v node)\" ~/.claude/skills/bug-bash/read-only-proxy.js --state <run dir>/proxy --egress"
   fi
+  # Both halves, for the target's own port. pfctl may print a port by its service name (443 as
+  # https), so either spelling counts. UDP matters though the direct connection check below cannot
+  # see it: a browser speaking HTTP/3 reaches the site over UDP.
+  local proto names ported name found
+  for proto in tcp udp; do
+    names="$port $(awk -v pp="$port/$proto" '$2 == pp { print $1; exit }' /etc/services 2>/dev/null)"
+    ported="$(grep "^rule block return out quick proto $proto from any to <bug_bash_targets> port = " <<< "$rules" | sed -n 's/.* port = \([^ ]*\) .*/\1/p')"
+    found=0
+    for name in $names; do grep -qxF -- "$name" <<< "$ported" && found=1; done
+    [ "$found" = 1 ] || fail "the rule does not refuse $proto to $host on port $port, so a browser could reach it that way."
+  done
   for a in $addrs; do
     grep -qx "target $a" <<< "$status" || fail "$host resolves to $a, which the rule does not hold, so a browser could reach the site there."
   done

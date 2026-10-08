@@ -458,6 +458,8 @@ if [ -n "$file" ]; then
   exit 0
 fi
 if [ -n "$flush" ]; then
+  # A flush pfctl answers with an error and leaves the rule where it was.
+  [ -e "$FAKE/knob-flush-fails" ] && [ "$flush" = rules ] && { echo "pfctl: DIOCXBEGIN: Device busy" >&2; exit 1; }
   if [ -n "$anchor" ]; then
     case "$flush" in
       rules) rm -f "$conf" ;;
@@ -473,7 +475,10 @@ case "$show" in
     if [ -z "$anchor" ]; then [ -e "$FAKE/knob-unanchored" ] || echo 'anchor "com.apple/*" all'; exit 0; fi
     [ -f "$conf" ] || exit 0
     ports="$(sed -n 's/.* port { \([^}]*\) }.*/\1/p' "$conf" | tr -d ',')"
-    for proto in tcp udp; do for p in $ports; do
+    # Knobs that make the loaded rule read back short: no udp half, or another port.
+    protos="tcp udp"; [ -e "$FAKE/knob-pf-no-udp" ] && protos=tcp
+    [ -e "$FAKE/knob-pf-port" ] && ports="$(cat "$FAKE/knob-pf-port")"
+    for proto in $protos; do for p in $ports; do
       echo "block return out quick proto $proto from any to <bug_bash_targets> port = $p group != $gid"
     done; done
     exit 0 ;;
@@ -601,6 +606,15 @@ else
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a system ruleset that never consults the anchor is refused" 8 "com.apple" "$rc" "$out"
   nothing_loaded && ok || bad "a rule found not in force is taken away again (unanchored)"
+  # The rule must read back for UDP too (a browser speaking HTTP/3 goes over UDP, which the direct
+  # connection check cannot see) and for the target's own port (lessons review of #938).
+  reset_fake; touch "$FAKE/knob-pf-no-udp"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule that reads back without its UDP half is refused" 8 "udp" "$rc" "$out"
+  nothing_loaded && ok || bad "a rule found not in force is taken away again (no udp)"
+  reset_fake; echo 9 > "$FAKE/knob-pf-port"
+  out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
+  expect "a rule that reads back for another port is refused" 8 "port $dead_port" "$rc" "$out"
   reset_fake; echo 4242 > "$FAKE/knob-pf-gid"
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a proxy not running in the group the rule lets through is refused" 8 "sudo -n -g _bugbash" "$rc" "$out"
@@ -630,6 +644,16 @@ else
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a rule left by a run whose proxy is gone is replaced" 0 "^READ-ONLY" "$rc" "$out"
   [ "$(owner_now)" = "$EPROXY_PID" ] && ok || bad "the replaced rule belongs to this run's proxy" "owner $(owner_now)"
+
+  # An unload says it worked only when the rule is gone, judged by reading the anchor back: here a
+  # rule left with no owner on file (a helper that died part way) and a flush pfctl refuses.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1
+  rm -f "$FAKE/state/owner"; touch "$FAKE/knob-flush-fails"
+  out="$(fakeenv bash "$EGRESS" unload 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] && grep -q 'still loaded' <<< "$out" && ok || bad "an unload that leaves the rule loaded says so, owner or none (rc $rc)" "$out"
+  rm -f "$FAKE/knob-flush-fails"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
 
   # The helper runs as root, so it takes nothing it has not checked the shape of.
   reset_fake
