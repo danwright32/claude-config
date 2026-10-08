@@ -138,6 +138,7 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # (claude-config#182). One file, not two: evidence kept somewhere with a retention schedule of its
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
 BEHIND_SKIPS_FILE="$SYNC_REPO/.behind-skips"   # sends in a row that could not go out (#323)
+SEND_REFUSED_FILE="$SYNC_REPO/.send-refused"   # the secret scan's last refusal, until a scan passes (#947)
 CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI verdict could be read (#327)
 CI_RED_SINCE_FILE="$SYNC_REPO/.ci-red-since"   # since when the shared repo's head has been red (#336)
 MY_PUSH_FILE="$SYNC_REPO/.my-push"   # the head this Mac last sent, and what became of it (#340)
@@ -318,6 +319,9 @@ record_sent(){     date +%s > "$LAST_SENT_FILE" 2>/dev/null || true; }
 # read as permanently fresh (L106); without the second, a failed push would stamp anyway.
 SEND_PENDING=0
 note_unsent_work(){ SEND_PENDING=1; }
+# The secret scan's refusal, when a sync asked for it to be handed back rather than end the run
+# (claude-config#947). Empty means no send this run was refused.
+SEND_REFUSED=""
 
 record_sent_if_shipped(){
   have_git || return 0
@@ -1068,6 +1072,10 @@ with_lock(){   # $@ = the command to run while holding the lock
   # Only on success, because a run that failed installed nothing to report and left through die()
   # anyway; `if` rather than `&&`, which under set -e would abort the run when rc is non-zero.
   if [ "$rc" -eq 0 ]; then flush_pending_report; fi
+  # A sync whose send the secret scan refused went on to receive, and its closing line says what it
+  # did, but the run FAILED: a job that cannot send must not exit as if it had (claude-config#947).
+  # Decided after the flush, so what it received is still checked and reported first.
+  if [ "$rc" -eq 0 ] && [ -n "$SEND_REFUSED" ]; then rc=1; fi
   return $rc
 }
 
@@ -4147,6 +4155,9 @@ $pf"*) continue ;; esac
   tokenize_payload
   scan_secrets   # never let a credential reach the shared remote  # LAST, once everything this send would carry is in the payload, so it sees the finished state
   # rather than one of the code paths that built it (L78).
+  # A refusal handed back to a sync ends the staging here: nothing staged is going anywhere, so
+  # there is nothing left for the check below to protect (claude-config#947).
+  if [ -n "$SEND_REFUSED" ]; then return 0; fi
   refuse_resurrected_deletions
 }
 
@@ -4154,8 +4165,13 @@ $pf"*) continue ;; esac
 # else a conservative set of distinctive token shapes (low false-positive).
 # Override with SYNC_SKIP_SECRET_SCAN=1 if it ever flags a legitimate string.
 scan_secrets(){
-  [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ] && return 0
-  [ -d "$PAYLOAD" ] || return 0
+  # Every way this ends WITHOUT refusing clears the record of its last refusal (claude-config#947):
+  # skipped, nothing to read, or passed. The send it refused is no longer being refused, and a later
+  # pull must not name it as the cause of anything.
+  if [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ] || [ ! -d "$PAYLOAD" ]; then
+    [ -z "${SEND_REFUSED_FILE:-}" ] || rm -f "$SEND_REFUSED_FILE" 2>/dev/null || true
+    return 0
+  fi
   local allow="$SYNC_REPO/.secret-allowlist"
   local q="[\"']?" pat apat
   pat='BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|sk_live_[A-Za-z0-9]{20,}'
@@ -4171,8 +4187,22 @@ scan_secrets(){
 "
   done < <(grep -rIoE "$pat|$apat" "$PAYLOAD" 2>/dev/null || true)
   findings="$(printf '%s' "$findings" | sort -u | tr '\n' ' ')"
-  is_blank "$findings" && return 0
-  die "possible secret found in: ${findings}— remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
+  # The refusal is RECORDED as well as said (claude-config#947), because the state it leaves behind
+  # outlives the run that said it: the staged edits stay uncommitted in the clone, and a later pull
+  # meets them with nothing but git's complaint to go on. Cleared by the next scan that passes.
+  # Guarded on the variable rather than assuming it, because tests/test-payload-secret-scan.sh runs
+  # this function cut out of the script, without the declarations at its top.
+  if is_blank "$findings"; then
+    [ -z "${SEND_REFUSED_FILE:-}" ] || rm -f "$SEND_REFUSED_FILE" 2>/dev/null || true
+    return 0
+  fi
+  local refusal="possible secret found in: ${findings% }. Remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
+  [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\n' "$(date +%s)" "${findings% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  # A sync asks for the refusal to be HANDED BACK rather than ending the run, so its receiving half
+  # still runs (claude-config#947). Nothing is weaker for it: do_sync then sets the staged edits
+  # aside, commits nothing, pushes nothing, and still fails the run with these same words.
+  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; return 0; fi
+  die "$refusal"
 }
 
 # ---------- what the apply ACTUALLY wrote on this Mac ----------
@@ -7083,6 +7113,134 @@ commits_in_words(){   # $1 = a count
   esac
 }
 
+# ---------- edits a stopped send left uncommitted in the clone (claude-config#947) ----------
+#
+# A send copies this Mac's config into the clone's payload, scans it, and only then commits. When the
+# scan refuses, the copy stays in the working tree, uncommitted. On 2026-10-08 that was the staged
+# copy of a lesson recorded during a refused send, and from then on both directions were stuck: a
+# pull refused, because git will not fast forward over local changes to a file the shared repo also
+# changed, and the automatic sync died at the same scan before it reached its receiving half. The
+# fix for the scan could not arrive because receiving was blocked, and the send could not clear
+# because the scan read the old file. It took a copy by hand to break.
+#
+# Those edits are not the work. The work is in this Mac's own config, which they were copied FROM
+# and which every send copies again. So setting the clone's copy aside to let a pull through loses
+# nothing, PROVIDED the live file really does hold it: each one is checked, and a copy that holds
+# anything the live file does not (an edit made in the clone by hand) is kept beside the live file
+# as `<file>.conflict-<host>`, before anything is reverted, which is where status already looks for
+# the only surviving copy of something (L5). The files rebuilt from this Mac's own config by every
+# send (the lessons index and the hooks fragment) need no copy: the next send
+# writes them over the clone's copy whatever it holds.
+#
+# Never `git stash`: the stash is shared by every worktree of a repository, and a pop takes whatever
+# is on top. Each path is put back with `git checkout HEAD --`, which resets the index entry too, so
+# nothing half set aside is left staged for the next commit (L731).
+uncommitted_paths(){   # $1 = a pathspec, or nothing for the whole repo -> paths differing from HEAD, untracked included
+  local tracked untracked
+  tracked="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --name-only --no-renames HEAD -- ${1:+"$1"} 2>/dev/null)" || return 1
+  untracked="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files --others --exclude-standard -- ${1:+"$1"} 2>/dev/null)" || return 1
+  printf '%s\n%s\n' "$tracked" "$untracked" | awk 'NF' | sort -u
+}
+pending_payload_edits(){ uncommitted_paths payload; }
+
+# Files a send rebuilds from this Mac's config every time, so a pending copy of one is never the only
+# copy of anything: the lessons index, and the hooks fragment taken out of settings.json. NOT the
+# shared settings: those are edited in the repo and never staged from this Mac (#695), so an
+# uncommitted edit to them in the clone is the only copy there is, and it is kept like any other.
+payload_rebuilt_by_send(){   # $1 = path relative to the payload
+  is_derived_rule_file "$1" && return 0
+  case "$1" in settings.hooks.json) return 0 ;; esac
+  return 1
+}
+
+# Three lists, because three different things were established about them and one sentence covering
+# all of them would claim for each what was only checked for some (L11): HELD were compared with the
+# live file and it holds them, REBUILT were not compared at all (a deletion has no content, and a
+# rebuilt file is written over by the next send), KEPT hold something the live file does not.
+SET_ASIDE_HELD=""; SET_ASIDE_REBUILT=""; SET_ASIDE_KEPT=""
+set_aside_payload_edits(){   # $@ = paths under payload/, relative to the repo
+  local p rel wt live view copy sfx n
+  SET_ASIDE_HELD=""; SET_ASIDE_REBUILT=""; SET_ASIDE_KEPT=""
+  sfx="$(conflict_suffix)"
+  # First every copy that is needed, made and READ BACK, and only then is anything reverted. A copy
+  # that cannot be made stops the run here with the clone exactly as it was found.
+  for p in "$@"; do
+    rel="${p#payload/}"; wt="$SYNC_REPO/$p"; live="$CLAUDE_HOME/$rel"
+    [ -f "$wt" ] || { SET_ASIDE_REBUILT+="$rel "; continue; }   # a deletion: no content of its own
+    if payload_rebuilt_by_send "$rel"; then SET_ASIDE_REBUILT+="$rel "; continue; fi
+    view="$(scratch_file)" || die "could not make a scratch file to compare $p with this Mac's own copy, so nothing was set aside, nothing was received, and nothing in $SYNC_REPO was changed."
+    if tokenized_path "$rel"; then detok < "$wt" > "$view"; else cp "$wt" "$view"; fi
+    if [ -f "$live" ] && is_blank "$(only_in_first "$view" "$live")"; then
+      rm -f "$view"; SET_ASIDE_HELD+="$rel "; continue
+    fi
+    copy="$live$sfx"; n=1
+    while [ -e "$copy" ] && ! cmp -s "$view" "$copy"; do n=$(( n + 1 )); copy="$live$sfx.$n"; done
+    mkdir -p "$(dirname "$copy")" 2>/dev/null || true
+    if ! { [ -e "$copy" ] || cp "$view" "$copy"; } || ! cmp -s "$view" "$copy"; then
+      rm -f "$view"
+      die "the uncommitted copy of $p in $SYNC_REPO holds content this Mac's own config does not, and it could not be kept at $copy, so it was NOT set aside. Nothing was received and nothing in $SYNC_REPO was changed. Copy that file somewhere safe, then run this again."
+    fi
+    rm -f "$view"
+    SET_ASIDE_KEPT+="$rel (kept as ${copy#"$CLAUDE_HOME"/}) "
+    # This run says so itself, a line below, so the standing report of older copies does not
+    # repeat it in the same run.
+    PRESERVED_CONFLICTS="$PRESERVED_CONFLICTS
+${copy#"$CLAUDE_HOME"/}"
+  done
+  for p in "$@"; do
+    if git -C "$SYNC_REPO" cat-file -e "HEAD:$p" 2>/dev/null; then
+      git -C "$SYNC_REPO" checkout -q HEAD -- "$p"
+    else
+      git -C "$SYNC_REPO" rm -q --cached --ignore-unmatch -- "$p" >/dev/null 2>&1 || true
+      rm -f "$SYNC_REPO/$p"
+    fi
+  done
+  return 0
+}
+
+# What stopped the send that left them, in words: the scan's own record when there is one, never a
+# guess, because a send can stop between staging and committing for other reasons too (L11).
+pending_edits_cause(){
+  local when found now
+  if [ -s "$SEND_REFUSED_FILE" ]; then
+    when="$(awk -F'\t' 'NR==1{print $1}' "$SEND_REFUSED_FILE" 2>/dev/null)"
+    found="$(awk -F'\t' 'NR==1{print $2}' "$SEND_REFUSED_FILE" 2>/dev/null)"
+    now="$(date +%s)"
+    case "$when" in
+      ''|*[!0-9]*) when="" ;;
+      *) when=" $(age_in_words "$(( now - when ))")" ;;
+    esac
+    # Two measured facts side by side, never "so": whether THESE edits are the ones that send staged
+    # is not something the record can tell, since a hand edit made after it reads the same (L11).
+    printf 'the secret scan last refused a send from this clone%s (possible secret in: %s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-?}" "$SYNC_REPO"
+    return 0
+  fi
+  printf '%s holds uncommitted edits no send has committed (a send that stopped before committing leaves them, and so does an edit made there by hand)' "$SYNC_REPO"
+}
+
+# The sentence saying what was set aside, and where each piece of it now lives.
+report_set_aside(){   # $1 = why they were set aside, a clause
+  local cause; cause="$(pending_edits_cause)"
+  echo "claude-sync: ${cause}. $1, so they were set aside rather than be stopped by them: $(printf '%s%s%s' "$SET_ASIDE_HELD" "$SET_ASIDE_REBUILT" "$SET_ASIDE_KEPT" | sed 's/ $//')." >&2
+  if ! is_blank "$SET_ASIDE_REBUILT"; then
+    echo "claude-sync: these hold nothing of their own to lose, being deletions or files rebuilt from this Mac's own config by every send: ${SET_ASIDE_REBUILT% }" >&2
+  fi
+  if ! is_blank "$SET_ASIDE_HELD"; then
+    # Not "they go out on the next send": where the other Mac changed the same file, the apply below
+    # may keep the other Mac's version and set this one beside it. What happens to each is the
+    # apply's to decide and to say, and this line claims only what was checked here (L11).
+    echo "claude-sync: nothing of these is lost: this Mac's own config still holds each of them, so the apply below treats them as edits this Mac has not sent yet, and says what it does with each: ${SET_ASIDE_HELD% }" >&2
+  fi
+  if ! is_blank "$SET_ASIDE_KEPT"; then
+    echo "claude-sync: these held content this Mac's own config does not, so each is kept beside the live file, where status reports it until you take what you need and delete the copy: ${SET_ASIDE_KEPT% }" >&2
+    notify "set aside uncommitted edits as *$(conflict_suffix)"
+  fi
+  case "$cause" in
+    'the secret scan'*) echo "claude-sync: the send stays refused until the scan passes: remove the credential from this Mac's config, or allowlist its fingerprint in .secret-allowlist if it is not one." >&2 ;;
+  esac
+  return 0
+}
+
 # The receiving half of a pull, with git's answer READ rather than discarded.
 #
 # `--ff-only` stays: refusing to invent a merge is the correct behaviour. What was wrong was that
@@ -7100,6 +7258,7 @@ commits_in_words(){   # $1 = a count
 # from a state is confidently wrong when it is wrong, and #52 was exactly that.
 pull_from_repo_or_die(){
   local branch ahead behind err
+  local pending incoming clashes="" clashing="" outside="" p set_aside=0
   # No origin configured is not a failure to report: a repo with no remote has nothing to receive,
   # and the offline paths (and the suite's local-only fixtures) drive the payload directly.
   git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 0
@@ -7157,8 +7316,39 @@ pull_from_repo_or_die(){
       die "this Mac and the shared repo have diverged: $(commits_in_words "$ahead") here the repo has not seen, and $(commits_in_words "$behind") there this Mac does not have. NOTHING was received and nothing on this Mac was changed, because a pull can only fast-forward. Reconcile with: claude-sync sync"
     fi
   fi
+  # Uncommitted payload edits in a file the shared repo changed would make git refuse the fast
+  # forward, so they are set aside first (claude-config#947, the section above). Only those: an edit
+  # to a file the shared repo did not touch never stops a fast forward, and is left where it is.
+  # Only when EVERY such file is in the payload. An edit outside it is somebody's own work on the
+  # repository, nothing in claude-sync writes there, and git's own refusal below names it; setting
+  # the payload ones aside first would change the clone for a pull that still cannot happen.
+  if [ "$behind" -gt 0 ]; then
+    if pending="$(uncommitted_paths)" && [ -n "$pending" ] \
+       && incoming="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --name-only --no-renames HEAD "origin/$branch" 2>/dev/null)"; then
+      clashes="$(printf '%s\n' "$pending" | awk 'NR == FNR { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$incoming") -)"
+      clashing="$(printf '%s\n' "$clashes" | awk '/^payload\//')"
+      outside="$(printf '%s\n' "$clashes" | awk 'NF && !/^payload\//')"
+    fi
+    if [ -n "$clashing" ] && [ -z "$outside" ]; then
+      local clash_list=()
+      while IFS= read -r p; do [ -n "$p" ] && clash_list+=("$p"); done <<< "$clashing"
+      set_aside_payload_edits "${clash_list[@]}"
+      set_aside=1
+      report_set_aside "The shared repo has changed the same files, and this pull receives them"
+    fi
+  fi
   if ! err="$(git -C "$SYNC_REPO" pull --ff-only -q 2>&1)"; then
-    die "git refused to fast-forward this Mac onto the shared repo, so NOTHING was received and nothing on this Mac was changed. The two sides have not diverged ($(commits_in_words "$ahead") here the repo has not seen, $(commits_in_words "$behind") there), so this is git's own refusal: ${err:-<no output>}"
+    # What stands in the way, named from what was measured above, so the reader is not left to work
+    # out from git's words alone whose edits these are and what clears them (claude-config#947).
+    local in_way="" changed="nothing on this Mac was changed"
+    if [ -n "$outside" ]; then
+      in_way=" The files in the way include uncommitted edits in $SYNC_REPO OUTSIDE the payload, which nothing in claude-sync writes, so they are somebody's own work on the repository: $(printf '%s' "$outside" | tr '\n' ' ' | sed 's/ $//'). Commit or discard them there, then pull again."
+      if [ -n "$clashing" ]; then
+        in_way="$in_way The payload edits in the way are set aside automatically once nothing else stands in the way: $(pending_edits_cause)."
+      fi
+    fi
+    [ "$set_aside" -eq 0 ] || changed="the edits named above were set aside, and nothing else on this Mac was changed"
+    die "git refused to fast-forward this Mac onto the shared repo, so NOTHING was received and $changed. The two sides have not diverged ($(commits_in_words "$ahead") here the repo has not seen, $(commits_in_words "$behind") there), so this is git's own refusal: ${err:-<no output>}${in_way}"
   fi
   return 0
 }
@@ -7519,14 +7709,30 @@ flush_pending_report(){
 # a file back over the change the pull just received.
 do_apply_only(){
   local before="${SYNC_PULL_BASE-}" after=""
+  # The sync this resumes had its send refused (claude-config#947). Taken into this run's own state
+  # and removed from the environment at once, so nothing this run starts (the hook suite runs
+  # claude-sync in its fixtures) inherits a refusal that was never its own (L169).
+  SEND_REFUSED="${SYNC_SEND_REFUSED:-}"
+  unset SYNC_SEND_REFUSED
   have_git && after="$(repo_head)"
   apply_payload_to_local
+  if [ -n "$SEND_REFUSED" ]; then report_unpublished_merge; fi
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   # The resume point after a self update finishes the same sync, so it owes the same report
   # (claude-config#283). Leaving it out here would make what a run says depend on whether the tool
   # happened to update itself in the middle of it.
   summarize_applied "$before" "$after"
-  report_when_lock_released "Synced (sent local changes, pulled remote; memory/permissions untouched)"
+  report_when_lock_released "$(sync_closing_stem)"
+}
+
+# How a sync closes. Said differently when its send was refused, because "sent local changes" over a
+# run that sent nothing is the false success this tool exists to stop printing (L11, L12).
+sync_closing_stem(){
+  if [ -n "$SEND_REFUSED" ]; then
+    printf 'Received the shared config onto this Mac and SENT NOTHING, because the secret scan refused the send (memory/permissions untouched)'
+  else
+    printf 'Synced (sent local changes, pulled remote; memory/permissions untouched)'
+  fi
 }
 
 # ---------- sync (two-way, used by the background job) ----------
@@ -7879,13 +8085,33 @@ do_sync(){
   # holds back is not answered by naming another command (claude-config#845). Cleared straight after,
   # so the staging publish_merged_rule_files does once the receiving is over says the plain thing.
   SYNC_RECEIVES_NEXT=1
+  # A secret scan refusal is HANDED BACK here instead of ending the run (claude-config#947). The
+  # sending half is refused all the same, and the run still fails in the scan's own words, but the
+  # receiving half runs: this is the path both automatic jobs take, and when the scan ended it there
+  # the fix for a wrong scan could never arrive. Only with git, where the staged copy can be set
+  # aside; without it the payload directory is all there is, and the refusal ends the run as before.
+  if have_git; then SCAN_REFUSAL_DEFERRED=1; fi
   stage_local_to_payload
+  SCAN_REFUSAL_DEFERRED=0
   SYNC_RECEIVES_NEXT=0
   local pushed=0 branch before="" after=""
   local fetch_err="" pull_err="" stash_before=0 stash_after=0 stash_top="" gitdir=""
   local derived_rc=0
+  if [ -n "$SEND_REFUSED" ]; then
+    # Nothing staged may be committed or pushed, and it may not ride into the rebase either, whose
+    # autostash would replay it over the other Mac's version of the same file. So every uncommitted
+    # payload edit is set aside, each one first checked against this Mac's own config, which it was
+    # copied from moments ago. A clone whose edits cannot be read is refused exactly as before.
+    local refused_list=() refused_all rp
+    refused_all="$(pending_payload_edits)" || die "$SEND_REFUSED"
+    while IFS= read -r rp; do [ -n "$rp" ] && refused_list+=("$rp"); done <<< "$refused_all"
+    if [ "${#refused_list[@]}" -gt 0 ]; then set_aside_payload_edits "${refused_list[@]}"; fi
+    notify "send refused by the secret scan; this Mac still receives"
+    echo "claude-sync: this sync SENT NOTHING, because $SEND_REFUSED" >&2
+    if [ "${#refused_list[@]}" -gt 0 ]; then report_set_aside "The receiving half of this sync still runs"; fi
+  fi
   if have_git; then
-    commit_if_changed && pushed=1
+    if [ -z "$SEND_REFUSED" ] && commit_if_changed; then pushed=1; fi
     # recover_unfinished_rebase has already run for this command, so a detached HEAD here is
     # something else again, and guessing `main` would push at a ref nobody checked out
     # (claude-config#324).
@@ -7994,15 +8220,23 @@ do_sync(){
     # No record_sent here: whether this run sent anything is decided once, from the finished
     # state, by record_sent_if_shipped. Stamping inside the branch that happens to push is what
     # left `push` and every other route unstamped (#79, #82).
-    { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q || true
-    # send half is done; hand off so the apply below runs the pulled logic
+    # A refused send pushes NOTHING, commits made by earlier runs included: whatever the scan
+    # refused this run, nothing leaves this Mac until a scan passes (claude-config#947).
+    if [ -z "$SEND_REFUSED" ]; then
+      { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q || true
+    fi
+    # send half is done; hand off so the apply below runs the pulled logic. The refusal travels with
+    # it, so the resumed run cannot close by saying it sent.
+    if [ -n "$SEND_REFUSED" ]; then export SYNC_SEND_REFUSED="$SEND_REFUSED"; fi
     reexec_after_self_update "$before" "$after" apply-only || true
+    unset SYNC_SEND_REFUSED
   fi
   apply_payload_to_local
   # The apply may have MERGED a rule file, which lives only here until something sends it, and this
   # is the path that sends (claude-config#312). Before the summary, so the closing line is only
-  # reached once the merge is provably in the repo.
-  publish_merged_rule_files
+  # reached once the merge is provably in the repo. Not when this run's send was refused: publishing
+  # stages and scans again, so it would only be refused again, and says what a pull says instead.
+  if [ -n "$SEND_REFUSED" ]; then report_unpublished_merge; else publish_merged_rule_files; fi
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   # WHAT ARRIVED, on this path too (claude-config#283). do_pull has always listed what it wrote and
   # added the start a new session notice when an arriving file cannot be seen by a running session;
@@ -8013,7 +8247,7 @@ do_sync(){
   # on this path the notice did not exist at all and had to be reconstructed from git by hand. A
   # silent path passes every check there is (L98).
   summarize_applied "$before" "$after"
-  report_when_lock_released "Synced (sent local changes, pulled remote; memory/permissions untouched)"
+  report_when_lock_released "$(sync_closing_stem)"
 }
 
 # ---------- send (one-way, used by the change watcher) ----------

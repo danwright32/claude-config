@@ -17,6 +17,7 @@ state/
 .resolved/
 .send-suite-verdicts
 .behind-skips
+.send-refused
 .ci-unreadable-since
 .resurrected-reported
 .ci-red-since

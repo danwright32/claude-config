@@ -681,6 +681,31 @@ Every push/sync scans the payload and aborts if it finds a credential shape.
 Accept a known string by adding the sha256 of the matched text to
 `.secret-allowlist`, or bypass once with `SYNC_SKIP_SECRET_SCAN=1`.
 
+### A refused send does not stop this Mac receiving
+
+A send copies this Mac's config into the clone, scans it, and only then commits, so a refused send
+leaves its staged copy uncommitted in the clone. That used to stop receiving too: `pull` refused
+because git will not fast forward over local changes to a file the shared repo also changed, and
+`sync` (what both automatic jobs run) ended at the scan before it reached its receiving half. On
+2026-10-08 that meant the fix for a wrong scan could not arrive, because receiving was blocked (#947).
+
+Now both receive. `pull` sets aside the uncommitted payload edits that stand in the way of the
+files it receives, and `sync` sets aside everything the refused send staged, then fetches, rebases
+and applies as usual. Each edit is checked against this Mac's own config first, which it was copied
+from: when the live file holds it, the apply treats it as an edit this Mac has not sent yet (kept,
+merged, or set beside the file as `.conflict-<host>` if the other Mac changed it too, exactly as
+for any unsent edit). An edit the live file does not hold, such as one made in the clone by hand,
+is kept beside the live file as `<file>.conflict-<host>` before anything is reverted, and `status`
+reports it until it is dealt with. Edits are put back with `git checkout HEAD --`, never the stash,
+which every worktree shares.
+
+The scan is exactly as strong as before. A refused sync commits nothing, pushes nothing (commits
+left by earlier runs included), closes by saying it SENT NOTHING and exits non zero with the scan's
+own finding. The refusal is also recorded in `.send-refused`, so a later pull names it as the cause
+of the edits it set aside. The edits go out on the next send that passes the scan. An uncommitted
+edit OUTSIDE the payload is somebody's own work on the repository: a pull leaves it alone and
+reports git's refusal.
+
 `tests/test-payload-secret-scan.sh` runs that same scan, cut out of `claude-sync` by name, over
 the payload git would carry, so a file that would block every send fails CI before it merges. A
 placeholder in a shipped template is the usual cause: a key named `token`, `secret`, `password` or
@@ -1372,7 +1397,7 @@ following the overnight rules for hours, and a real usage limit.
 
 ## Local state (per Mac, never synced)
 
-Sixteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` and `lesson-citations.tsv` also sit outside
 `payload/` and are the two exceptions: both are tracked and shared on purpose. A band nobody else
 can see cannot stop anybody else claiming a number, and a record of what a citation was written
@@ -1391,6 +1416,7 @@ defined answer for being absent or untrustworthy.
 | `.resurrected-reported` | a send that refused to publish a leftover copy back over a deletion, and was told to keep it with `SYNC_ACCEPT_DELETIONS=0` | that same refusal, to say it once per file rather than on every edit. With the default, which removes the leftover, there is nothing left to repeat and nothing is written here | absent means nothing has been refused here, which is the normal state. Each line is the path AND a digest of its content, so a file that CHANGES is a new decision and is reported again, and a file the person deletes or edits stops matching. Losing it costs one repeated message and nothing else, which is why it is not treated as important state |
 | `.ci-unreadable-since` | the automatic pull, the first time it cannot read whether the shared repo's head passed its tests | that same gate, to decide when to stop waiting for an answer that is not coming | absent means the last verdict was readable, whatever it said, which is the normal state. It holds when the condition started and, once expired, when that was first reported, so the alert is raised on the transition rather than on every edit. Any readable verdict removes it, including a red one, because those mean the lookup is working. Expiring does NOT remove it: once the verdict is judged unobtainable, config keeps arriving until the lookup works again, since restarting the clock would deliver config in three hour bursts. A value that will not parse is treated as the condition starting now, which errs toward waiting rather than toward applying unjudged config |
 | `.behind-skips` | a watcher send that found itself behind and whose reconcile did not clear it | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every edit | absent means sending is not stuck, which is the normal state and is said by saying nothing. It holds the count, the moment the run of skips started, and the moment of the last one; any run that gets through removes it, so the count is a measurement of the current state rather than a total that only grows. A count that will not parse is counted from zero again by the next skip, and until then status and the notice say the record could not be read, never that sending is stuck and never nothing |
+| `.send-refused` | the secret scan, whenever it refuses a send (#947) | a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone, to name the scan's finding as the cause rather than leave git's complaint as the only explanation | absent means no send is being refused by the scan, which is the normal state. It holds when the scan last refused and the files it found. The next scan that passes removes it. A time that will not parse is left out of the sentence rather than guessed |
 | `.ci-red-since` | the automatic pull, the first time the shared repo's head reads as having failed its tests | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every tick | absent means the shared repo's head is not red, which is the normal state and is said by saying nothing. It holds when the run of red verdicts started, how many there have been, and, once past its window, when that was first reported, so the alert is raised on the transition rather than on every automatic tick. The clock is on the CONDITION and not on the commit: keyed per commit it would reset on every push, and a push is exactly what keeps happening while somebody is fixing the red. Any readable verdict that is not red removes it, so the count measures the current state rather than growing for ever. Unlike `.ci-unreadable-since` it never expires into applying anyway: nobody can act on an unreadable verdict, and anybody can act on a red one, so the escape here is to tell a person rather than to lower the gate. Only the last field may be empty, because a blank middle column would be read as the one after it. A count that will not parse is reported as a record that could not be read, never as nothing |
 | `.my-push` | the trap every mutating run passes through, when that run left this Mac level with the shared repo | the next run, to ask what became of it, and `claude-sync status` once the answer is in | absent means the last thing this Mac sent was judged and passed, or nothing has been sent, which is the normal state. It holds the commit, when the current run of failures started, and, once reported, when that was. The verdict is deliberately NOT waited for at send time: a run holds the lock and a test run takes minutes, so the sha is written down and a later run asks. A green or cancelled verdict removes it, cancelled because there is nothing to report about a run nobody finished (the workflow no longer cancels a superseded run on main, #594, but a run can still be cancelled by hand). A push made while it still stands keeps its start time and its reported marker and only moves the commit, so a run of failures is announced once rather than per push. A verdict that never arrives is given up on after the same window an unreadable one gets. Only the last field may be empty |
 | `.send-suite-verdicts` | a send that ran a suite covering a hook it is about to publish | the next send, to decide whether that suite has to run again | absent means every relevant suite runs, which is the pre-#269 behaviour and only costs time. An entry is keyed on a digest of the whole staged hook set, so any hook edit retires it; a verdict is never reused across a change to what it judged. A `fail` is remembered exactly like a `pass`, because what it saves is re-running a red suite on every keystroke while the sync lock is held |

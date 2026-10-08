@@ -684,6 +684,29 @@ run is refused, or disabling the lock, which breaks the checks in #32 that prove
 What replaced both is cheaper and runs on every push: each section the push CHANGED is run on its
 own, which is the only run in which a missing prerequisite shows up at all.
 
+### Committing a refused send's edits locally so a pull can rebase over them
+
+Considered for #947 and rejected. When the secret scan refuses a send, its staged copy stays
+uncommitted in the clone and used to stop every pull. One fix is for the pull to commit that copy
+locally, without pushing, and rebase it like any local commit, so it goes out on the next send that
+passes. The objection is what a push carries: history, not just the tip. A commit holding a real
+credential would sit in the branch, and once the credential was removed from the live config a later
+commit would remove it from the tip too, the scan of the working tree would pass, and the push
+would publish the commit that still holds it. Nothing unscanned may be pushed, and this would make
+"scanned" mean "the tip was scanned".
+
+What is done instead keeps the clone free of anything the scan refused. The edits were copied FROM
+this Mac's own config, which every send copies again, so the clone's copy is not the work. Each is
+checked against the live file, kept beside it as `.conflict-<host>` when the live file does not
+hold it (an edit made in the clone by hand), and only then put back with `git checkout HEAD --`.
+The apply then treats them as what they are, edits this Mac has not sent yet, with the protection
+it already has for those. The stash was not used either: every worktree of a repository shares it,
+and a pop takes whatever is on top.
+
+The scan itself does not change. A sync asks for its refusal to be handed back instead of ending the
+run, so the receiving half still runs, but that run commits nothing, pushes nothing (earlier runs'
+commits included), says it SENT NOTHING and exits non zero.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round
