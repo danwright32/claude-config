@@ -45,8 +45,20 @@ function tokenProblem_(given) {
   if (typeof TOKEN !== 'string' || TOKEN === TOKEN_PLACEHOLDER || TOKEN.length < TOKEN_MIN_LENGTH) {
     return 'token not set: replace the TOKEN line in this script, then deploy a new version';
   }
-  if (typeof given !== 'string' || given !== TOKEN) return 'bad token';
+  if (!sameSecret_(given, TOKEN)) return 'bad token';
   return '';
+}
+
+// Constant time: every character of the expected value is read whatever the caller sent, so
+// how long a refusal takes says nothing about how much of a guess was right.
+function sameSecret_(given, expected) {
+  if (typeof given !== 'string') return false;
+  let diff = given.length ^ expected.length;
+  for (let i = 0; i < expected.length; i++) {
+    const g = i < given.length ? given.charCodeAt(i) : 0;
+    diff |= g ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 // GET carries its parameters in the address, which is logged, so it is refused outright.

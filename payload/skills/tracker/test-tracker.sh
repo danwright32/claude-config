@@ -294,11 +294,17 @@ const ctx = {
   JSON,
 };
 vm.createContext(ctx);
+// Counts character reads inside the script, to judge whether the key comparison does the same
+// work wherever a wrong key first differs (L19).
+let charReads = 0;
+const proto = vm.runInContext('String.prototype', ctx);
+const realCharCodeAt = proto.charCodeAt;
+proto.charCodeAt = function (i) { charReads++; return realCharCodeAt.call(this, i); };
 vm.runInContext(code, ctx);
 const out = method === 'GET'
   ? ctx.doGet({ parameter: JSON.parse(requestJson) })
   : ctx.doPost({ postData: { contents: requestJson } });
-console.log(JSON.stringify({ response: JSON.parse(out), appended: appended.length }));
+console.log(JSON.stringify({ response: JSON.parse(out), appended: appended.length, charReads: charReads }));
 JS
   GS="$DIR/apps-script.gs"
   # Built from parts so this file never holds a token shaped run of its own.
@@ -319,6 +325,24 @@ JS
     check "web app, real token, ${case%%|*}: refused as a bad token" '"error":"bad token"' "$r"
     check "web app, real token, ${case%%|*}: appends nothing" '"appended":0' "$r"
   done
+  # Near misses a broken constant time comparison would let through.
+  for near in "a prefix of the key|${REAL%?}" "the key plus one character|${REAL}x" \
+              "the key with its last character changed|${REAL%?}Z" "an empty key|"; do
+    r="$(gs "$REAL" "{\"key\":\"${near#*|}\",\"data\":{\"a\":1}}")"
+    check "web app, real token, ${near%%|*}: refused" '"error":"bad token"' "$r"
+    check "web app, real token, ${near%%|*}: appends nothing" '"appended":0' "$r"
+  done
+  # Constant time (L19): a wrong key differing at its FIRST character costs the comparison as
+  # many character reads as one differing at its LAST, and every character is read.
+  reads(){ sed -n 's/.*"charReads":\([0-9]*\).*/\1/p' <<< "$1"; }
+  wrong_first="Z${REAL:1}"; wrong_last="${REAL:0:${#REAL}-1}Z"
+  r_first="$(gs "$REAL" "{\"key\":\"$wrong_first\",\"action\":\"headers\"}")"
+  r_last="$(gs "$REAL" "{\"key\":\"$wrong_last\",\"action\":\"headers\"}")"
+  check "web app: the key wrong at its first character is refused as a bad token" '"error":"bad token"' "$r_first"
+  check "web app: the key wrong at its last character is refused as a bad token" '"error":"bad token"' "$r_last"
+  first="$(reads "$r_first")"; last="$(reads "$r_last")"
+  check_eq "web app: a key wrong at its first character costs the same reads as one wrong at its last" "$first" "$last"
+  if [ -n "$first" ] && [ "$first" -ge "${#REAL}" ]; then ok; else bad "web app: the comparison reads every character of the key (read $first of ${#REAL})"; fi
   r="$(gs "$REAL" "{\"key\":\"$REAL\"}")"
   check "web app: the right key with neither action nor data is refused" '"ok":false' "$r"
   check "and appends nothing, never an empty dated row" '"appended":0' "$r"
