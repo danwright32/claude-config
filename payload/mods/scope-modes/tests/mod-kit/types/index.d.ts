@@ -92,6 +92,27 @@ export type ModKit = {
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
   git: (input: { words: string[] }) => Promise<ModKitGit | undefined>
   /**
+   * One command's words read as gh reads them (#961, the reader moved here from scope-modes): its
+   * subcommand and action past gh's global flags, each flag with its value as pflag reads it
+   * (`--flag=value`, `-XDELETE`, `-Rowner/x`, a cluster such as `-sd`, the value flags known per
+   * subcommand and action), its positionals, the repository it names itself (`named`), and for
+   * `gh api` what it sends and where (`api`). Undefined when the first word is not gh. Ask it once
+   * per command, as `git` is, beside the commands `pipeline` gives.
+   */
+  gh: (input: { words: string[] }) => Promise<ModKitGh | undefined>
+  /**
+   * A repository as gh reads one (-R, GH_REPO, a `gh repo` positional), as owner/name in lower
+   * case; null when it is none (another host, more or less than owner and name). Here owner/name
+   * alone IS a repository, where to git it is a local path, so a git remote is read by `repo`,
+   * never this (#961). The one reading `gh`'s `named` uses.
+   */
+  ghRepo: (input: { spelling: string }) => Promise<string | null>
+  /**
+   * The repository a github.com link names (a pull request's, an issue's, a file's, its own page),
+   * as owner/name the link spells it, its case kept; null for anything else (#961).
+   */
+  linkRepo: (input: { link: string }) => Promise<string | null>
+  /**
    * The same commands as `commands`, each with `pipedFrom`, the words of the command whose output
    * a `|` (or `|&`) feeds into it, absent when nothing does. `;`, `&&`, `||`, `&` and a new line
    * link no two commands, and every command in a subshell, an if, while, until, for, case or `{ }`
@@ -249,6 +270,36 @@ export type ModKitProgram = { text: string; stdin?: true } | { unreadable: strin
 export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
+
+/**
+ * A gh command as `gh` reads it: its subcommand (`pr`, `api`) and action (`merge`), each empty
+ * when absent; each flag with its value, or true for one that takes none; the words that are
+ * neither. `named` is the repository it names itself, as owner/name in lower case (-R or --repo,
+ * else a github.com link among its positionals, else a `gh repo` owner/name): absent when it names
+ * none, so gh takes GH_REPO or the checkout's, null when it names one that cannot be read.
+ * `unreadable` marks a flag before the subcommand that is not one of gh's global flags, or one
+ * between the subcommand and its action: what it does cannot be said, and `named` is null.
+ */
+export type ModKitGh = {
+  sub: string
+  act: string
+  flags: { name: string; value: string | true }[]
+  positionals: string[]
+  named?: string | null
+  unreadable: boolean
+  api?: ModKitGhApi
+}
+
+/**
+ * A `gh api` call: its method (GET unless -X says otherwise or a field or input is sent, which
+ * makes it a POST), its endpoint, the values its -f and -F fields send, whether --input sends a
+ * body no reader can see, `repo`, the repository its endpoint names (`repos/<owner>/<name>/...`)
+ * as owner/name in lower case, absent for an endpoint outside repos/ or gh's placeholders for the
+ * current repository, null for one that cannot be read (a spelling gh does not send to repos/,
+ * one placeholder beside a name), and `query`, the GraphQL document its query field sends, null
+ * when none can be read (none given, a body from --input, `-F query=@file`).
+ */
+export type ModKitGhApi = { method: string; endpoint: string | undefined; fields: string[]; input: boolean; repo?: string | null; query: string | null }
 
 /**
  * One file a command writes: `word` as the command spells it, `path` the absolute path when the
