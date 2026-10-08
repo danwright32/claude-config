@@ -98,6 +98,62 @@ check "SKILL.md carries a worked append example to judge" "examples=1" "$example
 check_not "and no worked example lists Claude Code under Skills Used, which the rule forbids" "Claude Code" "$example_verdict"
 check_not "and every worked example is valid JSON" "unparseable" "$example_verdict"
 
+# --- every step that sends somebody into the sheet names it and links it ------
+# Drive holds two sheets called "Dan Work Project Tracker", and on 2026-10-08 a token rotation
+# stopped to ask which one. Dan confirmed this one. The expected link is written here, never
+# read back out of SKILL.md, so a wrong link there cannot satisfy the check (L70).
+SHEET_NAME="Dan Work Project Tracker"
+SHEET_URL="https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit"
+# Judged per numbered step inside the setup and rotation sections, never over the whole file,
+# because one link anywhere would answer a whole file match while a step still says only
+# "open the sheet" (L135). A step sends somebody into the sheet when it says to open it or
+# names its Extensions, Apps Script menu. Prints one line per step missing the link or the
+# name, a line for each section with no such step at all, then the count of steps judged.
+sheet_step_gaps(){ # $1 = a SKILL.md
+  python3 - "$1" "$SHEET_URL" "$SHEET_NAME" <<'PY'
+import re, sys
+text, url, name = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+sections = {}
+for block in re.split(r"(?m)^## ", text)[1:]:
+    head, _, body = block.partition("\n")
+    sections[head.strip()] = body
+opens = re.compile(r"Extensions, Apps Script|\b[Oo]pen the sheet\b")
+judged = 0
+for want in ("First run / setup", "Rotating the token"):
+    body = next((b for h, b in sections.items() if h.startswith(want)), None)
+    if body is None:
+        print("%s: section missing" % want); continue
+    steps = re.findall(r"(?ms)^(\d+)\. (.*?)(?=^\d+\. |^\S|\Z)", body)
+    hits = [(n, s) for n, s in steps if opens.search(s)]
+    if not hits:
+        print("%s: no step sends the reader into the sheet" % want)
+    for n, s in hits:
+        judged += 1
+        s = " ".join(s.split())  # a rewrapped step still names the sheet (L278)
+        if url not in s:
+            print("%s step %s lacks the sheet link" % (want, n))
+        if name not in s:
+            print("%s step %s lacks the sheet name" % (want, n))
+print("judged=%d" % judged)
+PY
+}
+gaps="$(sheet_step_gaps "$DIR/SKILL.md")"
+check_eq "every setup and rotation step that opens the sheet carries its name and link" "judged=2" "$gaps"
+# Answered yes or no, so a failure prints a word rather than the whole file (L445). Whitespace is
+# collapsed first so a rewrapped line still counts (L278).
+warns="$(python3 -c 'import re,sys; t=" ".join(open(sys.argv[1]).read().split()); print("yes" if ("a second sheet named \"%s\"" % sys.argv[2]) in t else "no")' "$DIR/SKILL.md" "$SHEET_NAME" 2>&1)"
+check_eq "and SKILL.md warns that a second sheet shares the name" "yes" "$warns"
+# The controls (L1): the same check names the step whose link was taken out, and refuses a
+# file whose steps no longer send anybody into the sheet rather than passing it on zero.
+python3 -c 'import sys; t=open(sys.argv[1]).read(); h=t.index("## Rotating the token"); print(t[:h] + t[h:].replace(sys.argv[2], "the sheet", 1), end="")' "$DIR/SKILL.md" "$SHEET_URL" > "$TMP/no-link.md"
+check "the check names a rotation step whose link was removed" "Rotating the token step 3 lacks the sheet link" "$(sheet_step_gaps "$TMP/no-link.md")"
+check_not "and only that step" "First run / setup step" "$(sheet_step_gaps "$TMP/no-link.md")"
+# A step that rewraps the name across a line break still names the sheet (L278), so it passes.
+python3 -c 'import sys; t=open(sys.argv[1]).read(); print(t.replace("**Dan Work Project Tracker**", "**Dan Work\n   Project Tracker**"), end="")' "$DIR/SKILL.md" > "$TMP/rewrapped.md"
+check_eq "and a step whose sheet name is rewrapped across lines still counts as naming it" "judged=2" "$(sheet_step_gaps "$TMP/rewrapped.md")"
+printf '## First run / setup\n\n1. Run something.\n\n## Rotating the token\n\n1. Run something.\n' > "$TMP/no-steps.md"
+check "and refuses steps that never open the sheet, rather than passing on zero" "no step sends the reader into the sheet" "$(sheet_step_gaps "$TMP/no-steps.md")"
+
 # --- config.local.json never travels ------------------------------------------
 # Git: the skill's own ignore file keeps it out of every commit.
 gitignored(){ # gitignored <file name>; prints yes when a pattern in the skill's .gitignore matches it
