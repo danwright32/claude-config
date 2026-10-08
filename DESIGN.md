@@ -520,9 +520,11 @@ Rejected along the way:
   home directory, so it would have to guess where to write. The pull's check claims only what it
   measures (listed and valid), and the real run was proven once per Mac by hand. The biggest lever
   not pulled, named so a later pass need not rediscover it (L308).
-- **Type checking each mod with tsc in the gate.** The types it needs are generated per Mac at load
-  time and are absent in CI, so the gate relies on `claude plugin validate`, which reads the module
-  the way the engine will.
+- **Type checking each mod against the types Claude Code lays.** They are generated per Mac at load
+  time, absent in CI, and their MCP part lists whatever tools the session had connected, so a check
+  borrowing them gave one tree a different verdict hour to hour (#953). The gate type checks against
+  one build's types pinned in `tools/typescript/claude-code-types` instead, beside
+  `claude plugin validate`, which reads the module the way the engine will.
 - **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
   Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
   skipped it, and kept every mod.
