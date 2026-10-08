@@ -39,6 +39,9 @@ const modKit: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => true,
       }
       return { ...built, modkit }
     })
@@ -52,7 +55,7 @@ const modKit: { name: string; register: Register } = {
             r.lines.map((l, n) => (
               <Box key={`${r.id}${n}`} flexDirection="row">
                 {l.map((p, i) =>
-                  p.button ? <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={() => undefined} /> : <Text key={String(i)} color={p.color}>{p.text}</Text>,
+                  p.button ? <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} /> : <Text key={String(i)} color={p.color}>{p.text}</Text>,
                 )}
               </Box>
             )),
@@ -95,6 +98,9 @@ const modKitToday: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => true,
       }
       return { ...built, modkit }
     })

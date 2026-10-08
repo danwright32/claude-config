@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
 
@@ -263,7 +263,7 @@ const pressDone = async ($: EngineInterface) => {
   if (n === undefined) return
   await refresh($)
   try {
-    await $.prompt.submit({ text: `step ${n + 1} done`, asUser: true })
+    await $.prompt.submit({ text: donePrompt(n), asUser: true })
   } catch (err) {
     await unsend($, n, true)
     await refresh($)
@@ -483,19 +483,16 @@ export const register: Register = on => {
     return { result: done ? 'Every step is finished, so the card is gone.' : `Step ${String(input.step)} recorded; ${left(out.card)}.` }
   })
 
-  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:done' }, async ($, e) => {
-    await pressDone($)
-    return { element: e.element }
-  })
-  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy' }, async ($, e) => {
-    await pressCopy($, 'value', e.surface)
-    return { element: e.element }
-  })
-  // Claude Code draws no hyperlinks on Apple Terminal, where a long link is text cut at the edge,
-  // so this is what takes the whole address there (#708).
-  on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy-link' }, async ($, e) => {
-    await pressCopy($, 'url', e.surface)
-    return { element: e.element }
+  // The card's buttons, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
+  // Copy link takes the whole address where the terminal draws no hyperlinks (#708). Where a click
+  // may not land, mod-kit draws no Copy link and the link wraps whole to be selected.
+  on('modkit.press', async ($, e, next) => {
+    const field = e.element === 'manual-steps:copy' ? 'value' : e.element === 'manual-steps:copy-link' ? 'url' : undefined
+    if (e.element !== 'manual-steps:done' && !field) return next(e)
+    // Done and Copy each finish well inside a noun's 10 s (#744): a state change, then a prompt sent
+    // or a copy, so the press is answered once its work is done.
+    await (field ? pressCopy($, field, e.surface) : pressDone($))
+    return { value: { isAnswered: true } }
   })
 
   on('command.run', { command: 'steps' }, async $ => {
