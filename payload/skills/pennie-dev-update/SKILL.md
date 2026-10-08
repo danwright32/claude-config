@@ -43,11 +43,15 @@ Sonar issues by whether an agent would bump into them.
 **Run it from any directory, including one that is not a git repo at all.** Every repo it
 touches comes from `repos.json`, never from the working directory.
 
-So **every `gh` command must carry `--repo <owner>/<name>` explicitly**, and every `git`
-command must be run against the configured `path` (`git -C <path> ...`). This is not a style
-preference. Dan's usual working directory for PET is the folder *above* the git repo, which is
-not a repo at all, so a bare `gh issue edit` there fails or, worse, resolves to whatever repo
-happens to be nearby.
+So **every `gh` command must carry `--repo <owner>/<name>` explicitly** (or name the repo in its
+API path). This is not a style preference. Dan's usual working directory for PET is the folder
+*above* the git repo, which is not a repo at all, so a bare `gh issue edit` there fails or, worse,
+resolves to whatever repo happens to be nearby.
+
+**No step needs a local checkout.** Gathering, the changelog records and the deploy check all ask
+GitHub by `owner/name`, so `repos.json` records no path. The paths it used to carry were typed by
+hand, pointed at `~/Documents/...`, and stopped existing when the work MacBook's Documents folder
+moved on 2026-10-02 (claude-config#679, L153).
 
 If Dan asks for an update "for Slate" or "for PET" specifically, filter `repos.json` to that
 one. Otherwise do them all.
@@ -60,7 +64,9 @@ Read `repos.json` beside this file:
 { "repos": [
   { "name": "PET",
     "repo": "Try-Pennie/project-enrollment-tracker",
-    "path": "~/Documents/Project Enrollment Tracker (PET)/pet" }
+    "deployRecord": "build_history",
+    "deployRecordFrom": "2026-07-29",
+    "changelogFrom": "2026-08-31" }
 ] }
 ```
 
@@ -86,12 +92,9 @@ skill, which is the correct state for a product managers cannot use yet.
 Having no `lastEnd` makes its next run its first appearance, which introduces the product
 (section 2) and then behaves exactly like PET forever after.
 
-Slate's repo is `Try-Pennie/slate`. Its entry, for when Dan wants it in the rotation:
-
-```json
-{ "name": "Slate", "repo": "Try-Pennie/slate",
-  "path": "~/<wherever it is checked out>" }
-```
+An entry needs only `name` and `repo`. Give it `changelogFrom` from the day its pull requests
+carry changelog records (section 3), and `deployRecord` with `deployRecordFrom` only if it has a
+verified deploy record (section 4).
 
 ---
 
@@ -190,9 +193,11 @@ gh api --paginate '/repos/<owner>/<name>/pulls?state=closed&per_page=100' \
         | @tsv'
 ```
 
-Filter to `merged_at >= start`. Cross-check the count against
-`gh api '/search/issues?q=repo:<owner>/<name>+is:pr+is:merged+merged:>=<start>' --jq .total_count`
-and refuse if they disagree, because a short read reports as a quiet week.
+Filter to `merged_at > start`, strictly, as section 2 says: the PR merged exactly at `lastEnd`
+is the newest one the last post listed. Cross-check the count against
+`gh api '/search/issues?q=repo:<owner>/<name>+is:pr+is:merged+merged:><start>' --jq .total_count`
+with the same strict `>`, and refuse if they disagree, because a short read reports as a quiet
+week.
 
 ### The record each change carries (PET #1186)
 
@@ -254,13 +259,17 @@ select commit_sha, recorded_at from build_history
 where commit_sha is not null order by recorded_at desc limit 1;
 ```
 
-A PR is live when its merge commit is an ancestor of that sha:
+A PR is live when its merge commit is an ancestor of that sha. Ask GitHub, never a local
+checkout, which may not have fetched the live sha at all:
 
 ```bash
-git merge-base --is-ancestor <merge_sha> <live_sha>
+gh api 'repos/<owner>/<name>/compare/<merge_sha>...<live_sha>' --jq .status
 ```
 
-Three cases that must stay distinct (L11, L98):
+`ahead` or `identical` means live. `behind` or `diverged` means not live yet. Any error means the
+check could not be made, which is a refusal, never a hold.
+
+Four cases that must stay distinct (L11, L98):
 
 | Situation | What to do |
 |---|---|
@@ -308,12 +317,11 @@ updates, as in the June to August post.
 Taken from Dan's own rewrite of the first post, and from the draft he accepted on
 2026-09-16 after rejecting a longer-bulleted one. Follow it exactly. **It reads like
 release notes**: many bullets, one change each, most under 25 words. The 2026-09-16 post
-covered 53 manager-visible PRs in 70 bullets.
+covered 53 manager-visible PRs in 70 bullets. Its opener is shown as Dan changed it on
+2026-09-28 (below), since that is the opener every draft uses now.
 
 ```
-Update for August 31 to September 15
-
-Some of these you may have noticed and some you will not, because they are backend only.
+Updates for August 31 to September 15 :thread:
 
 GOALS
 The automatic unit goal is now two tiers: 15 units for months 1 to 3, 22 units from month 4 on. The old 20 and 25 tiers are gone.
@@ -337,9 +345,9 @@ Build and deploy: the daily build is triggered from a Cloudflare Worker with the
 
 **What Dan changed before posting on 2026-09-28** (the first post with two products). Apply
 these on the first draft:
-- Opener: `Updates for September 15 to 28 :thread:`, with the detail going in the thread. It had
-  no "backend only" line. A launch gets a second opener line, "Including the launch of a new
-  tool, Sonar!".
+- He rewrote the opener as `Updates for September 15 to 28 :thread:`, with the detail going in
+  the thread, and deleted the line saying some items are backend only. Both are in the structure
+  rules below.
 - A product being LAUNCHED goes first, above PET. Its section explains what it is, when to
   open it, what it checks and how to share a result. Dan added where it is bookmarked and
   that agents should start with it.
@@ -357,10 +365,12 @@ facts (the two-tier goal) became four bullets, one per fact, with the detail kep
 connective prose dropped. That is the target for the FIRST draft, not a rewrite.
 
 **Structure**
-- **No title line.** Open with the period line.
-- Period label from the actual window: "Update for the week of September 8" for roughly a
-  week, "Update for September" for roughly a month, otherwise a date range.
-- One short line noting some items are backend only.
+- **No title line.** The first line is the opener, `Updates for <period> :thread:`, and the
+  detail goes in the thread (Dan, 2026-09-28).
+- The period comes from the actual window: "the week of September 8" for roughly a week,
+  "September" for roughly a month, otherwise a range such as "September 15 to 28".
+- A launch gets a second opener line: "Including the launch of a new tool, Sonar!".
+- **No line saying some items are backend only.** Dan deleted it on 2026-09-28.
 - Headings are **bare uppercase**, no bold markers, first item on the very next line, blank
   line between sections.
 - **Items carry no prefix at all: no `- `, no `•`** (Dan, 2026-09-28: "can you take out
@@ -407,7 +417,7 @@ headings back to state.
 **Quiet period.** When nothing manager-visible shipped:
 
 ```
-Update for the week of September 8
+Updates for the week of September 8 :thread:
 
 Nothing changed on screen this week. Behind the scenes:
 
@@ -437,10 +447,12 @@ The failure mode is a confident sentence describing something that did not happe
 Write to the session scratchpad directory, then open it:
 
 ```bash
-/Applications/BBEdit.app/Contents/Helpers/bbedit_tool <file>
+/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>
 ```
 
-`bbedit` is not on PATH and `open` triggers the Island browser. Use the helper above.
+`bbedit` is not on PATH and `open` triggers the Island browser. Use the helper above, with
+`--front-window`: without it the helper opens the file in the background, reports success, and
+Dan sees nothing. Say in the same reply that focus is about to move.
 
 Not archived. The window mechanism already prevents repeating content, so there is nothing to
 compare against.
