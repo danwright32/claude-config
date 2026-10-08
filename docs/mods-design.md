@@ -144,6 +144,27 @@ exception any more. Since #743 it reads a variable the command set before a writ
 (`pipeline(cmd, { assignments: true })`, through `commandWrites`, off for every other caller); what
 it cannot be sure of stays as written (Ask before saving, below).
 
+Since #965 it reports what a command substitution changes. The shell runs the commands inside a
+`$(...)` or backticks before the command they sit in, and in a heredoc whose delimiter is not quoted
+(`<<EOF`, `<<-EOF`) before the program fed that body starts; the reader dropped a heredoc's body as
+text and kept a substitution inside its word, so `python3 - <<EOF` whose body held `$(cat rules.md
+>> ~/.claude/CLAUDE.md)` wrote lasting memory with nothing reported, and the collision guard and no
+build let such a write through (ask before saving still asked, through the mention, #940, but not
+for `cat <<EOF`, which feeds no program). Now `commandWrites` reads each substitution in the
+command's text outside the heredoc bodies (never inside single quotes, `$'...'` or a comment) and in
+each body whose delimiter is unquoted, one never ended included, as a command line of its own, so a
+nested one is read too and a `cd` or variable set inside it ends with it. In a body a quote is text
+and only a backslash before `$`, a backtick or a backslash escapes; a `)` quoted inside a
+substitution closes nothing; `$((...))` is arithmetic, running only the substitutions inside it; a
+substitution never closed is read to the end of its text, the side that asks. A quoted delimiter
+(`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body data, so a commit message written through `"$(cat
+<<'EOF' ... EOF)"` names nothing. Two readings are knowingly loose: where the command changes folder
+(`cd`, `pushd`, `popd`) a relative path in a substitution is left as written, since it may run
+before the change or after; and a variable the command sets is not followed into a substitution,
+so a path through one stays as written. Not read yet: a substitution inside a shell's own script
+held in single quotes or a quoted heredoc (`bash -c '... $(...)'`, `bash <<'EOF'`), which that
+shell runs, and a process substitution (`<(...)`).
+
 What #712 brought into it, from the two copies it replaced. Beside `files`, the files content goes
 into, it reports `changes`: a file removed (`rm`, `unlink`, `rmdir`, a `mv`'s source, `find
 -delete`, `shred -u`), stamped (`touch`), emptied (`truncate`, `shred`), made (`mkdir`) or changed
@@ -1773,10 +1794,11 @@ and the band question is removed rather than kept beside it (L29). Three defects
   - Only a program the shell cannot have changed: on standard input from a quoted heredoc, or one
     holding no `$` or backtick. In any other the shell may have run what a sentence holds
     (`"$(cat x >> ~/.claude/CLAUDE.md)"` or the same in backticks, in an unquoted heredoc), so it is
-    read whole. That matters beyond this rule: mod-kit's write reader does not report a write made
-    by such a substitution, so the mention is the only thing that catches it, and a test holds the
-    unquoted case asked about and the same words under a quoted delimiter let through. So is a
-    program that runs a process, which may hand a sentence to a shell, and every other language. A
+    read whole. So is a program that runs a process, which may hand a sentence to a shell, and
+    every other language. Reading the unquoted heredoc whole mattered beyond this rule: mod-kit's write reader did not then
+    report a write made by such a substitution, so the mention was the only thing that caught it,
+    and a test holds the unquoted case asked about and the same words under a quoted delimiter let
+    through. Since #965 the write reader reports it too (above, under the write reader). A
     backtick is no quote in python, so one closing a mention (markdown in a sentence) leaves it text.
   - **Chosen: read from the text, not from what the program does with it.** A path cut out of a
     longer string at run time (a split, a slice) is not seen; tracing values through a program is

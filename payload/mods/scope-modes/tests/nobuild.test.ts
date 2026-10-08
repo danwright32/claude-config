@@ -639,3 +639,21 @@ describe('no build: a database client fed a heredoc', () => {
     expect(what(run(`psql "$DB" -c '\\set x \`rm -rf /repo\`'`))).toBe('run a shell command through psql')
   })
 })
+
+// #965: the shell runs a command substitution in an unquoted heredoc's body before the command fed
+// it starts, and one on the command line before the command it sits in; mod-kit's write reader now
+// reports what each changes, so no build refuses it. Quoted, the body or the word is text.
+describe('no build: what a command substitution changes (#965)', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test('in an unquoted heredoc body or on the command line, it is refused like any other change', () => {
+    expect(what(run('cat <<EOF\nnote $(rm /repo/app.ts) done\nEOF'))).toBe('remove app.ts')
+    expect(what(run('cat > /dev/null <<-EOF\n\tnote `echo x > /repo/app.ts` done\n\tEOF'))).toBe('write to app.ts')
+    expect(what(run('echo "note $(echo x >> /repo/app.ts)"'))).toBe('write to app.ts')
+  })
+  test('under a quoted delimiter, in single quotes, or in a quoted heredoc a substitution reads, nothing runs', () => {
+    expect(run("cat <<'EOF'\nnote $(rm /repo/app.ts) done\nEOF")).toBeUndefined()
+    expect(run('cat <<"EOF"\nnote `echo x > /repo/app.ts` done\nEOF')).toBeUndefined()
+    expect(run("echo 'note $(echo x >> /repo/app.ts)'")).toBeUndefined()
+    expect(run("echo \"$(cat <<'EOF'\nWrite > /repo/app.ts\nEOF\n)\"")).toBeUndefined()
+  })
+})
