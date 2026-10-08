@@ -94,8 +94,8 @@ describe('commands', () => {
   })
   // What a $( ) runs is given as commands of its own before it since #974.
   test('a parenthesis inside a word stays part of it', () => {
-    expect(commands('cd $(git rev-parse --show-toplevel)')).toEqual([['git', 'rev-parse', '--show-toplevel'], ['cd', '$(git', 'rev-parse', '--show-toplevel)']])
-    expect(commands('diff <(sort a) b')).toEqual([['diff', '<(sort', 'a)', 'b']])
+    expect(commands('cd $(git rev-parse --show-toplevel)')).toEqual([['git', 'rev-parse', '--show-toplevel'], ['cd', '$(git rev-parse --show-toplevel)']])
+    expect(commands('diff <(sort a) b')).toEqual([['sort', 'a'], ['diff', '<(sort a)', 'b']])
     expect(commands('echo $((1+2)) "(x)"')).toEqual([['echo', '$((1+2))', '(x)']])
   })
   test('nothing in, nothing out', () => {
@@ -287,8 +287,8 @@ describe('the reader after #730', () => {
     expect(commands('cat<<<x')).toEqual([['cat', '<<<x']])
     // A descriptor number stays with its redirect, and a < inside a $( ) word stays in the word.
     expect(commands('cat 0<<EOF\nx\nEOF')).toEqual([['cat', '0<<EOF']])
-    expect(commands('echo $(wc -l<f)')).toEqual([['wc', '-l', '<f'], ['echo', '$(wc', '-l<f)']])
-    expect(commands('diff <(sort a) b')).toEqual([['diff', '<(sort', 'a)', 'b']])
+    expect(commands('echo $(wc -l<f)')).toEqual([['wc', '-l', '<f'], ['echo', '$(wc -l<f)']])
+    expect(commands('diff <(sort a) b')).toEqual([['sort', 'a'], ['diff', '<(sort a)', 'b']])
   })
   // A case pattern's ) was read as a subshell's close, so it popped the group feeding the commands
   // around it, and `sh` in a piped while loop was fed nothing.
@@ -346,7 +346,7 @@ describe('heredocs name the descriptor they feed (#760)', () => {
     // A later redirect on another descriptor replaces nothing on standard input.
     expect(pipeline("psql db <<'SQL' 3< other.txt\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true }])
     // A process substitution is an argument, not a redirect onto standard input.
-    expect(pipeline("diff - <<'X' <(sort b)\na\nX")[0]?.heredocs).toEqual([{ word: 2, body: 'a', quoted: true }])
+    expect(pipeline("diff - <<'X' <(sort b)\na\nX").find(c => c.words[0] === 'diff')?.heredocs).toEqual([{ word: 2, body: 'a', quoted: true }])
     // 00 is descriptor 0 too.
     expect(pipeline("psql db 00<<'SQL'\nSELECT 1;\nSQL")[0]?.heredocs).toEqual([{ word: 2, body: 'SELECT 1;', quoted: true }])
   })
@@ -374,11 +374,11 @@ describe('heredocs name the descriptor they feed (#760)', () => {
 describe('the commands a substitution runs (#974)', () => {
   const subs = (cmd: string) => pipeline(cmd).filter(c => c.substitution).map(c => c.words)
   test('$(...) and backticks, bare or in double quotes, each give their commands, marked, before the command they sit in', () => {
-    expect(pipeline('echo $(git commit -m x)')).toEqual([{ words: ['git', 'commit', '-m', 'x'], substitution: true }, { words: ['echo', '$(git', 'commit', '-m', 'x)'] }])
-    expect(commands('echo `git push`')).toEqual([['git', 'push'], ['echo', '`git', 'push`']])
+    expect(pipeline('echo $(git commit -m x)')).toEqual([{ words: ['git', 'commit', '-m', 'x'], substitution: true }, { words: ['echo', '$(git commit -m x)'] }])
+    expect(commands('echo `git push`')).toEqual([['git', 'push'], ['echo', '`git push`']])
     expect(subs('echo "published: $(npm publish)"')).toEqual([['npm', 'publish']])
     expect(subs('echo "pushed: `git push origin main`"')).toEqual([['git', 'push', 'origin', 'main']])
-    expect(commands('cd /a; echo $(git push); ls')).toEqual([['cd', '/a'], ['git', 'push'], ['echo', '$(git', 'push)'], ['ls']])
+    expect(commands('cd /a; echo $(git push); ls')).toEqual([['cd', '/a'], ['git', 'push'], ['echo', '$(git push)'], ['ls']])
   })
   test('a substitution that only sets a variable still runs its commands, and so does one inside a word', () => {
     expect(subs('x=$(git push)')).toEqual([['git', 'push']])
@@ -387,8 +387,8 @@ describe('the commands a substitution runs (#974)', () => {
     expect(subs('echo $(wc -l<f)')).toEqual([['wc', '-l', '<f']])
   })
   test('nested substitutions, one spanning lines, and backticks inside $(...) are each read', () => {
-    expect(subs('echo $(echo $(git push))')).toEqual([['git', 'push'], ['echo', '$(git', 'push)']])
-    expect(subs('echo $(echo `npm publish`)')).toEqual([['npm', 'publish'], ['echo', '`npm', 'publish`']])
+    expect(subs('echo $(echo $(git push))')).toEqual([['git', 'push'], ['echo', '$(git push)']])
+    expect(subs('echo $(echo `npm publish`)')).toEqual([['npm', 'publish'], ['echo', '`npm publish`']])
     expect(subs('echo "$(git add .\ngit commit -m x)"')).toEqual([['git', 'add', '.'], ['git', 'commit', '-m', 'x']])
   })
   test("in an unquoted heredoc's body they run, in a quoted one they are data", () => {
@@ -418,7 +418,7 @@ describe('the commands a substitution runs (#974)', () => {
     const TYPED = 'tell application "System Events" to key' + 'stroke "n"'
     const given: [string, string[][]][] = [
       // The style check.
-      [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX], ['commit', '-m', `${FIX})`]]],
+      [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX]]],
       ['echo "made `git commit -F /tmp/msg.txt`"', [['git', 'commit', '-F', '/tmp/msg.txt'], ['echo', 'made `git commit -F /tmp/msg.txt`']]],
       [`cat <<EOF\n$(git commit -m "${FIX}")\nEOF`, [['git', 'commit', '-m', FIX], ['cat', '<<EOF']]],
       [`echo '$(git commit -m "${FIX}")'`, [['echo', `$(git commit -m "${FIX}")`]]],
@@ -430,12 +430,41 @@ describe('the commands a substitution runs (#974)', () => {
       ["echo '$(cat .env)' '`printenv`'", [['echo', '$(cat .env)', '`printenv`']]],
       ["cat <<'EOF'\n$(cat .env)\nEOF", [['cat', '<<EOF']]],
       // The keystroke guard.
-      [`x=$(osascript -e '${TYPED}')`, [['osascript', '-e', TYPED], ['-e', `${TYPED})`]]],
+      [`x=$(osascript -e '${TYPED}')`, [['osascript', '-e', TYPED]]],
       ['echo "`cliclick c:100,200`"', [['cliclick', 'c:100,200'], ['echo', '`cliclick c:100,200`']]],
       ["cat <<EOF\n$(open -a 'Google Chrome' report.html)\nEOF", [['open', '-a', 'Google Chrome', 'report.html'], ['cat', '<<EOF']]],
       ["echo '$(cliclick c:100,200)'", [['echo', '$(cliclick c:100,200)']]],
       ["cat <<'EOF'\n`cliclick c:100,200`\nEOF", [['cat', '<<EOF']]],
     ]
     for (const [command, words] of given) expect(`${command} => ${JSON.stringify(commands(command))}`).toBe(`${command} => ${JSON.stringify(words)}`)
+  })
+  // #975: a process substitution runs its commands too, as the command it sits in starts.
+  test('a process substitution, <(...) or >(...), gives its commands; in double quotes or a heredoc body it is text', () => {
+    expect(pipeline('diff <(git push) b')).toEqual([{ words: ['git', 'push'], substitution: true }, { words: ['diff', '<(git push)', 'b'] }])
+    expect(subs('tee >(npm publish) < x')).toEqual([['npm', 'publish']])
+    expect(subs('diff <(sort <(git push)) b')).toEqual([['git', 'push'], ['sort', '<(git push)']])
+    expect(subs('echo "<(git push)" \'>(npm publish)\'')).toEqual([])
+    expect(subs('cat <<EOF\n<(git push)\nEOF')).toEqual([])
+  })
+  // A substitution's spaces, quotes and redirects split the word it sits in, so `x=$(npm publish)`
+  // also gave a command named `publish)` and `> a.md)` a file named `a.md)`. It is one word now.
+  test('a substitution is part of the one word it sits in, its spaces, quotes and redirects included', () => {
+    expect(commands('x=$(npm publish)')).toEqual([['npm', 'publish']])
+    expect(commands('echo "$(echo "a b")" c')).toEqual([['echo', 'a b'], ['echo', '$(echo "a b")', 'c']])
+    expect(commands('rm $(cat list) `ls -d old`')).toEqual([['cat', 'list'], ['ls', '-d', 'old'], ['rm', '$(cat list)', '`ls -d old`']])
+    expect(commands('x=$(echo a > f.md); echo b')).toEqual([['echo', 'a', '>', 'f.md'], ['echo', 'b']])
+    // One never closed runs to the end, as the shell reads it.
+    expect(commands('echo $(git push')).toEqual([['git', 'push'], ['echo', '$(git push']])
+  })
+  // #975: the shell expands an unquoted heredoc's body before the program it feeds reads it, taking
+  // the backslash off an escaped $, backtick or backslash and joining an escaped line end, so a shell
+  // fed `\$(git push)` runs it. The program is read as it receives the body; a quoted body is as written.
+  test("a program fed an unquoted heredoc reads the body as the shell expanded it, escapes taken off", () => {
+    const program = (cmd: string) => pipeline(cmd).find(c => c.program)?.program
+    expect(program("python3 - <<EOF\nprint('\\$HOME \\` \\\\ \\x')\nEOF")).toEqual({ text: "print('$HOME ` \\ \\x')", stdin: true })
+    expect(program("python3 - <<EOF\nprint(1 + \\\n2)\nEOF")).toEqual({ text: 'print(1 + 2)', stdin: true })
+    expect(program("python3 - <<'EOF'\nprint('\\$HOME')\nEOF")).toEqual({ text: "print('\\$HOME')", stdin: true })
+    expect(subs('bash <<EOF\necho \\$(git push) \\`npm publish\\`\nEOF')).toEqual([['git', 'push'], ['npm', 'publish']])
+    expect(subs("bash <<'EOF'\necho \\$(git push)\nEOF")).toEqual([])
   })
 })

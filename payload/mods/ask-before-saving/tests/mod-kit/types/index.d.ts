@@ -62,7 +62,8 @@ export type ModKit = {
    * commands each command substitution runs (`$(...)` or backticks, on the command line, in an
    * unquoted heredoc's body or in a shell's own script, nested ones too) come before the command
    * they sit in (#974); one in single quotes, `$'...'`, a comment or a quoted heredoc body is text.
-   * The one reader every mod uses (L613).
+   * So do the commands a process substitution runs (`<(...)`, `>(...)`, #975), never one in double
+   * quotes or a heredoc body. The one reader every mod uses (L613).
    */
   commands: (input: { command: string }) => Promise<string[][]>
   /**

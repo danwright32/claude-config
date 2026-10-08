@@ -146,6 +146,34 @@ const ENTRIES: Entry[] = [
   {"method":"writes","input":{"command":"echo 'on $(git checkout main)'","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
   {"method":"commands","input":{"command":"cat <<'EOF'\non $(git checkout main)\nEOF"},"want":[["cat","<<EOF"]]},
   {"method":"writes","input":{"command":"cat <<'EOF'\non $(git checkout main)\nEOF","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"bash -c 'echo done >> notes.txt'"},"want":[["echo","done",">>","notes.txt"]]},
+  {"method":"writes","input":{"command":"bash -c 'echo done >> notes.txt'","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"sh -c 'echo \"$(echo done >> notes.txt)\"'"},"want":[["echo","done",">>","notes.txt"],["echo","$(echo done >> notes.txt)"]]},
+  {"method":"git","input":{"words":["echo","$(echo done >> notes.txt)"]},"want":null},
+  {"method":"writes","input":{"command":"sh -c 'echo \"$(echo done >> notes.txt)\"'","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"zsh -c 'echo \"`echo done >> notes.txt`\"'"},"want":[["echo","done",">>","notes.txt"],["echo","`echo done >> notes.txt`"]]},
+  {"method":"git","input":{"words":["echo","`echo done >> notes.txt`"]},"want":null},
+  {"method":"writes","input":{"command":"zsh -c 'echo \"`echo done >> notes.txt`\"'","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"sh <<'EOF'\nx=$(echo done >> notes.txt)\nEOF"},"want":[["echo","done",">>","notes.txt"]]},
+  {"method":"writes","input":{"command":"sh <<'EOF'\nx=$(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo 'echo done >> notes.txt' | bash"},"want":[["echo","echo done >> notes.txt"],["echo","done",">>","notes.txt"]]},
+  {"method":"git","input":{"words":["echo","echo done >> notes.txt"]},"want":null},
+  {"method":"writes","input":{"command":"echo 'echo done >> notes.txt' | bash","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"diff <(echo done >> notes.txt) b.txt"},"want":[["echo","done",">>","notes.txt"],["diff","<(echo done >> notes.txt)","b.txt"]]},
+  {"method":"writes","input":{"command":"diff <(echo done >> notes.txt) b.txt","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"tee >(cat >> notes.txt) < b.txt"},"want":[["cat",">>","notes.txt"],["tee",">(cat >> notes.txt)","<","b.txt"]]},
+  {"method":"git","input":{"words":["cat",">>","notes.txt"]},"want":null},
+  {"method":"writes","input":{"command":"tee >(cat >> notes.txt) < b.txt","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cat > /dev/null <<'EOF'\necho done >> notes.txt $(echo done >> notes.txt) <(echo done >> notes.txt)\nEOF"},"want":[["cat",">","/dev/null","<<EOF"]]},
+  {"method":"git","input":{"words":["cat",">","/dev/null","<<EOF"]},"want":null},
+  {"method":"writes","input":{"command":"cat > /dev/null <<'EOF'\necho done >> notes.txt $(echo done >> notes.txt) <(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo \"<(echo done >> notes.txt)\""},"want":[["echo","<(echo done >> notes.txt)"]]},
+  {"method":"git","input":{"words":["echo","<(echo done >> notes.txt)"]},"want":null},
+  {"method":"writes","input":{"command":"echo \"<(echo done >> notes.txt)\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"git","input":{"words":["diff","<(echo done >> notes.txt)","b.txt"]},"want":null},
+  {"method":"git","input":{"words":["tee",">(cat >> notes.txt)","<","b.txt"]},"want":null},
+  {"method":"commands","input":{"command":"bash <<EOF\necho \\$(echo done >> notes.txt)\nEOF"},"want":[["echo","done",">>","notes.txt"],["echo","$(echo done >> notes.txt)"]]},
+  {"method":"writes","input":{"command":"bash <<EOF\necho \\$(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
 ]
 
 const ask = (e: Entry): unknown => {
@@ -156,8 +184,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 136 entries', () => {
-    expect(ENTRIES.length).toBe(136)
+  test('holds 164 entries', () => {
+    expect(ENTRIES.length).toBe(164)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {

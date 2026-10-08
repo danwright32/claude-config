@@ -249,6 +249,34 @@ const KIT = new Map<string, unknown>([
   ["writes {\"command\":\"echo 'on $(git checkout main)'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
   ["commands {\"command\":\"cat <<'EOF'\\non $(git checkout main)\\nEOF\"}", [["cat","<<EOF"]]],
   ["writes {\"command\":\"cat <<'EOF'\\non $(git checkout main)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"bash -c 'echo done >> notes.txt'\"}", [["echo","done",">>","notes.txt"]]],
+  ["writes {\"command\":\"bash -c 'echo done >> notes.txt'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"sh -c 'echo \\\"$(echo done >> notes.txt)\\\"'\"}", [["echo","done",">>","notes.txt"],["echo","$(echo done >> notes.txt)"]]],
+  ["git {\"words\":[\"echo\",\"$(echo done >> notes.txt)\"]}", null],
+  ["writes {\"command\":\"sh -c 'echo \\\"$(echo done >> notes.txt)\\\"'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"zsh -c 'echo \\\"`echo done >> notes.txt`\\\"'\"}", [["echo","done",">>","notes.txt"],["echo","`echo done >> notes.txt`"]]],
+  ["git {\"words\":[\"echo\",\"`echo done >> notes.txt`\"]}", null],
+  ["writes {\"command\":\"zsh -c 'echo \\\"`echo done >> notes.txt`\\\"'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"sh <<'EOF'\\nx=$(echo done >> notes.txt)\\nEOF\"}", [["echo","done",">>","notes.txt"]]],
+  ["writes {\"command\":\"sh <<'EOF'\\nx=$(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo 'echo done >> notes.txt' | bash\"}", [["echo","echo done >> notes.txt"],["echo","done",">>","notes.txt"]]],
+  ["git {\"words\":[\"echo\",\"echo done >> notes.txt\"]}", null],
+  ["writes {\"command\":\"echo 'echo done >> notes.txt' | bash\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"diff <(echo done >> notes.txt) b.txt\"}", [["echo","done",">>","notes.txt"],["diff","<(echo done >> notes.txt)","b.txt"]]],
+  ["writes {\"command\":\"diff <(echo done >> notes.txt) b.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"tee >(cat >> notes.txt) < b.txt\"}", [["cat",">>","notes.txt"],["tee",">(cat >> notes.txt)","<","b.txt"]]],
+  ["git {\"words\":[\"cat\",\">>\",\"notes.txt\"]}", null],
+  ["writes {\"command\":\"tee >(cat >> notes.txt) < b.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cat > /dev/null <<'EOF'\\necho done >> notes.txt $(echo done >> notes.txt) <(echo done >> notes.txt)\\nEOF\"}", [["cat",">","/dev/null","<<EOF"]]],
+  ["git {\"words\":[\"cat\",\">\",\"/dev/null\",\"<<EOF\"]}", null],
+  ["writes {\"command\":\"cat > /dev/null <<'EOF'\\necho done >> notes.txt $(echo done >> notes.txt) <(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo \\\"<(echo done >> notes.txt)\\\"\"}", [["echo","<(echo done >> notes.txt)"]]],
+  ["git {\"words\":[\"echo\",\"<(echo done >> notes.txt)\"]}", null],
+  ["writes {\"command\":\"echo \\\"<(echo done >> notes.txt)\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["git {\"words\":[\"diff\",\"<(echo done >> notes.txt)\",\"b.txt\"]}", null],
+  ["git {\"words\":[\"tee\",\">(cat >> notes.txt)\",\"<\",\"b.txt\"]}", null],
+  ["commands {\"command\":\"bash <<EOF\\necho \\\\$(echo done >> notes.txt)\\nEOF\"}", [["echo","done",">>","notes.txt"],["echo","$(echo done >> notes.txt)"]]],
+  ["writes {\"command\":\"bash <<EOF\\necho \\\\$(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
 ])
 
 type Judge = string | 'no-answer'
@@ -939,6 +967,34 @@ test('a branch switch a command substitution runs is judged; quoted, it is text'
   for (const command of ["echo 'on $(git checkout main)'", "cat <<'EOF'\non $(git checkout main)\nEOF"]) await $.tool.call(bash(command, 'sub4'))
   expect(w.reached).toEqual(['Bash', 'Bash'])
   expect(w.prompts.length).toBe(3)
+})
+
+// #975: a write inside a script a second shell runs (its -c, a quoted heredoc, a script piped to it),
+// redirect or substitution, and one inside a process substitution, is read by mod-kit's write
+// reader, so a write there to a file another session is editing is judged. A quoted heredoc fed to a
+// program that is not a shell, and a process substitution in double quotes, are text.
+test('a write in a shell script or a process substitution is judged; fed to another program, it is text', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  const judged = [
+    "bash -c 'echo done >> notes.txt'",
+    "sh -c 'echo \"$(echo done >> notes.txt)\"'",
+    "zsh -c 'echo \"`echo done >> notes.txt`\"'",
+    "bash <<'EOF'\necho done >> notes.txt\nEOF",
+    "sh <<'EOF'\nx=$(echo done >> notes.txt)\nEOF",
+    // Unquoted, the outer shell takes the escape off, and the shell fed the body runs it.
+    'bash <<EOF\necho \\$(echo done >> notes.txt)\nEOF',
+    "echo 'echo done >> notes.txt' | bash",
+    'diff <(echo done >> notes.txt) b.txt',
+    'tee >(cat >> notes.txt) < b.txt',
+  ]
+  for (const command of judged) {
+    const r = await $.tool.call(bash(command, 'sub5'))
+    expect(`${command}: ${refusal(r)}`).toBe(`${command}: Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.`)
+  }
+  expect(w.reached).toEqual([])
+  for (const command of ["cat > /dev/null <<'EOF'\necho done >> notes.txt $(echo done >> notes.txt) <(echo done >> notes.txt)\nEOF", 'echo "<(echo done >> notes.txt)"']) await $.tool.call(bash(command, 'sub6'))
+  expect(w.reached).toEqual(['Bash', 'Bash'])
+  expect(w.prompts.length).toBe(judged.length)
 })
 
 // #707: a guard that refuses decides before this one judges, whichever order the mods load in. The

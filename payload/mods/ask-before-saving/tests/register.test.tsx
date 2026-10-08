@@ -637,6 +637,36 @@ test('a python program a substitution runs, writing a file its words do not name
   expect(w.ran).toEqual([])
 })
 
+// #975: a save inside a script a second shell runs (its -c, a quoted heredoc, a script piped to it),
+// redirect or substitution, and one inside a process substitution, is read by mod-kit's write reader,
+// so it is asked about by the file it writes. A quoted heredoc fed to a program that is not a shell,
+// and a process substitution in double quotes, are text.
+test('a save in a shell script or a process substitution is asked about by the file it writes; fed to another program, it is text (#975)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/rules.md`]: '- rule\n' } })
+  const save = 'cat rules.md >> ~/.claude/CLAUDE.md'
+  const asked = [
+    `bash -c '${save}'`,
+    `sh -c 'echo "$(${save})"'`,
+    `zsh -c 'echo "\`${save}\`"'`,
+    `bash <<'EOF'\n${save}\nEOF`,
+    `sh <<'EOF'\nx=$(${save})\nEOF`,
+    // Unquoted, the outer shell takes the escape off, and the shell fed the body runs it.
+    `bash <<EOF\necho \\$(${save})\nEOF`,
+    `echo '${save}' | bash`,
+    `diff <(${save}) rules.md`,
+    'tee >(cat >> ~/.claude/CLAUDE.md) < rules.md',
+  ]
+  for (const command of asked) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain('this writes lasting memory (~/.claude/CLAUDE.md)')
+  }
+  expect(w.ran).toEqual([])
+  const text = [`cat > notes.txt <<'EOF'\n${save} $(${save}) <(${save})\nEOF`, `echo "<(${save})" > notes.txt`]
+  for (const command of text) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.map(r => r.input.command)).toEqual(text)
+})
+
 test('a write whose file cannot be read from the command is still asked about, and the refusal says which file it took to be written and why (#940)', withKit, async ($, on) => {
   const w = world($, on)
   const why = refusalOf(await call($, { tool: 'Bash', command: `python3 - <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('${MEM}')\nEOF` }))
