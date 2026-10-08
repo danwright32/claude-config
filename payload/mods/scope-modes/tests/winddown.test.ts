@@ -23,6 +23,8 @@ describe('newWork: starting new work is denied while winding down', () => {
     expect(bash(['gh', '-R', 'o/x', 'issue', 'develop', '700'])?.what).toBe('start a new branch')
     expect(bash(['gh', '--repo=o/x', 'issue', 'develop', '700'])?.what).toBe('start a new branch')
     expect(bash(['gh', '-R', 'o/x', 'issue', 'view', '700'])).toBeUndefined()
+    // A flag before the subcommand gh's reader cannot place could hide one, so it is refused.
+    expect(bash(['gh', '--frob', 'x', 'issue', 'develop', '700'])?.what).toBe('run a gh command whose flags cannot be read')
     expect(tool('EnterWorktree', {})?.what).toBe('start a new branch')
   })
   test('agent dispatch for another issue, but not for this one', () => {

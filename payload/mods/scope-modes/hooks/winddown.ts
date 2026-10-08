@@ -134,6 +134,8 @@ export const newWork = (call: { tool: string; input: Record<string, unknown>; co
     if (g?.sub === 'branch' && args.length > 0 && !args[0]?.startsWith('-')) return { what: 'start a new branch' }
     // gh read by mod-kit's one reader (#961), past its global flags (`gh -R o/x issue develop 7`).
     if (c.gh?.sub === 'issue' && c.gh.act === 'develop') return { what: 'start a new branch' }
+    // A flag before the subcommand the reader cannot place could hide `issue develop`, so it is refused.
+    if (c.gh?.unreadable) return { what: 'run a gh command whose flags cannot be read' }
   }
   return undefined
 }

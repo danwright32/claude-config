@@ -178,7 +178,7 @@ describe('what a command does, by effect', () => {
     expect(kinds('gh pr merge 12 --squash')).toEqual(['merge'])
     expect(acts('gh pr merge 12 --auto --squash')[0]?.what).toBe('merge a PR (auto merge)')
     expect(acts('gh pr merge 12 --repo Try-Pennie/slate')[0]?.repo).toBe('try-pennie/slate')
-    // Every spelling gh reads, through phase 3's one reading of gh's arguments (ghargs.ts): a joined
+    // Every spelling gh reads, through mod-kit's one reading of gh's arguments ($.modkit.gh, #961): a joined
     // -R, --repo=, a PR link naming its repository, and a joined --method.
     expect(acts('gh pr merge 12 -RTry-Pennie/slate')[0]?.repo).toBe('try-pennie/slate')
     expect(acts('gh pr merge 12 --repo=o/x')[0]?.repo).toBe('o/x')

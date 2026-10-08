@@ -126,7 +126,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
     expect(await bash('gh pr create -R other/x --title x --body y')).toBe(other)
   })
-  test('every spelling gh accepts is read the same (ghargs.ts)', async () => {
+  test('every spelling gh accepts is read the same (the mod-kit gh reader, #961)', async () => {
     expect(await bash('gh api --method=DELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
     expect(await bash('gh api -XDELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
     expect(await bash('gh api -XPOST repos/other/x/issues/5/comments -fbody=x')).toBe(other)
