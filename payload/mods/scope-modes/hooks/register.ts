@@ -1850,7 +1850,8 @@ const tellOthers = async ($: EngineInterface, place: ScopeModesPlace): Promise<T
       else out.told++
     }
   } catch (err) {
-    out.unknown = `the session registry's answer could not be read (${msg(err)})`
+    // Added to what was already said, never over it: an unreadable record may be a live session (L215).
+    out.unknown = [out.unknown, `the session registry's answer could not be read (${msg(err)})`].filter(Boolean).join('; ')
   }
   return out
 }

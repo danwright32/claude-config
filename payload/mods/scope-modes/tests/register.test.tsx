@@ -232,6 +232,8 @@ type Opts = {
   lsFails?: string
   /** Reading this session's folder throws (#836: after the unanswered list is written). */
   cwdThrows?: boolean
+  /** The session registry's answer as raw text, in place of the usual one (#837). */
+  registryAnswer?: string
   /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
   promptFails?: number
   /** Opening the report in BBEdit failing (#837): the helper's words, and open -a BBEdit's. */
@@ -414,6 +416,7 @@ const world = (on: On, o: Opts = {}) => {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
       // A registry answer missing its lists, so enrolment throws reading it (#843).
       if (o.registryGarbled) return ok('{}')
+      if (o.registryAnswer !== undefined) return ok(o.registryAnswer)
       return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
     if (cmd === '__verdict') {
@@ -1544,6 +1547,13 @@ test('a session registry that answers garbled never loses the wake reply: the su
   // Telling the others the place met the same answer, and says so rather than throwing.
   expect(r.text).toMatch(/The other sessions could not be told: the session registry's answer could not be read \(.+?\)\. The night's report/)
   expect(w.files[CURRENT]).toBeUndefined()
+})
+
+test('a registry answer that names a record it could not read and then breaks keeps both said (#837)', withDeps, async ($, on) => {
+  const { clock } = world(on, { registryAnswer: JSON.stringify({ open: 7, closed: [], unreadable: ['s7.json'], selfId: 's1' }), files: { [CURRENT]: asleepRecord({ workers: [] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/The other sessions could not be told: the session registry could not read s7\.json; the session registry's answer could not be read \(.+?\)\./)
 })
 
 test('notes that cannot be read are said in the morning turn, pointing at the report (#837)', withDeps, async ($, on) => {
