@@ -1907,6 +1907,11 @@ the issue approved; what follows is that plan as built, with the readings taken 
   stamp, mode change or folder does not, nor does removing a whole folder by its name (`rm -r
   components`), which would need the folder walked and is left as a gap. A file in no git checkout is
   in no project and passes, which is what lets a design round build its switcher in the scratchpad.
+- **Which tools.** Every tool whose input carries a file path (a key ending path or paths) is judged
+  as writing it, except those known only to read it (Read, Grep, Glob, LS, NotebookRead, LSP,
+  Artifact, ArtifactData), so MultiEdit, NotebookEdit and a writing tool added later are held by
+  default; the shell is read by mod-kit's write reader. Built, only Write, Edit and Bash were judged,
+  which the lessons review found let the rest through.
 - **Where it decides.** A subagent's call is judged at `tool.call`, the one place its loop is known,
   refused alike, and told to stop and report the line the main session asks with; that refused call
   is kept waiting too, so the main session can ask Dan about it, and is then told to have the agent
