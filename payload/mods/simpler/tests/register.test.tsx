@@ -333,6 +333,24 @@ test('where a click cannot land there is no button, "type: /simpler" instead, an
   await ui.unmount()
 })
 
+// Lessons review of #952: /simpler asks just after it returns, so a failure there is a toast, as a
+// failed press's is, never an unhandled rejection after "Asking for the short version.".
+test('a /simpler whose ask fails after the command returned says so in a toast', KIT, async ($, on) => {
+  const w = world(on, { noClicks: true })
+  let failing = false
+  on('state.set', ($, e, next) => {
+    if (failing && (e as unknown as { key?: string }).key === 'offer') return { deny: 'state unwritable' } as never
+    return next(e)
+  })
+  await start($)
+  await answer($, LONG)
+  failing = true
+  const run = ($ as unknown as { command: { run: (e: object) => Promise<{ text?: string }> } }).command.run
+  expect((await run({ command: 'simpler' }))?.text).toBe('Asking for the short version.')
+  await w.clock.advance(1)
+  expect(w.toasts).toEqual([expect.stringMatching(/^Simpler could not ask for the short version: .*state unwritable/)])
+})
+
 test('a refused submit says why and puts the button back; the press is still counted', KIT, async ($, on) => {
   const w = world(on, { drop: 'a hook refused it' })
   await start($)

@@ -1530,6 +1530,21 @@ export const register = on => {
   })
 }
 TS
+  # A timer inside a promise the noun waits on is not after the noun: the noun answers only when
+  # the timer's work settles it (lessons review of #952).
+  mknounmod "$M12W" awaited-timer awaitedtimer <<'TS'
+export const register = on => {
+  on('awaitedtimer.press', async ($, e, next) => {
+    await new Promise(resolve => {
+      setTimeout(async () => {
+        await $.process.run(['/bin/sleep', '13'])
+        resolve(true)
+      }, 0)
+    })
+    return { value: true }
+  })
+}
+TS
   mknounmod "$M12W" awaited-not-deferred awaited <<'TS'
 const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
 export const register = on => {
@@ -1542,7 +1557,7 @@ export const register = on => {
 TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"43 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"44 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1558,7 +1573,7 @@ TS
       && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
       || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
   done
-  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1; do
+  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1 awaited-timer/hooks/register.ts:5; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
       && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
       || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
@@ -1575,7 +1590,7 @@ TS
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred; do rm -rf "${M12W:?}/$m"; done
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred awaited-timer; do rm -rf "${M12W:?}/$m"; done
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
     || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"

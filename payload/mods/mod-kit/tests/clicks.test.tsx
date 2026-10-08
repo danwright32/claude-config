@@ -295,7 +295,7 @@ test('$.modkit.clickable gives a mod drawing its own Button the same answer', wi
 
 test('a left rule over a wrapping line counts a button by the longer of its label and its instead text', () => {
   const long = [{ text: 'type: ' }, { text: 'step 12 done, a long phrase' }]
-  const n = mostRows([[{ text: 'x', wrap: true }, { button: 'done', label: 'Done', instead: long }]])
+  const n = mostRows([[{ text: 'x', wrap: true }, { button: 'done', label: 'Done', instead: long }]], 'manual-steps')
   expect(n).toBeGreaterThanOrEqual(1 + 'type: step 12 done, a long phrase'.length)
   // With no instead, the /press line drawn in its place.
   expect(mostRows([[{ text: 'x', wrap: true }, { button: 'compact', label: 'Go' }]], 'status-bar')).toBeGreaterThanOrEqual(1 + 'type: /press status-bar compact'.length)

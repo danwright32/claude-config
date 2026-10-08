@@ -185,7 +185,7 @@ export const register: Register = on => {
     // holds the turn. A refused ask is a toast, as a press's is.
     try {
       $.clock.after(0, () => {
-        void press($)
+        void press($).catch(err => $.ui.toast(`Simpler could not ask for the short version: ${why(err)}`))
       })
     } catch (err) {
       return { text: `Simpler could not ask for the short version: ${why(err)}` }

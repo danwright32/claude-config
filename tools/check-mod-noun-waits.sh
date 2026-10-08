@@ -44,7 +44,8 @@
 #     (#802).
 #
 # Work a noun's code hands to a timer (`$.clock.after(0, ...)`, `setTimeout`) runs after the noun has
-# answered, so it is not the noun's code: neither the code written in the timer's arguments nor what it
+# answered, unless the timer sits inside a promise the noun builds (it may be waiting on it), so it is
+# not the noun's code: neither the code written in the timer's arguments nor what it
 # calls is read as the noun's (#939). Measured live on 2026-10-08 (2.1.294, a throwaway plugin in a
 # headless `claude -p`, no user settings): a noun hook that started 13 s of `$.process.run` on
 # `$.clock.after(0, ...)` answered at once, and the timer's work finished 13,010 ms later, whole. A
@@ -580,10 +581,20 @@ BY_PATH = resolve_all(mods)
 
 
 def deferred_spans(f, start, end):
-    """The argument spans of each timer a region starts (#939): what runs after the noun answered."""
+    """The argument spans of each timer a region starts (#939): what runs after the noun answered.
+    A timer inside a promise the region builds is not: the promise may be what the noun waits on,
+    so the timer's work may be what the noun's answer waits for (lessons review of #952)."""
+    held = []
+    for m in re.finditer(r"(?<![\w$.])new\s+Promise\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
+        open_at = start + m.end() - 1
+        close = closing(f.code, open_at)
+        if close is not None:
+            held.append((open_at, close))
     out = []
     for m in re.finditer(r"(?:\.\s*clock\s*\.\s*after|(?<![\w$.])setTimeout)\s*\(", f.code[start:end]):
         open_at = start + m.end() - 1
+        if any(a <= open_at < b for a, b in held):
+            continue
         close = closing(f.code, open_at)
         if close is not None:
             out.append((f.rel, open_at, close))

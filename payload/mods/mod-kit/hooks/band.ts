@@ -58,7 +58,7 @@ export const fallbackOf = (mod: string, p: ModKitBandButton): ModKitBandText[] =
   p.instead ?? [{ text: 'type: ', dim: true }, { text: pressCommand(mod, p.button) }]
 
 /** The columns a button takes at most: its bracketed label, or the text drawn in its place where that is wider. */
-export const buttonWidth = (p: ModKitBandButton, mod = ''): number =>
+export const buttonWidth = (p: ModKitBandButton, mod: string): number =>
   Math.max(p.label.length + 2, fallbackOf(mod, p).reduce((w, r) => w + r.text.length, 0)) + (p.indent ?? 0)
 
 const insteadRefusal = (p: ModKitBandPart): string | undefined => {
@@ -113,7 +113,7 @@ export const wraps = (l: ModKitBandLine): boolean => Array.isArray(l) && l.some(
  * holds at least one. What a left rule must reach down (#734); it is laid over the row's height and
  * clipped to it, so the bound only has to be no smaller than the truth.
  */
-export const mostRows = (lines: ModKitBandLine[], mod = ''): number =>
+export const mostRows = (lines: ModKitBandLine[], mod: string): number =>
   lines.reduce(
     (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? buttonWidth(p, mod) : (p.indent ?? 0) + p.text.length), 0)) : 1),
     0,
