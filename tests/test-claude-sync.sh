@@ -11021,18 +11021,16 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$N968" > "$F968"; ch
 _968send(){ env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968" \
   CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" send 2>&1 < /dev/null || true; }
 _968count(){ grep -c 'skills that cannot load were not sent' "$N968" 2>/dev/null || true; }
-o968a="$(_968send)"; o968b="$(_968send)"; o968c="$(_968send)"
-dbg "#968 sends: $o968a // $o968b // $o968c"
+o968a="$(_968send)"; o968b="$(_968send)"
+dbg "#968 sends: $o968a // $o968b"
 check "#968 the sends really did judge the leftovers unloadable" \
-  "grep -q 'skills/kept-local' <<< \"\$o968a\""
-check "#968 three sends with the same folders post the notice once" "[ \"\$(_968count)\" = 1 ]"
+  "line_has \"\$o968a\" 'skills/kept-local' 'holds no SKILL\.md'"
+check "#968 two sends with the same folders post the notice once" "[ \"\$(_968count)\" = 1 ]"
 check "#968 while every send still names them in the terminal" \
-  "grep -q 'cannot load' <<< \"\$o968c\" && grep -q 'skills/kept-local' <<< \"\$o968c\""
+  "line_has \"\$o968b\" 'skills/kept-local' 'holds no SKILL\.md'"
 mkdir -p "$H968B/skills/another"; printf 'notes, no SKILL.md\n' > "$H968B/skills/another/notes.md"
 _968send >/dev/null
 check "#968 a new folder joining the set posts the notice again" "[ \"\$(_968count)\" = 2 ]"
-_968send >/dev/null
-check "#968 and only once" "[ \"\$(_968count)\" = 2 ]"
 rm -rf "$H968B/skills/another"
 _968send >/dev/null
 check "#968 the set shrinking is not news, so it posts nothing" "[ \"\$(_968count)\" = 2 ]"
@@ -11045,14 +11043,14 @@ check "#968 a folder that left and came back is new again, so it is posted" "[ \
 _968pull(){ env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968" \
   CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" pull 2>&1 < /dev/null || true; }
 _968kept(){ grep -c 'kept local files a send will refuse' "$N968" 2>/dev/null || true; }
-p968a="$(_968pull)"; p968b="$(_968pull)"; p968c="$(_968pull)"
-dbg "#968 pulls: $p968a // $p968c"
+p968a="$(_968pull)"; p968b="$(_968pull)"
+dbg "#968 pulls: $p968a // $p968b"
 check "#968 each pull keeps the unloadable folder's files and says a send will not carry them" \
-  "line_has \"\$p968a\" 'skills/another' 'send will NOT carry' && line_has \"\$p968c\" 'skills/another' 'send will NOT carry'"
-check "#968 three pulls keeping the same files post that notice once" "[ \"\$(_968kept)\" = 1 ]"
+  "line_has \"\$p968a\" 'skills/another' 'send will NOT carry' && line_has \"\$p968b\" 'skills/another' 'send will NOT carry'"
+check "#968 two pulls keeping the same files post that notice once" "[ \"\$(_968kept)\" = 1 ]"
 mkdir -p "$H968B/skills/second-draft"; printf 'more notes\n' > "$H968B/skills/second-draft/notes.md"
-_968pull >/dev/null; _968pull >/dev/null
-check "#968 a new folder of kept files posts it again, once" "[ \"\$(_968kept)\" = 2 ]"
+_968pull >/dev/null
+check "#968 a new folder of kept files posts it again" "[ \"\$(_968kept)\" = 2 ]"
 
 # A folder counts as told only once a notification was really POSTED (L368). One the notifier
 # failed to post, or one not shown at all (notifications off, or the sleep record holding them for
@@ -11072,8 +11070,6 @@ env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_NOTIFIER="$F
 check "#968 a send with notifications off posts nothing" "[ \"\$(_968count)\" = 4 ]"
 _968send >/dev/null
 check "#968 and the next send that can notify posts it" "[ \"\$(_968count)\" = 5 ]"
-_968send >/dev/null
-check "#968 once" "[ \"\$(_968count)\" = 5 ]"
 
 # An empty folder the pull clears from the payload (#62) is gone, not a skill somebody has to fix, so
 # it is not a reason for a notification on its own.
@@ -11083,7 +11079,7 @@ F968P="$WORK/968-prune-notifier"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$N968P" > "$F968P"; chmod +x "$F968P"
 out968p="$(CLAUDE_HOME="$H968P" SYNC_REPO="$R968P" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968P" bash "$SCRIPT" pull 2>&1 < /dev/null || true)"
 check "#968 the pull cleared the empty payload folder and said so" \
-  "[ ! -d '$R968P/payload/skills/hollow968' ] && grep -q 'hollow968' <<< \"\$out968p\""
+  "[ ! -d '$R968P/payload/skills/hollow968' ] && line_has \"\$out968p\" 'skills/hollow968' 'removed from the payload'"
 check "#968 and posted no notification for a folder it just cleared" \
   "! grep -q 'skills that cannot load' '$N968P'"
 

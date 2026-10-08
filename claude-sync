@@ -1467,7 +1467,10 @@ ENTRIES
   if [ -n "$fresh" ] && ! notify_posted "$3"; then
     cur="$told"
   fi
-  tmp="$(mktemp "$f.XXXXXX" 2>/dev/null)" || return 0
+  # Written beside the record and renamed over it, so a run that dies mid write leaves the old record
+  # whole. Named for this tool and this run, not scratch: it never leaves the sync clone, where the
+  # gitignore covers it, and the sync lock means only one run writes here at a time.
+  tmp="$f.claude-sync-new.$$"
   if { awk -F'\t' -v k="$1" '$1 != k' "$f" 2>/dev/null || true
        [ "$cur" = / ] || printf '%s\t%s\n' "$1" "$cur"; } > "$tmp"; then
     mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
