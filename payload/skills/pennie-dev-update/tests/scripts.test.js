@@ -270,8 +270,8 @@ function deployCase(liveArgs, compare, pulls, stateEntry) {
 {
   const r = deployCase(LIVE_OK, {}, [pr(41, '2026-09-01T12:00:00Z')]);
   const p = repoOf(r, PET);
-  check(p && p.status === 'refused' && /could not/.test(p.reason) && /#41/.test(p.reason),
-    'a compare GitHub cannot answer refuses the repo, never holds the PR', p && JSON.stringify(p));
+  check(p && p.status === 'unreachable' && /could not/.test(p.reason) && /#41/.test(p.reason),
+    'a compare GitHub fails to answer makes the repo unreachable, naming the PR, never holds it or calls it refused', p && JSON.stringify(p));
 }
 {
   const r = deployCase(['--live', PET + '=not-a-sha@2026-10-08T10:00:00Z'], {}, []);
@@ -334,6 +334,16 @@ function deployCase(liveArgs, compare, pulls, stateEntry) {
   const s = repoOf(r2, SONAR);
   check(r2.code === 0 && s && s.status === 'ok' && s.window.start === '2026-10-01T00:00:00Z' && s.window.source === 'since',
     '--since recovers lost state with an explicit start', r2.all);
+  // Committing that run with nothing listed must still leave a lastEnd, or the next run reads the
+  // repo as a first appearance and introduces the product again (lessons review of #937).
+  ws.draft = path.join(ws.dir, 'quiet.txt');
+  fs.writeFileSync(ws.draft, 'Updates for October :thread:\n\nNothing changed on screen.\n');
+  const c = commitState(ws, ['--draft', ws.draft, '--repo', SONAR]);
+  const st = fs.existsSync(ws.state) ? JSON.parse(fs.readFileSync(ws.state, 'utf8')) : {};
+  check(c.code === 0 && st[SONAR] && st[SONAR].lastEnd === '2026-10-01T00:00:00Z',
+    'a --since run that lists nothing records its start as lastEnd, so the repo is not new next time', c.all + JSON.stringify(st));
+  const again = gather(ws);
+  check(repoOf(again, SONAR) && repoOf(again, SONAR).status === 'ok', 'the next run after that continues the window rather than introducing the product', again.all);
 }
 {
   const ws = workspace({ pulls: { [SONAR]: [] } }, { repos: [{ name: 'Sonar', repo: SONAR }] }, '{ not json');

@@ -192,7 +192,9 @@ changes nothing). It takes `lastEnd` from the gathered `merged_at` of the newest
 Only for redoing a period or recovering lost state. When it is **later** than `lastEnd`,
 `gather.js` refuses that repo, naming exactly the period that would be skipped; ask Dan, and pass
 `--confirm-skip` only on his yes. A redo never moves `lastEnd` backwards (`commit-state` keeps the
-later of the two).
+later of the two). A repo with no `lastEnd` recovered this way gets the `--since` start as its
+`lastEnd` even when the post lists nothing, so the next run does not read it as a first
+appearance.
 
 ---
 
@@ -287,7 +289,7 @@ and hand it over as `--live <owner>/<name>=<commit_sha>@<recorded_at>`. A repo w
 A PR is live when its merge commit is an ancestor of that sha. `gather.js` asks GitHub's compare
 endpoint, never a local checkout, which may not have fetched the live sha at all: `ahead` or
 `identical` means live, `behind` or `diverged` means not live yet, and an error means the check
-could not be made, which refuses the repo rather than holding the PR.
+could not be made, which makes the repo `unreachable` rather than holding the PR.
 
 Four cases that must stay distinct (L11, L98), each a `deploy` value or a refusal in the output:
 

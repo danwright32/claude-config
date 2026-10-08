@@ -164,7 +164,11 @@ function isLive(slug, pr, liveSha) {
   let status;
   // per_page=1: only the status is read, so the commit list it would otherwise carry is not fetched.
   try { status = gh('repos/' + slug + '/compare/' + pr.merge_commit_sha + '...' + liveSha + '?per_page=1').status; }
-  catch (e) { refuse('whether #' + pr.number + ' is live could not be checked: ' + e.message); }
+  // A failed call is GitHub not answering, so the repo is unreachable, never refused (L11).
+  catch (e) {
+    if (e instanceof Unreachable) throw new Unreachable('whether #' + pr.number + ' is live could not be checked: ' + e.message);
+    throw e;
+  }
   if (status === 'ahead' || status === 'identical') return true;
   if (status === 'behind' || status === 'diverged') return false;
   refuse('GitHub answered ' + JSON.stringify(status) + ' comparing #' + pr.number + ' with the live sha, so whether it is live could not be checked.');
@@ -435,6 +439,11 @@ function cmdCommitState(args) {
     const was = entryNow.lastEnd ? Date.parse(entryNow.lastEnd) : -Infinity;
     if (Date.parse(newest) > was) { updated.lastEnd = newest; said.push('lastEnd moved to ' + newest); }
     else said.push('lastEnd stays at ' + entryNow.lastEnd + ' (a redo never moves it backwards)');
+  } else if (!entryNow.lastEnd && repo.window && repo.window.source === 'since') {
+    // Lost state recovered with --since and nothing listed: the chosen start becomes the boundary,
+    // or the next run reads this repo as a first appearance and introduces it again.
+    updated.lastEnd = repo.window.start;
+    said.push('nothing listed; lastEnd set to the --since start ' + repo.window.start);
   } else {
     said.push('nothing listed, so lastEnd stays at ' + entryNow.lastEnd);
   }
