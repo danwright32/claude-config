@@ -321,12 +321,19 @@ for d in "${mods[@]}"; do
     # it, so the mod would be checked without it and fail on every use until the next install (#951:
     # auto-session-name's first use of mod-kit). One this folder holds is laid here as Claude Code
     # lays it: its types beside the others, and its name among the tsconfig's types.
-    # The manifest is read whole, a list across lines included, so python3 reads it; without one,
-    # no dependency can be said to be laid, so the check is not claimed (L490).
-    if [ -n "$checked" ] && ! command -v python3 >/dev/null 2>&1; then
+    # The manifest is read whole, a list across lines included, so python3 reads it
+    # (CHECK_MODS_PYTHON overrides it); a mod whose manifest names no dependencies needs none. Without
+    # one, no dependency can be said to be laid, so the check is not claimed (L490).
+    py="${CHECK_MODS_PYTHON:-python3}"
+    if [ -n "$checked" ] && ! grep -q '"dependencies"' "$d/.claude-plugin/plugin.json"; then
+      :
+    elif [ -n "$checked" ] && ! command -v "$py" >/dev/null 2>&1; then
       checked=""; copy_failed="no python3 to read its dependencies with"
     elif [ -n "$checked" ]; then
-      if ! why="$(python3 - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
+      # A laid link whose installed file is gone is removed, never written through, which would make
+      # that file in the installed mod (lessons review of #964). A tsconfig with no types list
+      # includes every folder under its type roots already, so a list is only added to, never made.
+      if ! why="$("$py" - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
 import json, os, shutil, sys
 manifest, types, mods = sys.argv[1:4]
 try:
@@ -335,16 +342,18 @@ try:
         laid, ours = os.path.join(types, dep, "index.d.ts"), os.path.join(mods, dep, "types", "index.d.ts")
         if os.path.exists(laid) or not os.path.isfile(ours):
             continue
+        if os.path.lexists(laid):
+            os.unlink(laid)
         os.makedirs(os.path.dirname(laid), exist_ok=True)
         shutil.copyfile(ours, laid)
         conf = os.path.join(types, "tsconfig.json")
         c = json.load(open(conf))
-        listed = c.setdefault("compilerOptions", {}).setdefault("types", [])
-        if dep not in listed:
+        listed = c.get("compilerOptions", {}).get("types")
+        if isinstance(listed, list) and dep not in listed:
             listed.append(dep)
-        json.dump(c, open(conf, "w"), indent=2)
+            json.dump(c, open(conf, "w"), indent=2)
 except Exception as e:
-    print(f"laying a new dependency's types failed: {e}")
+    print(f"laying a new dependency failed: {e}")
     sys.exit(1)
 PY
 )"; then

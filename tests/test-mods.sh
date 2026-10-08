@@ -291,6 +291,31 @@ printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types checked' \
   && check "and the mod is type checked with it" ok || check "and the mod is type checked with it" "$out"
 [ ! -d "$TH4H/mods/adds-dep/.claude-plugin/types/provider" ] && grep -q '\["claude-code"\]' "$TH4H/mods/adds-dep/.claude-plugin/types/tsconfig.json" \
   && check "and the installed copy's laid types are never written" ok || check "and the installed copy's laid types are never written" "$(ls "$TH4H/mods/adds-dep/.claude-plugin/types")"
+# Lessons review of #964. A laid tsconfig with no types list includes every folder under its type
+# roots, the new one too, so none is made: a list naming one dependency would stop the others being
+# included. A dependency laid as a link to an installed file that is gone is never written through,
+# which would create that file in the installed mod. And a mod with no dependencies needs no python3,
+# so one missing does not leave its types unchecked.
+M4J="$TMPROOT/m4j"; mkmod "$M4J" adds-dep; mkmod "$M4J" provider; mkmod "$M4J" linked; mkmod "$M4J" plain
+mkdir -p "$M4J/provider/types"; printf 'export type P = "new"\n' > "$M4J/provider/types/index.d.ts"
+printf '{ "name": "adds-dep", "version": "0.1.0", "description": "x", "dependencies": ["provider"] }\n' > "$M4J/adds-dep/.claude-plugin/plugin.json"
+printf '{ "name": "linked", "version": "0.1.0", "description": "x", "dependencies": ["provider"] }\n' > "$M4J/linked/.claude-plugin/plugin.json"
+TH4J="$TMPROOT/types-home-4j"; for m in adds-dep linked plain; do laid "$TH4J/mods/$m"; done
+printf '{ "compilerOptions": { "typeRoots": ["."] } }\n' > "$TH4J/mods/adds-dep/.claude-plugin/types/tsconfig.json"
+mkdir -p "$TH4J/mods/linked/.claude-plugin/types/provider" "$TH4J/mods/provider/types"
+ln -s "$TH4J/mods/provider/types/index.d.ts" "$TH4J/mods/linked/.claude-plugin/types/provider/index.d.ts"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4J" CHECK_MODS_TS_DIR="$TSDIR" PATH="/usr/bin:/bin:$(dirname "$(command -v python3)")" bash "$CHECK" "$M4J" 2>&1)"; code=$?
+grep -q 'CONF adds-dep: {"compilerOptions":{"typeRoots":\["."\]}}' "$TSC_LOG" && grep -q 'DEP provider: export type P = "new"' "$TSC_LOG" \
+  && check "a laid tsconfig with no types list is given none, the dependency still laid" ok || check "a laid tsconfig with no types list is given none, the dependency still laid" "$(cat "$TSC_LOG")"
+[ ! -e "$TH4J/mods/provider/types/index.d.ts" ] \
+  && check "a dependency laid as a link to an installed file that is gone is never written through" ok \
+  || check "a dependency laid as a link to an installed file that is gone is never written through" "$(cat "$TH4J/mods/provider/types/index.d.ts")"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4J" CHECK_MODS_TS_DIR="$TSDIR" CHECK_MODS_PYTHON="$TMPROOT/no-such-python" PATH=/usr/bin:/bin bash "$CHECK" "$M4J" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'plain ok' | grep -q 'types checked' \
+  && check "with no python3, a mod with no dependencies is still type checked" ok || check "with no python3, a mod with no dependencies is still type checked" "$out"
+printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: .*no python3' \
+  && check "while one with dependencies says its types were not checked, and why" ok || check "while one with dependencies says its types were not checked, and why" "$out"
 # Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
