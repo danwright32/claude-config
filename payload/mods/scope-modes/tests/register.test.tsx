@@ -1253,6 +1253,8 @@ test('away holds a browser opened by another tool, the Artifact open action and 
   await command($ as never, 'home')
   const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
   await ui.press({ key: 'scope-modes:held-1' })
+  // The press is taken at once and its work done just after, outside a noun's 10 s (#939).
+  await clock.settle()
   await ui.unmount()
   expect(w.prompts).toEqual([
     'Dan is back and picked this from what was held while he was away: Open https://x.dev/a in the Playwright browser. Do it now. What was held: mcp__playwright__browser_navigate {"url":"https://x.dev/a"}',
@@ -1334,12 +1336,14 @@ test('coming home: one boxed card of what was held, nothing opens until a button
 
   const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
   await ui.press({ key: 'scope-modes:held-1' })
+  await clock.settle()
   expect(w.prompts.filter(p => p.startsWith('Dan is back'))).toEqual([
     'Dan is back and picked this from what was held while he was away: Open report.html in Google Chrome. Do it now. What was held: open -a "Google Chrome" /tmp/report.html',
   ])
   const after = w.bands[w.bands.length - 1] as Row
   expect(after.lines).toEqual([[{ text: 'Held while you were away', color: 'warning' }], [{ text: 'Type into Overture ' }, { button: 'held-2', label: 'Do it' }]])
   await ui.press({ key: 'scope-modes:held-2' })
+  await clock.settle()
   expect(w.cleared).toContain('held')
   await ui.unmount()
 })

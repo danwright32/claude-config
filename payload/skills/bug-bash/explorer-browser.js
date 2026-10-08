@@ -30,7 +30,10 @@ const isRead = method => READS.has(String(method).toUpperCase())
 
 const HEALTH = '/__bug-bash-proxy__/health'
 const MARK = 'bug-bash-read-only'
-/** Resolves when `proxy` is the bug bash read only proxy and answering; rejects naming why not. */
+/**
+ * Resolves with the proxy's health answer ({ proxy, pid, egid, egress }) when `proxy` is the bug
+ * bash read only proxy and answering; rejects naming why not.
+ */
 function proxyAnswers(proxy, timeoutMs = 3000) {
   return new Promise((resolve, reject) => {
     let url
@@ -49,9 +52,9 @@ function proxyAnswers(proxy, timeoutMs = 3000) {
       res.on('end', () => {
         let said
         try {
-          said = JSON.parse(body).proxy
+          said = JSON.parse(body)
         } catch {}
-        if (res.statusCode === 200 && said === MARK) resolve()
+        if (res.statusCode === 200 && said && said.proxy === MARK) resolve(said)
         else reject(new Error(`explorer-browser: ${proxy} answered, but not as the bug bash read only proxy (HTTP ${res.statusCode}). Start read-only-proxy.js and use its address.`))
       })
     })
@@ -87,7 +90,8 @@ async function launch({ chromium, readOnly = false, headless = true, proxy = pro
   }
   // The browser itself is not handed back, since close() is all an explorer needs of it. A context
   // made beside this one has no route, but its browser still goes through the proxy. A browser
-  // launched any other way goes through nothing, so the skill has every explorer launch here.
+  // launched any other way never meets the proxy: against a deployment the egress rule (egress.sh)
+  // refuses it the site, and the skill still has every explorer launch here.
   return { context, close: () => browser.close() }
 }
 

@@ -214,27 +214,34 @@ export const register: Register = on => {
     return { result: `Saved. The next session started in this repository offers it above the prompt.\n\n${prompt}` }
   })
 
-  on('ui.press', { plugin: 'mod-kit', element: 'handoff:use' }, async ($, e) => {
-    const got = await claim($, 'used')
-    if (!got) return { element: e.element }
-    try {
-      await $.prompt.submit({ text: got.rec.prompt, asUser: true })
-    } catch (err) {
-      // Not sent, so not used: it goes back to being the saved handoff, still on the band, unless a
-      // newer one was saved meanwhile, which it must not overwrite.
-      if (await got.back()) $.ui.toast(`Use did not send the handoff: ${message(err)}`)
-      else {
-        $.ui.toast(`Use did not send the handoff: ${message(err)}. A newer one was saved meanwhile, so this one stays in the archive.`)
-        await clearBand($)
-      }
-      return { element: e.element }
-    }
-    await clearBand($)
-    return { element: e.element }
+  // Use and Dismiss, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
+  on('modkit.press', ($, e, next) => {
+    if (e.element !== 'handoff:use' && e.element !== 'handoff:dismiss') return next(e)
+    // Taken at once and done just after: a noun's call is cut off at 10 s (#744).
+    $.clock.after(0, () => {
+      void (async () => {
+        if (e.element === 'handoff:use') return pressUse($)
+        if (await claim($, 'dismissed')) await clearBand($)
+      })().catch(err => $.ui.toast(`The handoff button did not finish: ${message(err)}`))
+    })
+    return { value: { isAnswered: true } }
   })
+}
 
-  on('ui.press', { plugin: 'mod-kit', element: 'handoff:dismiss' }, async ($, e) => {
-    if (await claim($, 'dismissed')) await clearBand($)
-    return { element: e.element }
-  })
+const pressUse = async ($: EngineInterface) => {
+  const got = await claim($, 'used')
+  if (!got) return
+  try {
+    await $.prompt.submit({ text: got.rec.prompt, asUser: true })
+  } catch (err) {
+    // Not sent, so not used: it goes back to being the saved handoff, still on the band, unless a
+    // newer one was saved meanwhile, which it must not overwrite.
+    if (await got.back()) $.ui.toast(`Use did not send the handoff: ${message(err)}`)
+    else {
+      $.ui.toast(`Use did not send the handoff: ${message(err)}. A newer one was saved meanwhile, so this one stays in the archive.`)
+      await clearBand($)
+    }
+    return
+  }
+  await clearBand($)
 }
