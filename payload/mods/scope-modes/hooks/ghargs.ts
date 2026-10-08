@@ -47,7 +47,13 @@ const shortValuesFor = (sub: string, act: string): string => {
   return s[act] ?? s['*'] ?? (SHORT_VALUES['*'] as Record<string, string>)['*'] as string
 }
 
-/** A GitHub repository in any spelling (owner/name, a link, an ssh remote) as owner/name in lower case; null when it is none. */
+/**
+ * A GitHub repository as a gh command spells it (-R, a link, a `gh repo` positional, an endpoint's
+ * owner/name) as owner/name in lower case; null when it is none. Here owner/name alone IS a
+ * repository, where to git it is a local path, so a git remote is never read with this: remotes are
+ * read by mod-kit's $.modkit.repo (#951). An address spelled here is still parsed by hand, a known
+ * exception in tools/check-mod-shared-parts.sh until #961 moves the gh reader into mod-kit.
+ */
 export const normRepo = (s: string): string | null => {
   let t = s.trim().replace(/\.git$/, '').replace(/\/+$/, '')
   // A host only where the spelling says so (a scheme, a user@, or github.com itself), so an owner
