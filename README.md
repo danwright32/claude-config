@@ -1254,6 +1254,96 @@ where the workflow installs it, a compiler that does not start fails instead. (I
 longer checks ask before saving's waiting saves against the goal tracker: since #777 the question
 is Claude Code's own dialog, which the goal tracker reads like any other question.)
 
+## Sleep mode
+
+Sleep mode lets the Claude Code sessions you leave open keep working on their issues while you
+sleep, without anything pinging you, and leaves you a report in the morning. It belongs to the
+whole Mac: each Mac has its own night.
+
+**Starting it.** Type `/sleep` in any session. The sessions open at that moment with a person at
+their prompt (not background or `claude -p` runs) are enrolled to work overnight. Before it starts
+it may ask you a few questions, one at a time:
+
+- for each enrolled session's repository that is not on the list below, what Claude may do there
+  overnight: "Merge, never deploy", "Hold merges, never deploy" or "Allowed to deploy". The answer
+  is saved for every night after, on both Macs, so each repository is asked once;
+- any questions the overnight sessions left on an issue on earlier nights, the one that frees the
+  most work first. Each answer is posted on its issue as your dated decision.
+
+Every question has "Go to sleep now", which asks nothing more, and an issue's question also has
+"Skip this one". The questions share one 10 minute wait;
+anything you leave unanswered gets the strictest choice for the night (no merge, no deploy, and an
+issue whose question is unanswered is not worked) and is listed again in the morning report.
+`/sleep` refuses when the Mac is on battery, so plug it in first. It keeps the Mac awake until the
+night ends, and the band above the prompt shows ASLEEP in every session.
+
+**Ending it.** Type `/wake`, or say "I'm up", in any session. If you write to a session between 7 AM
+and 7 PM ET while sleep is still on, Claude asks you once, in a plain line, whether you are up; it
+never ends sleep by itself. If you forget, sleep ends on its own at noon ET the next day (or when the
+Mac restarts) and sends one notification. The session you woke it in opens the night's report in
+BBEdit (focus moves there), unless you are away or woke it from your phone, when opening it waits
+for you in the held card. That session then summarises its own night and offers what the overnight
+sessions proposed: new issues in one multi select picker, with the priority, labels and milestone
+each was proposed with so you can correct them, and new lessons one at a time. Nothing is filed and
+no lesson is added until you pick it. Every other session that worked overnight is asked for its
+own short summary.
+
+**What it does overnight.** Each enrolled session takes one issue at a time from its repository's
+open issues (priority p0 to p3, most urgent first), each in a worktree of its own, and works it as in the daytime: test first, a pull request, and a merge and
+deploy only where the list below allows. It approves its own permission prompts, except for anything
+banned below. It writes for you only into the report: a question it needs you to answer, a proposed
+issue or lesson, or anything it noticed. An issue that takes two attempts or two hours of work is
+parked for the morning. A session that makes no progress for three turn ends in a row, or for 20
+minutes, is let go with a note. A usage limit or an overloaded server is waited out (5, 10, 20 and
+40 minutes, then hourly, all night, each wait in the report). Work stops when the weekly usage
+reaches 95 percent; if it is already there when sleep starts, each session stops at its first turn
+end and the report says why.
+
+**What it will not do overnight.** Ask you anything; file or edit issues, labels or milestones
+(a comment is allowed); add lessons; merge or deploy anywhere the list below says wait, or anywhere it has no
+answer for; push straight to a default branch; force push or delete branches; switch branches in
+your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
+write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
+work an issue someone else opened. No sound, notification or end of turn review reaches you. At
+wake it checks GitHub and the disk for anything outward that happened anyway (issues created,
+milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report.
+
+**Which repositories may merge and deploy overnight** (your list, confirmed 2026-10-07, in
+`payload/mods/sleep-repos.json`):
+
+- Wait overnight, no merge and no deploy (a green pull request stays open for the morning):
+  Try-Pennie/bidspoke, Try-Pennie/slate, and every repository owned by Halo-lab-Trypennie, now and
+  any added later (today that is Halo-lab-Trypennie/trypennie).
+- Merge and deploy as in the daytime: danwright32/claude-config, Try-Pennie/project-enrollment-tracker,
+  Try-Pennie/paperboi, Try-Pennie/sonar, dwright-pennie/new-agent-onboarding,
+  dwright-pennie/repo-digest, danwright32/overture, danwright32/ovation, danwright32/downbeat,
+  danwright32/PostRoll, danwright32/backstage, PlayedItApp/playedit and nursedexapp/nursedex.
+- Anything else (eavesly-web-app, for one) is asked once at bedtime, as above, and waits for that
+  night if you do not answer.
+
+The file has three lists: `waitOwners` (owners every repository of which waits, which outranks the
+other two), `mergeOnly` (merging allowed, deploying never; each entry says with `mergeDeploys`
+whether a merge there deploys by itself, and only `false` lets the merge run) and `mayDeploy`. A
+repository on both lists, or one GitHub cannot confirm at bedtime, waits.
+
+**The report** is `Sleep report YYYY-MM-DD.md` in your Downloads folder, dated for the evening sleep
+started (anything before noon ET counts as the night before). It exists from the first minute and is
+rebuilt after every note, so it is there however the night ends. At wake it is finished: what was
+done is read from GitHub (merged pull requests and closed issues) and checked against what the
+sessions noted, with any disagreement flagged. Above that comes Needs a look (anything outward,
+anything that could not be checked, and any session or claim that went quiet without saying why),
+then Questions for you; below it Parked and failed, Proposed issues, Proposed lessons, Findings, and
+Limits and usage (each wait on a limit, the usage readings and paid usage).
+
+**Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
+Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,
+two refused pushes, a permission prompt approved and one refused, a session kept working through
+one issue by the overnight driver, the notes in the report, and `/wake` with its morning turn. The
+model's answers come from a scripted stand-in, so it costs nothing and runs in every local test run
+(`SLEEP_REAL_ENGINE=0` skips it); CI has no Claude Code, so there it says UNMEASURED. What it cannot
+show, the first real night measures: an interactive session enrolled by `/sleep`, a real model
+following the overnight rules for hours, and a real usage limit.
+
 ## Local state (per Mac, never synced)
 
 Sixteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,

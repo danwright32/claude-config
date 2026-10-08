@@ -781,7 +781,12 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   both changes, with the clock injected.
 - `bootTime` is `sysctl kern.boottime`'s seconds, read once per session (a session lives inside one
   boot; a failed read is not kept). `/sleep` refuses when it cannot be read, since such a record
-  could never be told apart from an old boot's.
+  could never be told apart from an old boot's. The mod's `bootOf` and the shell's `sleep_boot_of`
+  take the number after the first `sec =`, both held to `BOOT_FIXTURES` in the same fixture file.
+  The shell's first reader took the last `sec =` on the line, the microseconds, so every shell route
+  read a sound record as another boot's and so as awake: no claim, no note, and every silenced
+  route still paging Dan. Both suites had written their fixtures' boot the same wrong way they read
+  it, so they agreed with themselves (L70); the real engine run (#838) found it.
 - Written whole to a temp file beside it, read back, then `ln`ed into place: a link fails when a
   record is there, so two `/sleep` at once place one, and the other says sleep is already on. A
   second `/sleep` says when (ET) and in which folder sleep started and changes nothing; so does one
@@ -799,9 +804,9 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   minute tick moves it, appends a `limit` line to `notes/<generation>.jsonl` (phase 4 builds the
   report on this file) and sends one notification; if the record moved is not the one judged over
   (a new sleep began between the read and the move) it is put back with `mv -n`.
-- `/sleep` writes the record and its workers. The before bed questions (#843, #836), paging (#841),
-  the report (#835) and the overnight driver (#844) build on it; the wake report and summaries
-  (#837) go where `wake` names the winner.
+- `/sleep` writes the record and its workers. The before bed questions (#843, #836), the silence
+  (#841), the report (#835) and the overnight driver (#844) build on it, and the waking (#837) is
+  done by the session `wake` names the winner.
 
 ### Sleep mode phase 4: the night's report (#835), built
 
@@ -945,7 +950,10 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   until the record's end, its process number kept in `caffeinate.pid` and let go at wake or at the
   record's own end, only while that process is still `caffeinate`.
 - Unmeasured until the first real night (Dan, 2026-10-07: build now, measure on night one): a full
-  hour of work in an interactive session, and what a real usage limit looks like.
+  hour of work in an interactive session, a real model following the rules for that long, and what
+  a real usage limit looks like. The engine's side of the driver (a Stop blocked with the rules
+  keeps a headless session working, the breaker lets a session with nothing new go, a session's own
+  `stopped` note lets it stop) is measured by `tests/test-sleep-real-engine.sh` (#838).
 
 ### Sleep mode phase 3: permissions and outward actions (#834), built
 
@@ -1039,12 +1047,8 @@ first, each with "Go to sleep now"; answers are posted on the issue as dated dec
 
 ### Sleep mode phase 7: merge and deploy lists that fail closed (#843), built
 
-Dan's decision 6 (2026-10-06): merge and deploy as in the daytime, except trypennie, Bidspoke and
-Slate, which merge but never deploy, and where a merge itself deploys the green PR is left open.
-Revised the same day: both sides are listed, and a repository on neither is asked about, never
-let through.
-
-Replaced on 2026-10-07 by the list Dan confirmed word for word. Wait overnight (no merge, no
+Both sides are listed, and a repository on neither is asked about, never let through (Dan,
+2026-10-06). The lists are the ones Dan confirmed word for word on 2026-10-07 (#843). Wait overnight (no merge, no
 deploy, a green PR stays open until morning): `Try-Pennie/bidspoke`, `Try-Pennie/slate`, and every
 repository owned by `Halo-lab-Trypennie`, now and any made later (his words: "Move ANYTHING in
 halo-lab-trypennie to the wait list automatically. Nothing in that account should merge
@@ -1111,6 +1115,73 @@ is still asked once at bedtime and closed if unanswered.
   route, so no merge reaches GitHub unjudged.
   The refusal tells Claude to leave the green PR open and note it for the report. Phase 3's bans
   (#834) apply on top; `mayDeploy` lifts only this phase's deploy refusals.
+
+### Sleep mode phase 2: nothing pages Dan while asleep (#841), built
+
+- Every route that can reach Dan is derived, never listed (L96): `tests/test-sleep-silence.sh`
+  enumerates the settings hooks on turn end and waiting events, every mod's notifier, sound and
+  question, every classic Stop, Notification or PermissionRequest hook a mod registers, and
+  claude-sync's `notify`, and fails on one that neither reads the sleep predicate nor sits on its
+  exempt list with a reason (L129). A text match proves only that the predicate is named, so every
+  shell route is also run asleep and awake in the same fixture (L159).
+- While asleep: a question (AskUserQuestion, `switch_to_build`) is refused in every session and noted
+  for the morning; the goal tracker sends no notification; ask before saving notes a save rather than
+  asking; the turn end sound (`hooks/turn-end-sound.sh`, in the per prompt hook cost suite), the
+  session reflection and issue review, the PR quiz and the lesson fan out stand down; claude-sync
+  writes what it would have said to its log. Other mods ask `$.scopeModes.isAsleep()` and note through
+  `$.scopeModes.sleepNote`.
+- Findings reach the report through the overnight rules' `sleep_note`, not the reflection hooks,
+  which stand down on `stop_hook_active` and would run once a night (H5).
+
+### Sleep mode phase 9: waking (#837), built
+
+Dan's decisions of 2026-10-07: only `/wake` or "I'm up" ends sleep, in every session, and the
+morning offers what the night proposed, filing nothing he has not picked.
+
+- The one session whose move of the record succeeds opens the finished report with BBEdit's helper
+  and `--front-window` (else `open -a BBEdit`, never a bare `open`), saying in the same reply that
+  focus moved. Away, or woken from the phone, opening it waits in the held card; at the noon limit
+  nothing opens. A report that is not there is said, never opened as an empty window.
+- That session asks each other worker still open for its own summary (`SUMMARY_ASK`); one that has
+  closed, or one the registry could not read, is said as such, never counted as asked (L215).
+- Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,
+  started with `$.prompt.submit` once the command is done, or the turn "I'm up" starts: its summary,
+  then the proposed issues in the end of turn issue review's multi select picker (each option ending
+  with its proposed priority, labels and milestone) and each proposed lesson in the durable lesson
+  picker. Notes that could not be read are said, and the proposals offered from the report instead.
+- A message from Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain
+  line, whether he is up (`isDaytimeEt`, tested at both edges in each season and on both change
+  days), counted as asked only once that prompt went in.
+
+### Sleep mode phase 10: the night run by the real engine (#838), built
+
+`tests/test-sleep-real-engine.sh` runs one night with Claude Code itself loading the five mods sleep
+mode needs, in headless sessions (`claude -p`, stream-json in and out, input held open so a turn a
+mod starts can run, as the spike did, #839), in a scratch HOME and a scratch repository whose GitHub
+looking origin is a local bare repository. It checks each step by what it leaves on disk: `/sleep`'s
+record, report and caffeinate hold; a force push to a scratch branch and a push to main refused, with
+origin unchanged; a worker's permission prompt approved and one a settings PermissionRequest hook
+denies left refused, against a control session that is not a worker; the breaker letting a worker
+with nothing new go after 3 blocks; a worker kept going by the driver through one claim, worked in
+its worktree, ended done, and stopped on its own note; the notes in the report; and `/wake` moving
+the record, letting the hold go, keeping the report off the screen (away before sleep) and
+submitting the morning turn with the proposed issue in it. It also checks the real
+`~/.claude/state/sleep` and `~/Downloads` gained nothing.
+
+- The model is a scripted stand-in (`tests/sleep-real-engine-model.py`, through `ANTHROPIC_BASE_URL`
+  with a key that is not a real one), answering from the conversation it is sent: the commands the
+  overnight rules name, run in order. So the run costs nothing, is the same every time, and does not
+  depend on the account's weekly usage. The first version ran on the real model instead (haiku, on
+  2026-10-07, about one cent): `/sleep`, the bans and `/wake` behaved as here, and the worker was let
+  stop at its first turn end because the account's weekly reading was 100 percent, past the 95 at
+  which the driver stops a night, as built.
+- A headless run is never enrolled by `/sleep` (#840), so the permission and worker sessions are
+  enrolled by adding their ids to the record. A real interactive session's enrolment, the before bed
+  questions, a real model's night, a full hour and a real usage limit stay for the first real night.
+- It found the shell's boot reading (phase 1 above): with `main`'s `sleep.sh` the worker's claims
+  could not be read ("the sleep record reads other-boot") and ten checks failed.
+- It runs in every local run, under a minute; `SLEEP_REAL_ENGINE=0` skips it, and with no Claude
+  Code or no macOS (CI) it reports UNMEASURED.
 
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
