@@ -308,6 +308,23 @@ test("Run /design-rounds, an answer in Dan's own words, and a dialog that closed
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
 })
 
+// Lessons review of #991: the refused call was taken off the waiting list before Dan's answer was
+// acted on, so "ask him again" after a save that failed, or an answer in his own words, was refused.
+test('when Skip them cannot be recorded, or Dan answers in his own words, he can be asked again about the same call', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  expect(contextOf(await askSkip($, w, why, 'hmm, which page?'))).toContain('hmm, which page?')
+  w.ctl.storeSetFails = true
+  expect(contextOf(await askSkip($, w, why, SKIP_YES))).toContain('could not be recorded')
+  w.ctl.storeSetFails = false
+  const again = await askSkip($, w, why, SKIP_YES)
+  expect(refusalOf(again)).toBe('')
+  expect(contextOf(again)).toContain(`Dan answered ${SKIP_YES}`)
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  // Once it is recorded, that call waits on nobody: asking about it again is refused.
+  expect(refusalOf(await askSkip($, w, why, SKIP_YES))).toContain('No look changing edit is waiting')
+})
+
 test('nothing Claude writes itself records a no or a settlement', withKit, async ($, on) => {
   const w = world($, on)
   const why = refusalOf(await call($, PAGE))

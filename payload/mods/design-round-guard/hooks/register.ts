@@ -326,11 +326,14 @@ export const register: Register = on => {
         const s = listed(waiting.subjects.map(x => x.label))
         const { r, chosen, none } = await asked(skipQuestion(waiting.files, waiting.subjects), skipOptions(waiting.subjects))
         if (chosen === undefined) return none ? say(r, none) : r
-        await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+        // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
+        // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
+        // (lessons review of #991).
         if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to its closing question.`)
         if (chosen !== SKIP_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded, so edits that change the look on ${s} stay blocked. Act on what he said.`)
         const failed = await record(waiting.subjects, 'skipped')
         if (failed !== undefined) return say(r, `Dan answered ${SKIP_YES}, but it could not be recorded (${failed}), so edits that change the look on ${s} stay blocked. Tell him, and ask again.`)
+        await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
         const again = waiting.agent
           ? 'The refused change was a subagent\'s: tell that agent, or a new one, to make it again.'
           : `Send the ${waiting.tool} call to ${listed(waiting.files)} again now, unchanged.`
