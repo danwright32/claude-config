@@ -323,6 +323,8 @@ test('Dismiss archives it without sending anything', withKit, async ($, on) => {
   await start($, w.clock)
   const ui = await mount($)
   await ui.press({ key: 'handoff:dismiss' })
+  // The press is taken at once and its work done on a timer (#939), as Use's is.
+  await w.clock.settle()
   expect(w.submitted).toEqual([])
   expect(CURRENT in w.files).toBe(false)
   expect(`${DIR}/archive/${T0}-dismissed.json` in w.files).toBe(true)

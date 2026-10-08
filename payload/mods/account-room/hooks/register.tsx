@@ -783,20 +783,22 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('ui.press', { plugin: 'mod-kit', element: 'account-room:switch' }, async ($, e) => {
-    await startSwitch($, opts)
-    return { element: e.element }
-  })
-  on('ui.press', { plugin: 'mod-kit', element: 'account-room:retry' }, async ($, e) => {
-    await startSwitch($, opts)
-    return { element: e.element }
-  })
-  on('ui.press', { plugin: 'mod-kit', element: 'account-room:dismiss' }, async ($, e) => {
-    // This session only: kept in its own state, nothing shared is written (the spec).
-    await $.state.set(dismissedRef, true)
-    if (!switching) await $.state.set(phaseRef, { kind: 'idle' })
-    await recompute($)
-    return { element: e.element }
+  // Switch, Try again and Dismiss, pressed by a click or by /press (#939): mod-kit raises both as
+  // modkit.press.
+  on('modkit.press', ($, e, next) => {
+    if (!['account-room:switch', 'account-room:retry', 'account-room:dismiss'].includes(e.element)) return next(e)
+    // Taken at once and done just after, outside a noun's 10 s (#744): even before a switch starts
+    // its own timer, recompute reads the other Mac's readings through gh, which may take 20 s.
+    $.clock.after(0, () => {
+      void (async () => {
+        if (e.element !== 'account-room:dismiss') return startSwitch($, opts)
+        // This session only: kept in its own state, nothing shared is written (the spec).
+        await $.state.set(dismissedRef, true)
+        if (!switching) await $.state.set(phaseRef, { kind: 'idle' })
+        await recompute($)
+      })().catch(err => $.ui.toast(`Account room: that press did not finish: ${message(err)}`))
+    })
+    return { value: { isAnswered: true } }
   })
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
@@ -811,6 +813,9 @@ export const register: Register = (on, options) => {
     // Decided by the surface named, as Claude Code's own table is (its types: "all but mobile Input").
     const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : undefined
     const who = a.org ? `${a.email}, ${a.org}` : a.email
+    // #939: Save and Skip are drawn only where a click reaches them; elsewhere (Apple Terminal, the
+    // main screen) the keys line below is the way, and the pane holds the keyboard.
+    const isClickable = await $.modkit.clickable(e)
     // The settled dialog (nickname round): chip, question, the email and org dim under it, a text
     // field, Save and Skip, and the keys in dim text. Esc closes it, which is a skip.
     return (
@@ -826,11 +831,13 @@ export const register: Register = (on, options) => {
         ) : (
           <Text key="no-field">Type the name in the terminal or the desktop app.</Text>
         )}
-        <Box flexDirection="row">
-          {Input ? <Button key="save" label="Save" onPress={async () => finishAsk($, (await $.state.get(typedRef)).value ?? '', true)} /> : null}
-          {Input ? <Text> </Text> : null}
-          <Button key="skip" label="Skip" onPress={() => void finishAsk($, null, true)} />
-        </Box>
+        {isClickable || !Input ? (
+          <Box flexDirection="row">
+            {Input ? <Button key="save" label="Save" onPress={async () => finishAsk($, (await $.state.get(typedRef)).value ?? '', true)} /> : null}
+            {Input ? <Text> </Text> : null}
+            <Button key="skip" label="Skip" onPress={() => void finishAsk($, null, true)} />
+          </Box>
+        ) : null}
         {Input ? <Text dimColor>Enter to save · Esc to skip</Text> : null}
       </Box>
     ) as never

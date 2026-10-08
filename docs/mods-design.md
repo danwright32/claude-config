@@ -1419,14 +1419,16 @@ every wrapped row however wide the band is. A button may carry `instead`, a list
 its place wherever a click may not reach it (#939, `clicksReach` in hooks/band.ts): a terminal not
 in the fullscreen layout, Apple Terminal (its per tab Allow Mouse Reporting switch cannot be read),
 and a terminal whose name or layout is unknown. An empty list draws nothing there. A button without
-`instead` is still drawn there as a button, until every mod answers `modkit.press` (the rest of
-#939). mod-kit's `/press <mod> <button>` presses a button showing in the band or a pane the way a
-click does: a click (the Button's own press) and a typed /press both raise `modkit.press`, which the
-publisher answers; a mod still answering in a `ui.press` hook takes its click there, so its Button's
-own press never runs. The command presses only a button showing now, and does so once it has
-returned, since a press may send a prompt, which command.run cannot; a press nothing answers is said.
-A mod drawing its own Button outside the band and a pane asks `$.modkit.clickable(e)` for the same
-answer.
+`instead` is drawn there as "type: /press <mod> <button>": mod-kit's `/press` presses a button
+showing in the band or a pane the way a click does. A click (the Button's own press) and a typed
+/press both raise `modkit.press`, which every publisher answers, so no button anywhere is left dead.
+The command presses only a button showing now, and does so once it has returned, since a press may
+send a prompt, which command.run cannot; a press nothing answers is said. A press's work that can
+outlast a noun's 10 s (a switch, a compact, a held row's replay) is taken at once and done on
+`$.clock.after(0, ...)` (measured 2026-10-08: such work outlives the noun, whole). A mod drawing its
+own Button outside the band and a pane (Simpler above an answer, the nickname dialog's Save and
+Skip) asks `$.modkit.clickable(e)` first and draws the typed way where it answers false (`/simpler`;
+Enter and Esc).
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
