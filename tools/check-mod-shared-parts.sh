@@ -41,6 +41,12 @@
 #             reading a git remote's address by hand (a         github and name are the two questions the
 #             pattern taking a trailing .git off, or matching   copies asked (#951: four copies drifted on
 #             github.com before : or /, or splitting on [/:])   hosts, ports and a .git folder)
+#   branch-reader                                               use $.modkit.branch({ path }), whose branch,
+#             reading where a checkout stands by hand: its      default branch, main working tree and issues
+#             branch (--show-current, --abbrev-ref), its        are the questions the copies asked (#980:
+#             default (symbolic-ref, origin/HEAD), or the       scope-modes and the collision guard each read
+#             issues a branch names (a run of \d{2,6})          them their own way). Which worktrees hold a
+#                                                               branch (worktree list) is another question.
 #   press     a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -118,6 +124,7 @@ PARTS=(
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
   "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
   "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name)"
+  "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
 )
 
 # $1 = mod  $2 = part -> "<issue> <file>": the issue that ends that mod's known exception for that

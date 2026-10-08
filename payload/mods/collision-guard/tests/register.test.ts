@@ -1,5 +1,6 @@
 import { expect, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import { branchAt } from './mod-kit/hooks/branch.ts'
 
 // Stand-ins for the two mods this one depends on. An inline plugin cannot reach this file's
 // variables, so the registry stand-in asks the world below for the sessions (a process.run the
@@ -41,6 +42,8 @@ const deps: { name: string; register: Register } = {
           commands: async (input: { command: string }) => kit('commands', input),
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
+          // Where a checkout stands (#980), read by the world with mod-kit's own reader.
+          branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           // A folder with no .git entry the world names is none; one the world cannot read refuses.
           workingTree: async ({ path }: { path: string }) => {
             let dir = path.replace(/\/+$/, '') || '/'
@@ -58,7 +61,6 @@ const deps: { name: string; register: Register } = {
           gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
           ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
           linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
-          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
@@ -289,18 +291,26 @@ type Send = true | { refused: string } | 'throws'
 // How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
 // refuses it.
 type Ran = 'ok' | 'error' | { deny: string }
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
 // The Mac and the model beneath the guard. Everything that gets past it, every question put to the
 // judge, every message sent and every card and toast is recorded.
 const world = (engine: Engine, on: On, o: Opts = {}) => {
-  const w = { reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[], runs: [] as string[] }
-  on('process.run', ($, e) => {
+  const w = { o, reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[], runs: [] as string[] }
+  on('process.run', function answer($, e) {
     const [cmd, ...args] = e.argv
     // mod-kit's readers, answered from the table; a request it has no answer for fails the test by
     // name rather than being read some other way. Not one of the runs a test watches.
+    if (cmd === '__modkit' && args[0] === 'branch') {
+      // Where a checkout stands (#980), read by a byte for byte copy of mod-kit's reader asking this
+      // world's git; every folder is a checkout of its own here, as the git answers below treat it.
+      if (o.branchReaderFails) return { value: { exitCode: 1, stdout: '', stderr: o.branchReaderFails, isStdoutTruncated: false, isStderrTruncated: false } }
+      const { path } = JSON.parse(args[1] as string) as { path: string }
+      const git = async (argv: string[]) => ((await answer($, { ...e, argv })) as { value: { exitCode: number; stdout: string; stderr: string } }).value
+      return branchAt(path, async p => p, git).then(b => ok(b === null ? '' : JSON.stringify(b))) as never
+    }
     if (cmd === '__modkit') {
       const key = `${args[0]} ${args[1]}`
       if (!KIT.has(key)) throw new Error(`the reader table has no answer for ${key}: measure it from mod-kit's reader and add it`)
@@ -318,7 +328,13 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
     }
     if (cmd === 'git' && args.includes('rev-parse')) return ok((o.repo ?? '/repo') + '\n')
     if (cmd === 'git' && args.includes('status')) return ok(' M src/InvoiceTable.tsx\n')
-    if (cmd === 'git' && args.includes('branch')) return ok('main\n')
+    // The branch each checkout is on: main unless a test says otherwise ('' is a detached head).
+    if (cmd === 'git' && args.includes('branch')) {
+      const b = o.branch ?? 'main'
+      return typeof b === 'string' ? ok(`${b}\n`) : { value: { exitCode: 128, stdout: '', stderr: b.fails, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (cmd === 'git' && args.includes('worktree')) return ok(`worktree ${o.repo ?? '/repo'}\nHEAD abc\nbranch refs/heads/main\n`)
+    if (cmd === 'git' && args.includes('symbolic-ref')) return ok('origin/main\n')
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('model.complete', ($, e) => {
@@ -490,6 +506,33 @@ test('a branch switch in a checkout another session works in is judged', withDep
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
   expect(w.sent[0]?.text).toBe('Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped. Nothing here was touched.')
+})
+
+// The branch the judge is told the checkout is on, pinned before the read moved onto mod-kit's
+// branch reader (#980): the branch git names, or (unknown) for a detached head or a read that fails.
+test('the judge is told the branch the checkout is on, or (unknown) when git names none (#980)', withDeps, async ($, on) => {
+  const cases: [Opts['branch'], string][] = [
+    [undefined, 'The checkout: /repo, on branch main, with changes:'],
+    ['issue-980-reader', 'The checkout: /repo, on branch issue-980-reader, with changes:'],
+    ['', 'The checkout: /repo, on branch (unknown), with changes:'],
+    [{ fails: 'fatal: not a git repository' }, 'The checkout: /repo, on branch (unknown), with changes:'],
+  ]
+  const w = world($, on, { open: [rec('them')] })
+  const o = w.o
+  for (const [i, [branch, said]] of cases.entries()) {
+    o.branch = branch
+    await $.tool.call(bash('git checkout main', `b${i}`))
+    expect(w.prompts[i]?.prompt).toContain(said)
+  }
+})
+
+test("a branch mod-kit's reader cannot give is (unknown) to the judge, and the call is still judged (#980)", withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them')], branchReaderFails: 'mod-kit is not loaded' })
+  await $.tool.call(bash('git checkout main'))
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /repo, on branch (unknown), with changes:')
+  expect(w.reached).toContain('Bash')
+  // Asked of mod-kit, never of git by hand.
+  expect(w.runs.filter(r => r.includes('--show-current'))).toEqual([])
 })
 
 test('a branch switch with nobody else in the checkout goes through unjudged', withDeps, async ($, on) => {

@@ -61,12 +61,15 @@ const judge = async ($: EngineInterface, c: Clash): Promise<Verdict | undefined>
   }
   const root = c.root
   const status = root ? await run($, ['git', '-C', root, 'status', '--short']) : undefined
-  const branch = root ? await run($, ['git', '-C', root, 'branch', '--show-current']) : undefined
+  // The branch as mod-kit's one reader of where a checkout stands gives it (#980); a detached head, a
+  // read that fails or a reader that throws are all (unknown) to the judge, which still judges.
+  const where = root ? await $.modkit.branch({ path: root }).catch(() => null) : null
+  const branch = where && !('unreadable' in where) ? where.branch : undefined
   const prompt = [
     'Two Claude Code sessions are working in the same git checkout. One is about to do something that may collide with the other.',
     `The action: ${c.action}`,
     ...lines,
-    `The checkout: ${root ?? '(unknown)'}, on branch ${branch?.trim() || '(unknown)'}, with changes:\n${status?.trim() || '(none, or could not be read)'}`,
+    `The checkout: ${root ?? '(unknown)'}, on branch ${branch || '(unknown)'}, with changes:\n${status?.trim() || '(none, or could not be read)'}`,
     'Answer with JSON only: {"verdict": "Proceed" | "Worktree" | "Stop", "reason": "<one short sentence>"}.',
     'Proceed when the two cannot interfere. Worktree when the action is fine but must happen in its own worktree. Stop when it must not happen now.',
   ].join('\n')
