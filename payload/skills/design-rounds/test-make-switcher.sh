@@ -278,10 +278,10 @@ user_root="$(t="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)" && [ -n "$t" ] && c
 clones_real="$(cd "$CLONES" && pwd -P)"
 if ! command -v lsof >/dev/null 2>&1; then
   echo "UNMEASURED: no lsof here, so removing a killed Chrome's own copy was not tested"
-  unmeasured=1
+  unmeasured=$((unmeasured + 1))
 elif [ -z "$user_root" ] || [ "${clones_real#"$user_root"/}" = "$clones_real" ]; then
   echo "UNMEASURED: this suite's temp folder $clones_real is not inside a per user temp folder (${user_root:-none found}), so removing a killed Chrome's own copy was not tested"
-  unmeasured=1
+  unmeasured=$((unmeasured + 1))
 else
   mkdir "$CLONES/code_sign_clone.before"
   : > "$CLONES/code_sign_clone.before/Google Chrome"
@@ -362,7 +362,7 @@ if [[ -x "$REAL_CHROME" ]]; then
   # the folder was found in the right place, so that is said instead of passed.
   if [ ! -d "$real_clones" ]; then
     echo "UNMEASURED: no clone folder at $real_clones, so whether a real Chrome run leaves its copy behind was not measured"
-    unmeasured=1
+    unmeasured=$((unmeasured + 1))
   else
     printf '<!doctype html><html><body><p>own copy</p></body></html>\n' > "$TMP/clone-probe.html"
     left="not run"; page=""
@@ -403,7 +403,7 @@ PROBEPY
 
 if [[ ! -x "$CHROME" ]]; then
   echo "UNMEASURED: no browser at $CHROME, so the keyboard wiring was not tested. Set SWITCHER_TEST_CHROME."
-  unmeasured=1
+  unmeasured=$((unmeasured + 1))
 else
   keys="$(probe "$TMP/out.html")"
   check_eq "arrows and jump keys move between the options" "Espresso,Ink,Espresso,Ink,Espresso" "$keys"
