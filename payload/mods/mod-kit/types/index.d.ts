@@ -257,9 +257,12 @@ export type ModKitBandText = { text: string; href?: string; color?: string; bold
 /**
  * Claude Code's own Button, `[ label ]`; `button` is its id within the publishing mod. `plain: true`
  * draws it in Claude Code's plain style, a survey's row: the hotkey in the accent colour, a colon,
- * the label (`1: 7 days`), or the label alone when it has no hotkey (#667).
+ * the label (`1: 7 days`), or the label alone when it has no hotkey (#667). `instead` is the text
+ * drawn in the button's place wherever a click may not reach it (#939): a terminal's main screen,
+ * and Apple Terminal, whose tab only reports clicks while View > Allow Mouse Reporting is ticked,
+ * which no mod can read. An empty list draws nothing there. Left out, the button is drawn everywhere.
  */
-export type ModKitBandButton = { button: string; label: string; hotkey?: string; plain?: true; indent?: number }
+export type ModKitBandButton = { button: string; label: string; hotkey?: string; plain?: true; indent?: number; instead?: ModKitBandText[] }
 export type ModKitBandPart = ModKitBandText | ModKitBandButton
 /** A thin grey line across the band, between the lines of a card. */
 export type ModKitBandDivider = { divider: true }

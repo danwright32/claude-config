@@ -1,4 +1,4 @@
-import type { ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane } from '../types/index.d.ts'
+import type { ModKitBandButton, ModKitBandFrame, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandSlot, ModKitPane } from '../types/index.d.ts'
 
 // The band above the prompt, composed once for every mod (docs/mods-design.md, "The band, shared
 // by every mod", settled with Dan 2026-10-04). Status rows on top, then the account room card (#659)
@@ -24,8 +24,44 @@ const FRAMES: Record<ModKitBandFrame['kind'], true> = { box: true, 'left-rule': 
 
 export const isDivider = (l: ModKitBandLine): l is { divider: true } => !Array.isArray(l) && !!l && (l as { divider?: unknown }).divider === true
 
+/** What decides whether a click on a drawn Button reaches the mod (#939). */
+export type ClickSite = { surface: string; isFullscreen: boolean | undefined; terminal: string | undefined }
+
+/**
+ * Whether a click on a Button drawn here reaches the mod. A remote surface (desktop, VS Code, mobile)
+ * draws its own native buttons. The terminal reports clicks only in the fullscreen layout, and Apple
+ * Terminal only while the tab's View > Allow Mouse Reporting is ticked, a switch cmd R flips and no
+ * mod can read: off in Dan's tab when the steps card's Done did nothing (measured 2026-10-08). So a
+ * terminal is trusted only when it is fullscreen, named, and not Apple Terminal; anything unmeasured
+ * is taken as a click that may not land, since a dead control is worse than a typed fallback.
+ */
+export const clicksReach = (site: ClickSite): boolean => {
+  if (site.surface !== 'terminal') return true
+  if (site.isFullscreen !== true) return false
+  return typeof site.terminal === 'string' && site.terminal !== '' && site.terminal !== 'Apple_Terminal'
+}
+
+/** The columns a button takes at most: its bracketed label, or its `instead` text where that is wider. */
+export const buttonWidth = (p: ModKitBandButton): number =>
+  Math.max(p.label.length + 2, (p.instead ?? []).reduce((w, r) => w + (r.indent ?? 0) + r.text.length, 0)) + (p.indent ?? 0)
+
+const insteadRefusal = (p: ModKitBandPart): string | undefined => {
+  const instead = (p as { instead?: unknown }).instead
+  if (instead === undefined) return undefined
+  if (!('button' in p)) return 'only a button can have instead; a text run is drawn as it is'
+  if (!Array.isArray(instead) || !instead.every(r => r && typeof r === 'object' && !('button' in r) && typeof (r as { text?: unknown }).text === 'string'))
+    return `button "${p.button}": instead must be a list of text runs, drawn where a click cannot reach it`
+  for (const r of instead as ModKitBandPart[]) {
+    const why = partRefusal(r)
+    if (why) return `button "${p.button}" instead: ${why}`
+  }
+  return undefined
+}
+
 const partRefusal = (p: ModKitBandPart): string | undefined => {
   if (!p || typeof p !== 'object') return 'a part must be a text run or a button'
+  const insteadWhy = insteadRefusal(p)
+  if (insteadWhy) return insteadWhy
   const indent = (p as { indent?: unknown }).indent
   if (indent !== undefined && !(typeof indent === 'number' && Number.isInteger(indent) && indent >= 0)) return `a part's indent must be a whole number of columns, not ${JSON.stringify(indent)}`
   // Refused rather than drawn bracketed: a picker whose options lost their plain style reads as another mod's buttons.
@@ -53,13 +89,13 @@ export const wraps = (l: ModKitBandLine): boolean => Array.isArray(l) && l.some(
 
 /**
  * The most terminal rows `lines` can take at any width: one for a line that never wraps, and for one
- * that does one per character it holds, its indent and its buttons' brackets included, since a row
+ * that does one per character it holds, its indent and its buttons (the wider of brackets and instead text) included, since a row
  * holds at least one. What a left rule must reach down (#734); it is laid over the row's height and
  * clipped to it, so the bound only has to be no smaller than the truth.
  */
 export const mostRows = (lines: ModKitBandLine[]): number =>
   lines.reduce(
-    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? p.label.length + 2 : (p.indent ?? 0) + p.text.length), 0)) : 1),
+    (n, l) => n + (Array.isArray(l) && wraps(l) ? Math.max(1, l.reduce((w, p) => w + ('button' in p ? buttonWidth(p) : (p.indent ?? 0) + p.text.length), 0)) : 1),
     0,
   )
 

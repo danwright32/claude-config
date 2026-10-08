@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, carriedNote, finish, finishedWhen, fold, keepFinished, nextStep, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, finish, finishedWhen, fold, keepFinished, nextStep, paneColumns, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -217,19 +217,46 @@ describe('cardLines', () => {
   })
 
   // #734: a long click path or exact location wraps under its step rather than being cut at the edge
-  // with an ellipsis, now that mod-kit's left rule spans wrapped lines. The link and the value are
-  // still cut, since Copy link and Copy each take them whole.
-  test('the click path and an exact location wrap; the link and the value do not', () => {
+  // with an ellipsis, now that mod-kit's left rule spans wrapped lines. #939 reversed the link and the
+  // value being cut: they were cut because Copy link and Copy took them whole, and where a click cannot
+  // reach those buttons (Apple Terminal, the main screen) a cut address could not be had at all, so
+  // they wrap too and can be selected whole.
+  test('the click path, an exact location, the link and the value all wrap', () => {
     const c = made({
       heading: 'x',
       steps: [step({ clicks: 'Settings, Security, Web application firewall, Custom rules, Create rule', value: 'ip.src eq 1.2.3.4' })],
     })
     const l = lines(c) as (P & { wrap?: boolean })[][]
     expect(l.find(x => x[1]?.text?.startsWith('Settings'))?.[1]?.wrap).toBe(true)
-    expect(l.find(x => x[1]?.text?.startsWith('https://'))?.[1]?.wrap).toBeUndefined()
-    expect(l.find(x => x[0]?.text === 'ip.src eq 1.2.3.4')?.[0]?.wrap).toBeUndefined()
+    expect(l.find(x => x[1]?.text?.startsWith('https://'))?.[1]?.wrap).toBe(true)
+    expect(l.find(x => x[0]?.text === 'ip.src eq 1.2.3.4')?.[0]?.wrap).toBe(true)
     const at = made({ heading: 'x', steps: [step({ url: undefined, location: 'Salesforce desktop app, Setup, Object Manager, Account, Fields' })] })
     expect((lines(at) as (P & { wrap?: boolean })[][]).find(x => x[1]?.text?.startsWith('Salesforce'))?.[1]?.wrap).toBe(true)
+  })
+
+  // #939: Dan, 2026-10-08, "I also can't click done here" and "copy link doesn't work here". Where a
+  // click cannot reach a button mod-kit draws its instead text: Done says what to type, which is what
+  // Done would have sent, and Copy link and Copy draw nothing, since the link and the value beside them
+  // are the text to select.
+  test('every button carries what is drawn where a click cannot reach it: Done the words to type, Copy link and Copy nothing', () => {
+    const c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B', value: 'ip.src eq 1.2.3.4' })] })
+    const buttons = (cardLines(c) as (P & { instead?: P[] })[][]).flat().filter(p => p.button)
+    expect(buttons).toEqual([
+      { button: 'done', label: 'Done', instead: [{ text: 'type: ', dim: true }, { text: 'step 2 done' }] },
+      { button: 'copy-link', label: 'Copy link', instead: [] },
+      { button: 'copy', label: 'Copy', instead: [] },
+    ])
+    // The words to type are the very prompt a press of Done sends, so Claude reads both the same way.
+    expect(buttons[0]?.instead?.map(r => r.text).join('')).toBe('type: step 2 done')
+  })
+
+  // #939: a docked pane asks to be as wide as its widest line, so the words drawn in Done's place,
+  // wider than "[ Done ]", are not cut at the dock's edge.
+  test('the pane asks for the width of the words drawn in place of Done', () => {
+    const title = 'T'.repeat(40)
+    const c = made({ heading: 'x', steps: [step({ title, url: undefined, location: 'here' })] })
+    // The rule, "1. ", the title, two spaces, then "type: step 1 done".
+    expect(paneColumns(c)).toBe(2 + 3 + title.length + 2 + 'type: step 1 done'.length)
   })
 
   // #886: grey reads as old, so only a step finished before this card is grey. One finished in this
@@ -330,7 +357,7 @@ describe('cardLines', () => {
   test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
-    expect(l[2]).toEqual([WHERE, { text: url, href: url }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
+    expect(l[2]).toEqual([WHERE, { text: url, href: url, wrap: true }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
     // The click path is not a link.
     expect(l[3]?.[1]?.href).toBeUndefined()
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] })) as (P & { href?: string })[][]
@@ -346,7 +373,7 @@ describe('cardLines', () => {
     expect(at.slice(2)).toEqual([
       [WHERE, { text: 'Keychain Access, login', wrap: true }],
       [WHAT, { text: 'File, New Password Item', wrap: true }],
-      [{ text: 'hunter2', indent: 3 }, { text: '  ' }, { button: 'copy', label: 'Copy' }],
+      [{ text: 'hunter2', indent: 3, wrap: true }, { text: '  ' }, { button: 'copy', label: 'Copy', instead: [] }],
     ])
     const all = at.flat().map(p => p.text ?? '').join('\n')
     expect(all.match(/Where:/g)).toHaveLength(1)

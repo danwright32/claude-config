@@ -854,9 +854,10 @@ test('the pane asks for a dock as wide as the open step\'s lines, so a click pat
   await pinFresh({ clicks })
   // The rule and its gap, the indent under the title, the bold label (#872), then the click path.
   expect(w.opens[0]?.columns).toBe(2 + 3 + 'What to do: '.length + clicks.length)
-  // A link is not measured: it opens whole however much of it shows.
+  // A link is not measured: it opens whole however much of it shows. The widest line left is the
+  // title with the words drawn where Done cannot be clicked (#939).
   await pinFresh({ url: `https://dash.cloudflare.com/${'a'.repeat(150)}` })
-  expect(w.opens[1]?.columns).toBeLessThan(40)
+  expect(w.opens[1]?.columns).toBe(2 + '1. Turn on the WAF rule  type: step 1 done'.length)
   await pinFresh({ clicks: 'x'.repeat(200) })
   expect(w.opens[2]?.columns).toBe(80)
   expect(w.opens).toHaveLength(3)

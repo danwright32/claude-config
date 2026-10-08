@@ -491,8 +491,8 @@ export const register: Register = on => {
     await pressCopy($, 'value', e.surface)
     return { element: e.element }
   })
-  // Claude Code draws no hyperlinks on Apple Terminal, where a long link is text cut at the edge,
-  // so this is what takes the whole address there (#708).
+  // Takes the whole address where the terminal draws no hyperlinks (#708). In Apple Terminal, where a
+  // click may not land, mod-kit draws no Copy link and the link wraps whole to be selected (#939).
   on('ui.press', { plugin: 'mod-kit', element: 'manual-steps:copy-link' }, async ($, e) => {
     await pressCopy($, 'url', e.surface)
     return { element: e.element }

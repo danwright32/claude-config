@@ -1235,10 +1235,21 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   its own, since on a terminal without hyperlinks a Link with text is drawn as the text then the
   address, which would show it twice. The click path and an exact location are text, one line
   each, and wrap at the edge rather than being cut (#734), the amber rule reaching down every row
-  they take; the link and the value are still cut, since Copy link and Copy take them whole. Docked
+  they take; since #939 the link and the value wrap too, so either can be selected whole where Copy
+  link and Copy cannot be pressed. Docked
   beside a fullscreen transcript, the pane asks to be as wide as the card's widest line other than
   the link, up to 80 columns, so a click path wraps less there; a width Dan drags it to wins (open:
   Copy link on every link rather than only a long one, and the 80 column cap).
+- **Where a click cannot land** (#939). Dan, 2026-10-08: "copy link doesn't work here" and "I also
+  can't click done here". The terminal reports clicks only in the fullscreen layout, and Apple
+  Terminal only while the tab's View > Allow Mouse Reporting is ticked, a per tab switch cmd R flips
+  that no mod can read; it was off in the tab where he clicked, and on in another tab beside it
+  (read through the menu's check mark, 2026-10-08). So on a terminal's main screen, in Apple
+  Terminal, and wherever the terminal or the layout is not known, mod-kit draws each card button's
+  `instead` text rather than a button: Done becomes "type: step N done", the prompt a press would
+  have sent, and Copy link and Copy are not drawn, the link and the value beside them being the
+  text to select. A fullscreen terminal that reports clicks (iTerm2, Ghostty and the rest) and the
+  remote surfaces keep the buttons.
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked`, `per-you`, or `not-done`, which opens the step again
@@ -1401,7 +1412,12 @@ run may carry `wrap: true`, drawn on as many lines as it needs rather than cut a
 that wraps keeps one rule mark per line; a row with one draws its rule as a single column laid over
 the row's whole height and clipped to it, holding a mark for every row its lines could take (one per
 character of a wrapping line, since a terminal row holds at least one), so the rule reaches down
-every wrapped row however wide the band is.
+every wrapped row however wide the band is. A button may carry `instead`, a list of text runs drawn in
+its place wherever a click may not reach it (#939, `clicksReach` in hooks/band.ts): a terminal not
+in the fullscreen layout, Apple Terminal (its per tab Allow Mouse Reporting switch cannot be read),
+and a terminal whose name or layout is unknown. An empty list draws nothing there. A button without
+`instead` is drawn everywhere as before; every mod other than manual steps still draws its band
+buttons that way, so they can be as dead in Apple Terminal as the steps card's were.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
