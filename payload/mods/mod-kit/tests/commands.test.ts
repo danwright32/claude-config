@@ -409,4 +409,33 @@ describe('the commands a substitution runs (#974)', () => {
     expect(subs("bash -c 'echo $(git push)'")).toEqual([['git', 'push']])
     expect(subs("sh <<'EOF'\nx=`npm publish`\nEOF")).toEqual([['npm', 'publish']])
   })
+  // The style check's, the secret guard's and the keystroke guard's tests (their READ_974) judge these
+  // readings as given, since a mod cannot import another mod's files: this holds each to the reader,
+  // so a reader change that moves one fails here. Change both together.
+  test("the readings other guards' tests take as given", () => {
+    const DASH = String.fromCharCode(0x2014)
+    const FIX = `Fix ${DASH} again`
+    const TYPED = 'tell application "System Events" to key' + 'stroke "n"'
+    const given: [string, string[][]][] = [
+      // The style check.
+      [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX], ['commit', '-m', `${FIX})`]]],
+      ['echo "made `git commit -F /tmp/msg.txt`"', [['git', 'commit', '-F', '/tmp/msg.txt'], ['echo', 'made `git commit -F /tmp/msg.txt`']]],
+      [`cat <<EOF\n$(git commit -m "${FIX}")\nEOF`, [['git', 'commit', '-m', FIX], ['cat', '<<EOF']]],
+      [`echo '$(git commit -m "${FIX}")'`, [['echo', `$(git commit -m "${FIX}")`]]],
+      [`cat <<'EOF'\n\`git commit -m "${FIX}"\`\nEOF`, [['cat', '<<EOF']]],
+      // The secret guard.
+      ['echo "$(cat .env)"', [['cat', '.env'], ['echo', '$(cat .env)']]],
+      ['echo `printenv`', [['printenv'], ['echo', '`printenv`']]],
+      ['cat <<EOF\n$(echo $GITHUB_TOKEN)\nEOF', [['echo', '$GITHUB_TOKEN'], ['cat', '<<EOF']]],
+      ["echo '$(cat .env)' '`printenv`'", [['echo', '$(cat .env)', '`printenv`']]],
+      ["cat <<'EOF'\n$(cat .env)\nEOF", [['cat', '<<EOF']]],
+      // The keystroke guard.
+      [`x=$(osascript -e '${TYPED}')`, [['osascript', '-e', TYPED], ['-e', `${TYPED})`]]],
+      ['echo "`cliclick c:100,200`"', [['cliclick', 'c:100,200'], ['echo', '`cliclick c:100,200`']]],
+      ["cat <<EOF\n$(open -a 'Google Chrome' report.html)\nEOF", [['open', '-a', 'Google Chrome', 'report.html'], ['cat', '<<EOF']]],
+      ["echo '$(cliclick c:100,200)'", [['echo', '$(cliclick c:100,200)']]],
+      ["cat <<'EOF'\n`cliclick c:100,200`\nEOF", [['cat', '<<EOF']]],
+    ]
+    for (const [command, words] of given) expect(`${command} => ${JSON.stringify(commands(command))}`).toBe(`${command} => ${JSON.stringify(words)}`)
+  })
 })

@@ -1,13 +1,12 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
-import { commands } from './mod-kit/hooks/commands.ts'
 
 // A stand-in for mod-kit: an inline plugin cannot reach this file's variables, so it reports each
 // card as a transcript line the world collects.
 // Its command reader asks the world (`__modkit`), which answers with a small stand-in for the real
-// reader, enough for most commands below; where what the real reader gives matters (#974), the world
-// reads with a byte for byte copy of mod-kit's own under tests/mod-kit (a mod cannot import another
-// mod's files), which tools/check-mod-shared-parts.sh holds to mod-kit's.
+// reader, enough for most commands below; where what the real reader gives matters (#974), a test
+// gives the world that reading, written out (a mod cannot import another mod's files) and held to
+// the real reader by mod-kit's commands.test.ts ("the readings other guards' tests take as given").
 const standIn = (cmd: string): string[][] =>
   cmd
     .split(/&&|;|\n/)
@@ -72,7 +71,7 @@ const BAD = `const label = "Loading ${DASH} please wait"`
 
 type Run = { argv: readonly string[]; stdin: string }
 
-const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown>; realReader?: true } = {}) => {
+const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown>; reads?: ReadonlyMap<string, string[][]> } = {}) => {
   const runs: Run[] = []
   const reached: string[] = []
   const toasts: string[] = []
@@ -85,7 +84,9 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Rec
     // The kit's command reader asking: answered, and never counted as a run of the scanner.
     if (e.argv[0] === '__modkit') {
       const { command } = JSON.parse(e.argv[2] as string) as { command: string }
-      const read = opts.realReader ? commands(command) : standIn(command)
+      // A test giving readings has one for every command it runs, never the stand-in's (L143).
+      const read = opts.reads ? opts.reads.get(command) : standIn(command)
+      if (!read) return { value: { exitCode: 1, stdout: '', stderr: `no reading given for ${command}`, isStdoutTruncated: false, isStderrTruncated: false } }
       return { value: { exitCode: 0, stdout: JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const stdin = e.init?.stdin ?? ''
@@ -207,13 +208,22 @@ test('a gh issue comment read from a body file is judged', withKit, async ($, on
 // #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
 // so a commit inside $(...) or backticks has its message judged as one on the command line does.
 // Quoted, the commit is text: no message command runs, and nothing is scanned.
+const FIX = `Fix ${DASH} again`
+const READ_974 = new Map<string, string[][]>([
+  [`x=$(git commit -m "${FIX}")`, [['git', 'commit', '-m', FIX], ['commit', '-m', `${FIX})`]]],
+  ['echo "made `git commit -F /tmp/msg.txt`"', [['git', 'commit', '-F', '/tmp/msg.txt'], ['echo', 'made `git commit -F /tmp/msg.txt`']]],
+  [`cat <<EOF\n$(git commit -m "${FIX}")\nEOF`, [['git', 'commit', '-m', FIX], ['cat', '<<EOF']]],
+  [`echo '$(git commit -m "${FIX}")'`, [['echo', `$(git commit -m "${FIX}")`]]],
+  [`cat <<'EOF'\n\`git commit -m "${FIX}"\`\nEOF`, [['cat', '<<EOF']]],
+])
 test('a commit a command substitution runs is judged; quoted, it is text (#974)', withKit, async ($, on) => {
-  const w = world(on, { files: { '/tmp/msg.txt': `Subject ${DASH} body\n` }, realReader: true })
-  for (const command of [`x=$(git commit -m "Fix ${DASH} again")`, 'echo "made `git commit -F /tmp/msg.txt`"', `cat <<EOF\n$(git commit -m "Fix ${DASH} again")\nEOF`]) {
+  const w = world(on, { files: { '/tmp/msg.txt': `Subject ${DASH} body\n` }, reads: READ_974 })
+  const [judged, text] = [[...READ_974.keys()].slice(0, 3), [...READ_974.keys()].slice(3)]
+  for (const command of judged) {
     expect(`${command}: ${refused(await $.tool.call({ tool: 'Bash', command } as never))}`).toContain('Blocked: this text has a dash or emoji')
   }
   expect(w.reached).toEqual([])
-  for (const command of [`echo '$(git commit -m "Fix ${DASH} again")'`, `cat <<'EOF'\n\`git commit -m "Fix ${DASH} again"\`\nEOF`]) await $.tool.call({ tool: 'Bash', command } as never)
+  for (const command of text) await $.tool.call({ tool: 'Bash', command } as never)
   expect(w.reached).toEqual(['Bash', 'Bash'])
 })
 
