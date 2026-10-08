@@ -72,7 +72,6 @@ const deps: { name: string; register: Register } = {
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
-          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         },
