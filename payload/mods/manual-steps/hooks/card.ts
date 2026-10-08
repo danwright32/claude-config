@@ -247,10 +247,21 @@ const finishedLine = (s: StepsStep, label: string, isCarried: boolean, drawn: Dr
   return [title, { text: `  ${f.text}${when}`, ...(f.color ? { color: f.color } : {}) }]
 }
 
-/** One part of a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
-export type CardPart =
-  | { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true; whole?: true }
-  | { button: 'done' | 'copy' | 'copy-link'; label: string }
+/** A run of text in a card line, in mod-kit's band row shape (plain data); `href` makes it a link. */
+export type CardText = { text: string; href?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number; wrap?: true; whole?: true }
+/**
+ * One part of a card line. A button always says what mod-kit draws in its place where a click may
+ * not reach it (#939): Apple Terminal, whose tab reports clicks only while View > Allow Mouse
+ * Reporting is ticked, and a terminal's main screen. Required here, so no button can ship without it.
+ */
+export type CardPart = CardText | { button: 'done' | 'copy' | 'copy-link'; label: string; instead: CardText[] }
+
+/** The prompt Done sends for step `i` (0 based), and the words the card says to type where it cannot be clicked. */
+export const donePrompt = (i: number): string => `step ${i + 1} done`
+
+// What Done says where it cannot be clicked: the very prompt a press sends, so Claude reads a typed
+// one and a pressed one alike (#939).
+const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { text: donePrompt(i) }]
 
 /**
  * The card's lines: the amber heading, "waiting on you" after it while the open step is Dan's,
@@ -259,8 +270,10 @@ export type CardPart =
  * after a bold "Where:", its clicks after a bold "What to do:" (several actions numbered one per
  * line under it), and any value with Copy (#872). A later step is its title alone; a finished one is dimmed and
  * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
- * Code's Link, so one cut at the edge still opens and copies whole where the terminal draws
- * hyperlinks, with Copy link beside it for the terminals that do not, Apple Terminal among them (#708).
+ * Code's Link, so it opens and copies whole where the terminal draws hyperlinks, with Copy link
+ * beside it. Where a click may not land (Apple Terminal, the main screen)
+ * mod-kit draws each button's instead text: Done the words to type, Copy link and Copy nothing, the
+ * link and the value wrapping whole beside them to be selected (#939).
  */
 export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardPart[][] => {
   const open = nextStep(card)
@@ -279,13 +292,16 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       lines.push([{ text: label }])
       return
     }
-    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: 'done' as const, label: 'Done' }])])
+    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: 'done' as const, label: 'Done', instead: typeDone(i) }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
     // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location
     // wrapping beside it never takes the label with it (#872).
     const lead = (text: string): CardPart => ({ text, bold: true, whole: true, indent })
-    if (s.url) lines.push([lead(WHERE), { text: s.url, href: s.url }, { text: '  ' }, { button: 'copy-link', label: 'Copy link' }])
+    // The link on a line of its own under the label, nothing beside it, wrapping whole under its own
+    // first character, so a terminal can select every character of it where Copy link cannot be
+    // pressed (#939: a Google Sheets link was cut at the edge). Copy link sits beside the label.
+    if (s.url) lines.push([lead(WHERE), { button: 'copy-link', label: 'Copy link', instead: [] }], [{ text: s.url, href: s.url, wrap: true, indent }])
     // A long location or click path wraps under its step rather than being cut at the edge (#734):
     // mod-kit's left rule reaches down every row it takes. It wraps beside its label, so the rows it
     // continues on sit under its own first word.
@@ -298,7 +314,7 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       const width = String(s.clicks.length).length
       s.clicks.forEach((a, k) => lines.push([{ text: `${String(k + 1).padStart(width)}. `, whole: true, indent: indent + 2 }, { text: a, wrap: true }]))
     }
-    if (s.value) lines.push([{ text: oneLine(s.value), indent }, { text: '  ' }, { button: 'copy', label: 'Copy' }])
+    if (s.value) lines.push([{ text: oneLine(s.value), indent, wrap: true }, { text: '  ' }, { button: 'copy', label: 'Copy', instead: [] }])
   })
   return lines
 }
@@ -311,11 +327,12 @@ const RULE = 2
 /**
  * How wide the side pane asks to be while docked: its widest line, so a click path or an exact
  * location is not cut at the dock's edge (#708), up to MAX_PANE_COLUMNS. A link is not measured,
- * since it opens and copies whole however much of it shows; a button is its label in brackets.
+ * since it opens and copies whole however much of it shows; a button is its label in brackets, or
+ * its instead text where that is wider (#939).
  */
 export const paneColumns = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): number => {
   const width = (l: CardPart[]) =>
-    l.reduce((sum, p) => sum + ('button' in p ? p.label.length + 2 : p.href ? 0 : (p.indent ?? 0) + p.text.length), 0)
+    l.reduce((sum, p) => sum + ('button' in p ? Math.max(p.label.length + 2, p.instead.reduce((w, r) => w + r.text.length, 0)) : p.href ? 0 : (p.indent ?? 0) + p.text.length), 0)
   return Math.min(MAX_PANE_COLUMNS, RULE + Math.max(...cardLines(card, drawn).map(width)))
 }
 

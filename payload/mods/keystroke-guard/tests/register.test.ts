@@ -48,6 +48,9 @@ const kit: { name: string; register: Register } = {
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
           screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+          // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+          press: async () => ({ isAnswered: false }),
+          clickable: async () => true,
         },
       }
     })
@@ -469,6 +472,9 @@ const brokenKit: { name: string; register: Register } = {
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
           screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+          // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+          press: async () => ({ isAnswered: false }),
+          clickable: async () => true,
         },
       }
     })

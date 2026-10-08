@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitBandSlot } from '../types/index.d.ts'
 
@@ -36,9 +36,10 @@ const publisher: { name: string; register: Register } = {
     })
     // The publisher's own handler for its button, reached through the press on mod-kit's drawing.
     // It runs in the publisher's own environment, so it reports through a toast the test can see.
-    on('ui.press', { plugin: 'mod-kit', element: 'publisher:go' }, ($, e) => {
+    on('modkit.press', ($, e, next) => {
+      if (e.element !== 'publisher:go') return next(e)
       $.ui.toast(`pressed ${e.element}`)
-      return { element: e.element }
+      return { value: { isAnswered: true } }
     })
   },
 }
@@ -54,8 +55,9 @@ const clear = async ($: Caller, mod: string, id: string) => {
   await $.tool.call({ tool: 'Bash', command: `clear ${mod} ${id}` } as never)
 }
 const props = (hasSurvey = false) => ({ hasSurvey, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} })
+// A fullscreen terminal that reports clicks (#939: elsewhere a button is drawn as text, clicks.test.tsx).
 const band = (surface: 'terminal' | 'desktop' = 'terminal', hasSurvey = false) =>
-  ({ plugin: 'mod-kit', surface, component: 'AbovePrompt', props: props(hasSurvey) }) as never
+  ({ plugin: 'mod-kit', surface, component: 'AbovePrompt', props: props(hasSurvey), viewport: { columns: 100, rows: 40, isFullscreen: true } }) as never
 // What the band shows, top to bottom: the text of every leaf Text, in document order.
 type Found = { text: string; children: unknown[] }
 const shown = async (ui: { findAll: (q: { type: string }) => Promise<Found[]> }) =>
@@ -63,6 +65,7 @@ const shown = async (ui: { findAll: (q: { type: string }) => Promise<Found[]> })
 
 // Claude Code beneath the kit: what it draws in the band when no mod draws there.
 const engineBand = (on: On) => {
+  mock.env(on, { TERM_PROGRAM: 'iTerm.app' })
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
