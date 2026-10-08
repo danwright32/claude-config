@@ -4165,13 +4165,13 @@ $pf"*) continue ;; esac
 # else a conservative set of distinctive token shapes (low false-positive).
 # Override with SYNC_SKIP_SECRET_SCAN=1 if it ever flags a legitimate string.
 scan_secrets(){
-  # Skipping the scan still clears the record of its last refusal (claude-config#947): the send it
-  # refused is no longer being refused, and a later pull must not name it as the cause of anything.
-  if [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ]; then
+  # Every way this ends WITHOUT refusing clears the record of its last refusal (claude-config#947):
+  # skipped, nothing to read, or passed. The send it refused is no longer being refused, and a later
+  # pull must not name it as the cause of anything.
+  if [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ] || [ ! -d "$PAYLOAD" ]; then
     [ -z "${SEND_REFUSED_FILE:-}" ] || rm -f "$SEND_REFUSED_FILE" 2>/dev/null || true
     return 0
   fi
-  [ -d "$PAYLOAD" ] || return 0
   local allow="$SYNC_REPO/.secret-allowlist"
   local q="[\"']?" pat apat
   pat='BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|sk_live_[A-Za-z0-9]{20,}'

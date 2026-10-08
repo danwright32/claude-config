@@ -106,6 +106,36 @@ case "$out" in
   *) check "control: the scan refuses the token shaped placeholder that blocked sync after #675" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 
+# Every path that ends a scan WITHOUT refusing clears the record of the last refusal
+# (claude-config#947), or a later pull blames a refusal that no longer applies. The early returns
+# are the paths a test of the whole tool cannot easily reach, so they are driven here.
+run_scan_recorded(){   # $1 = payload dir  $2 = repo dir  $3 = SYNC_SKIP_SECRET_SCAN value
+  local PAYLOAD="$1" SYNC_REPO="$2" SEND_REFUSED_FILE="$2/.send-refused"
+  printf '1\tskills/x/c.json\n' > "$SEND_REFUSED_FILE"
+  (
+    SYNC_SKIP_SECRET_SCAN="$3"
+    die(){ printf 'REFUSED: %s\n' "$*"; exit 1; }
+    eval "$BLANK_SRC"
+    eval "$SCAN_SRC"
+    scan_secrets
+  ) >/dev/null 2>&1
+  [ -e "$SEND_REFUSED_FILE" ] && printf 'still there' || printf 'cleared'
+}
+mkdir -p "$TMPROOT/rec/repo" "$TMPROOT/rec/clean/payload"
+printf 'nothing secret\n' > "$TMPROOT/rec/clean/payload/f.txt"
+r="$(run_scan_recorded "$TMPROOT/rec/clean/payload" "$TMPROOT/rec/repo" 0)"
+[ "$r" = cleared ] && check "#947 a scan that passes clears the record of the last refusal" ok \
+  || check "#947 a scan that passes clears the record of the last refusal" "$r"
+r="$(run_scan_recorded "$TMPROOT/rec/no-such-payload" "$TMPROOT/rec/repo" 0)"
+[ "$r" = cleared ] && check "#947 so does a scan with no payload to read" ok \
+  || check "#947 so does a scan with no payload to read" "$r"
+r="$(run_scan_recorded "$TMPROOT/planted/payload" "$TMPROOT/rec/repo" 1)"
+[ "$r" = cleared ] && check "#947 so does a send let past the scan with SYNC_SKIP_SECRET_SCAN=1" ok \
+  || check "#947 so does a send let past the scan with SYNC_SKIP_SECRET_SCAN=1" "$r"
+r="$(run_scan_recorded "$TMPROOT/planted/payload" "$TMPROOT/rec/repo" 0)"
+[ "$r" = 'still there' ] && check "#947 control: a scan that refuses keeps it" ok \
+  || check "#947 control: a scan that refuses keeps it" "$r"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
