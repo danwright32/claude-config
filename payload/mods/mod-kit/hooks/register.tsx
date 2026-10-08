@@ -5,8 +5,9 @@ import { clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, pa
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
+import { ghArgs } from './gh.ts'
 import { sendTwice } from './send.ts'
-import { githubRepo, repoName } from './repo.ts'
+import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
@@ -278,6 +279,7 @@ export const register: Register = (on, options) => {
       commands: async ({ command }) => commands(command),
       writes: async ({ command, cwd, home }) => commandWrites(command, cwd, home),
       git: async ({ words }) => git(words),
+      gh: async ({ words }) => ghArgs(words),
       pipeline: async ({ command }) => pipeline(command),
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
       repo: async ({ root, remote }) => ({ github: githubRepo(remote), name: repoName({ root, remote }) }),
@@ -287,6 +289,8 @@ export const register: Register = (on, options) => {
           p => workingTree(p, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`)),
           argv => built.process.run(argv, { timeoutMs: 3_000 }),
         ),
+      ghRepo: async ({ spelling }) => ghRepo(spelling),
+      linkRepo: async ({ link }) => linkRepo(link),
       bandRow: async row => {
         const why = refusal(row)
         if (why) throw new Error(why)
