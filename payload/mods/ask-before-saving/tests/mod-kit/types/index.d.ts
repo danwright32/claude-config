@@ -145,6 +145,17 @@ export type ModKit = {
    */
   repo: (input: { root?: string | null; remote: string | null }) => Promise<ModKitRepo>
   /**
+   * Where the checkout an absolute path sits in stands (#978): `root`, the checkout (found as
+   * `workingTree` finds it); `main`, its project's main working tree, which every worktree of it
+   * shares; `branch`; `defaultBranch`, the one origin/HEAD names, null when it names none;
+   * `isDefault`, that branch, or main or master when there is none; and `issues`, every run of 2 to
+   * 6 digits the branch name holds on its own (`978-guard`, `fix/issue-41-and-52`). Null when the
+   * path is in no checkout. A branch git cannot read, a detached head, or no main working tree is
+   * `unreadable`, saying which, with `main` where git named it. Rejects as `workingTree` does. Asked
+   * of git with three reads at once, each bounded at 3 seconds. The one reading every mod uses (L613).
+   */
+  branch: (input: { path: string }) => Promise<ModKitBranch | null>
+  /**
    * Shows a row in the band above the prompt, or replaces the row this mod already shows under the
    * same id (it keeps its place). Claude Code gives the band ONE drawing, so no mod but mod-kit
    * hooks it (tools/check-mod-shared-parts.sh); every mod publishes its rows here and mod-kit draws
@@ -195,6 +206,10 @@ export type ModKit = {
 
 /** A repository as `$.modkit.repo` reads it: its GitHub owner/name and its name, each null when there is none. */
 export type ModKitRepo = { github: string | null; name: string | null }
+/** Where a checkout stands, as `$.modkit.branch` reads it, or why that could not be read. */
+export type ModKitBranch =
+  | { root: string; main: string; branch: string; defaultBranch: string | null; isDefault: boolean; issues: number[] }
+  | { root: string; main: string | null; unreadable: string }
 /** A press on a button mod-kit drew: its `<mod>:<button>` key, the surface it came from, and how. */
 export type ModKitPress = { element: string; surface: string; how: 'click' | 'typed' }
 /** Where a Button is drawn, as a render hook's `e` carries it. */

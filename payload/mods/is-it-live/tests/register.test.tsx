@@ -54,6 +54,7 @@ const modKit: { name: string; register: Register } = {
         git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
         pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
         workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+        branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
       }

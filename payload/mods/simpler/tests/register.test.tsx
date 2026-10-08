@@ -120,6 +120,7 @@ const modKit: { name: string; register: Register } = {
         pipeline: never('pipeline'),
         workingTree: never('workingTree'),
         repo: never('repo'),
+        branch: never('branch'),
       }
       return { ...built, modkit }
     })
