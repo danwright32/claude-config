@@ -20,6 +20,7 @@ state/
 .send-refused
 .ci-unreadable-since
 .resurrected-reported
+.unloadable-notified*
 .ci-red-since
 .my-push
 .mods-seen

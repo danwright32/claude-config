@@ -10909,6 +10909,180 @@ CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT
 check "#62 an empty folder on this Mac is left where it is" "[ -d '$EMH/skills/mine-in-progress' ]"
 check "#62 and is still not sent"                           "[ ! -d '$EMR/payload/skills/mine-in-progress' ]"
 
+section "== a retired skill's leftover git folder is cleared, and the cannot load notice is posted once (#968) =="
+# #932 retired six skills from the payload. Two were git clones on this Mac, and the mirror never
+# touches a .git folder, so each was left as a skills folder holding only .git. From then on every
+# send called both "the directory holds no SKILL.md" and posted a desktop notification, three of them
+# inside one minute (2026-10-08). Two defects: the leftover was never recognised as retired, and the
+# notice repeated for a condition that had not changed (L36).
+#
+# The proof the leftover may go (L5, L211): the shared repo deleted that skill and does not hold it
+# now, the folder holds nothing the sync carries or the person made, and its git history holds no
+# commit missing from its own remote and no stash. Anything short of that is kept and reported.
+_968_upstream(){   # $1 = name -> a bare upstream repo holding a loadable skill, pushed
+  local up="$WORK/968-up-$1.git" seed="$WORK/968-seed-$1"
+  git init -q --bare -b main "$up"
+  git clone -q "$up" "$seed" 2>/dev/null
+  mkskill "$seed/SKILL.md" "the $1 skill"
+  printf 'echo %s\n' "$1" > "$seed/run.sh"
+  git -C "$seed" add SKILL.md run.sh
+  git -C "$seed" -c user.name=suite -c user.email=suite@example.invalid commit -q -m "seed $1"
+  git -C "$seed" push -q origin main 2>/dev/null
+  printf '%s' "$up"
+}
+R968B="$WORK/968-shared.git"; git init -q --bare -b main "$R968B"
+R968A="$WORK/968-repoA"; git clone -q "$R968B" "$R968A" 2>/dev/null
+R968R="$WORK/968-repoB"; git clone -q "$R968B" "$R968R" 2>/dev/null
+H968A="$WORK/968-homeA"; mkdir -p "$H968A"; echo '{"hooks":{}}' > "$H968A/settings.json"
+H968B="$WORK/968-homeB"; mkdir -p "$H968B/skills"; echo '{"hooks":{}}' > "$H968B/settings.json"
+# Skills installed on Mac B as git clones, and one ordinary skill that stays.
+for _n in retired-clone kept-local kept-unpushed kept-stash kept-tag kept-reflog kept-nested; do
+  git clone -q "$(_968_upstream "$_n")" "$H968B/skills/$_n" 2>/dev/null
+done
+# One whose .git is a pointer file naming a repository kept elsewhere, which this folder cannot speak for.
+git clone -q --separate-git-dir="$WORK/968-sep-kept-pointer" "$(_968_upstream kept-pointer)" "$H968B/skills/kept-pointer" 2>/dev/null
+mkskill "$H968B/skills/keeper/SKILL.md" 'a skill the shared config keeps'
+# What the person made inside one of them, which the sync never carries: a *.local.json holds one
+# Mac's own settings, often a secret (claude-config#675).
+printf '{"setting":"only on this Mac"}\n' > "$H968B/skills/kept-local/config.local.json"
+# And a commit in another that its own remote has never seen: the .git is its only copy.
+printf 'a local change\n' >> "$H968B/skills/kept-unpushed/run.sh"
+git -C "$H968B/skills/kept-unpushed" -c user.name=suite -c user.email=suite@example.invalid commit -q -am 'mine, never pushed'
+# And a stash in another: work set aside, held nowhere but this .git.
+printf 'set aside\n' >> "$H968B/skills/kept-stash/run.sh"
+git -C "$H968B/skills/kept-stash" -c user.name=suite -c user.email=suite@example.invalid stash -q
+# And a commit no branch holds any more: one reached only by a local tag, one only by the reflog.
+# Every ref but the remote-tracking ones counts, and so does the reflog, so neither is dropped (L5).
+for _n in kept-tag kept-reflog; do
+  printf 'work\n' >> "$H968B/skills/$_n/run.sh"
+  git -C "$H968B/skills/$_n" -c user.name=suite -c user.email=suite@example.invalid commit -q -am "only here: $_n"
+done
+git -C "$H968B/skills/kept-tag" tag mine-only
+git -C "$H968B/skills/kept-tag" reset -q --hard origin/main
+git -C "$H968B/skills/kept-reflog" reset -q --hard origin/main
+_968env(){ echo "SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=1"; }
+env $(_968env) CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" sync >/dev/null 2>&1
+env $(_968env) CLAUDE_HOME="$H968A" SYNC_REPO="$R968A" SYNC_HOSTNAME=m968A bash "$SCRIPT" sync >/dev/null 2>&1
+check "#968 the clones reached the shared repo, so retiring them is a deletion there" \
+  "[ -f '$R968A/payload/skills/retired-clone/SKILL.md' ] && [ -f '$R968A/payload/skills/kept-local/SKILL.md' ] && [ -f '$R968A/payload/skills/kept-unpushed/SKILL.md' ] \
+     && [ -f '$R968A/payload/skills/kept-stash/SKILL.md' ] && [ -f '$R968A/payload/skills/kept-pointer/SKILL.md' ]"
+check "#968 and the person's own *.local.json never travelled" \
+  "[ ! -e '$R968A/payload/skills/kept-local/config.local.json' ]"
+# Mac A retires all three and publishes.
+rm -rf "$H968A/skills/retired-clone" "$H968A/skills/kept-local" "$H968A/skills/kept-unpushed" \
+  "$H968A/skills/kept-stash" "$H968A/skills/kept-pointer" "$H968A/skills/kept-tag" "$H968A/skills/kept-reflog" "$H968A/skills/kept-nested"
+env $(_968env) CLAUDE_HOME="$H968A" SYNC_REPO="$R968A" SYNC_HOSTNAME=m968A bash "$SCRIPT" sync >/dev/null 2>&1
+check "#968 the retirement reached the shared repo" \
+  "[ -z \"\$(git -C '$R968B' ls-tree -r --name-only main -- payload/skills/retired-clone payload/skills/kept-local payload/skills/kept-unpushed payload/skills/kept-stash payload/skills/kept-pointer)\" ]"
+# A git folder the shared config never had: somebody started a skill here with git init. Not
+# retired, so not this tool's to remove however empty it looks.
+mkdir -p "$H968B/skills/fresh-git"; git -C "$H968B/skills/fresh-git" init -q
+# And a repository NESTED inside one, holding a commit of its own: only the folder's own .git is
+# version control the proof inspects, so a nested one is somebody's work and keeps the folder.
+# Made after the last send, so the shared copy never held its (empty, once .git is left out) folder.
+mkdir -p "$H968B/skills/kept-nested/vendor/lib"; git -C "$H968B/skills/kept-nested/vendor/lib" init -q
+printf 'nested work\n' > "$H968B/skills/kept-nested/vendor/lib/work.txt"
+git -C "$H968B/skills/kept-nested/vendor/lib" add work.txt
+git -C "$H968B/skills/kept-nested/vendor/lib" -c user.name=suite -c user.email=suite@example.invalid commit -q -m 'nested, only here'
+rm -f "$H968B/skills/kept-nested/vendor/lib/work.txt"
+out968="$(env $(_968env) CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" pull 2>&1)"
+dbg "#968 pull after the retirement: $out968"
+check "#968 the retired clone's leftover folder, holding only .git, is removed by the pull" \
+  "[ ! -e '$H968B/skills/retired-clone' ]"
+check "#968 and the pull says so in one line naming it" \
+  "grep -qE 'removed skills/retired-clone' <<< \"\$out968\""
+check "#968 a leftover holding a file the person made is kept, file and all" \
+  "[ -f '$H968B/skills/kept-local/config.local.json' ] && [ -e '$H968B/skills/kept-local/.git' ]"
+check "#968 and is reported as left alone, naming the file" \
+  "grep -qE 'skills/kept-local.*left alone.*config\.local\.json' <<< \"\$out968\""
+check "#968 a leftover whose git history holds an unpushed commit is kept" \
+  "[ -n \"\$(git -C '$H968B/skills/kept-unpushed' log --format=%s -1 2>/dev/null | grep 'mine, never pushed')\" ]"
+check "#968 and is reported as left alone, saying why" \
+  "grep -qE 'skills/kept-unpushed.*left alone.*not on any remote' <<< \"\$out968\""
+check "#968 a leftover whose git history holds a stash is kept, and says so" \
+  "[ -n \"\$(git -C '$H968B/skills/kept-stash' stash list 2>/dev/null)\" ] && grep -qE 'skills/kept-stash.*left alone.*stash' <<< \"\$out968\""
+check "#968 a leftover holding a commit only a local tag reaches is kept, and says so" \
+  "[ -n \"\$(git -C '$H968B/skills/kept-tag' log --format=%s -1 mine-only 2>/dev/null | grep 'only here')\" ] && grep -qE 'skills/kept-tag.*left alone.*not on any remote' <<< \"\$out968\""
+check "#968 a leftover holding a commit only its reflog reaches is kept, and says so" \
+  "[ -e '$H968B/skills/kept-reflog/.git' ] && grep -qE 'skills/kept-reflog.*left alone.*not on any remote' <<< \"\$out968\""
+check "#968 a leftover holding a nested repository with its own commit is kept, and says so" \
+  "[ -n \"\$(git -C '$H968B/skills/kept-nested/vendor/lib' log --format=%s -1 2>/dev/null | grep 'nested, only here')\" ] && grep -qE 'skills/kept-nested.*left alone.*vendor/lib/\.git' <<< \"\$out968\""
+check "#968 a leftover whose .git points at a repository elsewhere is kept, and says so" \
+  "[ -f '$H968B/skills/kept-pointer/.git' ] && grep -qE 'skills/kept-pointer.*left alone.*somewhere else' <<< \"\$out968\""
+check "#968 a git folder the shared config never held is kept" "[ -e '$H968B/skills/fresh-git/.git' ]"
+check "#968 and the pull removes nothing else" "! grep -qE 'removed skills/(fresh-git|kept-|keeper)' <<< \"\$out968\""
+check "#968 a skill still in the shared config is untouched" "[ -f '$H968B/skills/keeper/SKILL.md' ]"
+
+# THE NOTICE, ONCE PER NEW SET. The three folders left are each unloadable, and the watcher sends on
+# every save, so a notice per send is the alert that teaches people to dismiss alerts (L36).
+N968="$WORK/968-notified.log"; : > "$N968"
+F968="$WORK/968-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$N968" > "$F968"; chmod +x "$F968"
+_968send(){ env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" send 2>&1 < /dev/null || true; }
+_968count(){ grep -c 'skills that cannot load were not sent' "$N968" 2>/dev/null || true; }
+o968a="$(_968send)"; o968b="$(_968send)"
+dbg "#968 sends: $o968a // $o968b"
+check "#968 the sends really did judge the leftovers unloadable" \
+  "line_has \"\$o968a\" 'skills/kept-local' 'holds no SKILL\.md'"
+check "#968 two sends with the same folders post the notice once" "[ \"\$(_968count)\" = 1 ]"
+check "#968 while every send still names them in the terminal" \
+  "line_has \"\$o968b\" 'skills/kept-local' 'holds no SKILL\.md'"
+mkdir -p "$H968B/skills/another"; printf 'notes, no SKILL.md\n' > "$H968B/skills/another/notes.md"
+_968send >/dev/null
+check "#968 a new folder joining the set posts the notice again" "[ \"\$(_968count)\" = 2 ]"
+rm -rf "$H968B/skills/another"
+_968send >/dev/null
+check "#968 the set shrinking is not news, so it posts nothing" "[ \"\$(_968count)\" = 2 ]"
+mkdir -p "$H968B/skills/another"; printf 'back again\n' > "$H968B/skills/another/notes.md"
+_968send >/dev/null
+check "#968 a folder that left and came back is new again, so it is posted" "[ \"\$(_968count)\" = 3 ]"
+
+# The pull's sibling notice, about local files it kept that a send will refuse, is the same shape:
+# the files stay kept on every apply until somebody acts, so it too is posted once per new folder.
+_968pull(){ env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" pull 2>&1 < /dev/null || true; }
+_968kept(){ grep -c 'kept local files a send will refuse' "$N968" 2>/dev/null || true; }
+p968a="$(_968pull)"; p968b="$(_968pull)"
+dbg "#968 pulls: $p968a // $p968b"
+check "#968 each pull keeps the unloadable folder's files and says a send will not carry them" \
+  "line_has \"\$p968a\" 'skills/another' 'send will NOT carry' && line_has \"\$p968b\" 'skills/another' 'send will NOT carry'"
+check "#968 two pulls keeping the same files post that notice once" "[ \"\$(_968kept)\" = 1 ]"
+mkdir -p "$H968B/skills/second-draft"; printf 'more notes\n' > "$H968B/skills/second-draft/notes.md"
+_968pull >/dev/null
+check "#968 a new folder of kept files posts it again" "[ \"\$(_968kept)\" = 2 ]"
+
+# A folder counts as told only once a notification was really POSTED (L368). One the notifier
+# failed to post, or one not shown at all (notifications off, or the sleep record holding them for
+# the morning), is still news on the next run, or a condition that began at night is never seen.
+F968BAD="$WORK/968-notifier-fails"; N968BAD="$WORK/968-notified-fails.log"; : > "$N968BAD"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\nexit 1\n' "$N968BAD" > "$F968BAD"; chmod +x "$F968BAD"
+mkdir -p "$H968B/skills/third-draft"; printf 'notes\n' > "$H968B/skills/third-draft/notes.md"
+env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968BAD" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" send >/dev/null 2>&1 < /dev/null || true
+check "#968 the failing notifier really was asked to post the notice" \
+  "grep -q 'skills that cannot load were not sent' '$N968BAD'"
+_968send >/dev/null
+check "#968 a notice the notifier failed to post is posted on the next send" "[ \"\$(_968count)\" = 4 ]"
+mkdir -p "$H968B/skills/fourth-draft"; printf 'notes\n' > "$H968B/skills/fourth-draft/notes.md"
+env SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_NOTIFIER="$F968" \
+  CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" send >/dev/null 2>&1 < /dev/null || true
+check "#968 a send with notifications off posts nothing" "[ \"\$(_968count)\" = 4 ]"
+_968send >/dev/null
+check "#968 and the next send that can notify posts it" "[ \"\$(_968count)\" = 5 ]"
+
+# An empty folder the pull clears from the payload (#62) is gone, not a skill somebody has to fix, so
+# it is not a reason for a notification on its own.
+H968P="$WORK/968-prune-home"; R968P="$WORK/968-prune-repo"; N968P="$WORK/968-prune-notified.log"; : > "$N968P"
+mkdir -p "$H968P" "$R968P/payload/skills/hollow968"; echo '{"hooks":{}}' > "$H968P/settings.json"
+F968P="$WORK/968-prune-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$N968P" > "$F968P"; chmod +x "$F968P"
+out968p="$(CLAUDE_HOME="$H968P" SYNC_REPO="$R968P" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$F968P" bash "$SCRIPT" pull 2>&1 < /dev/null || true)"
+check "#968 the pull cleared the empty payload folder and said so" \
+  "[ ! -d '$R968P/payload/skills/hollow968' ] && line_has \"\$out968p\" 'skills/hollow968' 'removed from the payload'"
+check "#968 and posted no notification for a folder it just cleared" \
+  "! grep -q 'skills that cannot load' '$N968P'"
+
 section "== a skill provided by both a plugin and the local folder is caught (#49) =="
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
 # cloudflare plugin, so each was listed twice in every session and both copies were paid for.
