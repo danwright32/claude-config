@@ -132,8 +132,8 @@ export const newWork = (call: { tool: string; input: Record<string, unknown>; co
     if (g?.sub === 'switch' && args.some(a => a === '-c' || a === '-C' || a === '--create' || a === '--force-create' || a === '--orphan')) return { what: 'start a new branch' }
     if (g?.sub === 'worktree' && args[0] === 'add') return { what: 'start a new branch' }
     if (g?.sub === 'branch' && args.length > 0 && !args[0]?.startsWith('-')) return { what: 'start a new branch' }
-    const w = c.words
-    if ((w[0] ?? '').split('/').pop() === 'gh' && w[1] === 'issue' && w[2] === 'develop') return { what: 'start a new branch' }
+    // gh read by mod-kit's one reader (#961), past its global flags (`gh -R o/x issue develop 7`).
+    if (c.gh?.sub === 'issue' && c.gh.act === 'develop') return { what: 'start a new branch' }
   }
   return undefined
 }

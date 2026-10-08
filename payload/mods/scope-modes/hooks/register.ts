@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ScopeModes, ScopeModesHeld, ScopeModesLeftOpen, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
-import { noBuildRefusal, type Cmd } from './nobuild.ts'
+import { ghWords, helperWords, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
   addAnswer,
   closedSentence,
@@ -862,9 +862,12 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
-  const ghRepo = (await $.env.get('GH_REPO')) || undefined
+  // GH_REPO as gh reads it, through mod-kit's one reader (#961); a reader that fails is a repository
+  // that cannot be read, which refuses every write naming none itself (L42).
+  const spelling = (await $.env.get('GH_REPO')) || undefined
+  const ghRepo = spelling === undefined ? undefined : await $.modkit.ghRepo({ spelling }).catch(() => null)
   return overnightRefusal(
-    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo ? { ghRepo } : {}) },
+    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}) },
     lookOf($),
   )
 }
@@ -1283,12 +1286,20 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
 // feeds it (#724), the program it runs and what that program can do, a shell's script read as the
 // commands it runs (its -c, a heredoc, a here-string, or what echo, printf or cat pipes in), and
 // what a find -exec runs read as a command of its own, so this mod keeps no reader of its own
-// (L613). Each is given its git reading.
+// (L613). Each is given its git reading, and its gh readings (#961): the words it runs gh with and
+// the merge helper's arguments, each read once here by mod-kit's one reader of gh's arguments.
 const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => {
   const out: Cmd[] = []
   for (const c of await $.modkit.pipeline({ command: raw })) {
     const g = await $.modkit.git({ words: c.words })
-    out.push(g ? { ...c, git: { sub: g.sub, args: g.args, ...(g.dir !== undefined ? { dir: g.dir } : {}) } } : c)
+    const cmd: Cmd = g ? { ...c, git: { sub: g.sub, args: g.args, ...(g.dir !== undefined ? { dir: g.dir } : {}) } } : { ...c }
+    const ghAt = ghWords(c.words)
+    const gh = ghAt ? await $.modkit.gh({ words: ghAt }) : undefined
+    if (gh) cmd.gh = gh
+    const helperAt = helperWords(c.words)
+    const helper = helperAt ? await $.modkit.gh({ words: helperAt }) : undefined
+    if (helper) cmd.mergeHelper = helper
+    out.push(cmd)
   }
   return out
 }
@@ -1920,9 +1931,10 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
     const links = [...String(result.text ?? '').matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)]
     const link = links[links.length - 1]
     if (!link) return
-    // Read as the judge reads it, so `bash -lc 'gh pr create'` is seen too (lessons review of #714).
+    // Read as the judge reads it, so `bash -lc 'gh pr create'` is seen too (lessons review of #714),
+    // and gh past its global flags (`gh -R o/r pr create`, #961).
     const cmds = await readCommands($, raw)
-    if (!cmds.some(({ words: w }) => (w[0] ?? '').split('/').pop() === 'gh' && w[1] === 'pr' && w[2] === 'create')) return
+    if (!cmds.some(c => c.gh?.sub === 'pr' && c.gh.act === 'create')) return
     const repo = link[1] as string
     const number = Number(link[2])
     const opened = await openedOf($)

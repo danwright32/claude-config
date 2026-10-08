@@ -4,7 +4,8 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { ghRepo, githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
 
@@ -55,6 +56,8 @@ const deps: { name: string; register: Register } = {
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
           repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
+          gh: async (input: { words: string[] }) => kit('gh', input),
+          ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
           bandRow: async (row: Row) => {
             built.ui.log('BAND ' + JSON.stringify(row))
             await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
@@ -74,8 +77,6 @@ const deps: { name: string; register: Register } = {
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
-          gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
-          ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
           linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
@@ -206,6 +207,8 @@ type Opts = {
   reportFails?: Record<string, string>
   /** HOME stops reading once a note is written, so the final render's own setup throws. */
   homeGoneAfterNote?: boolean
+  /** The session's GH_REPO, unset by default (#961). */
+  ghRepoEnv?: string
   /** What this session's usage reads, or a read that throws. */
   usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
   /** /repo is a linked worktree rather than a primary checkout (#834). */
@@ -233,6 +236,8 @@ type Opts = {
   cwd?: string
   /** mod-kit's repo reader fails (#979 review). */
   repoReaderFails?: boolean
+  /** mod-kit's reader of a repository gh spells fails (#961). */
+  ghRepoReaderFails?: boolean
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
@@ -305,7 +310,10 @@ const world = (on: On, o: Opts = {}) => {
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
-  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' && !w.homeGone ? '/Users/x' : undefined }) as never)
+  on('env.get', ($, e) => {
+    const name = (e as unknown as { name: string }).name
+    return { value: name === 'HOME' && !w.homeGone ? '/Users/x' : name === 'GH_REPO' ? w.o.ghRepoEnv : undefined } as never
+  })
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
   let driverWrites = 0
@@ -401,10 +409,12 @@ const world = (on: On, o: Opts = {}) => {
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
     if (cmd === '__modkit') {
-      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string }
+      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
       if (a[0] === 'repo' && o.repoReaderFails) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
+      if (a[0] === 'ghRepo' && o.ghRepoReaderFails) return fail(1, 'mod-kit is not loaded')
+      if (a[0] === 'ghRepo') return ok(JSON.stringify(ghRepo(input.spelling)))
       // Where a checkout stands (#980), read by mod-kit's own reader asking this world's git. Every
       // folder is a checkout of its own here, as the git answers below treat it, except the
       // session's when it is in no repository.
@@ -414,7 +424,7 @@ const world = (on: On, o: Opts = {}) => {
         const git = async (args: string[]) => ((await answer($, { ...e, argv: args })) as { value: { exitCode: number; stdout: string; stderr: string } }).value
         return branchAt(input.path ?? '', walk, git).then(b => ok(b === null ? '' : JSON.stringify(b)))
       }
-      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : git(input.words ?? [])
+      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
@@ -612,7 +622,7 @@ const world = (on: On, o: Opts = {}) => {
     }
     const command = (e as { command?: string }).command
     w.reached.push(String(command ?? (e as { file_path?: string }).file_path ?? e.tool))
-    if (command?.includes('gh pr create') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
+    if (/\bpr create\b/.test(command ?? '') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
     return { result: 'ran', text: 'ran' } as never
   })
   on('ui.render', ($, e) => {
@@ -1014,6 +1024,16 @@ test('turning winding down on again keeps the PR it already found, rather than r
   expect(w.toasts).toEqual([])
 })
 
+// #961: a gh pr create with a global flag before it is read past the flag, by mod-kit's gh reader.
+test('a PR opened by gh with a global flag first is noted, so winding down waits on it (#961)', withDeps, async ($, on) => {
+  const pr31 = { number: 31, state: 'OPEN', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31, issues: {} } })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh -R o/r pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 is not merged yet\./)
+})
+
 test('turned on from the default branch, winding down finishes the PRs this session opened, an agent\'s included', withDeps, async ($, on) => {
   const pr31 = (state: string) => ({ number: 31, state, url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [{ number: 700 }] })
   const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31('OPEN'), issues: { 700: 'OPEN' } } })
@@ -1185,6 +1205,19 @@ test('only his answer to leave_pr_open leaves a PR open: a picker of Claude\'s o
   await call($ as never, leave(31, { repo: 'o/r' }, 'l4'))
   expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
   expect(w.toasts).toEqual([])
+})
+
+test('asleep, GH_REPO is read as gh reads it, and one that cannot be read refuses a write naming no repository (#961)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s9'] }) }, ghRepoEnv: 'https://github.com/Other/X.git' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to other\/x from a checkout of o\/r/)
+  w.o.ghRepoEnv = 'git@github.com:O/R.git'
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toBe('ran')
+  w.o.ghRepoEnv = 'nonsense'
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to GitHub where the repository it reaches could not be resolved/)
+  w.o.ghRepoEnv = 'o/r'
+  w.o.ghRepoReaderFails = true
+  expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to GitHub where the repository it reaches could not be resolved/)
 })
 
 // With no repository named, leave_pr_open asks about the PR in the session's own, read from its

@@ -924,21 +924,17 @@ for m in branch-show-current branch-origin-head branch-abbrev-ref branch-issues;
     || check "and names $m, pointing it at modkit.branch" "$out"
 done
 case "$out" in *clean-asks-branch*) check "a mod asking the kit for its branch, or git for its worktrees, passes" "$out" ;; *) check "a mod asking the kit for its branch, or git for its worktrees, passes" ok ;; esac
-# The one known exception (#961) covers scope-modes' gh argument reader in hooks/ghargs.ts alone:
-# it is printed as such on every run, and a copy anywhere else in scope-modes still fails.
+# #961 moved scope-modes' gh argument reader into mod-kit, so its copy in hooks/ghargs.ts fails the
+# run like any other, never named as a known exception again (L373: the exception's premise is spent).
 M9E="$TMPROOT/m9e"
 mkmodsrc "$M9E" scope-modes 'export const register = on => {}'
 printf '%s\n' 'export const normRepo = s => s.trim().replace(/\.git$/, "")' > "$M9E/scope-modes/hooks/ghargs.ts"
 out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
-[ "$code" -eq 0 ] && check "scope-modes' gh argument reader is a known exception, not a failure" ok \
-  || check "scope-modes' gh argument reader is a known exception, not a failure" "exit=$code out=$out"
-printf '%s\n' "$out" | grep -q 'scope-modes keeps its own remote-reader in hooks/ghargs.ts, a known exception until #961' \
-  && check "and is said on every run, with the issue that ends it" ok || check "and is said on every run, with the issue that ends it" "$out"
-printf '%s\n' 'const slug = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote)' > "$M9E/scope-modes/hooks/register.ts"
-out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
-[ "$code" -eq 1 ] && check "a copy elsewhere in scope-modes still fails the run" ok || check "a copy elsewhere in scope-modes still fails the run" "exit=$code out=$out"
-printf '%s\n' "$out" | grep -q 'scope-modes keeps its own remote-reader at /hooks/register.ts:1' \
-  && check "named by its own file and line" ok || check "named by its own file and line" "$out"
+[ "$code" -eq 1 ] && check "after #961 scope-modes keeping its gh argument reader's address parsing fails the run" ok \
+  || check "after #961 scope-modes keeping its gh argument reader's address parsing fails the run" "exit=$code out=$out"
+case "$out" in *'known exception'*) check "and is never named as a known exception" "$out" ;; *) check "and is never named as a known exception" ok ;; esac
+printf '%s\n' "$out" | grep 'scope-modes keeps its own remote-reader at /hooks/ghargs.ts:1' | grep -q 'modkit.ghRepo(' \
+  && check "named by its own file and line, and pointed at modkit.ghRepo" ok || check "named by its own file and line, and pointed at modkit.ghRepo" "$out"
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.
