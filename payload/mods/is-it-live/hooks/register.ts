@@ -264,19 +264,23 @@ export const register: Register = on => {
     return next({ ...e, props: { ...e.props, input: { repo: input.repo, pr: input.pr } } })
   })
 
-  // Copy and Mark sent, on any message this mod pinned. One hook for all of them: the buttons are
-  // named after their card, so they cannot be listed when the module loads.
-  on('ui.press', { plugin: 'mod-kit' }, async ($, e, next) => {
+  // Copy and Mark sent, on any message this mod pinned, pressed by a click or by /press (#939):
+  // mod-kit raises both as modkit.press. One hook for all of them: the buttons are named after their
+  // card, so they cannot be listed when the module loads.
+  on('modkit.press', async ($, e, next) => {
     const m = new RegExp(`^${MOD}:(copy|sent)-(.+)$`).exec(String(e.element ?? ''))
     if (!m) return next(e)
+    // A copy, or a card saved and its row cleared: well inside a noun's 10 s (#744), so the press is
+    // answered once its work is done.
+    const answered = { value: { isAnswered: true } }
     const [, verb, id] = m
     const c = await cardOfButton($, String(id))
     if (!c || !c.message) {
       $.ui.toast('That message is no longer kept.')
-      return { element: e.element }
+      return answered
     }
     if (verb === 'copy') {
-      const r = await $.ui.copy({ text: c.message, surface: e.surface })
+      const r = await $.ui.copy({ text: c.message, surface: e.surface as never })
       if (!r.isCopied) $.ui.toast(`Not copied: ${r.reason}`)
     } else {
       const at = await $.clock.now()
@@ -287,7 +291,7 @@ export const register: Register = on => {
       await $.modkit.clearBandRow({ mod: MOD, id: String(id) })
       if (id !== buttonId(c.repo, c.pr)) await $.modkit.clearBandRow({ mod: MOD, id: buttonId(c.repo, c.pr) })
     }
-    return { element: e.element }
+    return answered
   })
 
   on('command.run', { command: 'live' }, async $ => {
