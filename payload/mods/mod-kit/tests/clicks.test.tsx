@@ -237,6 +237,33 @@ test('/press refuses a button that is not showing, and says so when nothing answ
   expect(seen).toEqual([expect.stringMatching(/^Nothing answered the button publisher:copy/)])
 })
 
+// Lessons review of #946: a mod not yet moved onto modkit.press takes a click in its own ui.press
+// hook, which answers it without calling next, so the Button's own press (the modkit.press raise)
+// never runs and no false "Nothing answered" is toasted.
+const oldPublisher: { name: string; register: Register } = {
+  name: 'oldpub',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      await $.modkit.bandRow(JSON.parse(String((e as { command?: string }).command).slice('show '.length)) as ModKitBandRow)
+      return { deny: 'done' }
+    })
+    on('ui.press', { plugin: 'mod-kit', element: 'oldpub:go' }, ($, e) => {
+      $.ui.toast('oldpub took the click')
+      return { element: e.element }
+    })
+  },
+}
+test('a click a mod still answers in its ui.press hook is taken there, with no false toast', { plugins: [oldPublisher] }, async ($, on) => {
+  engine(on)
+  const seen = toasts(on)
+  mock.env(on, { TERM_PROGRAM: 'iTerm.app' })
+  await run($, `show ${JSON.stringify({ mod: 'oldpub', id: 'r', slot: 'steps', lines: [[{ button: 'go', label: 'Go' }]] })}`)
+  const ui = (await $.ui.mount(band('terminal', FULL))) as unknown as Ui
+  await ui.press({ key: 'oldpub:go' })
+  expect(seen).toEqual(['oldpub took the click'])
+  await ui.unmount()
+})
+
 test('a clicked button nothing answers says so in a toast', withPublisher, async ($, on) => {
   engine(on)
   const seen = toasts(on)
