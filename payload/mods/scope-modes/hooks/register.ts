@@ -47,9 +47,10 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, resumeDue,
+  LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, queueData, readDriver, resumeDue, thenNext,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
+import { overnightData } from './overnightdata.ts'
 import { bootOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
@@ -1424,7 +1425,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const unsavedPark = parkedHere.get(stopKey(en))
     if (unsavedPark && driver.state !== 'unreadable') {
       const base = driver.state === 'ok' ? driver.record : freshDriver(en.record.generation, en.self, en.now)
-      driver = { state: 'ok', record: { ...base, parked: base.parked ? `${base.parked} ${unsavedPark}` : unsavedPark } }
+      driver = { state: 'ok', record: { ...base, parked: base.parked ? `${thenNext(base.parked)}${unsavedPark}` : unsavedPark } }
     }
     parkedHere.delete(stopKey(en))
     const notesText = await notesNow($, en)
@@ -1450,7 +1451,8 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const ended = d.release ? await endClaim($, en, where.root, d.release) : null
     const notes = ended && d.release ? [...d.notes, { kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : d.notes
     await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
-    if (d.kind === 'block') return { block: ended && d.release ? `The claim on #${d.release.issue} could not be ended (${ended}): end it yourself. ${d.reason}` : d.reason }
+    // The queue's answer can quote a reason a worker wrote, so it reaches the block only as data (#922).
+    if (d.kind === 'block') return { block: ended && d.release ? `The claim on #${d.release.issue} could not be ended, so end it yourself.\n${queueData(ended)}${d.reason}` : d.reason }
     $.ui.log(`scope-modes: the overnight driver let this session stop: ${d.why}`, { to: 'debug' })
     return null
   })
@@ -1507,7 +1509,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     const where = await repoOf($)
     const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
     const failed = await endClaim($, en, where.root, { issue: c.claim.issue, state: 'parked', why })
-    d.parked = failed ? `The watchdog could not park #${c.claim.issue} (${failed}); park it yourself.` : `The watchdog parked #${c.claim.issue} (${why}); its claim is ended, so leave it and claim the next issue.`
+    d.parked = failed ? `The watchdog could not park #${c.claim.issue}, so park it yourself.\n${queueData(failed)}` : `The watchdog parked #${c.claim.issue} (${why}); its claim is ended, so leave it and claim the next issue.`
     if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
     return false
   })
@@ -2121,7 +2123,12 @@ export const register: Register = on => {
           }
         } else if (t.kind === 'wake') {
           const woke = await wake($, e.origin.kind === 'bridge')
-          if (woke) notes.push(`Dan's message woke sleep mode. Say so in one line first: "${woke.said}"`)
+          // What waking found quotes titles of issues, milestones and commits made overnight, so it
+          // reaches this turn only as data (#922).
+          if (woke)
+            notes.push(
+              `Dan's message woke sleep mode. Say so in one line first, saying what the block below says.\n${overnightData({ holds: 'what waking sleep mode did and found, which can quote titles of issues, milestones and commits made overnight', offer: 'said to Dan in that one line; it is offered to him through no picker', lines: [woke.said] })}`,
+            )
           // This turn is the morning one (#837): its summary and pickers ride along.
           if (woke?.morning) notes.push(woke.morning)
         } else {
