@@ -50,7 +50,8 @@ import {
   LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, resumeDue,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
-import { bootOf, etDate, etWhen, nightOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
+import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
@@ -108,6 +109,8 @@ let boot: number | undefined
 let interactive = false
 // The last state the band was given, so the minute's tick redraws it only when sleep began or ended.
 let shownAsleep: boolean | undefined
+// The night this session last asked Dan whether he is up (#837), by its generation: once a night.
+let askedUp: string | undefined
 
 const sleepPaths = async ($: EngineInterface) => {
   const home = await $.env.get('HOME')
@@ -773,7 +776,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   const repos: string[] = []
   const unread: string[] = []
   if (typeof record.generation === 'string') {
-    const notes = `${sleepDir(home)}/notes/${record.generation.replace(/[^\w.-]/g, '_')}.jsonl`
+    const notes = notesOf(home, record.generation)
     try {
       if (await $.fs.exists(notes))
         for (const line of (await $.fs.read(notes)).split('\n')) {
@@ -1087,25 +1090,101 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   return s
 }
 
+// Phase 9 (#837): the night's report opened on the Mac, by the one session that woke it, once the
+// final render is done. Away, or woken from the phone, nothing opens on the Mac: it waits in the held
+// card. Said in the same reply as the wake, so Dan reads that focus moved.
+const openReport = async ($: EngineInterface, path: string, fromPhone: boolean): Promise<string> => {
+  if (fromPhone || (await placeOf($)) === 'away') {
+    const later = openLater(path)
+    await hold($, later.label, later.prompt)
+    await showHeld($)
+    return fromPhone
+      ? 'You woke it from your phone, so it was not opened on the Mac: opening it waits in the held card for when you are at the Mac.'
+      : 'You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back.'
+  }
+  let there: boolean
+  try {
+    there = await $.fs.exists(path)
+  } catch (err) {
+    return `It was not opened: whether it is there could not be read (${msg(err)}).`
+  }
+  // The helper opens a missing file as a new empty window and says it worked, so a report that is not there is said instead.
+  if (!there) return 'It was not opened: there is no file there.'
+  const why: string[] = []
+  for (const argv of openers(path)) {
+    const r = await run($, argv)
+    if (r.exitCode === 0) return 'Focus moved to BBEdit, where it is open.'
+    why.push(`${argv[0] === BBEDIT ? 'bbedit_tool' : 'open -a BBEdit'}: ${r.stderr.trim() || `exit ${r.exitCode}`}`)
+  }
+  return `It could not be opened in BBEdit (${why.join('; ')}).`
+}
+
+// Phase 9 (#837): each other session that worked overnight is asked for its own summary. One that
+// has closed since is said, never counted as asked, and one the registry could not read is not
+// called closed (L215).
+const askSummaries = async ($: EngineInterface, record: SleepRecord | null, self: string): Promise<string> => {
+  const others = (Array.isArray(record?.workers) ? record.workers : []).filter((w): w is string => typeof w === 'string' && w !== self)
+  if (!others.length) return ''
+  let list
+  try {
+    list = await $.sessions.list()
+  } catch (err) {
+    return summariesSaid({ asked: 0, failed: [], closed: 0, unknown: `the session registry could not be read (${msg(err)})` })
+  }
+  const open = new Set(list.open.map(o => o.sessionId))
+  const told = { asked: 0, failed: [] as string[], closed: 0 }
+  for (const id of others) {
+    if (!open.has(id)) {
+      if (list.unreadable.length) told.failed.push(`whether it is still open is not known (the session registry could not read ${list.unreadable.join(', ')})`)
+      else told.closed++
+      continue
+    }
+    // mod-kit tries a refused send once more, so a refusal here is the second.
+    const sent = await $.session.send({ to: { sessionId: id }, text: SUMMARY_ASK })
+    if (sent.isDelivered) told.asked++
+    else told.failed.push(sent.reason)
+  }
+  return summariesSaid(told)
+}
+
+// Phase 9 (#837): what the waking session is asked to do, from the night's notes: its own summary,
+// then the proposed issues and lessons in the pickers that already exist. A read that fails is said
+// in the prompt, never read as a night with nothing proposed (L215).
+const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: string): Promise<string> => {
+  const worker = Array.isArray(record?.workers) && record.workers.includes(self)
+  if (typeof record?.generation !== 'string') return morningPrompt({ worker, issues: [], lessons: [], unread: 'the sleep record names no generation' })
+  try {
+    const path = notesOf((await sleepPaths($)).home, record.generation)
+    if (!(await $.fs.exists(path))) return morningPrompt({ worker, issues: [], lessons: [] })
+    return morningPrompt({ worker, ...proposalsIn(await $.fs.read(path)) })
+  } catch (err) {
+    return morningPrompt({ worker, issues: [], lessons: [], unread: msg(err) })
+  }
+}
+
 // /wake and "I'm up" (#840): the record is moved aside, and only the session whose move succeeds
-// acts. Phase 9 (#837) opens the report and asks for summaries here, on the winner only.
-const wake = async ($: EngineInterface): Promise<string | null> => {
+// acts. Phase 9 (#837): that session alone opens the report, asks the other workers for their
+// summaries, and comes back with the morning prompt (its summary and the pickers) for its caller to
+// start: a turn of its own after /wake, the turn already starting after "I'm up".
+type Woke = { said: string; morning: string | null }
+const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null> => {
+  const said = (s: string): Woke => ({ said: s, morning: null })
   const reading = await sleepNow($)
   if (reading.state === 'none') {
     // A preparing marker with no sleep behind it is one a session left when it died mid question.
     const p = await sleepPaths($)
     if (!(await $.fs.exists(p.preparing))) return null
     const rm = await run($, ['rm', '-f', p.preparing])
-    return rm.exitCode === 0 ? 'Sleep mode was not on. A sleep left half prepared was cleared, so /sleep can start again.' : `Sleep mode was not on, and a sleep left half prepared could not be cleared (${rm.stderr.trim() || `rm exited ${rm.exitCode}`}).`
+    return said(rm.exitCode === 0 ? 'Sleep mode was not on. A sleep left half prepared was cleared, so /sleep can start again.' : `Sleep mode was not on, and a sleep left half prepared could not be cleared (${rm.stderr.trim() || `rm exited ${rm.exitCode}`}).`)
   }
   const moved = await moveAside($, 'woke')
-  if ('gone' in moved) return 'Sleep mode was already woken by another session.'
-  if ('error' in moved) return `Sleep mode could not be turned off (${moved.error}). It is still on.`
+  if ('gone' in moved) return said('Sleep mode was already woken by another session.')
+  if ('error' in moved) return said(`Sleep mode could not be turned off (${moved.error}). It is still on.`)
   const record = parseRecord(moved.text)
   await releaseAwake($, (await sleepPaths($)).dir)
   await showModes($)
   await showHeld($)
-  if (reading.state === 'unreadable') return `Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`
+  if (reading.state === 'unreadable') return said(`Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`)
   const placed = await restorePlace($, record)
   // The overnight check's notes go in before the report is finished, so they are at its top (#834).
   const checked = await overnightCheck($, record, moved.to)
@@ -1114,11 +1193,15 @@ const wake = async ($: EngineInterface): Promise<string | null> => {
   if (record?.report) {
     const problems = await finishReport($, moved.to, { kind: 'woke' })
     s += problems.length ? ` The night's report at ${record.report} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${record.report}.`
+    s += ` ${await openReport($, record.report, fromPhone)}`
   } else {
     // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
     s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
   }
-  return s
+  const self = await $.session.id()
+  const asked = await askSummaries($, record, self)
+  if (asked) s += ` ${asked}`
+  return { said: s, morning: await morningFor($, record, self) }
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
@@ -1978,7 +2061,15 @@ export const register: Register = on => {
     return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual.`] }
   })
   on('command.run', { command: 'sleep' }, async $ => ({ text: await startSleep($) }))
-  on('command.run', { command: 'wake' }, async $ => ({ text: (await wake($)) ?? 'Sleep mode was not on.' }))
+  on('command.run', { command: 'wake' }, async ($, e) => {
+    const woke = await wake($, e.origin.kind === 'bridge')
+    if (!woke) return { text: 'Sleep mode was not on.' }
+    // The morning turn starts once the command is done: from inside command.run the prompt would
+    // wait on the turn this hook holds (as /handoff found).
+    const morning = woke.morning
+    if (morning) $.clock.after(0, () => void $.prompt.submit({ text: morning }).catch(err => $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}`)))
+    return { text: woke.said }
+  })
   on('command.run', { command: 'away' }, async $ => {
     await setPlace($, 'away')
     return { text: placeSentence('away', await tellOthers($, 'away')) }
@@ -2020,8 +2111,10 @@ export const register: Register = on => {
             notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. Say so in one line first.`)
           }
         } else if (t.kind === 'wake') {
-          const said = await wake($)
-          if (said) notes.push(`Dan's message woke sleep mode. Say so in one line first: "${said}"`)
+          const woke = await wake($, e.origin.kind === 'bridge')
+          if (woke) notes.push(`Dan's message woke sleep mode. Say so in one line first: "${woke.said}"`)
+          // This turn is the morning one (#837): its summary and pickers ride along.
+          if (woke?.morning) notes.push(woke.morning)
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
@@ -2044,8 +2137,18 @@ export const register: Register = on => {
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
     const sleeping = await sleepNow($)
-    if (sleeping.state === 'asleep') notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
-    else if ((await placeOf($)) === 'away') notes.push(AWAY_NOTE)
+    if (sleeping.state === 'asleep') {
+      notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
+      // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
+      // whether he is up, once a night in each session, and sleep goes on until he says so.
+      if (isDans(e.origin) && askedUp !== sleeping.record.generation) {
+        const now = await $.clock.now()
+        if (isDaytimeEt(now)) {
+          askedUp = sleeping.record.generation
+          notes.push(awakeAsk(etWhen(now)))
+        }
+      }
+    } else if ((await placeOf($)) === 'away') notes.push(AWAY_NOTE)
     else if ((await $.state.get(justHomeRef)).value) {
       notes.push(HOME_NOTE)
       await $.state.set(justHomeRef, false)

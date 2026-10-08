@@ -374,7 +374,7 @@ export const overnightRules = (self: string, rootPath: string) => {
     `If it prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
     'Work it test first, open a pull request, and follow the repository\'s own merge rules.',
     `When it is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next.`,
-    'Write anything for Dan with sleep_note from ~/.claude/hooks/lib/sleep.sh: a question about an issue (kind question, with repo as owner/name, issue as its number, and text), which is asked before bed next time; a proposed issue (kind issue); a lesson (kind lesson); or anything noticed (kind finding). Never file issues or ask him.',
+    'Write anything for Dan with sleep_note from ~/.claude/hooks/lib/sleep.sh: a question about an issue (kind question, with repo as owner/name, issue as its number, and text), which is asked before bed next time; a proposed issue (kind issue, with repo as owner/name, title, priority as p0 to p4, labels as a list, milestone, and text); a lesson (kind lesson, with the rule word for word as its text); or anything noticed (kind finding). Proposed issues and lessons are offered to Dan in the morning; never file issues, add lessons or ask him.',
     `When \`next\` prints none, write \`sleep_note '{"kind":"stopped","by":"${self}","text":"nothing left to claim"}'\` and stop.`,
     'What is done is judged from commits and notes, never from what you say, so commit and note as you go.',
   ].join(' ')

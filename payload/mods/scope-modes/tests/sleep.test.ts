@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { bootOf, etWhen, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
+import { bootOf, etWhen, isDaytimeEt, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
 import { SLEEP_FIXTURES } from './sleep-fixtures.ts'
 
 type Fixture = { name: string; text: string | null; now: number; boot: number | null; state: string }
@@ -57,6 +57,36 @@ describe('the night and when sleep ends, in ET', () => {
   test('a time is said in ET with its day', () => {
     expect(etWhen(utc(2026, 10, 8, 3, 42))).toBe('11:42 PM ET on Wed Oct 7')
     expect(etWhen(utc(2026, 10, 8, 16))).toBe('12:00 PM ET on Thu Oct 8')
+  })
+})
+
+// Phase 9 (#837): a message from Dan between 7 AM and 7 PM ET while asleep asks whether he is up.
+describe('isDaytimeEt: 7 AM up to 7 PM ET, read off the zone itself', () => {
+  test('both edges in winter (EST, UTC minus 5)', () => {
+    expect(isDaytimeEt(utc(2026, 1, 15, 11, 59, 59, 999))).toBe(false)
+    expect(isDaytimeEt(utc(2026, 1, 15, 12))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 1, 15, 23, 59, 59, 999))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 1, 16, 0))).toBe(false)
+  })
+  test('both edges in summer (EDT, UTC minus 4)', () => {
+    expect(isDaytimeEt(utc(2026, 7, 15, 10, 59, 59, 999))).toBe(false)
+    expect(isDaytimeEt(utc(2026, 7, 15, 11))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 7, 15, 22, 59, 59, 999))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 7, 15, 23))).toBe(false)
+  })
+  test('on the spring change day, morning is already EDT', () => {
+    // Mar 8 2026: 2 AM EST becomes 3 AM EDT, so 7 AM is 11:00 UTC, not 12:00.
+    expect(isDaytimeEt(utc(2026, 3, 8, 10, 59))).toBe(false)
+    expect(isDaytimeEt(utc(2026, 3, 8, 11))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 3, 8, 22, 59))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 3, 8, 23))).toBe(false)
+  })
+  test('on the fall change day, morning is already EST', () => {
+    // Nov 1 2026: 2 AM EDT becomes 1 AM EST, so 7 AM is 12:00 UTC and 7 PM is 00:00 UTC on Nov 2.
+    expect(isDaytimeEt(utc(2026, 11, 1, 11, 59))).toBe(false)
+    expect(isDaytimeEt(utc(2026, 11, 1, 12))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 11, 1, 23, 59))).toBe(true)
+    expect(isDaytimeEt(utc(2026, 11, 2, 0))).toBe(false)
   })
 })
 
