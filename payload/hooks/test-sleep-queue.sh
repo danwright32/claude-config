@@ -227,34 +227,52 @@ check_has "saying the Mac is not asleep" "not asleep" "$out"
 asleep
 
 # ---- claims ----
-# Two, then eight, claimers at once on one issue: exactly one owner, one entry.
+# Two, then eight, claimers at once on one issue: exactly one owner, one entry. Started together is
+# not the same as clashing: a scheduler that runs each claimer to the end before the next starts
+# gives one owner even with no link at all (CI did, #944). So every race holds its claimers at the
+# claim's barrier seam, SLEEP_CLAIM_BARRIER, until all of them have judged the issue free, and only
+# then lets any write: the clash happens on every run, and met says it did.
+barrier(){ # issue count: a barrier folder of this suite's own, for that many claimers
+  local b="$WORK/barrier-$1"
+  rm -rf "$b"; mkdir -p "$b"; printf '%s\n' "$2" > "$b/parties"
+  printf '%s\n' "$b"
+}
+met(){ # issue: how many claimers reached the barrier, and whether any waited out its deadline
+  local b="$WORK/barrier-$1"
+  printf '%s %s\n' "$(ls "$b" | grep -c '^arrived\.' | tr -d ' ')" "$([ -e "$b/timed-out" ] && echo timed-out || echo in-time)"
+}
 race(){ # issue count
-  local i
+  local i b
+  b="$(barrier "$1" "$2")"
   for i in $(seq 1 "$2"); do
     session "r$1-$i" "$((NOW - 1000))" null
-    ( sleep_claim "$ROOT" "$1" "r$1-$i" > "$WORK/race-$1-$i" 2>&1; echo $? >> "$WORK/race-$1-$i" ) &
+    ( SLEEP_CLAIM_BARRIER="$b" sleep_claim "$ROOT" "$1" "r$1-$i" > "$WORK/race-$1-$i" 2>&1; echo $? >> "$WORK/race-$1-$i" ) &
   done
   wait
   cat "$WORK"/race-"$1"-* | grep -c '^claimed' | tr -d ' '
 }
 check_eq "two claimers at once: exactly one owns it" 1 "$(race 21 2)"
+check_eq "both judged it free before either wrote" "2 in-time" "$(met 21)"
 check_eq "and one entry was made" "1 " "$(claims_of 21)"
 check_eq "eight claimers at once: exactly one owns it" 1 "$(race 22 8)"
+check_eq "all eight judged it free before any wrote" "8 in-time" "$(met 22)"
 check_eq "and still one entry" "1 " "$(claims_of 22)"
 check_eq "every loser says the issue is held" 7 "$(cat "$WORK"/race-22-* | grep -c "^not-claimed.*held" | tr -d ' ')"
 # Racers sharing $$ and RANDOM state (forked subshells, here seeded alike) still make exactly one
 # owner, and the one that says it won is the session its entry names: a shared temp name would let
 # one racer link another's entry and believe the claim its own.
 same_race(){ # issue count
-  local i
+  local i b
+  b="$(barrier "$1" "$2")"
   for i in $(seq 1 "$2"); do
     session "q$1-$i" "$((NOW - 1000))" null
-    ( RANDOM=7; sleep_claim "$ROOT" "$1" "q$1-$i" > "$WORK/same-$1-$i" 2>&1 ) &
+    ( RANDOM=7; SLEEP_CLAIM_BARRIER="$b" sleep_claim "$ROOT" "$1" "q$1-$i" > "$WORK/same-$1-$i" 2>&1 ) &
   done
   wait
 }
 for r in 51 52 53 54 55; do
   same_race "$r" 8
+  check_eq "racers sharing RANDOM on #$r all judged it free before any wrote" "8 in-time" "$(met "$r")"
   won="$(grep -l '^claimed' "$WORK"/same-"$r"-* 2>/dev/null | wc -l | tr -d ' ')"
   check_eq "racers sharing RANDOM on #$r: exactly one says it won" 1 "$won"
   winner="$(grep -l '^claimed' "$WORK"/same-"$r"-* 2>/dev/null | sed 's#.*/same-##')"
@@ -262,13 +280,39 @@ for r in 51 52 53 54 55; do
 done
 
 # The control: the same library with the link swapped for a copy must let several claimers own one
-# issue, or the race above proves nothing about the link (L1).
+# issue, or the race above proves nothing about the link (L1). Held at the barrier, every claimer
+# has judged the issue free before any writes, and a copy refuses nobody, so all eight own it.
 CTRL="$WORK/control"; mkdir -p "$CTRL"
 cp "$DIR/lib/sleep.sh" "$DIR/lib/sleep-queue.py" "$CTRL/"
 awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(cp "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
 check_eq "the control swapped the link for a copy" 1 "$(grep -c 'if err="$(cp "$tmp"' "$CTRL/sleep-queue.sh" | tr -d ' ')"
 owners="$( . "$CTRL/sleep-queue.sh" && race 41 8 )"
-check_eq "without the link, eight claimers at once make more than one owner" yes "$([ "${owners:-0}" -gt 1 ] && echo yes || echo "no, $owners")"
+check_eq "without the link, every one of eight claimers at once owns it" 8 "$owners"
+check_eq "the control's claimers all met at the barrier too" "8 in-time" "$(met 41)"
+
+# The barrier is a test's alone: it acts only on a folder holding a parties file, which only a test
+# writes, so a night with the variable set to anything else never waits (#944).
+mkdir -p "$WORK/not-a-barrier"
+session s0 "$((NOW - 1000))" null
+t0=$(date +%s)
+out="$(SLEEP_CLAIM_BARRIER="$WORK/not-a-barrier" sleep_claim "$ROOT" 42 s0)"
+t1=$(date +%s)
+check_has "a folder with no parties file is no barrier, and the claim goes ahead" "$(printf 'claimed\t42\t')" "$out"
+check_eq "without waiting" yes "$([ $((t1 - t0)) -lt 5 ] && echo yes || echo "no, $((t1 - t0))s")"
+check_eq "and nothing is written into that folder" "" "$(ls -A "$WORK/not-a-barrier")"
+b="$(barrier 43 x)"
+out="$(SLEEP_CLAIM_BARRIER="$b" sleep_claim "$ROOT" 43 s0)"
+check_has "nor is one whose parties file holds no count" "$(printf 'claimed\t43\t')" "$out"
+check_eq "and it records no arrival" "0 in-time" "$(met 43)"
+# A claimer waiting for parties that never come carries on at the barrier's deadline (L110) and
+# leaves a mark the race's met check fails on, so a broken barrier is a red, never a hang.
+b="$(barrier 44 2)"; printf '1\n' > "$b/deadline"
+t0=$(date +%s)
+out="$(SLEEP_CLAIM_BARRIER="$b" sleep_claim "$ROOT" 44 s0)"
+t1=$(date +%s)
+check_has "a barrier short of parties lets its claimer go at the deadline" "$(printf 'claimed\t44\t')" "$out"
+check_eq "within a few seconds of it" yes "$([ $((t1 - t0)) -lt 10 ] && echo yes || echo "no, $((t1 - t0))s")"
+check_eq "and says it timed out" "1 timed-out" "$(met 44)"
 
 out="$(sleep_claim "$ROOT" 9 s1)"; rc=$?
 check_eq "a free issue is claimed" 0 "$rc"
