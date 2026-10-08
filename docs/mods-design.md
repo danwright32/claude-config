@@ -799,7 +799,7 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   minute tick moves it, appends a `limit` line to `notes/<generation>.jsonl` (phase 4 builds the
   report on this file) and sends one notification; if the record moved is not the one judged over
   (a new sleep began between the read and the move) it is put back with `mv -n`.
-- `/sleep` writes only the record and its workers. The before bed questions (#836), paging (#841),
+- `/sleep` writes the record and its workers. The before bed questions (#843, #836), paging (#841),
   the report (#835) and the overnight driver (#844) build on it; the wake report and summaries
   (#837) go where `wake` names the winner.
 
@@ -813,7 +813,8 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   top of the script; a kind it does not know is still shown, under Other notes.
 - Notes are `notes/<generation>.jsonl`, one line per note, appended in one write in append mode,
   so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
-  `report` path in the record (`~/Downloads/sleep-report-<night>.md`), is derived from the record
+  `report` path in the record (`~/Downloads/Sleep report <night>.md`, the name Dan asked for in
+  decision 4), is derived from the record
   and the notes and replaced whole after each note, best effort: a note whose render fails is still
   written, the failure said on stderr, and the call exits 0 so nobody writes it twice. Renders take
   turns under a per night flock (`notes/<generation>.render.lock`, a 15 second deadline, then the
@@ -995,6 +996,47 @@ the ban list knowing that an action it does not name is approved.
   30 s deadline, each read given only the time left, so wake waits at most 30 s for it before the
   report's own final render.
 
+### Sleep mode phase 6: the before bed questions about the queue's issues (#836), built
+
+Dan's decision 8 (2026-10-06): turning sleep on gathers the open questions across the queue's
+issues and asks them one at a time in Claude Code's own dialog, the ones that unblock the most work
+first, each with "Go to sleep now"; answers are posted on the issue as dated decisions.
+
+- Where the questions come from: the night's notes. An overnight worker that meets a decision only
+  Dan can make notes it with `sleep_note` as a `question` with `repo` (owner/name), `issue` and
+  `text`, as the overnight rules tell it to. Those are the one structured record of a question about
+  an issue (a GitHub comment carries no marker a reader could rely on). A question noted with no
+  issue (a refused AskUserQuestion, which names a folder, or a repository closed by phase 7) has
+  nowhere to post an answer and is left to the morning report.
+- At `/sleep`, under the same `preparing` marker and in the same 10 minute round as phase 7's
+  repository questions, after them: every `notes/*.jsonl` is read, the questions about a worker's
+  repository kept, one already answered dropped (`state/sleep/answered/<key>.json`, one per
+  repository, issue and words), and each issue read once with `gh issue view` under any logged in
+  account (a closed one drops its questions; one that cannot be read is still asked about, ranked
+  last). The same words on two nights or two issues are one question.
+- Order: a question more issues wait on first; then the one whose issue has the fewest questions
+  left, so one answer frees a whole issue soonest; then the more urgent issue (its priority label);
+  then the question noted first. The repository questions come before all of these: a repository's
+  answer is written into the shared lists and covers every issue there on every night after, while
+  an issue's answer covers one issue, and a repository question exists only for a worker repository
+  on neither list, so it is rare once a repository has been asked once.
+- The dialog offers up to two choices the worker suggested (`options` on the note), then "Skip this
+  one" and "Go to sleep now"; anything else Dan types under Other is his answer. "Go to sleep now"
+  (on a repository question too) asks nothing more. Each answer is posted on every issue waiting on
+  it, as `**Decision from Dan, YYYY-MM-DD (ET)**` with the question quoted and the answer as given
+  (L249), then recorded as answered; a write is retried as another account only on GitHub's own not
+  found, so a comment that may have landed is never sent twice.
+- Every issue a question was left on (skipped, unanswered in the round, dismissed, Go to sleep now,
+  nobody at the session to ask, or an answer that could not be posted) goes into
+  `state/sleep/unanswered/<generation>`, one `owner/repo#N` a line, written whole before the record
+  is placed, so `sleep-queue.sh` leaves it out of the night's queue. A list that cannot be written
+  stops sleep starting (L42): the queue would otherwise work issues still waiting on Dan. Each
+  question left is noted again for the morning report in the same words, so it is asked again next
+  time; an answer that could not be posted is said in the `/sleep` reply and noted as a `finding`.
+  An answer given after the round is still posted, for the nights after; tonight its issue stays out.
+- `/sleep` says how many were answered and posted where, how many were left and which issues the
+  queue skips, and any notes that could not be read.
+
 ### Sleep mode phase 7: merge and deploy lists that fail closed (#843), built
 
 Dan's decision 6 (2026-10-06): merge and deploy as in the daytime, except trypennie, Bidspoke and
@@ -1021,7 +1063,7 @@ let through.
   repository not reached in it is closed, saying so), so `/sleep` never blocks longer. Each option means
   exactly what it says: "Merge, never deploy" (chosen only where a merge does not itself deploy, as
   the question says; `mergeDeploys: false`), "Hold merges, never deploy" (`mergeDeploys: true`) and
-  "Allowed to deploy". An answer is written into the installed file under the answers lock
+  "Allowed to deploy"; "Go to sleep now" (#836) closes that repository and asks nothing more. An answer is written into the installed file under the answers lock
   (`state/sleep/repos.lock`, the marker below), whole beside it and then moved, so a late answer and
   another never write over each other; an answer given after the 10 minutes is still written, for
   later nights. A writer waits up to 30 seconds on a live holder, then refuses, naming it. A

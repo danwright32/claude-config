@@ -113,6 +113,12 @@ export const untilOf = (night: string): number => {
   return noonEt(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate())
 }
 
+/** The calendar date of a moment in ET, YYYY-MM-DD: what a decision Dan gave is dated with (L249). */
+export const etDate = (ms: number): string => {
+  const p = etParts(ms)
+  return `${p.y}-${pad(p.mo)}-${pad(p.d)}`
+}
+
 /** A moment as Dan reads it: "11:42 PM ET on Wed Oct 7". */
 export const etWhen = (ms: number): string => {
   const p = etParts(ms)

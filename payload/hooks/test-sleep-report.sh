@@ -33,7 +33,7 @@ if ! . "$LIB"; then
 fi
 
 # The real Downloads, as it stands before anything runs: no sleep report may appear in it.
-real_downloads_before="$(ls "$HOME/Downloads" 2>/dev/null | grep -c '^sleep-report-' || true)"
+real_downloads_before="$(ls "$HOME/Downloads" 2>/dev/null | grep -c -E '^(sleep-report-|Sleep report )' || true)"
 
 # Stand-ins on PATH. Each logs its argv; what it answers is set by files in $WORK/fake.
 FAKE="$WORK/fake"; BIN="$WORK/bin"; mkdir -p "$FAKE" "$BIN"
@@ -66,10 +66,10 @@ SLEEPDIR="$WORK/hm/.claude/state/sleep"
 DL="$WORK/hm/Downloads"
 mkdir -p "$SLEEPDIR/ended"
 record(){   # $1 = generation, $2 = workers as a JSON list, $3 = where (current or an ended file)
-  printf '{"v":1,"generation":"%s","since":%s,"until":%s,"night":"2026-10-07","bootTime":1759800000,"report":"%s/sleep-report-%s.md","startedBy":{"sessionId":"aaaa1111","cwd":"/r/repo"},"workers":%s,"placeBefore":"home"}' \
+  printf '{"v":1,"generation":"%s","since":%s,"until":%s,"night":"2026-10-07","bootTime":1759800000,"report":"%s/Sleep report %s.md","startedBy":{"sessionId":"aaaa1111","cwd":"/r/repo"},"workers":%s,"placeBefore":"home"}' \
     "$1" "$SINCE" "$((SINCE + 86400000))" "$DL" "$1" "$2" > "$3"
 }
-report_of(){ cat "$DL/sleep-report-$1.md" 2>/dev/null; }
+report_of(){ cat "$DL/Sleep report $1.md" 2>/dev/null; }
 notes_of(){ cat "$SLEEPDIR/notes/$1.jsonl" 2>/dev/null; }
 py(){ HOME="$WORK/hm" SLEEP_REPORT_NOW_MS="${NOW:-$SINCE}" python3 "$PY" "$@"; }
 
@@ -86,7 +86,7 @@ has "before wake it says it is not final" "Still asleep as of 11:42 PM ET on Wed
 has "pmset was asked" "pmset -g batt" "$(cat "$FAKE/calls")"
 check_eq "the start note is one JSON line naming the power" "start|on AC power|g1|$SINCE" \
   "$(notes_of g1 | python3 -c 'import json,sys; [print("%s|%s|%s|%s" % (j["kind"], j["power"], j["generation"], j["at"])) for j in map(json.loads, sys.stdin)]')"
-check_eq "no temp file is left beside the report" "sleep-report-g1.md" "$(ls -A "$DL")"
+check_eq "no temp file is left beside the report" "Sleep report g1.md" "$(ls -A "$DL")"
 
 echo "Now drawing from 'Battery Power'
  -InternalBattery-0 (id=1)	41%; discharging; 3:10 remaining present: true" > "$FAKE/pmset.out"
@@ -345,7 +345,7 @@ NOW=$WOKE py render --record "$SLEEPDIR/ended/g9.json" >/dev/null 2>&1
 has "a reading written later but taken earlier never wins" 'Paid usage: $4.00' "$(report_of g9)"
 
 # A render that fails in any way after the note is written still exits 0, so the note is not written twice.
-printf '{"v":1,"generation":"g10","since":%s,"until":1,"night":"2026-10-07","bootTime":1,"report":"%s/sleep-report-g10.md","startedBy":"not a record","workers":[],"placeBefore":"home"}' "$SINCE" "$DL" > "$SLEEPDIR/ended/g10.json"
+printf '{"v":1,"generation":"g10","since":%s,"until":1,"night":"2026-10-07","bootTime":1,"report":"%s/Sleep report g10.md","startedBy":"not a record","workers":[],"placeBefore":"home"}' "$SINCE" "$DL" > "$SLEEPDIR/ended/g10.json"
 out="$(py note --record "$SLEEPDIR/ended/g10.json" --line '{"kind":"finding","by":"aaaa1111","text":"render crashes"}' 2>&1)"; rc=$?
 check_eq "a note whose render crashes still succeeds" 0 "$rc"
 has "and the crash is said" "the note was written, but the report could not be rendered: AttributeError" "$out"
@@ -405,9 +405,10 @@ has "a read it could not make is under Needs a look too" "Not checked overnight:
 lacks "neither is left for Other notes" "## Other notes" "$r"
 
 # ---- where the writes landed ----
-real_downloads_after="$(ls "$HOME/Downloads" 2>/dev/null | grep -c '^sleep-report-' || true)"
+real_downloads_after="$(ls "$HOME/Downloads" 2>/dev/null | grep -c -E '^(sleep-report-|Sleep report )' || true)"
 check_eq "the real Downloads gained no sleep report" "$real_downloads_before" "$real_downloads_after"
-check_eq "every report landed in the suite's own Downloads" "sleep-report-g1.md sleep-report-g2.md sleep-report-g3.md sleep-report-g5.md sleep-report-g6.md sleep-report-g7.md sleep-report-g8.md sleep-report-g9.md" "$(ls "$DL" | tr '\n' ' ' | sed 's/ $//')"
+# Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"

@@ -59,7 +59,7 @@ mod:scope-modes/hooks/register.ts:classic.Stop	Blocks only to keep Claude finish
 mod:manual-steps/hooks/register.tsx:classic.Stop	Sends Claude back to pin a steps card, and a card pinned while asleep is held by scope modes' hold, which reads the sleep record.
 mod:goal-tracker/hooks/register.tsx:classic.PermissionRequest	Reaches Dan only through notify, which consults the predicate (its own route below).
 mod:goal-tracker/hooks/register.tsx:classic.Notification	Reaches Dan only through notify, which consults the predicate (its own route below).
-mod:scope-modes/hooks/register.ts:askRepo:ask	The bedtime question about a repository on neither merge and deploy list (#843): asked only inside /sleep, while Dan is at the prompt that typed it and before the sleep record exists, so the Mac is not asleep yet.
+mod:scope-modes/hooks/register.ts:askOne:ask	The before bed questions, about a repository on neither merge and deploy list (#843) and the open questions on the queue's issues (#836): asked only inside /sleep, while Dan is at the prompt that typed it and before the sleep record exists, so the Mac is not asleep yet.
 mod:keystroke-guard/hooks/register.ts:headsUp:ask	Asked only after holdWhileAway, which holds the action through scope modes' hold while asleep, so the question is never reached then.
 EOF
 
