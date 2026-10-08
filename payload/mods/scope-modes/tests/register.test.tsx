@@ -230,6 +230,8 @@ type Opts = {
   commentFails?: Record<number, string>
   /** ls of a folder failing for a reason other than the folder being absent (#836). */
   lsFails?: string
+  /** Reading this session's folder throws (#836: after the unanswered list is written). */
+  cwdThrows?: boolean
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -467,7 +469,10 @@ const world = (on: On, o: Opts = {}) => {
     if ('throws' in u) throw new Error(u.throws)
     return { value: { startedAt: T0, context: { window: 200_000, percent: 10 }, ...u } } as never
   })
-  on('session.cwd', () => ({ value: '/repo' }) as never)
+  on('session.cwd', () => {
+    if (o.cwdThrows) throw new Error('the folder could not be read')
+    return { value: '/repo' } as never
+  })
   on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
@@ -2559,6 +2564,18 @@ test('an unanswered list that cannot be written stops sleep starting, since the 
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(r.text).toMatch(/^Sleep mode did not start: the list of issues whose before bed question went unanswered could not be written \(mv: rename .* Read-only file system\)\.$/)
+  expect(CURRENT in w.files).toBe(false)
+  expect(`${SLEEP}/preparing` in w.files).toBe(false)
+})
+
+test('a /sleep that throws after the questions leaves no unanswered list behind, and releases its marker', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE }, githubRepos: { default: ['o/r'] }, issueAnswers: { 'o/r#20: Rename it?': 'Skip this one' } })
+  await start($ as never, clock)
+  w.o.cwdThrows = true
+  // The engine reports the folder read failing as its own HooksError around the command.
+  const thrown = await command($ as never, 'sleep').then(() => 'did not throw', (err: unknown) => String(err))
+  expect(thrown).toMatch(/^HooksError: no implementation for command\.run/)
+  expect(UNANSWERED in w.files).toBe(false)
   expect(CURRENT in w.files).toBe(false)
   expect(`${SLEEP}/preparing` in w.files).toBe(false)
 })

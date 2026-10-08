@@ -987,6 +987,10 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     // a question for each worker's repository on neither list, every entry checked with GitHub.
     repos = await settleNight($, p.home, worked, round)
     issues = await askIssues($, p.dir, worked, round)
+    // Read before the list is written, so nothing between the list and the record can throw and
+    // leave a list for a night that never began.
+    startedIn = await $.session.cwd()
+    placeBefore = await placeOf($)
     // The issues whose question went unanswered, in the list sleep-queue.sh leaves out of tonight's
     // queue, in place before the record: a worker never reads a queue without it. Unwritten, sleep
     // does not start, since the queue would then work issues still waiting on Dan (L42).
@@ -995,8 +999,6 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
       await releaseMarker($, p.preparing, claim.claimed)
       return `Sleep mode did not start: the list of issues whose before bed question went unanswered could not be written (${unlisted}).`
     }
-    startedIn = await $.session.cwd()
-    placeBefore = await placeOf($)
   } catch (err) {
     await releaseMarker($, p.preparing, claim.claimed)
     throw err
