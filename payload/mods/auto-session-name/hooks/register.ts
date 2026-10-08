@@ -191,11 +191,13 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   } finally {
     renew.cancel()
   }
+  // Said as soon as /rename has answered, before the record's last write, so a failure there does
+  // not take this line with it (#948 review).
+  if (unread) $.ui.log(`${WHO} named this session without its repository in front: the repository could not be read (${unread}).`)
   // Only while this attempt still holds the claim: /rename waits for the session to go idle, and a
   // newer attempt may have taken over in the meantime.
   await update($, cur => (cur && mine(cur) ? { ...cur, outcome: 'named', claim: null, pendingTitle: outcome === 'set' ? null : name } : undefined))
   $.ui.log(`${MOD}: /rename answered ${outcome} (${detail}); ${outcome === 'set' ? 'named' : 'will set sessionTitle on the next message'}`, { to: 'debug' })
-  if (unread) $.ui.log(`${WHO} named this session without its repository in front: the repository could not be read (${unread}).`)
 }
 
 export const register: Register = on => {

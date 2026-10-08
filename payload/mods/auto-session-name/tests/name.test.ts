@@ -133,6 +133,9 @@ test('a name that already carries the right prefix is never doubled', async () =
   expect(withRepo('overture', '(overture) Fix export')).toBe('(overture) Fix export')
   expect(withRepo('overture', '(overture) (overture) Fix export')).toBe('(overture) Fix export')
   expect(withRepo('overture', '(overture)')).toBe('(overture)')
+  // In any case: the label is lower case, and Haiku may capitalise it (#948 review).
+  expect(withRepo('overture', '(Overture) Fix export')).toBe('(overture) Fix export')
+  expect(withRepo('claude-config', '(Claude-Config) (claude-config) Fix export')).toBe('(claude-config) Fix export')
 })
 
 // A bracket at the start of a name is taken off only when it is this repository's own label. No

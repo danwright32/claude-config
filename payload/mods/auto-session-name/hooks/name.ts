@@ -28,10 +28,13 @@ const LEAD_IN = /^\(([^()]+)\)(?:\s+|$)/
 const LABEL_CHARS = 30
 const WORKTREES = '/.claude/worktrees/'
 
-/** The name with this repository's prefix taken off its front, however many times it is there. */
+/**
+ * The name with this repository's prefix taken off its front, however many times it is there, in
+ * any case: the label is lower case and a reply may capitalise it.
+ */
 const unprefixed = (name: string, label: string): string => {
   let rest = name.trim()
-  for (let m = LEAD_IN.exec(rest); m && m[1] === label; m = LEAD_IN.exec(rest)) rest = rest.slice(m[0].length)
+  for (let m = LEAD_IN.exec(rest); m && (m[1] as string).trim().toLowerCase() === label; m = LEAD_IN.exec(rest)) rest = rest.slice(m[0].length)
   return rest
 }
 

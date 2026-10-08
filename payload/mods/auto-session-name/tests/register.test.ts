@@ -585,6 +585,22 @@ test('a session in no repository is named without a prefix', async ($, on) => {
   expect(w.logs).toEqual([])
 })
 
+// #948 review: the line saying the prefix is missing is said once the name is asked for, so a
+// failed write of the record after it does not take the line with it.
+test('the missing repository is still said when the last write of the record fails', async ($, on) => {
+  const s = failingState(on)
+  let release = () => {}
+  const held = new Promise<void>(r => { release = r })
+  const w = world(on, { repo: 'throws', holdRename: held })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
+  s.failing = true
+  release()
+  await w.clock.settle()
+  expect(w.logs).toContain('Auto session name named this session without its repository in front: the repository could not be read (git could not read the working copy).')
+})
+
 test('a repository that cannot be read still names the session, without the prefix, and says so', async ($, on) => {
   const w = world(on, { repo: 'throws' })
   await start($)
