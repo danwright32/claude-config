@@ -96,12 +96,33 @@ _sq_slug() {
 # once SECONDS pass, saying so on stderr and exiting 142. Everything this tool waits on from outside
 # (GitHub, a fetch) goes through it: it runs unattended, and a wait with no deadline only hangs
 # (L110). perl, since macOS has no timeout command.
+#
+# A test's seam (#950): SLEEP_DEADLINE_FROM names a file the command writes once it has started, and
+# the deadline then counts from that file appearing rather than from the launch. A hang test gives
+# its stand-in a deadline of seconds, and on a busy machine the stand-in may not have started by
+# then, so it is stopped before it can show it ran; counted from its start, the test measures the
+# deadline, not the scheduler (L290). Unset, as on every real night, nothing changes. Set, a command
+# that ends before writing the file is not held for it, and one that never writes it gets its
+# deadline armed after SLEEP_DEADLINE_FROM_WAIT seconds (20 unless set), saying so, so a broken
+# stand-in is a red, never a hang. The wait reads the clock, never a sum of its own sleeps (L226).
 _sq_deadline() {
-  perl -e 'my $t = shift; my $pid = fork; exit 127 unless defined $pid;
+  perl -MPOSIX=:sys_wait_h -e 'my $t = shift;
+    sub code { $_[0] & 127 ? 128 + ($_[0] & 127) : $_[0] >> 8 }
+    my $pid = fork; exit 127 unless defined $pid;
     if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    my $from = $ENV{SLEEP_DEADLINE_FROM} // "";
+    if ($from ne "") {
+      my $w = $ENV{SLEEP_DEADLINE_FROM_WAIT} // ""; $w = 20 unless $w =~ /^[0-9]+$/;
+      my $end = time + $w;
+      until (-s $from) {
+        exit code($?) if waitpid($pid, WNOHANG) == $pid;
+        if (time >= $end) { print STDERR "never said it had started within ${w}s, so its deadline counted from then\n"; last }
+        select(undef, undef, undef, 0.02);
+      }
+    }
     $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 1; kill "KILL", -$pid; waitpid($pid, 0);
       print STDERR "took longer than ${t}s and was stopped\n"; exit 142 };
-    alarm $t; waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$@"
+    alarm $t; waitpid($pid, 0); exit code($?)' "$@"
 }
 _sq_gh_limit() { printf '%s\n' "${SLEEP_GH_TIMEOUT:-60}"; }
 
