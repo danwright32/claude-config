@@ -74,6 +74,51 @@ want_test "lib/duration.cases.mjs"
 want_source "docs/design/rules/time-field.js"
 want_nottest "docs/design/rules/time-field.js"
 
+# --- claude-config#930: a file inside an Xcode test target folder is a test ---
+# Xcode names a test target's folder after the target, `<Name>Tests`, and a shared helpers target
+# is commonly `TestSupport`. The classifier knew only a bare `tests/` segment or a `Tests.swift`
+# suffix, so a suite file in `mac/OvertureTests/` whose own name did not end in Tests read as
+# SOURCE: on 2026-10-08 an Overture push adding two cases to EngineDivergenceGate.swift, and
+# nothing else, was refused as untested source and needed an override Dan had to approve.
+want_test "mac/OvertureTests/EngineDivergenceGate.swift"
+want_test "mac/OvertureHostedTests/Support/HostedHarness.swift"
+want_test "mac/TestSupport/FixtureLoader.swift"
+want_test "OvertureUITests/LaunchFlow.swift"
+
+# ...and nothing wider. The match is on a DIRECTORY segment ending in exactly `Tests` or
+# `TestSupport`, case sensitive, so a source file whose own name merely contains Tests, a folder
+# that only begins with it, and an ordinary word ending in "tests" all stay source and keep needing
+# a test of their own.
+want_source  "mac/Overture/TestsPanel.swift"
+want_nottest "mac/Overture/TestsPanel.swift"
+want_source  "mac/Overture/UnitTestsRunner.swift"
+want_nottest "mac/Overture/UnitTestsRunner.swift"
+want_source  "mac/OvertureTestsKit/Runner.swift"
+want_nottest "mac/OvertureTestsKit/Runner.swift"
+want_source  "web/contests/entry.ts"
+want_nottest "web/contests/entry.ts"
+want_source  "mac/TestSupportive/Thing.swift"
+want_nottest "mac/TestSupportive/Thing.swift"
+
+# --- the Test or Tests filename suffix is a WORD, not four letters ---
+# The suffix rule for JVM, .NET and Swift test files was matched case blind, so any source file whose
+# name merely ended in the letters "test" or "tests" counted as a test: Latest.swift and
+# Contests.swift each satisfied the zero test floor for an unrelated source change riding beside
+# them. It now needs Test or Tests as a word: capitalised (FooTests, FooTest), or lower case after a
+# separator (foo_test), or the whole name.
+want_test "mac/OvertureTests/FooTests.swift"
+want_test "src/main/FooTest.kt"
+want_test "app/src/test/WidgetTest.java"
+want_test "Tests/BarTests.cs"
+want_test "lib/parser_test.scala"
+want_test "pkg/Tests.swift"
+want_source  "src/Latest.swift"
+want_nottest "src/Latest.swift"
+want_source  "src/Contests.swift"
+want_nottest "src/Contests.swift"
+want_source  "lib/Manifest.kt"
+want_nottest "lib/Manifest.kt"
+
 # --- existing conventions must still register (regression) ---
 want_test "src/components/Foo.test.ts"
 want_test "src/components/Foo.spec.tsx"
@@ -381,6 +426,17 @@ else fail=$((fail+1)); echo "FAIL: #723 the prompt does not say the test changes
 W="$(mk_repo)"; seed_big_tests "$W" 90
 STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' run_hook "$W" "git push"
 want_code 0 "#723 a truncated push the reviewer passes is allowed"
+
+# --- claude-config#930, end to end: the push that was refused --------------
+# A push changing only a suite file inside an Xcode test target folder changes no source, so the
+# gate has nothing to judge and stays silent. Before #930 it was refused at the zero test floor.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p mac/OvertureTests \
+    && printf 'func testDivergence() { XCTAssertTrue(true) }\n' > mac/OvertureTests/EngineDivergenceGate.swift \
+    && git add mac/OvertureTests/EngineDivergenceGate.swift && git commit -qm "two more cases" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 0 "#930 a push changing only a file in an Xcode test target folder is allowed"
+want_silent "#930 a push changing only a file in an Xcode test target folder is allowed"
 
 # --- legitimate silent allows must STAY silent ----------------------------
 # These are correct passes, not fail-opens. Making them talk would train
