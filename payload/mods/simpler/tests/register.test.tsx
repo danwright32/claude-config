@@ -119,6 +119,7 @@ const modKit: { name: string; register: Register } = {
         git: never('git'),
         pipeline: never('pipeline'),
         workingTree: never('workingTree'),
+        repo: never('repo'),
       }
       return { ...built, modkit }
     })

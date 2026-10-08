@@ -42,6 +42,7 @@ const modKit: { name: string; register: Register } = {
           return path.startsWith('/tmp/repo/') ? '/tmp/repo' : null
         },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
