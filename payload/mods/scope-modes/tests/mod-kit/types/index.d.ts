@@ -328,10 +328,11 @@ declare module 'claude-code' {
     /**
      * The band's rows, in the order they were first published; kept in $.state so a reload keeps
      * them. `started`: when mod-kit last started in this session, so its reload can tell which mods
-     * that depend on it changed since (#960). `askAgain`: the mods a reload could not ask to load
+     * that depend on it changed since (#960). `askAgain`: the mods a pass could not ask to load
      * again, asked again at the next one. `stamped`: the time each manifest mod-kit touched was left
-     * with, by mod, so its own touch is not read as a change.
+     * with, by mod, so its own touch is not read as a change. `swept`: where each provider other than
+     * mod-kit was last looked at, at a turn's start (#966), `from` for one not looked at yet.
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number> }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> } }
   }
 }
