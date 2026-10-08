@@ -96,8 +96,33 @@ with open(os.path.join(stage, "tsconfig.json"), "w", encoding="utf-8") as h:
     h.write(json.dumps(cfg, indent=2) + "\n")
 PY
 
-mkdir -p "$dest" || exit 1
-for f in claude-code/index.d.ts claude-code-tools/index.d.ts tsconfig.json; do
-  mkdir -p "$dest/$(dirname "$f")" && cp "$stage/$f" "$dest/$f" || { echo "refresh-claude-code-types: could not write $dest/$f" >&2; exit 1; }
-done
+# The new set goes in whole or not at all (lessons review of #970): copied complete, with the hand
+# kept MCP list, into a folder beside the pin, then swapped in by two renames, so a copy failing part
+# way leaves the old pin as it was rather than one build's engine beside another's tools.
+if [ ! -f "$dest/claude-code-mcp/index.d.ts" ]; then
+  echo "refresh-claude-code-types: $dest has no claude-code-mcp/index.d.ts, the MCP list kept by hand; restore it from git first" >&2
+  exit 1
+fi
+new="$dest.new.$$"; old="$dest.old.$$"
+rm -rf "$new" 2>/dev/null
+if ! { mkdir -p "$new/claude-code-mcp" && cp "$dest/claude-code-mcp/index.d.ts" "$new/claude-code-mcp/index.d.ts" \
+    && mkdir -p "$new/claude-code" "$new/claude-code-tools" \
+    && cp "$stage/claude-code/index.d.ts" "$new/claude-code/index.d.ts" \
+    && cp "$stage/claude-code-tools/index.d.ts" "$new/claude-code-tools/index.d.ts" \
+    && cp "$stage/tsconfig.json" "$new/tsconfig.json"; }; then
+  rm -rf "$new" 2>/dev/null
+  echo "refresh-claude-code-types: could not write the new set beside $dest, so the pin is left as it was" >&2
+  exit 1
+fi
+if ! mv "$dest" "$old"; then
+  rm -rf "$new" 2>/dev/null
+  echo "refresh-claude-code-types: could not move the old pin aside, so it is left as it was" >&2
+  exit 1
+fi
+if ! mv "$new" "$dest"; then
+  mv "$old" "$dest" 2>/dev/null
+  echo "refresh-claude-code-types: could not put the new set in place, so the old pin was put back" >&2
+  exit 1
+fi
+rm -rf "$old" 2>/dev/null || echo "refresh-claude-code-types: the old pin, now unused, could not all be removed: $old" >&2
 echo "refresh-claude-code-types: pinned Claude Code $build's types in $dest. Run bash tests/test-mods.sh, then commit them with any change the newer types ask of a mod."
