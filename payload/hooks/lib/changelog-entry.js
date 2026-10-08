@@ -264,6 +264,9 @@ module.exports = {
   extractBlock: extractBlock,
   changelogLabels: changelogLabels,
   repoScope: repoScope,
+  // The /pennie-dev-update gatherer asks which local day a merge fell on with this same helper, so
+  // its "on or after changelogFrom" agrees with what this gate decided at merge time.
+  localDay: localDay,
   LABEL_PREFIX: LABEL_PREFIX,
   KINDS: KINDS,
   VISIBLE: VISIBLE,

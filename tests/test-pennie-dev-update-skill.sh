@@ -130,6 +130,25 @@ no_front="$(grep -n 'bbedit_tool' "$SKILL" | grep -v -e '--front-window' || true
 if [ -z "$no_front" ]; then check "every BBEdit open brings its window to the front" ok
 else check "every BBEdit open brings its window to the front" "$no_front"; fi
 
+# ---- claude-config#680: the window, gathering and post rules moved into scripts. The prose now
+# tells Claude to run them, so every script it names must exist beside it (L3: built is not wired),
+# and the sequence must run each one.
+SKILL_DIR="$(dirname "$SKILL")"
+named="$(grep -o '~/\.claude/skills/pennie-dev-update/[A-Za-z0-9_.-]*' "$SKILL" | sort -u)"
+if [ -z "$named" ]; then check "the skill runs its scripts by path" "it names no script under ~/.claude/skills/pennie-dev-update/"
+else
+  while IFS= read -r ref; do
+    f="${ref##*/}"
+    [ -z "$f" ] && continue
+    if [ -f "$SKILL_DIR/$f" ]; then check "the skill names $f, which exists beside it" ok
+    else check "the skill names $f, which exists beside it" "no $f in $SKILL_DIR"; fi
+  done <<< "$named"
+fi
+sequence="$(awk '/^## 10\./ { f = 1; next } f' "$SKILL")"
+for step in 'gather.js gather' 'gather.js commit-state' 'lint-post.js'; do
+  case "$sequence" in *"$step"*) check "the sequence runs $step" ok ;; *) check "the sequence runs $step" "section 10 never says $step" ;; esac
+done
+
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

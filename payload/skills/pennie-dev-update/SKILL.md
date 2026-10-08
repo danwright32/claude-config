@@ -100,6 +100,10 @@ verified deploy record (section 4).
 
 ## 2. The window
 
+**`gather.js` computes the window and `gather.js commit-state` is the only thing that writes the
+state** (claude-config#680). Never compute a window or edit the state file by hand. This section
+is the rule those two implement, and why; `tests/scripts.test.js` holds each rule.
+
 State lives at `~/.pennie-dev-update/state.json`, deliberately **outside `~/.claude`**, because
 anything under `~/.claude` auto-pushes to Dan's other Mac within seconds and a run timestamp is
 state, not config.
@@ -135,10 +139,16 @@ production (section 4), so the next run reports changes only, from after the int
 newer merge not yet in production goes in `heldBack`, as on any run. Record what the boundary
 came from in `_seededFrom` beside it (the PR number and its `merged_at`), so a later reader can
 tell a seeded boundary from one written after a listed post. The Sonar entry written on
-2026-09-28 (on the Mac that holds that state file) is the worked example.
+2026-09-28 (on the Mac that holds that state file) is the worked example. `gather.js` reports
+such a repo as `first_appearance` with the `seed` it found, and `commit-state` writes the seed
+and `_seededFrom` (it refuses `--listed` for it).
 
 A repo with no merged PR at all has nothing live to introduce: say so in the terminal and leave
 it without a `lastEnd` until it has one.
+
+A repo missing from a state file that exists is a first appearance. A state file that is missing
+**altogether** is lost state, not a set of new products, and `gather.js` refuses rather than
+introduce every product again; `--since` (below) is the way back.
 
 ### The boundary is an instant, never a day
 
@@ -171,33 +181,36 @@ A first appearance lists nothing and still seeds its boundary ("First appearance
 The window simply grows until there is something to report.
 
 **Write `lastEnd` only after the draft file exists.** If the run dies partway the boundary must
-not move, or that period is skipped forever.
+not move, or that period is skipped forever. `commit-state` takes `--draft` and refuses when the
+file is missing or empty, when a `--headings` entry is not a line of it, when a `--listed` PR was
+not gathered or was held back, and when the state moved since the gather (so running it twice
+changes nothing). It takes `lastEnd` from the gathered `merged_at` of the newest listed PR,
+`heldBack` from what gather found not yet live, and keeps every other field.
 
-### `--since <date>` is an escape hatch
+### `--since <ISO timestamp>` is an escape hatch
 
-Only for redoing a period or recovering lost state. If the date given is **later** than
-`lastEnd`, print exactly what period would be skipped and ask before proceeding. A redo never
-moves `lastEnd` backwards.
+Only for redoing a period or recovering lost state. When it is **later** than `lastEnd`,
+`gather.js` refuses that repo, naming exactly the period that would be skipped; ask Dan, and pass
+`--confirm-skip` only on his yes. A redo never moves `lastEnd` backwards (`commit-state` keeps the
+later of the two).
 
 ---
 
 ## 3. Gathering
 
-**Use the paginated API, never `gh pr list`.** `gh pr list --limit 2000` silently caps at 500,
-which reads exactly like a repo with 500 PRs:
+**`gather.js` does all of this; read its output, never re-fetch by hand.** What it does, and why:
 
-```bash
-gh api --paginate '/repos/<owner>/<name>/pulls?state=closed&per_page=100' \
-  --jq '.[] | select(.merged_at != null)
-        | [.number, .merged_at, .title, ([.labels[].name] | join(" ")), (.body // "")]
-        | @tsv'
-```
+- It reads the REST pulls API page by page until a page comes back short, never `gh pr list`,
+  whose `--limit 2000` silently caps at 500 and reads exactly like a repo with 500 PRs.
+- It keeps `merged_at > start`, strictly, as section 2 says: the PR merged exactly at `lastEnd`
+  is the newest one the last post listed.
+- It cross checks that count against GitHub search (`merged:>` the same instant) and refuses the
+  repo when they disagree, because a short read reports as a quiet week.
+- A repo GitHub cannot be reached for is `unreachable`, with GitHub's own error, and the other
+  repos still gather. It never reads as a repo with nothing in it.
 
-Filter to `merged_at > start`, strictly, as section 2 says: the PR merged exactly at `lastEnd`
-is the newest one the last post listed. Cross-check the count against
-`gh api '/search/issues?q=repo:<owner>/<name>+is:pr+is:merged+merged:><start>' --jq .total_count`
-with the same strict `>`, and refuse if they disagree, because a short read reports as a quiet
-week.
+Each PR in its output carries `record` (below), `deploy` (section 4), `carried` (true for a
+`heldBack` PR from the last run that sits below the window), and its title, labels and body.
 
 ### The record each change carries (PET #1186)
 
@@ -211,6 +224,13 @@ judgment already, made at merge time by the person who made the change and enfor
 | `changelog/technical` | Plumbing worth a roll-up line | Optional |
 | `changelog/none` | Not in the update at all | Must not carry a block |
 
+`gather.js` reads each record through `hooks/lib/changelog-entry.js`, the same parser the merge
+gate uses, so the two cannot disagree about what a record is. A PR's `record.kind` is
+`visible` (with `record.line`, the block's sentence), `technical`, `none`, `gap` (merged on or
+after the cutover with no valid record; `record.code` and `record.reason` say what is wrong),
+`unrecorded` (merged before the cutover, judged by hand) or `dependency` (Dependabot). The
+cutover day is the local day the merge fell on, as the gate judged it.
+
 So for anything merged on or after that date: **read the label, and take the sentence from the
 block verbatim as the starting point.** Do not re-derive the judgment from the title. That
 re-derivation is what made the first post cost a read of 499 titles, and the merge-time
@@ -222,7 +242,7 @@ engineering-voiced title, whether anyone outside engineering would notice.
 
 **Before the cutover date, and for anything with no record, fall back to reading titles and
 bodies exactly as below.** Say in the terminal how many of the window's pull requests carried a
-record and how many were judged by hand, because a window that is entirely hand-judged looks
+record and how many were judged by hand (`gather.js` prints both, from its `counts`), because a window that is entirely hand-judged looks
 identical to one that is entirely recorded, and the difference is how much to trust the sort.
 
 A pull request merged **after** the cutover with **no** record is a gap, not a plumbing change:
@@ -254,31 +274,32 @@ PET records one row per **verified** deploy in `build_history`, appended by
 `scripts/record-build-history.js` only after the live site is confirmed serving the new build.
 Measured 2026-08-31: 94 rows, all 94 carrying `commit_sha`.
 
+Read the newest row yourself (the one step `gather.js` cannot do, since it needs the database):
+
 ```sql
 select commit_sha, recorded_at from build_history
 where commit_sha is not null order by recorded_at desc limit 1;
 ```
 
-A PR is live when its merge commit is an ancestor of that sha. Ask GitHub, never a local
-checkout, which may not have fetched the live sha at all:
+and hand it over as `--live <owner>/<name>=<commit_sha>@<recorded_at>`. A repo whose
+`repos.json` entry names a `deployRecord` is refused without it.
 
-```bash
-gh api 'repos/<owner>/<name>/compare/<merge_sha>...<live_sha>' --jq .status
-```
+A PR is live when its merge commit is an ancestor of that sha. `gather.js` asks GitHub's compare
+endpoint, never a local checkout, which may not have fetched the live sha at all: `ahead` or
+`identical` means live, `behind` or `diverged` means not live yet, and an error means the check
+could not be made, which refuses the repo rather than holding the PR.
 
-`ahead` or `identical` means live. `behind` or `diverged` means not live yet. Any error means the
-check could not be made, which is a refusal, never a hold.
-
-Four cases that must stay distinct (L11, L98):
+Four cases that must stay distinct (L11, L98), each a `deploy` value or a refusal in the output:
 
 | Situation | What to do |
 |---|---|
-| Merge commit is an ancestor of the live sha | List it |
-| Merged, not yet live | Hold it back, add to `heldBack`, say so in the terminal |
-| Window starts before the record exists (PET: before 2026-07-29) | List everything, print a note that the deploy record does not cover this period. Do NOT hold back a whole backdated run |
-| `build_history` has no row in the last 3 days | **Refuse.** The recorder has stopped, so an empty answer means "cannot tell", not "nothing shipped" |
+| Merge commit is an ancestor of the live sha (`live`) | List it |
+| Merged, not yet live (`held`) | Hold it back; it is in the repo's `heldBack`. Say so in the terminal |
+| Merged before the record exists, PET before 2026-07-29 (`uncovered`) | List it, with the note that the deploy record does not cover this period. Do NOT hold back a whole backdated run |
+| `build_history` has no row in the last 3 days (refused) | **Refuse.** The recorder has stopped, so an empty answer means "cannot tell", not "nothing shipped" |
 
-A repo with no deploy record at all: list everything, print that the check could not run for it.
+A repo with no deploy record at all (`unchecked`): list everything, and say the check could not
+run for it.
 
 ---
 
@@ -444,7 +465,18 @@ The failure mode is a confident sentence describing something that did not happe
 
 ## 8. Output
 
-Write to the session scratchpad directory, then open it:
+Write to the session scratchpad directory and check it against the format rules:
+
+```bash
+node ~/.claude/skills/pennie-dev-update/lint-post.js <file>
+```
+
+It refuses (exit 1, one `line N:` per finding) a dash as punctuation, an item prefix, bold, an
+emoji or a shortcode other than the opener's `:thread:`, a heading that is not bare uppercase or
+ends in a colon or has no item under it, an opener that is not `Updates for <period> :thread:`,
+and the deleted "backend only" line. Fix every finding before Dan sees the draft. A hyphenated
+word is only a warning: keep it if it is the literal name of something on screen, such as the
+Top-out column. Then open it:
 
 ```bash
 /Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>
@@ -529,13 +561,30 @@ the backlog is not acceptable even when authorised.
 
 ## 10. Sequence
 
-1. Resolve the window (section 2). Refuse a gap. A repo with no `lastEnd` is a first appearance:
-   it is introduced, and its boundary seeded, as section 2 says.
-2. For each repo: gather merged PRs (section 3), verify each reached production (section 4).
-3. Classify (section 5). Read bodies where ambiguous.
+The scripts sit beside this file, at `~/.claude/skills/pennie-dev-update/`. Keep this run's
+files in the session scratchpad.
+
+1. For each repo with a `deployRecord`, read its newest row (section 4).
+2. Gather, with one `--live` per such repo (and `--only <name>` when Dan asked for one product):
+
+   ```bash
+   node ~/.claude/skills/pennie-dev-update/gather.js gather --live <owner>/<name>=<commit_sha>@<recorded_at> --out <scratchpad>/gathered.json
+   ```
+
+   Exit 0 is every repo gathered, 3 is at least one refused or unreachable (say which and why,
+   carry on with the rest), 1 is the whole run refused. Each repo's `status` is `ok`,
+   `first_appearance` (section 2: introduce it, list nothing), `refused` or `unreachable`.
+3. Classify (section 5) the `ok` repos' PRs. Read bodies where ambiguous.
 4. Draft in the format (section 6), applying the accuracy pass (section 7).
-5. Write and open in BBEdit (section 8).
+5. Write it, run `lint-post.js` until it is clean, and open it in BBEdit (section 8).
 6. Run the issue check (section 9) and print what it changed.
-7. Write `lastEnd`, `heldBack` and `headings` back to state.
+7. Commit the state, once per repo that was `ok` or `first_appearance`, naming the PRs the post
+   listed and the headings it used:
+
+   ```bash
+   node ~/.claude/skills/pennie-dev-update/gather.js commit-state --gathered <scratchpad>/gathered.json --draft <file> --repo <owner>/<name> --listed <n,n,...> --headings 'HEADING ONE|HEADING TWO'
+   ```
+
+   Leave out `--listed` for a first appearance and for a repo the post listed nothing from.
 8. Tell Dan: the window covered, how many changes, how many held back and why, and what the
    issue check changed.
