@@ -126,6 +126,18 @@ export type ModKit = {
    */
   workingTree: (input: { path: string }) => Promise<string | null>
   /**
+   * A repository read from what `$.session.repo()` gives (`root`, the main working tree, and
+   * `remote`, the origin's address), or from a remote's address alone (#951). Two answers, since
+   * they are two questions: `github`, the GitHub repository as owner/name in the case written, null
+   * for another host, a local path (owner/name alone is one to git) or no remote; and `name`, what
+   * the repository is called, the origin's last part on any host, else the checkout folder's name,
+   * a worktree under `.claude/worktrees/` naming its parent, null when neither names one. Git's own
+   * reading of an address: https, ssh with a user and a port, the scp form (`git@host:o/r`), git://,
+   * file:// and a local path, a trailing `.git` and slashes off. The one reading every mod uses
+   * (L613); a gh command's own `-R` is read by that command's reader.
+   */
+  repo: (input: { root?: string | null; remote: string | null }) => Promise<ModKitRepo>
+  /**
    * Shows a row in the band above the prompt, or replaces the row this mod already shows under the
    * same id (it keeps its place). Claude Code gives the band ONE drawing, so no mod but mod-kit
    * hooks it (tools/check-mod-shared-parts.sh); every mod publishes its rows here and mod-kit draws
@@ -174,6 +186,8 @@ export type ModKit = {
   clickable: (site: ModKitClickSite) => Promise<boolean>
 }
 
+/** A repository as `$.modkit.repo` reads it: its GitHub owner/name and its name, each null when there is none. */
+export type ModKitRepo = { github: string | null; name: string | null }
 /** A press on a button mod-kit drew: its `<mod>:<button>` key, the surface it came from, and how. */
 export type ModKitPress = { element: string; surface: string; how: 'click' | 'typed' }
 /** Where a Button is drawn, as a render hook's `e` carries it. */

@@ -39,6 +39,7 @@ const kit: { name: string; register: Register } = {
           writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
           clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
