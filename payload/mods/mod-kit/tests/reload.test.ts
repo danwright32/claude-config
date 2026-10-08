@@ -15,7 +15,7 @@ import type { On } from 'claude-code'
 const T0 = 1_791_000_000_000
 const MIN = 60_000
 
-type Mod = { deps?: string[]; mtimeMs: number; manifest?: string }
+type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number }
 
 // The mods folder beneath mod-kit: each mod's manifest and its files' times, wherever the folder is.
 const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[]; homeUnreadable?: boolean }) => {
@@ -37,7 +37,7 @@ const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[];
       return { value: [...Object.keys(mods).map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })), { name: 'account-room-nicknames.json', kind: 'file' as const, size: 1, mtimeMs: T0 + 9 * MIN, isLink: false }] } as never
     }
     const mod = mods[m.name] as Mod
-    if (m.rest === '.claude-plugin') return { value: [{ name: 'plugin.json', kind: 'file', size: 1, mtimeMs: mod.mtimeMs, isLink: false }, { name: 'types', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
+    if (m.rest === '.claude-plugin') return { value: [{ name: 'plugin.json', kind: 'file', size: 1, mtimeMs: mod.touchedAt ?? mod.mtimeMs, isLink: false }, { name: 'types', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
     if (m.rest === 'hooks') return { value: [{ name: 'hooks.json', kind: 'file', size: 1, mtimeMs: T0 - 99 * MIN, isLink: false }, { name: 'register.ts', kind: 'file', size: 1, mtimeMs: mod.mtimeMs, isLink: false }] } as never
     throw new Error(`ENOENT: ${e.path}`)
   })
@@ -47,13 +47,18 @@ const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[];
     const mod = mods[m.name] as Mod
     return { value: mod.manifest ?? JSON.stringify({ name: m.name, version: '0.1.0', ...(mod.deps ? { dependencies: mod.deps } : {}) }) } as never
   })
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
     const r = (exitCode: number, stderr = '') => ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
     argv.push([...e.argv])
     if (e.argv[0] !== 'touch') return r(1, 'unexpected')
     const path = e.argv[e.argv.length - 1] as string
     if (init.touchFails?.some(name => path.includes(`/${name}/`))) return r(1, `touch: ${path}: Permission denied`)
     touched.push(path)
+    // A touch takes a few milliseconds and stamps the manifest with the time it ran, after mod-kit
+    // read the clock at its start: the mocked clock stands still unless moved, the disk's does not.
+    await clock.advance(5)
+    const m = modOf(path)
+    if (m) (mods[m.name] as Mod).touchedAt = clock.now()
     return r(0)
   })
   on('ui.log', ($, e) => {
@@ -151,4 +156,32 @@ test('a mods folder that cannot be listed is said, and the start still completes
   expect(w.touched).toEqual([])
   // The kit turns a throwing answer into a missing one, so the reason it gives is its own.
   expect(w.logs.filter(l => l.includes('mods folder') && l.includes('could not be read') && l.includes('new session')).length).toBe(1)
+})
+
+// #967 review: a mod whose touch failed, or that went unexamined because the folder could not be
+// listed, is still unloaded, so the next reload must try it again rather than count it as done.
+test('a mod whose touch failed is tried again at the next reload', async ($, on) => {
+  const init = { mods: delivery(), touchFails: ['manual-steps'] }
+  const w = world(on, init)
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual([])
+  init.touchFails = []
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+})
+
+test('a mods folder that could not be listed is listed again at the next reload', async ($, on) => {
+  const init = { mods: delivery(), homeUnreadable: true }
+  const w = world(on, init)
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual([])
+  init.homeUnreadable = false
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
 })

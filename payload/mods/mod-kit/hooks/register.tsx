@@ -56,10 +56,11 @@ const started = { plugin: 'mod-kit', key: 'started' } as const
 // can be overwritten with an older copy. A mod that had loaded is loaded once more, which is harmless.
 // The session's own start loads every mod as it is on disk, so it only records the time.
 const reloadDependents = async ($: EngineInterface) => {
-  const now = await $.clock.now()
   const before = (await $.state.get(started)).value
-  await $.state.set(started, now)
-  if (before === undefined) return
+  if (before === undefined) {
+    await $.state.set(started, await $.clock.now())
+    return
+  }
   const home = $.plugin.root.replace(/\/+[^/]+\/*$/, '')
   const lost = 'If its tools or commands are missing in this session, a new session brings them back.'
   let entries: Awaited<ReturnType<EngineInterface['fs']['list']>>
@@ -70,6 +71,7 @@ const reloadDependents = async ($: EngineInterface) => {
     return
   }
   const touched: string[] = []
+  let failed = false
   for (const entry of entries) {
     if (entry.kind !== 'dir' || entry.name === 'mod-kit') continue
     const dir = `${home}/${entry.name}`
@@ -87,10 +89,15 @@ const reloadDependents = async ($: EngineInterface) => {
       if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `touch exited ${r.exitCode}`)
       touched.push(entry.name)
     } catch (err) {
+      failed = true
       $.ui.log(`mod-kit reloaded, but ${entry.name}, which depends on it, could not be asked to load again (${String((err as Error)?.message ?? err)}). ${lost}`)
     }
   }
   if (touched.length) $.ui.log(`mod-kit reloaded, so these mods that changed with it load again: ${touched.join(', ')}`, { to: 'debug' })
+  // Moved on only once every mod was asked, and to a time read after the touches (#967 review): a
+  // manifest touched here is then not taken for a change at the next reload, while a mod that could
+  // not be asked, or a folder that could not be listed (returned above), is tried again then.
+  if (!failed) await $.state.set(started, await $.clock.now())
 }
 
 export const register: Register = (on, options) => {
