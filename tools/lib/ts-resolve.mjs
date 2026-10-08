@@ -9,8 +9,10 @@
 // shorthand property, `{ wait }`, whose target is the value it reads) or "ref".
 // target is null when the checker finds no symbol, ["fn", file, start, end] for a function declared
 // in the mod (start at its `function` keyword, or the `const`, `let` or `var` of its declaration),
-// ["value", file, start, end] for any other variable the mod declares, and ["other"] for anything
-// else (a parameter, a class, a global).
+// ["value", file, start, end] for any other variable the mod declares, ["other", file, start, end]
+// for anything else the mod declares (a parameter, a class), and ["other"] for what it does not (a
+// global). Every target with a file and start names one declaration, so two names resolve to the
+// same thing exactly when those match (#915).
 //
 // Any failure to load the pinned compiler or to read a project exits non zero with the reason on
 // stderr: the caller refuses rather than resolving nothing (L490).
@@ -133,7 +135,8 @@ try {
           const isFn = init && (init.kind === SyntaxKind.ArrowFunction || init.kind === SyntaxKind.FunctionExpression);
           return [isFn ? "fn" : "value", file, codePoint(file, start), codePoint(file, d.end)];
         }
-        return ["other"];
+        // Where it is declared, so two declarations sharing a name are told apart (#915).
+        return ["other", file, codePoint(file, d.getStart()), codePoint(file, d.end)];
       }
       return ["other"];
     };

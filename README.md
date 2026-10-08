@@ -1246,6 +1246,8 @@ test` does not, so such a noun passes its own tests and fails only in a session 
 each call a noun makes to the function the TypeScript compiler's own checker resolves it to, through
 `tools/lib/ts-resolve.mjs` on the compiler pinned in `tools/typescript`, so scope, shadowing and
 parameters are the language's answer rather than the first function of that name in the mod (#895).
+A promise kept in a variable outside a noun's code is linked to a noun's read the same way, so only
+a read of that same variable counts, never another function's variable sharing its name (#915).
 Run on its own, it refuses (exit 4, naming `npm ci --prefix tools/typescript`) where that compiler
 is not installed. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
