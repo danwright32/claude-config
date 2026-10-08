@@ -41,17 +41,24 @@ snapshot and reports headroom that has nothing to do with anybody's files, so a 
 
 ### 2. Whether it is still falling, and how fast
 
-Two readings, several minutes apart, never one. A rate is the whole diagnosis: 19 GB an hour is
-something actively staging files, and no amount of deleting will keep up with it until it is
+Two readings, ten or more minutes apart, never one. A rate is the whole diagnosis: 19 GB an hour
+is something actively staging files, and no amount of deleting will keep up with it until it is
 stopped.
 
+The session's low space warning already takes a reading on every prompt and keeps the last six
+hours of them, so ask it rather than measuring a second way:
+
 ```bash
-df -k /System/Volumes/Data | awk 'NR == 2 { print strftime("%H:%M:%S"), $4 / 1048576 " GB free" }'
+bash ~/.claude/hooks/check-free-space.sh --report; echo "exit $?"
 ```
 
-Run it, wait five minutes, run it again, and subtract. The session's own low space warning keeps a
-rolling history and reports this rate itself, so if it has already fired, read its sentence rather
-than measuring again.
+It adds a reading to that history and says how much is left, then either the rate and how long
+until zero, or why it states no rate yet (the first reading, readings too close together, free
+space having gone back up, or not falling at all). Judge it by the exit code, not the wording:
+0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the 20 GB floor, 4 falling fast
+enough to reach zero within six hours, and 2 that it could not measure, which is not the same as
+fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
+rather than waiting inside a command.
 
 ### 3. Where the weight is
 
@@ -88,10 +95,13 @@ The staging area, which is what actually grows:
 du -x -d 2 -g ~/Library/Application\ Support/SynologyDrive/data/session 2>/dev/null | sort -rn | head
 ```
 
-**Backblaze.**
+**Backblaze.** Its data folder was readable without a password on Daniels-MacBook-Pro-2 on
+2026-10-08 (it is world readable), so this runs as it is. Errors are left showing on purpose: a
+"Permission denied" line means the total below it is short, and then the full size needs Dan to run
+the same command with `sudo` in front, which is his to run, never Claude's.
 
 ```bash
-sudo du -x -d 1 -g /Library/Backblaze.bzpkg/bzdata 2>/dev/null | sort -rn | head
+du -x -d 1 -g /Library/Backblaze.bzpkg/bzdata | sort -rn | head
 ```
 
 **iCloud.** Files evicted from local storage still show in Finder. What matters is what is

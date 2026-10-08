@@ -298,6 +298,89 @@ check "and the same reading is reported against a floor nothing can clear" \
 check "and that reading really is a number of GB, which is what proves df was parsed" \
   "$(grep -qE '^claude-sync: only [0-9]+ GB free on /,' <<< "$df_low" && echo ok || echo "said: $df_low")"
 
+# ---- --report: the disk-full skill's rate step reads this, rather than measuring again (#683) ----
+# The skill's step 2 used to compute a rate itself, with awk strftime (macOS awk has no such
+# function, so it failed on the Mac it was written for) and a five minute foreground sleep (which
+# the Bash tool refuses). This check already measures the rate, with refusals that keep a twitch
+# from reading as a trend, so the skill asks it. But the quiet default prints NOTHING on a healthy
+# disk, which is right for a warning on every prompt and useless to somebody triaging: so --report
+# always says how much is left, and either the rate or exactly why there is none (L11, L540).
+# The exit codes are the same four in both modes, because callers judge by those (L184).
+rprobe(){   # rprobe <free bytes> <epoch> <state dir> -> sets PROBE_RC and PROBE_MSG
+  local out="$TMPROOT/rprobe-out"
+  mkdir -p "$3"
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$3" \
+    FREE_SPACE_PATH=/fixture bash "$CHECK" --report > "$out" 2>&1
+  PROBE_RC=$?
+  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
+}
+
+# The quiet default stays quiet: the nudge relies on exit 0 saying nothing (claude-config#363).
+S_QUIET="$TMPROOT/state-quiet"; mkdir -p "$S_QUIET"
+probe "$((200 * GB))" "$T0" "$S_QUIET"
+check "without --report a disk with room still prints nothing" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# First reading in the window: room, no rate, and the reason is that there is nothing to compare.
+rprobe "$((200 * GB))" "$T0" "$TMPROOT/state-r-first"
+check "--report on a disk with room exits 0, the same answer as the quiet mode" \
+  "$([ "$PROBE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+check "--report says how much is left even when there is room" \
+  "$(grep -q '^claude-sync: 200 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+check "--report on a first reading states no rate, and says it is the first reading" \
+  "$(! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+
+# A slow fall over three hours: exit 0 (zero is outside the horizon) and the quiet mode says
+# nothing, which is exactly the case somebody triaging needs the number for.
+S_RSLOW="$TMPROOT/state-r-slow"
+rprobe "$((300 * GB))" "$((T0 - 10800))" "$S_RSLOW"
+rprobe "$((240 * GB))" "$T0" "$S_RSLOW"
+check "--report states the rate of a fall the quiet mode keeps to itself" \
+  "$([ "$PROBE_RC" -eq 0 ] && grep -q 'about 20 GB per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Two readings minutes apart: no rate, and the reason is the span, with the minimum named.
+S_RSHORT="$TMPROOT/state-r-short"
+rprobe "$((300 * GB))" "$((T0 - 240))" "$S_RSHORT"
+rprobe "$((280 * GB))" "$T0" "$S_RSHORT"
+check "--report over a span too short states no rate and says the span is the reason" \
+  "$([ "$PROBE_RC" -eq 0 ] && ! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -q 'span only 4 minute(s)' <<< "$PROBE_MSG" && grep -q 'at least 10 minutes' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Free space went up across the window: not falling, said in those words.
+S_RUP="$TMPROOT/state-r-up"
+rprobe "$((100 * GB))" "$((T0 - 10800))" "$S_RUP"
+rprobe "$((101 * GB))" "$T0" "$S_RUP"
+check "--report on a disk that is not falling says so rather than stating a rate" \
+  "$([ "$PROBE_RC" -eq 0 ] && ! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -qi 'not falling' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# A sawtooth: no rate, and the reason is the recovery, not a missing history.
+S_RSAW="$TMPROOT/state-r-saw"
+rprobe "$((150 * GB))" "$((T0 - 3600))" "$S_RSAW"
+rprobe "$((35 * GB))"  "$((T0 - 2400))" "$S_RSAW"
+rprobe "$((150 * GB))" "$((T0 - 1200))" "$S_RSAW"
+rprobe "$((86 * GB))"  "$T0" "$S_RSAW"
+check "--report after a recovery states no rate and names the recovery as the reason" \
+  "$(! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -qi 'went back up' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Under the floor with no rate: still exit 3, and the reason travels with it.
+rprobe "$((7 * GB))" "$T0" "$TMPROOT/state-r-low"
+check "--report under the floor still exits 3 and still says why there is no rate" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q '7 GB free on /fixture' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# A mistyped flag must not fall back to the quiet mode, which on a healthy disk prints nothing and
+# would read as a report with nothing in it (L320).
+S_RTYPO="$TMPROOT/state-r-typo"; mkdir -p "$S_RTYPO"
+typo_msg="$(FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$S_RTYPO" \
+  FREE_SPACE_PATH=/fixture bash "$CHECK" --reprot 2>&1)"; typo_rc=$?
+check "an argument it does not know is refused by name, never run as the quiet mode" \
+  "$([ "$typo_rc" -eq 2 ] && grep -q -- '--reprot' <<< "$typo_msg" && echo ok || echo "exit $typo_rc, said: $typo_msg")"
+
+# And the report against a real df, which on this Mac is BSD df: the reading parses into GB.
+S_RDF="$TMPROOT/state-r-df"; mkdir -p "$S_RDF"
+rdf_msg="$(FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$S_RDF" FREE_SPACE_PATH=/ FREE_SPACE_FLOOR_GB=0 \
+  bash "$CHECK" --report 2>&1)"; rdf_rc=$?
+check "--report against a real df parses a number of GB" \
+  "$([ "$rdf_rc" -eq 0 ] && grep -qE '^claude-sync: [0-9]+ GB free on /,' <<< "$rdf_msg" && echo ok || echo "exit $rdf_rc, said: $rdf_msg")"
+
 # ---- the macOS symbol cache, named as a known cause on a low or falling verdict ----
 # Measured 2026-10-04: the disk fell from 25 GB to 8 GB free, more than once, while Overture agents
 # built and crash tested, and this warning said only that nothing here knew what was using it.

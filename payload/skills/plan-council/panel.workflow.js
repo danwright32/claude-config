@@ -181,20 +181,28 @@ if (a.mode === 'revise') {
 }
 
 // --- Preflight: confirm the grounding sources are actually reachable ---
-const PREFLIGHT_SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: ['repoReadable', 'schemaReachable', 'notes'],
-  properties: {
-    repoReadable: { type: 'boolean' },
-    schemaReachable: { type: 'boolean' },
-    notes: { type: 'string' },
-  },
-}
+// THE SCHEMA IS PROBED ONLY WHERE THERE IS ONE (claude-config#685). The probe used to ask about the
+// Supabase MCP tools on every project, so Overture, Ovation and every project without Supabase
+// read as schemaReachable:false and the plan opened with a grounding warning that was a false
+// alarm, which teaches the reader to skip the warning on the run where it is real (L36). The skill
+// runs uses-supabase.sh on the project and passes its answer as a.usesSupabase: false skips the
+// probe and reports the schema as 'not-applicable'; true probes; absent (the detector could not
+// tell, or an older caller) probes as before, because guessing "no" would hide a real gap (L93).
+// The state has four values, so not applicable, unreachable and never probed stay apart (L11).
+const probesSchema = (args) => args.usesSupabase !== false
+const schemaState = (args, pf) => !probesSchema(args) ? 'not-applicable' : (!pf || typeof pf.schemaReachable !== 'boolean') ? 'unverified' : (pf.schemaReachable ? 'reachable' : 'unreachable')
+const preflightPrompt = (args, feat, dir) => `Quick grounding probe for planning "${feat}". Project directory: ${dir}.\n(1) Can you actually read this project's source files and its CLAUDE.md? Try listing/reading one or two.\n` + (probesSchema(args) ? `(2) Can you reach the live database schema via the Supabase MCP tools? Try one cheap call.\nReport a boolean for each plus a short note on anything you could NOT access.` : `Skip any database probe: nothing in this project shows it uses a hosted database, so report only that boolean plus a short note on anything you could NOT read.`) + ` Be honest: a "false" here is valuable, not a failure.`
+// What the run returns as `preflight`: the probe's answer plus its schemaState, or null when the
+// probe never ran, so a dead probe is never dressed up as one that ran and read nothing (L98).
+const preflightResult = (pf, args) => pf ? { ...pf, schemaState: schemaState(args, pf) } : null
+const preflightSchema = (args) => ({ type: 'object', additionalProperties: false, required: probesSchema(args) ? ['repoReadable', 'schemaReachable', 'notes'] : ['repoReadable', 'notes'], properties: probesSchema(args) ? { repoReadable: { type: 'boolean' }, schemaReachable: { type: 'boolean' }, notes: { type: 'string' } } : { repoReadable: { type: 'boolean' }, notes: { type: 'string' } } })
 phase('Preflight')
 const preflight = await agent(
-  `Quick grounding probe for planning "${feature}". Project directory: ${a.projectDir || '(current working directory)'}.\n(1) Can you actually read this project's source files and its CLAUDE.md? Try listing/reading one or two.\n(2) Can you reach the live database schema via the Supabase MCP tools? Try one cheap call.\nReport a boolean for each plus a short note on anything you could NOT access. Be honest: a "false" here is valuable, not a failure.`,
-  { label: 'preflight', phase: 'Preflight', schema: PREFLIGHT_SCHEMA }
+  preflightPrompt(a, feature, a.projectDir || '(current working directory)'),
+  { label: 'preflight', phase: 'Preflight', schema: preflightSchema(a) }
 )
+const pfSchema = schemaState(a, preflight)
+if (pfSchema === 'not-applicable') log(`Schema probe skipped: this project does not use Supabase, so there is no schema to reach (not applicable, not a grounding gap).`)
 // THREE states, not two. `agent()` returns null when the subagent dies on a terminal
 // API error after retries, and reading a field off that null used to crash the whole
 // run with "null is not an object", which names the wrong thing and loses every agent
@@ -205,8 +213,8 @@ const preflight = await agent(
 // verified reachability.
 if (!preflight) {
   log(`PREFLIGHT DID NOT RUN: the probe agent died, usually a transient API error. Continuing, but reachability is UNVERIFIED rather than confirmed, and the plan must be reported that way.`)
-} else if (!preflight.repoReadable || !preflight.schemaReachable) {
-  log(`GROUNDING GAP: repoReadable=${preflight.repoReadable} schemaReachable=${preflight.schemaReachable}: ${preflight.notes}. The plan will explicitly mark where it is ungrounded.`)
+} else if (!preflight.repoReadable || pfSchema === 'unreachable' || pfSchema === 'unverified') {
+  log(`GROUNDING GAP: repoReadable=${preflight.repoReadable} schemaState=${pfSchema}: ${preflight.notes}. The plan will explicitly mark where it is ungrounded.`)
 }
 
 const PASS_SCHEMA = {
@@ -366,4 +374,4 @@ while ((stillBroken() || stillViolating()) && rcRounds < 2) {
   lessonsAudit = normalizeAudit(auditN)
 }
 
-return { feature, criteria, preflight, options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, lessonsAudit, rcRounds }
+return { feature, criteria, preflight: preflightResult(preflight, a), options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, lessonsAudit, rcRounds }
