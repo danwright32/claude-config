@@ -333,6 +333,28 @@ test('where a click cannot land there is no button, "type: /simpler" instead, an
   await ui.unmount()
 })
 
+// Lessons review of #952: typing "/simpler" into the composer is pressing the button, so the keys
+// that spell it must not take the offer away the way other typing does; anything else typed still does.
+test('typing /simpler key by key keeps the offer, and the command then asks; other typing still clears it', KIT, async ($, on) => {
+  const w = world(on, { noClicks: true })
+  await start($)
+  await answer($, LONG)
+  const edit = ($ as unknown as { prompt: { edit: (e: unknown) => Promise<unknown> } }).prompt
+  let text = ''
+  for (const ch of '/simpler') {
+    await edit.edit({ origin: { kind: 'composer' }, text, cursor: text.length, start: text.length, end: text.length, inputText: ch })
+    text += ch
+  }
+  const run = ($ as unknown as { command: { run: (e: object) => Promise<{ text?: string }> } }).command.run
+  expect((await run({ command: 'simpler' }))?.text).toBe('Asking for the short version.')
+  await w.clock.advance(1)
+  expect(w.submits.at(-1)).toEqual({ text: requestText('Bidspoke'), asUser: true })
+  // A new long answer, then typing that is not the command: the offer goes, as before.
+  await answer($, LONG)
+  await edit.edit({ origin: { kind: 'composer' }, text: '/s', cursor: 2, start: 2, end: 2, inputText: 't' })
+  expect((await run({ command: 'simpler' }))?.text).toBe('There is no long answer to make simpler right now.')
+})
+
 // Lessons review of #952: /simpler asks just after it returns, so a failure there is a toast, as a
 // failed press's is, never an unhandled rejection after "Asking for the short version.".
 test('a /simpler whose ask fails after the command returned says so in a toast', KIT, async ($, on) => {

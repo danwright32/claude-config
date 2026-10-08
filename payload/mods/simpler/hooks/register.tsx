@@ -209,7 +209,11 @@ export const register: Register = on => {
 
   // Gone once Dan types: the first edit of the prompt box, or a message he sends from elsewhere.
   on('prompt.edit', async ($, e, next) => {
-    if ((await $.state.get(OFFER)).value) await $.state.set(OFFER, null)
+    // Spelling "/simpler" is pressing the button where a click cannot land (#939), not typing past
+    // it, so the box as this edit leaves it being a start of that command keeps the offer.
+    const after = (e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end)).trim()
+    const isPressing = after !== '' && '/simpler'.startsWith(after)
+    if (!isPressing && (await $.state.get(OFFER)).value) await $.state.set(OFFER, null)
     return next(e)
   })
   on('prompt.submit', async ($, e, next) => {
