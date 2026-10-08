@@ -524,6 +524,47 @@ for want in 'collision-guard keeps its own write-reader' 'collision-guard keeps 
 done
 printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'modkit.pipeline(' \
   && check "and points a mod judging code its own way at what modkit.pipeline gives" ok || check "and points a mod judging code its own way at what modkit.pipeline gives" "$out"
+# #939: a button must work where it is drawn. A mod-kit button's press reaches its mod through
+# modkit.press, which a click and a typed /press both raise, so a mod hooking ui.press for one is
+# reached by a click alone and fails the run. A mod drawing its own Button must ask
+# $.modkit.clickable in that file, or it shows a button a click may not reach (Apple Terminal).
+M9PRESS="$TMPROOT/m9press"
+mkmodsrc "$M9PRESS" mod-kit "export const register = on => { on('ui.press', { plugin: 'mod-kit' }, h) }"
+mkmodsrc "$M9PRESS" presses-single "export const register = on => { on('ui.press', { plugin: 'mod-kit', element: 'presses-single:go' }, h) }"
+mkmodsrc "$M9PRESS" presses-double "export const register = on => { on(\"ui.press\", { plugin: \"mod-kit\" }, h) }"
+# Written across lines, or filtered through a constant: the engine takes either (lessons review of #957).
+mkmodsrc "$M9PRESS" presses-multiline "export const register = on => {
+  on('ui.press', {
+    plugin: 'mod-kit',
+    element: 'presses-multiline:go',
+  }, h)
+}"
+mkmodsrc "$M9PRESS" presses-split-call "export const register = on => {
+  on(
+    'ui.press',
+    { plugin: 'mod-kit' },
+    h,
+  )
+}"
+mkmodsrc "$M9PRESS" presses-constant "const KIT = { plugin: 'mod-kit' } as const
+export const register = on => { on('ui.press', KIT, h) }"
+mkmodsrc "$M9PRESS" own-button-unasked "export const draw = (\$, e, Button) => <Button key=\"go\" label=\"Go\" onPress={go} />"
+mkmodsrc "$M9PRESS" own-button-asked "export const draw = async (\$, e, Button, Text) => ((await \$.modkit.clickable(e)) ? <Button key=\"go\" label=\"Go\" onPress={go} /> : <Text>type: /go</Text>)"
+mkmodsrc "$M9PRESS" own-button-cast "export const draw = async (\$, e, Button) => ((await (\$ as unknown as K).modkit.clickable(e)) ? <Button key=\"go\" label=\"Go\" onPress={go} /> : null)"
+mkmodsrc "$M9PRESS" own-press "export const register = on => { on('modkit.press', h); on('ui.press', { plugin: 'own-press' }, mine) }"
+mkmodsrc "$M9PRESS" press-in-comment "// a mod used to hook 'ui.press' for mod-kit's buttons; <Button> is drawn by mod-kit
+export const register = on => { on('modkit.press', h) }"
+out="$(bash "$SHARED" "$M9PRESS" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#939: hooking ui.press for mod-kit's buttons, or an unasked Button, fails the run" ok \
+  || check "#939: hooking ui.press for mod-kit's buttons, or an unasked Button, fails the run" "exit=$code out=$out"
+for want in 'presses-single hooks ui.press' 'presses-double hooks ui.press' 'presses-multiline hooks ui.press' 'presses-split-call hooks ui.press' 'presses-constant hooks ui.press' 'own-button-unasked draws its own Button'; do
+  case "$out" in *"$want"*) check "and names: $want" ok ;; *) check "and names: $want" "$out" ;; esac
+done
+printf '%s\n' "$out" | grep 'presses-single hooks ui.press' | grep -q "on('modkit.press'" \
+  && check "and points a mod at modkit.press" ok || check "and points a mod at modkit.press" "$out"
+for clean in own-button-asked own-button-cast own-press press-in-comment; do
+  case "$out" in *"check-mod-shared-parts: $clean"*) check "#939: $clean passes" "$out" ;; *) check "#939: $clean passes" ok ;; esac
+done
 # #712, #730: a mod's tests may read with mod-kit's own readers, through a copy under tests/mod-kit
 # (a test cannot import another mod's files), held byte for byte to mod-kit's (L422). A copy that
 # differs fails, naming the cp that brings it back; running that cp passes (L406); a copy of a file
