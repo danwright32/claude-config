@@ -252,6 +252,23 @@ test('a test folder counts only inside the project: a project checked out under 
   expect(w.ran.length).toBe(1)
 })
 
+// Lessons review of #991: only Write, Edit and Bash were judged, so MultiEdit, NotebookEdit or any
+// tool added later wrote a screen unasked. Every tool carrying a file path is judged, a tool known
+// only to read its path excepted, so a writing tool nobody listed is held by default.
+test('every tool that carries a file path is judged: MultiEdit, NotebookEdit and an unknown tool are held, a reading tool is not', withKit, async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  const multi = { tool: 'MultiEdit', file_path: '/w/slate/app/page.tsx', edits: [{ old_string: 'p-4', new_string: 'p-6' }] }
+  expect(refusalOf(await call($, multi))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { ...multi, agentId: 'agent-a1' }))).toContain('Stop')
+  expect(refusalOf(await call($, { tool: 'FutureWrite', path: '/w/slate/app/site.css', text: 'a{}' }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'BulkWrite', file_paths: ['/w/slate/README.md', '/w/slate/app/Header.tsx'] }))).toContain('app/Header.tsx')
+  // A notebook is no screen, and a tool known only to read its path is not judged.
+  expect(refusalOf(await call($, { tool: 'NotebookEdit', notebook_path: '/w/slate/analysis.ipynb', new_source: 'x' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Read', file_path: '/w/slate/app/page.tsx' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Artifact', file_path: '/w/slate/index.html' }))).toBe('')
+  expect(w.ran.map(x => x.tool)).toEqual(['NotebookEdit', 'Read', 'Artifact'])
+})
+
 test('a look changing Write is refused, naming the file and both ways on, with the grey card for Dan', withKit, async ($, on) => {
   const w = world($, on)
   const why = refusalOf(await call($, PAGE))

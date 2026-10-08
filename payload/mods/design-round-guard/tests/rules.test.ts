@@ -9,15 +9,18 @@ import {
   SKIP_YES,
   agentRefusal,
   isOwnRecord,
+  READS_ONLY,
   isSwiftUI,
   lookKind,
   mentionedLookFiles,
+  pathsOf,
   refusal,
   settledOptions,
   settledQuestion,
   skipOptions,
   skipQuestion,
   subjectsOf,
+  textsOf,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -64,6 +67,15 @@ test('a test file is not look changing, by its .test. or .spec. part, a test fol
     expect(lookKind(p)).toBe(kind)
   // A folder ending Tests marks a Swift test target only: a web file there is still a screen.
   expect(lookKind('/r/AppTests/page.tsx')).toBe('screen')
+})
+
+test("a tool's file paths are read from every key ending path or paths, and its carried text from its edits", () => {
+  expect(pathsOf({ file_path: '/a.tsx', edits: [] })).toEqual(['/a.tsx'])
+  expect(pathsOf({ notebook_path: '/n.ipynb', new_source: 'x' })).toEqual(['/n.ipynb'])
+  expect(pathsOf({ file_paths: ['/a.css', '/b.md'], path: '/a.css', count: 2 })).toEqual(['/a.css', '/b.md'])
+  expect(pathsOf({ command: 'echo', url: 'https://x' })).toEqual([])
+  expect(textsOf({ new_string: 'a', edits: [{ new_string: 'b' }, { old_string: 'c' }] })).toEqual(['a', 'b'])
+  expect(READS_ONLY.has('Read') && READS_ONLY.has('Artifact') && !READS_ONLY.has('MultiEdit') && !READS_ONLY.has('NotebookEdit')).toBe(true)
 })
 
 test('a Swift file is a SwiftUI view when it imports SwiftUI or declares a view body', () => {

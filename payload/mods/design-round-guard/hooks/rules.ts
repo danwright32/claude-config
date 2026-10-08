@@ -63,6 +63,34 @@ export const shapeKind = (path: string): LookKind | null => {
   return null
 }
 
+/**
+ * The built in tools that take a file path only to read it, each never writing there: Read, Grep,
+ * Glob and LS read; NotebookRead reads a notebook; LSP asks about code; Artifact publishes a local
+ * page (its read action saves into its own scratch folder, named by out_dir, not a path); ArtifactData
+ * reads a local JSON file. Every other tool carrying a file path is judged as writing it (lessons
+ * review of #991), so a writing tool added later, MultiEdit and NotebookEdit among those today, is
+ * held by default rather than missed.
+ */
+export const READS_ONLY: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'LSP', 'Artifact', 'ArtifactData'])
+
+/** The file paths a tool's input carries: every top level string, or list of strings, under a key ending path or paths (file_path, notebook_path, path, file_paths). */
+export const pathsOf = (input: Record<string, unknown>): string[] => {
+  const out: string[] = []
+  for (const [k, v] of Object.entries(input)) {
+    if (!/paths?$/i.test(k)) continue
+    for (const x of Array.isArray(v) ? v : [v]) if (typeof x === 'string' && x.trim() && !out.includes(x)) out.push(x)
+  }
+  return out
+}
+
+/** The text a call says it puts in a file, where its input carries any: content, new_string, each edit's new_string, a notebook cell's new_source. */
+export const textsOf = (input: Record<string, unknown>): string[] => {
+  const out: string[] = []
+  for (const k of ['content', 'new_string', 'new_source']) if (typeof input[k] === 'string') out.push(input[k] as string)
+  if (Array.isArray(input.edits)) for (const e of input.edits) if (e && typeof (e as { new_string?: unknown }).new_string === 'string') out.push((e as { new_string: string }).new_string)
+  return out
+}
+
 /** Whether Swift source is a SwiftUI view: it imports SwiftUI, or declares a view or its body. */
 export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(text) || /\bsome\s+View\b/.test(text) || /:\s*View\s*\{/.test(text)
 

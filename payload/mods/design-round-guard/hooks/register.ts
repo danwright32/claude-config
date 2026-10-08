@@ -22,6 +22,9 @@ import {
   shapeKind,
   mentionedLookFiles,
   mentionsStore,
+  pathsOf,
+  READS_ONLY,
+  textsOf,
   refusal,
   resolvePath,
   settledOptions,
@@ -39,7 +42,8 @@ import {
 // how a screen looks waits for a settled design round on its issue, unless he has said to skip them.
 //
 // - What counts (rules.ts lookKind): style files, screen and component files, SwiftUI views, in every
-//   project, written by Write, Edit or the shell (mod-kit's one write reader). A file in no git
+//   project, written by the shell (mod-kit's one write reader) or by any tool carrying a file path,
+//   a tool known only to read it excepted (rules.ts READS_ONLY). A test file passes. A file in no git
 //   checkout is in no project (a design round's own switcher in the scratchpad) and passes.
 // - Settled: Dan's Settled to "Is this design settled?", the design rounds skill's closing picker
 //   (metadata.source design-settled). Skipped: his Skip them to "Skip design rounds for this issue?",
@@ -57,8 +61,6 @@ import {
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
-const TOOL_NAMES = ['Write', 'Edit', 'Bash'] as const
-const TOOLS: ReadonlySet<string> = new Set(TOOL_NAMES)
 
 // A subagent's calls the tool.call hook judged and let through, by tool_use_id: the tool.check hook
 // beneath, which cannot see which loop a call runs in, does not judge them again.
@@ -82,10 +84,13 @@ type Target = { path?: string; word: string; text?: string }
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
 const targetsOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<{ targets: Target[]; storeMentioned: boolean }> => {
-  if (tool === 'Write' || tool === 'Edit') {
-    const word = String(input.file_path ?? '')
+  // Every tool but the shell names the files it writes by a path in its input (lessons review of
+  // #991): Write, Edit, MultiEdit, NotebookEdit and any tool added later, a reading tool excepted.
+  if (tool !== 'Bash') {
+    if (READS_ONLY.has(tool)) return { targets: [], storeMentioned: false }
+    // A Write's content is the whole file; any other tool's text is judged beside the file as it is.
     const text = tool === 'Write' ? String(input.content ?? '') : undefined
-    return { targets: [{ path: resolvePath(word, at.cwd, at.home), word, ...(text === undefined ? {} : { text }) }], storeMentioned: false }
+    return { targets: pathsOf(input).map(word => ({ path: resolvePath(word, at.cwd, at.home), word, ...(text === undefined ? {} : { text }) })), storeMentioned: false }
   }
   const command = String(input.command ?? '')
   const w = await $.modkit.writes({ command, cwd: at.cwd, home: at.home })
@@ -116,9 +121,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
 const swiftView = async ($: EngineInterface, t: Target, tool: string, input: Record<string, unknown>): Promise<boolean> => {
   const texts: string[] = []
   if (t.text !== undefined) texts.push(t.text)
-  if (tool === 'Edit') texts.push(String(input.new_string ?? ''))
+  // The text an edit carries (Edit's, each of MultiEdit's), judged beside the file as it is now.
+  const carried = tool === 'Bash' || t.text !== undefined ? [] : textsOf(input)
+  texts.push(...carried)
   if (t.path && t.text === undefined) {
-    if (!(await $.fs.exists(t.path).catch(() => false))) return tool !== 'Edit' || isSwiftUI(texts.join('\n'))
+    if (!(await $.fs.exists(t.path).catch(() => false))) return !carried.length || isSwiftUI(texts.join('\n'))
     try {
       texts.push(await $.fs.read(t.path))
     } catch {
@@ -156,7 +163,8 @@ type Verdict =
 
 // The judgement every call gets, the main session's and a subagent's alike.
 const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
-  if (!TOOLS.has(tool)) return { pass: true }
+  // Only the shell, and a tool carrying a file path it may write, can change a file at all.
+  if (tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)) return { pass: true }
   const at = await whereOf($)
   const { targets, storeMentioned } = await targetsOf($, tool, input, at)
   // By its path, or by its name where the reader could not follow the folder (lessons review of #991).
@@ -270,8 +278,8 @@ type AskResult = { answers?: Record<string, unknown>; questions?: { question?: u
 export const register: Register = on => {
   // A subagent's call, judged where its loop is known: refused like the main session's, and told to
   // stop and report rather than ask Dan. One it lets through is not judged again beneath.
-  on('tool.call', { tool: TOOL_NAMES }, async ($, e, next) => {
-    if (e.agentId === undefined) return next(e)
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined || e.tool === 'AskUserQuestion') return next(e)
     const raw = e as unknown as Record<string, unknown>
     const id = String(raw.tool_use_id ?? '')
     const v = await judge($, e.tool, argsOf(raw))
@@ -288,7 +296,7 @@ export const register: Register = on => {
   // untouched; one that is refused goes to the settings hooks first, so a call one of them refuses is
   // refused in its words and never turned into a question for Dan.
   on('tool.check', async ($, e, next) => {
-    if (!TOOLS.has(e.tool) || (e.tool_use_id !== undefined && fromAgent.has(e.tool_use_id))) return next(e)
+    if (e.tool_use_id !== undefined && fromAgent.has(e.tool_use_id)) return next(e)
     const v = await judge($, e.tool, (e.input ?? {}) as Record<string, unknown>)
     if ('pass' in v) return next(e)
     const decided = await next(e)
