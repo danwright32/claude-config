@@ -59,7 +59,22 @@ ROOT="$(cd "$DIR/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
-unmeasured() { echo "UNMEASURED: $1"; printf 'SUITE-RESULT passed=0 failed=0\n'; exit 0; }
+pass=0
+fail=0
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "ok: $1"; else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+unmeasured() { echo "UNMEASURED: $1"; printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"; [ "$fail" -eq 0 ]; exit $?; }
+
+# The session driver itself, which needs only python3 and so runs everywhere, CI included: a session
+# that exits without reading its input must still end in a summary naming that, never a traceback
+# with no summary, which would leave every check after it judging an empty answer (lessons review
+# of d547970). A message bigger than a pipe holds makes the write fail every time, not by a race.
+DRV_TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-sleep-real-engine-driver.XXXXXX")"
+DRV_SAID="$(python3 "$DIR/sleep-real-engine-session.py" "$DRV_TMP/out.jsonl" 30 1 "$(python3 -c 'print("x" * 200000)')" -- /bin/sh -c 'exit 3' 2>"$DRV_TMP/err")"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["exit"] == 3 and d["results"] == 0 and "input" in d.get("input_error", "") else 1)' "$DRV_SAID" 2>/dev/null \
+  && check "the session driver says a session that stopped reading its input, with a summary" ok \
+  || check "the session driver says a session that stopped reading its input, with a summary" "said: ${DRV_SAID:-nothing}; stderr: $(head -c 300 "$DRV_TMP/err")"
+rm -rf "$DRV_TMP"
+
 if [ "${SLEEP_REAL_ENGINE:-}" = 0 ]; then
   unmeasured "sleep mode against the real Claude Code engine was not run: SLEEP_REAL_ENGINE=0 skips it"
 fi
@@ -90,9 +105,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-pass=0
-fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "ok: $1"; else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 unmeasured_parts=()
 # The stand-in model is stopped and reaped quietly, so the SUITE-RESULT line stays the last thing said.
 stop_model() { if [ -n "$MODEL_PID" ]; then { kill "$MODEL_PID"; wait "$MODEL_PID"; } 2>/dev/null; MODEL_PID=""; fi; }

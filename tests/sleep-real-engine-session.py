@@ -39,11 +39,20 @@ def main(argv):
     sent = 0
     buf = b''
     timed_out = False
+    input_error = ''
 
+    # A session that has stopped reading (it exited at start, or crashed) is said in the summary,
+    # and its output is still read to the end, never a traceback with no summary.
     def send(text):
+        nonlocal input_error
+        if input_error:
+            return
         line = json.dumps({'type': 'user', 'message': {'role': 'user', 'content': text}}) + '\n'
-        proc.stdin.write(line.encode())
-        proc.stdin.flush()
+        try:
+            proc.stdin.write(line.encode())
+            proc.stdin.flush()
+        except (BrokenPipeError, ValueError) as err:
+            input_error = f'the session stopped reading its input before message {sent + 1} was sent ({err})'
 
     def close_input():
         if not proc.stdin.closed:
@@ -109,7 +118,10 @@ def main(argv):
             timed_out = True
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
-    print(json.dumps({'results': results, 'texts': texts, 'cost_usd': round(cost, 4), 'exit': proc.returncode, 'timed_out': timed_out}))
+    summary = {'results': results, 'texts': texts, 'cost_usd': round(cost, 4), 'exit': proc.returncode, 'timed_out': timed_out}
+    if input_error:
+        summary['input_error'] = input_error
+    print(json.dumps(summary))
     return 0
 
 
