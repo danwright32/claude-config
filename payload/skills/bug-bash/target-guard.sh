@@ -13,6 +13,13 @@
 #      browser: --proxy (or BUG_BASH_PROXY) must name it, it must answer as itself, and it must be
 #      seen to refuse a write, sent to a host that does not exist so a proxy that forwarded it
 #      reaches nothing. Only then is any request made to the target.
+#      Against a deployment the proxy alone is not enough: a browser an explorer starts some other
+#      way never meets it. So the guard also loads the egress rule (egress.sh, #813), which refuses
+#      every connection from this Mac to the deployment's addresses except the proxy's, and proves
+#      it in force, a direct connection from here refused. The proxy must have been started for it:
+#      in the _bugbash group, the one the rule lets through, and with --egress, so that it takes the
+#      rule away when it stops. A local build has no real users, so it needs the proxy but not the
+#      rule (and the guard's own look at its page goes straight to it).
 #   2. A production build, never a dev server. A dev server compiles each route on its first visit
 #      and injects reload scripts, so explorers report its pauses as dead links. A local URL whose
 #      page carries a dev server's marks is refused. The marks recognised are Next.js's, Vite's
@@ -23,7 +30,8 @@
 # Prints one line on success, `LOCAL <url>` or `READ-ONLY <url> via <proxy>`, and exits 0. Every refusal goes
 # to stderr with its reason and a distinct exit code: 2 usage, 3 remote without read only, 4 dev
 # server, 5 nothing answering, 6 a redirect chain longer than six hops, 7 a read only run with no
-# working read only proxy.
+# working read only proxy, 8 a read only run against a deployment whose egress rule could not be
+# loaded or is not in force (a rule it loaded is taken away again before it exits 8).
 # Text is matched through here strings, never `printf | grep -q`: under pipefail grep -q exiting on
 # its first match kills printf, and the pipeline then reads as no match (L183).
 set -uo pipefail
@@ -61,6 +69,23 @@ host_of() {
   esac
   printf '%s' "$rest" | tr '[:upper:]' '[:lower:]'
 }
+# A URL's port: the one it names, or its scheme's.
+port_of() {
+  local rest="${1#*://}" scheme="${1%%://*}" p=""
+  rest="${rest%%/*}"
+  rest="${rest%%\?*}"
+  rest="${rest%%#*}"
+  rest="${rest##*@}"
+  case "$rest" in
+    \[*\]:*) p="${rest##*]:}" ;;
+    \[*\]) ;;
+    *:*) p="${rest##*:}" ;;
+  esac
+  if [ -z "$p" ]; then
+    if [ "$scheme" = https ]; then p=443; else p=80; fi
+  fi
+  printf '%s' "$p"
+}
 # Local means the whole host names this machine. Matched on the whole name, so localhost.example.com
 # and 127.0.0.1.nip.io, which resolve wherever their owners like, are remote.
 is_local_host() {
@@ -90,10 +115,13 @@ if [ "$read_only" -eq 1 ]; then
     exit 7
   fi
   launcher="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/explorer-browser.js"
-  if ! why="$(node -e 'require(process.argv[1]).proxyAnswers(process.argv[2]).then(() => process.exit(0), e => { console.log(e.message); process.exit(1) })' "$launcher" "$proxy" 2>&1)"; then
-    echo "target-guard: refusing a read only run: nothing at $proxy answers as the bug bash read only proxy (${why#explorer-browser: }). $no_proxy_fix" >&2
+  # Its answer also says which process it is, which group it runs in, and whether it was started
+  # for a deployment (--egress), for the egress rule below.
+  if ! facts="$(node -e 'require(process.argv[1]).proxyAnswers(process.argv[2]).then(b => { console.log([b.pid, b.egid, b.egress].join(" ")); process.exit(0) }, e => { console.log(e.message); process.exit(1) })' "$launcher" "$proxy" 2>&1)"; then
+    echo "target-guard: refusing a read only run: nothing at $proxy answers as the bug bash read only proxy (${facts#explorer-browser: }). $no_proxy_fix" >&2
     exit 7
   fi
+  read -r proxy_pid proxy_egid proxy_egress <<< "$facts"
   # A write sent through it, to a name that resolves nowhere (.invalid), must come back refused by
   # the proxy itself: a proxy that forwarded it would reach nothing.
   probe="$(curl -s --noproxy '' --max-time 5 -o /dev/null -D - -x "$proxy" -X POST --data probe "http://bug-bash-probe.invalid/write" 2>/dev/null)"
@@ -109,6 +137,32 @@ is_local_host "$host" && is_local=1
 
 if [ "$is_local" -eq 0 ]; then
   if [ "$read_only" -eq 1 ]; then
+    egress="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/egress.sh"
+    proxy_fix="Start the proxy for a deployment, in the _bugbash group the egress rule lets through: sudo -n -g _bugbash \"\$(command -v node)\" ~/.claude/skills/bug-bash/read-only-proxy.js --state <run dir>/proxy --egress"
+    if [ "${proxy_egress:-}" != true ]; then
+      echo "target-guard: refusing a read only run against $host: the read only proxy at $proxy was not started for a deployment (--egress), so nothing would take the egress rule away when it stops. $proxy_fix" >&2
+      exit 8
+    fi
+    if ! grep -Eq '^[0-9]+$' <<< "${proxy_pid:-}" || ! grep -Eq '^[0-9]+$' <<< "${proxy_egid:-}"; then
+      echo "target-guard: refusing a read only run against $host: the read only proxy at $proxy did not say its process and group ($facts). $proxy_fix" >&2
+      exit 8
+    fi
+    port="$(port_of "$url")"
+    if ! grep -Eq '^[0-9]+$' <<< "$port"; then
+      echo "target-guard: give a URL whose port is a number, got: $url" >&2
+      exit 2
+    fi
+    if ! why="$(bash "$egress" load "$host" "$port" "$proxy_pid" 2>&1)"; then
+      echo "target-guard: refusing a read only run against $host: the egress rule that keeps every browser but the read only proxy's off it could not be loaded. $why" >&2
+      exit 8
+    fi
+    if ! why="$(bash "$egress" check "$host" "$port" "$proxy_egid" 2>&1)"; then
+      if ! left="$(bash "$egress" unload "$proxy_pid" 2>&1)"; then
+        why="$why It could not be taken away again either ($left), so this Mac is still refused $host: remove it with bash ~/.claude/skills/bug-bash/egress.sh unload"
+      fi
+      echo "target-guard: refusing a read only run against $host: the egress rule is not in force. $why" >&2
+      exit 8
+    fi
     printf 'READ-ONLY %s via %s\n' "$url" "$proxy"
     exit 0
   fi
