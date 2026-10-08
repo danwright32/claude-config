@@ -191,6 +191,7 @@ export type Note = Record<string, unknown> & { kind: string }
 /** A claim the driver ends through sleep-queue.sh, which writes the matching note itself (one writer, #844). */
 export type Release = { issue: number; state: 'parked' | 'failed'; why: string }
 
+/** A block's reason leaves out what its release came to, known only after the queue answers: say it with blockTold (#925). */
 export type StopDecision =
   | { kind: 'block'; reason: string; record: DriverRecord; notes: Note[]; release?: Release }
   | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; release?: Release; why: string }
@@ -297,7 +298,8 @@ export const decideStop = (i: StopInput): StopDecision => {
   } else if (claim && claim.since !== null && activeMs(d.waits, claim.since, now) >= LIMITS.stuckMs) {
     release = { issue: claim.issue, state: 'parked', why: `${mins(activeMs(d.waits, claim.since, now))} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` }
   }
-  if (release) told = `The driver parked #${release.issue} (${release.why}); its claim is ended, so leave it and claim the next issue. `
+  // What the release says is not written here: whether it ended is known only once the queue has
+  // answered, so blockTold puts it in front of this reason then (#925).
   if (d.parked) {
     told += thenNext(d.parked)
     d.parked = null
@@ -321,9 +323,33 @@ export const decideStop = (i: StopInput): StopDecision => {
 
   d.blocks++
   if (!progressed) d.idleBlocks++
-  const status = unread ? unread : claim && !release ? `You hold #${claim.issue} in ${claim.repo} (attempt ${claim.attempts}): carry on with it. ` : 'You hold no issue: claim the next one. '
+  // A release says the next step itself, ended or not, so no status is given beside it.
+  const status = unread ? unread : release ? '' : claim ? `You hold #${claim.issue} in ${claim.repo} (attempt ${claim.attempts}): carry on with it. ` : 'You hold no issue: claim the next one. '
   return { kind: 'block', record: d, ...(release ? { release } : {}), notes: [{ kind: 'heartbeat', ...where }], reason: `${told}${status}${i.rules}` }
 }
+
+/** Where a refused release is run from: the repository the session is in (null when none) and the session. */
+export type ReleaseAt = { root: string | null; self: string }
+
+/**
+ * What a block says about a claim the driver or its watchdog ended through the queue, built only
+ * once the queue has answered (#925), so one block never says both that it failed and that it is
+ * ended. `failed` is null when it ended, else the queue's answer, which reaches Claude only as data
+ * (#922). A refused one names the one command that ends it.
+ */
+export const releaseTold = (by: 'driver' | 'watchdog', rel: Release, failed: string | null, at: ReleaseAt): string => {
+  const [did, todo] = rel.state === 'parked' ? ['parked #N', 'park #N'] : ['ended #N as failed', 'end #N as failed']
+  const n = (s: string) => s.replace('#N', `#${rel.issue}`)
+  if (failed === null) return `The ${by} ${n(did)} (${rel.why}); its claim is ended, so leave it and claim the next issue.`
+  const run = at.root === null
+    ? 'sleep-queue.sh release as the overnight rules say'
+    : `\`bash ~/.claude/hooks/lib/sleep-queue.sh release ${shellWord(at.root)} ${rel.issue} ${shellWord(at.self)} ${rel.state} ${shellWord(rel.why)}\``
+  return `The ${by} could not ${n(todo)} (${rel.why}), so end its claim yourself with ${run}, then claim the next issue.\n${queueData(failed)}`
+}
+
+/** A block's whole reason: what its release came to, from the queue's answer (#925), then the decided reason. */
+export const blockTold = (d: Extract<StopDecision, { kind: 'block' }>, failed: string | null, at: ReleaseAt): string =>
+  d.release ? `${thenNext(releaseTold('driver', d.release, failed, at))}${d.reason}` : d.reason
 
 export type FailureDecision =
   | { kind: 'wait'; record: DriverRecord; minutes: number; notes: Note[] }

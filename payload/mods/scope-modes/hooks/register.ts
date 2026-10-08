@@ -47,7 +47,7 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, RESUME, activeMs, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, queueData, readDriver, resumeDue, thenNext,
+  LIMITS, RESUME, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, thenNext,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
@@ -1455,8 +1455,8 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const ended = d.release ? await endClaim($, en, where.root, d.release) : null
     const notes = ended && d.release ? [...d.notes, { kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : d.notes
     await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
-    // The queue's answer can quote a reason a worker wrote, so it reaches the block only as data (#922).
-    if (d.kind === 'block') return { block: ended && d.release ? `The claim on #${d.release.issue} could not be ended, so end it yourself.\n${queueData(ended)}${d.reason}` : d.reason }
+    // Said from what the queue answered, never before it (#925); its answer reaches the block only as data (#922).
+    if (d.kind === 'block') return { block: blockTold(d, ended, { root: where.root, self: en.self }) }
     $.ui.log(`scope-modes: the overnight driver let this session stop: ${d.why}`, { to: 'debug' })
     return null
   })
@@ -1512,8 +1512,8 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     if (active < LIMITS.stuckMs) return false
     const where = await repoOf($)
     const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
-    const failed = await endClaim($, en, where.root, { issue: c.claim.issue, state: 'parked', why })
-    d.parked = failed ? `The watchdog could not park #${c.claim.issue}, so park it yourself.\n${queueData(failed)}` : `The watchdog parked #${c.claim.issue} (${why}); its claim is ended, so leave it and claim the next issue.`
+    const rel: Release = { issue: c.claim.issue, state: 'parked', why }
+    d.parked = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
     if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
     return false
   })
