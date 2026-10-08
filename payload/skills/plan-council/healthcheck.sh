@@ -42,7 +42,7 @@ done
 [ "$n" -gt 0 ] && echo "  ($n role agents)"
 
 echo "== helper / hook scripts (syntax) =="
-for f in "$D"/skills/plan-council/post-discussion.sh "$D"/hooks/teammate-challenge-gate.sh; do
+for f in "$D"/skills/plan-council/post-discussion.sh "$D"/skills/plan-council/uses-supabase.sh "$D"/hooks/teammate-challenge-gate.sh; do
   if [ -f "$f" ] && bash -n "$f" 2>/dev/null; then ok "$(basename "$f")"; else bad "$(basename "$f"): missing or syntax error"; fi
 done
 
