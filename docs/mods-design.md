@@ -1434,7 +1434,11 @@ outlast a noun's 10 s (a switch, a compact, a held row's replay) is taken at onc
 `$.clock.after(0, ...)` (measured 2026-10-08: such work outlives the noun, whole). A mod drawing its
 own Button outside the band and a pane (Simpler above an answer, the nickname dialog's Save and
 Skip) asks `$.modkit.clickable(e)` first and draws the typed way where it answers false (`/simpler`;
-Enter and Esc).
+Enter and Esc). `tools/check-mod-shared-parts.sh` fails a mod hooking `ui.press` for mod-kit's
+buttons, which a typed /press would never reach, and a hooks file drawing `<Button` that never asks
+`$.modkit.clickable`. A button in the band or a pane, the status bar's Compact row among them, is
+mod-kit's to draw, so it gets its typed fallback there by construction; the grey status line under
+the prompt draws text only.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
