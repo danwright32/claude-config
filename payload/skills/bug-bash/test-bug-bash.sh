@@ -661,12 +661,12 @@ else
   expect "an installed helper that differs from this one is refused, naming the setup" 8 "setup again" "$rc" "$out"
   # One rule at a time: a live run's rule is never replaced; a dead one's is.
   reset_fake
-  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
   expect "a rule held by another live run is refused, not replaced" 8 "another read only run" "$rc" "$out"
-  [ "$(owner_now)" = "$$" ] && [ -e "$FAKE/anchor.conf" ] && ok || bad "the other run's rule is left in place" "owner $(owner_now)"
+  [ "$(owner_now)" = "$PROXY_PID" ] && [ -e "$FAKE/anchor.conf" ] && ok || bad "the other run's rule is left in place" "owner $(owner_now)"
   out="$(fakeenv bash "$EGRESS" unload 99999999 2>&1)"; rc=$?
-  [ "$rc" = 0 ] && [ "$(owner_now)" = "$$" ] && ok || bad "an unload by a process that does not hold the rule leaves it" "$out"
+  [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "an unload by a process that does not hold the rule leaves it" "$out"
   reset_fake
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$DEAD_PID" >/dev/null 2>&1
   out="$(eguard "https://app.example.com:$dead_port/")"; rc=$?
@@ -699,11 +699,47 @@ else
   rm -f "$FAKE/state/owner"; echo 7777 > "$FAKE/state/token"
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$DEAD_PID" >/dev/null 2>&1
   grep -q -- '-X 7777' "$FAKE/pfctl.calls" && ok || bad "a load releases the pf reference a helper killed part way left behind" "$(cat "$FAKE/pfctl.calls")"
-  # An unload for one process touches nothing it cannot show that process holds.
+  # An unload for one process touches nothing it cannot show that process holds: a live run's rule
+  # stays. A rule with no owner on file is a leftover (a load writes its owner before it lets go of
+  # the lock), so that one is swept.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" unload 12345 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && [ -e "$FAKE/anchor.conf" ] && [ "$(owner_now)" = "$PROXY_PID" ] && grep -q 'left in place' <<< "$out" && ok \
+    || bad "an unload for another pid leaves a live run's rule alone (rc $rc)" "$out"
   rm -f "$FAKE/state/owner"
   out="$(fakeenv bash "$EGRESS" unload 12345 2>&1)"; rc=$?
-  [ "$rc" = 0 ] && [ -e "$FAKE/anchor.conf" ] && grep -q 'left in place' <<< "$out" && ok \
-    || bad "an unload for a pid with no rule on record leaves the anchor alone (rc $rc)" "$out"
+  [ "$rc" = 0 ] && nothing_loaded && ok || bad "a rule with no owner on file is swept as a leftover by the next call (rc $rc)" "$out"
+  fakeenv bash "$EGRESS" unload >/dev/null 2>&1
+
+  # The owner check runs on its own: every call first removes a rule whose owner has died, or whose
+  # pid now belongs to something that is not the read only proxy, so a proxy killed outright cannot
+  # leave this Mac refused the site for good (coordinator, #938). Here a --egress proxy is SIGKILLed
+  # holding the rule, and the next call, a plain status, sweeps it and says so.
+  reset_fake
+  mkdir -p "$TMP/proxy-k"
+  PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-k" --egress >"$TMP/proxy-k.out" 2>&1 & kp=$!
+  for _ in $(seq 1 200); do grep -q "\"pid\":$kp" "$TMP/proxy-k/proxy.json" 2>/dev/null && break; sleep 0.05; done
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$kp" >/dev/null 2>&1
+  [ "$(owner_now)" = "$kp" ] && ok || bad "the rule is loaded for the proxy about to be killed" "owner $(owner_now)"
+  kill -9 "$kp" 2>/dev/null; wait "$kp" 2>/dev/null
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && nothing_loaded && grep -q "Removed a rule left by pid $kp" <<< "$out" && grep -q 'No bug bash egress rule is loaded' <<< "$out" && ok \
+    || bad "a SIGKILLed proxy's rule is swept by the next call, which says so (rc $rc)" "$out"
+  # A pid that is alive but no longer the proxy (reused by something else) counts as gone too.
+  sleep 30 & other=$!
+  BG_PIDS="$BG_PIDS $other"
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$other" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"
+  nothing_loaded && ok || bad "a rule whose owner pid now runs something other than the proxy is swept" "$out"
+  kill "$other" 2>/dev/null
+  # A live run's rule is reported, with who holds it, and left.
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && grep -q "loaded.*pid $PROXY_PID" <<< "$out" && grep -q "$dead_port" <<< "$out" && [ "$(owner_now)" = "$PROXY_PID" ] && ok \
+    || bad "status names a live run's rule and its holder, and leaves it (rc $rc)" "$out"
   fakeenv bash "$EGRESS" unload >/dev/null 2>&1
   # A second --egress proxy that refuses to start never listened, so it holds no rule and unloads
   # nothing as it exits (lessons review of #938).
@@ -953,6 +989,9 @@ grep -q 'read-only-proxy.js' "$DIR/SKILL.md" && ok || bad "SKILL.md starts the r
 # time setup and its self test are named where the skill sends Dan.
 grep -qF 'sudo -n -g _bugbash "$(command -v node)" ~/.claude/skills/bug-bash/read-only-proxy.js' "$DIR/SKILL.md" && grep -q -- '--egress' "$DIR/SKILL.md" && ok \
   || bad "SKILL.md starts a deployment's proxy in the _bugbash group with --egress"
+# What Dan runs if a site ever seems blocked is said in the skill (coordinator, #938).
+grep -q 'seems blocked.*bash ~/.claude/skills/bug-bash/egress.sh status' "$DIR/SKILL.md" && ok \
+  || bad "SKILL.md says, in one line, what to run if a site ever seems blocked"
 # Started through sudo, the pid the shell holds is sudo's, never the proxy's, so the skill must not
 # tell the reader to match proxy.json's pid against it (lessons review of #938, L321).
 ! grep -q 'its `pid` is the process you started' "$DIR/SKILL.md" && grep -q 'ps -o ppid= -p' "$DIR/SKILL.md" && ok \

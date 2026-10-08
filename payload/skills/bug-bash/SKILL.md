@@ -56,8 +56,9 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    with `readOnly: true`, and every finding is at most a risk. `<run dir>/proxy/requests.log`
    lists what was forwarded and refused. Stop the proxy (the `pid` in proxy.json) when the run
    ends: it takes the egress rule away as it stops. Until then Dan's own browser cannot reach that
-   site either (nor, on a shared hosting address, its neighbours there); a proxy killed outright
-   leaves the rule, which `bash ~/.claude/skills/bug-bash/egress.sh unload` removes.
+   site either (nor, on a shared hosting address, its neighbours there); a rule left by a proxy
+   killed outright is removed by the next egress call of any kind.
+   If a site ever seems blocked on this Mac, Dan runs `bash ~/.claude/skills/bug-bash/egress.sh status`: it removes a rule whose run has ended and says whether one is still loaded, and for whom.
 
    The rule needs a one time setup on each Mac, which needs Dan's password and his sign off on
    the sudo grant it adds (claude-config#813). Until that is done the guard refuses every read only

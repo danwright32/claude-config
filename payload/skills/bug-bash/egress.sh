@@ -5,6 +5,7 @@
 #   bash ~/.claude/skills/bug-bash/egress.sh load <host> <port> <owner pid>
 #   bash ~/.claude/skills/bug-bash/egress.sh check <host> <port> <proxy group id>
 #   bash ~/.claude/skills/bug-bash/egress.sh unload [<owner pid>]
+#   bash ~/.claude/skills/bug-bash/egress.sh status
 #   bash ~/.claude/skills/bug-bash/egress.sh selftest
 #
 # The read only proxy refuses every write that passes through it, but a browser an explorer starts
@@ -22,6 +23,8 @@
 #           and a direct connection to each address on <port>, from here, refused. Exit 1 naming the
 #           first that fails.
 #   unload  takes the rule away (only if <owner pid> holds it, when one is given).
+#   status  says whether a rule is loaded and for whom. Every call, this one included, first has the
+#           helper remove a rule whose run has ended (its proxy dead, or its pid now something else).
 #   selftest measures once, on this Mac, what the tests can only stand in for: with the rule loaded
 #           for a listener on this machine, a direct connection is refused, a connection from the
 #           _bugbash group gets through, and once the rule is gone a direct one gets through again.
@@ -164,6 +167,29 @@ cmd_check() {
   echo "in force: only group $egid reaches $host ($(tr '\n' ' ' <<< "$addrs" | sed 's/ $//')) on port $port"
 }
 
+# Whether a rule is loaded, and for whom, after the helper's own sweep has removed any rule whose
+# run has ended. What Dan runs if a site ever seems blocked on this Mac.
+cmd_status() {
+  [ "$#" -eq 0 ] || fail "usage: egress.sh status"
+  local status swept owner request
+  status="$(helper status)" || fail "${status#bug-bash-egress: }"
+  swept="$(sed -n 's/^swept //p' <<< "$status")"
+  owner="$(sed -n 's/^owner //p' <<< "$status")"
+  request="$(sed -n 's/^request //p' <<< "$status")"
+  if [ -n "$swept" ]; then
+    if [ "$swept" = none ]; then
+      echo "Removed a rule left by a helper that did not finish."
+    else
+      echo "Removed a rule left by pid $swept, whose read only run had ended."
+    fi
+  fi
+  if [ "$owner" = none ] && ! grep -q '^rule ' <<< "$status"; then
+    echo "No bug bash egress rule is loaded on this Mac."
+  else
+    echo "A bug bash egress rule is loaded ($request), held by pid $owner, whose read only run is still going. Stopping that run's proxy removes it; to remove it anyway: bash ~/.claude/skills/bug-bash/egress.sh unload"
+  fi
+}
+
 cmd_unload() {
   [ "$#" -le 1 ] || fail "usage: egress.sh unload [<owner pid>]"
   local out
@@ -220,6 +246,7 @@ case "${1:-}" in
   load) shift; cmd_load "$@" ;;
   check) shift; cmd_check "$@" ;;
   unload) shift; cmd_unload "$@" ;;
+  status) shift; cmd_status "$@" ;;
   selftest) shift; cmd_selftest "$@" ;;
-  *) fail "usage: egress.sh load <host> <port> <owner pid> | check <host> <port> <proxy group id> | unload [<owner pid>] | selftest" ;;
+  *) fail "usage: egress.sh load <host> <port> <owner pid> | check <host> <port> <proxy group id> | unload [<owner pid>] | status | selftest" ;;
 esac

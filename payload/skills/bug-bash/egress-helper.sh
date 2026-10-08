@@ -16,6 +16,10 @@
 #   bug-bash-egress status
 #       What the packet filter holds now, one fact a line, for egress.sh to check.
 #
+# Every verb first sweeps: a rule whose owner has died, or whose pid now runs something that is not
+# the read only proxy, is removed before anything else, so a proxy killed outright cannot leave the
+# Mac refused a site for longer than the next call.
+#
 # The rule lives in one pf anchor of its own, com.apple/000.bug-bash-read-only. The system's own
 # /etc/pf.conf already evaluates every anchor under com.apple/ (`anchor "com.apple/*"`), so this
 # never loads, flushes or edits the main ruleset, and the 000 sorts it ahead of Apple's own anchors.
@@ -150,6 +154,35 @@ remove_rule() {
   rm -f "$STATE/owner" "$STATE/request" "$STATE/rules.conf"
 }
 
+# Whether the process a rule is on record for is still the run that loaded it: alive, and still
+# the read only proxy (or the self test), so a pid the system has since handed to something else
+# does not keep a rule standing.
+owner_is_live() {
+  is_pid "$1" && kill -0 "$1" 2>/dev/null || return 1
+  grep -Eq 'read-only-proxy\.js|egress\.sh selftest' <<< "$(ps -o command= -p "$1" 2>/dev/null)"
+}
+
+# The owner check that runs on its own, first thing under the lock in every verb: a rule whose
+# owner has died or is no longer the proxy (a proxy killed outright, which never ran its own
+# unload) is removed, and so is one with no owner on file, which only a helper killed part way
+# leaves (a load records its owner before it lets go of the lock). SWEPT names what was removed.
+SWEPT=""
+sweep() {
+  local holder
+  holder="$(cat "$STATE/owner" 2>/dev/null)"
+  if [ -n "$holder" ]; then
+    owner_is_live "$holder" && return 0
+  elif [ -z "$("$PFCTL" -a "$ANCHOR" -s rules 2>/dev/null)" ] && [ ! -f "$STATE/token" ]; then
+    return 0
+  fi
+  if [ -n "$holder" ]; then
+    remove_rule || die 5 "the rule left by pid $holder, whose run has ended, could not be taken away, so it is still loaded."
+  else
+    remove_rule || die 5 "the rule left by a helper that did not finish could not be taken away, so it is still loaded."
+  fi
+  SWEPT="${holder:-none}"
+}
+
 # A load that failed part way: whatever pf took of it, rule or address table, goes again.
 undo_partial_load() {
   "$PFCTL" -a "$ANCHOR" -F rules >/dev/null 2>&1
@@ -171,8 +204,9 @@ do_load() {
   ports="$port"
   case "$port" in 80|443) ports="80, 443" ;; esac
   lock
+  sweep
   prior="$(cat "$STATE/owner" 2>/dev/null)"
-  if [ -n "$prior" ] && [ "$prior" != "$owner" ] && is_pid "$prior" && kill -0 "$prior" 2>/dev/null; then
+  if [ -n "$prior" ] && [ "$prior" != "$owner" ] && owner_is_live "$prior"; then
     die 4 "another read only run holds the rule (its proxy, pid $prior, is still running; $(cat "$STATE/request" 2>/dev/null)). End that run first."
   fi
   # Whatever is on record goes first, owner or none (a helper killed part way leaves a rule, or a
@@ -201,9 +235,10 @@ do_unload() {
   local owner="${1:-}" holder
   [ -z "$owner" ] || is_pid "$owner" || die 2 "the owner must be a process id, got: $owner"
   lock
+  sweep
   holder="$(cat "$STATE/owner" 2>/dev/null)"
-  # For one process, only a rule on record as that process's. Anything else (another run's, or one
-  # with no owner on file) is left for an unload with no owner, which takes whatever is there.
+  # For one process, only a rule on record as that process's: another live run's is left (the sweep
+  # above has already taken any leftover). An unload with no owner takes whatever is there.
   if [ -n "$owner" ] && [ "$holder" != "$owner" ]; then
     if [ -n "$holder" ]; then
       echo "left in place: the rule belongs to pid $holder, not $owner"
@@ -219,6 +254,10 @@ do_unload() {
 do_status() {
   [ "$#" -eq 0 ] || die 2 "usage: status"
   local info main
+  lock
+  sweep
+  [ -z "$SWEPT" ] || echo "swept $SWEPT"
+  echo "request $(cat "$STATE/request" 2>/dev/null || echo none)"
   info="$("$PFCTL" -s info 2>/dev/null)"
   main="$("$PFCTL" -s rules 2>/dev/null)"
   if grep -q '^Status: Enabled' <<< "$info"; then echo "enabled yes"; else echo "enabled no"; fi
