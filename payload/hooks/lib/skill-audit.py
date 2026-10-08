@@ -204,6 +204,10 @@ def cmd_unrun(argv) -> int:
     if not skills:
         return refuse(f"{folder} holds no skills, so there was nothing to check. Refusing to pass it.")
     suites = list(repo_suites(root))
+    suite_code = [
+        (p, "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#")))
+        for p, text in suites
+    ]
     runner_invoked = any(runs_the_runner(text) for _, text in suites)
     checked = unrun = 0
     for skill in skills:
@@ -220,9 +224,12 @@ def cmd_unrun(argv) -> int:
             under = f"{skill}/{inside}"
             if py and runner_invoked:
                 continue
+            # Named on a line of code, never only in a comment: a comment talks about a file and
+            # runs nothing (the PR #936 lessons review). A static read cannot prove the named line
+            # executes, so a name in an echo still counts; what it can refuse, it does.
             named = any(
-                under in text or (os.path.abspath(p).startswith(skill_dir + os.sep) and inside in text)
-                for p, text in suites
+                under in code or (os.path.abspath(p).startswith(skill_dir + os.sep) and inside in code)
+                for p, code in suite_code
             )
             if named:
                 continue

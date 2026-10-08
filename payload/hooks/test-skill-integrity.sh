@@ -173,6 +173,12 @@ for still in gamma/web/widget.test.js delta/test_legacy.sh; do
   has "$out" "$still" && ok || bad "$still is still run by nothing" "$out"
 done
 
+# A file named only in a suite's COMMENT is talked about, not run, so it stays unrun.
+printf '#!/bin/bash\n# gamma/web/widget.test.js is covered elsewhere\n' > "$U/hooks/test-commenter.sh"
+out="$(python3 "$AUDIT" unrun "$U/skills" "$U" 2>&1)"; rc=$?
+has "$out" "gamma/web/widget.test.js" && ok || bad "a file named only in a comment is not covered by it" "$out"
+rm -f "$U/hooks/test-commenter.sh"
+
 # A suite in ANOTHER checkout nested inside this one (a worktree) covers nothing here (L234).
 mkdir -p "$U/.claude/worktrees/other/hooks"
 printf 'gitdir: elsewhere\n' > "$U/.claude/worktrees/other/.git"
