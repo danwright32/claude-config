@@ -180,6 +180,16 @@ fi
 is_test() {
   local f="$1"
   printf '%s' "$f" | grep -Eiq '(^|/)(tests?|spec|__tests__|__mocks__)/' && return 0
+  # Xcode test target folders (claude-config#930). Xcode names a test target's folder after the
+  # target, `<Name>Tests` (OvertureTests, OvertureHostedTests, OvertureUITests), and a shared
+  # helpers target is commonly `TestSupport`. A suite file in one whose own name does not end in
+  # Tests read as SOURCE, so an Overture push that only added cases to
+  # mac/OvertureTests/EngineDivergenceGate.swift was refused as untested and overridden.
+  #
+  # Deliberately CASE SENSITIVE and on a DIRECTORY segment that ENDS in the word, unlike the line
+  # above: matched case blind, every folder whose name ends in the letters "tests" (contests/)
+  # would count as a test directory, and a source file there could ride through the gate.
+  printf '%s' "$f" | grep -Eq '(^|/)[^/]*(Tests|TestSupport)/'         && return 0
   printf '%s' "$f" | grep -Eiq '\.(test|spec)\.[a-z0-9]+$'            && return 0
   # `test-foo.ts` / `test_foo.js` runnable test scripts (common in a scripts/
   # dir), but NOT test-only helpers like test-utils / test-setup / test-mocks.
@@ -204,7 +214,11 @@ is_test() {
   # is: a rule written as one repository's path is absent the moment the next project adopts the
   # convention, and it reads as coverage while covering nothing (L362).
   printf '%s' "$f" | grep -Eiq '\.cases\.(ts|tsx|js|jsx|mjs|cjs)$'      && return 0
-  printf '%s' "$f" | grep -Eiq 'Tests?\.(java|kt|cs|swift|scala)$'    && return 0
+  # Test or Tests as a WORD before the extension: capitalised (FooTests.swift, FooTest.kt), or lower
+  # case after a separator or as the whole name (foo_test.scala, test.swift). Deliberately CASE
+  # SENSITIVE: matched case blind it took the last letters of ordinary names, so Latest.swift and
+  # Contests.swift counted as tests and could satisfy the zero test floor for a source change.
+  printf '%s' "$f" | grep -Eq '(Tests?|(^|[/_-])tests?)\.(java|kt|cs|swift|scala)$' && return 0
   printf '%s' "$f" | grep -Eiq '(^|/)conftest\.py$'                   && return 0
   # Shell suites (claude-config#95). A whole language of tests was invisible here, and the config
   # repo's suite is entirely shell: a push carrying a one line Python change and the assertion
