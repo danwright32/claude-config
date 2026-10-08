@@ -12030,6 +12030,7 @@ check "#947 a hand edit in the clone does not stop the pull" "[ \"\$rs_rc\" -eq 
 check "#947 the hand edit is kept beside the live file"      "grep -qx 'hand edit in the clone' '$RFHB/agents/other.md.conflict-rsmac'"
 check "#947 and named as kept"                               "line_has \"\$out_rs4\" 'agents/other.md' 'other.md.conflict-rsmac'"
 check "#947 without claiming a refused send"                 "! grep -q 'secret scan last refused' <<< \"\$out_rs4\""
+check "#947 nor calling the copy it just made an earlier one" "! grep -q 'an earlier conflict.*other.md.conflict-rsmac' <<< \"\$out_rs4\""
 # The shared settings file is edited in the repo and never staged from this Mac, so an uncommitted
 # edit to it in the clone is the only copy there is. It is kept, not reverted as if a send rebuilt it.
 rfs_shared_head="$(git -C "$RFRA" show HEAD:payload/settings.shared.json 2>/dev/null || printf '{}')"
@@ -12043,7 +12044,8 @@ out_rs4b="$(env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRI
 dbg "pull over a hand edit to the shared settings: rc=$rs_rc $out_rs4b"
 check "#947 a hand edit to the shared settings does not stop the pull" "[ \"\$rs_rc\" -eq 0 ] && [ \"\$(git -C '$RFRB' rev-parse HEAD)\" = \"\$(git -C '$RFB' rev-parse HEAD)\" ]"
 check "#947 and is kept, since nothing else holds it"        "grep -qx '{\"hand\": \"edit in the clone\"}' '$RFHB/settings.shared.json.conflict-rsmac'"
-check "#947 nor calling the copy it just made an earlier one" "! grep -q 'an earlier conflict.*other.md.conflict-rsmac' <<< \"\$out_rs4\""
+check "#947 and named as kept by the pull that kept it"      "line_has \"\$out_rs4b\" 'settings.shared.json' 'settings.shared.json.conflict-rsmac'"
+check "#947 which does not call that copy an earlier one"    "! grep -q 'an earlier conflict.*settings.shared.json.conflict-rsmac' <<< \"\$out_rs4b\""
 
 # THE AUTOMATIC PATH. The timer runs `sync`, which stages first, and the scan used to end the whole
 # run there, so nothing was received. Now the receiving half still runs, nothing is sent, and the
