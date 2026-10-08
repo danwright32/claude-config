@@ -1207,9 +1207,13 @@ session, although its notice says "the previous version stays loaded" (#960, mea
 this is how the steps card lost `steps` and `steps_done` after #946). So mod-kit, at its own reload,
 touches the manifest of every mod that depends on it and changed since mod-kit last started in that
 session, and Claude Code loads each one again against the new mod-kit. The touch changes only the
-file's time, so the sync carries nothing. A mod that depends on one of the other mods that provide
-something (session-registry, status-bar, is-it-live, addon-notes) is not covered yet (#966). If a
-mod's tools are still missing, a new session brings them back.
+file's time, so the sync carries nothing. The same can happen to a mod that depends on one of the
+other mods that provide something (session-registry, status-bar, is-it-live, addon-notes), whose
+reload mod-kit cannot see (#966). So mod-kit also looks at the start of each turn: a provider that
+changed since the last look has reloaded by then, and each mod that depends on it and changed since
+then is touched the same way, so its tools come back at the end of that turn. A mod that could not
+be touched is named in the session (by a turn's look only the first time) and tried again at the
+next look or mod-kit reload. If a mod's tools are still missing, a new session brings them back.
 
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
