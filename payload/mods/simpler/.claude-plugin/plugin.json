@@ -4,5 +4,5 @@
   "description": "A Simpler button at the top of a long or technical answer, asking for it again in 2 to 3 plain sentences, with a weekly count of which kinds of answer needed it.",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts",
-  "dependencies": ["addon-notes"]
+  "dependencies": ["addon-notes", "mod-kit"]
 }
