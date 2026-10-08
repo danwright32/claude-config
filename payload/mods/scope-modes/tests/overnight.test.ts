@@ -3,6 +3,11 @@ import type { Cmd } from '../hooks/nobuild.ts'
 import { NEVER_ASKED, normRepo, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from '../hooks/overnight.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { githubRepo } from './mod-kit/hooks/repo.ts'
+import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
+
+// mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
+const github = async (remote: string) => githubRepo(remote)
 
 // Sleep mode phase 3 (#834): what is refused overnight, by effect and by the repository a call
 // reaches. Commands are read by mod-kit's own reader (its byte for byte copy under tests/mod-kit),
@@ -348,11 +353,25 @@ describe('what is never approved, and the disk readers', () => {
     expect(normRepo('https://gitlab.com/o/r')).toBeNull()
     expect(normRepo('r')).toBeNull()
   })
-  test('one GitHub repository across the remotes, or none said', () => {
-    expect(repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\norigin\tgit@github.com:o/r.git (push)\n')).toBe('o/r')
+  test('one GitHub repository across the remotes, or none said', async () => {
+    expect(await repoFromRemotes('origin\tgit@github.com:O/R.git (fetch)\norigin\tgit@github.com:o/r.git (push)\n', github)).toBe('o/r')
     // A fork's upstream is where gh may send a comment, so two repositories cannot be resolved.
-    expect(repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\nupstream\thttps://github.com/other/x (fetch)\n')).toBeNull()
-    expect(repoFromRemotes('')).toBeNull()
+    expect(await repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\nupstream\thttps://github.com/other/x (fetch)\n', github)).toBeNull()
+    // Nor can a GitHub remote beside one on another host.
+    expect(await repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\nmirror\thttps://gitlab.com/o/r.git (fetch)\n', github)).toBeNull()
+    expect(await repoFromRemotes('', github)).toBeNull()
+  })
+  // Each remote is read through mod-kit's one reader (#951), on the table every mod's reading is
+  // pinned on, in the lower case the overnight rules compare in.
+  test('a folder with one remote names the GitHub repository mod-kit reads from it, on every shared case (#951)', async () => {
+    const got: { why: string; github: string | null }[] = []
+    for (const f of REPO_FIXTURES) got.push({ why: f.why, github: await repoFromRemotes(f.remote === null ? '' : `origin\t${f.remote.trim()} (fetch)\norigin\t${f.remote.trim()} (push)\n`, github) })
+    expect(got).toEqual(REPO_FIXTURES.map(f => ({ why: f.why, github: f.github?.toLowerCase() ?? null })))
+  })
+  // A reader that fails is never a remote that names nothing: the failure reaches the caller, which
+  // says the folder's repository could not be read.
+  test('a remote the reader cannot read fails the reading, never names none', async () => {
+    await expect(repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\n', async () => { throw new Error('mod-kit is not loaded') })).rejects.toThrow('mod-kit is not loaded')
   })
   test('a primary checkout has its git folder and its common one the same', () => {
     expect(primaryFrom('/Users/x/repo/.git\n/Users/x/repo/.git\n')).toBe(true)

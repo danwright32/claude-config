@@ -1,4 +1,4 @@
-import { repoFromRemotes } from './overnight.ts'
+import { repoFromRemotes, type GithubOf } from './overnight.ts'
 import { etWhen } from './sleep.ts'
 
 // Sleep mode phase 3 (#834): the wake check. The overnight rules (overnight.ts) judge the words of a
@@ -27,11 +27,12 @@ const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
 /**
  * What GitHub and the disk say happened since `since` (ms), read through `run`. `repos` are the
  * repositories the night's notes name, each read whatever the events feed shows (#834 review: a
- * private repository the feed leaves out is still read).
+ * private repository the feed leaves out is still read). `github` reads a remote's address, the
+ * live sync clone's among them, as mod-kit's one reader does (#951).
  */
 export const wakeCheck = async (
   runAny: Runner,
-  o: { since: number; home: string; repos?: string[]; now?: () => number; budgetMs?: number },
+  o: { since: number; home: string; github: GithubOf; repos?: string[]; now?: () => number; budgetMs?: number },
 ): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
@@ -123,9 +124,17 @@ export const wakeCheck = async (
 
   // LESSONS.md, on GitHub through the live sync clone's repository, and the installed copy.
   const remotes = await run(['git', '-C', `${o.home}/claude-config-sync`, 'remote', '-v'])
-  const config = remotes.exitCode === 0 ? repoFromRemotes(remotes.stdout) : null
+  let config: string | null = null
+  let unread = firstLine(remotes.stderr)
+  if (remotes.exitCode === 0) {
+    try {
+      config = await repoFromRemotes(remotes.stdout, o.github)
+    } catch (err) {
+      unread = `its remotes could not be read: ${firstLine(String((err as Error)?.message ?? err))}`
+    }
+  }
   const lessonHits: string[] = []
-  if (!config) unmeasured.push(`LESSONS.md on GitHub was not checked: the config repository could not be read from ~/claude-config-sync (${firstLine(remotes.stderr) || 'no one GitHub remote'})`)
+  if (!config) unmeasured.push(`LESSONS.md on GitHub was not checked: the config repository could not be read from ~/claude-config-sync (${unread || 'no one GitHub remote'})`)
   else {
     addRepo(config)
     if (me) {

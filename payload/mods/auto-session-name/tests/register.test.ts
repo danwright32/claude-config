@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
+import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 
 const MIN = 60_000
 const T0 = 1_000 * MIN
@@ -11,7 +12,44 @@ type Rename = 'set' | 'refused' | 'refused-for-mod' | 'unknown' | 'throws'
 // The repository the session runs in, as $.session.repo() answers it: none by default, so the
 // tests about naming itself see the name alone; 'throws' is a repository that cannot be read.
 type Repo = { root: string; remote: string | null } | null | 'throws'
-type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void>; repo?: Repo }
+type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void>; repo?: Repo; kitFails?: boolean }
+
+// mod-kit, standing in: a mod cannot import another mod's files, and a plugin in a test runs in its
+// own environment, so its repository reader asks the world (`__modkit`), which reads with a byte for
+// byte copy of mod-kit's reader under tests/mod-kit (#951). The kit's other members are never
+// reached here: each refuses by name if one ever is.
+const modKit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const never = (member: string) => async () => { throw new Error(`mod-kit's ${member} is not stood in by these tests`) }
+      const modkit = {
+        repo: async (input: { root?: string | null; remote: string | null }) => {
+          const r = await built.process.run(['__modkit', 'repo', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout) as { github: string | null; name: string | null }
+        },
+        blocked: never('blocked'),
+        card: never('card'),
+        commands: never('commands'),
+        writes: never('writes'),
+        git: never('git'),
+        pipeline: never('pipeline'),
+        workingTree: never('workingTree'),
+        bandRow: never('bandRow'),
+        clearBandRow: never('clearBandRow'),
+        pane: never('pane'),
+        clearPane: never('clearPane'),
+        screen: never('screen'),
+        press: never('press'),
+        clickable: never('clickable'),
+      }
+      return { ...built, modkit }
+    })
+  },
+}
+const withKit = { plugins: [modKit] }
 
 const exchange = (): Msg[] => [
   { role: 'user', text: 'Build the auto session name mod from issue 635', toolUses: [] },
@@ -39,6 +77,12 @@ const world = (on: On, o: Opts = {}) => {
     return { value: w.repo && { ...w.repo, internal: false, name: null } } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  // mod-kit's repository reader, as the stand-in above asks it: mod-kit's own copy (#951).
+  on('process.run', ($, e) => {
+    if (e.argv[0] !== '__modkit' || o.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    const input = JSON.parse(e.argv[2] as string) as { root?: string | null; remote: string | null }
+    return { value: { exitCode: 0, stdout: JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
   on('session.messages', () => {
     if (o.messagesThrow) return { deny: 'transcript unavailable' } as never
     return { value: w.messages } as never
@@ -537,7 +581,7 @@ test('a session whose ten minute write failed is named at the next idle point on
 const CONFIG_WORKTREE = { root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: 'git@github.com:danwright32/claude-config.git' }
 const OVERTURE = { root: '/Users/x/Apps/Overture', remote: 'https://github.com/danwright32/Overture.git' }
 
-test('the name is prefixed with the repository the session runs in, a worktree naming its parent', async ($, on) => {
+test('the name is prefixed with the repository the session runs in, a worktree naming its parent', withKit, async ($, on) => {
   const w = world(on, { repo: CONFIG_WORKTREE })
   await start($)
   await w.clock.advance(10 * MIN)
@@ -545,7 +589,7 @@ test('the name is prefixed with the repository the session runs in, a worktree n
   expect(w.logs).toEqual([])
 })
 
-test('the repository is read when the name is set, so a session that moved is named for where it is', async ($, on) => {
+test('the repository is read when the name is set, so a session that moved is named for where it is', withKit, async ($, on) => {
   const w = world(on, { repo: CONFIG_WORKTREE })
   await start($)
   await w.clock.advance(5 * MIN)
@@ -554,21 +598,21 @@ test('the repository is read when the name is set, so a session that moved is na
   expect(w.renames.map(r => r.args)).toEqual(['(overture) Auto session name mod'])
 })
 
-test('the fallback route carries the prefix too', async ($, on) => {
+test('the fallback route carries the prefix too', withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, rename: 'refused' })
   await start($)
   await w.clock.advance(10 * MIN)
   expect((await prompt($)).sessionTitle).toBe('(overture) Auto session name mod')
 })
 
-test("a reply already carrying this repository's prefix is not doubled", async ($, on) => {
+test("a reply already carrying this repository's prefix is not doubled", withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, replies: ['(overture) Fix export'] })
   await start($)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['(overture) Fix export'])
 })
 
-test("a reply leading with a bracket of its own keeps it, after this repository's prefix", async ($, on) => {
+test("a reply leading with a bracket of its own keeps it, after this repository's prefix", withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, replies: ['(v2) Fix export'] })
   await start($)
   await w.clock.advance(10 * MIN)
@@ -599,6 +643,16 @@ test('the missing repository is still said when the last write of the record fai
   release()
   await w.clock.settle()
   expect(w.logs).toContain('Auto session name named this session without its repository in front: the repository could not be read (git could not read the working copy).')
+})
+
+// #951: the repository's name is mod-kit's reading; a reader that fails is a name read as missing,
+// said as such, never a session in no repository.
+test("mod-kit's reader failing still names the session, without the prefix, and says so", withKit, async ($, on) => {
+  const w = world(on, { repo: OVERTURE, kitFails: true })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
+  expect(w.logs).toEqual(['Auto session name named this session without its repository in front: the repository could not be read (mod-kit is not loaded).'])
 })
 
 test('a repository that cannot be read still names the session, without the prefix, and says so', async ($, on) => {
