@@ -7,7 +7,7 @@
 // Only the decisions live here; register.ts carries them out on the one session whose move of the
 // record succeeded, so the report opens once and the pickers are offered once.
 
-import { jsonData, notesAreData, overnightData } from './overnightdata.ts'
+import { notesAreData, overnightData } from './overnightdata.ts'
 
 /** The BBEdit helper (bbedit is not on PATH); without --front-window it opens in the background. */
 export const BBEDIT = '/Applications/BBEdit.app/Contents/Helpers/bbedit_tool'
@@ -138,10 +138,9 @@ export const morningPrompt = (o: { worker: boolean; issues: ProposedIssue[]; les
   }
   if (fromReport || o.lessons.length) {
     out.push(
-      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>"}${fromReport ? '' : ' as given beside it in the block below (copied as it stands: its \\u escapes are JSON\'s own, so the rule parses back word for word)'}, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan's Add to LESSONS.md.`,
+      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>"}${fromReport ? '' : ' as given beside it in the block below'}, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan's Add to LESSONS.md.`,
     )
-    // The metadata is JSON with its own exact escapes, so the rule reaches the picker word for word (#923 review).
-    data.push(...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${jsonData({ source: 'durable-lesson', rule: l })}`))
+    data.push(...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${JSON.stringify({ source: 'durable-lesson', rule: l })}`))
   }
   if (data.length) out.push(overnightData({ holds: "the night's proposed issues (1.n) and lessons (2.n)", offer: PICKERS, lines: data }))
   return out.join('\n')
