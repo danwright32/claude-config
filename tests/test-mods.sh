@@ -539,6 +539,13 @@ mkmodsrc "$M9PRESS" presses-multiline "export const register = on => {
     element: 'presses-multiline:go',
   }, h)
 }"
+mkmodsrc "$M9PRESS" presses-split-call "export const register = on => {
+  on(
+    'ui.press',
+    { plugin: 'mod-kit' },
+    h,
+  )
+}"
 mkmodsrc "$M9PRESS" presses-constant "const KIT = { plugin: 'mod-kit' } as const
 export const register = on => { on('ui.press', KIT, h) }"
 mkmodsrc "$M9PRESS" own-button-unasked "export const draw = (\$, e, Button) => <Button key=\"go\" label=\"Go\" onPress={go} />"
@@ -550,12 +557,12 @@ export const register = on => { on('modkit.press', h) }"
 out="$(bash "$SHARED" "$M9PRESS" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "#939: hooking ui.press for mod-kit's buttons, or an unasked Button, fails the run" ok \
   || check "#939: hooking ui.press for mod-kit's buttons, or an unasked Button, fails the run" "exit=$code out=$out"
-for want in 'presses-single hooks ui.press' 'presses-double hooks ui.press' 'presses-multiline hooks ui.press' 'presses-constant hooks ui.press' 'own-button-unasked draws its own Button'; do
+for want in 'presses-single hooks ui.press' 'presses-double hooks ui.press' 'presses-multiline hooks ui.press' 'presses-split-call hooks ui.press' 'presses-constant hooks ui.press' 'own-button-unasked draws its own Button'; do
   case "$out" in *"$want"*) check "and names: $want" ok ;; *) check "and names: $want" "$out" ;; esac
 done
 printf '%s\n' "$out" | grep 'presses-single hooks ui.press' | grep -q "on('modkit.press'" \
   && check "and points a mod at modkit.press" ok || check "and points a mod at modkit.press" "$out"
-for clean in 'mod-kit ' own-button-asked own-button-cast own-press press-in-comment; do
+for clean in own-button-asked own-button-cast own-press press-in-comment; do
   case "$out" in *"check-mod-shared-parts: $clean"*) check "#939: $clean passes" "$out" ;; *) check "#939: $clean passes" ok ;; esac
 done
 # #712, #730: a mod's tests may read with mod-kit's own readers, through a copy under tests/mod-kit

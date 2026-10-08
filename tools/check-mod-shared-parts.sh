@@ -160,17 +160,18 @@ for d in "$dir"/*/; do
       fi
     done <<< "$copied"
   fi
-  # press (#939): a file holding a ui.press hook that names mod-kit anywhere, its filter written on
-  # one line or across several, or held in a constant (lessons review of #957). A click alone reaches
-  # such a hook; mod-kit's typed /press raises modkit.press, which it never sees.
+  # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
+  # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review
+  # of #957). A click alone reaches such a hook; mod-kit's typed /press raises modkit.press, which it
+  # never sees. Comments are already taken out, so only code names them.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     grep -qE "[\"'\`]mod-kit[\"'\`]" "$f" || continue
     failed=1
     while IFS= read -r h; do
       echo "check-mod-shared-parts: $name hooks ui.press for mod-kit's buttons at ${f#"$sd"}:${h%%:*}, which a click alone reaches: answer the press in on('modkit.press', ...) instead, which a typed /press reaches too."
-    done <<< "$(grep -nE "on\(\s*[\"'\`]ui\.press[\"'\`]" "$f")"
-  done <<< "$(grep -rlE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' "on\(\s*[\"'\`]ui\.press[\"'\`]" "$sd/hooks" 2>/dev/null)"
+    done <<< "$(grep -nE "[\"'\`]ui\.press[\"'\`]" "$f")"
+  done <<< "$(grep -rlE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' "[\"'\`]ui\.press[\"'\`]" "$sd/hooks" 2>/dev/null)"
   # button (#939): a file drawing its own Button that never asks whether a click reaches it there.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
