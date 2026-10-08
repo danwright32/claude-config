@@ -37,6 +37,7 @@ const modKit: { name: string; register: Register } = {
         git: never('git'),
         pipeline: never('pipeline'),
         workingTree: never('workingTree'),
+        branch: never('branch'),
         bandRow: never('bandRow'),
         clearBandRow: never('clearBandRow'),
         pane: never('pane'),

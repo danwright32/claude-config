@@ -179,6 +179,50 @@ test('the working tree a path sits in is shared as $.modkit.workingTree, a look 
   expect(await ask('relative/CLAUDE.md')).toBe('refused: a working tree is found from an absolute path, not relative/CLAUDE.md')
 })
 
+// #978: where a checkout stands, read once by the kit for every mod. The reader stands in for the
+// design round guard; the disk (a .git folder at /tmp/repo) and git's answers are the test's.
+const branchReader: { name: string; register: Register } = {
+  name: 'branch-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      try {
+        return { deny: JSON.stringify(await $.modkit.branch({ path: String((e as { command?: string }).command) })) }
+      } catch (err) {
+        return { deny: `refused: ${String((err as Error).message ?? err)}` }
+      }
+    })
+  },
+}
+
+test('where a checkout stands is shared as $.modkit.branch: null in no checkout, git asked with a bound in one', { plugins: [branchReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('fs.exists', ($, e) => {
+    if (e.path === '/locked/.git') throw new Error('the disk is gone')
+    return { value: e.path === '/tmp/repo/.git' } as never
+  })
+  const runs: { argv: string; timeoutMs?: number }[] = []
+  const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
+  on('process.run', ($, e) => {
+    runs.push({ argv: e.argv.join(' '), timeoutMs: e.init?.timeoutMs })
+    const sub = e.argv.slice(3).join(' ')
+    if (sub === 'branch --show-current') return out('41-header\n')
+    if (sub === 'worktree list --porcelain') return out('worktree /tmp/repo\nHEAD a\n')
+    return out('origin/main\n')
+  })
+  const ask = async (path: string) => {
+    const r = (await $.tool.call({ tool: 'Bash', command: path } as never)) as { deny?: string; text?: string }
+    return r.deny ?? r.text
+  }
+  expect(JSON.parse(String(await ask('/tmp/repo/app/page.tsx')))).toEqual({ root: '/tmp/repo', main: '/tmp/repo', branch: '41-header', defaultBranch: 'main', isDefault: false, issues: [41] })
+  expect(runs.map(r => r.argv).sort()).toEqual(['git -C /tmp/repo branch --show-current', 'git -C /tmp/repo symbolic-ref --short refs/remotes/origin/HEAD', 'git -C /tmp/repo worktree list --porcelain'])
+  // Each read is bounded well inside the 10 seconds a noun has (docs/mods-design.md, standing rule 4).
+  for (const r of runs) expect(r.timeoutMs).toBe(3_000)
+  runs.length = 0
+  expect(await ask('/tmp/backup/page.tsx')).toBe('null')
+  expect(runs).toEqual([])
+  expect(await ask('/locked/page.tsx')).toMatch(/^refused: /)
+})
+
 // #951: a session's repository, read once by the kit for every mod: the GitHub repository and the
 // name, each its own answer. The reader stands in for a mod, handing the kit what
 // $.session.repo() gives.
