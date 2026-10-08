@@ -42,7 +42,11 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => true,
         // #951: the session's repository, asked of the world (a plugin in a test runs in its own
         // environment), which reads with a byte for byte copy of mod-kit's own reader.
-        repo: async (input: { root?: string | null; remote: string | null }) => JSON.parse((await built.process.run(['__modkit', 'repo', JSON.stringify(input)])).stdout),
+        repo: async (input: { root?: string | null; remote: string | null }) => {
+          const r = await built.process.run(['__modkit', 'repo', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
@@ -107,7 +111,7 @@ const withKit = { plugins: [modKit] }
 const T0 = 1_800_000_000_000
 const REPO = 'danwright32/slate'
 type Gh = { exitCode: number; stdout: string; stderr?: string }
-type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; repoName: Gh; remote: string | null; copied: boolean; stored?: Record<string, unknown> }
+type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; repoName: Gh; remote: string | null; copied: boolean; stored?: Record<string, unknown>; kitFails?: boolean }
 
 // GitHub, the clipboard, the store, toasts and Claude Code's own band beneath the mod.
 const world = (on: On, init: Partial<World> = {}) => {
@@ -131,6 +135,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('process.run', ($, e) => {
     // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
     if (e.argv[0] === '__modkit') {
+      if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const input = JSON.parse(e.argv[2] as string) as { root?: string | null; remote: string | null }
       return { value: { exitCode: 0, stdout: JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
@@ -499,6 +504,14 @@ test("/live in a checkout whose origin still has the repo's old name lists the c
   await card($, CARD)
   expect(await live($)).toBe('- Live: Filter bookings by venue (#412)')
   expect(w.runs).toContainEqual(['gh', 'repo', 'view', 'danwright32/old-slate', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
+})
+
+// #979 review: mod-kit's reader failing is said as the repository not being read, never as a
+// folder with no GitHub repository, and /live answers rather than throwing.
+test("/live says the session's repository could not be read when mod-kit's reader fails", withKit, async ($, on) => {
+  const { runs } = world(on, { kitFails: true })
+  expect(await live($)).toBe("This session's repository could not be read (mod-kit is not loaded), so its cards cannot be listed.")
+  expect(runs.filter(r => r[0] === 'gh')).toEqual([])
 })
 
 test('/live says so when GitHub cannot be asked for the repo\'s current name, and lists what is kept under the remote\'s', withKit, async ($, on) => {

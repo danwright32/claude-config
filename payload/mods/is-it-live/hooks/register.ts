@@ -290,8 +290,14 @@ export const register: Register = on => {
 
   on('command.run', { command: 'live' }, async $ => {
     // owner/name from the session's origin, read by mod-kit's one reader (#951).
-    const here = await $.session.repo()
-    const repo = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
+    // A reading that fails is said as that, never as a folder with no GitHub repository (#979 review).
+    let repo: string | null
+    try {
+      const here = await $.session.repo()
+      repo = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
+    } catch (err) {
+      return { text: `This session's repository could not be read (${String((err as Error)?.message ?? err)}), so its cards cannot be listed.` }
+    }
     if (!repo) return { text: 'This folder has no GitHub repository, so it has no cards.' }
     // Cards are kept under the name GitHub's own link gives the repository, which after a rename is
     // not the name a checkout's origin may still carry, so GitHub is asked for its name now (it
