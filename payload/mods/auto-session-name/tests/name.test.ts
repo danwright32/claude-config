@@ -132,28 +132,38 @@ test('a name is prefixed with its repository in brackets', async () => {
 test('a name that already carries the right prefix is never doubled', async () => {
   expect(withRepo('overture', '(overture) Fix export')).toBe('(overture) Fix export')
   expect(withRepo('overture', '(overture) (overture) Fix export')).toBe('(overture) Fix export')
+  expect(withRepo('overture', '(overture)')).toBe('(overture)')
 })
 
 test("a stale prefix from another repository is replaced by this one's", async () => {
   expect(withRepo('overture', '(claude-config) Fix export')).toBe('(overture) Fix export')
-  expect(withRepo('bidspoke', '(project enrollment tracker pet) Fix export')).toBe('(bidspoke) Fix export')
+  expect(withRepo('bidspoke', '(repo-digest) (account_room) Fix export')).toBe('(bidspoke) Fix export')
+  expect(withRepo('bidspoke', '(sleep2) Fix export')).toBe('(bidspoke) Fix export')
 })
 
 test('brackets that are part of the name, not a repository, are kept', async () => {
-  // A repository prefix is always lower case, so a bracketed word with a capital is the name's own.
+  // A capital, or a space, never appears in a repository slug, so these are the name's own.
   expect(withRepo('overture', '(WIP) Fix export')).toBe('(overture) (WIP) Fix export')
+  expect(withRepo('overture', '(two parts) Fix export')).toBe('(overture) (two parts) Fix export')
+  // A plain lower case word reads the same as a tag Haiku wrote, so it is kept rather than lost
+  // (#948 review): only this repository's own label is taken as a prefix in that shape.
+  expect(withRepo('overture', '(wip) Fix export')).toBe('(overture) (wip) Fix export')
+  expect(withRepo('overture', '(draft) Fix export')).toBe('(overture) (draft) Fix export')
+  expect(withRepo('claude-config', '(overture) Fix export')).toBe('(claude-config) (overture) Fix export')
 })
 
 test('a reply carrying a repository prefix is cleaned to the name alone, and a prefix with no name is empty', async () => {
   expect(cleanName('(claude-config) Fix export')).toEqual({ name: 'Fix export' })
-  expect(cleanName('"(overture) Fix export."')).toEqual({ name: 'Fix export' })
-  expect(cleanName('(overture)')).toEqual({ refused: 'empty' })
+  expect(cleanName('"(repo-digest) Fix export."')).toEqual({ name: 'Fix export' })
+  expect(cleanName('(claude-config)')).toEqual({ refused: 'empty' })
   expect(cleanName('(WIP) Fix export')).toEqual({ name: '(WIP) Fix export' })
+  expect(cleanName('(wip) Fix export')).toEqual({ name: '(wip) Fix export' })
+  expect(cleanName('(draft) Fix export')).toEqual({ name: '(draft) Fix export' })
 })
 
 test('with no repository the name goes unprefixed, and a stale prefix still goes', async () => {
   expect(withRepo(null, 'Fix export')).toBe('Fix export')
-  expect(withRepo(null, '(overture) Fix export')).toBe('Fix export')
+  expect(withRepo(null, '(claude-config) Fix export')).toBe('Fix export')
 })
 
 test('the prefix counts toward the 60 character cap, and the name is what gets shortened', async () => {

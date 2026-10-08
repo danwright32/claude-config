@@ -17,17 +17,26 @@ const LONG_DASH = new RegExp('[\\u2012\\u2013\\u2014\\u2015\\u2212]', 'g')
 const WRAPPERS = new RegExp('^[\\s"\'`*_\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+|[\\s"\'`*_\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+$', 'g')
 
 // The repository prefix every name this mod sets starts with (#945): `(claude-config) Fix export`.
-// A label is the repository's name in lower case with no brackets, so a bracketed run with neither
-// a bracket nor a capital in it is read as a prefix; `(WIP)` is the name's own and is kept.
-const REPO_PREFIX = /^\(([^()\p{Lu}]+)\)(?:\s+|$)/u
-// Room for the name: a label is cut to this, so at least 27 of the 60 characters stay the name's.
+const LEAD_IN = /^\(([^()]+)\)(?:\s+|$)/
+// Another repository's prefix is told from the name's own bracketed word by shape: a slug, lower
+// case with no space, holding a hyphen, dot, underscore or digit (claude-config, repo-digest). A
+// plain word like (wip), (draft) or (overture) reads the same as a tag Haiku wrote, so it is kept
+// unless it is this repository's own label: losing a word of the name is worse than a second
+// bracket, which /rename can take off (#948 review).
+const OTHER_REPO = /^(?=[a-z0-9._-]*[-._\d])[a-z0-9._-]+$/
+// Room for the name: a label is cut to this, so with `(` and `) ` at least 26 of the 60 characters
+// stay the name's.
 const LABEL_CHARS = 30
 const WORKTREES = '/.claude/worktrees/'
 
-/** The name with any repository prefixes in front of it taken off. */
-const unprefixed = (name: string): string => {
+/** The name with any repository prefixes in front of it taken off: this repository's, or a slug. */
+const unprefixed = (name: string, label: string | null): string => {
   let rest = name.trim()
-  for (let m = REPO_PREFIX.exec(rest); m; m = REPO_PREFIX.exec(rest)) rest = rest.slice(m[0].length)
+  for (let m = LEAD_IN.exec(rest); m; m = LEAD_IN.exec(rest)) {
+    const inner = m[1] as string
+    if (inner !== label && !OTHER_REPO.test(inner)) break
+    rest = rest.slice(m[0].length)
+  }
   return rest
 }
 
@@ -42,7 +51,7 @@ export const cleanName = (reply: string): Cleaned => {
   name = name.replace(LONG_DASH, ' ').replace(/(^|\s)-+(\s|$)/g, ' ')
   name = name.replace(/[.\s]+$/, '').replace(WRAPPERS, '').replace(/\s+/g, ' ').trim()
   // A prefix Haiku copied from the conversation is not the name: the right one goes on at naming.
-  name = unprefixed(name)
+  name = unprefixed(name, null)
   if (!/[\p{L}\p{N}]/u.test(name)) return { refused: 'empty' }
   if (name.split(' ').length > MAX_WORDS || name.length > MAX_CHARS) return { refused: 'too-long' }
   return { name }
@@ -75,9 +84,11 @@ export const repoLabel = (repo: { root: string; remote: string | null } | null):
  * the 60 character cap, and the name is what is shortened, at a word where one fits.
  */
 export const withRepo = (label: string | null, name: string): string => {
-  const rest = unprefixed(name) || name.trim()
-  if (!label) return rest
+  const rest = unprefixed(name, label)
+  if (!label) return rest || name.trim()
   const head = `(${label}) `
+  // A name that was only this repository's prefix is the prefix alone, never the prefix twice.
+  if (!rest) return head.trim()
   const room = MAX_CHARS - head.length
   if (rest.length <= room) return head + rest
   let kept = ''
