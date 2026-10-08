@@ -124,16 +124,28 @@ const ENTRIES: Entry[] = [
   {"method":"commands","input":{"command":"make >& notes.txt"},"want":[["make",">&","notes.txt"]]},
   {"method":"git","input":{"words":["make",">&","notes.txt"]},"want":null},
   {"method":"writes","input":{"command":"make >& notes.txt","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
-  {"method":"commands","input":{"command":"cat <<EOF\nnote $(echo done >> notes.txt)\nEOF"},"want":[["cat","<<EOF"]]},
+  {"method":"commands","input":{"command":"cat <<EOF\nnote $(echo done >> notes.txt)\nEOF"},"want":[["echo","done",">>","notes.txt"],["cat","<<EOF"]]},
   {"method":"git","input":{"words":["cat","<<EOF"]},"want":null},
   {"method":"writes","input":{"command":"cat <<EOF\nnote $(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
-  {"method":"commands","input":{"command":"echo \"note `echo done >> notes.txt`\""},"want":[["echo","note `echo done >> notes.txt`"]]},
+  {"method":"commands","input":{"command":"echo \"note `echo done >> notes.txt`\""},"want":[["echo","done",">>","notes.txt"],["echo","note `echo done >> notes.txt`"]]},
   {"method":"git","input":{"words":["echo","note `echo done >> notes.txt`"]},"want":null},
   {"method":"writes","input":{"command":"echo \"note `echo done >> notes.txt`\"","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}},
   {"method":"commands","input":{"command":"cat <<'EOF'\nnote $(echo done >> notes.txt)\nEOF"},"want":[["cat","<<EOF"]]},
   {"method":"writes","input":{"command":"cat <<'EOF'\nnote $(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
   {"method":"commands","input":{"command":"echo 'note `echo done >> notes.txt`'"},"want":[["echo","note `echo done >> notes.txt`"]]},
   {"method":"writes","input":{"command":"echo 'note `echo done >> notes.txt`'","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo \"on $(git checkout main)\""},"want":[["git","checkout","main"],["echo","on $(git checkout main)"]]},
+  {"method":"git","input":{"words":["echo","on $(git checkout main)"]},"want":null},
+  {"method":"writes","input":{"command":"echo \"on $(git checkout main)\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo \"on `git checkout main`\""},"want":[["git","checkout","main"],["echo","on `git checkout main`"]]},
+  {"method":"git","input":{"words":["echo","on `git checkout main`"]},"want":null},
+  {"method":"writes","input":{"command":"echo \"on `git checkout main`\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cat <<EOF\non $(git checkout main)\nEOF"},"want":[["git","checkout","main"],["cat","<<EOF"]]},
+  {"method":"writes","input":{"command":"cat <<EOF\non $(git checkout main)\nEOF","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"echo 'on $(git checkout main)'"},"want":[["echo","on $(git checkout main)"]]},
+  {"method":"writes","input":{"command":"echo 'on $(git checkout main)'","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cat <<'EOF'\non $(git checkout main)\nEOF"},"want":[["cat","<<EOF"]]},
+  {"method":"writes","input":{"command":"cat <<'EOF'\non $(git checkout main)\nEOF","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
 ]
 
 const ask = (e: Entry): unknown => {
@@ -144,8 +156,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 124 entries', () => {
-    expect(ENTRIES.length).toBe(124)
+  test('holds 136 entries', () => {
+    expect(ENTRIES.length).toBe(136)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {
