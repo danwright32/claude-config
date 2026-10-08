@@ -246,7 +246,12 @@ TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md LESSONS-CORE.txt)
 # hook. Regenerating one locally costs nothing.
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-* \
   --exclude=__pycache__ --exclude=__pycache__/ --exclude=*.pyc \
-  --exclude=.claude-plugin/types/)
+  --exclude=.claude-plugin/types/ --exclude=*.local.json)
+# *.local.json is a file one Mac keeps for itself, often holding a secret: the tracker skill's
+# config.local.json carries its Apps Script write token, and the repository is public
+# (claude-config#675). Excluded here, at any depth in every mirrored tree, so the send never stages
+# it into the payload and the apply's --delete never removes the receiving Mac's own copy. A skill's
+# .gitignore alone would keep it out of a commit but not out of either rsync.
 # .claude-plugin/types/ is written by Claude Code itself into every plugin folder it loads, on every
 # load, describing THAT Mac's build and connected MCP tools (measured 2026-10-03, claude-config#606).
 # It is per Mac output, not config: carried, the two Macs would overwrite each other's on every
@@ -3641,8 +3646,8 @@ record_mods_seen(){
 # the shared copy until another Mac sent it back. So an empty folder is read as a deletion only where
 # this Mac held files in that tree before (L5).
 TREES_SEEN_FILE="$SYNC_REPO/.trees-seen"
-# Does this tree hold a file a send would carry? Placeholders, OS litter, bytecode and the engine's
-# generated plugin types are not content. $2.. are the --exclude= values the send uses for the tree
+# Does this tree hold a file a send would carry? Placeholders, OS litter, bytecode, the engine's
+# generated plugin types and a Mac's own *.local.json (#675) are not content. $2.. are the --exclude= values the send uses for the tree
 # (the plugin managed skills), matched against each file's first path component.
 tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
   local dir="$1" f rel top e n skip; shift
@@ -3652,7 +3657,7 @@ tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
     [ -n "$f" ] || continue
     rel="${f#"$dir"/}"; top="${rel%%/*}"
     # At the top of the tree as well as below it (review of #785).
-    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|__pycache__/*|*/__pycache__/*|.claude-plugin/types/*|*/.claude-plugin/types/*|*.conflict-*) continue ;; esac
+    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|__pycache__/*|*/__pycache__/*|.claude-plugin/types/*|*/.claude-plugin/types/*|*.conflict-*|*.local.json) continue ;; esac
     skip=""
     for e in "$@"; do
       n="${e#--exclude=}"
