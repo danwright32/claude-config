@@ -12030,6 +12030,19 @@ check "#947 a hand edit in the clone does not stop the pull" "[ \"\$rs_rc\" -eq 
 check "#947 the hand edit is kept beside the live file"      "grep -qx 'hand edit in the clone' '$RFHB/agents/other.md.conflict-rsmac'"
 check "#947 and named as kept"                               "line_has \"\$out_rs4\" 'agents/other.md' 'other.md.conflict-rsmac'"
 check "#947 without claiming a refused send"                 "! grep -q 'secret scan refused' <<< \"\$out_rs4\""
+# The shared settings file is edited in the repo and never staged from this Mac, so an uncommitted
+# edit to it in the clone is the only copy there is. It is kept, not reverted as if a send rebuilt it.
+rfs_shared_head="$(git -C "$RFRA" show HEAD:payload/settings.shared.json 2>/dev/null || printf '{}')"
+printf '{"hand": "edit in the clone"}\n' > "$RFRB/payload/settings.shared.json"
+printf '%s\n' "$rfs_shared_head" | jq -c '. + {"from": "the other Mac"}' > "$RFRA/payload/settings.shared.json"
+git -C "$RFRA" add -- payload/settings.shared.json
+git -C "$RFRA" -c user.name=suite -c user.email=suite@localhost commit -qm "the other Mac changes the shared settings"
+git -C "$RFRA" push -q 2>/dev/null
+rs_rc=0
+out_rs4b="$(env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRIPT" pull 2>&1)" || rs_rc=$?
+dbg "pull over a hand edit to the shared settings: rc=$rs_rc $out_rs4b"
+check "#947 a hand edit to the shared settings does not stop the pull" "[ \"\$rs_rc\" -eq 0 ] && [ \"\$(git -C '$RFRB' rev-parse HEAD)\" = \"\$(git -C '$RFB' rev-parse HEAD)\" ]"
+check "#947 and is kept, since nothing else holds it"        "grep -qx '{\"hand\": \"edit in the clone\"}' '$RFHB/settings.shared.json.conflict-rsmac'"
 check "#947 nor calling the copy it just made an earlier one" "! grep -q 'an earlier conflict.*other.md.conflict-rsmac' <<< \"\$out_rs4\""
 
 # THE AUTOMATIC PATH. The timer runs `sync`, which stages first, and the scan used to end the whole
@@ -12076,6 +12089,16 @@ out_rs7="$(env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRIP
 dbg "send once clear again: rc=$rs_rc $out_rs7"
 check "#947 once the scan passes, the edit that waited goes out" "[ \"\$rs_rc\" -eq 0 ] && [ \"\$(git -C '$RFB' show HEAD:payload/agents/mine.md 2>/dev/null)\" = 'B new 2' ]"
 check "#947 still without the credential, ever"            "! rs_shared_has_secret"
+
+# A send let through with SYNC_SKIP_SECRET_SCAN=1 is no longer refused, so the record of the last
+# refusal goes with it, or a later pull would blame a refusal that no longer applies.
+RFKH="$WORK/refused-skip-home"; mkdir -p "$RFKH/agents"; echo '{"hooks":{}}' > "$RFKH/settings.json"
+RFKR="$WORK/refused-skip-repo"; mkdir -p "$RFKR"
+printf 'export AWS_KEY=%s\n' "$rs_secret" > "$RFKH/agents/leak.md"
+env "${rs_env[@]}" SYNC_NO_GIT=1 CLAUDE_HOME="$RFKH" SYNC_REPO="$RFKR" bash "$SCRIPT" push >/dev/null 2>&1 || true
+check "#947 a refused push records the refusal (control)"    "grep -q 'agents/leak.md' '$RFKR/.send-refused'"
+env "${rs_env[@]}" SYNC_NO_GIT=1 SYNC_SKIP_SECRET_SCAN=1 CLAUDE_HOME="$RFKH" SYNC_REPO="$RFKR" bash "$SCRIPT" push >/dev/null 2>&1 || true
+check "#947 a send let past the scan clears that record"     "[ ! -e '$RFKR/.send-refused' ]"
 
 # WHEN WHAT ARRIVES IS claude-sync ITSELF, which is how the fix for a wrong scan arrives. The sync
 # hands off to the new copy to finish the apply, and that copy must still know the send was refused:

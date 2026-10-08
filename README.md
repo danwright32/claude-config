@@ -1394,7 +1394,7 @@ following the overnight rules for hours, and a real usage limit.
 
 ## Local state (per Mac, never synced)
 
-Sixteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` and `lesson-citations.tsv` also sit outside
 `payload/` and are the two exceptions: both are tracked and shared on purpose. A band nobody else
 can see cannot stop anybody else claiming a number, and a record of what a citation was written

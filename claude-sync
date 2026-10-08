@@ -4165,7 +4165,12 @@ $pf"*) continue ;; esac
 # else a conservative set of distinctive token shapes (low false-positive).
 # Override with SYNC_SKIP_SECRET_SCAN=1 if it ever flags a legitimate string.
 scan_secrets(){
-  [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ] && return 0
+  # Skipping the scan still clears the record of its last refusal (claude-config#947): the send it
+  # refused is no longer being refused, and a later pull must not name it as the cause of anything.
+  if [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ]; then
+    [ -z "${SEND_REFUSED_FILE:-}" ] || rm -f "$SEND_REFUSED_FILE" 2>/dev/null || true
+    return 0
+  fi
   [ -d "$PAYLOAD" ] || return 0
   local allow="$SYNC_REPO/.secret-allowlist"
   local q="[\"']?" pat apat
@@ -7124,7 +7129,7 @@ commits_in_words(){   # $1 = a count
 # anything the live file does not (an edit made in the clone by hand) is kept beside the live file
 # as `<file>.conflict-<host>`, before anything is reverted, which is where status already looks for
 # the only surviving copy of something (L5). The files rebuilt from this Mac's own config by every
-# send (the lessons index, the hooks fragment, the shared settings) need no copy: the next send
+# send (the lessons index and the hooks fragment) need no copy: the next send
 # writes them over the clone's copy whatever it holds.
 #
 # Never `git stash`: the stash is shared by every worktree of a repository, and a pop takes whatever
@@ -7139,10 +7144,12 @@ uncommitted_paths(){   # $1 = a pathspec, or nothing for the whole repo -> paths
 pending_payload_edits(){ uncommitted_paths payload; }
 
 # Files a send rebuilds from this Mac's config every time, so a pending copy of one is never the only
-# copy of anything: the lessons index, and the two fragments taken out of settings.json.
+# copy of anything: the lessons index, and the hooks fragment taken out of settings.json. NOT the
+# shared settings: those are edited in the repo and never staged from this Mac (#695), so an
+# uncommitted edit to them in the clone is the only copy there is, and it is kept like any other.
 payload_rebuilt_by_send(){   # $1 = path relative to the payload
   is_derived_rule_file "$1" && return 0
-  case "$1" in settings.hooks.json|"$SHARED_SETTINGS_FILE") return 0 ;; esac
+  case "$1" in settings.hooks.json) return 0 ;; esac
   return 1
 }
 
