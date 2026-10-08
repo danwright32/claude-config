@@ -228,16 +228,28 @@ const KIT = new Map<string, unknown>([
   ["commands {\"command\":\"make >& notes.txt\"}", [["make",">&","notes.txt"]]],
   ["git {\"words\":[\"make\",\">&\",\"notes.txt\"]}", null],
   ["writes {\"command\":\"make >& notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
-  ["commands {\"command\":\"cat <<EOF\\nnote $(echo done >> notes.txt)\\nEOF\"}", [["cat","<<EOF"]]],
+  ["commands {\"command\":\"cat <<EOF\\nnote $(echo done >> notes.txt)\\nEOF\"}", [["echo","done",">>","notes.txt"],["cat","<<EOF"]]],
   ["git {\"words\":[\"cat\",\"<<EOF\"]}", null],
   ["writes {\"command\":\"cat <<EOF\\nnote $(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
-  ["commands {\"command\":\"echo \\\"note `echo done >> notes.txt`\\\"\"}", [["echo","note `echo done >> notes.txt`"]]],
+  ["commands {\"command\":\"echo \\\"note `echo done >> notes.txt`\\\"\"}", [["echo","done",">>","notes.txt"],["echo","note `echo done >> notes.txt`"]]],
   ["git {\"words\":[\"echo\",\"note `echo done >> notes.txt`\"]}", null],
   ["writes {\"command\":\"echo \\\"note `echo done >> notes.txt`\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
   ["commands {\"command\":\"cat <<'EOF'\\nnote $(echo done >> notes.txt)\\nEOF\"}", [["cat","<<EOF"]]],
   ["writes {\"command\":\"cat <<'EOF'\\nnote $(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
   ["commands {\"command\":\"echo 'note `echo done >> notes.txt`'\"}", [["echo","note `echo done >> notes.txt`"]]],
   ["writes {\"command\":\"echo 'note `echo done >> notes.txt`'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo \\\"on $(git checkout main)\\\"\"}", [["git","checkout","main"],["echo","on $(git checkout main)"]]],
+  ["git {\"words\":[\"echo\",\"on $(git checkout main)\"]}", null],
+  ["writes {\"command\":\"echo \\\"on $(git checkout main)\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo \\\"on `git checkout main`\\\"\"}", [["git","checkout","main"],["echo","on `git checkout main`"]]],
+  ["git {\"words\":[\"echo\",\"on `git checkout main`\"]}", null],
+  ["writes {\"command\":\"echo \\\"on `git checkout main`\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cat <<EOF\\non $(git checkout main)\\nEOF\"}", [["git","checkout","main"],["cat","<<EOF"]]],
+  ["writes {\"command\":\"cat <<EOF\\non $(git checkout main)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo 'on $(git checkout main)'\"}", [["echo","on $(git checkout main)"]]],
+  ["writes {\"command\":\"echo 'on $(git checkout main)'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cat <<'EOF'\\non $(git checkout main)\\nEOF\"}", [["cat","<<EOF"]]],
+  ["writes {\"command\":\"cat <<'EOF'\\non $(git checkout main)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
 ])
 
 type Judge = string | 'no-answer'
@@ -913,6 +925,21 @@ test('a write a command substitution makes, in an unquoted heredoc or on the com
   for (const command of ["cat <<'EOF'\nnote $(echo done >> notes.txt)\nEOF", "echo 'note `echo done >> notes.txt`'"]) await $.tool.call(bash(command, 'sub2'))
   expect(w.reached).toEqual(['Bash', 'Bash'])
   expect(w.prompts.length).toBe(2)
+})
+
+// #974: mod-kit's command reader now gives the commands a substitution runs as commands of their own,
+// so a branch switch inside $(...) or backticks, in a checkout another session works in, is judged as
+// one on the command line is; in single quotes or a quoted heredoc it is text and goes through.
+test('a branch switch a command substitution runs is judged; quoted, it is text', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them')], judge: '{"verdict":"Stop","reason":"They have uncommitted work."}' })
+  for (const command of ['echo "on $(git checkout main)"', 'echo "on `git checkout main`"', 'cat <<EOF\non $(git checkout main)\nEOF']) {
+    const r = await $.tool.call(bash(command, 'sub3'))
+    expect(`${command}: ${refusal(r)}`).toBe(`${command}: Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.`)
+  }
+  expect(w.reached).toEqual([])
+  for (const command of ["echo 'on $(git checkout main)'", "cat <<'EOF'\non $(git checkout main)\nEOF"]) await $.tool.call(bash(command, 'sub4'))
+  expect(w.reached).toEqual(['Bash', 'Bash'])
+  expect(w.prompts.length).toBe(3)
 })
 
 // #707: a guard that refuses decides before this one judges, whichever order the mods load in. The

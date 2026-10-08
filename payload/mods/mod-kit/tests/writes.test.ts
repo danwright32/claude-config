@@ -660,6 +660,15 @@ describe('writes: what the shell runs inside a command substitution (#965)', () 
     // Once, also where a heredoc never ended is read both as a body and as commands (lessons review of #972).
     expect(read("cat <<EOF\n$(python3 -c 'import os; os.remove(\"x.md\")')").unnamed.map(u => u.what)).toEqual(['an inline python3 script'])
   })
+  // #974: the substitutions are now given by the command reader, which reads a shell's own script as
+  // the commands that shell runs, so one there is read too; a quoted heredoc fed to anything but a
+  // shell stays data.
+  test("a substitution in a shell's own script, single quoted or fed as a quoted heredoc, is read; fed to another program it is data", () => {
+    expect(changed("bash -c 'echo $(rm old.txt)'")).toEqual([`remove ${CWD}/old.txt`])
+    expect(changed("sh <<'EOF'\nx=`touch new.md`\nEOF")).toEqual([`touch ${CWD}/new.md`])
+    expect(paths("echo 'echo \"$(cat a >> b.md)\"' | zsh")).toEqual([`${CWD}/b.md`])
+    expect(read("python3 - <<'EOF'\nprint('$(rm old.txt)')\nEOF").changes).toEqual([])
+  })
   test('a file the line names and a substitution also edits or copies onto keeps what the substitution says of it (lessons review of #972)', () => {
     expect(read("echo x > f.md; echo \"$(sed -i '' s/a/b/ f.md)\"").files).toEqual([{ word: 'f.md', path: `${CWD}/f.md`, edits: true }])
     expect(read('echo x > d; echo "$(cp /tmp/a.md d)"').files).toEqual([{ word: 'd', path: `${CWD}/d`, sources: ['/tmp/a.md'], mayBeFolder: true }])

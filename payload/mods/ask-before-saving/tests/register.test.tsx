@@ -624,6 +624,20 @@ test('a substitution that writes lasting memory, in an unquoted heredoc or at th
   expect(w.ran.map(r => r.input.command)).toEqual(text)
 })
 
+// #974: mod-kit's command reader now gives the commands a substitution runs, a python program among
+// them. A program inside a substitution was never one whose sentences were taken out of what the
+// command mentions (#940), so a write there whose file its words do not name is still judged by the
+// lasting memory the command mentions, as it was before the reader gave it.
+test('a python program a substitution runs, writing a file its words do not name, is still judged by what the command mentions (#974)', withKit, async ($, on) => {
+  const w = world($, on)
+  const command = `x=$(python3 -c "import sys; open(sys.argv[1],'w').write('see ${MEM} first')" out.txt)`
+  expect(pipeline(command).some(c => c.substitution && c.language === 'python')).toBe(true)
+  const why = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(why).toContain(ASKS)
+  expect(why).toContain(`this may write lasting memory (${MEM})`)
+  expect(w.ran).toEqual([])
+})
+
 test('a write whose file cannot be read from the command is still asked about, and the refusal says which file it took to be written and why (#940)', withKit, async ($, on) => {
   const w = world($, on)
   const why = refusalOf(await call($, { tool: 'Bash', command: `python3 - <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('${MEM}')\nEOF` }))

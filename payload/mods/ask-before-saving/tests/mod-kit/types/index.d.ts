@@ -58,8 +58,11 @@ export type ModKit = {
    * it runs, what a find -exec runs read after the find as a command of its own (#730), a subshell's
    * parentheses each a command of their own (`['(']`, `[')']`), while one inside a word (`$(`, `<(`)
    * stays part of it, a case's `case WORD in` and `esac` each a command, its patterns none, and an
-   * input redirect (`<file`, `<<EOF`, `<<<text`) a word of its own however it is spaced. The one
-   * reader every mod uses (L613).
+   * input redirect (`<file`, `<<EOF`, `<<<text`) a word of its own however it is spaced. The
+   * commands each command substitution runs (`$(...)` or backticks, on the command line, in an
+   * unquoted heredoc's body or in a shell's own script, nested ones too) come before the command
+   * they sit in (#974); one in single quotes, `$'...'`, a comment or a quoted heredoc body is text.
+   * The one reader every mod uses (L613).
    */
   commands: (input: { command: string }) => Promise<string[][]>
   /**
@@ -115,6 +118,9 @@ export type ModKit = {
    * input (`3<<EOF`), absent when it is; `replaced` marks one on standard input that a later
    * redirect there (`< file`, `<<<`, another heredoc) replaces, so it is not what the command reads. A heredoc inside a word (`"$(cat <<'EOF' ... )"`) feeds no command
    * here, and one that never ends has no body (its lines are read as commands).
+   *
+   * `substitution` marks a command a command substitution runs (#974), given before the command it
+   * sits in, so a guard can tell it from one on the command line where that matters.
    */
   pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
   /**
@@ -231,6 +237,7 @@ export type ModKitCommand = {
   program?: ModKitProgram
   script?: { files: string[]; stdin?: true }
   verdict?: ModKitCodeVerdict
+  substitution?: true
 }
 
 /** The languages whose inline code the reader judges. */
