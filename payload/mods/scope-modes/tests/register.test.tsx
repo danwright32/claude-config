@@ -232,6 +232,12 @@ type Opts = {
   lsFails?: string
   /** Reading this session's folder throws (#836: after the unanswered list is written). */
   cwdThrows?: boolean
+  /** The session registry's answer as raw text, in place of the usual one (#837). */
+  registryAnswer?: string
+  /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
+  promptFails?: number
+  /** Opening the report in BBEdit failing (#837): the helper's words, and open -a BBEdit's. */
+  openFails?: { helper?: string; open?: string }
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -273,6 +279,8 @@ const world = (on: On, o: Opts = {}) => {
     releasedBy: [] as string[],
     caffeinated: [] as string[],
     killed: [] as string[],
+    /** Every opening of a file in BBEdit that succeeded, as run (#837). */
+    opened: [] as string[][],
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
@@ -342,6 +350,26 @@ const world = (on: On, o: Opts = {}) => {
       if (o.reportFails?.[op]) return fail(1, o.reportFails[op])
       if (op === 'note') w.appended.push({ file: arg('--record'), line: arg('--line') })
       if (op === 'note' && o.homeGoneAfterNote) w.homeGone = true
+      // The final render leaves the report the record names on the disk (#837: wake opens it).
+      if (op === 'render' && rest.includes('--final')) {
+        try {
+          const rec = JSON.parse(w.files[arg('--record')] ?? '') as { report?: unknown }
+          if (typeof rec.report === 'string') w.files[rec.report] = '# Sleep report\n'
+        } catch {
+          // A record that is not JSON names no report.
+        }
+      }
+      return ok()
+    }
+    // Opening the night's report (#837): the BBEdit helper, then BBEdit by name.
+    if (cmd === '/Applications/BBEdit.app/Contents/Helpers/bbedit_tool') {
+      if (o.openFails?.helper) return fail(1, o.openFails.helper)
+      w.opened.push(argv)
+      return ok()
+    }
+    if (cmd === 'open' && a[0] === '-a' && a[1] === 'BBEdit') {
+      if (o.openFails?.open) return fail(1, o.openFails.open)
+      w.opened.push(argv)
       return ok()
     }
     if (cmd === 'terminal-notifier') {
@@ -388,6 +416,7 @@ const world = (on: On, o: Opts = {}) => {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
       // A registry answer missing its lists, so enrolment throws reading it (#843).
       if (o.registryGarbled) return ok('{}')
+      if (o.registryAnswer !== undefined) return ok(o.registryAnswer)
       return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
     if (cmd === '__verdict') {
@@ -488,6 +517,10 @@ const world = (on: On, o: Opts = {}) => {
     return (outcome === true ? { isDelivered: true } : { isDelivered: false, reason: outcome.refused }) as never
   })
   on('prompt.submit', ($, e) => {
+    if (o.promptFails) {
+      o.promptFails--
+      throw new Error('the prompt could not be entered')
+    }
     w.prompts.push(e.text)
     return { text: e.text, context: e.context } as never
   })
@@ -1366,18 +1399,22 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.")
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. One session that worked overnight has closed since, so its night is only in the report.")
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
   expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
   expect(w.reports[1]).toEqual({ op: 'render', record: moved, final: true })
   expect(w.files[CURRENT]).toBeUndefined()
-  expect(Object.keys(w.files)).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`])
+  expect(Object.keys(w.files).filter(f => f.startsWith(SLEEP))).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
   expect(w.sent).toEqual([{ to: 's2', text: AWAY_TEXT }])
   expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on.')
   expect(w.sent.length).toBe(1)
+  // Away, nothing opens on the Mac (#837): the report waits in the held card for home.
+  expect(w.opened).toEqual([])
+  await command($ as never, 'home')
+  expect(JSON.stringify(w.bands[w.bands.length - 1])).toContain("Open the night's sleep report in BBEdit")
 })
 
 test('two /wake calls at once: only the one whose move succeeds acts', withDeps, async ($, on) => {
@@ -1397,6 +1434,174 @@ test('a move that fails for another reason leaves sleep on and says so', withDep
   await start($ as never, clock)
   expect((await command($ as never, 'wake')).text).toBe(`Sleep mode could not be turned off (mv: rename ${CURRENT} to ${SLEEP}/ended/${T0}-woke-s1.json: Operation not permitted). It is still on.`)
   expect(w.files[CURRENT]).toBeDefined()
+})
+
+// ---- Sleep mode phase 9 (#837): waking opens the report and offers the morning pickers ----
+
+const REPORT = '/Users/x/Downloads/Sleep report 1969-12-31.md'
+const BBEDIT_TOOL = '/Applications/BBEdit.app/Contents/Helpers/bbedit_tool'
+const proposal = (n: Record<string, unknown>) => JSON.stringify({ v: 1, generation: 'g0', at: T0 - MIN, by: 's2', ...n })
+const PROPOSED = [
+  proposal({ kind: 'issue', repo: 'o/r', title: 'Date parse drops the zone', priority: 'priority-p1', labels: ['bug'], milestone: 'Ungrouped', text: 'Seen in parse.ts.' }),
+  proposal({ kind: 'lesson', text: 'Parse a date with its zone.' }),
+].join('\n') + '\n'
+const PROPOSED_AT = '/Users/x/.claude/state/sleep/notes/g0.jsonl'
+const morningOf = (w: { prompts: string[] }) => w.prompts.filter(p => p.startsWith('Dan is up'))
+
+test('/wake opens the report in BBEdit on the front window, says focus moved, and starts the morning turn with the pickers (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [interactive('s2'), { sessionId: 's3' }], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }), [PROPOSED_AT]: PROPOSED } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session and 2 others. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Asked the other session that worked overnight for its summary.`)
+  // Opened only after the final render, so BBEdit shows the finished report.
+  expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', REPORT]])
+  expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
+  // Each other worker summarises its own night; a session that did not work is only told the place.
+  const asks = w.sent.filter(x => x.text.startsWith('Dan is up'))
+  expect(asks.map(x => x.to)).toEqual(['s2'])
+  expect(asks[0]?.text).toMatch(/^Dan is up: sleep mode is off\. Summarise for him/)
+  expect(w.sent.filter(x => x.to === 's3').map(x => x.text)).toEqual(['Dan switched every session on this Mac to home.'])
+  // The waking session's own turn: started once the command is done, with its summary and both pickers.
+  expect(morningOf(w)).toEqual([])
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/^Dan is up: sleep mode is off\. Summarise for him in a few plain lines what this session did overnight/)
+  expect(m).toContain('1.1 o/r: Date parse drops the zone. Seen in parse.ts. [p1, bug, Ungrouped]')
+  expect(m).toContain('2.1 Parse a date with its zone. Metadata: {"source":"durable-lesson","rule":"Parse a date with its zone."}')
+  // Nothing filed and nothing added: no gh issue create, no write to LESSONS.md.
+  expect(w.runs.some(x => x.join(' ').includes('issue create'))).toBe(false)
+  expect(w.fsWrites.some(f => f.endsWith('LESSONS.md'))).toBe(false)
+})
+
+test('two /wake calls at once open the report once, ask each worker once and start one morning turn (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [interactive('s2')], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }), [PROPOSED_AT]: PROPOSED } })
+  await start($ as never, clock)
+  await Promise.all([command($ as never, 'wake'), command($ as never, 'wake')])
+  await clock.settle()
+  expect(w.opened.length).toBe(1)
+  expect(w.sent.filter(x => x.text.startsWith('Dan is up')).length).toBe(1)
+  expect(morningOf(w).length).toBe(1)
+})
+
+test('"I\'m up" carries the morning instruction in its own turn, with the focus line to say first (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED } })
+  await start($ as never, clock)
+  const r = await say($ as never, "I'm up")
+  const ctx = r.context?.join('\n') ?? ''
+  expect(ctx).toMatch(/Dan's message woke sleep mode\. Say so in one line first: "Sleep mode is off\..*Focus moved to BBEdit, where it is open\."/s)
+  expect(ctx).toContain('1.1 o/r: Date parse drops the zone')
+  expect(ctx).toContain('~/.claude/hooks/review/issue-review.md')
+  await clock.settle()
+  // No second turn: this one already carries it.
+  expect(morningOf(w)).toEqual([])
+  expect(w.opened.length).toBe(1)
+})
+
+test('the helper failing falls back to open -a BBEdit, never a bare open (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: [] }) }, openFails: { helper: 'bbedit_tool: No such file or directory' } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'wake')).text).toMatch(/Focus moved to BBEdit, where it is open\.$/)
+  expect(w.opened).toEqual([['open', '-a', 'BBEdit', REPORT]])
+})
+
+test('woken from the phone, nothing opens on the Mac: the report waits in the held card (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: [] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake', 'bridge')
+  expect(r.text).toMatch(/You woke it from your phone, so it was not opened on the Mac: opening it waits in the held card for when you are at the Mac\.$/)
+  expect(w.opened).toEqual([])
+  expect(JSON.stringify(w.bands[w.bands.length - 1])).toContain("Open the night's sleep report in BBEdit")
+})
+
+test('when neither opener works the reply says why, and the report is still named (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: [] }) }, openFails: { helper: 'no helper', open: 'Unable to find application named BBEdit' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(new RegExp(`The night's report is at ${asRegExp(REPORT).source}\\. It could not be opened in BBEdit \\(bbedit_tool: no helper; open -a BBEdit: Unable to find application named BBEdit\\)\\.$`))
+  expect(w.opened).toEqual([])
+  expect(w.runs.some(x => x[0] === 'open' && x[1] !== '-a')).toBe(false)
+})
+
+test('a report that is not on the disk is not opened, and that is said (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: [] }) }, reportFails: { render: 'gh: not logged in' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/is not complete: the report could not be finished \(gh: not logged in\)\. It was not opened: there is no file there\.$/)
+  expect(w.opened).toEqual([])
+})
+
+test('a worker that closed overnight, or that cannot be told, is said rather than counted as asked (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [interactive('s2'), interactive('s3')], sends: [true, true, true, { refused: 'session s3 is busy' }, { refused: 'session s3 is busy' }], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2', 's3', 's4'] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/Asked the other session that worked overnight for its summary\. One session that worked overnight could not be asked for its summary: session s3 is busy\. One session that worked overnight has closed since, so its night is only in the report\.$/)
+  expect(w.sent.filter(x => x.text.startsWith('Dan is up')).map(x => x.to)).toEqual(['s2', 's3', 's3'])
+})
+
+test('a session registry that answers garbled never loses the wake reply: the summaries are said as not asked (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { registryGarbled: true, files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/^Sleep mode is off\..*The other sessions that worked overnight could not be asked for their summaries: .+\.$/s)
+  // Telling the others the place met the same answer, and says so rather than throwing.
+  expect(r.text).toMatch(/The other sessions could not be told: the session registry's answer could not be read \(.+?\)\. The night's report/)
+  expect(w.files[CURRENT]).toBeUndefined()
+})
+
+test('a registry answer that names a record it could not read and then breaks keeps both said (#837)', withDeps, async ($, on) => {
+  const { clock } = world(on, { registryAnswer: JSON.stringify({ open: 7, closed: [], unreadable: ['s7.json'], selfId: 's1' }), files: { [CURRENT]: asleepRecord({ workers: [] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/The other sessions could not be told: the session registry could not read s7\.json; the session registry's answer could not be read \(.+?\)\./)
+})
+
+test('notes that cannot be read are said in the morning turn, pointing at the report (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `not json\n${PROPOSED}` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/One line of the night's notes could not be read, so a proposal may be missing here; the night's report counts it too\./)
+  expect(m).toContain('1.1 o/r: Date parse drops the zone')
+})
+
+test('a night with no proposals still starts the summary turn, and offers no picker (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
+})
+
+test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he is up, once a night, and never ends sleep (#837)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  // 6:59 AM ET on Thu Jan 1 1970 (EST) is 11:59 UTC: not yet.
+  await clock.set(Date.UTC(1970, 0, 1, 11, 59))
+  expect((await say($ as never, 'how did it go')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going', 'peer')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+  const r = await say($ as never, 'how is it going')
+  expect(r.context?.join('\n')).toMatch(/Dan wrote while sleep mode is on, at 7:00 AM ET on Thu Jan 1\. Before anything else, ask him in one line whether he is up: "I'm up" or \/wake ends sleep mode in every session\./)
+  expect(w.files[CURRENT]).toBeDefined()
+  expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+test('the ask whether he is up counts as made only once its prompt went in, so a prompt that failed asks again (#837)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, promptFails: 1 })
+  await start($ as never, clock)
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  await expect(say($ as never, 'how is it going')).rejects.toThrow()
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+})
+
+test('a message from Dan in the evening while asleep does not ask whether he is up (#837)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: Date.UTC(1970, 0, 2, 17) }) } })
+  await start($ as never, clock)
+  // 7:00 PM ET on Thu Jan 1 is 00:00 UTC on Jan 2: past the window.
+  await clock.set(Date.UTC(1970, 0, 2, 0, 0))
+  expect((await say($ as never, 'still going?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
 })
 
 test("Dan's own \"I'm up\" wakes it; the same words from another session do not", withDeps, async ($, on) => {
@@ -1446,6 +1651,9 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
   // Every session put back where it was before sleep.
   expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
+  // Only /wake or "I'm up" opens the report and asks for the morning (#837): nobody may be at the Mac at noon.
+  expect(w.opened).toEqual([])
+  expect(w.prompts).toEqual([])
   // The band is cleared before the overnight check reads GitHub, which may be slow (#834).
   const after = w.order.slice(w.order.lastIndexOf('modes ["ASLEEP"]') + 1)
   expect(after[0]).toBe('modes []')
@@ -1516,7 +1724,7 @@ test('a wake whose report cannot be finished says each thing that failed, and is
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
   // A usage hook that throws is skipped by the engine, so the read fails with the engine's own words.
-  expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\.$/)
+  expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\. It was not opened: there is no file there\./)
   expect(w.files[CURRENT]).toBeUndefined()
   // The woke note is still written, without a usage reading it does not have.
   expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'woke', at: T0, by: 's1' })
@@ -1533,7 +1741,7 @@ test('a final render whose own setup throws is said with the rest, never escapin
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, homeGoneAfterNote: true })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/is not complete: the report could not be finished \(HOME is not set\)\.$/)
+  expect(r.text).toMatch(/is not complete: the report could not be finished \(HOME is not set\)\. It was not opened: there is no file there\./)
   expect(w.reports.map(x => x.op)).toEqual(['note'])
   expect(w.files[CURRENT]).toBeUndefined()
 })

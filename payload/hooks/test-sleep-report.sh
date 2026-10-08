@@ -254,7 +254,7 @@ mkdir -p "$SLEEPDIR/notes"
   echo '{"v":1,"kind":"wait","at":1791444000000,"by":"aaaa1111","minutes":5,"error":"rate_limit","generation":"g6"}'
   echo '{"v":1,"kind":"wait","at":1791444300000,"by":"aaaa1111","minutes":10,"error":"server_error","generation":"g6"}'
   echo '{"v":1,"kind":"wait","at":1791444600000,"by":"aaaa1111","minutes":20.0,"error":"rate_limit","generation":"g6"}'
-  echo '{"v":1,"kind":"issue","at":1791444400000,"by":"aaaa1111","repo":"o/r","title":"Cache misses on cold start","priority":"p2","labels":["perf"],"text":"Seen while fixing 12","generation":"g6"}'
+  echo '{"v":1,"kind":"issue","at":1791444400000,"by":"aaaa1111","repo":"o/r","title":"Cache misses on cold start","priority":"p2","labels":["perf"],"milestone":"Ungrouped","text":"Seen while fixing 12","generation":"g6"}'
   echo '{"v":1,"kind":"mystery","at":1791444500000,"by":"aaaa1111","text":"a kind nobody renders yet","generation":"g6"}'
   echo 'this line is broken'
   echo '{"v":1,"kind":"claim","at":1791444600000,"by":"aaaa1111","repo":"o/s","issue":3,"generation":"g6"}'
@@ -310,6 +310,7 @@ lacks "a failed claim is not flagged" "o/s#3, claimed" "$r"
 has "parked work is listed with its branch" "Parked o/r#21 (branch fix-21): Two hours with no fix" "$r"
 has "failed work is listed" "Failed o/s#3: Classifier refused the push" "$r"
 has "a proposed issue is listed" "Cache misses on cold start" "$r"
+has "a proposed issue carries its priority, labels and milestone, for the morning picker (#837)" "o/r: Cache misses on cold start (p2, perf, milestone Ungrouped). Seen while fixing 12" "$r"
 has "a PR that is not a number is flagged" 'o/r PR "--web" was noted done, but that is not a PR number, so GitHub was not asked' "$r"
 lacks "and never reaches gh" "[--web]" "$(cat "$FAKE/calls")"
 has "a PR held as a list in an old note is flagged, never breaking the report" 'o/r PR "[1, 2]" was noted done, but that is not a PR number' "$r"

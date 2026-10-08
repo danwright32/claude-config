@@ -66,6 +66,11 @@ describe('the block', () => {
     expect(RULES).toContain('a question about an issue (kind question, with repo as owner/name, issue as its number, and text)')
     expect(RULES).toMatch(/asked before bed next time/)
   })
+  test('a proposed issue and lesson are noted with the fields the morning pickers read (#837)', () => {
+    expect(RULES).toContain('a proposed issue (kind issue, with repo as owner/name, title, priority as p0 to p4, labels as a list, milestone, and text)')
+    expect(RULES).toContain('a lesson (kind lesson, with the rule word for word as its text)')
+    expect(RULES).toMatch(/offered to Dan in the morning; never file issues, add lessons or ask him/i)
+  })
   test('says which issue is held, and writes a heartbeat naming it', () => {
     const r = decideStop(input({ claim: held() }))
     expect(r.kind === 'block' && r.reason).toMatch(/^You hold #7 in o\/r \(attempt 1\): carry on with it\./)

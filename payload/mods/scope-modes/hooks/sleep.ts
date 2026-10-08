@@ -119,6 +119,16 @@ export const etDate = (ms: number): string => {
   return `${p.y}-${pad(p.mo)}-${pad(p.d)}`
 }
 
+/**
+ * Whether a moment is daytime in ET, 7 AM up to (not including) 7 PM, read off the zone itself so it
+ * holds across the change to and from daylight time (#837): a message from Dan in it while asleep
+ * asks whether he is up, since only /wake or "I'm up" ends sleep.
+ */
+export const isDaytimeEt = (ms: number): boolean => {
+  const h = etParts(ms).h
+  return h >= 7 && h < 19
+}
+
 /** A moment as Dan reads it: "11:42 PM ET on Wed Oct 7". */
 export const etWhen = (ms: number): string => {
   const p = etParts(ms)
@@ -128,3 +138,6 @@ export const etWhen = (ms: number): string => {
 
 /** Where everything sleep keeps lives, this Mac only (never synced). */
 export const sleepDir = (home: string) => `${home.replace(/\/+$/, '')}/.claude/state/sleep`
+
+/** A night's notes file, named by its generation as hooks/lib/sleep-report.py names it (notes_path). */
+export const notesOf = (home: string, generation: string) => `${sleepDir(home)}/notes/${generation.replace(/[^\w.-]/g, '_')}.jsonl`

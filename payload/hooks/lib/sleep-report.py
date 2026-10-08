@@ -37,8 +37,12 @@ report knows, and the fields each reads (every other field is kept, and shown no
   question   repo, issue, text              something only Dan can answer; or cwd, questions (a
                                             list), as scope modes notes a refused question (#841)
   save       files, rule                    a save ask before saving held for Dan (#841)
-  issue      repo, title, priority?, labels?, text    a proposed issue (nothing is filed overnight)
-  lesson     text                           a proposed lesson
+  issue      repo, title, priority?, labels?, milestone?, text
+                                            a proposed issue (nothing is filed overnight): priority
+                                            p0 to p4, labels a list; offered at wake in the end of
+                                            turn review's picker with all three (#837)
+  lesson     text                           a proposed lesson, the rule word for word: offered
+                                            at wake in the durable lesson picker (#837)
   finding    repo?, text                    anything else noticed
   heartbeat  repo?, issue?, usage?          each pass of the overnight driver (phase 8)
   wait       minutes, error?, text?         each rate limit or overload wait (#844)
@@ -423,6 +427,8 @@ def build(record, notes, bad, final, now, github):
         extra = [str(n["priority"])] if n.get("priority") else []
         if isinstance(n.get("labels"), list):
             extra += [str(x) for x in n["labels"]]
+        if n.get("milestone"):
+            extra.append("milestone %s" % n["milestone"])
         issues.append("%s: %s%s%s" % (n.get("repo") or "a repo not named", n.get("title") or "(no title)",
                                        " (%s)" % ", ".join(extra) if extra else "", ". %s" % text_of(n) if text_of(n) else ""))
     section("Proposed issues", issues)
