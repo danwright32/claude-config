@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
 // Is it live (claude-config#617) in a session: Claude hands the card tool what it found after a
@@ -47,16 +48,21 @@ const modKit: { name: string; register: Register } = {
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout)
         },
+        // #961: a github.com link, asked of the world the same way.
+        linkRepo: async (input: { link: string }) => {
+          const r = await built.process.run(['__modkit', 'linkRepo', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+        gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
+        ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
         writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
         git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
         pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
         workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
-        gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
-        ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
-        linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
         branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
@@ -140,6 +146,10 @@ const world = (on: On, init: Partial<World> = {}) => {
     // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
     if (e.argv[0] === '__modkit') {
       if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (e.argv[1] === 'linkRepo') {
+        const { link } = JSON.parse(e.argv[2] as string) as { link: string }
+        return { value: { exitCode: 0, stdout: JSON.stringify(linkRepo(link)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      }
       const input = JSON.parse(e.argv[2] as string) as { root?: string | null; remote: string | null }
       return { value: { exitCode: 0, stdout: JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
@@ -650,4 +660,28 @@ test("/live reads the session's GitHub repository from its origin as mod-kit's r
     got.push({ why: f.why, github: asked ? (asked[3] as string) : said.startsWith('This folder has no GitHub repository') ? null : `unexpected: ${said}` })
   }
   expect(got).toEqual(REPO_FIXTURES.map(f => ({ why: f.why, github: f.github })))
+})
+
+// #961: a card is kept under the repository GitHub's own link for the PR names, read by mod-kit's
+// one reader of a github.com link, on the table every reading of a link is pinned on; a link naming
+// none keeps it under the repository Claude gave. Each row is its own PR, so no row finds another's.
+test("a card is kept under the repository its PR's link names, as mod-kit's reader reads it, on every shared case (#961)", withReader, async ($, on) => {
+  const { w } = world(on)
+  const got: { why: string; keptUnder: string | null }[] = []
+  for (const [i, f] of LINK_FIXTURES.entries()) {
+    const pr = 500 + i
+    w.pr = { exitCode: 0, stdout: JSON.stringify({ state: 'MERGED', title: 'A change', url: f.link }) }
+    await card($, { ...CARD, repo: 'claude/typed', pr })
+    const under = async (repo: string) => JSON.parse(await verdict($, `${repo} ${pr}`)) !== null
+    got.push({ why: f.why, keptUnder: (await under('claude/typed')) ? null : f.repo !== null && (await under(f.repo)) ? f.repo : 'neither' })
+  }
+  expect(got).toEqual(LINK_FIXTURES.map(f => ({ why: f.why, keptUnder: f.repo })))
+})
+
+test("a link mod-kit cannot read keeps the card under the repository Claude gave, and says so (#961)", withReader, async ($, on) => {
+  world(on, { pr: mergedIn('danwright32/backstage', 9), kitFails: true })
+  const r = await card($, { ...CARD, pr: 9 })
+  expect(r.deny).toBeUndefined()
+  expect((r.context ?? []).join(' ')).toContain(`GitHub's link for #9 could not be read (mod-kit is not loaded), so the card is kept under ${REPO} as given.`)
+  expect(JSON.parse(await verdict($, `${REPO} 9`)).state).toBe('live')
 })

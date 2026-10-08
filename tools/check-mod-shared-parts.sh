@@ -49,6 +49,10 @@
 #             default (symbolic-ref, origin/HEAD), or the       scope-modes and the collision guard each read
 #             issues a branch names (a run of \d{2,6})          them their own way). Which worktrees hold a
 #                                                               branch (worktree list) is another question.
+#   link-reader                                                 use $.modkit.linkRepo({ link }) (#961: is it
+#             reading a github.com link's repository by hand    live and scope-modes read a pull request's
+#             (a pattern capturing or matching a class right    link four ways, which differed on its end
+#             after github.com/)                                and on case)
 #   press     a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -124,6 +128,7 @@ PARTS=(
   "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
   "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name), or \$.modkit.ghRepo({ spelling }) for a repository as gh spells one"
   "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
+  "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
 )
 
 n=0
