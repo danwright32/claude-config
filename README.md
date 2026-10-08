@@ -60,6 +60,11 @@ mod's status line into `settings.json`, naming this Mac's own copy of its script
 `statusLine` is set. One pointing anywhere else is never overwritten, and `claude-sync status`
 names it.
 
+Any file named `*.local.json` inside a synced folder stays on the Mac that wrote it: the send
+never carries it and a pull never deletes it. That is where a skill keeps a secret, such as the
+tracker skill's `config.local.json` with its Apps Script write token (#675). A second Mac needs
+its own copy, made by hand.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills. Both lists live
 in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS` and `PLATFORM_SKILL_DIRS`), which
@@ -1186,6 +1191,7 @@ Two things are deliberately not carried:
 
 - `.claude-plugin/types/`, which Claude Code writes into every plugin folder on every load,
   describing that Mac's build and MCP tools. It is excluded on both sides of the mirror.
+- A `*.local.json`, which every synced folder keeps to its own Mac (see "What NEVER syncs").
 - Nothing else. A mod's own `tsconfig.json` IS carried: the engine writes one only where none
   exists and leaves an existing one alone (measured on 2.1.288). So every mod ships its own:
   `tools/check-mods.sh` fails a mod without one, because the copy the engine would generate is
