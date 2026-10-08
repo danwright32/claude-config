@@ -648,9 +648,10 @@ mirror never touches `.git`, so the retirement used to leave a folder holding no
 as a skill that cannot load on every send. A pull now removes such a folder, saying so in one line,
 but only on proof that nothing is lost: the shared repo deleted that skill and no longer holds it,
 the folder holds nothing but `.git` and regenerable cruft (`.DS_Store`, `__pycache__`, `*.pyc`, `.claude-plugin/types`), and
-its git history has no branch commit missing from its own remote and no stash. A folder holding
-anything else (a `*.local.json`, a conflict copy, any file somebody made, an unpushed commit) is left
-alone and the pull says why (claude-config#968).
+no ref outside its remote-tracking ones (a branch, a tag, a note, the stash) and no reflog entry
+reaches a commit its own remote lacks. A folder holding anything else (a `*.local.json`, a conflict
+copy, any file somebody made, a commit only it has) is left alone and the pull says why
+(claude-config#968).
 
 ## A copy left at an earlier release is stale, not a local edit
 

@@ -1492,10 +1492,11 @@ ENTRIES
 #   - the folder holds nothing but version control and regenerable cruft (.git, .DS_Store,
 #     __pycache__, *.pyc, .claude-plugin/types). A *.local.json or a *.conflict-* copy is excluded
 #     from the mirror too, but each is something a person made, so it keeps the folder;
-#   - its git history holds no branch or HEAD commit missing from its own remotes, and no stash,
-#     because the mirror never carried .git and it is the only copy of anything committed here.
-#     Commits reachable only from the reflog are not counted: a remote that rewrote its history
-#     would otherwise keep every clone of it for ever, and those are not deliberate work.
+#   - no ref outside the remote-tracking ones (a branch, HEAD, a tag, a note, the stash, anything
+#     under refs/) and no reflog entry reaches a commit missing from its own remotes, because the
+#     mirror never carried .git and it is the only copy of anything committed here. The cost of
+#     counting the reflog is a clone whose upstream rewrote its history being kept and reported
+#     rather than removed, which is the side to err on.
 # Anything short of that is LEFT ALONE and said, once per pull, with the reason.
 skill_folder_own_files(){   # $1 = a folder -> every file in it but version control and cruft, or status 1 when it could not be read
   local out
@@ -1506,15 +1507,15 @@ skill_folder_own_files(){   # $1 = a folder -> every file in it but version cont
 }
 skill_clone_unsafe_to_drop(){   # $1 = a .git directory -> why its history may hold the only copy of something, or nothing
   local g="$1" out
-  local -a tips; tips=(--branches)
   if ! git --git-dir="$g" rev-parse --git-dir >/dev/null 2>&1; then
     printf 'its .git could not be read as a repository, so what it holds is unknown'; return 0
   fi
   if git --git-dir="$g" rev-parse -q --verify refs/stash >/dev/null 2>&1; then
     printf 'its git history holds a stash'; return 0
   fi
-  git --git-dir="$g" rev-parse -q --verify HEAD >/dev/null 2>&1 && tips+=(HEAD)
-  if ! out="$(git --git-dir="$g" rev-list -1 "${tips[@]}" --not --remotes 2>/dev/null)"; then
+  # --all is every ref under refs/ plus HEAD, so a tag or a note counts as much as a branch, and
+  # --reflog adds every commit a reflog names. Anything it cannot read keeps the folder.
+  if ! out="$(git --git-dir="$g" rev-list -1 --all --reflog --not --remotes 2>/dev/null)"; then
     printf 'its git history could not be read'; return 0
   fi
   [ -z "$out" ] || printf 'its git history holds commits that are not on any remote'

@@ -10936,7 +10936,7 @@ R968R="$WORK/968-repoB"; git clone -q "$R968B" "$R968R" 2>/dev/null
 H968A="$WORK/968-homeA"; mkdir -p "$H968A"; echo '{"hooks":{}}' > "$H968A/settings.json"
 H968B="$WORK/968-homeB"; mkdir -p "$H968B/skills"; echo '{"hooks":{}}' > "$H968B/settings.json"
 # Skills installed on Mac B as git clones, and one ordinary skill that stays.
-for _n in retired-clone kept-local kept-unpushed kept-stash; do
+for _n in retired-clone kept-local kept-unpushed kept-stash kept-tag kept-reflog; do
   git clone -q "$(_968_upstream "$_n")" "$H968B/skills/$_n" 2>/dev/null
 done
 # One whose .git is a pointer file naming a repository kept elsewhere, which this folder cannot speak for.
@@ -10951,6 +10951,15 @@ git -C "$H968B/skills/kept-unpushed" -c user.name=suite -c user.email=suite@exam
 # And a stash in another: work set aside, held nowhere but this .git.
 printf 'set aside\n' >> "$H968B/skills/kept-stash/run.sh"
 git -C "$H968B/skills/kept-stash" -c user.name=suite -c user.email=suite@example.invalid stash -q
+# And a commit no branch holds any more: one reached only by a local tag, one only by the reflog.
+# Every ref but the remote-tracking ones counts, and so does the reflog, so neither is dropped (L5).
+for _n in kept-tag kept-reflog; do
+  printf 'work\n' >> "$H968B/skills/$_n/run.sh"
+  git -C "$H968B/skills/$_n" -c user.name=suite -c user.email=suite@example.invalid commit -q -am "only here: $_n"
+done
+git -C "$H968B/skills/kept-tag" tag mine-only
+git -C "$H968B/skills/kept-tag" reset -q --hard origin/main
+git -C "$H968B/skills/kept-reflog" reset -q --hard origin/main
 _968env(){ echo "SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_NOTIFY=1"; }
 env $(_968env) CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" sync >/dev/null 2>&1
 env $(_968env) CLAUDE_HOME="$H968A" SYNC_REPO="$R968A" SYNC_HOSTNAME=m968A bash "$SCRIPT" sync >/dev/null 2>&1
@@ -10961,7 +10970,7 @@ check "#968 and the person's own *.local.json never travelled" \
   "[ ! -e '$R968A/payload/skills/kept-local/config.local.json' ]"
 # Mac A retires all three and publishes.
 rm -rf "$H968A/skills/retired-clone" "$H968A/skills/kept-local" "$H968A/skills/kept-unpushed" \
-  "$H968A/skills/kept-stash" "$H968A/skills/kept-pointer"
+  "$H968A/skills/kept-stash" "$H968A/skills/kept-pointer" "$H968A/skills/kept-tag" "$H968A/skills/kept-reflog"
 env $(_968env) CLAUDE_HOME="$H968A" SYNC_REPO="$R968A" SYNC_HOSTNAME=m968A bash "$SCRIPT" sync >/dev/null 2>&1
 check "#968 the retirement reached the shared repo" \
   "[ -z \"\$(git -C '$R968B' ls-tree -r --name-only main -- payload/skills/retired-clone payload/skills/kept-local payload/skills/kept-unpushed payload/skills/kept-stash payload/skills/kept-pointer)\" ]"
@@ -10984,6 +10993,10 @@ check "#968 and is reported as left alone, saying why" \
   "grep -qE 'skills/kept-unpushed.*left alone.*not on any remote' <<< \"\$out968\""
 check "#968 a leftover whose git history holds a stash is kept, and says so" \
   "[ -n \"\$(git -C '$H968B/skills/kept-stash' stash list 2>/dev/null)\" ] && grep -qE 'skills/kept-stash.*left alone.*stash' <<< \"\$out968\""
+check "#968 a leftover holding a commit only a local tag reaches is kept, and says so" \
+  "[ -n \"\$(git -C '$H968B/skills/kept-tag' log --format=%s -1 mine-only 2>/dev/null | grep 'only here')\" ] && grep -qE 'skills/kept-tag.*left alone.*not on any remote' <<< \"\$out968\""
+check "#968 a leftover holding a commit only its reflog reaches is kept, and says so" \
+  "[ -e '$H968B/skills/kept-reflog/.git' ] && grep -qE 'skills/kept-reflog.*left alone.*not on any remote' <<< \"\$out968\""
 check "#968 a leftover whose .git points at a repository elsewhere is kept, and says so" \
   "[ -f '$H968B/skills/kept-pointer/.git' ] && grep -qE 'skills/kept-pointer.*left alone.*somewhere else' <<< \"\$out968\""
 check "#968 a git folder the shared config never held is kept" "[ -e '$H968B/skills/fresh-git/.git' ]"
