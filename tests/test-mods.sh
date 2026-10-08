@@ -50,9 +50,13 @@ case "$1 $2" in
 esac
 STUB
 chmod +x "$FAKE"
+# Every case not about types runs with a compiler stub that passes everything, so a fixture's
+# placeholder code is never judged by the real compiler, which a checkout with the pinned one
+# installed would otherwise find and run against the pinned types (#953).
+TSC_PASS="$TMPROOT/tsc-pass"; printf '#!/bin/bash\nexit 0\n' > "$TSC_PASS"; chmod +x "$TSC_PASS"
 runit(){   # $1 = mods dir -> sets out and code
   : > "$LOG"
-  out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" bash "$CHECK" "$1" 2>&1)"; code=$?
+  out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" bash "$CHECK" "$1" 2>&1)"; code=$?
 }
 
 # 1. Every good mod passes, and the run names how many it checked (L98: a pass over nothing reads
@@ -127,7 +131,7 @@ const kit = { name: 'k', register: (on: any) => {
   on('tool.call', () => ({ result: 'ran' }) as never)
 } }
 TS
-out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin bash "$CHECK" "$M3S" 2>&1)"; code=$?
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M3S" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a stand-in casting what engine.create returns fails the run, with no claude command" ok \
   || check "a stand-in casting what engine.create returns fails the run, with no claude command" "exit=$code out=$out"
 printf '%s\n' "$out" | grep -q 'cast-one-line/tests/register.test.ts:4:.*as never' \
@@ -140,7 +144,7 @@ printf '%s\n' "$out" | grep -q 'cast-multi-line/tests/register.test.ts:4:.*as ne
 
 # 3c. The tsconfig.json rule needs only the filesystem, so it holds where no claude command exists
 #     (CI's Linux runner) instead of hiding behind UNMEASURED (lessons review of #645).
-out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin bash "$CHECK" "$M3B" 2>&1)"; code=$?
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M3B" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "with no claude command, a mod missing tsconfig.json still fails" ok \
   || check "with no claude command, a mod missing tsconfig.json still fails" "exit=$code out=$out"
 
@@ -166,26 +170,56 @@ grep -q "plugin test $M4B/uionly" "$LOG" && check "a mod with only .test.tsx fil
 ! grep -q "plugin test $M4B/typedtsx" "$LOG" && check "a .test.tsx under generated types is ignored" ok \
   || check "a .test.tsx under generated types is ignored" "$(cat "$LOG")"
 
-# 4c. Strict types (#758). Claude Code lays its declarations and the tsconfig a mod extends under
-#     .claude-plugin/types once it has loaded the mod; with those and a TypeScript compiler, a mod is
-#     type checked as its own tsconfig.json says, and errors fail the run by name and count. The
-#     compiler is a stub that fails any mod whose folder name holds "illtyped" (L2: no real tsc).
+# 4c. Strict types (#758), against types from this repository alone (#953). Each mod is type checked
+#     in a scratch copy beside the Claude Code types pinned in tools/typescript/claude-code-types and
+#     a tsconfig naming its own dependencies, as its own tsconfig.json says, and errors fail the run
+#     by name and count. The compiler is a stub (L2: no real tsc) that fails any mod whose folder
+#     name holds "illtyped", and logs what it was handed.
 TSC="$TMPROOT/tsc"; TSC_LOG="$TMPROOT/tsc-calls"
 cat > "$TSC" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$TSC_LOG"
-# What a dependency's types said where the compiler read them (#840).
-for f in "$2"/.claude-plugin/types/*/index.d.ts; do [ -f "$f" ] && echo "DEP $(basename "$(dirname "$f")"): $(cat "$f")" >> "$TSC_LOG"; done
+t="$2/.claude-plugin/types"
+# What each type root said where the compiler read it (#840), the types the tsconfig named, and
+# which MCP list it was handed (#953).
+for f in "$t"/*/index.d.ts; do [ -f "$f" ] && echo "DEP $(basename "$(dirname "$f")"): $(head -n 1 "$f")" >> "$TSC_LOG"; done
+echo "TYPES $(basename "$2"): $(tr -d ' \n' < "$t/tsconfig.json" | sed -nE 's/.*"types":\[([^]]*)\].*/\1/p')" >> "$TSC_LOG"
+echo "MCP $(basename "$2"): $(cksum < "$t/claude-code-mcp/index.d.ts")" >> "$TSC_LOG"
 case "$2" in *crashing*) printf 'node:internal/modules/cjs/loader:1228\n  throw err;\nError: Cannot find module typescript\n'; exit 1 ;; esac
 case "$2" in *illtyped*) printf 'hooks/register.tsx(3,1): error TS2339: no such thing\nhooks/register.tsx(9,1): error TS2604: not a component\n'; exit 2 ;; esac
+# The fault #953 is about, as tsc gives it: a matcher naming the mod's own MCP tool fails (TS2322)
+# while the MCP list it is checked against declares tools, but not that one.
+case "$2" in *mcpwatcher*)
+  m="$t/claude-code-mcp/index.d.ts"
+  if grep -qE '^[[:space:]]*"?mcp__[A-Za-z0-9_-]+"?:' "$m" && ! grep -q 'mcp__fixture__x' "$m"; then
+    printf "hooks/register.ts(4,21): error TS2322: Type '\"mcp__fixture__x\"' is not assignable to type '\"Bash\"'.\n"; exit 2
+  fi ;;
+esac
 # Every mod imports its own files as ./x.ts, which the tsconfig Claude Code lays does not allow, so
 # real tsc refuses each one unless the check allows them itself (lessons review of #797).
 case " $* " in *" --allowImportingTsExtensions "*) ;; *) printf "hooks/register.tsx(1,20): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\n"; exit 2 ;; esac
 exit 0
 STUB
 chmod +x "$TSC"
-laid(){ mkdir -p "$1/.claude-plugin/types"; printf '{}\n' > "$1/.claude-plugin/types/tsconfig.json"; }
-M4C="$TMPROOT/m4c"; mkmod "$M4C" illtyped; laid "$M4C/illtyped"; mkmod "$M4C" welltyped; laid "$M4C/welltyped"; mkmod "$M4C" unlaid
+PINNED_MCP="$ROOT/tools/typescript/claude-code-types/claude-code-mcp/index.d.ts"
+pinned_mcp_sum="$(cksum < "$PINNED_MCP" 2>/dev/null)"
+# A types folder as Claude Code lays one, with an MCP list naming $2 (default none).
+laid(){
+  mkdir -p "$1/.claude-plugin/types/claude-code-mcp"
+  printf '{ "compilerOptions": { "types": ["claude-code-mcp"] } }\n' > "$1/.claude-plugin/types/tsconfig.json"
+  printf 'declare module "claude-code" {\n  interface McpToolInputs {\n    %s: {}\n  }\n}\n' "${2:-mcp__laid__only}" > "$1/.claude-plugin/types/claude-code-mcp/index.d.ts"
+}
+# A pinned types folder in a test's own TS dir, describing build $2.
+pin(){
+  local p="$1/claude-code-types"
+  mkdir -p "$p/claude-code" "$p/claude-code-tools" "$p/claude-code-mcp"
+  printf '// Written by Claude Code %s.\nexport {}\n' "$2" > "$p/claude-code/index.d.ts"
+  printf 'export {}\n' > "$p/claude-code-tools/index.d.ts"
+  printf 'export {}\n' > "$p/claude-code-mcp/index.d.ts"
+  printf '{ "compilerOptions": { "types": ["claude-code", "claude-code-tools", "claude-code-mcp"] } }\n' > "$p/tsconfig.json"
+}
+M4C="$TMPROOT/m4c"; mkmod "$M4C" illtyped; mkmod "$M4C" welltyped; mkmod "$M4C" neverloaded
+mkmod "$M4C" laidhere; laid "$M4C/laidhere"
 : > "$TSC_LOG"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4C" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod failing a strict type check fails the run" ok || check "a mod failing a strict type check fails the run" "exit=$code out=$out"
@@ -193,12 +227,20 @@ printf '%s\n' "$out" | grep 'illtyped' | grep -q '2 errors' \
   && check "naming the mod and how many errors" ok || check "naming the mod and how many errors" "$out"
 printf '%s\n' "$out" | grep 'welltyped ok' | grep -q 'types checked' \
   && check "a mod that type checks says its types were checked" ok || check "a mod that type checks says its types were checked" "$out"
-printf '%s\n' "$out" | grep 'unlaid ok' | grep -q 'types not checked: Claude Code has not laid its types here' \
-  && check "a mod with no laid types says so rather than claiming a check" ok || check "a mod with no laid types says so rather than claiming a check" "$out"
-! grep -q "$M4C/unlaid" "$TSC_LOG" && check "and the compiler is not run on it" ok || check "and the compiler is not run on it" "$(cat "$TSC_LOG")"
+printf '%s\n' "$out" | grep 'neverloaded ok' | grep -q 'types checked' && grep -q -- "-p .*/neverloaded" "$TSC_LOG" \
+  && check "a mod Claude Code never laid types for is type checked all the same, against the pinned types" ok \
+  || check "a mod Claude Code never laid types for is type checked all the same, against the pinned types" "$out $(cat "$TSC_LOG")"
+grep -qxF "MCP laidhere: $pinned_mcp_sum" "$TSC_LOG" && [ -n "$pinned_mcp_sum" ] \
+  && check "types laid inside the folder under check are replaced by the pinned ones" ok \
+  || check "types laid inside the folder under check are replaced by the pinned ones" "pinned=$pinned_mcp_sum $(cat "$TSC_LOG")"
+grep -qxF 'TYPES welltyped: "claude-code","claude-code-tools","claude-code-mcp"' "$TSC_LOG" \
+  && check "a mod with no dependencies is checked against Claude Code's three type roots alone" ok \
+  || check "a mod with no dependencies is checked against Claude Code's three type roots alone" "$(cat "$TSC_LOG")"
+printf '%s\n' "$out" | grep -q "type checked against the Claude Code [0-9.]* types pinned in" \
+  && check "the run names the pinned build every mod was checked against" ok || check "the run names the pinned build every mod was checked against" "$out"
 # A compiler that fails without reporting any type error measured nothing, so it is said as that,
 # never as "0 errors" (lessons review of #797, L11).
-M4D="$TMPROOT/m4d"; mkmod "$M4D" crashing; laid "$M4D/crashing"
+M4D="$TMPROOT/m4d"; mkmod "$M4D" crashing
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4D" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'crashing' | grep -q 'could not be type checked: the compiler exited 1 without reporting a type error: .*Cannot find module typescript' \
   && check "a compiler that fails with no type error is named as such, and fails the run" ok \
@@ -209,23 +251,23 @@ out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/u
 [ "$code" -eq 0 ] && check "with no compiler, the type check is skipped rather than failed" ok || check "with no compiler, the type check is skipped rather than failed" "exit=$code out=$out"
 printf '%s\n' "$out" | grep 'illtyped ok' | grep -q 'types not checked: no TypeScript compiler' \
   && check "and each mod says its types were not checked, and why" ok || check "and each mod says its types were not checked, and why" "$out"
+printf '%s\n' "$out" | grep -q "UNMEASURED: 4 of 4 mods' types were not checked (4 no TypeScript compiler: " \
+  && check "and the run sums them up as UNMEASURED, by cause" ok || check "and the run sums them up as UNMEASURED, by cause" "$out"
+printf '%s\n' "$out" | grep -q 'npm ci --prefix tools/typescript' \
+  && check "with the command that installs the pinned compiler" ok || check "with the command that installs the pinned compiler" "$out"
 
-# 4d. The pinned compiler and the borrowed types (#803). Claude Code lays a mod's types only in the
-#     copy it loads (~/.claude/mods/<mod>), which the mirror never carries, so a check of
-#     payload/mods borrows them from there; a pinned compiler in tools/typescript is found with
-#     no TSC_BIN; a mod whose errors were recorded passes while its count is at or under the
-#     record; and every mod left unchecked is summed up as UNMEASURED with the install command.
-M4E="$TMPROOT/m4e"; mkmod "$M4E" borrowed; mkmod "$M4E" illtyped-known; mkmod "$M4E" illtyped-new
-TH="$TMPROOT/types-home"
-for m in borrowed illtyped-known illtyped-new; do laid "$TH/mods/$m"; done
-TSDIR="$TMPROOT/ts"; mkdir -p "$TSDIR/node_modules/.bin"; cp "$TSC" "$TSDIR/node_modules/.bin/tsc"
+# 4d. The pinned compiler (#803) and its record of known type errors, and each mod's dependencies,
+#     whose contracts are read from the folder under review (#840), named by each dependency's own
+#     plugin.json, never from an installed copy.
+M4E="$TMPROOT/m4e"; mkmod "$M4E" plain; mkmod "$M4E" illtyped-known; mkmod "$M4E" illtyped-new
+TSDIR="$TMPROOT/ts"; mkdir -p "$TSDIR/node_modules/.bin"; cp "$TSC" "$TSDIR/node_modules/.bin/tsc"; pin "$TSDIR" 2.1.291
 printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
+run4e(){ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin "$@" bash "$CHECK" "$M4E" 2>&1)"; code=$?; }
 : > "$TSC_LOG"
-out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types checked' \
-  && check "a mod whose types were laid only in the installed copy is type checked with them" ok \
-  || check "a mod whose types were laid only in the installed copy is type checked with them" "$out"
-grep -q -- "-p .*borrowed" "$TSC_LOG" && check "by the pinned compiler, found with no TSC_BIN" ok || check "by the pinned compiler, found with no TSC_BIN" "$(cat "$TSC_LOG")"
+run4e
+printf '%s\n' "$out" | grep 'plain ok' | grep -q 'types checked' && grep -q -- "-p .*plain" "$TSC_LOG" \
+  && check "a mod is type checked by the pinned compiler, found with no TSC_BIN" ok \
+  || check "a mod is type checked by the pinned compiler, found with no TSC_BIN" "$out $(cat "$TSC_LOG")"
 printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q '2 known type errors (#900)' \
   && check "a mod at its recorded count of type errors passes, naming the count and the issue" ok \
   || check "a mod at its recorded count of type errors passes, naming the count and the issue" "$out"
@@ -235,108 +277,138 @@ printf '%s\n' "$out" | grep -q 'illtyped-new fails a strict type check (2 errors
 [ "$code" -eq 1 ] && check "and fails the run" ok || check "and fails the run" "exit=$code"
 # One recorded error fixed and a new one made: the count is the same, and the new one still fails.
 printf 'illtyped-known\thooks/register.tsx TS2339\t1\t#900\nilltyped-known\thooks/register.tsx TS9999\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"; rm -rf "${M4E:?}/illtyped-new"
-out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+run4e
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-known' | grep -q 'type errors not in the record.*hooks/register.tsx TS2604 (1 found, 0 recorded)' \
   && check "an error not in the record fails though the count is unchanged, naming where and how many" ok \
   || check "an error not in the record fails though the count is unchanged, naming where and how many" "exit=$code out=$out"
 printf 'illtyped-known\thooks/register.tsx TS2339\t3\t#900\nilltyped-known\thooks/register.tsx TS2604\t1\t#900\n' > "$TSDIR/known-type-errors.tsv"
-out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+run4e
 [ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'illtyped-known ok' | grep -q 'fewer than recorded' \
   && check "a mod under its record passes and says the record can come down" ok \
   || check "a mod under its record passes and says the record can come down" "exit=$code out=$out"
-# A dependency's types are the copy under review, never the installed one the laid types copied
-# (#840): a mod checked against its dependency's old contract fails a change made to both in one
-# PR, and passes one that breaks it, until the next install. A dependency the folder does not hold
-# keeps its laid types, and Claude Code's own are never touched.
-M4G="$TMPROOT/m4g"; mkmod "$M4G" dependent; mkmod "$M4G" provider
+# A dependency's contract is the copy under review, never an installed one (#840): checked against
+# its dependency's old contract, a mod fails a change made to both in one PR, and passes one that
+# breaks it. Which file is the contract is what the dependency's plugin.json names as "types"; one
+# naming none adds nothing to `$` and is left out, as the engine leaves it out. Laid types already
+# in the folder, a dependency's a symbolic link to an outside file as Claude Code lays it, are
+# replaced in scratch and never written through: a copy through such a link once rewrote the
+# installed mod, which the sync then pushed to main (2026-10-07, while #840 was built).
+M4G="$TMPROOT/m4g"; mkmod "$M4G" dependent; mkmod "$M4G" provider; mkmod "$M4G" bare
+printf '{ "name": "dependent", "version": "0.1.0", "description": "x", "dependencies": ["provider", "bare"] }\n' > "$M4G/dependent/.claude-plugin/plugin.json"
+printf '{ "name": "provider", "version": "0.1.0", "description": "x", "types": "./types/index.d.ts" }\n' > "$M4G/provider/.claude-plugin/plugin.json"
 mkdir -p "$M4G/provider/types"; printf 'export type P = "new"\n' > "$M4G/provider/types/index.d.ts"
-TH4G="$TMPROOT/types-home-4g"; laid "$TH4G/mods/dependent"; laid "$TH4G/mods/provider"
-# Laid as Claude Code lays them: each dependency's index.d.ts a symbolic link to the INSTALLED
-# dependency's own types file, so a copy written through it would rewrite the installed mod, which the
-# sync then pushes to main (it did, 2026-10-07, while #840 was built).
-for dep in provider elsewhere claude-code; do
-  mkdir -p "$TH4G/mods/dependent/.claude-plugin/types/$dep" "$TH4G/mods/$dep/types"
-  printf 'export type P = "installed %s"\n' "$dep" > "$TH4G/mods/$dep/types/index.d.ts"
-  ln -s "$TH4G/mods/$dep/types/index.d.ts" "$TH4G/mods/dependent/.claude-plugin/types/$dep/index.d.ts"
-done
+OUTSIDE="$TMPROOT/installed-provider.d.ts"; printf 'export type P = "installed"\n' > "$OUTSIDE"
+laid "$M4G/dependent"; mkdir -p "$M4G/dependent/.claude-plugin/types/provider"; ln -s "$OUTSIDE" "$M4G/dependent/.claude-plugin/types/provider/index.d.ts"
 : > "$TSC_LOG"
-out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4G" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4G" 2>&1)"; code=$?
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4G" 2>&1)"; code=$?
 grep -q 'DEP provider: export type P = "new"' "$TSC_LOG" \
   && check "a dependency's types are read from the folder under review" ok || check "a dependency's types are read from the folder under review" "$(cat "$TSC_LOG")"
-grep -q 'DEP elsewhere: export type P = "installed elsewhere"' "$TSC_LOG" && grep -q 'DEP claude-code: export type P = "installed claude-code"' "$TSC_LOG" \
-  && check "one the folder does not hold, and Claude Code's own, keep their laid types" ok || check "one the folder does not hold, and Claude Code's own, keep their laid types" "$(cat "$TSC_LOG")"
-[ "$(cat "$TH4G/mods/provider/types/index.d.ts")" = 'export type P = "installed provider"' ] && [ -L "$TH4G/mods/dependent/.claude-plugin/types/provider/index.d.ts" ] \
-  && check "and the installed copy is never written, through the laid link or otherwise" ok \
-  || check "and the installed copy is never written, through the laid link or otherwise" "$(cat "$TH4G/mods/provider/types/index.d.ts")"
-# Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
-out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
-  && printf '%s\n' "$out" | grep -q 'UNMEASURED: .*not checked ([0-9]* no TypeScript compiler: ' \
-  && check "with types to borrow but no compiler, the compiler is what is named" ok \
-  || check "with types to borrow but no compiler, the compiler is what is named" "$out"
-# Types laid but the scratch copy fails (here, a scratch folder that cannot be written): that is the
-# cause named, never missing types.
+grep -qxF 'TYPES dependent: "claude-code","claude-code-tools","claude-code-mcp","provider"' "$TSC_LOG" \
+  && check "the tsconfig names each dependency that has a contract, and leaves out one that has none" ok \
+  || check "the tsconfig names each dependency that has a contract, and leaves out one that has none" "$(cat "$TSC_LOG")"
+[ "$code" -eq 0 ] && check "and the mods pass" ok || check "and the mods pass" "exit=$code out=$out"
+[ "$(cat "$OUTSIDE")" = 'export type P = "installed"' ] && [ -L "$M4G/dependent/.claude-plugin/types/provider/index.d.ts" ] \
+  && check "and a laid link in the folder is never written through" ok \
+  || check "and a laid link in the folder is never written through" "$(cat "$OUTSIDE")"
+# A dependency this folder does not hold cannot be typed from the repository, so it fails by name.
+M4H="$TMPROOT/m4h"; mkmod "$M4H" orphan
+printf '{ "name": "orphan", "version": "0.1.0", "description": "x", "dependencies": ["elsewhere"] }\n' > "$M4H/orphan/.claude-plugin/plugin.json"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4H" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'orphan could not be type checked' | grep -q 'elsewhere' \
+  && check "a dependency the folder does not hold fails the mod, naming it" ok \
+  || check "a dependency the folder does not hold fails the mod, naming it" "exit=$code out=$out"
+# The pinned types missing a file: no mod can be checked, and that is a fault in the checkout.
+TSX="$TMPROOT/ts-broken"; pin "$TSX" 2.1.291; rm -f "$TSX/claude-code-types/claude-code-tools/index.d.ts"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHECK_MODS_TS_DIR="$TSX" bash "$CHECK" "$M4G" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'could not be type checked' | grep -q 'claude-code-tools/index.d.ts' \
+  && check "pinned types missing a file fail, naming the file" ok \
+  || check "pinned types missing a file fail, naming the file" "exit=$code out=$out"
+# The scratch copy failing (here, a scratch folder that cannot be written) is the cause named.
 # A user who can write anyway (root, in the Linux container) cannot be refused this way, so there it
 # is said as unmeasured rather than read as a fault in the check (L411).
 RO="$TMPROOT/ro-tmp"; mkdir -p "$RO"; chmod 500 "$RO"
 if [ -w "$RO" ]; then
   echo "UNMEASURED: this user can write a mode 500 folder, so a scratch copy that fails cannot be staged here"
 else
-  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-  printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'could not copy it to scratch' \
-    && check "a mod whose scratch copy fails says so, not that no types were laid" ok \
-    || check "a mod whose scratch copy fails says so, not that no types were laid" "$out"
-  # Two causes in one run are each counted and named in the summary, never folded into the last.
-  TH2="$TMPROOT/types-home-2"; laid "$TH2/mods/borrowed"
-  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH2" CHECK_MODS_TS_DIR="$TSDIR" TSC_BIN="$TSC" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-  printf '%s\n' "$out" | grep 'UNMEASURED: 2 of 2' | grep 'could not be copied to scratch: borrowed' | grep -q 'no types laid: illtyped-known' \
-    && check "the summary counts and names each cause" ok || check "the summary counts and names each cause" "$out"
+  out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
+  printf '%s\n' "$out" | grep 'plain ok' | grep -q 'could not copy it to scratch' \
+    && printf '%s\n' "$out" | grep 'UNMEASURED: 2 of 2' | grep -q 'could not be copied to scratch: illtyped-known, plain)\.$' \
+    && check "a mod whose scratch copy fails says so, and the summary counts it by cause" ok \
+    || check "a mod whose scratch copy fails says so, and the summary counts it by cause" "$out"
 fi
 chmod 700 "$RO"
-# Nothing laid anywhere and no compiler: one UNMEASURED summary naming how many and the install command.
-rm -rf "$TSDIR/node_modules"
-out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TMPROOT/no-types" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
-[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q "UNMEASURED: 2 of 2 mods' types were not checked" \
-  && check "mods left unchecked are summed up as UNMEASURED, never a silent skip" ok \
-  || check "mods left unchecked are summed up as UNMEASURED, never a silent skip" "exit=$code out=$out"
-printf '%s\n' "$out" | grep -q 'npm ci --prefix tools/typescript' \
-  && check "with the command that installs the pinned compiler" ok || check "with the command that installs the pinned compiler" "$out"
 
-# 4e. Which Claude Code the types came from (#833). The laid types describe the Claude Code build
-#     that laid them, so the record of known errors is only comparable against the build it was
-#     measured on. That build is recorded beside the record, and a run on another build names both,
-#     so a difference reads as newer types and not as a regression in the mod. It still fails: a
-#     real regression on the other build looks exactly the same (L42).
+# 4e. The pinned types name the Claude Code build they came from, on their first line as the engine
+#     writes it. A Mac running another build is told so, with the command that pins its types, and
+#     nothing else changes: the verdict is the same on every build (#953). This replaces the record
+#     of which build the types came from (#833), which the pinned types now carry themselves.
 M4F="$TMPROOT/m4f"; mkmod "$M4F" verclean; mkmod "$M4F" illtyped-ver
-TH4F="$TMPROOT/types-home-4f"; laid "$TH4F/mods/verclean"; laid "$TH4F/mods/illtyped-ver"
-TS4F="$TMPROOT/ts-4f"; mkdir -p "$TS4F/node_modules/.bin"; cp "$TSC" "$TS4F/node_modules/.bin/tsc"
-printf '2.1.291\n' > "$TS4F/claude-code-version"
-run4f(){ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4F" CHECK_MODS_TS_DIR="$TS4F" PATH=/usr/bin:/bin "$@" bash "$CHECK" "$M4F" 2>&1)"; code=$?; }
-run4f env FAKE_CC_VERSION=2.1.291
-printf '%s\n' "$out" | grep -q 'types came from Claude Code 2.1.291, the build the record was measured on' \
-  && check "a run on the recorded Claude Code build says so" ok || check "a run on the recorded Claude Code build says so" "$out"
+TS4F="$TMPROOT/ts-4f"; mkdir -p "$TS4F/node_modules/.bin"; cp "$TSC" "$TS4F/node_modules/.bin/tsc"; pin "$TS4F" 2.1.291
+run4f(){ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TS_DIR="$TS4F" PATH=/usr/bin:/bin "$@" bash "$CHECK" "$M4F" 2>&1)"; code=$?; }
+run4f env FAKE_CC_VERSION=2.1.291; same_out="$(printf '%s\n' "$out" | grep -v 'this Mac runs')"; same_code=$code
+printf '%s\n' "$out" | grep -q 'type checked against the Claude Code 2.1.291 types pinned in' && ! printf '%s\n' "$out" | grep -q 'this Mac runs' \
+  && check "a run on the pinned build names it, and says nothing more" ok || check "a run on the pinned build names it, and says nothing more" "$out"
 run4f env FAKE_CC_VERSION=2.1.300
-[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'illtyped-ver fails a strict type check' | grep -q 'Claude Code 2.1.300.*measured on 2.1.291' \
-  && check "a type failure on another Claude Code build names both builds on the mod's line, and still fails" ok \
-  || check "a type failure on another Claude Code build names both builds on the mod's line, and still fails" "exit=$code out=$out"
-printf '%s\n' "$out" | grep -q 'types came from Claude Code 2.1.300, and the record .* was measured on 2.1.291' \
-  && check "and the run ends naming the mismatch" ok || check "and the run ends naming the mismatch" "$out"
-# A compiler that dies on the newer types is the likeliest failure of all on another build, so it
-# names both builds too (review of #847).
-mkmod "$M4F" crashing-ver; laid "$TH4F/mods/crashing-ver"
-run4f env FAKE_CC_VERSION=2.1.300
-printf '%s\n' "$out" | grep 'crashing-ver could not be type checked' | grep -q 'Claude Code 2.1.300.*measured on 2.1.291' \
-  && check "a compiler that dies on another build's types names both builds" ok \
-  || check "a compiler that dies on another build's types names both builds" "$out"
-rm -rf "${M4F:?}/crashing-ver"
-rm -f "$TS4F/claude-code-version"
-run4f env FAKE_CC_VERSION=2.1.291
-printf '%s\n' "$out" | grep -q 'names no Claude Code build' \
-  && check "a record naming no build is said as that" ok || check "a record naming no build is said as that" "$out"
-# The shipped record names a build, in the form claude --version prints it.
-grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' "$ROOT/tools/typescript/claude-code-version" 2>/dev/null \
-  && check "the shipped record names the Claude Code build its types were measured on" ok \
-  || check "the shipped record names the Claude Code build its types were measured on" "$(cat "$ROOT/tools/typescript/claude-code-version" 2>&1)"
+printf '%s\n' "$out" | grep 'this Mac runs Claude Code 2.1.300' | grep '2.1.291' | grep -q 'refresh-claude-code-types.sh' \
+  && check "a run on another build names both, with the command that pins the newer types" ok \
+  || check "a run on another build names both, with the command that pins the newer types" "$out"
+[ "$code" -eq "$same_code" ] && [ "$(printf '%s\n' "$out" | grep -v 'this Mac runs')" = "$same_out" ] \
+  && check "and every verdict is the same on either build" ok \
+  || check "and every verdict is the same on either build" "exit $same_code then $code: $out"
+# The pinned types this repository ships are held whole and clean by tools/test-refresh-claude-code-types.sh.
+
+# 4f. The same tree gives the same verdict whatever is installed (#953). Each mod's types once came
+#     from its installed copy, ~/.claude/mods/<mod>/.claude-plugin/types, whose MCP list is whatever
+#     the session had connected when that copy last reloaded: manual-steps' matchers on its own tools
+#     failed the check one hour and passed the next with no change to manual-steps (L461, L398).
+#     The same folder is checked with that copy absent, listing the mod's own tool, and listing other
+#     tools, and every verdict must be identical, and a pass.
+M4I="$TMPROOT/m4i"; mkmod "$M4I" mcpwatcher; mkmod "$M4I" bystander
+run4i(){   # $1 = a home folder
+  : > "$TSC_LOG"
+  out="$(HOME="$1" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4I" 2>&1)"; code=$?
+}
+mkdir -p "$TMPROOT/home-absent"
+laid "$TMPROOT/home-own/.claude/mods/mcpwatcher" mcp__fixture__x; laid "$TMPROOT/home-own/.claude/mods/bystander" mcp__fixture__x
+laid "$TMPROOT/home-other/.claude/mods/mcpwatcher" mcp__other__y; laid "$TMPROOT/home-other/.claude/mods/bystander" mcp__other__y
+verdicts=""
+for h in home-absent home-own home-other; do
+  run4i "$TMPROOT/$h"
+  verdicts="$verdicts$h exit $code: $(printf '%s\n' "$out" | grep -v 'this Mac runs' | paste -sd'|' -)
+"
+  [ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'mcpwatcher ok' | grep -q 'types checked' \
+    && check "with the installed copy $h, a mod matching its own MCP tool passes the type check" ok \
+    || check "with the installed copy $h, a mod matching its own MCP tool passes the type check" "exit=$code out=$out"
+  grep -qxF "MCP mcpwatcher: $pinned_mcp_sum" "$TSC_LOG" \
+    && check "with the installed copy $h, the compiler is handed the pinned MCP list" ok \
+    || check "with the installed copy $h, the compiler is handed the pinned MCP list" "$(cat "$TSC_LOG")"
+done
+[ "$(printf '%s' "$verdicts" | sed 's/^[^ ]* //' | sort -u | wc -l | tr -d ' ')" = 1 ] \
+  && check "and the verdict is identical with the installed copy absent, present, or listing other tools" ok \
+  || check "and the verdict is identical with the installed copy absent, present, or listing other tools" "$verdicts"
+# The same with the real compiler and the real pinned types, where the pinned compiler is installed
+# (always on CI, #895): a mod whose tool.call matcher names its own MCP tool, as manual-steps' do.
+REAL_TSC="$ROOT/tools/typescript/node_modules/.bin/tsc"
+if [ ! -x "$REAL_TSC" ]; then
+  echo "UNMEASURED: the pinned compiler is not installed in this checkout (npm ci --prefix tools/typescript), so the real compiler's verdict was not compared across installed copies"
+else
+  M4J="$TMPROOT/m4j"; mkmod "$M4J" realmcp
+  cat > "$M4J/realmcp/hooks/register.ts" <<'TS'
+import type { Register } from 'claude-code'
+export const register: Register = (on) => {
+  on('tool.call', { tool: 'mcp__realmcp__ask' }, async ($, e, next) => next(e))
+}
+TS
+  real=""
+  for h in home-absent home-own home-other; do
+    out="$(HOME="$TMPROOT/$h" CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" TSC_BIN="$REAL_TSC" bash "$CHECK" "$M4J" 2>&1)"; code=$?
+    real="$real$code $(printf '%s\n' "$out" | grep -v 'this Mac runs' | paste -sd'|' -)
+"
+  done
+  [ "$(printf '%s' "$real" | sort -u | wc -l | tr -d ' ')" = 1 ] && printf '%s' "$real" | head -n 1 | grep -q '^0 .*realmcp ok (types checked)' \
+    && check "the real compiler passes a mod matching its own MCP tool, with the same verdict whatever is installed" ok \
+    || check "the real compiler passes a mod matching its own MCP tool, with the same verdict whatever is installed" "$real"
+fi
 
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
@@ -346,12 +418,19 @@ runit "$M5"
   || check "an empty mods folder passes and says it checked none" "exit=$code out=$out"
 
 # 6. With no claude to ask, mods present is UNMEASURED: its own exit code, never a pass (L411, L490).
-out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M1" 2>&1)"; code=$?
+: > "$TSC_LOG"
+out="$(TSC_LOG="$TSC_LOG" TSC_BIN="$TSC" CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M1" 2>&1)"; code=$?
 [ "$code" -eq 3 ] && check "no claude means exit 3, unmeasured" ok || check "no claude means exit 3, unmeasured" "exit=$code out=$out"
 case "$out" in *UNMEASURED*) check "and says UNMEASURED" ok ;; *) check "and says UNMEASURED" "$out" ;; esac
-# CI is this case, and the strict type check is the part it never reaches, so it is named (#833).
-printf '%s\n' "$out" | grep UNMEASURED | grep -q 'strict type check is UNMEASURED too' \
-  && check "and names the strict type check as unmeasured as well" ok || check "and names the strict type check as unmeasured as well" "$out"
+# CI is this case. The strict type check needs only the pinned types and compiler, never Claude Code,
+# so it runs there too (#953; before it, CI never reached it, #833), and its result is said.
+grep -q -- "-p .*/one" "$TSC_LOG" && printf '%s\n' "$out" | grep -q '2 of 2 mods type checked against' \
+  && check "and still type checks every mod" ok || check "and still type checks every mod" "$out $(cat "$TSC_LOG")"
+M6="$TMPROOT/m6"; mkmod "$M6" illtyped-ci
+out="$(TSC_LOG="$TSC_LOG" TSC_BIN="$TSC" CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M6" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'illtyped-ci fails a strict type check' \
+  && check "so with no claude a type error fails the run, rather than hiding behind UNMEASURED" ok \
+  || check "so with no claude a type error fails the run, rather than hiding behind UNMEASURED" "exit=$code out=$out"
 
 # 6b. Claude Code answering that hooks modules are switched off is machine state the suite cannot
 #     set, so it is UNMEASURED with its own exit code and the engine's words, never a failure of
@@ -379,7 +458,7 @@ line="$(printf '%s\n' "$out" | grep 'noverdict-mod failed')"
 case "$line" in *"exit 7"*"something odd happened"*) check "naming the exit code and the last output" ok ;; *) check "naming the exit code and the last output" "$out" ;; esac
 
 # 7. A mods folder that does not exist is refused, not passed as empty.
-out="$(CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code=$?
+out="$(CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" TSC_BIN="$TSC_PASS" bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused" ok || check "a missing mods folder is refused" "exit=$code out=$out"
 
 # 7b. A hook on an event Claude Code's built-in security default sends past the user tier is a hook
@@ -399,7 +478,7 @@ printf "on('classic.Stop', () => ({}))\n" > "$M7B/checks/hooks/register.test.ts"
 # review of #879): only a line that is a comment is taken out.
 mkmod "$M7B" urls
 printf "export const register = on => {\n  const u = 'https://example.com'; on('classic.Notification', async (\$, e, next) => next(e))\n}\n" > "$M7B/urls/hooks/register.ts"
-runbp(){ : > "$LOG"; out="$(STUB_LOG="$LOG" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" bash "$CHECK" "$M7B" 2>&1)"; code=$?; }
+runbp(){ : > "$LOG"; out="$(STUB_LOG="$LOG" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7B" 2>&1)"; code=$?; }
 runbp
 [ "$code" -eq 1 ] && check "a mod hooking a bypassed event fails the run" ok || check "a mod hooking a bypassed event fails the run" "exit=$code out=$out"
 printf '%s\n' "$out" | grep -q 'stops hooks classic.Stop, which' && check "naming the mod and the classic event" ok || check "naming the mod and the classic event" "$out"
@@ -415,7 +494,7 @@ printf '%s\n' "$out" | grep -q 'urls hooks classic.Notification, which' && check
 ! printf '%s\n' "$out" | grep -q 'checks hooks' && check "while tool.check, a comment, another object's on and a test file are not hooks" ok \
   || check "while tool.check, a comment, another object's on and a test file are not hooks" "$out"
 # The same check where no claude command exists: still a definite failure, never UNMEASURED.
-out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" PATH=/usr/bin:/bin bash "$CHECK" "$M7B" 2>&1)"; code=$?
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7B" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "with no claude command, a hook on a bypassed event still fails" ok \
   || check "with no claude command, a hook on a bypassed event still fails" "exit=$code out=$out"
 # Listed with the issue deciding it: the run passes.
@@ -465,6 +544,13 @@ else
   if [ "$code" -eq 3 ]; then
     echo "note: no claude command on this machine, so the real mods are reported UNMEASURED rather than passed."
     check "the real mods could not be measured here" ok
+    # Their types were checked all the same, wherever the pinned compiler is installed (#953).
+    if [ -x "$ROOT/tools/typescript/node_modules/.bin/tsc" ]; then
+      nm="$(find "$ROOT/payload/mods" -mindepth 3 -maxdepth 3 -path '*/.claude-plugin/plugin.json' | wc -l | tr -d ' ')"
+      printf '%s\n' "$out" | grep -q "^check-mods: $nm of $nm mods type checked against" \
+        && check "but every real mod's types were checked, with no claude" ok \
+        || check "but every real mod's types were checked, with no claude" "$out"
+    fi
   elif [ "$code" -eq 4 ]; then
     # Claude Code's cached rollout switch, which this suite cannot set (#740, L411).
     echo "note: Claude Code has hooks modules switched off on this machine, so the real mods are UNMEASURED rather than passed:"
