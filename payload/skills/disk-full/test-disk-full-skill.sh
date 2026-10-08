@@ -52,7 +52,7 @@ check "no step tells Claude to wait minutes inside the session" \
   "$(grep -qiE 'wait (five|5|several|a few) minutes' "$SKILL" && echo "still says to wait minutes" || echo ok)"
 
 # ---- 3. the rate comes from check-free-space.sh, and the command as written works ----
-rate_line="$(grep -F 'check-free-space.sh' <<< "$CODE" | head -n 1)"
+rate_line="$(grep -m 1 -F 'check-free-space.sh' <<< "$CODE")"
 check "the rate step runs the free space check rather than measuring a second way" \
   "$([ -n "$rate_line" ] && echo ok || echo "no command in a block runs check-free-space.sh")"
 check "and runs the installed copy, with --report so a disk with room still answers" \

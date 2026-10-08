@@ -92,7 +92,7 @@ check "no folder given is could not tell (exit 2), never no" \
 
 # ---- 2. the workflow probes only when it should, and reports not applicable otherwise ----
 check "the workflow still parses as the Workflow engine runs it" \
-  "$(node "$SYNTAX" "$WF" >/dev/null 2>&1 && echo ok || echo "$(node "$SYNTAX" "$WF" 2>&1 | head -n 3)")"
+  "$(node "$SYNTAX" "$WF" >/dev/null 2>&1 && echo ok || echo "$(node "$SYNTAX" "$WF" 2>&1)")"
 
 fns="$(grep -E '^const (probesSchema|schemaState|preflightPrompt|preflightSchema) = ' "$WF")"
 n_fns="$(grep -c . <<< "$fns")"

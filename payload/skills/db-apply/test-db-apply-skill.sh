@@ -44,7 +44,7 @@ CODE="$(awk '/^[[:space:]]*```/ { inside = !inside; next } inside { sub(/^[[:spa
 # The prefix depends on how the server is connected (claude.ai connector or a local server), so a
 # full name is right in one session and absent in the next. The bare tool name is what both share.
 check "no MCP tool is named with a server prefix" \
-  "$(grep -oE 'mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_]+' "$SKILL" | head -n 1 | sed 's/^/still names /' | grep . || echo ok)"
+  "$(grep -m 1 -oE 'mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_]+' "$SKILL" | sed 's/^/still names /' | grep . || echo ok)"
 for tool in list_tables execute_sql list_migrations; do
   check "the Supabase MCP tool $tool is named, as \`$tool\`" \
     "$(grep -qF "\`$tool\`" "$SKILL" && echo ok || echo "not named in $SKILL")"
@@ -61,13 +61,13 @@ check "no command passes a connection string or password on the command line" \
   "$(grep -qE -- '--db-url|--password|(^| )-p |postgres(ql)?://' <<< "$CODE" && echo "found in a command block" || echo ok)"
 
 # ---- 4. psql is optional, and the command keeps the connection string out of the transcript ----
-psql_line="$(grep -E '(^|[^a-z_])psql ' <<< "$CODE" | head -n 1)"
+psql_line="$(grep -m 1 -E '(^|[^a-z_])psql ' <<< "$CODE")"
 check "there is a psql command to test" "$([ -n "$psql_line" ] && echo ok || echo "no psql command in a block")"
 check "the psql command checks psql is installed before using it" \
   "$(grep -qF 'command -v psql' <<< "$psql_line" && echo ok || echo "the line is: $psql_line")"
 # A path that needs no psql must come first, so a Mac without it is not a dead end.
-first_exec="$(grep -n -F '`execute_sql`' "$SKILL" | head -n 1 | cut -d: -f1)"
-first_psql="$(grep -n 'psql' "$SKILL" | head -n 1 | cut -d: -f1)"
+first_exec="$(grep -m 1 -n -F '`execute_sql`' "$SKILL" | cut -d: -f1)"
+first_psql="$(grep -m 1 -n 'psql' "$SKILL" | cut -d: -f1)"
 check "execute_sql is offered before psql" \
   "$([ -n "$first_exec" ] && [ -n "$first_psql" ] && [ "$first_exec" -lt "$first_psql" ] && echo ok || echo "execute_sql at line ${first_exec:-none}, psql at ${first_psql:-none}")"
 
