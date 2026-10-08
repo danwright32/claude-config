@@ -49,7 +49,8 @@ and settles its own surfaces in rounds of its own before it is built.
    10 s (none given waits up to Claude Code's 30 s default) and a `$.model.complete` with none under
    10 s (a completion can take a minute), unless the noun races it against a shorter timer. Its first run found two in session-registry's
    engine.create code (a save's `mv` and the repository root lookup), now bounded at 5 s.
-5. **A mod that changes with mod-kit is loaded again after mod-kit reloads (#960).** Measured on
+5. **A mod that changes with a mod it depends on is loaded again after that one reloads (#960,
+   #966).** Measured on
    2026-10-08 (2.1.294) with throwaway mods in a session of their own: when one pull changes mod-kit
    and a mod that starts hooking or calling something mod-kit only now provides, an open session can
    reload that mod first, against the old mod-kit, idle or at a busy turn's end whatever order the
@@ -61,7 +62,24 @@ and settles its own surfaces in rounds of its own before it is built.
    that depends on it and changed since mod-kit last started in that session, which Claude Code
    takes as a save and loads the mod again, now against the new mod-kit. Proven end to end on the
    real mod-kit the same day: the dependent was unloaded, mod-kit reloaded and touched it, and it
-   loaded again with its tool. The other providers' dependents are #966.
+   loaded again with its tool.
+   The same happens to a mod depending on another provider (session-registry, status-bar,
+   is-it-live, addon-notes), measured the same day on 2.1.295 with a provider that does not depend
+   on mod-kit and a mod depending on it alone: the dependent was unloaded, the provider reloaded,
+   and `session.start` was raised for the provider alone, so nothing of mod-kit ran and the
+   dependent stayed unloaded through the next turn (#966). Having each provider ask mod-kit from its
+   own `session.start` would cover only the providers that remember to, and two of them do not
+   depend on mod-kit at all, so mod-kit looks for every provider in one place instead: at each
+   turn's start (`turn.start`, the look made once the turn has begun, so it holds nothing back), a
+   provider whose files changed since the last look has reloaded (an idle session reloads at once,
+   a busy one at its turn's end), and each mod depending on it that changed since that last look is
+   touched the same way; a provider whose newest file is not older than the turn's start is still
+   landing and is judged at the next look. Such a mod's tools come back at the end of the turn that
+   looked. Proven the same day, idle and busy (a busy turn's end reloaded the dependent before its
+   provider): the next turn's look touched the dependent and it loaded again with its tool. With
+   twenty mod folders the look took about a tenth of a second. A mod whose touch fails is named in
+   the session (by a turn's look only the first time) and tried again at the next look or mod-kit
+   reload; a change in a folder beneath a module's `hooks` folder counts.
 
 ## Guard surfaces (#607, #608, #609)
 

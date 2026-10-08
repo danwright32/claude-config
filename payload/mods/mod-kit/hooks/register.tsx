@@ -4,7 +4,7 @@ import type { ModKit, ModKitBandButton, ModKitBandLine, ModKitBandPart, ModKitBa
 import { clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
-import { dependsOn, newestFile } from './dependents.ts'
+import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
 import { sendTwice } from './send.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
@@ -43,10 +43,12 @@ const band = { plugin: 'mod-kit', key: 'band' } as const
 const panes = { plugin: 'mod-kit', key: 'panes' } as const
 // When this mod last started in this session (#960), there for the same reason: a reload reads it.
 const started = { plugin: 'mod-kit', key: 'started' } as const
-// The mods a reload could not ask to load again, asked again at the next one whatever their times.
+// The mods a pass could not ask to load again, asked again at the next one whatever their times.
 const askAgain = { plugin: 'mod-kit', key: 'askAgain' } as const
 // The time each manifest mod-kit touched was left with, so its own touch is not read as a change.
 const stamped = { plugin: 'mod-kit', key: 'stamped' } as const
+// Where each provider other than mod-kit was last looked at, at a turn's start (#966).
+const swept = { plugin: 'mod-kit', key: 'swept' } as const
 
 // #960, measured 2026-10-08 with throwaway mods in a session of its own. When one delivery changes
 // mod-kit and a mod that starts using something mod-kit only now provides (the steps card hooking
@@ -60,63 +62,167 @@ const stamped = { plugin: 'mod-kit', key: 'stamped' } as const
 // can be overwritten with an older copy. A mod that had loaded is loaded once more, which is harmless.
 // The session's own start loads every mod as it is on disk, so it only records the time.
 //
+// #966, measured the same day (2.1.295): the same happens to a mod that depends on another provider
+// (session-registry, status-bar, is-it-live, addon-notes), and nothing of mod-kit runs when that
+// provider reloads: session.start is raised for the reloaded mod alone. So mod-kit also looks at each
+// turn's start, by when a provider changed since the last look has reloaded (a busy session reloads
+// at its turn's end, an idle one at once), and asks again for its dependents that changed since
+// then. One place for every provider, present and future, none of which has to opt in. The cost: a
+// look at the mods folder each turn, made once the turn has begun so it holds nothing back, and such
+// a mod's tools come back at the end of the turn that looked rather than at once.
+//
 // From the #967 review: the next pass compares against the time this pass BEGAN, so a delivery that
 // lands while it is still asking is seen then; mod-kit's own touches are told apart by the time each
 // left its manifest with, so they are not taken for changes; a mod that could not be asked is kept by
-// name and asked again, so one that keeps failing holds no other back; and a folder that could not
-// be listed moves nothing, so every mod is looked at again.
-const reloadDependents = async ($: EngineInterface) => {
-  const before = (await $.state.get(started)).value
-  const passStart = await $.clock.now()
-  if (before === undefined) {
-    await $.state.set(started, passStart)
-    return
-  }
-  const home = $.plugin.root.replace(/\/+[^/]+\/*$/, '')
-  const lost = 'If its tools or commands are missing in this session, a new session brings them back.'
-  let entries: Awaited<ReturnType<EngineInterface['fs']['list']>>
-  try {
-    entries = await $.fs.list(home)
-  } catch (err) {
-    $.ui.log(`mod-kit reloaded, but the mods folder ${home} could not be read (${String((err as Error)?.message ?? err)}), so a mod that changed with it was not asked to load again. ${lost}`)
-    return
-  }
-  const retry = new Set((await $.state.get(askAgain)).value ?? [])
-  const stamps: Record<string, number> = { ...((await $.state.get(stamped)).value ?? {}) }
-  const touched: string[] = []
-  const failed: string[] = []
+// name and asked again at the next pass of either kind, so one that keeps failing holds no other
+// back; a folder that could not be listed moves nothing, so every mod is looked at again; and a
+// change in a folder beneath a module's hooks folder counts.
+const lost = 'If its tools or commands are missing in this session, a new session brings them back.'
+const reason = (err: unknown) => String((err as Error)?.message ?? err)
+const modsFolder = ($: EngineInterface) => $.plugin.root.replace(/\/+[^/]+\/*$/, '')
+
+// The newest file in a module's folder and the folders beneath it, to a depth no module here comes
+// near, links not followed, so a loop cannot hold a pass.
+const newestBeneath = async ($: EngineInterface, dir: string, depth = 0): Promise<number> => {
+  const entries = await $.fs.list(dir)
+  let newest = newestFile(entries)
+  for (const f of entries) if (f.kind === 'dir' && !f.isLink && depth < 4) newest = Math.max(newest, await newestBeneath($, `${dir}/${f.name}`, depth + 1))
+  return newest
+}
+
+type ModLook = { name: string; manifestPath: string; deps: string[]; newest: () => Promise<number> }
+type Pass = { mods: ModLook[]; unread: { name: string; text: string }[]; retry: Set<string>; stamps: Record<string, number> }
+
+// Every mod in the mods folder but mod-kit, in the folder's order: what it depends on and, when
+// asked, its newest file, mod-kit's own touch of its manifest not counted. No manifest, no mod:
+// nothing loads the folder. No hooks folder, no module: nothing of it is loaded, so it has no tools
+// to lose. A manifest that is there but cannot be read may be a mod that is unloaded now, so it is a
+// failure, said and asked about again.
+const beginPass = async ($: EngineInterface, home: string, entries: readonly { name: string; kind: string }[], after: string): Promise<Pass> => {
+  const pass: Pass = { mods: [], unread: [], retry: new Set((await $.state.get(askAgain)).value ?? []), stamps: { ...((await $.state.get(stamped)).value ?? {}) } }
   for (const entry of entries) {
     if (entry.kind !== 'dir' || entry.name === 'mod-kit') continue
     const dir = `${home}/${entry.name}`
     const manifestPath = `${dir}/.claude-plugin/plugin.json`
     try {
-      // No manifest, no mod: nothing loads the folder. One that is there but cannot be read may be
-      // a mod that is unloaded now, so it is a failure, said and asked about again.
       if (!(await $.fs.exists(manifestPath))) continue
-      if (!dependsOn(await $.fs.read(manifestPath)).includes('mod-kit')) continue
-      // No hooks folder, no module: nothing of it is loaded, so it has no tools to lose.
+      const deps = dependsOn(await $.fs.read(manifestPath))
       if (!(await $.fs.exists(`${dir}/hooks`))) continue
-      const own = (f: { name: string; mtimeMs: number }) => f.name === 'plugin.json' && f.mtimeMs === stamps[entry.name]
-      const files = [...(await $.fs.list(`${dir}/.claude-plugin`)).filter(f => !own(f)), ...(await $.fs.list(`${dir}/hooks`))]
-      if (newestFile(files) <= before && !retry.has(entry.name)) continue
-      const r = await $.process.run(['touch', '-c', manifestPath])
-      if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `touch exited ${r.exitCode}`)
-      touched.push(entry.name)
-      try {
-        stamps[entry.name] = (await $.fs.stat(manifestPath)).mtimeMs
-      } catch {
-        delete stamps[entry.name] // unknown: its touch is taken for a change once more, which is harmless
-      }
+      const own = (f: { name: string; mtimeMs: number }) => f.name === 'plugin.json' && f.mtimeMs === pass.stamps[entry.name]
+      const read = async () => Math.max(newestFile((await $.fs.list(`${dir}/.claude-plugin`)).filter(f => !own(f))), await newestBeneath($, `${dir}/hooks`))
+      let newest: Promise<number> | undefined
+      pass.mods.push({ name: entry.name, manifestPath, deps, newest: () => (newest ??= read()) })
     } catch (err) {
-      failed.push(entry.name)
-      $.ui.log(`mod-kit reloaded, but ${entry.name}, which depends on it, could not be asked to load again (${String((err as Error)?.message ?? err)}). ${lost}`)
+      pass.unread.push({ name: entry.name, text: `${entry.name} could not be asked to load again after ${after} reloaded (${reason(err)}). ${lost}` })
     }
   }
-  if (touched.length) $.ui.log(`mod-kit reloaded, so these mods that changed with it load again: ${touched.join(', ')}`, { to: 'debug' })
+  return pass
+}
+
+// Asks again for each mod that depends on a provider in `reloaded` (each with the time it was last
+// looked at) and changed since then, and for each the last pass could not ask, then records the
+// outcome. With `sayAgain` false a failure is said only the first time, so a look made every turn
+// does not repeat a line the person already has.
+const askDependents = async ($: EngineInterface, pass: Pass, reloaded: ReadonlyMap<string, number>, opts: { sayAgain: boolean; who: (under: string[]) => string }) => {
+  const touched: string[] = []
+  const failed: string[] = []
+  const fail = (name: string, text: string) => {
+    failed.push(name)
+    if (opts.sayAgain || !pass.retry.has(name)) $.ui.log(text)
+  }
+  for (const u of pass.unread) fail(u.name, u.text)
+  for (const mod of pass.mods) {
+    let under: string[] = []
+    try {
+      if (mod.deps.some(p => reloaded.has(p))) under = reloadedUnder(mod.deps, await mod.newest(), reloaded)
+      if (!under.length && !pass.retry.has(mod.name)) continue
+      const r = await $.process.run(['touch', '-c', mod.manifestPath])
+      if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `touch exited ${r.exitCode}`)
+      touched.push(mod.name)
+      try {
+        pass.stamps[mod.name] = (await $.fs.stat(mod.manifestPath)).mtimeMs
+      } catch {
+        delete pass.stamps[mod.name] // unknown: its touch is taken for a change once more, which is harmless
+      }
+    } catch (err) {
+      fail(mod.name, `${mod.name} could not be asked to load again after ${opts.who(under)} reloaded (${reason(err)}). ${lost}`)
+    }
+  }
+  if (touched.length) $.ui.log(`These mods load again, as a mod they depend on reloaded: ${touched.join(', ')}`, { to: 'debug' })
   await $.state.set(askAgain, failed)
-  await $.state.set(stamped, stamps)
+  await $.state.set(stamped, pass.stamps)
+}
+
+// mod-kit's own reload (#960): its dependents that changed since it last started.
+const afterOwnStart = async ($: EngineInterface) => {
+  const before = (await $.state.get(started)).value
+  const passStart = await $.clock.now()
+  // The look at turns begins with the session, or with the first start of a mod-kit that makes it.
+  if ((await $.state.get(swept)).value === undefined) await $.state.set(swept, { from: passStart, at: {} })
+  if (before === undefined) {
+    await $.state.set(started, passStart)
+    return
+  }
+  const home = modsFolder($)
+  let entries: Awaited<ReturnType<EngineInterface['fs']['list']>>
+  try {
+    entries = await $.fs.list(home)
+  } catch (err) {
+    $.ui.log(`mod-kit reloaded, but the mods folder ${home} could not be read (${reason(err)}), so a mod that changed with it was not asked to load again. ${lost}`)
+    return
+  }
+  const pass = await beginPass($, home, entries, 'mod-kit')
+  await askDependents($, pass, new Map([['mod-kit', before]]), { sayAgain: true, who: () => 'mod-kit' })
   await $.state.set(started, passStart)
 }
+
+// What a look at a turn's start has said and not yet seen put right, so each is said once.
+const saidAtTurns = new Set<string>()
+const sayOnce = ($: EngineInterface, kind: string, text: string) => {
+  if (saidAtTurns.has(kind)) return
+  saidAtTurns.add(kind)
+  $.ui.log(text)
+}
+
+// A turn's start (#966): every provider but mod-kit that changed since the last look has reloaded.
+// mod-kit asks for its own dependents when it reloads, at once, so it is not judged here.
+const atTurnStart = async ($: EngineInterface, turnStart: number) => {
+  const look = (await $.state.get(swept)).value
+  if (look === undefined) {
+    await $.state.set(swept, { from: turnStart, at: {} })
+    return
+  }
+  const home = modsFolder($)
+  let entries: Awaited<ReturnType<EngineInterface['fs']['list']>>
+  try {
+    entries = await $.fs.list(home)
+  } catch (err) {
+    sayOnce($, 'folder', `The mods folder ${home} could not be read at a turn's start (${reason(err)}), so mod-kit could not check whether a mod needs to load again. ${lost}`)
+    return
+  }
+  saidAtTurns.delete('folder')
+  const pass = await beginPass($, home, entries, 'a mod it depends on')
+  const byName = new Map(pass.mods.map(m => [m.name, m]))
+  const newest: Record<string, number> = {}
+  for (const provider of new Set(pass.mods.flatMap(m => m.deps))) {
+    const mod = byName.get(provider)
+    if (provider === 'mod-kit' || !mod) continue
+    try {
+      newest[provider] = await mod.newest()
+    } catch (err) {
+      // Not judged, so looked at from the same time at the next turn.
+      pass.unread.push({ name: provider, text: `mod-kit could not tell at a turn's start whether ${provider} changed (${reason(err)}), so a mod that depends on it was not asked to load again. ${lost}` })
+    }
+  }
+  const { reloaded, at } = judgeProviders(newest, look, turnStart)
+  await askDependents($, pass, reloaded, { sayAgain: false, who: under => (under.length ? under.join(' and ') : 'a mod it depends on') })
+  await $.state.set(swept, { from: look.from, at })
+  saidAtTurns.delete('check')
+}
+
+// One pass at a time, so two never read and write the same records over each other.
+let passes: Promise<void> = Promise.resolve()
+const onePass = (fn: () => Promise<void>) => (passes = passes.then(fn, fn))
 
 export const register: Register = (on, options) => {
   registerBand(on, options)
@@ -377,12 +483,27 @@ const registerBand: Register = on => {
   on('session.start', async ($, e, next) => {
     if (e.isInteractive) await $.command.register({ name: 'press', description: 'Press a button in the band or a pane: /press <mod> <button>, as the band shows it', argumentHint: '<mod> <button>' })
     // #960: at a reload, the mods that changed with mod-kit are asked to load again.
-    try {
-      await reloadDependents($)
-    } catch (err) {
-      $.ui.log(`mod-kit could not check which mods to load again after it started (${String((err as Error)?.message ?? err)}). If a mod's tools or commands are missing in this session, a new session brings them back.`)
-    }
+    await onePass(async () => {
+      try {
+        await afterOwnStart($)
+      } catch (err) {
+        $.ui.log(`mod-kit could not check which mods to load again after it started (${reason(err)}). ${lost}`)
+      }
+    })
     return next(e)
+  })
+  // #966: at each turn's start, the mods whose provider reloaded since the last look. Looked at once
+  // the turn has begun, so it never holds the turn back, judged by the time the turn began.
+  on('turn.start', async ($, e, next) => {
+    const r = await next(e)
+    const failed = (err: unknown) => sayOnce($, 'check', `mod-kit could not check at a turn's start which mods to load again (${reason(err)}). ${lost}`)
+    try {
+      const turnStart = await $.clock.now()
+      $.clock.after(0, () => void onePass(() => atTurnStart($, turnStart).catch(failed)))
+    } catch (err) {
+      failed(err)
+    }
+    return r
   })
   on('command.run', { command: 'press' }, async ($, e) => {
     const [mod = '', ...rest] = e.args.trim().split(/\s+/)
