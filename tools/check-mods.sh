@@ -293,7 +293,7 @@ for d in "${mods[@]}"; do
     echo "check-mods: $name ok ($types)"
     continue
   fi
-  copy_failed=""
+  copy_failed=""; lay_failed=""
   if [ ! -f "$d/.claude-plugin/types/tsconfig.json" ] && [ -f "$TYPES_HOME/mods/$name/.claude-plugin/types/tsconfig.json" ]; then
     [ -n "$scratch" ] || copy_failed="no scratch folder could be made"
   fi
@@ -328,11 +328,12 @@ for d in "${mods[@]}"; do
     if [ -n "$checked" ] && ! grep -q '"dependencies"' "$d/.claude-plugin/plugin.json"; then
       :
     elif [ -n "$checked" ] && ! command -v "$py" >/dev/null 2>&1; then
-      checked=""; copy_failed="no python3 to read its dependencies with"
+      checked=""; lay_failed="no python3 to read its dependencies with"
     elif [ -n "$checked" ]; then
       # A laid link whose installed file is gone is removed, never written through, which would make
-      # that file in the installed mod (lessons review of #964). A tsconfig with no types list
-      # includes every folder under its type roots already, so a list is only added to, never made.
+      # that file in the installed mod (lessons review of #964); so is a laid tsconfig that is a link,
+      # which is rewritten as a file of its own. A tsconfig with no types list includes every folder
+      # under its type roots already, so a list is only added to, never made.
       why="$("$py" - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
 import json, os, shutil, sys
 manifest, types, mods = sys.argv[1:4]
@@ -351,6 +352,8 @@ try:
         listed = c.get("compilerOptions", {}).get("types")
         if isinstance(listed, list) and dep not in listed:
             listed.append(dep)
+            if os.path.islink(conf):
+                os.unlink(conf)
             json.dump(c, open(conf, "w"), indent=2)
 except Exception as e:
     print(f"laying a new dependency failed: {e}")
@@ -360,11 +363,15 @@ PY
       if [ "$prc" -ne 0 ]; then
         # A python3 that dies outside its own try (a crash, a failed import) says nothing, and is
         # still the cause named, never taken for types that were not laid (L11).
-        checked=""; copy_failed="${why:-python3 exited $prc without saying why while laying its dependencies}"
+        checked=""; lay_failed="${why:-python3 exited $prc without saying why}"
       fi
     fi
   fi
-  if [ -n "$copy_failed" ]; then
+  if [ -n "$lay_failed" ]; then
+    # The scratch copy was made; laying a dependency the change adds is the step that failed (L11).
+    types="types not checked: a dependency it adds could not be laid ($lay_failed)"
+    unchecked "a new dependency could not be laid" "$name"
+  elif [ -n "$copy_failed" ]; then
     # Types were laid; what failed is the scratch copy, which is the cause said (L11).
     types="types not checked: its laid types are in $TYPES_HOME/mods/$name but it could not copy it to scratch ($copy_failed)"
     unchecked "could not be copied to scratch" "$name"

@@ -319,8 +319,27 @@ printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: .*no pyt
 # A python3 that dies saying nothing is still the cause named, never "no types laid" (L11).
 SILENT_PY="$TMPROOT/silent-python"; printf '#!/bin/sh\nexit 3\n' > "$SILENT_PY"; chmod +x "$SILENT_PY"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4J" CHECK_MODS_TS_DIR="$TSDIR" CHECK_MODS_PYTHON="$SILENT_PY" PATH=/usr/bin:/bin bash "$CHECK" "$M4J" 2>&1)"; code=$?
-printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: .*could not copy it to scratch (python3 exited 3 without saying why while laying its dependencies)' \
+printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: a dependency it adds could not be laid (python3 exited 3 without saying why)' \
   && check "a python3 that dies silently is named as the cause" ok || check "a python3 that dies silently is named as the cause" "$out"
+# The step that failed is named, never the scratch copy, which succeeded (lessons review of #964).
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4J" CHECK_MODS_TS_DIR="$TSDIR" CHECK_MODS_PYTHON="$TMPROOT/no-such-python" PATH=/usr/bin:/bin bash "$CHECK" "$M4J" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'types not checked: a dependency it adds could not be laid (no python3 to read its dependencies with)' \
+  && ! printf '%s\n' "$out" | grep 'adds-dep ok' | grep -q 'could not copy it to scratch' \
+  && check "a missing python3 is named as that, not as a failed copy" ok || check "a missing python3 is named as that, not as a failed copy" "$out"
+printf '%s\n' "$out" | grep -q 'UNMEASURED: .*a new dependency could not be laid: adds-dep' \
+  && check "and counted under its own cause in the summary" ok || check "and counted under its own cause in the summary" "$out"
+# A laid tsconfig that is a link into the installed mod is replaced, never written through.
+M4K="$TMPROOT/m4k"; mkmod "$M4K" adds-dep; mkmod "$M4K" provider
+mkdir -p "$M4K/provider/types"; printf 'export type P = "new"\n' > "$M4K/provider/types/index.d.ts"
+printf '{ "name": "adds-dep", "version": "0.1.0", "description": "x", "dependencies": ["provider"] }\n' > "$M4K/adds-dep/.claude-plugin/plugin.json"
+TH4K="$TMPROOT/types-home-4k"; mkdir -p "$TH4K/mods/adds-dep/.claude-plugin/types" "$TH4K/installed"
+printf '{ "compilerOptions": { "types": ["claude-code"] } }\n' > "$TH4K/installed/tsconfig.json"
+ln -s "$TH4K/installed/tsconfig.json" "$TH4K/mods/adds-dep/.claude-plugin/types/tsconfig.json"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4K" CHECK_MODS_TS_DIR="$TSDIR" PATH="/usr/bin:/bin:$(dirname "$(command -v python3)")" bash "$CHECK" "$M4K" 2>&1)"; code=$?
+grep -q 'CONF adds-dep: .*"types":\["claude-code","provider"\]' "$TSC_LOG" && [ "$(tr -d ' \n' < "$TH4K/installed/tsconfig.json")" = '{"compilerOptions":{"types":["claude-code"]}}' ] \
+  && check "a laid tsconfig linked into the installed mod is replaced, never written through" ok \
+  || check "a laid tsconfig linked into the installed mod is replaced, never written through" "$(cat "$TSC_LOG"; cat "$TH4K/installed/tsconfig.json")"
 # Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
