@@ -159,9 +159,13 @@ remove_rule() {
 # Whether the process a rule is on record for is still the run that loaded it: alive, and still
 # the read only proxy (or the self test), so a pid the system has since handed to something else
 # does not keep a rule standing.
+# Judged by the shape of the whole command, never a mention anywhere in it: node running the proxy
+# script, or bash running the self test. A program that merely names the file (an editor, a pager)
+# is not the proxy.
+OWNER_SHAPES='^([^ ]*/)?node( [^ ]+)* [^ ]*/?read-only-proxy\.js( |$)|^([^ ]*/)?bash [^ ]*egress\.sh selftest$'
 owner_is_live() {
   is_pid "$1" && kill -0 "$1" 2>/dev/null || return 1
-  grep -Eq 'read-only-proxy\.js|egress\.sh selftest' <<< "$(ps -o command= -p "$1" 2>/dev/null)"
+  grep -Eq "$OWNER_SHAPES" <<< "$(ps -o command= -p "$1" 2>/dev/null)"
 }
 
 # The owner check that runs on its own, first thing under the lock in every verb: a rule whose

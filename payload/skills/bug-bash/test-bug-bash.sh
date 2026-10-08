@@ -734,6 +734,14 @@ else
   out="$(fakeenv bash "$EGRESS" status 2>&1)"
   nothing_loaded && ok || bad "a rule whose owner pid now runs something other than the proxy is swept" "$out"
   kill "$other" 2>/dev/null
+  # A program that merely names the proxy's file (an editor, a pager) is not the proxy either.
+  bash -c 'sleep 30; :' read-only-proxy.js & namer=$!
+  BG_PIDS="$BG_PIDS $namer"
+  reset_fake
+  fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$namer" >/dev/null 2>&1
+  out="$(fakeenv bash "$EGRESS" status 2>&1)"
+  nothing_loaded && ok || bad "a rule whose owner only mentions the proxy's file is swept" "$(ps -o command= -p "$namer") | $out"
+  kill "$namer" 2>/dev/null
   # A live run's rule is reported, with who holds it, and left.
   reset_fake
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >/dev/null 2>&1
