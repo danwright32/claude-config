@@ -335,11 +335,16 @@ for d in "${mods[@]}"; do
       # which is rewritten as a file of its own. A tsconfig with no types list includes every folder
       # under its type roots already, so a list is only added to, never made.
       why="$("$py" - "$d/.claude-plugin/plugin.json" "$checked/.claude-plugin/types" "$dir" <<'PY'
-import json, os, shutil, sys
+import json, os, re, shutil, sys
 manifest, types, mods = sys.argv[1:4]
 try:
     deps = json.load(open(manifest)).get("dependencies", [])
     for dep in deps:
+        # A plugin name, never a path: nothing outside the scratch types or the mods folder is
+        # read or written for it (lessons review of #964).
+        if not isinstance(dep, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", dep) or dep in (".", ".."):
+            print(f"it lists {dep}, which is no plugin name")
+            sys.exit(1)
         laid, ours = os.path.join(types, dep, "index.d.ts"), os.path.join(mods, dep, "types", "index.d.ts")
         if os.path.exists(laid) or not os.path.isfile(ours):
             continue

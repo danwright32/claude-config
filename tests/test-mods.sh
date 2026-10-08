@@ -340,6 +340,17 @@ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HO
 grep -q 'CONF adds-dep: .*"types":\["claude-code","provider"\]' "$TSC_LOG" && [ "$(tr -d ' \n' < "$TH4K/installed/tsconfig.json")" = '{"compilerOptions":{"types":["claude-code"]}}' ] \
   && check "a laid tsconfig linked into the installed mod is replaced, never written through" ok \
   || check "a laid tsconfig linked into the installed mod is replaced, never written through" "$(cat "$TSC_LOG"; cat "$TH4K/installed/tsconfig.json")"
+# A dependency named as a path is no plugin name, so nothing is read or written outside the scratch
+# types and the mods folder for it: the mod's types are said as not checked, naming it (lessons
+# review of #964).
+M4L="$TMPROOT/m4l/mods"; mkmod "$M4L" escapes; mkdir -p "$TMPROOT/m4l/outside/types"; printf 'export type P = "outside"\n' > "$TMPROOT/m4l/outside/types/index.d.ts"
+printf '{ "name": "escapes", "version": "0.1.0", "description": "x", "dependencies": ["../outside"] }\n' > "$M4L/escapes/.claude-plugin/plugin.json"
+TH4L="$TMPROOT/types-home-4l"; laid "$TH4L/mods/escapes"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH4L" CHECK_MODS_TS_DIR="$TSDIR" PATH="/usr/bin:/bin:$(dirname "$(command -v python3)")" bash "$CHECK" "$M4L" 2>&1)"; code=$?
+printf '%s\n' "$out" | grep 'escapes ok' | grep -q "types not checked: a dependency it adds could not be laid (it lists ../outside, which is no plugin name)" \
+  && [ "$(grep -c '^DEP ' "$TSC_LOG")" = 0 ] \
+  && check "a dependency named as a path is refused by name, nothing laid for it" ok || check "a dependency named as a path is refused by name, nothing laid for it" "$out $(cat "$TSC_LOG")"
 # Types laid for the installed copy but no compiler: the cause named is the compiler, not the types.
 out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TYPES_HOME="$TH" CHECK_MODS_TS_DIR="$TMPROOT/no-ts" TSC_BIN="$TMPROOT/no-such-tsc" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
 printf '%s\n' "$out" | grep 'borrowed ok' | grep -q 'types not checked: no TypeScript compiler' \
