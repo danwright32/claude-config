@@ -256,9 +256,12 @@ export type CardText = { text: string; href?: string; color?: string; bold?: boo
  */
 export type CardPart = CardText | { button: 'done' | 'copy' | 'copy-link'; label: string; instead: CardText[] }
 
-// What Done says where it cannot be clicked: the very prompt a press sends (register.tsx pressDone),
-// so Claude reads a typed one and a pressed one alike.
-const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { text: `step ${i + 1} done` }]
+/** The prompt Done sends for step `i` (0 based), and the words the card says to type where it cannot be clicked. */
+export const donePrompt = (i: number): string => `step ${i + 1} done`
+
+// What Done says where it cannot be clicked: the very prompt a press sends, so Claude reads a typed
+// one and a pressed one alike (#939).
+const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { text: donePrompt(i) }]
 
 /**
  * The card's lines: the amber heading, "waiting on you" after it while the open step is Dan's,

@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
 
@@ -263,7 +263,7 @@ const pressDone = async ($: EngineInterface) => {
   if (n === undefined) return
   await refresh($)
   try {
-    await $.prompt.submit({ text: `step ${n + 1} done`, asUser: true })
+    await $.prompt.submit({ text: donePrompt(n), asUser: true })
   } catch (err) {
     await unsend($, n, true)
     await refresh($)

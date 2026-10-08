@@ -391,6 +391,18 @@ test('Done on a step Claude can check: "step 1 done" is sent, then Claude marks 
   expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
 })
 
+// #939 review: where Done cannot be clicked the card says what to type, which must be the very prompt
+// a press sends, read from the press itself rather than from a second literal.
+test('the words Done says to type are the prompt a Done press sends', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Purge the cache' })])
+  const done = (await band($))?.lines[1]?.find(p => p.button === 'done') as { instead?: { text: string }[] } | undefined
+  const typed = (done?.instead ?? []).map(r => r.text).join('')
+  await press($, 'done')
+  expect(typed).toBe(`type: ${w.prompts[0]}`)
+})
+
 test('Done on a step Claude cannot check reads "done, you pressed Done" with its time; the last one finished takes the card away', withKit, async ($, on) => {
   const w = world(on)
   await start($)
