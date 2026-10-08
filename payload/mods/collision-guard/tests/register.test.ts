@@ -42,7 +42,6 @@ const deps: { name: string; register: Register } = {
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
           // A folder with no .git entry the world names is none; one the world cannot read refuses.
-          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
           workingTree: async ({ path }: { path: string }) => {
             let dir = path.replace(/\/+$/, '') || '/'
             for (let looked = 0; looked < 64; looked++) {
@@ -55,6 +54,7 @@ const deps: { name: string; register: Register } = {
             throw new Error(`could not tell whether ${path} is in a checkout`)
           },
           // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
