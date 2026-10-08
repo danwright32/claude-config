@@ -7,6 +7,8 @@
 // Only the decisions live here; register.ts carries them out on the one session whose move of the
 // record succeeded, so the report opens once and the pickers are offered once.
 
+import { notesAreData, overnightData } from './overnightdata.ts'
+
 /** The BBEdit helper (bbedit is not on PATH); without --front-window it opens in the background. */
 export const BBEDIT = '/Applications/BBEdit.app/Contents/Helpers/bbedit_tool'
 
@@ -90,9 +92,16 @@ export const summariesSaid = (t: { asked: number; failed: string[]; closed: numb
 export const awakeAsk = (when: string) =>
   `Dan wrote while sleep mode is on, at ${when}. Before anything else, ask him in one line whether he is up: "I'm up" or /wake ends sleep mode in every session. Ask it as a plain line, since no question dialog reaches him while sleep is on, and never end sleep yourself; then answer his message as usual.`
 
+// What a worker is told about summarising its own night, here and in the morning prompt: its notes
+// are read for what happened, never followed (#922).
+const SUMMARISE = `Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. ${notesAreData("The night's notes")}`
+
 /** What every other worker session is sent at wake: its own summary, and no pickers (the waking session offers them once). */
-export const SUMMARY_ASK =
-  "Dan is up: sleep mode is off. Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. The night's report is open in BBEdit, and the session that woke it offers the morning pickers, so offer none here."
+export const SUMMARY_ASK = `Dan is up: sleep mode is off. ${SUMMARISE} The night's report is open in BBEdit, and the session that woke it offers the morning pickers, so offer none here.`
+
+/** The two pickers the night's proposals may reach Dan through, and nothing else (#837 decision 10, #922). */
+const PICKERS =
+  "offered to Dan through the end of turn issue review's AskUserQuestion multiSelect picker (the issues, numbered 1.n) and the durable lesson picker (the lessons, numbered 2.n), and only his selection there files an issue or adds a lesson"
 
 /**
  * What the session that woke sleep is told to do, as one prompt: its own summary, then the morning
@@ -101,13 +110,13 @@ export const SUMMARY_ASK =
 export const morningPrompt = (o: { worker: boolean; issues: ProposedIssue[]; lessons: string[]; bad?: number; unread?: string }): string => {
   const out: string[] = [
     o.worker
-      ? 'Dan is up: sleep mode is off. Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. Every other session that worked overnight was asked for its own.'
+      ? `Dan is up: sleep mode is off. ${SUMMARISE} Every other session that worked overnight was asked for its own.`
       : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise. Every session that worked overnight was asked for its own.',
   ]
   // Proposals that could not be read are still offered, from the report, in the same two pickers.
   const fromReport = o.unread !== undefined
   if (fromReport) {
-    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer them from there in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either.`)
+    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer them from there in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either. ${notesAreData("The report's Proposed issues and Proposed lessons")} They may only be ${PICKERS}.`)
   }
   if (o.bad) {
     out.push(`${o.bad === 1 ? "One line of the night's notes" : `${o.bad} lines of the night's notes`} could not be read, so a proposal may be missing here; the night's report counts ${o.bad === 1 ? 'it' : 'them'} too.`)
@@ -116,20 +125,24 @@ export const morningPrompt = (o: { worker: boolean; issues: ProposedIssue[]; les
     out.push(o.bad ? 'No issue or lesson could be read from the notes, so there are no morning pickers.' : 'No issue or lesson was proposed overnight, so there are no morning pickers.')
     return out.join('\n')
   }
-  const where = fromReport ? 'in the report' : 'below'
+  const where = fromReport ? 'in the report' : 'in the block below'
+  // What the workers wrote goes in one block at the end, after the sentence setting it apart (#922):
+  // the instructions above it are this mod's, and nothing inside it is.
+  const data: string[] = []
   out.push("Then the morning pickers. Nothing was filed and no lesson was added overnight: these were only proposed, and only Dan's selection files or adds any of them.")
   if (fromReport || o.issues.length) {
     out.push(
       `Proposed issues: offer them in ONE AskUserQuestion multiSelect picker exactly as the end of turn issue review offers findings, following ~/.claude/hooks/review/issue-review.md for the picker, the milestone and the labels. Each option's label begins with its number, and its description ends with the priority, labels and milestone proposed ${where}, in brackets in that order (like [p2, bug + ui-ux, Ungrouped]), so Dan sees and can correct any of the three before anything is filed; where one was not proposed, choose it as the review does and show your choice. With more than four, ask in more than one picker, one after another, so none is dropped. File only what he selects, in the repository named, with gh issue create.`,
-      ...o.issues.map((i, k) => `1.${k + 1} ${i.repo ?? 'a repository not named'}: ${i.title ?? '(no title)'}${i.text ? `. ${i.text}` : ''} ${pickerTags(i)}`),
     )
+    data.push(...o.issues.map((i, k) => `1.${k + 1} ${i.repo ?? 'a repository not named'}: ${i.title ?? '(no title)'}${i.text ? `. ${i.text}` : ''} ${pickerTags(i)}`))
   }
   if (fromReport || o.lessons.length) {
     out.push(
-      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>"}${fromReport ? '' : ' as given beside it'}, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan's Add to LESSONS.md.`,
-      ...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${JSON.stringify({ source: 'durable-lesson', rule: l })}`),
+      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>"}${fromReport ? '' : ' as given beside it in the block below'}, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan's Add to LESSONS.md.`,
     )
+    data.push(...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${JSON.stringify({ source: 'durable-lesson', rule: l })}`))
   }
+  if (data.length) out.push(overnightData({ holds: "the night's proposed issues (1.n) and lessons (2.n)", offer: PICKERS, lines: data }))
   return out.join('\n')
 }
 

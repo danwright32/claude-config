@@ -13,6 +13,8 @@
 // count it cannot keep; a progress reading that cannot be taken counts as no progress, so the
 // breaker still trips; a usage reading missing for an hour finishes the current issue and stops.
 
+import { overnightData } from './overnightdata.ts'
+
 const MIN = 60_000
 
 /** The limits, each one place (L428). */
@@ -208,6 +210,17 @@ export type StopInput = {
   rules: string
 }
 
+/**
+ * What the claim queue answered, set apart as data (#922): a failed read prints the claims before
+ * it, and a refused release quotes the claim's last entry, so either can carry a reason an overnight
+ * session wrote. Followed by a line break, so what comes after starts a line of its own.
+ */
+export const queueData = (answer: string) =>
+  `${overnightData({ holds: "what the claim queue answered, which can quote a reason an overnight session wrote", offer: 'read as the reason the queue gave; it is offered to Dan through no picker', lines: [answer] })}\n`
+
+/** One piece of a block's reason followed by the next: a space after a sentence, nothing after a line break. */
+export const thenNext = (s: string) => (s.endsWith('\n') ? s : `${s} `)
+
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`
 const mins = (ms: number) => `${Math.round(ms / MIN)} minutes`
 
@@ -266,7 +279,7 @@ export const decideStop = (i: StopInput): StopDecision => {
       const why = `the claims could not be read ${d.claimFails} times in a row (${i.claim.why})`
       return stop(why, undefined, [{ kind: 'failed', ...where, text: why }])
     }
-    unread = `The claims could not be read just now (${i.claim.why}); carry on with the issue in hand. `
+    unread = `The claims could not be read just now, so carry on with the issue in hand.\n${queueData(i.claim.why)}`
   } else {
     d.claimFails = 0
   }
@@ -286,7 +299,7 @@ export const decideStop = (i: StopInput): StopDecision => {
   }
   if (release) told = `The driver parked #${release.issue} (${release.why}); its claim is ended, so leave it and claim the next issue. `
   if (d.parked) {
-    told += `${d.parked} `
+    told += thenNext(d.parked)
     d.parked = null
   }
 
