@@ -99,6 +99,8 @@ def main():
         int("y")
     except (ValueError, BaseException):
         ...
+    q = subprocess.Popen(["true"])
+    out, err = q.communicate()
     return 0
 PY
 scan
@@ -112,6 +114,7 @@ fires P1 24 "a Popen nobody waits on"
 fires P2 27 "except Exception: pass"
 fires P2 32 "a bare except: continue"
 fires P2 36 "a tuple holding BaseException, with an ellipsis body"
+fires P1 38 "a Popen whose output is read by communicate() and whose status is not"
 has "$out" "$FILE:15:" && bad "the first apply() IS checked on the next line, so it is not flagged" "$out" || ok
 has "$out" "$FILE:7:" && bad "a function returning the process result defers to its callers" "$out" || ok
 

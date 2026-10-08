@@ -351,7 +351,9 @@ def status_reads(mod, scope, name, kind):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == name:
             if node.attr in ("returncode", "check_returncode"):
                 lines.append(node.lineno)
-            elif kind == "popen" and node.attr in ("wait", "poll", "communicate"):
+            # wait() and poll() return the status; communicate() returns output, and only sets a
+            # returncode somebody still has to read (the PR #936 lessons review).
+            elif kind == "popen" and node.attr in ("wait", "poll"):
                 call = mod.parent.get(node)
                 if isinstance(call, ast.Call) and not isinstance(mod.parent.get(call), ast.Expr):
                     lines.append(node.lineno)
