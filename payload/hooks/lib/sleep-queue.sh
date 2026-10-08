@@ -252,6 +252,34 @@ _sq_link() {
   return 2
 }
 
+# A test's seam (#944), between judging an issue free and writing its entry. The race test needs
+# every claimer to have judged the issue free before any of them writes, which starting them together
+# does not promise: a scheduler can run each to the end before the next starts. SLEEP_CLAIM_BARRIER
+# names a folder, and the seam acts only when that folder holds a `parties` file with a count in it,
+# which only a test writes; unset, or naming anything else, it returns at once, so a real night never
+# waits here. Acting, it records this claimer's arrival and waits until `parties` claimers have
+# arrived, or for `deadline` seconds (20 when no such file), when it leaves a `timed-out` mark the
+# test fails on and carries on, so a broken barrier is a red, never a hang (L110).
+_sq_claim_barrier() {
+  local b="${SLEEP_CLAIM_BARRIER:-}" parties limit start arrived
+  [ -n "$b" ] && [ -f "$b/parties" ] || return 0
+  parties="$(cat "$b/parties" 2>/dev/null)"
+  case "$parties" in ''|*[!0-9]*) return 0 ;; esac
+  limit="$(cat "$b/deadline" 2>/dev/null)"
+  case "$limit" in ''|*[!0-9]*) limit=20 ;; esac
+  mktemp "$b/arrived.XXXXXXXX" >/dev/null 2>&1 || return 0
+  start=$SECONDS
+  while :; do
+    arrived=("$b"/arrived.*)
+    [ "${#arrived[@]}" -ge "$parties" ] && return 0
+    if [ $((SECONDS - start)) -ge "$limit" ]; then
+      : > "$b/timed-out"
+      return 0
+    fi
+    sleep 0.02
+  done
+}
+
 # sleep_claim REPO_ROOT ISSUE SESSION_ID: `claimed ISSUE attempts=N STATE` (exit 0), or
 # `not-claimed ISSUE WHY` (exit 1), or refused (exit 3).
 sleep_claim() {
@@ -272,6 +300,7 @@ sleep_claim() {
       mine) printf 'claimed\t%s\tattempts=%s\tmine\n' "$issue" "$attempts"; return 0 ;;
       free)
         entry="$(python3 "$_SQ_PY" entry claim "$self" "$(_sq_now)")" || { _sq_refuse "the claim entry could not be written"; return 3; }
+        _sq_claim_barrier
         err="$(_sq_link "$dir" "$nxt" "$entry")"
         case $? in
           0)
