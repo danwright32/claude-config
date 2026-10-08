@@ -35,6 +35,9 @@ const modKit: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => true,
       }
       return { ...built, modkit }
     })
@@ -49,7 +52,7 @@ const modKit: { name: string; register: Register } = {
               <Box key={`${r.id}${n}`} flexDirection="row">
                 {l.map((p, i) =>
                   p.button ? (
-                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={() => undefined} />
+                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} />
                   ) : (
                     <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim}>
                       {p.text}
@@ -272,6 +275,24 @@ test('context above 70% brings the Compact row, which compacts when pressed, and
   await measure($, 20)
   expect(await shown(ui as never)).toBe('engine band')
   await ui.unmount()
+})
+
+// #939, Dan 2026-10-08: "ctx 71% [ Compact ]" did nothing when clicked in Apple Terminal. Where a
+// click cannot land mod-kit draws a button's instead text, so Compact says what to type, the
+// command that does the same.
+test('the Compact button carries "type: /compact" for where a click cannot land', withKit, async ($, on) => {
+  const { clock } = world(on)
+  const published: string[] = []
+  on('state.set', async ($, e, next) => {
+    const w = e as unknown as { plugin?: string; key?: string; value?: unknown }
+    if (w.plugin === 'mod-kit' && w.key === 'band') published.push(JSON.stringify(w.value))
+    return next(e)
+  })
+  await start($, clock)
+  await measure($, 74)
+  const rows = JSON.parse(published[published.length - 1] ?? '[]') as { lines: Record<string, unknown>[][] }[]
+  const button = rows.flatMap(r => r.lines.flat()).find(p => p.button === 'compact')
+  expect(button).toEqual({ button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] })
 })
 
 test('a Compact that does not run says why in a toast, rather than nothing', withKit, async ($, on) => {

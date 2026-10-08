@@ -1241,10 +1241,24 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   its own, since on a terminal without hyperlinks a Link with text is drawn as the text then the
   address, which would show it twice. The click path and an exact location are text, one line
   each, and wrap at the edge rather than being cut (#734), the amber rule reaching down every row
-  they take; the link and the value are still cut, since Copy link and Copy take them whole. Docked
+  they take. Since #939 the link and the value wrap too, so either can be selected whole where Copy
+  link and Copy cannot be pressed, and the link stands on a line of its own under "Where:", Copy
+  link beside the label, so nothing else is selected with it (Dan, 2026-10-08: a Google Sheets link
+  read "https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV..." and could be neither read nor
+  copied). Docked
   beside a fullscreen transcript, the pane asks to be as wide as the card's widest line other than
   the link, up to 80 columns, so a click path wraps less there; a width Dan drags it to wins (open:
   Copy link on every link rather than only a long one, and the 80 column cap).
+- **Where a click cannot land** (#939). Dan, 2026-10-08: "copy link doesn't work here" and "I also
+  can't click done here". The terminal reports clicks only in the fullscreen layout, and Apple
+  Terminal only while the tab's View > Allow Mouse Reporting is ticked, a per tab switch cmd R flips
+  that no mod can read; it was off in the tab where he clicked, and on in another tab beside it
+  (read through the menu's check mark, 2026-10-08). So on a terminal's main screen, in Apple
+  Terminal, and wherever the terminal or the layout is not known, mod-kit draws each card button's
+  `instead` text rather than a button: Done becomes "type: step N done", the prompt a press would
+  have sent, and Copy link and Copy are not drawn, the link and the value beside them being the
+  text to select. A fullscreen terminal that reports clicks (iTerm2, Ghostty and the rest) and the
+  remote surfaces keep the buttons.
 - **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Claude records its
   verdict through `steps_done`: `checked`, `per-you`, or `not-done`, which opens the step again
@@ -1379,9 +1393,9 @@ the run's text is the address, so a terminal without hyperlinks does not draw it
 holding a control character is refused, since one could end the hyperlink's sequence early) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
 survey's row: the hotkey in the accent colour, a colon, the label, `1: 7 days`, or the label alone
 with no hotkey, #667). A button is Claude Code's own, drawn with the
-key `<mod>:<button>`, and its press reaches the publisher through
-`on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`, since a closure cannot
-cross from one mod to another. The rows live in mod-kit's `$.state`, so a reload keeps them, and
+key `<mod>:<button>`, and its press reaches the publisher through mod-kit's `modkit.press` event,
+`on('modkit.press', ...)` with that element, since a closure cannot cross from one mod to another
+(#939; before it, `ui.press`). The rows live in mod-kit's `$.state`, so a reload keeps them, and
 they yield to a survey. Later mods that need more than lines of runs add that shape to mod-kit
 rather than drawing the band themselves.
 
@@ -1407,13 +1421,24 @@ run may carry `wrap: true`, drawn on as many lines as it needs rather than cut a
 that wraps keeps one rule mark per line; a row with one draws its rule as a single column laid over
 the row's whole height and clipped to it, holding a mark for every row its lines could take (one per
 character of a wrapping line, since a terminal row holds at least one), so the rule reaches down
-every wrapped row however wide the band is.
+every wrapped row however wide the band is. A button may carry `instead`, a list of text runs drawn in
+its place wherever a click may not reach it (#939, `clicksReach` in hooks/band.ts): a terminal not
+in the fullscreen layout, Apple Terminal (its per tab Allow Mouse Reporting switch cannot be read),
+and a terminal whose name or layout is unknown. An empty list draws nothing there. A button without
+`instead` is still drawn there as a button, until every mod answers `modkit.press` (the rest of
+#939). mod-kit's `/press <mod> <button>` presses a button showing in the band or a pane the way a
+click does: a click (the Button's own press) and a typed /press both raise `modkit.press`, which the
+publisher answers; a mod still answering in a `ui.press` hook takes its click there, so its Button's
+own press never runs. The command presses only a button showing now, and does so once it has
+returned, since a press may send a prompt, which command.run cannot; a press nothing answers is said.
+A mod drawing its own Button outside the band and a pane asks `$.modkit.clickable(e)` for the same
+answer.
 
 A side pane is drawn the same way (#690). A mod still opens and closes its pane itself with
 `$.ui.open({ id })`, and publishes what is in it with `$.modkit.pane({ mod, id, lines, frame })`: a
 band row's lines and frame with no slot, since a pane holds one card. mod-kit draws it with the very
 function that draws a band row, so the steps card cannot read differently in the pane and the band
-as cards gain shapes, and a button in it reaches the publisher by the same `ui.press` key.
+as cards gain shapes, and a button in it reaches the publisher by the same `modkit.press` key.
 `$.modkit.clearPane({ mod, id })` stops it, after which Claude Code draws a still open pane itself.
 Claude Code keys a pane by its id alone, so a pane id another mod already draws is refused rather
 than taken over. `tools/check-mod-shared-parts.sh` fails any other mod that draws a card's parts

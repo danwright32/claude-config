@@ -248,7 +248,7 @@ const publish = () =>
     const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now })
     const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now, isWorking: turnRunning })
     const compact = due
-      ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact' }]
+      ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }]
       : []
     try {
       const lookKey = JSON.stringify(look)
