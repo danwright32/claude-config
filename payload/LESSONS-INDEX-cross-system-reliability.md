@@ -94,3 +94,4 @@ which is NOT loaded into the session.
 - L754. A job that runs after an earlier failure does not pass that on: give every job that needs it its own if, or default success() skips it.
 - L755. A Durable Object's memory is wiped after ten idle seconds; persist what a later call needs and test by rebuilding the object over its storage.
 - L1018. A closing word before #N closes it even when negated ("does not close #N"); never write one before an issue to keep open, write "Part of #N".
+- L756. Size how much work runs at once from what the shared resource can serve, not from what is waiting; past it, every unit misses its deadline.

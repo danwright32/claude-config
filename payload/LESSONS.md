@@ -9779,6 +9779,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 - **L1018. GitHub treats a closing keyword directly before an issue number as an instruction regardless of negation, so "This does not close #N" closes #N on merge; a PR body or commit message must never put close, fix or resolve in any form directly before an issue it means to leave open, and should write "Part of #N" instead.** (overture#4586, 2026-10-07)
   SHORT: A closing word before #N closes it even when negated ("does not close #N"); never write one before an issue to keep open, write "Part of #N".
+- **L756. Before letting more work run at once to get through a queue faster, measure how much the shared resource every unit uses (a database, an API quota) can serve; past that, the released work splits it and misses its deadlines together, so size the concurrency from that measured throughput, never from how much work is waiting.** (slate#3495, 2026-10-07)
+  SHORT: Size how much work runs at once from what the shared resource can serve, not from what is waiting; past it, every unit misses its deadline.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
