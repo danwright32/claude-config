@@ -86,8 +86,11 @@ type Heredoc = { at: number; body: string; quoted: boolean }
 // A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
 // apostrophe in it would open a quote that swallows the commands after it. Each body is kept with
 // where its << stands in the text left, so a reader that judges what a heredoc feeds can have it
-// (#698). <<- takes the leading tabs off its body, as the shell does.
-const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[] } => {
+// (#698). <<- takes the leading tabs off its body, as the shell does. A heredoc that never ends is
+// given as `unended` too, its body to the end of the text, since the shell still reads that body
+// (and expands it, unless its delimiter was quoted) as well as its lines being read as commands here
+// (#965). The write reader reads what the shell runs inside each body (writes.ts).
+export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; unended?: Omit<Heredoc, 'at'> } => {
   const out: string[] = []
   const heredocs: Heredoc[] = []
   const open: { end: string; tabs: boolean; at: number; quoted: boolean }[] = []
@@ -116,7 +119,8 @@ const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[] } => {
     }
     offset += line.length + 1
   }
-  return { text: [...out, ...unended].join('\n'), heredocs }
+  const h = open[0]
+  return { text: [...out, ...unended].join('\n'), heredocs, ...(h ? { unended: { body: body.join('\n'), quoted: h.quoted } } : {}) }
 }
 
 // Words, split on separators outside quotes. A quoted script spanning lines stays one word. Each

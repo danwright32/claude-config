@@ -226,6 +226,16 @@ const KIT = new Map<string, unknown>([
   ["commands {\"command\":\"make >& notes.txt\"}", [["make",">&","notes.txt"]]],
   ["git {\"words\":[\"make\",\">&\",\"notes.txt\"]}", null],
   ["writes {\"command\":\"make >& notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cat <<EOF\\nnote $(echo done >> notes.txt)\\nEOF\"}", [["cat","<<EOF"]]],
+  ["git {\"words\":[\"cat\",\"<<EOF\"]}", null],
+  ["writes {\"command\":\"cat <<EOF\\nnote $(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo \\\"note `echo done >> notes.txt`\\\"\"}", [["echo","note `echo done >> notes.txt`"]]],
+  ["git {\"words\":[\"echo\",\"note `echo done >> notes.txt`\"]}", null],
+  ["writes {\"command\":\"echo \\\"note `echo done >> notes.txt`\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cat <<'EOF'\\nnote $(echo done >> notes.txt)\\nEOF\"}", [["cat","<<EOF"]]],
+  ["writes {\"command\":\"cat <<'EOF'\\nnote $(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"echo 'note `echo done >> notes.txt`'\"}", [["echo","note `echo done >> notes.txt`"]]],
+  ["writes {\"command\":\"echo 'note `echo done >> notes.txt`'\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[],"unnamed":[]}],
 ])
 
 type Judge = string | 'no-answer'
@@ -885,6 +895,22 @@ test('a write inside a heredoc fed to a shell, a truncate and a >& are judged li
   }
   expect(w.reached).toEqual([])
   expect(w.prompts.length).toBe(3)
+})
+
+// #965: the shell runs a command substitution in an unquoted heredoc's body before the command fed
+// it starts, and one on the command line before the command it sits in. mod-kit's write reader now
+// reports what each writes, so a write there to a file another session is editing is judged; under a
+// quoted delimiter or in single quotes it is text, nothing is judged and the call goes through.
+test('a write a command substitution makes, in an unquoted heredoc or on the command line, is judged; quoted, it is text', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  for (const command of ['cat <<EOF\nnote $(echo done >> notes.txt)\nEOF', 'echo "note `echo done >> notes.txt`"']) {
+    const r = await $.tool.call(bash(command, 'sub1'))
+    expect(`${command}: ${refusal(r)}`).toBe(`${command}: Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.`)
+  }
+  expect(w.reached).toEqual([])
+  for (const command of ["cat <<'EOF'\nnote $(echo done >> notes.txt)\nEOF", "echo 'note `echo done >> notes.txt`'"]) await $.tool.call(bash(command, 'sub2'))
+  expect(w.reached).toEqual(['Bash', 'Bash'])
+  expect(w.prompts.length).toBe(2)
 })
 
 // #707: a guard that refuses decides before this one judges, whichever order the mods load in. The
