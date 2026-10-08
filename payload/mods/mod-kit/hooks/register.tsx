@@ -43,6 +43,8 @@ const band = { plugin: 'mod-kit', key: 'band' } as const
 const panes = { plugin: 'mod-kit', key: 'panes' } as const
 // When this mod last started in this session (#960), there for the same reason: a reload reads it.
 const started = { plugin: 'mod-kit', key: 'started' } as const
+// The mods a reload could not ask to load again, asked again at the next one whatever their times.
+const askAgain = { plugin: 'mod-kit', key: 'askAgain' } as const
 
 // #960, measured 2026-10-08 with throwaway mods in a session of its own. When one delivery changes
 // mod-kit and a mod that starts using something mod-kit only now provides (the steps card hooking
@@ -70,8 +72,9 @@ const reloadDependents = async ($: EngineInterface) => {
     $.ui.log(`mod-kit reloaded, but the mods folder ${home} could not be read (${String((err as Error)?.message ?? err)}), so a mod that changed with it was not asked to load again. ${lost}`)
     return
   }
+  const retry = new Set((await $.state.get(askAgain)).value ?? [])
   const touched: string[] = []
-  let failed = false
+  const failed: string[] = []
   for (const entry of entries) {
     if (entry.kind !== 'dir' || entry.name === 'mod-kit') continue
     const dir = `${home}/${entry.name}`
@@ -83,21 +86,25 @@ const reloadDependents = async ($: EngineInterface) => {
     }
     try {
       if (!dependsOn(manifest).includes('mod-kit')) continue
+      // No hooks folder, no module: nothing of it is loaded, so it has no tools to lose.
+      if (!(await $.fs.exists(`${dir}/hooks`))) continue
       const files = [...(await $.fs.list(`${dir}/.claude-plugin`)), ...(await $.fs.list(`${dir}/hooks`))]
-      if (newestFile(files) <= before) continue
+      if (newestFile(files) <= before && !retry.has(entry.name)) continue
       const r = await $.process.run(['touch', '-c', `${dir}/.claude-plugin/plugin.json`])
       if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `touch exited ${r.exitCode}`)
       touched.push(entry.name)
     } catch (err) {
-      failed = true
+      failed.push(entry.name)
       $.ui.log(`mod-kit reloaded, but ${entry.name}, which depends on it, could not be asked to load again (${String((err as Error)?.message ?? err)}). ${lost}`)
     }
   }
   if (touched.length) $.ui.log(`mod-kit reloaded, so these mods that changed with it load again: ${touched.join(', ')}`, { to: 'debug' })
-  // Moved on only once every mod was asked, and to a time read after the touches (#967 review): a
-  // manifest touched here is then not taken for a change at the next reload, while a mod that could
-  // not be asked, or a folder that could not be listed (returned above), is tried again then.
-  if (!failed) await $.state.set(started, await $.clock.now())
+  // #967 review: the baseline moves to a time read after the touches, so a manifest touched here is
+  // not taken for a change at the next reload, and each mod that could not be asked is kept by name
+  // and asked again then, so one that keeps failing holds no other back. A folder that could not be
+  // listed (returned above) moves nothing, so every mod is looked at again.
+  await $.state.set(askAgain, failed)
+  await $.state.set(started, await $.clock.now())
 }
 
 export const register: Register = (on, options) => {

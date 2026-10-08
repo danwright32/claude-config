@@ -307,8 +307,9 @@ declare module 'claude-code' {
     /**
      * The band's rows, in the order they were first published; kept in $.state so a reload keeps
      * them. `started`: when mod-kit last started in this session, so its reload can tell which mods
-     * that depend on it changed since (#960).
+     * that depend on it changed since (#960). `askAgain`: the mods a reload could not ask to load
+     * again, asked again at the next one.
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[] }
   }
 }

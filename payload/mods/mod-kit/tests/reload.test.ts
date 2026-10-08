@@ -15,7 +15,7 @@ import type { On } from 'claude-code'
 const T0 = 1_791_000_000_000
 const MIN = 60_000
 
-type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number }
+type Mod = { deps?: string[]; mtimeMs: number; manifest?: string; touchedAt?: number; noHooks?: boolean }
 
 // The mods folder beneath mod-kit: each mod's manifest and its files' times, wherever the folder is.
 const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[]; homeUnreadable?: boolean }) => {
@@ -38,8 +38,13 @@ const world = (on: On, init: { mods: Record<string, Mod>; touchFails?: string[];
     }
     const mod = mods[m.name] as Mod
     if (m.rest === '.claude-plugin') return { value: [{ name: 'plugin.json', kind: 'file', size: 1, mtimeMs: mod.touchedAt ?? mod.mtimeMs, isLink: false }, { name: 'types', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
+    if (m.rest === 'hooks' && mod.noHooks) throw new Error(`ENOENT: no such file or directory, scandir '${e.path}'`)
     if (m.rest === 'hooks') return { value: [{ name: 'hooks.json', kind: 'file', size: 1, mtimeMs: T0 - 99 * MIN, isLink: false }, { name: 'register.ts', kind: 'file', size: 1, mtimeMs: mod.mtimeMs, isLink: false }] } as never
     throw new Error(`ENOENT: ${e.path}`)
+  })
+  on('fs.exists', ($, e) => {
+    const m = modOf(e.path)
+    return { value: !!m && !(m.rest === 'hooks' && (mods[m.name] as Mod).noHooks) } as never
   })
   on('fs.read', ($, e) => {
     const m = modOf(e.path)
@@ -184,4 +189,32 @@ test('a mods folder that could not be listed is listed again at the next reload'
   await w.clock.advance(10 * MIN)
   await start($)
   expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+})
+
+// #967 review, second round: one mod that keeps failing must not make the others' own touches
+// read as changes at every later reload, and a dependent with no hooks folder has no module, so no
+// tools to lose: it is passed over, not counted as a failure.
+test('while one mod keeps failing, a mod touched at one reload is not touched again at the next', async ($, on) => {
+  const mods = { ...delivery(), handoff: { deps: ['mod-kit'], mtimeMs: T0 + 5 * MIN } }
+  const w = world(on, { mods, touchFails: ['handoff'] })
+  await start($)
+  for (let i = 0; i < 3; i++) {
+    await w.clock.advance(10 * MIN)
+    await start($)
+  }
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+  // The failing one is still tried, and said, at every reload.
+  expect(w.logs.filter(l => l.includes('handoff')).length).toBe(3)
+})
+
+test('a dependent with no hooks folder is passed over without a failure, and holds nothing back', async ($, on) => {
+  const mods = { ...delivery(), 'no-hooks': { deps: ['mod-kit'], mtimeMs: T0 + 5 * MIN, noHooks: true } }
+  const w = world(on, { mods })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+  expect(w.logs.filter(l => l.includes('no-hooks'))).toEqual([])
 })
