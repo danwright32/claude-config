@@ -76,7 +76,7 @@ export const primaryFrom = (stdout: string): boolean | null => {
 
 // A folder a cd names, resolved against the one before it; null when the shell would decide it
 // (a variable, a glob, `cd -`), so whatever needs it is refused.
-const resolve = (word: string | undefined, dir: string | null, home: string): string | null => {
+export const resolveDir = (word: string | undefined, dir: string | null, home: string): string | null => {
   if (word === undefined) return home
   if (word === '-' || /[$`*?[\]{}]/.test(word)) return null
   let p = word === '~' ? home : word.startsWith('~/') ? `${home}${word.slice(1)}` : word
@@ -137,7 +137,7 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
   }
   if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return 'delete a branch'
   if (sub === 'switch' || (sub === 'checkout' && checkoutMoves(args))) {
-    const where = g.dir === undefined ? dir : resolve(g.dir, dir, home)
+    const where = g.dir === undefined ? dir : resolveDir(g.dir, dir, home)
     const primary = where === null ? null : await look.isPrimary(where)
     if (primary === null) return `run git ${sub} where it could not be told whether this is a primary checkout`
     return primary ? `run git ${sub} in a primary checkout` : undefined
@@ -330,7 +330,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       continue
     }
     if (cmd === 'cd' || cmd === 'pushd') {
-      dir = resolve(words.slice(1).find(a => !a.startsWith('-') || a === '-'), dir, call.home)
+      dir = resolveDir(words.slice(1).find(a => !a.startsWith('-') || a === '-'), dir, call.home)
       continue
     }
     if (cmd === 'popd') {

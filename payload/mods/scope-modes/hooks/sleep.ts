@@ -1,4 +1,5 @@
 import type { ScopeModesPlace } from '../types/index.d.ts'
+import type { NightRepos } from './mergedeploy.ts'
 
 // Sleep mode phase 1 (#840): the machine wide sleep record. One file for the whole Mac,
 // ~/.claude/state/sleep/current.json, written whole beside itself and linked into place, so a
@@ -31,6 +32,8 @@ export type SleepRecord = {
   workers: string[]
   /** Where Dan was before sleep (home or away), put back on every session at wake. */
   placeBefore: ScopeModesPlace
+  /** The night's merge and deploy lists as settled at bedtime (#843, mergedeploy.ts); absent on an older record, which closes every repository. */
+  repos?: NightRepos
 }
 
 /**

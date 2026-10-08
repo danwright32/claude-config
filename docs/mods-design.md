@@ -995,6 +995,65 @@ the ban list knowing that an action it does not name is approved.
   30 s deadline, each read given only the time left, so wake waits at most 30 s for it before the
   report's own final render.
 
+### Sleep mode phase 7: merge and deploy lists that fail closed (#843), built
+
+Dan's decision 6 (2026-10-06): merge and deploy as in the daytime, except trypennie, Bidspoke and
+Slate, which merge but never deploy, and where a merge itself deploys the green PR is left open.
+Revised the same day: both sides are listed, and a repository on neither is asked about, never
+let through.
+
+- One shared file, `payload/mods/sleep-repos.json`, two lists: `mergeOnly` (`{ repo, mergeDeploys }`)
+  and `mayDeploy` (owner/name). It sits beside `account-room-nicknames.json` for the same reason: a
+  file under `mods/` is mirrored both ways, so an answer one Mac writes into the installed copy
+  reaches the repository and the other Mac, and each repository is asked once. (The issue had the
+  answer committed to the development checkout instead; a file the sync carries both ways needs no
+  second writer.) Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
+  unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
+  record whether a merge there deploys (L72). trypennie
+  (`Halo-lab-Trypennie/trypennie`), Bidspoke and Slate (`Try-Pennie/...`) and claude-config are all
+  `mergeDeploys: true`: Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
+  main, trypennie's deploy could not be read so it takes the strict answer, and a claude-config merge
+  reaches the live harness. `tests/test-sleep-repos.sh` holds the shipped file to the reader's shape
+  and to that decision.
+- At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
+  worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
+  neither list is asked about, one picker at a time, all of them sharing one 10 minute wait (a
+  repository not reached in it is closed, saying so), so `/sleep` never blocks longer. Each option means
+  exactly what it says: "Merge, never deploy" (chosen only where a merge does not itself deploy, as
+  the question says; `mergeDeploys: false`), "Hold merges, never deploy" (`mergeDeploys: true`) and
+  "Allowed to deploy". An answer is written into the installed file under the answers lock
+  (`state/sleep/repos.lock`, the marker below), whole beside it and then moved, so a late answer and
+  another never write over each other; an answer given after the 10 minutes is still written, for
+  later nights. A writer waits up to 30 seconds on a live holder, then refuses, naming it. A
+  question dismissed or not shown closes the repository with its own reason, never as unanswered. Every
+  listed entry is then checked with `gh repo view`, under the active account and then each other
+  account gh is logged in to (the work repositories are seen only by the work account). The result
+  goes into the record as `repos` (`mayDeploy`, `mergeOnly`, `closed` with a reason each, and
+  `listWhy` when the file could not be trusted at all), so the night is judged by what was settled
+  at bedtime, never a later edit. The `preparing` marker is a file placed whole (written beside
+  itself with its owner, time and nonce, then linked into place, so of two at once one is placed).
+  One whose owner is no open session, or older than two hours (a chosen limit), is taken over by
+  moving it aside in one rename and linking a new one, never removed and made again; one held by a
+  live session refuses `/sleep` naming it and since when; one that cannot be read or written is said
+  as such. `/wake` clears one at any age. `/sleep` says which repositories are closed and why, and each
+  closed one is noted (`repo-closed`, with the question still to answer) for the morning report.
+- Closed for the night, no merge and no deploy: a file that is missing or does not read, a
+  repository on both lists, an entry GitHub does not know, a question unanswered in 10 minutes or
+  with nobody to ask, a repository first met after sleep began (noted once a night), a call whose
+  repository cannot be told (it changes folder first), and a record from before this phase.
+- While asleep, every session's Bash calls are judged by effect (`hooks/mergedeploy.ts`, gh read by phase 3's `ghargs.ts`, commands through
+  mod-kit's reader): merges (`gh pr merge` and `--auto`, `merge-when-ready.sh`, the REST merge
+  endpoints, the GraphQL merge mutations, and a query that cannot be read), deploys (no build's own
+  deploy tool list, shared, `gh workflow run`, a workflow dispatch, and a package script by name or
+  by a body that deploys), and a push reaching a default branch, refused in every repository. The
+  repository is the one a command names (`--repo`, a `repos/` endpoint), else the one in the folder
+  it runs in, followed as the #892 push hook does (a `cd` or `pushd` before it, a git `-C`); a folder
+  it cannot follow (a variable, a pattern, `popd`, `--git-dir` or `--work-tree`) is a repository it
+  cannot tell, closed. This check runs first whenever the Mac is asleep, before any other mode's
+  route, so no merge reaches GitHub unjudged.
+  The refusal tells Claude to leave the green PR open and note it for the report. Phase 3's bans
+  (#834) apply on top; `mayDeploy` lifts only this phase's deploy refusals.
+
 ### Manual steps behaviour (#614), decided in the build, 2026-10-04
 
 No round: each follows from the spec and the settled surfaces above. The ones marked open were

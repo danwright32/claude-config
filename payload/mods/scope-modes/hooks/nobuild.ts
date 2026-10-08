@@ -164,6 +164,36 @@ export const DEPLOYERS: Record<string, (args: string[]) => boolean> = {
 const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
 const DEPLOY_SCRIPT = /^(?:deploy|release|publish)(?:[:\-_.].*)?$/i
 
+/** The package script a runner runs (`npm run build`, `yarn build`, `npm test`), or undefined when it runs none. */
+// A package manager's own commands, which run no package script by that name (bare `npm publish`
+// included: it is npm's publish, refused on its own; `npm run publish` runs the script named publish).
+const RUNNER_OWN = new Set(['install', 'i', 'ci', 'add', 'remove', 'rm', 'uninstall', 'un', 'update', 'up', 'upgrade', 'ls', 'list', 'outdated', 'audit', 'init', 'create', 'exec', 'dlx', 'x', 'why', 'info', 'view', 'config', 'cache', 'link', 'unlink', 'pack', 'version', 'login', 'logout', 'whoami', 'help', 'publish', 'prune', 'dedupe', 'rebuild', 'fund', 'doctor', 'pm'])
+export const runnerScript = (words: string[]): string | undefined => {
+  if (!RUNNERS.has(name(words[0]))) return undefined
+  if (words[1] === 'run' || words[1] === 'run-script') return words[2] && !isFlag(words[2]) ? words[2] : undefined
+  const script = words[1]
+  return script && !isFlag(script) && !RUNNER_OWN.has(script) ? script : undefined
+}
+
+/**
+ * What one command would deploy, by its words, as the action ("deploy with wrangler", "run npm
+ * run deploy"), or undefined. No build refuses it, and sleep mode's overnight judge refuses it in a
+ * repository not allowed to deploy (mergedeploy.ts): one list of deploy tools for both (L613).
+ */
+export const deployWith = (words: string[]): string | undefined => {
+  // npx and bunx only fetch and run the tool named after them.
+  while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((w, i) => i > 0 || !isFlag(w))
+  const cmd = name(words[0])
+  const deployer = DEPLOYERS[cmd]
+  if (deployer && deployer(words.slice(1))) return `deploy with ${cmd}`
+  if (RUNNERS.has(cmd)) {
+    const script = runnerScript(words)
+    if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return `run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`
+  }
+  if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return `run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`
+  return undefined
+}
+
 
 
 // The code an interpreter runs, judged where the guard can read it, and refused where it cannot: a
@@ -237,13 +267,8 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
   const cmd = name(words[0])
   if (c.git && gitRefusal(c.git)) return why(`run git ${c.git.sub}`)
   if (cmd === 'gh') return why(ghRefusal(words))
-  const deployer = DEPLOYERS[cmd]
-  if (deployer && deployer(words.slice(1))) return why(`deploy with ${cmd}`)
-  if (RUNNERS.has(cmd)) {
-    const script = words[1] === 'run' || words[1] === 'run-script' ? words[2] : words[1]
-    if (words[1] === 'publish' || (script && DEPLOY_SCRIPT.test(script))) return why(`run ${words.slice(0, words[1] === 'run' ? 3 : 2).join(' ')}`)
-  }
-  if (cmd === 'make' && words.slice(1).some(w => DEPLOY_SCRIPT.test(w))) return why(`run make ${words.slice(1).find(w => DEPLOY_SCRIPT.test(w))}`)
+  const deploys = deployWith(words)
+  if (deploys) return why(deploys)
   if (DB_CLIENTS.has(cmd)) return databaseRefusal({ ...c, words })
   return programRefusal({ ...c, words })
 }
