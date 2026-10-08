@@ -1,7 +1,7 @@
 {
   "name": "mod-kit",
   "version": "0.1.0",
-  "description": "What every mod shares: the boxed card a tool result row is drawn as, the grey card for an action a guard blocked among its uses, the shell and git command readers, the reader of a session's repository, the reader of where a checkout stands (its branch and the issues it names), the band above the prompt composed once for every mod, a mod's side pane drawn as the same card, and one more try of a mod's refused message to another session.",
+  "description": "What every mod shares: the boxed card a tool result row is drawn as, the grey card for an action a guard blocked among its uses, the shell, git and gh command readers, the readers of a session's repository, of a repository gh names and of a github.com link, the reader of where a checkout stands (its branch and the issues it names), the band above the prompt composed once for every mod, a mod's side pane drawn as the same card, and one more try of a mod's refused message to another session.",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts"
 }
