@@ -37,6 +37,18 @@
 #             reading what a shell or interpreter runs, or     command $.modkit.pipeline({ command }) gives,
 #             judging inline code by what it can do (naming    read and judged once (#712: no build kept the
 #             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
+#   press     a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
+#             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
+#                                                               "type: /press <mod> <button>" where a click
+#                                                               cannot land (#939) is never answered by a
+#                                                               click alone
+#
+# And one a mod drawing its own Button must ASK (#939):
+#   button    a hooks file drawing `<Button` must ask           draw the Button only where it answers true,
+#             $.modkit.clickable in that file                   and say what to do instead elsewhere: the
+#                                                               terminal reports clicks only fullscreen, and
+#                                                               Apple Terminal only while a per tab switch
+#                                                               no mod can read is on
 #
 # A known exception is a mod still holding its own copy until a named issue moves it. It is printed
 # on every run, with that issue, rather than failing the run or passing in silence (L129, L523). None
@@ -148,6 +160,27 @@ for d in "$dir"/*/; do
       fi
     done <<< "$copied"
   fi
+  # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
+  # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review
+  # of #957). A click alone reaches such a hook; mod-kit's typed /press raises modkit.press, which it
+  # never sees. Comments are already taken out, so only code names them.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qE "[\"'\`]mod-kit[\"'\`]" "$f" || continue
+    failed=1
+    while IFS= read -r h; do
+      echo "check-mod-shared-parts: $name hooks ui.press for mod-kit's buttons at ${f#"$sd"}:${h%%:*}, which a click alone reaches: answer the press in on('modkit.press', ...) instead, which a typed /press reaches too."
+    done <<< "$(grep -nE "[\"'\`]ui\.press[\"'\`]" "$f")"
+  done <<< "$(grep -rlE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' "[\"'\`]ui\.press[\"'\`]" "$sd/hooks" 2>/dev/null)"
+  # button (#939): a file drawing its own Button that never asks whether a click reaches it there.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qE '\.modkit\.clickable\(' "$f" && continue
+    failed=1
+    while IFS= read -r h; do
+      echo "check-mod-shared-parts: $name draws its own Button at ${f#"$sd"}:${h%%:*} but never asks \$.modkit.clickable(e) in that file, so it shows a button a click may not reach (Apple Terminal, the main screen): draw it only where that answers true, and say what to do instead elsewhere."
+    done <<< "$(grep -nE '<Button\b' "$f")"
+  done <<< "$(grep -rlE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' '<Button\b' "$sd/hooks" 2>/dev/null)"
   # screen (#707, per hook since #732): a tool.call hook answering with a result that never asks
   # mod-kit's screen in its own body.
   if ! found="$(python3 "$TS_SOURCE" unscreened "$d/hooks")"; then
