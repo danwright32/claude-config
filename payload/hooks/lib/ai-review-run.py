@@ -10,7 +10,8 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --started EPOCH
 
 It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
-<model>` with the diff on stdin.
+<model> --settings {"disableAllHooks":true} --disallowedTools ReportFindings` with the diff on
+stdin (the last two are explained where the command is built).
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
 hook inherits that variable from the session that fired it. Removing it here rather than in the
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
@@ -262,8 +263,17 @@ def main(argv):
         # headless claude ran Dan's global hooks, the reviewer's own tool use tripped the end of turn
         # issue review, and what came back was that review of the SESSION, not a review of the diff.
         # --bare would skip hooks too but refuses subscription sign in, so the setting is passed.
+        # The findings tool OFF (claude-config#804). Claude Code offers every headless run a built
+        # in ReportFindings tool whose own description says to report a code review through it and
+        # not also print the findings as text, so the reviewer often did exactly that: measured
+        # 2026-10-08, 6 of about 10 rounds on one pull request answered "I reported N findings
+        # through ReportFindings" with no finding line, the gate correctly refused that as unparsed,
+        # and the findings existed only in a tool call nobody reads. Disallowed, the tool is gone
+        # from the run's tool list (checked against the run's own init event), so the text this
+        # runner parses is the review's only channel. Last on the line because the flag takes a list.
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
-               "--model", a.model, "--settings", '{"disableAllHooks":true}']
+               "--model", a.model, "--settings", '{"disableAllHooks":true}',
+               "--disallowedTools", "ReportFindings"]
         with open(a.diff_file, "rb") as diff:
             # Its own process group, so the deadline can kill everything claude started and not
             # only the one pid subprocess knows about.

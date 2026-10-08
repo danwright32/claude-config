@@ -59,6 +59,28 @@ sleep "${FAKE_CLAUDE_SLEEP:-0}"
 [ -n "${FAKE_CLAUDE_STDERR_FILE:-}" ] && cat "$FAKE_CLAUDE_STDERR_FILE" >&2
 [ -n "${FAKE_CLAUDE_EXIT:-}" ] && { echo "fake claude: simulated failure" >&2; exit "$FAKE_CLAUDE_EXIT"; }
 [ -n "${FAKE_CLAUDE_EMPTY:-}" ] && exit 0
+# FAKE_CLAUDE_TOOL=1 stands in for the real reviewer as measured 2026-10-08 (claude-config#804):
+# Claude Code offers every headless run a built in ReportFindings tool whose own description says to
+# report a review through it and NOT also print the findings as text, so whenever the tool is
+# offered the answer is prose about having used it. Offered unless the call disallows it by name.
+if [ -n "${FAKE_CLAUDE_TOOL:-}" ]; then
+  offered=1; in_list=0
+  for a in "$@"; do
+    case "$a" in
+      --disallowedTools=*|--disallowed-tools=*) in_list=0; a="${a#*=}" ;;
+      --disallowedTools|--disallowed-tools) in_list=1; continue ;;
+      -*) in_list=0; continue ;;
+      *) [ "$in_list" = 1 ] || continue ;;
+    esac
+    for t in $(printf '%s' "$a" | tr ',' ' '); do [ "$t" = "ReportFindings" ] && offered=0; done
+  done
+  if [ "$offered" = 1 ]; then
+    printf 'I reported 1 finding through ReportFindings. It is rated plausible; I did not run any code.\n\n1. **App/Sync.swift:3**, deleteEvent still swallows the error.\n'
+  else
+    printf 'App/Sync.swift:3: deleteEvent still swallows the error createEvent now reports (L215). Should be: report it the same way. [severity: major]\n'
+  fi
+  exit 0
+fi
 if [ -n "${FAKE_CLAUDE_OUT_FILE:-}" ]; then cat "$FAKE_CLAUDE_OUT_FILE"; exit 0; fi
 if [ -n "${FAKE_CLAUDE_OUT:-}" ]; then printf '%s\n' "$FAKE_CLAUDE_OUT"; exit 0; fi
 printf 'App/Sync.swift:3: deleteEvent still swallows the error createEvent now reports (L215). Should be: report it the same way. [severity: major]\n'
@@ -368,6 +390,40 @@ out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "and it refuses, never reads as zero findings" "1" "$rc"
 check "saying the answer was not a review" "not in the review's format" "$out"
 check "the reviewer runs with every hook switched off" "disableAllHooks" "$(tr '\036' '\n' < "$FAKE_LOG/args")"
+
+# 3f3. the findings tool (claude-config#804). Measured 2026-10-08: in 6 of about 10 rounds on one
+#      pull request the real reviewer called Claude Code's built in ReportFindings tool and answered
+#      "I reported N findings through ReportFindings" with no finding line, so a review that had run
+#      was refused as unparsed and the findings never reached the gate. The runner takes the tool
+#      away, so the reviewer's only channel is the text the gate parses. Three stand ins, one verdict
+#      each: the one that answers through the tool whenever it is offered, one that answers in prose
+#      whatever it is offered, and one that answers in the format.
+reset_state
+FAKE_CLAUDE_TOOL=1 prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "the tool using reviewer's review wrote its file"
+F="$(final_of "$HEAD_SHA")"
+check_eq "a reviewer that would answer through the findings tool is never offered it, so it is read" "ok" "$(meta "$F" status)"
+check_eq "and its finding is counted" "1" "$(meta "$F" findings)"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "and the gate refuses it as findings to read, not as a failed review" "1" "$rc"
+check "carrying the finding line" "App/Sync.swift:3: deleteEvent still swallows" "$out"
+check "and a read key" "PR_REVIEW_READ=" "$out"
+check_not "never as unparsed" "not in the review's format" "$out"
+reset_state
+FAKE_CLAUDE_OUT=$'I reported 3 findings through ReportFindings. All three are plausible.\n\n1. **App/Sync.swift:3**, deleteEvent still swallows the error.' prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "the prose review wrote its file"
+check_eq "an answer that is prose about findings, with no finding line, is still unparsed" "unparsed" "$(meta "$(final_of "$HEAD_SHA")" status)"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "and still refuses" "1" "$rc"
+check "as not a review" "not in the review's format" "$out"
+check_not "with no read key, since nothing was read back" "PR_REVIEW_READ=" "$out"
+reset_state
+FAKE_CLAUDE_OUT="No issues found." prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "the clean review wrote its file"
+check_eq "an answer in the format is read as clean" "ok" "$(meta "$(final_of "$HEAD_SHA")" status)"
+check_eq "with no findings" "0" "$(meta "$(final_of "$HEAD_SHA")" findings)"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "and the gate allows it" "0" "$rc"
 
 # 3g. abandoned: pending past its deadline with no runner left.
 reset_state
