@@ -5999,6 +5999,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   log.)
   SHORT: Take personal data or a secret in the request body, never the address: platform request logs record full addresses before your code runs.
 
+- **L757. Text a person can edit (a name, a label, a note) must be escaped for the format it lands
+  in, Slack markup, HTML or email, at the one shared point every message is sent, because escaping
+  at each call site is skipped by the next sender written, and the failure is a name that pings a
+  whole channel or renders as a link.**
+  (Try-Pennie/bidspoke#1893, 2026-10-08)
+  SHORT: Escape person-edited text for its target format (Slack, HTML, email) at the one shared send point, never per call site.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
