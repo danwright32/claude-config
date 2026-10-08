@@ -38,3 +38,4 @@ which is NOT loaded into the session.
 - L498. An error path an unauthenticated caller can reach is volume they control, so decide who may trigger an error before deciding what it costs.
 - L741. A shape-matching scrub cannot see percent-encoded data, so strip query strings and fragments from URLs before logging or alerting them.
 - L752. Take personal data or a secret in the request body, never the address: platform request logs record full addresses before your code runs.
+- L757. Escape person-edited text for its target format (Slack, HTML, email) at the one shared send point, never per call site.
