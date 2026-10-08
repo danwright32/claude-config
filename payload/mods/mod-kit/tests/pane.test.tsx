@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitPane } from '../types/index.d.ts'
 
@@ -21,9 +21,10 @@ const publisher: { name: string; register: Register } = {
       return { deny: 'done' }
     })
     // The publisher's own handler for its button, reached through the press on mod-kit's drawing.
-    on('ui.press', { plugin: 'mod-kit', element: 'publisher:done' }, ($, e) => {
+    on('modkit.press', ($, e, next) => {
+      if (e.element !== 'publisher:done') return next(e)
       $.ui.toast(`pressed ${e.element} on ${String(e.surface)}`)
-      return { element: e.element }
+      return { value: { isAnswered: true } }
     })
   },
 }
@@ -42,14 +43,16 @@ const card = (over: Partial<ModKitPane> = {}): ModKitPane => ({
   ...over,
 })
 const pane = (surface: 'terminal' | 'desktop' = 'terminal', requestId = 'steps') =>
-  ({ plugin: 'mod-kit', surface, component: 'Pane', requestId, props: { title: 'Manual steps', isFocused: false, bodyColumns: 50 } }) as never
+  ({ plugin: 'mod-kit', surface, component: 'Pane', requestId, props: { title: 'Manual steps', isFocused: false, bodyColumns: 50 }, viewport: { columns: 120, rows: 40, isFullscreen: true } }) as never
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 type Found = { text: string; children: unknown[] }
 const shown = async (ui: { findAll: (q: { type: string }) => Promise<Found[]> }) =>
   (await ui.findAll({ type: 'Text' })).filter(t => t.children.every(c => typeof c === 'string')).map(t => t.text)
 
 // Claude Code beneath the kit: what it draws where no mod draws.
+// A fullscreen terminal that reports clicks (#939: elsewhere a button is drawn as text, clicks.test.tsx).
 const engine = (on: On) => {
+  mock.env(on, { TERM_PROGRAM: 'iTerm.app' })
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -94,7 +97,7 @@ test('the pane and the band draw one row the same way', withPublisher, async ($,
   await run($, `pane ${JSON.stringify(card())}`)
   await run($, `band ${JSON.stringify(card())}`)
   const inPane = await $.ui.mount(pane())
-  const inBand = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: bandProps } as never)
+  const inBand = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: bandProps, viewport: { columns: 120, rows: 40, isFullscreen: true } } as never)
   expect(await shown(inPane)).toEqual(await shown(inBand))
   await inPane.unmount()
   await inBand.unmount()

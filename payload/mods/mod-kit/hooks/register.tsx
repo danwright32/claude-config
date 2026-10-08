@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
-import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCall, ModKitCard, ModKitPane, ModKitRun } from '../types/index.d.ts'
-import { compose, drop, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
+import type { ModKit, ModKitBandButton, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandText, ModKitCall, ModKitCard, ModKitClickSite, ModKitPane, ModKitPress, ModKitRun } from '../types/index.d.ts'
+import { clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { sendTwice } from './send.ts'
@@ -111,6 +111,9 @@ export const register: Register = (on, options) => {
       // Answered by this mod's own hook on the noun's event below, which has the whole $ and so can
       // ask the secret guard wherever its folder sorts; this answers only when that hook failed.
       screen: async call => screenFailed(call, 'the check itself failed'),
+      // The bottom of every press (#939): reached only when no publisher's modkit.press hook took it.
+      press: async () => ({ isAnswered: false }),
+      clickable: async site => siteClickable(site, () => built.env.get('TERM_PROGRAM')),
     }
     return { ...built, modkit }
   })
@@ -156,21 +159,33 @@ export const register: Register = (on, options) => {
 // One mod's card as the band and a side pane both draw it (#690): its lines, inside its frame.
 // `columns` is how wide the site is, so a divider reaches its edge. The one drawing of a card, so
 // the band and the pane cannot drift apart as cards gain shapes.
-const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: number, row: ModKitPane) => {
+// `isClickable` is whether a click on a Button here reaches the mod (band.ts clicksReach, #939).
+const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: number, row: ModKitPane, isClickable: boolean) => {
   const { Box, Button, Link, Text } = $.ui.resolve(e)
+  // A link inside the run's own Text, so it keeps the run's style and is cut or wrapped as the
+  // run says, while the address it opens and copies stays whole (#708). Where the terminal
+  // draws no hyperlinks (Apple Terminal) a Link with text is drawn as the text then the
+  // address, so a run whose text is its own address is a Link with neither, which shows it once.
+  const run = (p: ModKitBandText, key: string) => (
+    <Text key={key} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap={p.wrap ? 'wrap' : 'truncate-end'}>
+      {p.href === undefined ? p.text : p.text === p.href ? <Link href={p.href} /> : <Link href={p.href}>{p.text}</Link>}
+    </Text>
+  )
   const part = (p: ModKitBandPart, i: number) => {
+    // Where a click may not land, a button that says what to draw instead is that text, never a
+    // control that looks pressable and does nothing (#939).
+    if ('button' in p && !isClickable)
+      return (
+        <Box key={`instead:${row.mod}:${p.button}`} flexDirection="row" flexShrink={0} paddingLeft={p.indent}>
+          {fallbackOf(row.mod, p).map((r, k) => run(r, `${p.button}:${k}`))}
+        </Box>
+      )
     const drawn =
       'button' in p ? (
-        // The press reaches the publisher through its ui.press hook on this key; nothing to do here.
-        <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} plain={p.plain} onPress={() => undefined} />
+        // The press reaches the publisher through its modkit.press hook, as a typed /press does (#939).
+        <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} plain={p.plain} onPress={press => void pressed($, press.element, String(press.surface), 'click').then(why => why && $.ui.toast(why))} />
       ) : (
-        // A link inside the run's own Text, so it keeps the run's style and is cut or wrapped as the
-        // run says, while the address it opens and copies stays whole (#708). Where the terminal
-        // draws no hyperlinks (Apple Terminal) a Link with text is drawn as the text then the
-        // address, so a run whose text is its own address is a Link with neither, which shows it once.
-        <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap={p.wrap ? 'wrap' : 'truncate-end'}>
-          {p.href === undefined ? p.text : p.text === p.href ? <Link href={p.href} /> : <Link href={p.href}>{p.text}</Link>}
-        </Text>
+        run(p, String(i))
       )
     // #872: a whole run, a label, never shrinks, so a long run beside it is cut or wrapped instead
     // of taking the label with it ("Whe..." on Ink at 30 columns).
@@ -215,7 +230,7 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
     return (
       <Box key={key} flexDirection="column">
         <Box key={`${key}:rule`} position="absolute" top={0} bottom={0} left={0} width={1} overflow="hidden" flexDirection="column">
-          <Text color={color}>{Array.from({ length: mostRows(row.lines) }, () => '│').join('\n')}</Text>
+          <Text color={color}>{Array.from({ length: mostRows(row.lines, row.mod) }, () => '│').join('\n')}</Text>
         </Box>
         <Box key={`${key}:lines`} flexDirection="column" paddingLeft={2} flexGrow={1}>
           {lines}
@@ -249,16 +264,68 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
 // it in any mod (tools/check-mod-shared-parts.sh). A survey holds the band, and the rows yield to it.
 // A side pane a mod published through $.modkit.pane is drawn here too, as the same card; one it did
 // not publish is left to whoever draws it.
+// Whether a click on a Button drawn at `site` reaches the mod (#939), for mod-kit's own drawing and
+// for any mod drawing its own Button ($.modkit.clickable). The terminal's name is read from the
+// session's environment; one that cannot be read is taken as unknown, which draws the text.
+const siteClickable = async (site: ModKitClickSite, terminalName: () => Promise<string | undefined>) => {
+  const terminal = site.surface === 'terminal' ? await terminalName().catch(() => undefined) : undefined
+  return clicksReach({ surface: site.surface, isFullscreen: site.viewport?.isFullscreen, terminal })
+}
+const clickable = ($: EngineInterface, e: ModKitClickSite) => siteClickable(e, () => $.env.get('TERM_PROGRAM'))
+
+// A press on one of mod-kit's buttons, clicked or typed: raised as modkit.press for the publisher to
+// answer. Nothing answering, or the press failing, is said rather than left as a dead control.
+const pressed = async ($: EngineInterface, element: string, surface: string, how: ModKitPress['how']): Promise<string | undefined> => {
+  try {
+    const r = await $.modkit.press({ element, surface, how })
+    if (r?.isAnswered) return undefined
+    return `Nothing answered the button ${element}; its mod may not be loaded.`
+  } catch (err) {
+    return `The button ${element} failed: ${String((err as Error)?.message ?? err)}`
+  }
+}
+
+// The buttons showing now, in the band and in every pane, by their `<mod>:<button>` key (#939).
+const showing = async ($: EngineInterface): Promise<Map<string, ModKitBandButton>> => {
+  const out = new Map<string, ModKitBandButton>()
+  for (const r of [...((await read($, band)) ?? []), ...((await read($, panes)) ?? [])])
+    for (const l of r.lines) if (Array.isArray(l)) for (const p of l) if ('button' in p) out.set(`${r.mod}:${p.button}`, p)
+  return out
+}
+
 const registerBand: Register = on => {
+  // #939: where a click cannot land, a button is drawn as "type: /press <mod> <button>", and this is
+  // that command. Only a button showing now is pressed, so an old line typed again presses nothing.
+  on('session.start', async ($, e, next) => {
+    if (e.isInteractive) await $.command.register({ name: 'press', description: 'Press a button in the band or a pane: /press <mod> <button>, as the band shows it', argumentHint: '<mod> <button>' })
+    return next(e)
+  })
+  on('command.run', { command: 'press' }, async ($, e) => {
+    const [mod = '', ...rest] = e.args.trim().split(/\s+/)
+    const element = `${mod}:${rest.join(' ')}`
+    const button = (await showing($)).get(element)
+    if (!mod || !rest.length || !button) return { text: `No button "${e.args.trim()}" is showing in the band or a pane, so nothing was pressed.` }
+    // Pressed once this command has returned: a press that sends a prompt (Done, Use) cannot send it
+    // from inside command.run, which holds the turn. Nothing answering, or a failure, is a toast.
+    try {
+      $.clock.after(0, () => {
+        void pressed($, element, 'terminal', 'typed').then(why => why && $.ui.toast(why))
+      })
+    } catch (err) {
+      return { text: `${button.label} could not be pressed: ${String((err as Error)?.message ?? err)}` }
+    }
+    return { text: `Pressing ${button.label}.` }
+  })
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rows = compose((await read($, band)) ?? [])
     if (e.props.hasSurvey || rows.length === 0) return next(e)
+    const isClickable = await clickable($, e)
     const { Box } = $.ui.resolve(e)
-    return <Box flexDirection="column">{rows.map(row => drawCard($, e, e.props.bodyColumns, row))}</Box>
+    return <Box flexDirection="column">{rows.map(row => drawCard($, e, e.props.bodyColumns, row, isClickable))}</Box>
   })
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     const pane = ((await read($, panes)) ?? []).find(p => p.id === e.requestId)
     if (!pane) return next(e)
-    return drawCard($, e, e.props.bodyColumns, pane)
+    return drawCard($, e, e.props.bodyColumns, pane, await clickable($, e))
   })
 }

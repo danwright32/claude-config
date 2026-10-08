@@ -41,6 +41,9 @@ const modKit: { name: string; register: Register } = {
         // The screen (#707): refuses a call carrying SCREEN-REFUSES, as the secret guard refuses a
         // token; mod-kit's own tests prove the real one asks the secret guard.
         screen: async (call: unknown) => (JSON.stringify(call).includes('SCREEN-REFUSES') ? { deny: 'Blocked: this message contains a secret. Refer to it by its name, not its value.' } : null),
+        // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
+        press: async () => ({ isAnswered: false }),
+        clickable: async () => true,
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
@@ -69,7 +72,7 @@ const modKit: { name: string; register: Register } = {
             <Box key={String(n)} flexDirection="row">
               {l.map((p, i) =>
                 p.button ? (
-                  <Button key={`${pane.mod}:${p.button as string}`} label={p.label as string} onPress={() => undefined} />
+                  <Button key={`${pane.mod}:${p.button as string}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} />
                 ) : (
                   <Text key={String(i)} bold={p.bold as boolean | undefined}>
                     {p.text as string}
@@ -92,7 +95,7 @@ const modKit: { name: string; register: Register } = {
               <Box key={`${r.id}${n}`} flexDirection="row">
                 {l.map((p, i) =>
                   p.button ? (
-                    <Button key={`${r.mod}:${p.button as string}`} label={p.label as string} onPress={() => undefined} />
+                    <Button key={`${r.mod}:${p.button as string}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} />
                   ) : (
                     <Text key={String(i)}>{p.text as string}</Text>
                   ),
@@ -319,7 +322,7 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: https://dash.cloudflare.com/waf  [copy-link]', '2. Purge the cache'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [copy-link]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -335,7 +338,7 @@ test('when the terminal is wide the card is the side pane, and the band stays cl
   expect(await ui.find({ type: 'Text', text: 'Cloudflare WAF' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '1. Turn on the WAF rule' }))?.props).toMatchObject({ bold: true })
   expect((await ui.find({ type: 'Button', key: 'manual-steps:done' }))?.props.label).toBe('Done')
-  expect((await paneShown($))?.lines.length).toBe(3)
+  expect((await paneShown($))?.lines.length).toBe(4)
   // Done pressed in the pane does what Done in the band does.
   await ui.press({ key: 'manual-steps:done' })
   expect(w.prompts).toEqual(['step 1 done'])
@@ -356,7 +359,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: https://dash.cloudflare.com/waf  [copy-link]'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [copy-link]', 'https://dash.cloudflare.com/waf'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -523,7 +526,7 @@ test('a handover is kept per project for the next session, and /steps shows it a
   expect(await slashSteps($, w.w)).toBe('The steps card is open.')
   expect(w.opened).toHaveLength(2)
   expect(await band($)).toBeUndefined()
-  expect((await paneShown($))?.lines.length).toBe(3)
+  expect((await paneShown($))?.lines.length).toBe(4)
 })
 
 // Dan closing the pane by hand (the card then moves to the band) is not covered here: the test
@@ -854,9 +857,10 @@ test('the pane asks for a dock as wide as the open step\'s lines, so a click pat
   await pinFresh({ clicks })
   // The rule and its gap, the indent under the title, the bold label (#872), then the click path.
   expect(w.opens[0]?.columns).toBe(2 + 3 + 'What to do: '.length + clicks.length)
-  // A link is not measured: it opens whole however much of it shows.
+  // A link is not measured: it opens whole however much of it shows. The widest line left is the
+  // title with the words drawn where Done cannot be clicked (#939).
   await pinFresh({ url: `https://dash.cloudflare.com/${'a'.repeat(150)}` })
-  expect(w.opens[1]?.columns).toBeLessThan(40)
+  expect(w.opens[1]?.columns).toBe(2 + '1. Turn on the WAF rule  type: step 1 done'.length)
   await pinFresh({ clicks: 'x'.repeat(200) })
   expect(w.opens[2]?.columns).toBe(80)
   expect(w.opens).toHaveLength(3)
@@ -960,7 +964,7 @@ test('steps_done withdrawn takes a pinned step off the card as not done, and the
   expect(await bandText($)).toEqual([
     'Cloudflare WAF  waiting on you',
     '1. Turn on the WAF rule  [done]',
-    'Where: https://dash.cloudflare.com/waf  [copy-link]',
+    'Where: [copy-link]', 'https://dash.cloudflare.com/waf',
     expect.stringMatching(/^2\. Watch the next merge  taken off on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M, not done$/),
   ])
   expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
