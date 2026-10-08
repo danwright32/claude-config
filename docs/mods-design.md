@@ -1781,11 +1781,11 @@ and the band question is removed rather than kept beside it (L29). Three defects
   - Only a program the shell cannot have changed: on standard input from a quoted heredoc, or one
     holding no `$` or backtick. In any other the shell may have run what a sentence holds
     (`"$(cat x >> ~/.claude/CLAUDE.md)"` or the same in backticks, in an unquoted heredoc), so it is
-    read whole. That mattered beyond this rule: mod-kit's write reader did not then report a write
-    made by such a substitution, so the mention was the only thing that caught it, and a test holds
-    the unquoted case asked about and the same words under a quoted delimiter let through. Since
-    #965 the write reader reports it too (below, under the write reader). So is a
-    program that runs a process, which may hand a sentence to a shell, and every other language. A
+    read whole. So is a program that runs a process, which may hand a sentence to a shell, and
+    every other language. Reading the unquoted heredoc whole mattered beyond this rule: mod-kit's write reader did not then
+    report a write made by such a substitution, so the mention was the only thing that caught it,
+    and a test holds the unquoted case asked about and the same words under a quoted delimiter let
+    through. Since #965 the write reader reports it too (above, under the write reader). A
     backtick is no quote in python, so one closing a mention (markdown in a sentence) leaves it text.
   - **Chosen: read from the text, not from what the program does with it.** A path cut out of a
     longer string at run time (a split, a slice) is not seen; tracing values through a program is
