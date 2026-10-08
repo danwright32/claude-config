@@ -110,10 +110,9 @@ esac
 # (claude-config#947), or a later pull blames a refusal that no longer applies. The early returns
 # are the paths a test of the whole tool cannot easily reach, so they are driven here.
 run_scan_recorded(){   # $1 = payload dir  $2 = repo dir  $3 = SYNC_SKIP_SECRET_SCAN value
-  local PAYLOAD="$1" SYNC_REPO="$2" SEND_REFUSED_FILE="$2/.send-refused"
+  local PAYLOAD="$1" SYNC_REPO="$2" SEND_REFUSED_FILE="$2/.send-refused" SYNC_SKIP_SECRET_SCAN="$3"
   printf '1\tskills/x/c.json\n' > "$SEND_REFUSED_FILE"
   (
-    SYNC_SKIP_SECRET_SCAN="$3"
     die(){ printf 'REFUSED: %s\n' "$*"; exit 1; }
     eval "$BLANK_SRC"
     eval "$SCAN_SRC"

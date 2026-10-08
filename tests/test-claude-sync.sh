@@ -11969,8 +11969,8 @@ env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRIPT" pull >/d
 check "#947 the fixture delivers a pull that works (positive control)" "grep -q 'shared base' '$RFHB/agents/shared.md'"
 # Read whole, never piped into grep -q, so a match cannot become a SIGPIPE that reads as absence (L183).
 rs_secret='AKIAIOSFODNN7EXAMPLE'
-rs_shared_has_secret(){ local _l; _l="$(git -C "$RFB" log --all -p 2>/dev/null)"; grep -q "$rs_secret" <<< "$_l"; }
-rs_clone_has_secret(){ local _l; _l="$(git -C "$RFRB" log --all -p 2>/dev/null)"; grep -q "$rs_secret" <<< "$_l"; }
+rs_shared_has_secret(){ local _rs_log; _rs_log="$(git -C "$RFB" log --all -p 2>/dev/null)"; grep -q "$rs_secret" <<< "$_rs_log"; }
+rs_clone_has_secret(){ local _rs_log; _rs_log="$(git -C "$RFRB" log --all -p 2>/dev/null)"; grep -q "$rs_secret" <<< "$_rs_log"; }
 
 # This Mac edits a file, writes a new one, and a credential lands beside them. The send is refused.
 printf 'shared edited on B\n' > "$RFHB/agents/shared.md"
