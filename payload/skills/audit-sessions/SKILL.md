@@ -13,7 +13,7 @@ Run the bundled condenser. Default window 14 days; take an override from the inv
 
     python3 ~/.claude/skills/audit-sessions/extract_friction.py --days 14 --out <scratchpad>/audit
 
-It auto-discovers project transcript dirs (skipping tmp and worktree noise, and any project with fewer than 3 sessions in the window) and writes one `friction_<project>.txt` per project: USER messages, INTERRUPT markers, SLASH commands, and tool-error signatures per session. Report the per-project stats line to the user before fanning out.
+It auto-discovers project transcript dirs (skipping tmp and worktree noise, and any project with fewer than 3 sessions in the window) and writes one `friction_<project>.txt` per project: USER messages, INTERRUPT markers, SLASH commands, and tool-error signatures per session. Report the per-project stats line to the user before fanning out. If it exits non-zero it names the transcripts it could not read: the files it wrote are missing those sessions, so tell the user which before going on.
 
 ## 2. Fan out (one agent per project, in parallel, single message)
 

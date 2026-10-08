@@ -149,13 +149,13 @@ return "applied"
 ''')
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("card", type=Path)
     ap.add_argument("--folder", default="Reels")
     ap.add_argument("--title", default=None,
                     help="defaults to the card's first heading")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not args.card.is_file():
         print(f"error: no such card: {args.card}", file=sys.stderr)
@@ -176,8 +176,15 @@ def main() -> int:
 
     r = apply_checklist(title, tickable)
     out = r.stdout.strip()
-    if out.startswith("ABORTED"):
-        print(f"note created, but tick boxes NOT applied.\n{out}\n"
+    # Only the script's own last line says the keystrokes were sent. A failed osascript prints
+    # nothing on stdout, so judging by the absence of ABORTED read every failure as done
+    # (claude-config#677): the exit status and the exact answer are both required.
+    if r.returncode != 0 or out != "applied":
+        if r.returncode != 0:
+            why = f"osascript exit {r.returncode}: {r.stderr.strip() or 'no message'}"
+        else:
+            why = out or "the tick box step answered nothing"
+        print(f"note created, but tick boxes NOT applied.\n{why}\n"
               f"Leave Notes frontmost and run this again.", file=sys.stderr)
         return 1
 
