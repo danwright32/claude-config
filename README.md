@@ -497,7 +497,10 @@ still running (with elapsed time), did not finish, failed, came back empty, answ
 shape (`unparsed`), abandoned, could not run (no claude, no python3, no base), too large, and an
 empty diff. All but the clean ones, the read ones and the empty diff refuse, naming
 `bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head>` and the one command
-override `SKIP_PR_REVIEW=1`, which is explained to Dan before it is used.
+override `SKIP_PR_REVIEW=1`, which is explained to Dan before it is used. The reviewer runs with
+hooks off and with Claude Code's built in `ReportFindings` tool disallowed, because a review
+reported through that tool leaves no finding line to read and came back `unparsed` in 6 of about 10
+rounds on one pull request (#804).
 
 Measured 2026-09-24: across the last 150 squash merges of claude-config, Overture, Ovation and
 PostRoll, 11 of 600 branches were over the 300 KB cap it shares with the push review. Two real
