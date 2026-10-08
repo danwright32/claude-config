@@ -69,8 +69,12 @@ class T(unittest.TestCase):
         self.assertEqual(1 + 1, 2)
 PY
 cat > "$TMP/good/scripts/test_bare.py" <<'PY'
+def testdata():
+    return ["a", "b"]
+
+
 def test_plain_assert():
-    assert "a" in "abc"
+    assert "a" in testdata()
 PY
 run "$TMP/good"
 [ "$rc" -eq 0 ] && [ "$(result_of)" = "2 0" ] && ok \

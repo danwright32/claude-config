@@ -380,8 +380,13 @@ def exits_python(path: str, rel: str):
             findings.append(f"{rel}:{call.lineno}: P1 the exit status of {what}(...) is dropped, so a failure "
                             f"reads as success. Check it, or pass check=True.")
             continue
+        bound = None  # the names this call's result is bound to, by `x = ...` or `with ... as x`
         if isinstance(parent, (ast.Assign, ast.AnnAssign)) and getattr(parent, "value", None) is call:
-            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            bound = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+        elif isinstance(parent, ast.withitem) and parent.context_expr is call and parent.optional_vars is not None:
+            bound = [parent.optional_vars]
+        if bound is not None:
+            targets = bound
             if len(targets) == 1 and isinstance(targets[0], ast.Name):
                 name = targets[0].id
                 scope = mod.scope_of(call)

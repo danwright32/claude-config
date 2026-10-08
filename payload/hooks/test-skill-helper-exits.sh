@@ -101,6 +101,8 @@ def main():
         ...
     q = subprocess.Popen(["true"])
     out, err = q.communicate()
+    with subprocess.Popen(["true"]) as w:
+        pass
     return 0
 PY
 scan
@@ -115,6 +117,7 @@ fires P2 27 "except Exception: pass"
 fires P2 32 "a bare except: continue"
 fires P2 36 "a tuple holding BaseException, with an ellipsis body"
 fires P1 38 "a Popen whose output is read by communicate() and whose status is not"
+fires P1 40 "a Popen opened in a with whose status is never read"
 has "$out" "$FILE:15:" && bad "the first apply() IS checked on the next line, so it is not flagged" "$out" || ok
 has "$out" "$FILE:7:" && bad "a function returning the process result defers to its callers" "$out" || ok
 
@@ -151,6 +154,9 @@ def main():
     p = subprocess.Popen(["true"])
     if p.wait() != 0:
         return status
+    with subprocess.Popen(["true"]) as w:
+        if w.wait() != 0:
+            return 1
     try:
         json.loads("x")
     except json.JSONDecodeError:

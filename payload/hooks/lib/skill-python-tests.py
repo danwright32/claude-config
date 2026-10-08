@@ -69,7 +69,7 @@ def run_one(path: str) -> int:
 
     suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
     for name, obj in sorted(vars(module).items()):
-        if not (name.startswith("test") and inspect.isfunction(obj)):
+        if not (name.startswith("test_") and inspect.isfunction(obj)):  # a helper like testdata() is not a test
             continue
         if obj.__module__ != module.__name__:
             continue  # imported from elsewhere, not a test of this file
