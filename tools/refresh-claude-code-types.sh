@@ -44,7 +44,7 @@ fi
 
 stage="$(mktemp -d "${TMPDIR:-/tmp}/refresh-cc-types.XXXXXX")" || { echo "refresh-claude-code-types: no scratch folder could be made" >&2; exit 1; }
 trap 'rm -rf "$stage"' EXIT
-python3 - "$scanner" "$src" "$stage" <<'PY' || exit 1
+python3 -I - "$scanner" "$src" "$stage" <<'PY' || exit 1
 import importlib.util, json, os, re, sys
 scanner, src, stage = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("style_scan", scanner)

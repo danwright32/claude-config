@@ -88,25 +88,43 @@ run "$T/src3"
   && check "engine types that do not name their build are refused, and nothing is pinned" ok \
   || check "engine types that do not name their build are refused, and nothing is pinned" "exit=$code out=$out"
 
-# 3b. A copy failing part way must never leave a pin holding two builds' files, the engine's first
-#     line naming one while the tools are another's (lessons review of #970): the new set is staged
-#     whole beside the pin and swapped in, or the pin is left as it was. Staged here by a pinned
-#     tools file and folder that cannot be written, which a copy in place stops at after the
-#     engine's file is already new. A user who can write anyway (root) cannot be refused this way.
+# 3b. A refresh must never leave a pin holding two builds' files, the engine's first line naming one
+#     while the tools are another's (lessons review of #970). A pinned tools file and folder that
+#     cannot be written stopped the copy that used to go file by file into the pin after the engine's
+#     file was already new; the new set is now written whole beside the pin and swapped in, so the
+#     same pin is refreshed whole. A user who can write anyway (root) cannot be refused this way.
 lay "$T/src5" 2.1.500; printf 'export type B500 = 1\n' >> "$T/src5/claude-code-tools/index.d.ts"
 chmod 444 "$P/claude-code-tools/index.d.ts"; chmod 555 "$P/claude-code-tools"
 if [ -w "$P/claude-code-tools/index.d.ts" ]; then
-  echo "UNMEASURED: this user can write a mode 444 file, so a copy failing part way cannot be staged here"
+  echo "UNMEASURED: this user can write a mode 444 file, so a pin that cannot be written in place cannot be staged here"
 else
   run "$T/src5"
   b="$(head -n 1 "$P/claude-code/index.d.ts")"; t="$(grep -c 'B500' "$P/claude-code-tools/index.d.ts")"
-  { [ "$b" = '// Written by Claude Code 2.1.500.' ] && [ "$t" = 1 ]; } || { [ "$b" != '// Written by Claude Code 2.1.500.' ] && [ "$t" = 0 ]; } \
-    && check "a copy failing part way leaves the pin whole, all new or all as it was" ok \
-    || check "a copy failing part way leaves the pin whole, all new or all as it was" "exit=$code first line: $b, new tools: $t, out=$out"
+  [ "$code" -eq 0 ] && [ "$b" = '// Written by Claude Code 2.1.500.' ] && [ "$t" = 1 ] \
+    && check "a pin whose files cannot be written in place is still refreshed whole, engine and tools alike" ok \
+    || check "a pin whose files cannot be written in place is still refreshed whole, engine and tools alike" "exit=$code first line: $b, new tools: $t, out=$out"
   [ "$(cat "$P/claude-code-mcp/index.d.ts")" = 'export {}' ] \
     && check "and the hand kept MCP list survives the swap" ok || check "and the hand kept MCP list survives the swap" "$(cat "$P/claude-code-mcp/index.d.ts" 2>&1)"
 fi
-chmod -R u+w "$TS" 2>/dev/null
+chmod -R u+w "$TS" 2>/dev/null; rm -rf "$TS"/claude-code-types.old.* 2>/dev/null
+
+# 3c. Where the new set cannot be written at all (here, the folder holding the pin refuses a new
+#     folder), the refresh fails, says the pin was left as it was, and it was: every file the same
+#     and nothing left beside it.
+lay "$T/src6" 2.1.600; printf 'export type B600 = 1\n' >> "$T/src6/claude-code-tools/index.d.ts"
+sums(){ cat "$P/claude-code/index.d.ts" "$P/claude-code-tools/index.d.ts" "$P/claude-code-mcp/index.d.ts" "$P/tsconfig.json" | cksum; }
+before="$(sums)"
+chmod 555 "$TS"
+if [ -w "$TS" ]; then
+  echo "UNMEASURED: this user can write a mode 555 folder, so a refresh that cannot write its new set cannot be staged here"
+else
+  run "$T/src6"
+  stray="$(find "$TS" -maxdepth 1 -name 'claude-code-types.*' | wc -l | tr -d ' ')"
+  [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'left as it was' && [ "$(sums)" = "$before" ] && [ "$stray" = 0 ] \
+    && check "a new set that cannot be written fails the refresh and leaves the pin exactly as it was" ok \
+    || check "a new set that cannot be written fails the refresh and leaves the pin exactly as it was" "exit=$code stray=$stray out=$out"
+fi
+chmod 755 "$TS"
 
 # 4. The pinned types this repository ships (#953): whole, naming their build on the engine's first
 #    line, carrying the built-in tools' inputs, declaring no MCP tool, with a tsconfig naming
