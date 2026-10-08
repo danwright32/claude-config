@@ -1500,7 +1500,10 @@ ENTRIES
 # Anything short of that is LEFT ALONE and said, once per pull, with the reason.
 skill_folder_own_files(){   # $1 = a folder -> every file in it but version control and cruft, or status 1 when it could not be read
   local out
-  out="$(cd "$1" && find . \( -name .git -o -name __pycache__ -o -path '*/.claude-plugin/types' \) -prune \
+  # Only the folder's OWN .git is passed over, because it is the one repository the proof inspects.
+  # A .git deeper down is a nested repository whose commits nothing here checks, so its files count
+  # as the folder's own and keep it (L5).
+  out="$(cd "$1" && find . \( -path ./.git -o -name __pycache__ -o -path '*/.claude-plugin/types' \) -prune \
     -o ! -type d ! -name .DS_Store ! -name '*.pyc' -print 2>/dev/null)" || return 1
   printf '%s' "$out" | sed 's|^\./||'
   return 0

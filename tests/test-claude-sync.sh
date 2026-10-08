@@ -10936,7 +10936,7 @@ R968R="$WORK/968-repoB"; git clone -q "$R968B" "$R968R" 2>/dev/null
 H968A="$WORK/968-homeA"; mkdir -p "$H968A"; echo '{"hooks":{}}' > "$H968A/settings.json"
 H968B="$WORK/968-homeB"; mkdir -p "$H968B/skills"; echo '{"hooks":{}}' > "$H968B/settings.json"
 # Skills installed on Mac B as git clones, and one ordinary skill that stays.
-for _n in retired-clone kept-local kept-unpushed kept-stash kept-tag kept-reflog; do
+for _n in retired-clone kept-local kept-unpushed kept-stash kept-tag kept-reflog kept-nested; do
   git clone -q "$(_968_upstream "$_n")" "$H968B/skills/$_n" 2>/dev/null
 done
 # One whose .git is a pointer file naming a repository kept elsewhere, which this folder cannot speak for.
@@ -10970,13 +10970,21 @@ check "#968 and the person's own *.local.json never travelled" \
   "[ ! -e '$R968A/payload/skills/kept-local/config.local.json' ]"
 # Mac A retires all three and publishes.
 rm -rf "$H968A/skills/retired-clone" "$H968A/skills/kept-local" "$H968A/skills/kept-unpushed" \
-  "$H968A/skills/kept-stash" "$H968A/skills/kept-pointer" "$H968A/skills/kept-tag" "$H968A/skills/kept-reflog"
+  "$H968A/skills/kept-stash" "$H968A/skills/kept-pointer" "$H968A/skills/kept-tag" "$H968A/skills/kept-reflog" "$H968A/skills/kept-nested"
 env $(_968env) CLAUDE_HOME="$H968A" SYNC_REPO="$R968A" SYNC_HOSTNAME=m968A bash "$SCRIPT" sync >/dev/null 2>&1
 check "#968 the retirement reached the shared repo" \
   "[ -z \"\$(git -C '$R968B' ls-tree -r --name-only main -- payload/skills/retired-clone payload/skills/kept-local payload/skills/kept-unpushed payload/skills/kept-stash payload/skills/kept-pointer)\" ]"
 # A git folder the shared config never had: somebody started a skill here with git init. Not
 # retired, so not this tool's to remove however empty it looks.
 mkdir -p "$H968B/skills/fresh-git"; git -C "$H968B/skills/fresh-git" init -q
+# And a repository NESTED inside one, holding a commit of its own: only the folder's own .git is
+# version control the proof inspects, so a nested one is somebody's work and keeps the folder.
+# Made after the last send, so the shared copy never held its (empty, once .git is left out) folder.
+mkdir -p "$H968B/skills/kept-nested/vendor/lib"; git -C "$H968B/skills/kept-nested/vendor/lib" init -q
+printf 'nested work\n' > "$H968B/skills/kept-nested/vendor/lib/work.txt"
+git -C "$H968B/skills/kept-nested/vendor/lib" add work.txt
+git -C "$H968B/skills/kept-nested/vendor/lib" -c user.name=suite -c user.email=suite@example.invalid commit -q -m 'nested, only here'
+rm -f "$H968B/skills/kept-nested/vendor/lib/work.txt"
 out968="$(env $(_968env) CLAUDE_HOME="$H968B" SYNC_REPO="$R968R" SYNC_HOSTNAME=m968B bash "$SCRIPT" pull 2>&1)"
 dbg "#968 pull after the retirement: $out968"
 check "#968 the retired clone's leftover folder, holding only .git, is removed by the pull" \
@@ -10997,6 +11005,8 @@ check "#968 a leftover holding a commit only a local tag reaches is kept, and sa
   "[ -n \"\$(git -C '$H968B/skills/kept-tag' log --format=%s -1 mine-only 2>/dev/null | grep 'only here')\" ] && grep -qE 'skills/kept-tag.*left alone.*not on any remote' <<< \"\$out968\""
 check "#968 a leftover holding a commit only its reflog reaches is kept, and says so" \
   "[ -e '$H968B/skills/kept-reflog/.git' ] && grep -qE 'skills/kept-reflog.*left alone.*not on any remote' <<< \"\$out968\""
+check "#968 a leftover holding a nested repository with its own commit is kept, and says so" \
+  "[ -n \"\$(git -C '$H968B/skills/kept-nested/vendor/lib' log --format=%s -1 2>/dev/null | grep 'nested, only here')\" ] && grep -qE 'skills/kept-nested.*left alone.*vendor/lib/\.git' <<< \"\$out968\""
 check "#968 a leftover whose .git points at a repository elsewhere is kept, and says so" \
   "[ -f '$H968B/skills/kept-pointer/.git' ] && grep -qE 'skills/kept-pointer.*left alone.*somewhere else' <<< \"\$out968\""
 check "#968 a git folder the shared config never held is kept" "[ -e '$H968B/skills/fresh-git/.git' ]"
