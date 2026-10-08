@@ -37,8 +37,8 @@
 #             reading what a shell or interpreter runs, or     command $.modkit.pipeline({ command }) gives,
 #             judging inline code by what it can do (naming    read and judged once (#712: no build kept the
 #             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
-#   press     hooking ui.press for a button mod-kit drew       on('modkit.press', ...): a click and a typed
-#             (`'ui.press'` and mod-kit on one line)            /press both raise it, so a button drawn as
+#   press     a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
+#             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
 #                                                               cannot land (#939) is never answered by a
 #                                                               click alone
@@ -112,7 +112,6 @@ PARTS=(
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
   "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
-  "press|[\"'\`]ui\\.press[\"'\`].*mod-kit|the modkit.press event, on('modkit.press', ...), which a typed /press reaches too (#939),"
 )
 
 # $1 = mod  $2 = part -> the issue that ends that mod's known exception for that part, or nothing.
@@ -161,6 +160,17 @@ for d in "$dir"/*/; do
       fi
     done <<< "$copied"
   fi
+  # press (#939): a file holding a ui.press hook that names mod-kit anywhere, its filter written on
+  # one line or across several, or held in a constant (lessons review of #957). A click alone reaches
+  # such a hook; mod-kit's typed /press raises modkit.press, which it never sees.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qE "[\"'\`]mod-kit[\"'\`]" "$f" || continue
+    failed=1
+    while IFS= read -r h; do
+      echo "check-mod-shared-parts: $name hooks ui.press for mod-kit's buttons at ${f#"$sd"}:${h%%:*}, which a click alone reaches: answer the press in on('modkit.press', ...) instead, which a typed /press reaches too."
+    done <<< "$(grep -nE "on\(\s*[\"'\`]ui\.press[\"'\`]" "$f")"
+  done <<< "$(grep -rlE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' "on\(\s*[\"'\`]ui\.press[\"'\`]" "$sd/hooks" 2>/dev/null)"
   # button (#939): a file drawing its own Button that never asks whether a click reaches it there.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
