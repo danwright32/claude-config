@@ -129,6 +129,7 @@ for want in ("First run / setup", "Rotating the token"):
         print("%s: no step sends the reader into the sheet" % want)
     for n, s in hits:
         judged += 1
+        s = " ".join(s.split())  # a rewrapped step still names the sheet (L278)
         if url not in s:
             print("%s step %s lacks the sheet link" % (want, n))
         if name not in s:
@@ -147,6 +148,9 @@ check_eq "and SKILL.md warns that a second sheet shares the name" "yes" "$warns"
 python3 -c 'import sys; t=open(sys.argv[1]).read(); h=t.index("## Rotating the token"); print(t[:h] + t[h:].replace(sys.argv[2], "the sheet", 1), end="")' "$DIR/SKILL.md" "$SHEET_URL" > "$TMP/no-link.md"
 check "the check names a rotation step whose link was removed" "Rotating the token step 3 lacks the sheet link" "$(sheet_step_gaps "$TMP/no-link.md")"
 check_not "and only that step" "First run / setup step" "$(sheet_step_gaps "$TMP/no-link.md")"
+# A step that rewraps the name across a line break still names the sheet (L278), so it passes.
+python3 -c 'import sys; t=open(sys.argv[1]).read(); print(t.replace("**Dan Work Project Tracker**", "**Dan Work\n   Project Tracker**"), end="")' "$DIR/SKILL.md" > "$TMP/rewrapped.md"
+check_eq "and a step whose sheet name is rewrapped across lines still counts as naming it" "judged=2" "$(sheet_step_gaps "$TMP/rewrapped.md")"
 printf '## First run / setup\n\n1. Run something.\n\n## Rotating the token\n\n1. Run something.\n' > "$TMP/no-steps.md"
 check "and refuses steps that never open the sheet, rather than passing on zero" "no step sends the reader into the sheet" "$(sheet_step_gaps "$TMP/no-steps.md")"
 
