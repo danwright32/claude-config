@@ -22,8 +22,10 @@ export type SleepRecord = {
   until: number
   /** The evening it began, as an ET date (YYYY-MM-DD); before noon ET counts as the night before. */
   night: string
-  /** This boot's start in seconds (sysctl kern.boottime): a record from another boot reads as awake. */
+  /** This boot's start in seconds (sysctl kern.boottime): a record from another boot reads as awake. Judged within BOOT_TIME_TOLERANCE_S, and only where `bootSession` cannot decide. */
   bootTime: number
+  /** This boot's session (sysctl kern.bootsessionuuid), which only a restart changes: absent on a record written before it was kept, or when it could not be read. */
+  bootSession?: string
   /** Where the night's report goes (written by phase 4, #835). */
   report: string
   /** Where sleep was started: the session and its folder. */
@@ -50,12 +52,27 @@ export type SleepReading =
 
 const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
 
+/** This boot as a reader knows it: its session and its start in seconds, each null when it could not be read. */
+export type Boot = { session: string | null; time: number | null }
+
+/**
+ * How far this boot's start may sit from the record's and still be the same boot, when no boot
+ * session decides. macOS derives kern.boottime from the wall clock minus uptime, so a clock
+ * correction moves it by seconds with no restart (2 s on 2026-10-08, which ended the night on the
+ * shell side while this mod, holding its first reading, still said asleep); a real restart moves it
+ * by the whole time the Mac had been up. The shell's TOLERANCE_S (hooks/lib/sleep.sh) is the same,
+ * held to it by the shared fixtures at both edges.
+ */
+export const BOOT_TIME_TOLERANCE_S = 300
+
 /**
  * The one predicate (#840). `text` is the record file's content, null when there is no file; `now`
- * in ms; `boot` this boot's start in seconds, null when it could not be read (then only the end decides). The checks run in
- * the order the shell reader runs them, so the two answer alike on a record wrong in two ways.
+ * in ms; `boot` this boot (with neither half known, only the end decides). The record's boot
+ * session decides which boot it belongs to whenever both sides have one, and only otherwise its
+ * start, within BOOT_TIME_TOLERANCE_S. The checks run in the order the shell reader runs them, so
+ * the two answer alike on a record wrong in two ways.
  */
-export const readSleep = (text: string | null, now: number, boot: number | null): SleepReading => {
+export const readSleep = (text: string | null, now: number, boot: Boot): SleepReading => {
   if (text === null) return { state: 'none' }
   let j: unknown
   try {
@@ -68,10 +85,17 @@ export const readSleep = (text: string | null, now: number, boot: number | null)
   if (!isNum(r.v) || r.v < 1) return { state: 'unreadable', why: 'the sleep record has no version this reader knows' }
   if (!isNum(r.until)) return { state: 'unreadable', why: 'the sleep record names no end' }
   if (!isNum(r.bootTime)) return { state: 'unreadable', why: 'the sleep record names no boot' }
+  if ('bootSession' in r && !(typeof r.bootSession === 'string' && r.bootSession)) return { state: 'unreadable', why: 'the sleep record names a boot session this reader cannot read' }
   const record = r as unknown as SleepRecord
-  // This boot unknown (sysctl failed) only skips the boot check: a sound record still holds until
-  // its end, which bounds it either way, and is never called broken for what this side could not read.
-  if (boot !== null && r.bootTime !== boot) return { state: 'other-boot', record }
+  // This boot unknown both ways (sysctl failed) only skips the boot check: a sound record still holds
+  // until its end, which bounds it either way, and is never called broken for what this side could not read.
+  const same =
+    typeof r.bootSession === 'string' && boot.session !== null
+      ? r.bootSession.toUpperCase() === boot.session.toUpperCase()
+      : boot.time !== null
+        ? Math.abs(r.bootTime - boot.time) <= BOOT_TIME_TOLERANCE_S
+        : true
+  if (!same) return { state: 'other-boot', record }
   if (now >= r.until) return { state: 'expired', record }
   return { state: 'asleep', record }
 }
@@ -80,6 +104,12 @@ export const readSleep = (text: string | null, now: number, boot: number | null)
 export const bootOf = (text: string): number | null => {
   const m = /\bsec\s*=\s*(\d+)/.exec(text)
   return m ? Number(m[1]) : null
+}
+
+/** This boot's session, from `sysctl -n kern.bootsessionuuid`'s text: its first line when that is a UUID, in upper case, or null. */
+export const bootSessionOf = (text: string): string | null => {
+  const line = (text.split('\n')[0] ?? '').trim()
+  return /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/.test(line) ? line.toUpperCase() : null
 }
 
 // ET, always America/New_York whatever zone the Mac is set to, one helper for every date (L39).
