@@ -1,17 +1,18 @@
 @RTK.md
 <!-- lessons index: generated from LESSONS.md, do not edit between these markers -->
-@LESSONS-INDEX-proof-over-green.md
-@LESSONS-INDEX-data-safety.md
-@LESSONS-INDEX-honest-failure.md
-@LESSONS-INDEX-state-and-identity.md
-@LESSONS-INDEX-security-and-privacy.md
-@LESSONS-INDEX-ux-completeness.md
-@LESSONS-INDEX-external-systems.md
-@LESSONS-INDEX-building-with-ai.md
-@LESSONS-INDEX-codebase-hygiene.md
-@LESSONS-INDEX-cross-system-reliability.md
-@LESSONS-INDEX-test-speed.md
-@LESSONS-INDEX-pipeline-speed.md
+@LESSONS-CORE-proof-over-green.md
+@LESSONS-CORE-data-safety.md
+@LESSONS-CORE-honest-failure.md
+@LESSONS-CORE-state-and-identity.md
+@LESSONS-CORE-security-and-privacy.md
+@LESSONS-CORE-ux-completeness.md
+@LESSONS-CORE-external-systems.md
+@LESSONS-CORE-building-with-ai.md
+@LESSONS-CORE-codebase-hygiene.md
+@LESSONS-CORE-cross-system-reliability.md
+@LESSONS-CORE-test-speed.md
+@LESSONS-CORE-pipeline-speed.md
+@LESSONS-CORE-_TOC.md
 <!-- end lessons index -->
 
 The files above are lessons, one line each, generated from LESSONS.md and split by section. Which

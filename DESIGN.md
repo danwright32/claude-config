@@ -1343,13 +1343,21 @@ The job is daily and the delivery monthly, rather than one monthly launchd job, 
 ordered by their declared times are not ordered at all (L386) and a monthly job that fails costs the
 month (L533).
 
-**What it does not do yet.** The tags behind the 2026-09-24 approval were never committed. The two
-passes were written to `tags-pass1-sonnet.txt` and `tags-pass2-opus.txt` in that session's
-scratchpad, which no longer exists, and the session's transcript never printed them whole; a search
-on 2026-10-09 (the temp folders, Spotlight, the #563 and #575 threads) found no copy. So
-`lesson-tags.tsv` has to be seeded before the first re-rank, and until then it refuses with NO TAGS,
-which is the honest answer, rather than guessing which of the 355 were the 20 ranked ones or
-re-tagging without Dan.
+**The tags were re-run, not recovered.** The tags behind the 2026-09-24 approval were never
+committed. The two passes were written to `tags-pass1-sonnet.txt` and `tags-pass2-opus.txt` in that
+session's scratchpad, which no longer exists, and the session's transcript never printed them whole;
+a search on 2026-10-09 (the temp folders, Spotlight, the #563 and #575 threads) found no copy. Dan
+decided on 2026-10-09 to re-run both passes over every lesson rather than reconstruct them, with his
+2026-09-24 rule for disputes unchanged (a lesson the passes disagree on stays in the core), so
+nothing waits on him. `lesson-tags.tsv` (sonnet) and `lesson-tags-second.tsv` (opus) are that
+re-run, exactly as `tools/tag-lessons.py` printed them.
+
+The re-run does not reproduce the old split. On 2026-09-24 the passes put 201 lessons as agreed
+unreviewable, 134 disputed and 400 agreed diff; on 2026-10-09, over 776 lessons, 223, 131 and 422.
+The seats are read from the list as it stands, as the lessons in the core both passes call diff, so
+the core Dan approved now holds 72 seats rather than 20: at least 52 lessons that were unreviewable
+or disputed in September are agreed diff now, and the re-rank treats them as seat holders that can be
+proposed out.
 
 ## Things known to be wrong and left that way
 

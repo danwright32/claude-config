@@ -1,4 +1,4 @@
-import type { ScopeModesLeftOpen } from '../types/index.d.ts'
+import type { ScopeModesLeftAsIs, ScopeModesLeftClosed, ScopeModesLeftOpen } from '../types/index.d.ts'
 import type { Cmd } from './nobuild.ts'
 
 // Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
@@ -6,16 +6,30 @@ import type { Cmd } from './nobuild.ts'
 // what blocks this issue's merge or deploy is allowed; starting new work is denied. Asking Dan
 // (AskUserQuestion) is never new work: winding down finalizes everything the session has open, so a
 // PR needing his sign off is asked about and merged, never parked waiting on him (#856). The one
-// exception is Dan's own answer (#917): a PR he chose to leave open, recorded from his answer to
-// leave_pr_open against the commit the PR was on, is settled until it is pushed to again.
+// exception is Dan's own answer to leave_pr_open: a PR he chose to leave open (#917), recorded
+// against the commit the PR was on, is settled until it is pushed to again, and a PR closed without
+// merging that he chose to leave closed (#1033) is settled while it stays closed.
+//
+// A closed PR is never settled without his answer, even where its work plainly merged in another PR
+// (ovation#711, whose work merged as #716): GitHub records no link from a closed PR to the one that
+// carried its work, a closing reference belongs to the issue rather than to either PR, and a squash
+// merge leaves the closed PR's commits out of the base branch's history (L642), so nothing it gives
+// says so reliably.
 
 export type Refusal = { what: string }
 
 /** Dan's own answer that a PR stays open (#917), recorded where he gave it, against its head commit. */
 export type LeftOpen = ScopeModesLeftOpen
+/** Dan's own answer that a PR closed without merging stays closed (#1033). */
+export type LeftClosed = ScopeModesLeftClosed
+/** Dan's own answer about one PR, open or closed. */
+export type LeftAsIs = ScopeModesLeftAsIs
+
+/** Whether an answer was about a PR closed without merging, told by its own field (#1033). */
+export const isLeftClosed = (d: LeftAsIs): d is LeftClosed => 'closed' in d && d.closed === true
 
 /** Dan's choice about this PR, by repository (in any case) and number, or undefined when he made none. */
-export const leftOpenFor = (all: readonly LeftOpen[], repo: string, number: number): LeftOpen | undefined =>
+export const choiceFor = (all: readonly LeftAsIs[], repo: string, number: number): LeftAsIs | undefined =>
   all.find(d => d.number === number && d.repo.toLowerCase() === repo.toLowerCase())
 type Unreadable = { unreadable: string }
 const isUnreadable = (v: unknown): v is Unreadable => !!v && typeof v === 'object' && 'unreadable' in v
@@ -27,8 +41,8 @@ export type Reading = {
   isDefault: boolean
   /** `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none. */
   pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[] } | null | Unreadable
-  /** Dan's choice to leave this PR open, when he made one (#917); never inferred. */
-  leftOpen?: LeftOpen
+  /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
+  choice?: LeftAsIs
   branchHere: boolean | Unreadable
   branchOnGitHub: boolean | Unreadable
   worktreeOnBranch: boolean | Unreadable
@@ -69,15 +83,20 @@ export const outstanding = (r: Reading): string[] => {
     return out
   }
   if (r.pr.state === 'OPEN') {
-    const d = r.leftOpen
+    // An answer about the PR while it was closed says nothing about it open (#1033).
+    const d = r.choice && !isLeftClosed(r.choice) ? r.choice : undefined
     // Nobody decided: #856's default, an open PR is outstanding until merged.
     if (!d) return [`PR #${r.pr.number} is not merged yet`]
-    if (keptOpen(r)) return []
+    if (settledByDan(r)) return []
     if (!r.pr.head) return [`PR #${r.pr.number}'s latest commit could not be read, so Dan's choice to leave it open cannot be matched to it`]
     // His answer was about the commits he was asked about, never ones pushed since.
     return [`PR #${r.pr.number} has new commits since Dan chose to leave it open: merge it, or ask him again (mcp__scope-modes__leave_pr_open)`]
   }
-  if (r.pr.state === 'CLOSED') return [`PR #${r.pr.number} was closed without merging; ask Dan what to do`]
+  if (r.pr.state === 'CLOSED') {
+    if (settledByDan(r)) return []
+    // His answer to leave it open was about an open PR, so it settles nothing once closed.
+    return [`PR #${r.pr.number} was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)`]
+  }
   const d = r.deploy
   if (d === null) out.push(`PR #${r.pr.number} has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)`)
   else if (isUnmeasured(d)) out.push(`the deploy is unmeasured: ${d.unmeasured}`)
@@ -100,10 +119,16 @@ export const outstanding = (r: Reading): string[] => {
   return out
 }
 
-/** Whether this reading is a PR still open on Dan's own choice, made at the commit it is on now (#917). */
-export function keptOpen(r: Reading): boolean {
+/**
+ * Whether this reading is a PR left as it is on Dan's own choice: still open, chosen at the commit it
+ * is on now (#917), or closed without merging, chosen while closed (#1033).
+ */
+export function settledByDan(r: Reading): boolean {
   const pr = r.pr
-  return !!pr && !isUnreadable(pr) && pr.state === 'OPEN' && !!r.leftOpen && !!pr.head && pr.head === r.leftOpen.head
+  const d = r.choice
+  if (!pr || isUnreadable(pr) || !d) return false
+  if (isLeftClosed(d)) return pr.state === 'CLOSED'
+  return pr.state === 'OPEN' && !!pr.head && pr.head === d.head
 }
 
 const ISSUE_REF = /(?:#|\bissue\s+)(\d+)\b/gi

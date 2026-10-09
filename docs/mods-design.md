@@ -1938,6 +1938,44 @@ the issue approved; what follows is that plan as built, with the readings taken 
   a hook that throws: each refuses with its own sentence. An answer that cannot be recorded is said
   in the dialog's result, and the edit stays held.
 
+### What #1010 changed, 2026-10-09
+
+trypennie PR #529 changed one prop on a page, `xbc={xbc}` to `xbc={leadXbc ?? ''}`, which booking
+code the page hands its calendar. Nothing on screen changed, and four things went wrong; the issue's
+direction is what follows.
+
+- **The edit is judged, not only the file.** An Edit, MultiEdit or Write to an existing `.tsx` or
+  `.jsx` file passes unasked when its one difference from the file on disk lies inside the value of
+  one prop on a component (a capitalised tag), the prop's name names no look or visible state (a
+  list read anywhere in the name: class, style, variant, size, colour, open, hidden, disabled, label,
+  text, value, icon, `isX` and the like), and both values only carry data (names, property access,
+  calls, `??`, `||`, `&&`, `!`, `?:`, and no literal but the empty string). Everything else is asked:
+  a className, style, literal, JSX, copy, an import, a prop on a plain HTML element (CSS can read
+  it), two changes in one edit, a shell edit, a new file. Leaning that way on purpose: a hold costs
+  Dan one answer, a pass is a look he never saw.
+- **A third answer.** The skip question offers Not a look change beside Skip them and Run
+  /design-rounds. It lets that one refused call through, recognised when it is sent again unchanged
+  by a hash of its tool, its input, the folder it runs in and the session (so a shell command's
+  relative path elsewhere, or the same edit in a later session, is asked about again), within an
+  hour of his answer (it authorises a call, so it is judged on its age at use, L567), and keeps his
+  word with why, and the call written out whole, which must match exactly, under `pass:<that key>`;
+  nothing is recorded for the issue, so the next look changing edit is asked about again.
+- **Settled is for the refused call's project.** It read the session's folder, so Dan's Settled for
+  a trypennie edit was recorded for Slate issue #2210 and the edit stayed held. Now the settled
+  question names the refused call (`metadata.call`), or, left out, takes the refused calls waiting
+  when they all wait on one answer; with none waiting it needs `metadata.path`, a folder or file in
+  the project's checkout, and refuses without one. Settle and the judge read a checkout through one
+  resolver, and settle and skip find a refused call through one lookup.
+- **Route parameters are path parts.** mod-kit's write reader read `src/app/booking/[SO_ID]/page.tsx`
+  as a pattern and named no file, so the write was refused as one it could not follow. A part shaped
+  like a route parameter (`[id]`, `[...slug]`, `[[...slug]]`, `[id=matcher]`, `[id].tsx`) now names
+  that folder or file. A range, a negation or a bracket beside other letters is still a pattern, and
+  a name whose extension is a pattern (`page.ts[x]`) is held as one that may be a look changing
+  file. A file an inline script only mentions keeps its route segments and groups (`(shop)`) too;
+  it was read as `/page.tsx`, at the top of the disk, and passed.
+- **The design rounds skill has an exit with nothing to render**: say so, build no switcher, and
+  ask the guard's own question about the refused edit, where Not a look change lets it through.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

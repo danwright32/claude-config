@@ -24,6 +24,14 @@ import { kindOf } from './program.ts'
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
+// A path part shaped like a web framework's route parameter (#1010): Next.js's [id], [...slug] and
+// [[...slug]], SvelteKit's [id=matcher], and a pages router file such as [id].tsx. It names that
+// folder or file: quoted the shell takes it as written, and unquoted bash leaves a pattern matching
+// nothing as written (measured 2026-10-09; zsh refuses the command, so nothing is written). It
+// differs only where a folder named by one of its letters holds the same file, which a route tree
+// does not. A range, a negation or a bracket beside other letters is a pattern, and stays unnamed.
+const ROUTE_PART = /^\[(?:\[\.\.\.[A-Za-z0-9_=]+\]|(?:\.\.\.)?[A-Za-z0-9_=]+)\](?:\.[A-Za-z0-9.+_]+)?$/
+const patternIn = (p: string) => UNNAMEABLE.test(p.split('/').map(part => (ROUTE_PART.test(part) ? part.replace(/[[\]]/g, '') : part)).join('/'))
 const HOME_VAR = /^\$(?:HOME|\{HOME\})(?=\/|$)/
 
 const isDevice = (p: string) => p === '/dev' || p.startsWith('/dev/')
@@ -51,7 +59,8 @@ type Vars = Map<string, string | null>
 
 /**
  * A word as an absolute path, or undefined when it cannot be named: built from a variable other
- * than HOME or a pattern, a ~user, or relative to a folder that is not known.
+ * than HOME or a pattern (a route parameter part is no pattern, ROUTE_PART), a ~user, or relative to
+ * a folder that is not known.
  */
 export const absolutePath = (word: string, dir: string | undefined, home: string): string | undefined => {
   if (!word) return undefined
@@ -61,7 +70,7 @@ export const absolutePath = (word: string, dir: string | undefined, home: string
     if (!home) return undefined
     p = home + p.slice(hv[0].length)
   }
-  if (UNNAMEABLE.test(p)) return undefined
+  if (patternIn(p)) return undefined
   if (p === '~' || p.startsWith('~/')) {
     if (!home) return undefined
     p = home + p.slice(1)
