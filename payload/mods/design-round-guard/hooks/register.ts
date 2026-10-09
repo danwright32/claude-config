@@ -184,7 +184,6 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
       why ||= `where the command writes ${t.word} could not be followed`
       continue
     }
-    if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
     let tree: string | null
     try {
       tree = await $.modkit.workingTree({ path: t.path })
@@ -197,6 +196,9 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
     // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
     // inside its project, so a folder named tests above the checkout lets nothing through.
     if (lookKindIn(t.path, tree) === null) continue
+    // Only now is a Swift file read for SwiftUI, so a test is never read, nor held when it cannot be
+    // (lessons review of #991).
+    if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)
@@ -283,7 +285,8 @@ export const register: Register = on => {
     const raw = e as unknown as Record<string, unknown>
     const id = String(raw.tool_use_id ?? '')
     const v = await judge($, e.tool, argsOf(raw))
-    if (!('pass' in v)) return { deny: await refuse($, v, { id, tool: e.tool, agent: true }) }
+    // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
+    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true }) : previewed(v) }
     // An empty id names no one call, so it is never marked: any other call carrying it would skip its
     // judgement (lessons review of #991). Such a call is judged again beneath, the same way.
     if (!id) return next(e)
@@ -306,7 +309,7 @@ export const register: Register = on => {
     if (decided.decision === 'deny') return decided
     // A check asked with no call id ($.tool.check) runs nothing: it is answered as the call would be,
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
-    if (e.tool_use_id === undefined) return { decision: 'deny', reason: previewed(v) }
+    if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
     return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false }) }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(message(next.error)) }))
 

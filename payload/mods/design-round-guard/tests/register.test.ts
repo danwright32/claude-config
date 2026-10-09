@@ -91,6 +91,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const dialog: Dialog = {}
   const cards: Record<string, unknown>[] = []
   const gitRuns: string[] = []
+  const reads: string[] = []
   const at = { cwd: init.cwd ?? '/w/slate' }
   mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
@@ -133,8 +134,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   })
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', ($, e) => {
+    reads.push(e.path)
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
+    // A file that exists and cannot be read.
+    if (t === 'UNREADABLE') throw new Error(`EACCES: ${e.path}`)
     return { value: t } as never
   })
   on('store.get', ($, e) => {
@@ -177,7 +181,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads }
 }
 type W = ReturnType<typeof world>
 
@@ -290,6 +294,32 @@ test("a subagent's call with an empty id marks nothing, so a call arriving with 
   await running
   expect(refusalOf(meanwhile)).toContain('app/page.tsx')
   expect(w.ran.map(x => x.input.file_path)).toEqual(['/w/slate/lib/HOLD.ts'])
+})
+
+// Lessons review of #991: a Swift test file was read for SwiftUI before it was known to be a test,
+// so one that could not be read was held, though tests pass.
+test('a Swift test file passes without being read, even one the disk cannot read', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/AppTests/RowTests.swift': 'UNREADABLE', '/w/slate/Sources/Row.swift': 'UNREADABLE' } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: '/w/slate/AppTests/RowTests.swift', old_string: 'a', new_string: 'b' }))).toBe('')
+  expect(w.reads).toEqual([])
+  // A Swift file that is no test and cannot be read is still held.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: '/w/slate/Sources/Row.swift', old_string: 'a', new_string: 'b' }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #991: a refused call with an empty id was kept waiting under that empty id and
+// told to report "design-round-guard:" with nothing after it.
+test('a refused call with an empty id waits under no id and is told the two ways on without one', withKit, async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  for (const extra of [{}, { agentId: 'agent-a1' }]) {
+    const why = refusalOf((await $.tool.call({ tool_use_id: '', ...PAGE, ...extra } as never)) as Result)
+    expect(why).toContain('app/page.tsx')
+    expect(why).toContain(SKIP_QUESTION)
+    expect(/design-round-guard:(?!\w)/.test(why)).toBe(false)
+  }
+  expect(refusalOf(await call($, { tool: 'AskUserQuestion', questions: [{ question: 'Skip design rounds for this issue?', header: 'x', options: [], multiSelect: false }], metadata: { source: 'design-round-guard:' } }))).toContain('No look changing edit is waiting')
+  expect(w.asked).toEqual([])
+  expect(w.cards).toEqual([])
 })
 
 test('a look changing Write is refused, naming the file and both ways on, with the grey card for Dan', withKit, async ($, on) => {
