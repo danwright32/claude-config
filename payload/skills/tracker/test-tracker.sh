@@ -504,9 +504,15 @@ const width = () => rows.reduce((m, r) => Math.max(m, r.length), 0);
 // { date: ISO, display } is a date cell (getValues gives a Date, the sheet shows `display`),
 // { formula, value, display } a formula cell. A written cell becomes plain text again.
 const raw = (r, c) => (rows[r - 1] && c - 1 < rows[r - 1].length ? rows[r - 1][c - 1] : '');
+// Dates the sheet hands out are remembered, so the formatDate stub can format them; any other
+// Date it is given is the script asking for today, which this double pins to 2026-01-01.
+const sheetDates = new WeakSet();
 const cell = (r, c) => {
   const v = raw(r, c);
-  if (v && typeof v === 'object') return v.date !== undefined ? new Date(v.date) : v.value;
+  if (v && typeof v === 'object') {
+    if (v.date === undefined) return v.value;
+    const d = new Date(v.date); sheetDates.add(d); return d;
+  }
   return v;
 };
 const shown = (r, c) => { const v = raw(r, c); return v && typeof v === 'object' ? v.display : String(v); };
@@ -548,6 +554,9 @@ function range(r, c, nr, nc) {
     getFormulas() { return grid(formulaOf); },
     setValue(v) {
       if (nr !== 1 || nc !== 1) throw new Error('setValue on a range of more than one cell');
+      if (fx.failWriteAt && fx.failWriteAt[0] === r && fx.failWriteAt[1] === c) {
+        throw new Error('Service Spreadsheets failed: you are trying to edit a protected cell');
+      }
       while (rows.length < r) rows.push([]);
       while (rows[r - 1].length < c) rows[r - 1].push('');
       rows[r - 1][c - 1] = stored(v);
@@ -574,7 +583,7 @@ const ctx = {
     hasLock: () => lock.taken > lock.released,
   }) },
   ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (s) => ({ setMimeType: () => s }) },
-  Utilities: { formatDate: () => '2026-01-01' },
+  Utilities: { formatDate: (d) => (sheetDates.has(d) ? d.toISOString().slice(0, 10) : '2026-01-01') },
   Session: { getScriptTimeZone: () => 'UTC' },
   JSON,
 };
@@ -702,6 +711,7 @@ fixture("sheet-sorted", afterBulkRead=[{"swap": [2, 3]}])
 fixture("sheet-relinked", afterBulkRead=[{"set": [2, 9, "https://github.com/example/other"]}])
 fixture("sheet-column", afterBulkRead=[{"insertColumn": [10, "Inserted"]}])
 fixture("sheet-locked", lockBusy=True)
+fixture("sheet-failwrite", failWriteAt=[2, 6])
 # A row whose cells hold what the sheet really holds: a date (getValues gives a Date, which
 # serializes as a timestamp nobody typed) and a formula (getValues gives its result).
 typed = [r[:] for r in rows] + [["Zeta", "2026-06-01", "", "Goal Z", "Did Z", "Out Z",
@@ -808,11 +818,33 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
   r="$(gs "$REAL" "{\"key\":\"$REAL\",\"data\":{\"Project Name\":\"x\"}}" POST "$TMP/sheet-proto.json")"
   check_eq "append: columns named constructor and toString that the caller did not name stay empty" '["x","",""]' "$(jget "$r" 'd["rows"][-1]')"
 
-  # A date column left empty is filled with today, and as literal text like every caller's date,
-  # so one column never mixes real dates with text dates.
-  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"Theta","Date Started":"2026-05-01"}}))' "$REAL")" POST "$SHEET")"
-  check_eq "append: an empty date column is filled with today as literal text, the same kind as a date sent" \
-    '["2026-05-01","2026-01-01"]' "$(jget "$r" '[d["rows"][-1][1], d["rows"][-1][2]]')"
+  # A date the caller marks {"date":"yyyy-mm-dd"} is written as a real date, like the dates
+  # already in the sheet, so a date column never mixes real dates and text; and a date column
+  # left empty is filled with today, also a real date. The mark is checked against a strict date
+  # pattern, so it can never carry a formula.
+  isdate='(lambda c: c.get("display") if isinstance(c, dict) and "date" in c else ["NOT A DATE", c])'
+  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"Theta","Date Started":{"date":"2026-05-01"}}}))' "$REAL")" POST "$SHEET")"
+  check_eq "append: a marked date and an empty date column filled with today are both real dates" \
+    '["2026-05-01","2026-01-01"]' "$(jget "$r" "[$isdate(d['rows'][-1][1]), $isdate(d['rows'][-1][2])]")"
+  r="$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"When to Check Results":{"date":"2027-02-03"}}')" POST "$SHEET")"
+  check_eq "update: a marked date is written as a real date, without restore" '"2027-02-03"' "$(jget "$r" "$isdate(d['rows'][1][6])")"
+  refuses_update "a marked date that is not a date" "When to Check Results" \
+    "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"When to Check Results":{"date":"=IMPORTXML(\"https://evil.example/\",\"//a\")"}}')" POST "$SHEET")"
+  for bad in '{"Date Started":{"date":"=1+1"}}' '{"Date Started":{"date":"tomorrow"}}' '{"Date Started":{"formula":"=1+1"}}' '{"Date Started":["2026-01-01"]}'; do
+    r="$(gs "$REAL" "$(python3 -c 'import json,sys; d=json.loads(sys.argv[2]); d["Project Name"]="Iota"; print(json.dumps({"key":sys.argv[1],"data":d}))' "$REAL" "$bad")" POST "$SHEET")"
+    check "append, $bad: refused, naming the column" "Date Started" "$(jget "$r" 'd["response"].get("error")')"
+    check_eq "append, $bad: appends nothing" '0' "$(jget "$r" 'd["appended"]')"
+  done
+
+  # A write that fails partway (a protected cell, a quota) must not leave the row half changed:
+  # the cells already written are put back, and the answer says which cell failed and that the
+  # rest were put back.
+  r="$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x","Outcome/Results":"y"}')" POST "$TMP/sheet-failwrite.json")"
+  check "update, a write failing partway: refused" '"ok":false' "$(jget "$r" 'd["response"]')"
+  check "and names the cell that failed and says the rest were put back" "Outcome/Results" "$(jget "$r" 'd["response"].get("error")')"
+  check "and that it put the others back" "put back" "$(jget "$r" 'd["response"].get("error")')"
+  check_eq "and the cell written before the failure was written, then put back" "[[2,5,\"'x\"],[2,5,\"'Did A\"]]" "$(jget "$r" 'd["writes"]')"
+  check_eq "and the row is as it was" '[]' "$(jget "$r" 'd["diffs"][0]')"
 
   # restore: the one raw write, for an undo. It puts back exactly what the answer's "restore"
   # recorded (a formula as a live formula, a date as a date, text as text), and only together with

@@ -112,15 +112,21 @@ function doPost(e) {
   const norm = norm_;
   // A Map, never a plain object, so a column named "constructor" is not found on Object.prototype.
   const byHeader = new Map();
-  Object.keys(data).forEach(function (k) { byHeader.set(norm(k), data[k]); });
+  const dataKeys = Object.keys(data);
+  for (let i = 0; i < dataKeys.length; i++) {
+    const problem = cellValueProblem_(dataKeys[i], data[dataKeys[i]], false);
+    if (problem) return json_({ ok: false, error: problem + '; nothing was appended' });
+    byHeader.set(norm(dataKeys[i]), data[dataKeys[i]]);
+  }
 
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 
   const row = heads.map(function (h) {
     const key = norm(h);
-    if (byHeader.has(key)) return literal_(byHeader.get(key));
-    // Literal like every date a caller sends, so one column never mixes real dates and text.
-    if (/(date|timestamp|added|updated|created)/.test(key)) return literal_(today);
+    if (byHeader.has(key)) return cellInput_(byHeader.get(key));
+    // A real date, like a { date } a caller sends and the dates already in the sheet. The script
+    // makes this value itself, so it carries nothing a caller wrote.
+    if (/(date|timestamp|added|updated|created)/.test(key)) return today;
     return '';
   });
 
@@ -143,35 +149,46 @@ function literal_(v) {
   return typeof v === 'string' && v !== '' ? "'" + v : v;
 }
 
+// A real calendar date, yyyy-mm-dd: the only shape a { date } value may take, so a date mark can
+// never carry a formula into the sheet.
+const DATE_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
 // What, written back with restore, puts a cell back as it is: a formula as { formula }, a date as
-// { date } holding the date as the sheet shows it (Sheets reads it back as that date), text as
-// text, and a number or true or false as itself. Marked objects rather than raw strings, so a
-// restore never needs an apostrophe a shell cannot quote, and plain text stays literal even then.
-// Dates are told apart with toString, which works for a Date from any realm, where instanceof
-// does not.
-function restoreValue_(rawValue, formula, shown) {
+// { date } in yyyy-mm-dd, text as text, and a number or true or false as itself. Marked objects
+// rather than raw strings, so a restore never needs an apostrophe a shell cannot quote, and plain
+// text stays literal even then. Dates are told apart with toString, which works for a Date from
+// any realm, where instanceof does not.
+function restoreValue_(rawValue, formula) {
   if (formula) return { formula: formula };
-  if (Object.prototype.toString.call(rawValue) === '[object Date]') return { date: shown };
+  if (Object.prototype.toString.call(rawValue) === '[object Date]') {
+    return { date: Utilities.formatDate(rawValue, Session.getScriptTimeZone(), 'yyyy-MM-dd') };
+  }
   return rawValue;
 }
 
-// The value setValue is given: a marked formula or date (accepted only with restore) raw, so
-// Sheets makes it a formula or a date again; anything else literal.
+// The value setValue or appendRow is given: a marked formula or date raw, so Sheets makes it a
+// formula or a real date; anything else literal.
 function cellInput_(v) {
   if (v && typeof v === 'object') return v.formula !== undefined ? v.formula : v.date;
   return literal_(v);
 }
 
-// A cell value update accepts: text, a number, true or false; and with restore only, a marked
-// { formula: "=..." } or { date: "..." }, each the single key. Returns a refusal or ''.
+// A value append or update accepts: text, a number, true or false; a { date: "yyyy-mm-dd" } for a
+// real date, like the dates already in the sheet; and, with restore only (an undo), a
+// { formula: "=..." }. Each mark is an object of that single key. Returns a refusal or ''.
 function cellValueProblem_(header, v, restore) {
   if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return '';
   if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1) {
-    if (!restore) return 'a { formula } or { date } value for "' + header + '" is written only with restore: true (an undo)';
-    if (typeof v.formula === 'string' && v.formula.charAt(0) === '=') return '';
-    if (typeof v.date === 'string' && v.date !== '') return '';
+    if (v.date !== undefined) {
+      if (typeof v.date === 'string' && DATE_PATTERN.test(v.date)) return '';
+      return 'the date for "' + header + '" must be a real date written yyyy-mm-dd';
+    }
+    if (v.formula !== undefined) {
+      if (!restore) return 'a { formula } value for "' + header + '" is written only with restore: true (an undo)';
+      if (typeof v.formula === 'string' && v.formula.charAt(0) === '=') return '';
+    }
   }
-  return 'the value for "' + header + '" must be text, a number, or true or false (or, with restore, { formula: "=..." } or { date: "..." })';
+  return 'the value for "' + header + '" must be text, a number, true or false, or { date: "yyyy-mm-dd" } (or, with restore, { formula: "=..." })';
 }
 
 // How long an update waits for another request that is writing the sheet, before refusing.
@@ -332,7 +349,7 @@ function findAndUpdate_(sheet, link, name, cells, keys, expect, preview) {
   const restoreWith = {};
   targets.forEach(function (t) {
     before[t.header] = formulas[t.col - 1] || current[t.col - 1];
-    restoreWith[t.header] = restoreValue_(rawValues[t.col - 1], formulas[t.col - 1], current[t.col - 1]);
+    restoreWith[t.header] = restoreValue_(rawValues[t.col - 1], formulas[t.col - 1]);
   });
   for (let i = 0; i < targets.length; i++) {
     const want = expect.get(norm_(targets[i].header));
@@ -344,9 +361,29 @@ function findAndUpdate_(sheet, link, name, cells, keys, expect, preview) {
   if (preview) {
     return { ok: true, action: 'update', preview: true, rowNumber: rowNumber, before: before, restore: restoreWith, row: current, headers: heads };
   }
-  targets.forEach(function (t) {
-    sheet.getRange(rowNumber, t.col).setValue(cellInput_(t.value));
-  });
+  // One cell at a time, so a cell the caller did not name is never written. If a write fails
+  // partway (a protected cell, a quota), the cells already written are put back from `restore`,
+  // so the row is never left half changed, and the answer says which cell failed and whether the
+  // others went back.
+  const written = [];
+  try {
+    targets.forEach(function (t) {
+      sheet.getRange(rowNumber, t.col).setValue(cellInput_(t.value));
+      written.push(t);
+    });
+  } catch (err) {
+    const failed = targets[written.length];
+    const why = 'writing "' + failed.header + '" (row ' + rowNumber + ') failed: ' + String((err && err.message) || err);
+    if (written.length === 0) return { ok: false, error: why + '; nothing had been written', restore: restoreWith };
+    const names = written.map(function (t) { return '"' + t.header + '"'; }).join(', ');
+    try {
+      written.forEach(function (t) { sheet.getRange(rowNumber, t.col).setValue(cellInput_(restoreWith[t.header])); });
+      SpreadsheetApp.flush();
+    } catch (err2) {
+      return { ok: false, error: why + '; ' + names + ' had been written and could NOT be put back (' + String((err2 && err2.message) || err2) + '): undo them with restore', written: written.map(function (t) { return t.header; }), restore: restoreWith };
+    }
+    return { ok: false, error: why + '; ' + names + ' had been written and were put back, so the row is as it was', restore: restoreWith };
+  }
   SpreadsheetApp.flush();
   const row = sheet.getRange(rowNumber, 1, 1, heads.length).getDisplayValues()[0];
   return { ok: true, action: 'update', rowNumber: rowNumber, before: before, restore: restoreWith, row: row, headers: heads };

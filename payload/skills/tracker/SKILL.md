@@ -127,9 +127,10 @@ across by hand (AirDrop), never through the repository.
      column with today. Because this sheet has both *Date Started* and *Date Completed*,
      always set both explicitly (computed start date; `""` for completed-if-unfinished) so
      neither gets a wrong "today".
-   - Every text value is stored as literal text, exactly as sent: a value starting `=`, `+`,
-     `-` or `@` never becomes a formula, and a date sent as `"2026-05-20"` stays that text
-     (written `yyyy-mm-dd`, it still sorts by date).
+   - **Send every date as `{"date":"yyyy-mm-dd"}`** (as in the example below). That is written
+     as a real date, like the dates already in the sheet, so date columns sort together. Every
+     other text value is stored as literal text, exactly as sent: a value starting `=`, `+`,
+     `-` or `@` never becomes a formula, and a date sent as plain `"2026-05-20"` would stay text.
    - If a column that clearly needs a value (e.g. Project Name, Problem/Goal) can't be
      inferred, ask the user one short question rather than guessing.
    - **Skills Used, never "Claude Code".** This column is for resume-grade skills: the actual
@@ -148,7 +149,7 @@ across by hand (AirDrop), never through the repository.
    *Project Name, Date Started, Date Completed, Problem/Goal, My Actions, Outcome/Results,
    When to Check Results, Skills Used, Link*, but always re-read via `headers` in case they change.
    ```
-   bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":"2026-05-20","Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"TypeScript, Next.js, Supabase/Postgres, session auth"}'
+   bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":{"date":"2026-05-20"},"Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"TypeScript, Next.js, Supabase/Postgres, session auth"}'
    ```
 6. **Confirm**: the script returns `{"ok":true,"rowNumber":N,"row":[...]}`. Tell the user the
    row was added and summarize what went in. If `ok` is false, surface the `error`.
@@ -182,15 +183,19 @@ Always get approval first, as for an append:
    "row":[...]}`, carries in `before` what each changed cell held just before the write, and in
    `restore` the exact values that put each one back.
 
-Every text value is written as literal text: a value starting `=`, `+`, `-` or `@` stays that
-text and never becomes a formula, and date or number shaped text stays as typed. A JSON number
-or true or false is written as itself. (Append does the same.)
+Values are written as for an append: a date as `{"date":"yyyy-mm-dd"}` becomes a real date,
+every other text value is literal text (a value starting `=`, `+`, `-` or `@` stays that text
+and never becomes a formula), and a JSON number or true or false is written as itself.
+
+If writing one cell fails partway (a protected cell, a quota), the cells already written are put
+back and the answer says which cell failed; only if putting them back fails too does it list
+them, to undo with restore.
 
 To undo, run `update --restore` with the answer's `restore` as the cells and, as the fourth
 argument, the values the update wrote (what the cells hold now). In `restore` a formula comes as
 `{"formula":"=..."}` and a date as `{"date":"2026-11-01"}`; restore is the only write that
-accepts those, and puts them back as a live formula and a real date. Text stays literal even
-then. It refuses unless every cell still holds what the fourth argument says.
+accepts a formula, and puts it back live. Text stays literal even then. It refuses unless every
+cell still holds what the fourth argument says.
 
 ```
 bash tracker.sh update --preview 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
