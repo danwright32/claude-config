@@ -94,6 +94,8 @@ else
   [[ "$exit_section" == *"\"source\": \"$skip_source:"* ]] && ok || bad "the nothing to render section does not show the guard's own question's source"
   [[ "$exit_section" == *"no switcher"* ]] && ok || bad "the nothing to render section does not say no switcher is built"
 fi
+# Its "ask nothing" must not be contradicted by a last step that every run ends with the picker.
+grep -q 'Every run of this skill ends with' "$SKILL" && bad "SKILL.md says every run ends with the settled picker, which the nothing to render exit contradicts" || ok
 
 # The check is seen to fail: a skill whose source drifted from the guard's is caught.
 sed "s/\"source\": \"$source_v\"/\"source\": \"design-done\"/" "$SKILL" > "$TMP/drifted.md"

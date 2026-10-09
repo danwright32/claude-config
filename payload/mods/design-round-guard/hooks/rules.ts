@@ -107,13 +107,22 @@ export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(
  * The look changing files a command's text names, for a write its words do not name (an inline
  * script, a patch). A Next.js dynamic segment or route group (`[SO_ID]`, `(shop)`) is part of the
  * name (#1010): read as where the name starts, `src/app/booking/[SO_ID]/page.tsx` was `/page.tsx`, a
- * file at the top of the disk in no project, and passed. A call's own parenthesis before a name
- * (`open(app/page.tsx`) is not part of it.
+ * file at the top of the disk in no project, and passed. A call's own name and parenthesis before a
+ * name (`open(app/page.tsx`) is not part of it; a folder holding one (`x(1)`) is.
  */
 export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
   for (const m of text.matchAll(/[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g)) {
-    const word = m[0].replace(/^.*[\w)]\(/, '').replace(/^[.]+(?=[^./])/, '')
+    let word = m[0].replace(/^(?:[\w$.]*\()+/, '').replace(/^[.]+(?=[^./])/, '')
+    // A ) closing nothing in the name closes the call around it (`open(app/page.tsx).read`).
+    let depth = 0
+    for (let i = 0; i < word.length; i++) {
+      if (word[i] === '(') depth++
+      else if (word[i] === ')' && --depth < 0) {
+        word = word.slice(0, i)
+        break
+      }
+    }
     if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
   }
   return out

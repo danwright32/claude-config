@@ -187,7 +187,7 @@ nothing on screen changes, build no switcher, and close one of two ways.
 
 ## The last step: is this design settled?
 
-Every run of this skill ends with one more picker, after the last round and before the
+Every run that rendered a round ends with one more picker, after the last round and before the
 deliverable is written: the question **"Is this design settled?"**. Dan's answer to it is
 what lets the build start. The design round guard mod holds every edit that changes how a
 screen looks (style files, screen and component files, SwiftUI views) until Dan has
@@ -255,5 +255,5 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    prose, which is the same mistake wearing the rule as cover.
 9. Retyping the picker's options instead of reading the ones the tool wrote, which is how
    the tab and the picker come to disagree about what an option is called.
-10. Ending without the "Is this design settled?" picker, or asking it in prose: the design
+10. Ending a round without the "Is this design settled?" picker, or asking it in prose: the design
    is then settled in conversation only, and the guard holds every screen edit after it.

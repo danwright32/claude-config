@@ -96,6 +96,11 @@ test('the look changing files a command only mentions are found by their names',
   // the file is not read as one at the top of the disk.
   expect(mentionedLookFiles(`python3 -c "open('src/app/booking/[SO_ID]/page.tsx','w')"`)).toEqual(['src/app/booking/[SO_ID]/page.tsx'])
   expect(mentionedLookFiles(`open('src/app/(marketing)/[...slug]/page.tsx','w')`)).toEqual(['src/app/(marketing)/[...slug]/page.tsx'])
+  // Only a call's own name before its parenthesis is dropped, never a folder holding one (lessons review of #1010).
+  expect(mentionedLookFiles('cat x > /w/slate/app/x(1)/page.tsx')).toEqual(['/w/slate/app/x(1)/page.tsx'])
+  expect(mentionedLookFiles('echo /w/slate/(a)(b)/page.tsx')).toEqual(['/w/slate/(a)(b)/page.tsx'])
+  expect(mentionedLookFiles('print(open(app/page.tsx).read())')).toEqual(['app/page.tsx'])
+  expect(mentionedLookFiles('fs.writeFileSync(src/site.css)')).toEqual(['src/site.css'])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
