@@ -2023,15 +2023,20 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 #     1034s, 968s, 1139s and 898s. Median 968s, 38% of the budget, at an ambient CPU of 347% to
 #     575% of one core and a load average reaching 98.
 #   In a quiet window:
-#     866s, 860s and 846s. Median 860s, 34% of the budget, at an ambient CPU of 202% to 410% and a
-#     load average of 10 to 16.
+#     866s, 860s and 846s, then 911s from the monthly reading of 2026-10-01. Median 860s (with four
+#     readings, the lower of the middle two, which is the figure the check below computes), 34% of
+#     the budget, at an ambient CPU of 78% to 410% and a load average of 10 to 16.
 #
-# So the suite's own share is 860s and the margin at the worst of those six readings is 1381s. The
+# So the suite's own share is 860s and the margin at the worst of those seven readings is 1381s. The
 # 1847s does not reproduce: the busiest reading taken here, at a load average of 98, reached 1139s.
 # Load is the larger share, as #517 suspected, and it shows in the SPREAD more than in the median,
-# 20s across the quiet arm against 241s across the busy one. So the lever #492 named, sharing
+# 65s across the quiet arm against 241s across the busy one. So the lever #492 named, sharing
 # fixtures between sections that build the same shape, is not needed at 34% of budget, and the
 # coupling it would create is not worth buying at this margin.
+#
+# The quiet arm's highest, 911s, came at the LOWEST ambient CPU of any reading, 10 days after the
+# other three, so load does not explain it. One reading cannot say whether the suite's own share
+# has grown; the next monthly reading can.
 #
 # A reading under a load this tool STARTS rather than one it found is MEASURE_LOAD_PROCS, and it
 # was not taken. Named here rather than left to be rediscovered (L308): the two arms above already
