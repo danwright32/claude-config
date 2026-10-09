@@ -19275,6 +19275,41 @@ check "#565 and does not join the core on its own" \
   "! grep -q '^- L6\.' '$LCH/LESSONS-CORE-data-safety.md'"
 check "#565 and the core stays in use" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
 
+# THE LIBRARY'S TABLE OF CONTENTS, loaded beside the core (#566, the text Dan approved on #563). A
+# session with the core in use no longer has the library in front of it, so it is told what the
+# library holds and where, section by section, with counts DERIVED at render time rather than kept
+# by hand (L41). A section none of whose lessons is in the core is listed too: that is exactly the
+# one a session would otherwise not know it is missing.
+printf '\n## Test speed\n\n- **L7. A test speed lesson that is not in the core.** body\n' >> "$LCH/LESSONS.md"
+lc_push >/dev/null
+LCTOC="$LCH/LESSONS-CORE-_TOC.md"
+check "#566 with the core in use the library's table of contents is written" "[ -f '$LCTOC' ]"
+check "#566 and imported last, after every core file" \
+  "[ \"\$(grep '^@LESSONS-' '$LCH/CLAUDE.md' | tail -1)\" = '@LESSONS-CORE-_TOC.md' ]"
+check "#566 it counts each section's lessons and how many are in the core" \
+  "grep -qF 'Proof over green (proof-over-green): 3 lessons, 2 in the core' '$LCTOC' && grep -qF 'Data safety (data-safety): 3 lessons, 2 in the core' '$LCTOC'"
+check "#566 a section with none in the core is listed too, in the singular where it is one" \
+  "grep -qF 'Test speed (test-speed): 1 lesson, 0 in the core' '$LCTOC'"
+check "#566 it says where the whole library and any one lesson can be read" \
+  "grep -qF '~/.claude/LESSONS-INDEX-<section>.md' '$LCTOC' && grep -qF 'claude-sync lesson' '$LCTOC'"
+check "#566 it carries no lesson line, so nothing counting core lessons counts it" \
+  "! grep -q '^- L[0-9]' '$LCTOC'"
+check "#566 and it travels with the core" "[ -f '$LCR/payload/LESSONS-CORE-_TOC.md' ]"
+# NO SECTION CAN RENDER OVER IT, on a case insensitive filesystem too, which is macOS's default: a
+# section titled "TOC" has the slug toc, and its core file must stay a separate file from the table
+# of contents, each holding its own content.
+printf '\n## TOC\n\n- **L8. A lesson in a section whose name could collide.** body\n' >> "$LCH/LESSONS.md"
+printf 'L1\nL2\nL4\nL5\nL8\n' > "$WORK/lcore-toc.txt"
+CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-toc.txt" >/dev/null 2>&1
+lc_push >/dev/null
+check "#566 a section named TOC keeps its own core file holding its lesson" \
+  "grep -q '^- L8\.' '$LCH/LESSONS-CORE-toc.md'"
+check "#566 and the table of contents survives beside it, listing that section" \
+  "grep -qF 'TOC (toc): 1 lesson, 1 in the core' '$LCTOC' && grep -qF 'Proof over green (proof-over-green)' '$LCTOC'"
+# Back to the four lesson list the cases below are written against.
+CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-want.txt" >/dev/null 2>&1
+lc_push >/dev/null
+
 # 3 to 6. EVERY WAY THE LIST CAN BE WRONG loads the whole library, records why, and says so.
 lc_fallback(){ # lc_fallback <description> <state words>
   local out; out="$(lc_push)"
@@ -19299,8 +19334,9 @@ fi
 printf 'L1\n' > "$WORK/lcore-small.txt"
 CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-small.txt" >/dev/null 2>&1
 lc_push >/dev/null
+# One section file, plus the library's table of contents that loads beside any core (#566).
 check "#564 a shrink made through core-set renders the smaller core" \
-  "[ \"\$(lc_core_files)\" = 1 ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
+  "[ \"\$(lc_core_files)\" = 2 ] && [ -f '$LCH/LESSONS-CORE-_TOC.md' ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
 
 # 7. THE CAP IS ENFORCED WHERE THE LIST IS EDITED, never at the send (a send that refused would stop
 #    every other file travelling with it, L371).
@@ -19338,6 +19374,54 @@ check "#564 a removal from the list travels too" \
   "! grep -qx L5 '$LCHB/LESSONS-CORE.txt' && grep -qx L4 '$LCHB/LESSONS-CORE.txt'"
 check "#564 and the receiving Mac treats a reviewed shrink as a decision, not damage" \
   "case \"\$(cat '$LCHB/.lessons-core-state' 2>/dev/null)\" in 'active 3'*) true ;; *) false ;; esac"
+
+section "== each Mac's lesson citation counts are committed, so the monthly re-rank can read both Macs (claude-config#566) =="
+# The re-rank of the lessons core adds both Macs' prose citation counts together, and ~/.claude/state
+# does not travel. So each Mac's counts are a file of their own under lesson-counts/ in the repo,
+# beside lesson-bands/: one file per writer, so two Macs recording can never conflict, committed here
+# so the next sync carries it. Recorded only through this command, which holds the sync lock, so it
+# can never land in the middle of a send's own commit or rebase. What it refuses, it refuses whole:
+# counts naming another Mac, counts with no time stamp (the re-rank judges staleness by it), a
+# truncated file, and anything carrying the counter's --sample sentences, which are conversation
+# text and the repository is public.
+LKR="$WORK/lcounts-repo"; git init -q -b main "$LKR" 2>/dev/null || { mkdir -p "$LKR"; git -C "$LKR" init -q; }
+mkdir -p "$LKR/payload"; printf 'seed\n' > "$LKR/payload/seed.txt"
+git -C "$LKR" add -A && git -C "$LKR" -c user.name=t -c user.email=t@e commit -q -m seed
+LKH="$WORK/lcounts-home"; mkdir -p "$LKH"
+lk_counts(){ # lk_counts <file> <host> <extra header words>: a counts file in lesson-citations.py's format
+  printf 'HOST %s DAYS 60 READ 12 UNREAD 0 EXCLUDED subagent=0 claude-config=0 recording=0 LEDGER read DISMISSED 0%s\nL1\t3\t4\t0\nL7\t1\t1\t2\nEND 2 lessons\n' "$2" "$3" > "$1"
+}
+lk_record(){ SYNC_HOSTNAME=MacCount SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LKH" SYNC_REPO="$LKR" bash "$SCRIPT" record-lesson-counts "$1" 2>&1; }
+lk_counts "$WORK/lk-good.txt" MacCount " AT 2026-10-09T15:00:00Z"
+out_lk="$(lk_record "$WORK/lk-good.txt")"; rc_lk=$?
+dbg "#566 record-lesson-counts said: $out_lk"
+check "#566 a Mac's counts land under lesson-counts, named for that Mac" \
+  "[ \$rc_lk -eq 0 ] && cmp -s '$WORK/lk-good.txt' '$LKR/lesson-counts/MacCount.tsv'"
+check "#566 and are committed, so the next sync carries them" \
+  "grep -q . <<< \"\$(git -C '$LKR' log --oneline -- lesson-counts)\""
+check "#566 leaving the working tree clean" "[ -z \"\$(git -C '$LKR' status --porcelain lesson-counts 2>/dev/null)\" ]"
+check "#566 and it says what it recorded" "case \"\$out_lk\" in *lesson-counts/MacCount.tsv*) true ;; *) false ;; esac"
+lk_commits(){ git -C "$LKR" log --oneline -- lesson-counts | grep -c .; }
+lk_before="$(lk_commits)"
+lk_record "$WORK/lk-good.txt" >/dev/null
+check "#566 recording the same counts again makes no second commit" "[ \"\$(lk_commits)\" = '$lk_before' ]"
+lk_refused(){ # lk_refused <description> <file> <word the refusal must name>
+  out_lkr="$(lk_record "$2")"; rc_lkr=$?
+  dbg "#566 $1: $out_lkr"
+  check "#566 $1 is refused" "[ \$rc_lkr -ne 0 ]"
+  check "#566 $1: the refusal names $3" "case \"\$out_lkr\" in *'$3'*) true ;; *) false ;; esac"
+  check "#566 $1 leaves the recorded counts as they were" "cmp -s '$WORK/lk-good.txt' '$LKR/lesson-counts/MacCount.tsv'"
+}
+lk_counts "$WORK/lk-other.txt" MacElse " AT 2026-10-09T15:00:00Z"
+lk_refused "counts taken on another Mac" "$WORK/lk-other.txt" "MacElse"
+lk_counts "$WORK/lk-nostamp.txt" MacCount ""
+lk_refused "counts with no time stamp" "$WORK/lk-nostamp.txt" "time stamp"
+lk_counts "$WORK/lk-short.txt" MacCount " AT 2026-10-09T15:00:00Z"; sed -i.bak '/^END/d' "$WORK/lk-short.txt"; rm -f "$WORK/lk-short.txt.bak"
+lk_refused "a truncated counts file" "$WORK/lk-short.txt" "END"
+lk_counts "$WORK/lk-sample.txt" MacCount " AT 2026-10-09T15:00:00Z"; printf 'SAMPLE L1\tsomething Claude said\n' >> "$WORK/lk-sample.txt"
+lk_refused "counts carrying sampled sentences" "$WORK/lk-sample.txt" "SAMPLE"
+out_lkno="$(lk_record "$WORK/lk-absent.txt")"; rc_lkno=$?
+check "#566 a counts file that is not there is refused" "[ \$rc_lkno -ne 0 ]"
 
 section "== mods travel to the other Mac and are wired into settings.json (#606) =="
 # A mod is a Claude Code plugin folder (.claude-plugin/plugin.json plus a hooks module). Claude Code

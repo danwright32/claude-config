@@ -11,6 +11,17 @@
 # pushed diff to `claude -p` with the review prompt in lib/ai-review-prompt.txt and lets the answer
 # arrive on a later prompt through ai-review-nudge.sh.
 #
+# ONLY WHERE THE PUSH GATE DOES NOT REVIEW (claude-config#1007). Since #599, pr-review-push-gate.sh
+# holds every push of a branch other than the default one for the lessons review of the WHOLE
+# branch (merge base to head, every file type, the same reviewer, on both Macs), so this review of
+# the pushed code files would be a second model run over a subset of the same diff (L301). It
+# stands down wherever that gate holds the push, and runs only where the gate does not: a push of
+# the default branch, and a push carrying the gate's override SKIP_PR_REVIEW=1. Which pushes the
+# gate holds is asked of the gate's own predicate, mt_push_gate_scope in lib/merge-target.sh, never
+# a copy of it (L261). It is asked AFTER the push, so it reads the branch the command left the
+# checkout on; a command that pushes a branch and then switches to the default one in the same
+# breath is judged as a push of the default branch.
+#
 # IT NEVER BLOCKS AND IT ADDS NO WAIT TO THE PUSH. Every path here exits 0, and the review itself
 # runs in a process this hook starts and does not wait for (`nohup ... &` then `disown`, with all
 # three standard streams redirected so nothing holds the hook's pipes open). A blocking version
@@ -32,6 +43,11 @@
 # that found nothing (L98):
 #   - the push did not succeed (tool_response.exit_code non-zero, or the command was interrupted);
 #     when the payload cannot say, the review goes ahead;
+#   - pr-review-push-gate.sh held this push for the lessons review of the whole branch, which reads
+#     everything this review would (see above);
+#   - the push sent no commits: it only deletes remote branches, or no repository or commit was
+#     found (the same predicate's answer, so a delete pushed from the default branch is not
+#     reviewed as though HEAD's last range had just gone out);
 #   - `claude` is not on PATH;
 #   - python3 is not on PATH, which is what the background reviewer runs under;
 #   - CLAUDE_DETACHED_RUN is set (a headless run has nobody to read the review);
@@ -90,8 +106,12 @@
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+# merge-target.sh sources push-scope.sh, and holds the push gate's own answer to which pushes it
+# holds (mt_push_gate_scope). Missing, the push gate refuses every push itself, so nothing reaches
+# this hook to review.
+# shellcheck source=lib/merge-target.sh
+. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+declare -F mt_push_gate_scope >/dev/null || exit 0
 # shellcheck source=lib/ai-review-common.sh
 . "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || exit 0
 
@@ -147,6 +167,20 @@ case "$push_exit" in
   *) say "skipped: the push did not succeed (exit $push_exit), so there is nothing to review." ;;
 esac
 [ "$push_interrupted" = "true" ] && say "skipped: the push command was interrupted, so there is nothing to review."
+
+# Where the push gate held this push for the lessons review of the whole branch, that review reads
+# everything this one would (claude-config#1007). Asked through the gate's own predicate, never a
+# copy of it (L261), so the two cannot come to disagree about which pushes the gate covers.
+raw="$(ps_parse_payload "$payload" raw)" || raw=""
+raw="${raw%%$'\x1f'*}"
+# The same predicate also says when the push sent no commits at all (a push that only deletes, from
+# the default branch where the gate stands down too): reviewing HEAD then would read a range the
+# push never sent.
+mt_push_gate_scope "$cmd" "$raw" "$cwd" 2>/dev/null
+case $? in
+  0) say "skipped: pr-review-push-gate.sh holds this push for the lessons review of the whole branch (merge base to head, every file type), which reads everything this review would, so no second review runs." ;;
+  6) say "skipped: ${MT_PUSH_GATE_WHY:-the push sends nothing to review}, so there is nothing to review." ;;
+esac
 
 command -v claude >/dev/null 2>&1 || say "skipped: no 'claude' command is on PATH, so no review can run. Install the Claude Code CLI to turn this on."
 

@@ -76,13 +76,30 @@ urgent="no"
 # line points would describe a render nobody was shown.
 render_stamp="$(mktemp "${TMPDIR:-/tmp}/claude-issue-stamp.XXXXXX" 2>/dev/null)" || render_stamp=""
 trap 'rm -f ${render_stamp:+"$render_stamp"}' EXIT
+# WHERE THE FINDINGS AND THE STAMP GO, worked out before the render rather than after it, because the
+# render also reads the SEEN LEDGER that sits beside the stamp (#1011): the marks a clear could not
+# write into the spool, because the spool could not be written from where the clear line ran. The
+# ledger's path comes from the library, from the stamp's, so the clear that writes it and this render
+# that reads it cannot derive two different paths (L70). One stable name per project for the
+# findings, overwritten by every review; one stamp per SESSION (see below).
+#
+# ${TMPDIR%/} rather than $TMPDIR, because macOS sets it with a trailing slash and this path is SHOWN
+# to Dan in the reason rather than only used.
+hash=$(printf '%s' "$proj" | shasum | cut -c1-12)
+findings_path="${TMPDIR:-/tmp}"
+findings_path="${findings_path%/}/claude-issue-findings-${hash}.txt"
+stamp_file="${findings_path%.txt}.$(basename "$transcript" .jsonl).manifest"
+seen_ledger=""
 if [ -f "$SPOOL_LIB" ]; then
-  pending=$(bash "$SPOOL_LIB" pending "$proj" "$transcript" "$render_stamp" 2>/dev/null) || pending=""
+  seen_ledger="$(bash "$SPOOL_LIB" seen-ledger "$stamp_file" 2>/dev/null)" || seen_ledger=""
+  pending=$(bash "$SPOOL_LIB" pending "$proj" "$transcript" "$render_stamp" "$seen_ledger" 2>/dev/null) || pending=""
   # Only a real FINDING earns the cooldown bypass. A harvest that FAILED is
   # reported whenever the review next speaks, but does not itself make it speak:
   # a recurring failure keeps the spool permanently non-empty, which would fire
-  # the review on every single turn and teach us both to ignore it.
-  if bash "$SPOOL_LIB" has-findings "$proj" "$transcript" >/dev/null 2>&1; then urgent="yes"; fi
+  # the review on every single turn and teach us both to ignore it. Nor does a
+  # finding this session has already been shown and cannot settle (#1011): the
+  # render will not show it again, so it must not make a review fire either.
+  if bash "$SPOOL_LIB" has-findings "$proj" "$transcript" "$seen_ledger" >/dev/null 2>&1; then urgent="yes"; fi
 fi
 
 # One failure reason has no remedy at all: an agent spawned by another agent
@@ -115,7 +132,6 @@ fi
 
 # Throttle: only re-prompt once per cooldown window, tracked per project.
 COOLDOWN_SECONDS=1800  # 30 minutes
-hash=$(printf '%s' "$proj" | shasum | cut -c1-12)
 stamp="${TMPDIR:-/tmp}/claude-feature-issue-review-${hash}.stamp"
 
 now=$(date +%s)
@@ -151,10 +167,7 @@ INSTRUCTION="$SELF_DIR/review/issue-review.md"
 # nothing here passes it as an argument any more.
 findings_file=""
 if [ -n "$pending" ]; then
-  # ${TMPDIR%/} rather than $TMPDIR, because macOS sets it with a trailing slash
-  # and this path is now SHOWN to Dan in the reason rather than only used.
-  findings_file="${TMPDIR:-/tmp}"
-  findings_file="${findings_file%/}/claude-issue-findings-${hash}.txt"
+  findings_file="$findings_path"
   # Annotated with the open issue that already covers a finding, where one clearly does
   # (claude-config#256). An agent auditing the backlog restates the issues it read, and those
   # restatements were filed as fresh issues and closed as duplicates within the hour. It FAILS
@@ -190,7 +203,6 @@ if [ -n "$pending" ]; then
   # is open, so the honest answer is that these cannot be filed from this review and will come back
   # at the next one (L173, L11).
   if [ -n "$findings_file" ]; then
-    stamp_file="${findings_file%.txt}.$(basename "$transcript" .jsonl).manifest"
     if [ -n "$render_stamp" ] && [ -s "$render_stamp" ] \
         && mv -f "$render_stamp" "$stamp_file" 2>/dev/null && [ -f "$stamp_file" ]; then
       render_stamp=""
