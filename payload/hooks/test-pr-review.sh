@@ -176,17 +176,25 @@ done
 # 2. The PostToolUse hook: a successful creation starts a detached review of the WHOLE branch,
 #    every file type, on this Mac too.
 # ===========================================================================================
-fire_create(){ # fire_create <command> <exit code>
+fire_create(){ # fire_create <command> <exit code, or "" for a payload carrying none> [stdout] [stderr]
   local p
-  p="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]},"tool_response":{"exit_code":int(sys.argv[3])}}))' "$REPO" "$1" "$2")"
+  p="$(python3 -c '
+import json, sys
+r = {"stdout": sys.argv[4], "stderr": sys.argv[5]}
+if sys.argv[3] != "":
+    r["exit_code"] = int(sys.argv[3])
+print(json.dumps({"session_id": "s1", "cwd": sys.argv[1], "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                  "tool_input": {"command": sys.argv[2]}, "tool_response": r}))' "$REPO" "$1" "$2" "${3:-}" "${4:-}")"
   printf '%s' "$p" | bash "$CREATE_HOOK" 2>&1
 }
+opened_url(){ awk -F '\t' -v s="$HEAD_SHA" '$5 == s { u = $6 } END { print u }' "$AI_REVIEW_STATE_DIR/pr-opened.tsv" 2>/dev/null; }
+opened_rows(){ awk -F '\t' -v s="$HEAD_SHA" '$5 == s { n++ } END { print n + 0 }' "$AI_REVIEW_STATE_DIR/pr-opened.tsv" 2>/dev/null; }
 reset_state
 out="$(fire_create "gh pr create --fill" 1)"
 check "a failed creation starts nothing, and says so" "did not succeed" "$out"
 check_eq "a failed creation calls no reviewer" "0" "$(calls)"
 
-out="$(fire_create "gh pr create --fill" 0)"
+out="$(fire_create "gh pr create --fill" 0 $'https://github.com/test-owner/repo/pull/42\n')"
 check "a creation says the whole branch review started" "started" "$out"
 check "and names the branch range, merge base to head" "${BASE_SHA:0:7}..${HEAD_SHA:0:7}" "$out"
 check_not "this Mac is not skipped by the push review's host list" "not one AI_REVIEW_HOSTS names" "$out"
@@ -213,11 +221,22 @@ check "the file its finding named" "App/Sync.swift" "$line"
 check "the lesson it cited" "L215" "$line"
 check "and the Mac it ran on" "$AI_REVIEW_HOST" "$line"
 check "the opening is in its own ledger" "$HEAD_SHA" "$(cat "$AI_REVIEW_STATE_DIR/pr-opened.tsv" 2>/dev/null)"
+# claude-config#1006: the pull request gh printed is recorded with the opening, so the report counts
+# by pull request without asking GitHub.
+check_eq "the opening records the pull request gh printed" "https://github.com/test-owner/repo/pull/42" "$(opened_url)"
 
 # A second creation for the same head starts nothing new.
 out="$(fire_create "gh pr create --fill" 0)"
 check "the same head is not reviewed twice" "already" "$out"
 check_eq "and no second reviewer ran" "1" "$(calls)"
+
+# The repeat that makes duplicate openings: gh refuses because the pull request exists, prints its
+# URL on stderr, and the payload carries no exit code. The URL is recorded, so the report can tell
+# the repeat belongs to the same pull request.
+before_rows="$(opened_rows)"
+fire_create "gh pr create --fill" "" "" $'a pull request for branch "feature" into branch "main" already exists:\nhttps://github.com/test-owner/repo/pull/42\n' >/dev/null
+check_eq "the repeat is recorded as an opening" "$((before_rows + 1))" "$(opened_rows)"
+check_eq "naming the pull request that already exists" "https://github.com/test-owner/repo/pull/42" "$(opened_url)"
 
 # ===========================================================================================
 # 3. check: every outcome the merge gate can meet.
