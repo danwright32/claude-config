@@ -45,7 +45,8 @@ let interactive = false
 // One reading at a time: a slow gh must not let the next tick start a second one beside it.
 let reading = false
 let pr: PrReading | null = null
-// When GitHub was last asked about the PR, answered or not (#1014).
+// When GitHub last ANSWERED about the PR (#1014). An ask that fails sets nothing, so the next tick
+// asks again rather than leaving the band without a PR for the whole idle wait.
 let prAskedAt: number | undefined
 let unpushed: UnpushedReading | null = null
 let unpushedNoted = false
@@ -182,17 +183,18 @@ const readUnpushed = async ($: EngineInterface, root: string) => {
 // blank (L682); only gh saying there is no PR clears it.
 const readPr = async ($: EngineInterface, root: string) => {
   const now = await $.clock.now()
-  prAskedAt = now
   try {
     const r = await $.process.run(['gh', 'pr', 'view', '--json', 'number,state,statusCheckRollup'], { cwd: root, timeoutMs: 20_000 })
     if (r.exitCode === 0) {
       const j = JSON.parse(r.stdout) as { number?: number; state?: string; statusCheckRollup?: RollupEntry[] }
       if (typeof j.number !== 'number') throw new Error('no PR number in gh output')
       pr = j.state === 'OPEN' ? { number: j.number, checks: checksOf(j.statusCheckRollup ?? []), readAt: now, isStale: false } : null
+      prAskedAt = now
       return
     }
     if (/no pull requests found/i.test(r.stderr)) {
       pr = null
+      prAskedAt = now
       return
     }
     throw new Error(r.stderr.trim() || `gh exited ${r.exitCode}`)
@@ -294,7 +296,7 @@ const warnCache = async ($: EngineInterface) => {
 
 // Whether this reading asks GitHub about the PR (#1014): always when told to (a turn just ended),
 // on the first reading, and while the last answer had checks running; otherwise once PR_IDLE_MS has
-// passed since the last ask.
+// passed since GitHub last answered.
 const prDue = (now: number, force: boolean): boolean =>
   force || prAskedAt === undefined || pr?.checks === 'running' || now - prAskedAt >= PR_IDLE_MS
 // A turn's end that asked while a reading was already running: kept for the next reading rather
