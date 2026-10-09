@@ -142,7 +142,7 @@ elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
 }
 
 read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline m_kind m_findings
-  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_kind=""; m_findings=""; m_dir=""
+  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_kind=""; m_findings=""; m_dir=""; m_groups=""
   local line
   while IFS= read -r line; do
     [ -n "$line" ] || break
@@ -157,6 +157,7 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
       kind=*) m_kind="${line#kind=}" ;;
       findings=*) m_findings="${line#findings=}" ;;
       dir=*) m_dir="${line#dir=}" ;;
+      groups=*) m_groups="${line#groups=}" ;;
     esac
   done < "$1"
 }
@@ -174,6 +175,9 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
   case "$base" in "$key"-*) ;; *) continue ;; esac
   read_meta "$p"
   case "$m_started" in ''|*[!0-9]*) continue ;; esac
+  # A pull request review read in groups (#601) is left to lib/pr-review.sh check, which knows its
+  # groups: it writes the review up from answers that exist, and names the groups that never came.
+  [ -n "$m_groups" ] && continue
   limit="${m_deadline:-$AR_DEADLINE}"
   case "$limit" in ''|*[!0-9]*) limit="$AR_DEADLINE" ;; esac
   if [ $((now - m_started)) -gt $((limit + 60)) ]; then

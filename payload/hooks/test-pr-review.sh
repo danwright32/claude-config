@@ -1072,6 +1072,29 @@ check "#601 as abandoned" "never finished" "$out"
 check "#601 naming the group" "group 2" "$(cat "$(final_of "$GRP_SHA")")"
 check "#601 and the refusal itself names it" "no answer from group 2" "$out"
 [ ! -e "$GP" ] && ok || bad "#601 an abandoned grouped review's files are removed"
+# A writer killed after taking the write lock leaves it behind; once the deadline has passed with
+# every group answered, the review is still written, never called abandoned (review of #601).
+reset_state
+GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP/.writing"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+for g in 1 2; do
+  printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
+done
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 every group answered, though a dead writer left its lock: the review is written and allows" "0" "$rc"
+check_eq "#601 as ok, not abandoned" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+# The nudge leaves a review in groups to the check, which knows its groups: it never writes one up as
+# abandoned without them (review of #601).
+reset_state
+GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+for g in 1 2; do
+  printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
+done
+printf '{"session_id":"gn1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+[ ! -e "$(final_of "$GRP_SHA")" ] && ok || bad "#601 the nudge does not write up a review in groups as abandoned ($(meta "$(final_of "$GRP_SHA")" status))"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 and the check then writes it from its groups" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
 # Groups nothing ever wrote up (the waiting process died, no check came) are swept after 14 days.
 reset_state
 mkdir -p "$AI_REVIEW_STATE_DIR/parts/old-pr-dead"; touch -t 202601010000 "$AI_REVIEW_STATE_DIR/parts/old-pr-dead"

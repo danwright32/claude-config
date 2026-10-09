@@ -619,9 +619,21 @@ do_check() {
         if [ -e "$parts/$name-g$k.txt" ]; then gdone=$((gdone + 1)); else gmissing="$gmissing${gmissing:+, }group $k"; fi
       done
     fi
-    if [ $((now - st)) -gt $((dl + 60)) ]; then
-      if [ -n "$gn" ]; then
-        record abandoned "The review was started in $gn groups of files and never finished: $(elapsed_text $((now - st))) passed with no answer from ${gmissing:-every group}, which means a background runner died. The branch was not read." "$(meta_of "$pending" base)" "$gn"
+    # Past the deadline with every group answered, a write lock still standing was left by a writer
+    # that died holding it (the waiting process and a check are each done in seconds), so it is
+    # taken down and the review written, never called abandoned over answers that exist.
+    if [ $((now - st)) -gt $((dl + 60)) ] && [ -n "$gn" ] && [ "$gdone" -eq "$gn" ]; then
+      rm -rf "$parts/.writing"
+      assemble_groups
+    fi
+    if [ -e "$final" ]; then
+      :
+    elif [ $((now - st)) -gt $((dl + 60)) ]; then
+      if [ -n "$gn" ] && [ -n "$gmissing" ]; then
+        record abandoned "The review was started in $gn groups of files and never finished: $(elapsed_text $((now - st))) passed with no answer from $gmissing, which means a background runner died. The branch was not read." "$(meta_of "$pending" base)" "$gn"
+        rm -rf "$parts"
+      elif [ -n "$gn" ]; then
+        record abandoned "The review was started in $gn groups of files, and every group answered, but the review could not be written from their answers under $parts. The branch counts as not read." "$(meta_of "$pending" base)" "$gn"
         rm -rf "$parts"
       else
         record abandoned "The review was started and never finished: $(elapsed_text $((now - st))) passed with no answer written, which means the background runner died. Nothing was read back." "$(meta_of "$pending" base)"
