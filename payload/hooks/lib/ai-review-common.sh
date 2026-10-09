@@ -239,22 +239,28 @@ ar_size_text() {   # $1 = bytes
 
 # The one sentence naming what a pull request review left out (claude-config#583), from the
 # "<bytes><TAB><path><TAB><kind><TAB><why>" rows lib/pr-review.sh writes beside the review as
-# <review>.leftout. Largest first and at most ten by name, then how many more and the file holding
-# them all: a branch with hundreds of fixtures must not push a refusal past the 10,000 character
-# hook output cap, which cuts it silently so the first names read as the whole list (L351). Prints
-# nothing when nothing was left out. Every surface that reports a review prints it (the gate's
-# verdicts, the start line, the nudge), so none reports a review without saying what it did not read.
-ar_left_out_note() {   # $1 = the .leftout file
+# <review>.leftout. Largest first, by name only while the names stay under 1,500 characters and ten
+# files, then how many more and the file holding them all: a branch with hundreds of fixtures must
+# not push a refusal past the 10,000 character hook output cap, which cuts it silently so the first
+# names read as the whole list (L351). Prints nothing when nothing was left out. Every surface that
+# reports a review prints it (the gate's verdicts, the start line, the nudge), so none reports a
+# review without saying what it did not read. A review refused as too large never ran, so for that
+# outcome ($2) it says what WOULD have been left out, never that a review left it out (L11).
+ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
   [ -s "$1" ] || return 0
-  LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null | LC_ALL=C awk -F '\t' -v file="$1" -v max=10 "$AR_AWK_SIZE"'
+  LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null | LC_ALL=C awk -F '\t' -v file="$1" -v max=10 -v chars=1500 -v status="${2:-}" "$AR_AWK_SIZE"'
     NF >= 4 && $2 != "" {
       n++; total += $1
-      if (n <= max) list = list (list == "" ? "" : "; ") $2 " (" $4 ", " size($1) ")"
+      item = $2 " (" $4 ", " size($1) ")"
+      if (shown < max && length(list) + length(item) <= chars) { list = list (list == "" ? "" : "; ") item; shown++ }
     }
     END {
       if (!n) exit
-      more = (n > max) ? sprintf("; and %d more, all listed in %s", n - max, file) : ""
-      printf "Not read by this review: %d file(s), %s in all, left out because the branch was over the size cap and each is proven to need no reading: %s%s.\n", n, size(total), list, more
+      more = (n > shown) ? sprintf("%s%d %s, all listed in %s", shown ? "; and " : "", n - shown, shown ? "more" : "file(s)", file) : ""
+      if (status == "too-large")
+        printf "Would have been left out of the review as proven to need no reading, had the rest fitted: %d file(s), %s in all: %s%s.\n", n, size(total), list, more
+      else
+        printf "Not read by this review: %d file(s), %s in all, left out because the branch was over the size cap and each is proven to need no reading: %s%s.\n", n, size(total), list, more
     }'
 }
 

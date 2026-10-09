@@ -889,6 +889,22 @@ check "#583 the start line is capped the same way" "more, all listed in" "$start
 # The nudge shows a finished review too, so it names what that review did not read (#1003).
 nout="$(printf '{"session_id":"lo1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
 check "#583 the nudge's report of the review names the files it left out" "scripts/fixtures/big.json" "$nout"
+# And counts that note against its own output budget, so three long reviews cannot push it past the
+# 10,000 character hook cap (lessons review of #1003, L351).
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+long="$(printf 'x%.0s' $(seq 1 110))"
+for n in 1 2 3; do
+  lf="$(final_of "fake$n")"
+  {
+    printf 'repo=repo\nbranch=b%s\nsha=fake%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=15\n\n' "$n" "$n"
+    for l in $(seq 1 15); do printf 'App/F%s.swift:%s: %s (L1). Should be: y.\n' "$n" "$l" "$long"; done
+  } > "$lf"
+  for l in $(seq 1 12); do printf '%s\tscripts/fixtures/%s/%s%s.json\tfixture\tfixture data\n' "$((5000 - l))" "$long" "$long" "$l"; done > "$lf.leftout"
+done
+nout="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+[ "${#nout}" -lt 10000 ] && ok || bad "#583 the nudge stays under the hook cap with left out notes counted (${#nout} chars)"
+check "#583 holding back what does not fit, and saying so" "not shown" "$nout"
 # A review with findings names them as well, in the refusal that carries the findings.
 reset_state
 PR_REVIEW_MAX_BYTES=$DCAP prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE" >/dev/null
@@ -903,7 +919,8 @@ out="$(PR_REVIEW_MAX_BYTES=300 prr check --dir "$REPO" --sha "$DATA_SHA" --base-
 check_eq "#583 code over the cap with the data left out is still refused" "1" "$rc"
 check "#583 as too large" "too large" "$out"
 check "#583 saying how large the rest still was" "proven to need no reading still leaves" "$out"
-check "#583 and naming, uncut, what it would have left out" "scripts/fixtures/big.json (fixture data" "$(printf '%s\n' "$out" | grep 'Not read by this review')"
+check "#583 and naming, uncut, what it would have left out" "scripts/fixtures/big.json (fixture data" "$(printf '%s\n' "$out" | grep 'Would have been left out')"
+check_not "#583 never saying a review left them out, since none ran" "Not read by this review" "$out"
 check_eq "#583 and no reviewer ran" "0" "$(calls)"
 # The proof is the content: a copy is identical only to the file at the same path in mod-kit.
 cand="$(cd "$REPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DATA_BASE' '$DATA_SHA'")"

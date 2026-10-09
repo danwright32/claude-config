@@ -456,7 +456,7 @@ case "$verb" in
   start) do_start ;;
   # Every verdict names what the review did not read (#583); a review still running is said by
   # its start line, which named them already.
-  check) do_check; rc=$?; [ "$rc" -eq 3 ] || ar_left_out_note "$leftout"; exit "$rc" ;;
+  check) do_check; rc=$?; [ "$rc" -eq 3 ] || ar_left_out_note "$leftout" "$(meta_of "$final" status)"; exit "$rc" ;;
   restart) rm -f "$final" "$pending" "$acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout"; do_start ;;
 esac
 exit 0

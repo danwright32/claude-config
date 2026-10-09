@@ -203,7 +203,14 @@ for base in $todo; do
   short="${m_sha:0:7}"
   took="$(elapsed_text $((${m_finished:-0} - ${m_started:-0})))"
   body="$(ar_capped_body "$f" "$NUDGE_LINES" "$NUDGE_CHARS")"
-  printed=$((printed + ${#body} + 300))
+  # What a pull request review over the size cap left out (#583), counted with the rest: a review
+  # is shown whole or held whole, and a later one only when it still fits the budget, so the output
+  # never reaches the hook cap that would cut it silently (L351).
+  left_note=""
+  [ "$m_kind" = "pr" ] && left_note="$(ar_left_out_note "$f.leftout" "$m_status")"
+  cost=$((${#body} + ${#left_note} + 300))
+  if [ "$printed" -gt 0 ] && [ $((printed + cost)) -gt "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
+  printed=$((printed + cost))
   if [ "$m_kind" = "pr" ]; then
     case "$m_status" in
       ok)
@@ -228,7 +235,7 @@ for base in $todo; do
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
     esac
     # What a review over the size cap left out, so no report of it reads as covering them (#583).
-    ar_left_out_note "$f.leftout"
+    [ -n "$left_note" ] && printf '%s\n' "$left_note"
     mark_shown "$base"
     continue
   fi
