@@ -100,7 +100,12 @@ test('the look changing files a command only mentions are found by their names',
   expect(mentionedLookFiles('cat x > /w/slate/app/x(1)/page.tsx')).toEqual(['/w/slate/app/x(1)/page.tsx'])
   expect(mentionedLookFiles('echo /w/slate/(a)(b)/page.tsx')).toEqual(['/w/slate/(a)(b)/page.tsx'])
   expect(mentionedLookFiles('print(open(app/page.tsx).read())')).toEqual(['app/page.tsx'])
-  expect(mentionedLookFiles('fs.writeFileSync(src/site.css)')).toEqual(['src/site.css'])
+  // A name before a parenthesis may be a call or a folder (`x(1)`), which its spelling cannot tell
+  // apart, so both readings are given and either holds; a call's absolute argument is only itself.
+  expect(mentionedLookFiles('fs.writeFileSync(src/site.css)')).toEqual(['src/site.css', 'fs.writeFileSync(src/site.css'])
+  expect(mentionedLookFiles('cat x > x(1)/page.tsx')).toContain('x(1)/page.tsx')
+  expect(mentionedLookFiles('cat x > app(shop)/page.tsx')).toContain('app(shop)/page.tsx')
+  expect(mentionedLookFiles('open(/tmp/x.tsx)')).toEqual(['/tmp/x.tsx'])
   // A name that starts with a route group keeps it.
   expect(mentionedLookFiles(`open('(shop)/page.tsx','w')`)).toEqual(['(shop)/page.tsx'])
   expect(mentionedLookFiles(`cd src/app && python3 -c "open('(shop)/[id]/page.tsx','w')"`)).toEqual(['(shop)/[id]/page.tsx'])

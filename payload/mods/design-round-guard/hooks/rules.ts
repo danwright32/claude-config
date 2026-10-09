@@ -108,22 +108,30 @@ export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(
  * script, a patch). A Next.js dynamic segment or route group (`[SO_ID]`, `(shop)`) is part of the
  * name (#1010): read as where the name starts, `src/app/booking/[SO_ID]/page.tsx` was `/page.tsx`, a
  * file at the top of the disk in no project, and passed. A call's own name and parenthesis before a
- * name (`open(app/page.tsx`) is not part of it; a folder holding one (`x(1)`) is.
+ * name (`open(app/page.tsx`) may not be part of it, and a folder holding one (`x(1)`) is, so both
+ * readings are given.
  */
 export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
   for (const m of text.matchAll(/[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g)) {
-    let word = m[0].replace(/^(?:[\w$.]+\()+/, '').replace(/^[.]+(?=[^./])/, '')
-    // A ) closing nothing in the name closes the call around it (`open(app/page.tsx).read`).
-    let depth = 0
-    for (let i = 0; i < word.length; i++) {
-      if (word[i] === '(') depth++
-      else if (word[i] === ')' && --depth < 0) {
-        word = word.slice(0, i)
-        break
+    // `open(app/page.tsx` is a call around a name and `x(1)/page.tsx` a folder holding parentheses,
+    // and the spelling cannot tell them apart, so both readings are kept and either holds. Only an
+    // absolute name after a call's parenthesis is that name alone (lessons review of #1010).
+    const raw = m[0]
+    const call = raw.replace(/^(?:[\w$.]+\()+/, '')
+    for (let word of call === raw || /^[/~$]/.test(call) ? [call] : [call, raw]) {
+      word = word.replace(/^[.]+(?=[^./])/, '')
+      // A ) closing nothing in the name closes the call around it (`open(app/page.tsx).read`).
+      let depth = 0
+      for (let i = 0; i < word.length; i++) {
+        if (word[i] === '(') depth++
+        else if (word[i] === ')' && --depth < 0) {
+          word = word.slice(0, i)
+          break
+        }
       }
+      if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
     }
-    if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
   }
   return out
 }
