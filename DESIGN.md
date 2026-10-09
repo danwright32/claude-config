@@ -1308,8 +1308,8 @@ Decided while building it, 2026-10-09, inside Dan's rules of 2026-09-24 (#563). 
 re-rank" says what it does; this is why it is shaped that way.
 
 **Seats, not the cap, bound what ranks.** The approved core is 355 lessons and about 50k characters,
-2.5 times the 20,000 cap, because the lessons no review can see are 335 of them and stay whatever
-their rank. Ranking "under the cap" would therefore admit nothing ever. The approved list kept 20
+2.5 times the 20,000 cap, because 335 of them, everything but the 20 seats, are protected and stay
+whatever their rank (see the next paragraph). Ranking "under the cap" would therefore admit nothing ever. The approved list kept 20
 reviewable lessons by rank, so the re-rank swaps through 20 seats. The size is still reported against
 the cap with the over cap switch in the apply command, so the cap stays where Dan put it, in
 `core-set`, and the decision stays his.
