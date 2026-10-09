@@ -1,0 +1,23 @@
+# The seats of the lessons core (claude-config#566): the only core lessons a re-rank may swap.
+# Every other lesson in the core is protected by not being named here, whatever its tag.
+# Seeded 2026-10-09 by tools/lessons-core-rerank.py --seed-seats 20: the most cited of the 72 core lessons both tagging passes call diff, counted on Daniels-MacBook-Pro-2 (2026-10-09), Dans-MacBook-Pro (2026-09-24) over 60 days.
+L11  # rank 1 of 72, 89.0 citations per 30 days
+L50  # rank 2 of 72, 48.0 citations per 30 days
+L370  # rank 3 of 72, 38.9 citations per 30 days
+L562  # rank 4 of 72, 34.2 citations per 30 days
+L524  # rank 5 of 72, 30.7 citations per 30 days
+L98  # rank 6 of 72, 28.0 citations per 30 days
+L411  # rank 7 of 72, 26.4 citations per 30 days
+L96  # rank 8 of 72, 24.0 citations per 30 days
+L13  # rank 9 of 72, 22.5 citations per 30 days
+L5  # rank 10 of 72, 22.0 citations per 30 days
+L35  # rank 11 of 72, 20.0 citations per 30 days
+L77  # rank 12 of 72, 19.5 citations per 30 days
+L290  # rank 13 of 72, 16.8 citations per 30 days
+L10  # rank 14 of 72, 16.0 citations per 30 days
+L33  # rank 15 of 72, 15.5 citations per 30 days
+L613  # rank 16 of 72, 11.8 citations per 30 days
+L263  # rank 17 of 72, 9.3 citations per 30 days
+L445  # rank 18 of 72, 6.8 citations per 30 days
+L650  # rank 19 of 72, 6.0 citations per 30 days
+L657  # rank 20 of 72, 6.0 citations per 30 days
