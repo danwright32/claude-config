@@ -272,16 +272,21 @@ change at a time. The table of contents has its own recorded size too.
 
 Once the core is in use, a job on each Mac proposes moves in and out of it once a month, on a page
 for Dan (claude-config#566). It only proposes: nothing runs `core-set` until Dan approves. The rules
-are his decisions of 2026-09-24 (#563):
+are his decisions of 2026-09-24 (#563) and 2026-10-09 ("Keep your 355 protected"):
 
-- a lesson no PR review can see (tagged design or operate, or one the two tagging passes disputed)
-  stays in the core whatever its rank, and is never proposed out;
-- the rest of the core is the most cited reviewable lessons. Their number is the core's seats, read
-  from the list as it stands (20 in the approved list), so a re-rank swaps lessons through the seats
-  and does not add seats;
+- the core is protected except for its 20 seats, named in `lesson-core-seats.txt` at the repo root.
+  A protected lesson is never proposed out, whatever its tag or rank. Protection is that file, not
+  the tags, so re-tagging can never unprotect a lesson Dan approved;
+- only the seats swap: a seat holder leaves when reviewable lessons outside the core out-rank it,
+  and the lesson replacing it takes its seat, so there are always 20 seats;
 - new lessons start in the library and earn their way in: a reviewable one by ranking inside the
-  seats, one no review can see by being cited at least as often as the last seat, after which it
-  stays like the rest of its kind.
+  seats, one no review can see by being cited at least as often as the last seat. That one comes
+  in as an addition, not a seat, and is protected from then on.
+
+Applying a proposal is two writes that belong together: `core-set` with the proposed list, and the
+proposed seats file committed as `lesson-core-seats.txt`. A seat that is not in the core is what one
+without the other leaves behind, and the re-rank refuses on it (SEAT NOT IN CORE) rather than
+shrinking the seats. The seats were seeded once with `--seed-seats 20`; DESIGN.md says how.
 
 The rank is the one `tools/lessons-core-proposal.py` used, shared through
 `tools/lib/lessons_core.py`: prose and review citations from both Macs, per 30 days of exposure.
@@ -312,8 +317,8 @@ lesson can ever leave the core.
 
 **The job.** `tools/run-lessons-core-rerank.sh` runs daily and delivers monthly: it recounts when due,
 then, unless this month's proposal is already out, re-ranks and writes
-`~/.claude/state/lessons-core-rerank/rerank-<YYYY-MM>.html`, with the moves and the list to apply
-(`core-<YYYY-MM>.txt`) beside it. It posts one notification per month per outcome (a proposal,
+`~/.claude/state/lessons-core-rerank/rerank-<YYYY-MM>.html`, with the moves, the list to apply
+(`core-<YYYY-MM>.txt`) and the seats to commit with it (`seats-<YYYY-MM>.txt`) beside it. It posts one notification per month per outcome (a proposal,
 refused, not measured), which opens the page in Chrome when clicked, and records it as given only
 once it was really posted, so asleep (sleep mode) or a missing notifier means the next day tries
 again. A core not in use is logged and never notified. Install it on each Mac, from the clone the
@@ -1580,7 +1585,7 @@ following the overnight rules for hours, and a real usage limit.
 
 Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/`, `lesson-citations.tsv`, `lesson-counts/`,
-`lesson-tags.tsv` and `lesson-tags-second.tsv` also sit outside `payload/` and are the exceptions: all are tracked and shared
+`lesson-core-seats.txt`, `lesson-tags.tsv` and `lesson-tags-second.tsv` also sit outside `payload/` and are the exceptions: all are tracked and shared
 on purpose. A band nobody else can see cannot stop anybody else claiming a number, a record of what
 a citation was written about is a fact about the shared payload rather than about one Mac, and the
 lessons core re-rank needs both Macs' citation counts and one settled set of tags. See Lesson
