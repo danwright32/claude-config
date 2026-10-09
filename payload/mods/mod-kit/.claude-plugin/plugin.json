@@ -3,5 +3,13 @@
   "version": "0.1.0",
   "description": "What every mod shares: the boxed card a tool result row is drawn as, the grey card for an action a guard blocked among its uses, the shell, git and gh command readers, the readers of a session's repository, of a repository gh names and of a github.com link, the reader of where a checkout stands (its branch and the issues it names), the band above the prompt composed once for every mod, a mod's side pane drawn as the same card, and one more try of a mod's refused message to another session.",
   "author": { "name": "Dan Wright" },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "appleTerminalMouseReporting": {
+      "type": "boolean",
+      "title": "Apple Terminal: Allow Mouse Reporting is kept on",
+      "description": "Set on a Mac whose Apple Terminal tabs keep View > Allow Mouse Reporting ticked (#1012). On, Apple Terminal in the fullscreen layout draws real buttons in the band and in panes. Off (the default), it draws each button as the text to type instead (\"type: /press <mod> <button>\"). The risk with it on, accepted by Dan on 2026-10-09: that switch is per tab and Cmd+R flips it, and no mod can read it, so in a tab where it is off every button still looks live and a click on it does nothing. Tick the switch again in that tab, or type the button's /press command. tmux, screen, the main screen and an unnamed terminal draw the typed text either way. Saved in this Mac's own settings.json, which the sync never carries; a new session picks up a change.",
+      "default": false
+    }
+  }
 }
