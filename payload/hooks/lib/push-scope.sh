@@ -373,12 +373,18 @@ ps__segment_is_pr_create() {   # $1 = one segment
 # reader that cannot run reads no cd, and no cd is exactly what judged a push in the session's
 # repository. A command naming neither is the session's either way.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text="" rc
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text="" rc names=0
   rec="$(ps__action_record "$cmd" "$pred")"; rc=$?
+  grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd" && names=1
   if [ "$rc" -eq 0 ]; then
     dir="${rec%%$'\x1f'*}"; text="${rec#*$'\x1f'}"
-  elif [ "$rc" -eq 2 ] && grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd"; then
+  elif [ "$rc" -eq 2 ] && [ "$names" -eq 1 ]; then
     echo "push-scope: this command names a directory with a cd or a git -C, and nothing here could read which one is in force: $PS_SHELL_WORDS is missing or python3 is not on PATH. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017, L490). Reinstall the hooks (claude-sync pull) or install python3." >&2
+    return 2
+  elif [ "$names" -eq 1 ]; then
+    # Read, but none of its commands is the action asked about ($pred), so which cd is in force for
+    # it cannot be said: refused, never handed the session directory (lessons review of #1017).
+    echo "push-scope: this command names a directory with a cd or a git -C, but none of its commands is the one asked about ($pred), so which directory it runs in could not be told. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017)." >&2
     return 2
   fi
 
@@ -536,7 +542,8 @@ ps__read_adds() {   # $1 = command  $2 = scope | takes
   # lib/shell-words.py's RESERVED, the list the push recogniser uses, so `if x; then git add -A; fi`
   # is an add here as it is to ps_is_git_add (lessons review of #1017). With that file missing the
   # list is empty, which only reads fewer adds, the reading every release before #1017 had.
-  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -c '
+  # -B: loading shell-words.py as a module would otherwise leave a bytecode cache in the hooks' lib/.
+  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
 import importlib.util, os, re, shlex, sys
 cmd = sys.stdin.read()
 mode = os.environ.get("PS_MODE", "scope")

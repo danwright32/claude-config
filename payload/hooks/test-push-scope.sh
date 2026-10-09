@@ -562,6 +562,23 @@ got="$(lone ps_repo_dir "git push" "$S" 2>/dev/null)"; rc=$?
 [ "$rc" -eq 0 ] && [ "$got" = "$S" ] && check "#1017 a push naming no directory is still the session's" ok \
   || check "#1017 a push naming no directory is still the session's" "rc=$rc got [$got]"
 
+# A caller asking about an action no command in the line performs, while the line names a directory,
+# is refused by name rather than handed the session directory (lessons review of #1017): a hook that
+# forgets to name its action would otherwise judge `cd <repo> && git commit` in the session.
+got="$(ps_repo_dir "cd $T && git commit -m x" "$S" 2>"$RD/noaction.err")"; rc=$?
+if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -q "none of its commands" "$RD/noaction.err"; then
+  check "#1017 a cd before a command that is not the action asked about is refused, not the session's" ok
+else check "#1017 a cd before a command that is not the action asked about is refused, not the session's" "rc=$rc got [$got] said [$(cat "$RD/noaction.err")]"; fi
+got="$(ps_repo_dir "git status" "$S" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = "$S" ] && check "#1017 a line naming no directory is still the session's" ok \
+  || check "#1017 a line naming no directory is still the session's" "rc=$rc got [$got]"
+# The add reader loads shell-words.py's list without leaving a bytecode cache in the hooks' lib/.
+PYC_BEFORE="$(ls "$DIR/lib/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+ps_add_scope "if true; then git add -A; fi && git commit -m x" >/dev/null
+PYC_AFTER="$(ls "$DIR/lib/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+[ "$PYC_AFTER" = "$PYC_BEFORE" ] && [ "$PYC_AFTER" = 0 ] && check "#1017 reading an add leaves no shell-words bytecode in lib/" ok \
+  || check "#1017 reading an add leaves no shell-words bytecode in lib/" "before $PYC_BEFORE after $PYC_AFTER"
+
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \
   "#1017 &> is a redirect, not a cd sent to the background"
