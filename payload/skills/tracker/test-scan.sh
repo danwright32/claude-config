@@ -133,6 +133,21 @@ done
 newrepo "$ROOT/ignored-repo" "https://github.com/o/ignored-repo"
 commit "$ROOT/ignored-repo" -1 "$ME_NAME" "$ME_EMAIL" "ignored on purpose"
 
+# heads: worktrees holding commits that no branch, remote branch or tag reaches.
+newrepo "$ROOT/heads" "https://github.com/o/heads"
+commit "$ROOT/heads" -12 "$ME_NAME" "$ME_EMAIL" "base on main"
+git -C "$ROOT/heads" worktree add -q --detach "$ROOT/heads-wt/detached" 2>/dev/null
+commit "$ROOT/heads-wt/detached" -1 "$ME_NAME" "$ME_EMAIL" "on a detached head"
+git -C "$ROOT/heads" worktree add -q "$ROOT/heads-wt/left" -b left 2>/dev/null
+commit "$ROOT/heads-wt/left" -9 "$ME_NAME" "$ME_EMAIL" "on a branch deleted after the worktree detached"
+git -C "$ROOT/heads-wt/left" checkout -q --detach
+git -C "$ROOT/heads" branch -q -D left
+git -C "$ROOT/heads" worktree add -q "$ROOT/heads-wt/gone" -b gone 2>/dev/null
+commit "$ROOT/heads-wt/gone" -8 "$ME_NAME" "$ME_EMAIL" "on a branch deleted under the worktree"
+# git refuses to delete a branch a worktree has checked out, so the ref is removed directly: HEAD
+# is then left naming a branch that does not exist, and only its reflog holds the last commit.
+git -C "$ROOT/heads-wt/gone" update-ref -d refs/heads/gone
+
 # a repository with a submodule, which has a git dir of its own and so is a repository of its own.
 newrepo "$ROOT/withsub" "https://github.com/o/withsub"
 commit "$ROOT/withsub" -1 "$ME_NAME" "$ME_EMAIL" "the superproject"
@@ -143,6 +158,11 @@ check "and the same capture does see the helper's USR1 trap, so that empty answe
 # The fixture's own premises, checked before anything is concluded from them (L475).
 [ -f "$ROOT/wt/mine-feature/.git" ] && ok || bad "premise: the worktree's .git is a file"
 [ -f "$ROOT/withsub/sub/.git" ] && ok || bad "premise: the submodule's .git is a file"
+# Premise: no ref reaches the three worktree commits, which is the case under test.
+check_eq "premise: no branch, remote branch or tag reaches the worktrees' commits" "base on main" \
+  "$(git -C "$ROOT/heads" log --branches --remotes --tags --format=%s)"
+check_eq "premise: the deleted-under worktree's HEAD resolves to nothing" "" \
+  "$(git -C "$ROOT/heads-wt/gone" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null)"
 [ "$(git -C "$ROOT/shallow" rev-parse --is-shallow-repository)" = "true" ] && ok || bad "premise: the clone is shallow"
 
 OUT="$TMP/out.json"
@@ -179,8 +199,8 @@ check_not "and its output is JSON" "PARSE-ERROR" "$(q 'd["repo_count"]')"
 
 repos="$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
 check_eq "it finds exactly the wanted repositories, each once" \
-  '["atpass", "empty", "mine", "rebased", "secret", "shallow", "strangers", "withsub", "withsub/sub"]' "$repos"
-check_eq "and counts them" 9 "$(q 'd["repo_count"]')"
+  '["atpass", "empty", "heads", "mine", "rebased", "secret", "shallow", "strangers", "withsub", "withsub/sub"]' "$repos"
+check_eq "and counts them" 10 "$(q 'd["repo_count"]')"
 check_eq "and says it found some" "repos_found" "$(q 'd["outcome"]')"
 check_eq "and names the root it searched, resolved" "[\"$REAL_ROOT\"]" "$(q 'd["roots_searched"]')"
 
@@ -233,6 +253,13 @@ check_eq "and the entry is the main checkout, though another worktree's path sor
 check_eq "which names the git dir they share" "$REAL_ROOT/mine/.git" "$(q 'R("mine")["git_common_dir"]')"
 check_eq "and the feature branch's commit is counted once in the whole output" 1 \
   "$(q 'sum(1 for r in d["repos"] for s in (r["window_subjects"] or []) if s == "work on the feature branch")')"
+# Every grouped worktree's HEAD is read, so work no ref reaches is still the repository's.
+check_eq "heads: commits reached only by a worktree's HEAD are counted" 4 "$(q 'R("heads")["commit_count"]')"
+check_eq "and are the user's window commits, newest first" \
+  '["on a detached head", "on a branch deleted under the worktree", "on a branch deleted after the worktree detached", "base on main"]' \
+  "$(q 'R("heads")["window_subjects"]')"
+check_eq "and set last_commit_date" "$(iso_day "$(at -1)")" "$(q 'R("heads")["last_commit_date"][:10]')"
+check "the branch deleted under a worktree is reported, since its work was read from the reflog" "heads-wt/gone" "$(q 'd["warnings"]')"
 check_eq "a repository with no worktrees lists none" "[]" "$(q 'R("strangers")["worktrees"]')"
 check_eq "a submodule, whose .git is also a file, is a repository of its own" 1 "$(q 'len([r for r in d["repos"] if r["path"] == sys.argv[2] + "/withsub/sub"])')"
 check "with its own git dir" "/withsub/.git/modules/sub" "$(q 'R("withsub/sub")["git_common_dir"]')"

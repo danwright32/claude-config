@@ -285,10 +285,36 @@ while IFS=$'\t' read -r -u 3 top common others; do
     fi
   fi
 
-  # Every branch, remote branch and tag, and HEAD when it points at a commit. An empty repository
-  # has no HEAD commit, so asking for it would fail: it is asked whether it has one first.
+  # Every branch, remote branch and tag, plus the HEAD of EVERY working tree in this entry, the
+  # main checkout and each worktree found: a detached worktree, or one whose branch was deleted,
+  # holds commits no ref reaches. Each HEAD is added once, as a commit id, since "HEAD" alone
+  # would name only the main checkout's. An empty repository has no HEAD commit, so each is asked
+  # whether it has one first. A worktree whose branch was deleted underneath it has a HEAD naming
+  # a branch that no longer exists; its last commit is read from its own HEAD reflog, and the run
+  # says so in its warnings.
   revs="--branches --remotes --tags"
-  if gitr rev-parse -q --verify HEAD > /dev/null 2>&1; then revs="$revs HEAD"; fi
+  printf '%s\n' "$top" > "$WORK/wts"
+  if [ -n "$others" ]; then printf '%s\n' "$others" | tr '\035' '\n' >> "$WORK/wts"; fi
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    sha=""
+    if sha="$(git -C "$wt" rev-parse -q --verify 'HEAD^{commit}' 2> /dev/null < /dev/null)"; then :
+    elif branch="$(git -C "$wt" symbolic-ref -q HEAD 2> /dev/null < /dev/null)"; then
+      sha=""
+      if logf="$(git -C "$wt" rev-parse --path-format=absolute --git-path logs/HEAD 2> /dev/null < /dev/null)" && [ -s "$logf" ]; then
+        # Deleting the branch appends an entry whose new value is all zeros, so the commit is the
+        # last NON-zero value HEAD held, not simply the last line.
+        last="$(awk '$2 !~ /^0+$/ { v = $2 } END { print v }' "$logf")"
+        if [ -n "$last" ] && git -C "$wt" rev-parse -q --verify "$last^{commit}" > /dev/null 2>&1 < /dev/null; then
+          sha="$last"
+          rec WARN "$wt: its branch $branch no longer exists, so its last commit was read from its HEAD reflog"
+        fi
+      fi
+    fi
+    if [ -n "$sha" ]; then
+      case " $revs " in *" $sha "*) ;; *) revs="$revs $sha" ;; esac
+    fi
+  done < "$WORK/wts"
   # shellcheck disable=SC2086 # revs is a fixed list of git options, split on purpose
   {
     rc=0; total="$(gitr rev-list --count $revs 2> "$ERRF")" || rc=$?
