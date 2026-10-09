@@ -310,6 +310,41 @@ check_eq "and so are the subjects" "null" "$(q 'R("mine")["window_subjects"]')"
 check "while authors_in_window still lists who committed, for the first run's picker" "Stranger Person" "$(q 'R("mine")["authors_in_window"]')"
 check_not "without the bots" "[bot]" "$(q 'R("mine")["authors_in_window"]')"
 
+# --- a window read that FAILS is unmeasured, never a measured zero ---------------
+# A git placed first on PATH fails only the windowed log or shortlog it is told to, and hands
+# every other call to the real git, so only the step under test fails.
+REAL_GIT="$(command -v git)"
+mkdir -p "$TMP/failgit"
+cat > "$TMP/failgit/git" <<STUB
+#!/usr/bin/env bash
+sub=""; since=""
+for a in "\$@"; do
+  case "\$a" in
+    log|shortlog) [ -n "\$sub" ] || sub="\$a" ;;
+    --since=*) since=1 ;;
+  esac
+done
+if [ -n "\$since" ] && [ "\$sub" = "\${FAIL_GIT_WINDOW:-}" ]; then echo "fatal: simulated \$sub failure" >&2; exit 128; fi
+exec "$REAL_GIT" "\$@"
+STUB
+chmod +x "$TMP/failgit/git"
+failscan(){ # failscan <log|shortlog> <args...>
+  local which="$1"; shift
+  RC=0
+  FAIL_GIT_WINDOW="$which" PATH="$TMP/failgit:$PATH" bash "$SCAN" "$@" > "$OUT" 2> "$ERR" || RC=$?
+}
+failscan log --root "$ROOT/mine" --now "$NOW" --days 30 --author "$ME_EMAIL"
+check_eq "a scan whose window log fails still finishes" 0 "$RC"
+check_eq "and the window counts are null, not zero" "[null, null, null]" \
+  "$(q '[R("mine")["window_commit_count"], R("mine")["window_commit_count_all"], R("mine")["window_subjects"]]')"
+check "and the failure is named on the repository" "simulated log failure" "$(q 'R("mine")["errors"]')"
+check "while the authors, read separately, are still there" "Stranger Person" "$(q 'R("mine")["authors_in_window"]')"
+failscan shortlog --root "$ROOT/mine" --now "$NOW" --days 30 --author "$ME_EMAIL"
+check_eq "a scan whose shortlog fails has null authors and bot count, not empty" "[null, null]" \
+  "$(q '[R("mine")["authors_in_window"], R("mine")["bot_commits_in_window"]]')"
+check "and the failure is named on the repository" "simulated shortlog failure" "$(q 'R("mine")["errors"]')"
+check_eq "while the window counts, read separately, are still measured" 3 "$(q 'R("mine")["window_commit_count"]')"
+
 # --- overlapping roots find a repository once -------------------------------------
 scan --root "$ROOT/mine" --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL"
 check_eq "a repository under two roots is emitted once" 1 "$(q 'len([r for r in d["repos"] if r["path"] == sys.argv[2] + "/mine"])')"

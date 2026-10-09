@@ -336,13 +336,14 @@ while IFS=$'\t' read -r -u 3 top common others; do
     rec F first_commit_date "$first"
 
     rc=0; window="$(gitr log --since="@$since" --until="@$now" --format="%aN${US}%aE${US}%s" $revs 2> "$ERRF")" || rc=$?
-    if [ "$rc" -ne 0 ]; then rec ERROR "log for the window failed: $(sed -n 1p "$ERRF")"; window=""; fi
+    # A failed read is unmeasured, never a zero: the window fields become null (L622).
+    if [ "$rc" -ne 0 ]; then rec ERROR "log for the window failed: $(sed -n 1p "$ERRF")"; rec F window_failed 1; window=""; fi
     while IFS= read -r line; do [ -n "$line" ] && rec C "$line"; done <<EOF
 $window
 EOF
 
     rc=0; shortlog="$(gitr shortlog -sne --since="@$since" --until="@$now" $revs 2> "$ERRF")" || rc=$?
-    if [ "$rc" -ne 0 ]; then rec ERROR "shortlog failed: $(sed -n 1p "$ERRF")"; shortlog=""; fi
+    if [ "$rc" -ne 0 ]; then rec ERROR "shortlog failed: $(sed -n 1p "$ERRF")"; rec F shortlog_failed 1; shortlog=""; fi
     while IFS= read -r line; do [ -n "$line" ] && rec S "$line"; done <<EOF
 $shortlog
 EOF
@@ -414,6 +415,13 @@ with open(rec_path, encoding="utf-8", errors="replace") as f:
             key, _, val = rest.partition("\x1f")
             if key == "is_shallow":
                 repo[key] = {"true": True, "false": False}.get(val)
+            elif key == "window_failed":
+                repo["window_commit_count"] = None
+                repo["window_commit_count_all"] = None
+                repo["window_subjects"] = None
+            elif key == "shortlog_failed":
+                repo["authors_in_window"] = None
+                repo["bot_commits_in_window"] = None
             elif key == "commit_count":
                 repo[key] = int(val) if val.isdigit() else None
                 repo["is_empty"] = None if repo[key] is None else repo[key] == 0
