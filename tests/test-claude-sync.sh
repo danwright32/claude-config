@@ -18979,11 +18979,13 @@ check "#473 and every one of them travels to the other Mac" \
 check "#473 the single index file is not left behind" \
   "[ ! -f '$SPH/LESSONS-INDEX.md' ] && [ ! -f '$SPR/payload/LESSONS-INDEX.md' ]"
 
-# A file that nothing imports does not travel and does not load, so the imports are DERIVED from
-# the sections rather than maintained by hand beside them (L41), and the retired import goes with
-# the retired file or every session dies on a dangling reference.
-check "#473 CLAUDE.md imports every generated file" \
-  "grep -q '^@LESSONS-INDEX-proof-over-green\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-data-safety\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-cross-system-reliability\.md\$' '$SPH/CLAUDE.md'"
+# The imports are DERIVED from the sections rather than maintained by hand beside them (L41), and
+# the retired import goes with the retired file or every session dies on a dangling reference.
+# Which files are imported is no longer "every one of them": since Dan reversed that on 2026-09-24
+# (#565), a session loads the lessons core when a list is set and the whole library only when none
+# is, which the #564 section below holds. The check that CLAUDE.md imports every generated file
+# defended the reversed decision and was deleted with it (L252); what still matters is that the
+# library itself stays complete, which the union checks below and in #564 hold.
 check "#473 and no longer imports the file that was retired" \
   "! grep -q '^@LESSONS-INDEX\.md\$' '$SPH/CLAUDE.md'"
 check "#473 the imports reached the payload too" \
@@ -19098,6 +19100,23 @@ check "#564 the library files are still written, and current, beside it" \
 check "#564 and the library and the list both still travel" \
   "[ -f '$LCR/payload/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$LCR/payload/LESSONS-CORE.txt' ]"
 check "#564 the state records the core in use and its size" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
+# THE LIBRARY STAYS COMPLETE while the core is in use (#565). Once a session no longer loads the
+# library, the only readers left are `claude-sync lesson`, the PR lessons review and the re-rank, so
+# a lesson lost from it is lost everywhere at once and nothing in a session would notice.
+lc_union(){ cat "$1"/LESSONS-INDEX-*.md 2>/dev/null | grep -oE '^- L[0-9]+\.' | grep -oE '[0-9]+' | sort -n | tr '\n' ' '; }
+check "#565 with the core in use the library still holds every lesson exactly once" \
+  "[ \"\$(lc_union '$LCH')\" = '1 2 3 4 5 ' ]"
+check "#565 and so does the library that travels" \
+  "[ \"\$(lc_union '$LCR/payload')\" = '1 2 3 4 5 ' ]"
+# A lesson recorded while the core is in use goes to the library, never the core: new lessons earn
+# their way in by citations at the re-rank (Dan, 2026-09-24, #563).
+printf '\n- **L6. A data lesson recorded while the core is in use.** body\n' >> "$LCH/LESSONS.md"
+lc_push >/dev/null
+check "#565 a lesson recorded while the core is in use reaches the library" \
+  "grep -q '^- L6\.' '$LCH/LESSONS-INDEX-data-safety.md' && [ \"\$(lc_union '$LCH')\" = '1 2 3 4 5 6 ' ]"
+check "#565 and does not join the core on its own" \
+  "! grep -q '^- L6\.' '$LCH/LESSONS-CORE-data-safety.md'"
+check "#565 and the core stays in use" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
 
 # 3 to 6. EVERY WAY THE LIST CAN BE WRONG loads the whole library, records why, and says so.
 lc_fallback(){ # lc_fallback <description> <state words>

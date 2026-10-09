@@ -5,7 +5,7 @@
 # while the session that wrote it is still there to fix it (claude-config#374).
 #
 # A lesson entry written into LESSONS.md in the wrong shape is invisible from the moment it is
-# saved: absent from the generated lessons index, which loads into every session in every project, unreadable
+# saved: absent from the generated lessons index, which the lessons core is chosen from and every PR lessons review reads, unreadable
 # by `claude-sync lesson`, uncounted by the duplicate check and by the number minter. Nothing
 # reported it. The only thing that noticed was the next sync, which can be days later, and by then
 # the malformed entry had been holding the ENTIRE lessons file back from publishing, so every
@@ -110,7 +110,7 @@ if ! command -v python3 >/dev/null 2>&1; then
     *"$CLAUDE_HOME"*LESSONS.md*|*LESSONS.md*"$CLAUDE_HOME"*)
       {
         echo "LESSON CHECK DID NOT RUN: python3 is not on PATH, and lesson-entry-check.sh reads the written file out of the tool payload with it and runs claude-sync lesson-faults over the entry. Nothing has judged the lesson just written into $CLAUDE_HOME/LESSONS.md."
-        echo "Until python3 is installed, a malformed or over length entry is invisible: absent from LESSONS-INDEX.md (which loads into every session in every project), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and it holds the WHOLE lessons file back from the next send, so every lesson written after it is stuck too."
+        echo "Until python3 is installed, a malformed or over length entry is invisible: absent from the generated lessons index (which the lessons core is chosen from and every PR lessons review reads), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and it holds the WHOLE lessons file back from the next send, so every lesson written after it is stuck too."
         echo "Check the entry by hand now, or install python3 and confirm with: claude-sync lesson-faults"
       } >&2
       exit 2 ;;
@@ -190,7 +190,7 @@ case "$out" in
     block "$WRITTEN could not be checked: the clone of claude-sync at $(dirname "$sync") does not have the 'lesson-faults' command yet, so nothing here could judge the entry. That clone updates on its own schedule, and this config reached this Mac first. Run 'claude-sync pull' from that clone, then check the entry with: $sync lesson-faults" ;;
 esac
 
-block "$WRITTEN leaves the file unable to publish. Fix it now, in this session, rather than leaving it: until it is fixed the entry is absent from the generated lessons index (which loads into every session in every project), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and the WHOLE lessons file is held back from the next send, so every other lesson written since is stuck behind it too.
+block "$WRITTEN leaves the file unable to publish. Fix it now, in this session, rather than leaving it: until it is fixed the entry is absent from the generated lessons index (which the lessons core is chosen from and every PR lessons review reads), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and the WHOLE lessons file is held back from the next send, so every other lesson written since is stuck behind it too.
 
 What claude-sync lesson-faults said:
 

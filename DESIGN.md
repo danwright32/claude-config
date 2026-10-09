@@ -1255,9 +1255,37 @@ Bash, Grep, and a Write of a new file never arm it, and Edit does only because i
 first. `InstructionsLoaded` carries no `agent_id`, so a hook cannot tell which agent a rule reached.
 And the saving was not there: coding sessions would still have loaded 81 to 94 percent of the
 lessons, while sessions driven through Bash or an MCP server, which open files without the Read
-tool, would have lost the lessons entirely. Interactive sessions therefore keep every lesson, and the saving is taken where nothing
-reads them: the headless runs hooks start, which switch the global config off or say why they keep
-it, enforced by `hooks/test-headless-claude-config.sh` (#538).
+tool, would have lost the lessons entirely. The conclusion drawn that day, that interactive sessions
+therefore keep every lesson, was REVERSED the next day (below); the headless runs hooks start still
+switch the global config off or say why they keep it, enforced by `hooks/test-headless-claude-config.sh` (#538).
+
+**Every lesson in every session was reversed on 2026-09-24, in favour of a core and a checkpoint**
+(milestone 17, plan record on #560, recorded here by #565). Dan's decisions: "Small core,
+checkpoints"; the core chosen by evidence with his approval; "I don't need it done at every turn, but
+definitely before a PR"; "Yes, PR is the net". So a session loads the lessons core
+(`LESSONS-CORE-<section>.md`, rendered by claude-sync from `LESSONS-CORE.txt`, README "The lessons
+core") and the whole library only when no list is set or the list is unusable, and the net for every
+lesson that is not in the core is the PR lessons review, which reads all of them before any merge
+(#560). The core is the lessons no PR review can see, because they are about design or operation
+rather than a diff (201 lessons two tagging passes agreed on, plus all 134 they disputed, which Dan
+settled as staying), plus the 20 most cited reviewable lessons: 355 lessons, about 50,000 index
+characters against about 105,000 for the library (#563). New lessons start in the library and earn
+their way in at the monthly re-rank (#566); the 30 day probation in the core the plan proposed was
+dropped by Dan, because at about 1,000 characters a day it would have held a month of intake
+permanently. The switch waited on #562's measurement that nearly every pull request opened had a
+finished review, met on both Macs on 2026-10-09 (91 and 94 percent of openings). The budget suite
+gates the core per file and as a whole (`hooks/test-rule-file-budget.sh`).
+
+Two more routes were measured and rejected on 2026-09-24, recorded so neither is planned a third
+time:
+
+- **Path scoped lesson rules, again.** Rejected above on 2026-09-23 and re-measured: such a rule arms
+  only on the Read tool, and 25 of 38 interactive tool using sessions on Daniels-MacBook-Pro-2 never
+  called Read at all. About 80 to 85 percent of lessons are design shaped, so a path scoped core
+  would not have been smaller either.
+- **Class consolidation** (folding near duplicate lessons into one): about a 6 percent fold rate.
+  165 lessons state they are distinct from a named neighbour, #390 found one genuinely duplicate
+  pair, and a member reduced to a number in its class loses the trigger that made it fire.
 
 ## Things known to be wrong and left that way
 
