@@ -151,6 +151,23 @@ recorded_size() {  # $1 = payload relative path
     LESSONS-INDEX-pipeline-speed.md)          printf '3994' ;;
     LESSONS-INDEX-test-speed.md)              printf '2176' ;;
     LESSONS-INDEX-building-with-ai.md)        printf '2099' ;;
+    # The lessons core (#565), one file per section, measured 2026-10-09 by rendering the list Dan
+    # approved on #563 (355 lessons) with `claude-sync core-set` and a push into a throwaway home,
+    # since no live Mac had it set yet. Re-measure the same way, or with
+    #   wc -c payload/LESSONS-CORE-*.md
+    # once the core is in use.
+    LESSONS-CORE-proof-over-green.md)         printf '14685' ;;
+    LESSONS-CORE-ux-completeness.md)          printf '6256' ;;
+    LESSONS-CORE-honest-failure.md)           printf '4934' ;;
+    LESSONS-CORE-cross-system-reliability.md) printf '4932' ;;
+    LESSONS-CORE-codebase-hygiene.md)         printf '4615' ;;
+    LESSONS-CORE-data-safety.md)              printf '3897' ;;
+    LESSONS-CORE-pipeline-speed.md)           printf '3814' ;;
+    LESSONS-CORE-state-and-identity.md)       printf '3306' ;;
+    LESSONS-CORE-external-systems.md)         printf '2634' ;;
+    LESSONS-CORE-security-and-privacy.md)     printf '2187' ;;
+    LESSONS-CORE-test-speed.md)               printf '1700' ;;
+    LESSONS-CORE-building-with-ai.md)         printf '1412' ;;
     *)                                        printf '' ;;
   esac
 }
@@ -223,6 +240,52 @@ if [ "$count" -ge 3 ]; then ok; else
 fi
 
 printf '  %-42s %8s bytes read at the start of every session, in every project\n' "TOTAL" "$total"
+
+echo "rule file budget: the lessons core"
+
+# THE CORE (claude-config#565). Since Dan's reversal on 2026-09-24 a session loads the lessons core
+# (LESSONS-CORE-<section>.md, rendered by claude-sync from LESSONS-CORE.txt) in place of the whole
+# library whenever a list is set, and the whole library only when none is or the list is unusable.
+# The list is set on a live Mac with `claude-sync core-set`, not by a change here, so the moment it
+# is set the payload starts importing core files. Every core file a section can produce therefore
+# needs its recorded size BEFORE that happens, or the walk above fails every push and every pull on
+# the day the core is switched on. The names are derived from the library files present, never
+# listed, so a section added later is asked for here at once (L41).
+for _lib in "$PAYLOAD"/LESSONS-INDEX-*.md; do
+  [ -f "$_lib" ] || continue
+  _core="LESSONS-CORE-${_lib##*/LESSONS-INDEX-}"
+  if [ -n "$(recorded_size "$_core")" ]; then ok; else
+    bad "$_core has no recorded size, and the lessons core renders it the moment a core list names a lesson in that section. Measure it from a core render (see recorded_size) and add it, so switching the core on cannot fail this suite."
+  fi
+done
+
+# THE CORE'S OWN TOTAL, ratcheted like a file. The per file ratchets above each allow at least
+# MIN_RATCHET_HEADROOM of growth, which over a dozen core files is more than the whole core, so they
+# cannot see the core as a whole doubling. A re-rank that moves lessons in is a list change nobody
+# reviews here, so this is what makes growth in the core a deliberate act (L316). Recorded from the
+# list Dan approved on 2026-09-24 (#563): 355 lessons, 50,246 index characters, 54,372 bytes with
+# the file headers, rendered against LESSONS.md on 2026-10-09. The cap `claude-sync core-set`
+# enforces (SYNC_CORE_CAP, 20,000) is a separate decision, made at the list, and Dan chose to go
+# over it for this list.
+CORE_RECORDED=54372
+core_total=0
+core_files=0
+while IFS= read -r rel; do
+  case "$rel" in LESSONS-CORE-*.md) ;; *) continue ;; esac
+  [ -f "$PAYLOAD/$rel" ] || continue
+  core_files=$((core_files + 1))
+  core_total=$((core_total + $(wc -c < "$PAYLOAD/$rel" | tr -d ' ')))
+done < <(loaded_files)
+core_ceiling="$(ratchet_ceiling "$CORE_RECORDED")"
+if [ "$core_files" -eq 0 ]; then
+  ok
+  printf '  %-42s %8s (no core list is set, so the whole library loads)\n' "lessons core" "off"
+elif [ "$core_total" -gt "$core_ceiling" ]; then
+  bad "the lessons core loads $core_total bytes across $core_files files against a recorded $CORE_RECORDED, past the $core_ceiling it is ratcheted to. If a re-rank grew it on purpose, raise CORE_RECORDED; if not, the list holds lessons nobody chose."
+else
+  ok
+  printf '  %-42s %8s bytes in %s files (recorded %s, ratchet %s)\n' "lessons core" "$core_total" "$core_files" "$CORE_RECORDED" "$core_ceiling"
+fi
 
 # THE TOTAL, reported and never refused (claude-config#546). Claude Code shows its large-memory-files
 # banner for the SUM of the loaded instruction files as well as for any one of them: the larger of

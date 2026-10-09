@@ -224,12 +224,12 @@ Read one in full with `./claude-sync lesson L174`, or open the entry in `~/.clau
 body is where the failure behind the rule is described, so read it whenever a rule is about to
 decide something.
 
-The index is ONE FILE PER SECTION of `LESSONS.md`, named `LESSONS-INDEX-<section>.md`, and CLAUDE.md
-imports every one of them between two markers it also generates. Both limits on a file loaded into
-every session are per file (the 140,000 byte budget in `hooks/test-rule-file-budget.sh` and the
-platform's own banner at 150,000 characters), and the single file was 100,899 characters on
-2026-09-19 and growing about 1,130 a day. Splitting removes that deadline and loses no rule: every
-file still loads. It saves no tokens, which is the point.
+The index is ONE FILE PER SECTION of `LESSONS.md`, named `LESSONS-INDEX-<section>.md`: the library.
+CLAUDE.md imports it between two markers it also generates, every file of it while no lessons core
+is in use (below). Both limits on a file loaded into every session are per file (the 140,000 byte
+budget in `hooks/test-rule-file-budget.sh` and the platform's own banner at 150,000 characters), and
+the single file was 100,899 characters on 2026-09-19 and growing about 1,130 a day. Splitting removed
+that deadline and lost no rule. It saved no tokens either; the core is what does that.
 
 The files are generated from `LESSONS.md` on every send and every apply, never maintained beside it.
 A hand edit to one is overwritten on the next run, and a file whose section has been renamed or
@@ -237,6 +237,12 @@ removed is deleted, which is the point: a list kept by hand next to the thing it
 the drift is silent.
 
 ### The lessons core (built, not yet switched on)
+
+Every lesson loading into every session was REVERSED by Dan on 2026-09-24 ("Small core,
+checkpoints"; DESIGN.md has the decision and the routes rejected on the way). Sessions are to load a
+core, and the net for the rest is the PR lessons review, which reads every lesson before any merge.
+The list Dan approved on #563 is 355 lessons, about 50,000 index characters against about 105,000 for
+the library: the lessons no PR review can see, plus the 20 most cited ones it can.
 
 A subset of the index can load in place of the whole library (claude-config#564). The list is
 `LESSONS-CORE.txt`, set only with `./claude-sync core-set <file of lesson numbers>`, which checks
@@ -249,8 +255,14 @@ written and still travel, so `claude-sync lesson` and every PR lessons review ke
 With no list nothing changes, which is how it ships. A list that is empty, unreadable, names a
 lesson that does not exist, or holds fewer lessons than it declares (or, undeclared, under half the
 last one applied) loads the whole library instead, records why in `~/.claude/.lessons-core-state`,
-and `lessons-core-notice.sh` says so once in each session. Switching it on is claude-config#566,
-after the measurement in #562.
+and `lessons-core-notice.sh` says so once in each session. Switching it on is claude-config#566;
+the measurement in #562 it waited on was met on both Macs on 2026-10-09.
+
+`hooks/test-rule-file-budget.sh` already carries a recorded size for every core file a section can
+produce, derived from the library files present, because setting a list on a live Mac makes the
+payload import the core with no change to this repository, and an unrecorded import fails every
+push and pull. It also ratchets the core's own total (`CORE_RECORDED`, the approved list's 54,372
+bytes), since a re-rank can grow the core one list change at a time.
 
 ## When a merge cannot be done
 
