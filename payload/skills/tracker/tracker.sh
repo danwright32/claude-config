@@ -121,7 +121,7 @@ TOKEN="${CHECKED#*$'\n'}"
 # matching apps-script.gs reads; the first version of the script read "token", so this caller
 # and that deployment refuse each other ("bad token") rather than half understanding.
 # The body is built by python with the token from its environment, and reaches curl on stdin.
-post(){   # $1 = the request body without its key, as a JSON object; $2 = "update" for an update
+post(){   # $1 = the request body without its key, as a JSON object; $2 = "update" or "preview" for those
   local payload
   payload=$(TRACKER_TOKEN="$TOKEN" python3 -c "import json,os,sys;b=json.loads(sys.argv[1]);b['key']=os.environ['TRACKER_TOKEN'];print(json.dumps(b))" "$1")
   # NOTE: no -X POST. --data makes the first request a POST; Apps Script 302-redirects
@@ -146,12 +146,18 @@ except ValueError:
 if not isinstance(reply, dict) or reply.get("ok") is not True:
     why = reply.get("error") if isinstance(reply, dict) else None
     sys.stderr.write("tracker.sh: the web app refused: %s\n" % (why or body[:200]))
-    if expect == "update" and "nothing to append" in str(why):
+    if expect in ("update", "preview") and "nothing to append" in str(why):
         # The deployed script has no update, and refused the body because it carries no data.
         sys.stderr.write("tracker.sh: the deployed web app predates update, so nothing was changed. Deploy the current apps-script.gs as a new version (SKILL.md, Turning on update).\n")
     sys.exit(1)
-if expect == "update" and reply.get("action") != "update":
+if expect in ("update", "preview") and reply.get("action") != "update":
     sys.stderr.write("tracker.sh: the answer was ok but not an update'"'"'s, so what changed in the sheet is unknown; check the sheet. It began: %r\n" % body[:200])
+    sys.exit(1)
+if expect == "preview" and reply.get("preview") is not True:
+    sys.stderr.write("tracker.sh: asked for a preview but the answer is not a preview, so the sheet may have been written; check row %s. It began: %r\n" % (reply.get("rowNumber"), body[:200]))
+    sys.exit(1)
+if expect == "update" and reply.get("preview") is True:
+    sys.stderr.write("tracker.sh: asked to update but the answer is only a preview, so nothing was written.\n")
     sys.exit(1)
 print(body)
 ' "$answer" "${2:-}"
@@ -171,10 +177,16 @@ case "${1:-}" in
     # confirmed that row's Project Name is <project name>. Every other cell is left as it is.
     # The cells go as "cells", never "data": a deployed script older than update would read a
     # "data" object as a row to append, and refuses a body without one instead.
-    USAGE="usage: tracker.sh update '<link>' '<project name>' '<json object of header:value>'"
-    BODY="$(python3 - "$USAGE" "${2-}" "${3-}" "${4-}" "$#" <<'PY'
+    # --preview finds and checks the row the same way, writes nothing, and prints what each named
+    # cell holds now, so the old and new values can be shown for approval before the real update.
+    USAGE="usage: tracker.sh update [--preview] '<link>' '<project name>' '<json object of header:value>'"
+    shift
+    MODE=update
+    if [ "${1-}" = "--preview" ]; then MODE=preview; shift; fi
+    BODY="$(python3 - "$USAGE" "${1-}" "${2-}" "${3-}" "$(( $# + 1 ))" "$MODE" <<'PY'
 import json, sys
 usage, link, name, cells, argc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+preview = sys.argv[6] == "preview"
 def refuse(why):
     sys.stderr.write("tracker.sh: %s. %s\n" % (why, usage))
     sys.exit(1)
@@ -190,10 +202,13 @@ except ValueError:
     refuse("the cells are not JSON")
 if not isinstance(parsed, dict) or not parsed:
     refuse("the cells must be a JSON object naming at least one column")
-print(json.dumps({"action": "update", "link": link, "projectName": name, "cells": parsed}))
+body = {"action": "update", "link": link, "projectName": name, "cells": parsed}
+if preview:
+    body["preview"] = True
+print(json.dumps(body))
 PY
 )" || exit 1
-    post "$BODY" update
+    post "$BODY" "$MODE"
     ;;
   *)
     echo "usage: tracker.sh {headers | append '<json>' | update '<link>' '<project name>' '<json>' | new-token}" >&2

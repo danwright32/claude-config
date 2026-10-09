@@ -166,6 +166,13 @@ PY
 )"
 check_not "SKILL.md's Turning on update section names the redeploy (Deploy, Manage deployments, New version) and how to check it" "MISSING" "$redeploy"
 check "and that section exists" "New version: yes" "$redeploy"
+# Old values can only be shown for approval if something reads them before the write: SKILL.md's
+# update section must send the reader through --preview first.
+preview_doc="$(python3 -c 'import re,sys
+t=open(sys.argv[1]).read()
+b=next((x for x in re.split(r"(?m)^## ", t)[1:] if x.startswith("Updating a row in place")), "")
+print("yes" if "tracker.sh update --preview" in " ".join(b.split()) else "no")' "$DIR/SKILL.md" 2>&1)"
+check_eq "SKILL.md's update section shows old values through update --preview before writing" "yes" "$preview_doc"
 # Answered yes or no, so a failure prints a word rather than the whole file (L445). Whitespace is
 # collapsed first so a rewrapped line still counts (L278).
 warns="$(python3 -c 'import re,sys; t=" ".join(open(sys.argv[1]).read().split()); print("yes" if ("a second sheet named \"%s\"" % sys.argv[2]) in t else "no")' "$DIR/SKILL.md" "$SHEET_NAME" 2>&1)"
@@ -264,6 +271,20 @@ check "and says the answer was not an update's" "not an update" "$OUT"
 FAKE_ANSWER='{"ok":false,"error":"the row with that Link is Beta, not Alpha"}' run update "https://github.com/example/beta" "Alpha" '{"My Actions":"x"}'
 if [ "$RC" -eq 1 ]; then ok; else bad "a refused update exits 1 (got $RC)"; fi
 check "and names the web app's own error" "is Beta, not Alpha" "$OUT"
+# --preview: the same request marked a preview, and only a preview's answer is accepted.
+FAKE_ANSWER='{"ok":true,"action":"update","preview":true,"rowNumber":2,"before":{"My Actions":"old"}}' run update --preview "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+check_eq "update --preview succeeds" 0 "$RC"
+check "and prints the current values" '"before":{"My Actions":"old"}' "$OUT"
+check "and the body asks for a preview" '"preview": true' "$(grep '^STDIN:' "$CURL_LOG")"
+check "with the same cells" '"cells": {"My Actions": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
+FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update --preview "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "a preview answered as a real update exits 1 (got $RC)"; fi
+check "and says the sheet may have been written" "not a preview" "$OUT"
+FAKE_ANSWER='{"ok":true,"action":"update","preview":true,"rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "an update answered as a preview exits 1 (got $RC)"; fi
+check "and says nothing was written" "only a preview" "$OUT"
+check_not "and a real update never asks for a preview" '"preview"' "$(grep '^STDIN:' "$CURL_LOG")"
+
 refuses_update_call(){ # refuses_update_call <description> <args to update...>
   local what="$1"; shift
   run update "$@"
@@ -434,7 +455,17 @@ const appended = [], writes = [];
 let reads = 0, mutated = false;
 const lock = { taken: 0, released: 0, busy: !!fx.lockBusy };
 const width = () => rows.reduce((m, r) => Math.max(m, r.length), 0);
-const cell = (r, c) => (rows[r - 1] && c - 1 < rows[r - 1].length ? rows[r - 1][c - 1] : '');
+// A fixture cell is plain text or a number, or an object standing for what Sheets holds:
+// { date: ISO, display } is a date cell (getValues gives a Date, the sheet shows `display`),
+// { formula, value, display } a formula cell. A written cell becomes plain text again.
+const raw = (r, c) => (rows[r - 1] && c - 1 < rows[r - 1].length ? rows[r - 1][c - 1] : '');
+const cell = (r, c) => {
+  const v = raw(r, c);
+  if (v && typeof v === 'object') return v.date !== undefined ? new Date(v.date) : v.value;
+  return v;
+};
+const shown = (r, c) => { const v = raw(r, c); return v && typeof v === 'object' ? v.display : String(v); };
+const formulaOf = (r, c) => { const v = raw(r, c); return v && typeof v === 'object' && v.formula ? v.formula : ''; };
 function applyChange(ops) {
   ops.forEach((op) => {
     if (op.set) { const [r, c, v] = op.set; while (rows[r - 1].length < c) rows[r - 1].push(''); rows[r - 1][c - 1] = v; }
@@ -446,14 +477,17 @@ function applyChange(ops) {
 function range(r, c, nr, nc) {
   nr = nr === undefined ? 1 : nr; nc = nc === undefined ? 1 : nc;
   if (!(r >= 1 && c >= 1 && nr >= 1 && nc >= 1)) throw new Error('bad range ' + [r, c, nr, nc]);
+  const grid = (read) => {
+    reads++;
+    const out = [];
+    for (let i = 0; i < nr; i++) { const row = []; for (let j = 0; j < nc; j++) row.push(read(r + i, c + j)); out.push(row); }
+    if (nr > 1 && !mutated && fx.afterBulkRead) { applyChange(fx.afterBulkRead); mutated = true; }
+    return out;
+  };
   return {
-    getValues() {
-      reads++;
-      const out = [];
-      for (let i = 0; i < nr; i++) { const row = []; for (let j = 0; j < nc; j++) row.push(cell(r + i, c + j)); out.push(row); }
-      if (nr > 1 && !mutated && fx.afterBulkRead) { applyChange(fx.afterBulkRead); mutated = true; }
-      return out;
-    },
+    getValues() { return grid(cell); },
+    getDisplayValues() { return grid(shown); },
+    getFormulas() { return grid(formulaOf); },
     setValue(v) {
       if (nr !== 1 || nc !== 1) throw new Error('setValue on a range of more than one cell');
       while (rows.length < r) rows.push([]);
@@ -610,6 +644,13 @@ fixture("sheet-sorted", afterBulkRead=[{"swap": [2, 3]}])
 fixture("sheet-relinked", afterBulkRead=[{"set": [2, 9, "https://github.com/example/other"]}])
 fixture("sheet-column", afterBulkRead=[{"insertColumn": [10, "Inserted"]}])
 fixture("sheet-locked", lockBusy=True)
+# A row whose cells hold what the sheet really holds: a date (getValues gives a Date, which
+# serializes as a timestamp nobody typed) and a formula (getValues gives its result).
+typed = [r[:] for r in rows] + [["Zeta", "2026-06-01", "", "Goal Z", "Did Z", "Out Z",
+  {"date": "2026-11-01T04:00:00.000Z", "display": "2026-11-01"},
+  {"formula": "=CONCAT(\"Type\",\"Script\")", "value": "TypeScript", "display": "TypeScript"},
+  "https://github.com/example/zeta", ""]]
+json.dump({"rows": typed}, open(os.path.join(tmp, "sheet-typed.json"), "w"))
 PY
   SHEET="$TMP/sheet.json"
   ALPHA="https://github.com/example/alpha"
@@ -641,6 +682,34 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
     '{"My Actions":"Did E","Outcome/Results":"Out E"}' "$(jget "$r" 'd["responses"][1]["before"]')"
   # The double was reached (L143): the script read the sheet and took and gave back its lock.
   check_eq "and the update took the script lock once and released it" '{"taken":1,"released":1,"busy":false}' "$(jget "$r" 'd["lock"]')"
+
+  # "before" is what an undo writes back, so it must be what a person would type to restore the
+  # cell: a date as the sheet shows it, never a timestamp, and a formula as its formula, never
+  # its result, which would freeze it.
+  r="$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/zeta" "Zeta" '{"When to Check Results":"2027-01-01","Skills Used":"Go"}')" POST "$TMP/sheet-typed.json")"
+  check_eq "update: a date cell's before is the date as shown, and a formula cell's before is its formula" \
+    '{"When to Check Results":"2026-11-01","Skills Used":"=CONCAT(\"Type\",\"Script\")"}' "$(jget "$r" 'd["responses"][0]["before"]')"
+  check_eq "and the answer's row is the row as the sheet shows it after the write" \
+    '["Zeta","2026-06-01","","Goal Z","Did Z","Out Z","2027-01-01","Go","https://github.com/example/zeta",""]' "$(jget "$r" 'd["responses"][0]["row"]')"
+
+  # preview: the same lookup and checks, the current values of the named cells, and no write,
+  # so the old and new values can be shown for approval before anything changes.
+  prev(){ python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["preview"]=True; print(json.dumps(b))' "$(upd "$@")"; }
+  r="$(gs "$REAL" "$(prev "$REAL" "https://github.com/example/zeta" "Zeta" '{"When to Check Results":"2027-01-01","My Actions":"x"}')" POST "$TMP/sheet-typed.json")"
+  check_eq "update preview: succeeds, marked a preview" '[true,"update",true,6]' \
+    "$(jget "$r" '[d["response"].get("ok"), d["response"].get("action"), d["response"].get("preview"), d["response"].get("rowNumber")]')"
+  check_eq "and gives the named cells' current values" '{"When to Check Results":"2026-11-01","My Actions":"Did Z"}' "$(jget "$r" 'd["response"]["before"]')"
+  check_eq "and writes no cell" '[]' "$(jget "$r" 'd["writes"]')"
+  refuses_update_preview(){ # the preview refuses exactly where the update would
+    check "update preview, $1: refused" '"ok":false' "$(jget "$3" 'd["response"]')"
+    check "update preview, $1: says why" "$2" "$(jget "$3" 'd["response"].get("error")')"
+    check_eq "update preview, $1: writes no cell" '[]' "$(jget "$3" 'd["writes"]')"
+  }
+  refuses_update_preview "Beta's Link sent with Alpha's Project Name" 'has Project Name \"Beta\", not \"Alpha\"' \
+    "$(gs "$REAL" "$(prev "$REAL" "https://github.com/example/beta" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
+  refuses_update_preview "a header the sheet does not have" "Not A Column" \
+    "$(gs "$REAL" "$(prev "$REAL" "$ALPHA" "Alpha" '{"Not A Column":"y"}')" POST "$SHEET")"
+  refuses_update_preview "a wrong key" "bad token" "$(gs "$REAL" "$(prev "nope" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
 
   # An existing row, found among others, carrying a column after Link.
   r="$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/beta" "Beta" '{"Notes":"note b2"}')" POST "$SHEET")"

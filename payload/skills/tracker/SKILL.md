@@ -164,11 +164,21 @@ the sheet shows them; the web app refuses, changing nothing, when:
 - a header in the JSON is not a column of the sheet, or is named twice;
 - another request is writing the sheet at that moment (`busy`): try again.
 
-Always show the user the old and new value of every cell first and get approval, as for an
-append. The answer, `{"ok":true,"action":"update","rowNumber":N,"before":{...},"row":[...]}`,
-carries in `before` what each changed cell held, which is what an undo writes back.
+Always get approval first, as for an append:
+
+1. Run the same command with `--preview` (shown below). It finds and checks the row exactly as
+   the update will, writes nothing, and answers
+   `{"ok":true,"action":"update","preview":true,"rowNumber":N,"before":{...},"row":[...]}`,
+   where `before` holds what each named cell holds now.
+2. Show the user the old value (from `before`) and the new value of every cell, and get
+   approval or edits.
+3. Run it without `--preview`. The answer, `{"ok":true,"action":"update","rowNumber":N,
+   "before":{...},"row":[...]}`, again carries in `before` what each changed cell held just
+   before the write: a formula as its formula and anything else as the sheet showed it, which is
+   exactly what an undo writes back with another update.
 
 ```
+bash tracker.sh update --preview 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
 bash tracker.sh update 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
 ```
 

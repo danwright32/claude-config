@@ -14,6 +14,8 @@
  *        -> changes ONLY the named cells of the one row whose Link is `link`, once that row's
  *           Project Name is confirmed to be `projectName`; every other cell is never written.
  *           Returns { ok, action: "update", rowNumber, before: { Header: old }, row, headers }.
+ *           With preview: true it checks the same way, writes nothing, and answers
+ *           { ok, action: "update", preview: true, rowNumber, before, row, headers }.
  * The body field is "key", not "token": the first version of this script read "token", so a
  * caller written for one version is refused by the other rather than half understood. For the
  * same reason an update carries its cells as "cells", never "data": a script deployed before
@@ -154,6 +156,13 @@ function update_(sheet, body) {
     }
   }
 
+  if (body.preview !== undefined && typeof body.preview !== 'boolean') {
+    return { ok: false, error: 'preview must be true or false' };
+  }
+  // A preview finds and checks the row exactly as the update would, writes nothing, and answers
+  // with the named cells' current values, so they can be shown for approval first.
+  if (body.preview === true) return findAndUpdate_(sheet, link, name, cells, keys, true);
+
   // One update at a time, so two runs cannot interleave their checks and writes. A person
   // editing the sheet takes no lock, which is what the re-check below is for.
   const lock = LockService.getScriptLock();
@@ -161,13 +170,16 @@ function update_(sheet, body) {
     return { ok: false, error: 'busy: another request is writing the sheet; nothing was changed, try again' };
   }
   try {
-    return updateLocked_(sheet, link, name, cells, keys);
+    return findAndUpdate_(sheet, link, name, cells, keys, false);
   } finally {
     lock.releaseLock();
   }
 }
 
-function updateLocked_(sheet, link, name, cells, keys) {
+// Reads cells as the sheet SHOWS them (getDisplayValues), never getValues: a date cell's value
+// is a Date, which reaches the caller as a timestamp nobody typed and would not match the Link
+// or Project Name a person sees.
+function findAndUpdate_(sheet, link, name, cells, keys, preview) {
   const heads = headers_(sheet);
   const col = new Map(); // normalized header -> 1 based column, or 0 when two columns share it
   heads.forEach(function (h, i) {
@@ -194,7 +206,7 @@ function updateLocked_(sheet, link, name, cells, keys) {
   // Find the row: exactly one row may hold this Link. None, or more than one, is a refusal,
   // never a guess at the nearest row.
   const lastRow = sheet.getLastRow();
-  const rows = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, heads.length).getValues() : [];
+  const rows = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, heads.length).getDisplayValues() : [];
   const cellText = function (row, c) { return String(row[c - 1] === undefined || row[c - 1] === null ? '' : row[c - 1]).trim(); };
   const matches = [];
   rows.forEach(function (row, i) { if (cellText(row, linkAt.col) === link) matches.push(i + 2); });
@@ -217,15 +229,22 @@ function updateLocked_(sheet, link, name, cells, keys) {
   if (!sameHeads) {
     return { ok: false, error: 'the sheet changed while updating (its columns moved); nothing was changed. Read it again and retry' };
   }
-  const current = sheet.getRange(rowNumber, 1, 1, heads.length).getValues()[0];
+  const target = sheet.getRange(rowNumber, 1, 1, heads.length);
+  const current = target.getDisplayValues()[0];
   if (cellText(current, linkAt.col) !== link || cellText(current, nameAt.col) !== name) {
     return { ok: false, error: 'the sheet changed while updating (row ' + rowNumber + ' no longer holds Link ' + link + ' and Project Name "' + name + '"); nothing was changed. Read it again and retry' };
   }
 
+  // What each named cell held, in the form that restores it when written back (an undo): a
+  // formula as its formula, never its result, and anything else as the sheet shows it.
+  const formulas = target.getFormulas()[0];
   const before = {};
-  targets.forEach(function (t) { before[t.header] = current[t.col - 1]; });
+  targets.forEach(function (t) { before[t.header] = formulas[t.col - 1] || current[t.col - 1]; });
+  if (preview) {
+    return { ok: true, action: 'update', preview: true, rowNumber: rowNumber, before: before, row: current, headers: heads };
+  }
   targets.forEach(function (t) { sheet.getRange(rowNumber, t.col).setValue(t.value); });
   SpreadsheetApp.flush();
-  const row = sheet.getRange(rowNumber, 1, 1, heads.length).getValues()[0];
+  const row = sheet.getRange(rowNumber, 1, 1, heads.length).getDisplayValues()[0];
   return { ok: true, action: 'update', rowNumber: rowNumber, before: before, row: row, headers: heads };
 }
