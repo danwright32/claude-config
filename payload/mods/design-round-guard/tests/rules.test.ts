@@ -101,6 +101,9 @@ test('the look changing files a command only mentions are found by their names',
   expect(mentionedLookFiles('echo /w/slate/(a)(b)/page.tsx')).toEqual(['/w/slate/(a)(b)/page.tsx'])
   expect(mentionedLookFiles('print(open(app/page.tsx).read())')).toEqual(['app/page.tsx'])
   expect(mentionedLookFiles('fs.writeFileSync(src/site.css)')).toEqual(['src/site.css'])
+  // A name that starts with a route group keeps it.
+  expect(mentionedLookFiles(`open('(shop)/page.tsx','w')`)).toEqual(['(shop)/page.tsx'])
+  expect(mentionedLookFiles(`cd src/app && python3 -c "open('(shop)/[id]/page.tsx','w')"`)).toEqual(['(shop)/[id]/page.tsx'])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

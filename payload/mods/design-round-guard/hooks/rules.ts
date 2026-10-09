@@ -113,7 +113,7 @@ export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(
 export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
   for (const m of text.matchAll(/[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g)) {
-    let word = m[0].replace(/^(?:[\w$.]*\()+/, '').replace(/^[.]+(?=[^./])/, '')
+    let word = m[0].replace(/^(?:[\w$.]+\()+/, '').replace(/^[.]+(?=[^./])/, '')
     // A ) closing nothing in the name closes the call around it (`open(app/page.tsx).read`).
     let depth = 0
     for (let i = 0; i < word.length; i++) {
