@@ -16,8 +16,26 @@ export type DesignRoundPending = {
   files: string[]
   /** What has no settled round and no skip yet; Dan's Skip them answers every one. */
   subjects: DesignRoundSubject[]
+  /** The checkouts its files are in, so Dan's Settled about it is for that project, never the session's folder (#1010). */
+  trees: string[]
+  /** The call itself, as rules.ts callKey knows it, so the same call sent again is recognised after Not a look change. */
+  key: string
   /** Set when a subagent's call was refused: the agent is told to make the change again, not the main loop. */
   agent?: true
+}
+
+/** Dan's Not a look change for one refused call (#1010), kept in the mod's store under `pass:<its key>`. */
+export type DesignRoundPass = {
+  kind: 'not-look'
+  /** When he answered, in milliseconds since the epoch. */
+  at: number
+  /** The tool the call used, and the files it changes, as Dan read them. */
+  tool: string
+  files: string[]
+  /** What it was held for, as the question named them. */
+  subjects: string[]
+  /** Why it went ahead, in words. */
+  why: string
 }
 
 /** Dan's own answer, kept in the mod's store under its subject's key (this Mac, every session). */

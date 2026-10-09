@@ -73,6 +73,25 @@ grep -q '"issue": <the issue number>' "$SKILL" && ok || bad "SKILL.md does not s
 # example is what gets copied (L562): it names the issue by a placeholder, never a number (#987 review).
 grep -q -E '"issue": [0-9]' "$SKILL" && bad "SKILL.md shows a literal issue number in the metadata, which every project would copy" || ok
 
+# #1010: Settled was recorded for the session's folder (Slate) while the refused edit was on another
+# project. The worked call names the refused call, and the skill says how to name a project when no
+# call waits, never leaving it to the session's folder.
+grep -q '"call": "<the id the refusal named>"' <<< "$(block_of "$SKILL")" && ok || bad "SKILL.md's closing call does not name the refused call in its metadata"
+grep -q '"path": "<a folder or file in the project' "$SKILL" && ok || bad "SKILL.md does not show naming the project by a path when no refused call waits"
+
+# #1010: a round with nothing to render (a data only prop change) had no exit but a switcher. The
+# skill gives one, by the guard's own third answer, read from rules.ts (L638).
+not_look="$(constant NOT_LOOK)"
+skip_source="$(constant SKIP_SOURCE)"
+exit_section="$(awk '/^## When there is nothing to render/{s=1;print;next} s&&/^## /{exit} s{print}' "$SKILL")"
+if [[ -z "$not_look" || -z "$skip_source" ]]; then bad "rules.ts declares no NOT_LOOK or SKIP_SOURCE constant"
+elif [[ -z "$exit_section" ]]; then bad "SKILL.md has no section for a round with nothing to render"
+else
+  [[ "$exit_section" == *"$not_look"* ]] && ok || bad "the nothing to render section does not name the guard's answer $not_look"
+  [[ "$exit_section" == *"\"source\": \"$skip_source:"* ]] && ok || bad "the nothing to render section does not show the guard's own question's source"
+  [[ "$exit_section" == *"no switcher"* ]] && ok || bad "the nothing to render section does not say no switcher is built"
+fi
+
 # The check is seen to fail: a skill whose source drifted from the guard's is caught.
 sed "s/\"source\": \"$source_v\"/\"source\": \"design-done\"/" "$SKILL" > "$TMP/drifted.md"
 drift="$(lacks "$TMP/drifted.md")"

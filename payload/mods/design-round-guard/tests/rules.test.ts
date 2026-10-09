@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import {
   HEADER,
+  NOT_LOOK,
   SETTLED_NO,
   SETTLED_QUESTION,
   SETTLED_YES,
@@ -8,6 +9,9 @@ import {
   SKIP_QUESTION,
   SKIP_YES,
   agentRefusal,
+  callKey,
+  dataOnlyChange,
+  editedText,
   isOwnRecord,
   READS_ONLY,
   isSwiftUI,
@@ -88,6 +92,10 @@ test('the look changing files a command only mentions are found by their names',
   expect(mentionedLookFiles(`python3 - <<'EOF'\nopen('app/page.tsx','w').write(x)\nEOF`)).toEqual(['app/page.tsx'])
   expect(mentionedLookFiles('git apply fix.patch')).toEqual([])
   expect(mentionedLookFiles('node -e "fs.writeFileSync(`src/styles/site.css`, s)"')).toEqual(['src/styles/site.css'])
+  // #1010: a Next.js dynamic segment or route group is part of the name, never where it starts, so
+  // the file is not read as one at the top of the disk.
+  expect(mentionedLookFiles(`python3 -c "open('src/app/booking/[SO_ID]/page.tsx','w')"`)).toEqual(['src/app/booking/[SO_ID]/page.tsx'])
+  expect(mentionedLookFiles(`open('src/app/(marketing)/[...slug]/page.tsx','w')`)).toEqual(['src/app/(marketing)/[...slug]/page.tsx'])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
@@ -132,10 +140,99 @@ test("Dan's two questions are the plan's words, with answers the guard sets itse
   const subjects = [{ key: 'k', label: 'issue #978 in slate' }]
   expect(skipQuestion(['app/page.tsx'], subjects).startsWith(SKIP_QUESTION)).toBe(true)
   expect(skipQuestion(['app/page.tsx'], subjects)).toContain('app/page.tsx')
-  expect(skipOptions(subjects).map(o => o.label)).toEqual([SKIP_YES, SKIP_NO])
+  expect(skipOptions(subjects).map(o => o.label)).toEqual([SKIP_YES, SKIP_NO, NOT_LOOK])
   expect(settledQuestion(subjects).startsWith(SETTLED_QUESTION)).toBe(true)
   expect(settledQuestion(subjects)).toContain('issue #978 in slate')
   expect(settledOptions(subjects).map(o => o.label)).toEqual([SETTLED_YES, SETTLED_NO])
   // Claude Code's dialog takes a header of at most 12 characters.
   expect(HEADER.length).toBeLessThanOrEqual(12)
+})
+
+// #1010: a data only prop change on a page (`xbc={xbc}` to `xbc={leadXbc ?? ''}`, which booking code
+// the page hands its calendar) was held for a design round, though nothing on screen changes. The
+// guard judges the edit itself where that is reliable, and every other shape stays on the picker.
+const PAGE = [
+  "import { BookingCalendar } from '@/components/BookingCalendar'",
+  '',
+  'export default function Result({ xbc, leadXbc, slots }: Props) {',
+  '  return (',
+  '    <main className="p-4">',
+  '      <h1 className="text-xl">Pick a time</h1>',
+  '      <BookingCalendar slots={slots} xbc={xbc} variant={plain} onPick={() => go(xbc)} />',
+  '    </main>',
+  '  )',
+  '}',
+  '',
+].join('\n')
+const swap = (from: string, to: string) => {
+  if (!PAGE.includes(from)) throw new Error(`the fixture holds no ${from}`)
+  return PAGE.replace(from, to)
+}
+
+test("a change confined to a component's data prop is no look change: Dan's xbc edit, and others like it", () => {
+  expect(dataOnlyChange(PAGE, swap('xbc={xbc}', "xbc={leadXbc ?? ''}"))).toBe(true)
+  expect(dataOnlyChange(PAGE, swap('xbc={xbc}', 'xbc={lead?.xbc || xbc}'))).toBe(true)
+  expect(dataOnlyChange(PAGE, swap('slots={slots}', 'slots={pick(slots, lead)}'))).toBe(true)
+  // And back again, so neither direction is judged differently.
+  expect(dataOnlyChange(swap('xbc={xbc}', "xbc={leadXbc ?? ''}"), PAGE)).toBe(true)
+})
+
+test('a changed className, style, look naming prop, literal, JSX structure or visible copy is a look change, judged from the same page', () => {
+  for (const [from, to] of [
+    ['className="p-4"', 'className="p-6"'],
+    ['<main className="p-4">', '<main className="p-4" style={{ gap: 4 }}>'],
+    ['variant={plain}', 'variant={bold}'],
+    ['Pick a time', 'Choose a time'],
+    ['<h1 className="text-xl">Pick a time</h1>', '<h1 className="text-xl">Pick a time</h1>\n      <p>Times are local</p>'],
+    // A literal in a data prop may be shown, so it is not judged here.
+    ['xbc={xbc}', "xbc={'ABC'}"],
+    ['xbc={xbc}', 'xbc={2}'],
+    ['xbc={xbc}', 'xbc={`${xbc}-x`}'],
+    ['xbc={xbc}', 'xbc={xbc === lead}'],
+    ['xbc={xbc}', 'xbc={<Badge />}'],
+    // A new prop, or one taken away, changes the element.
+    ['xbc={xbc}', 'xbc={xbc} compact'],
+    ['xbc={xbc} ', ''],
+    // An event handler holding an arrow is not a plain expression.
+    ['onPick={() => go(xbc)}', 'onPick={() => go(leadXbc)}'],
+    // Two changes in one edit, one of them a look change.
+    ['slots={slots} xbc={xbc} variant={plain}', 'slots={lead} xbc={xbc} variant={bold}'],
+    // A change outside any prop: an import can swap the component itself.
+    ["from '@/components/BookingCalendar'", "from '@/components/BookingCalendarV2'"],
+  ] as const)
+    expect([from, to, dataOnlyChange(PAGE, swap(from, to))]).toEqual([from, to, false])
+  // A prop on a plain HTML element can be read by CSS, so only a component's props are judged.
+  const html = '<a className="link" href={url}>Go</a>\n'
+  expect(dataOnlyChange(html, html.replace('href={url}', 'href={next}'))).toBe(false)
+  // No change at all changes nothing, and is no evidence either way: the guard asks.
+  expect(dataOnlyChange(PAGE, PAGE)).toBe(false)
+})
+
+test('the text a call leaves in a file: an Edit, a MultiEdit, a Write, and nothing for an edit that would not apply', () => {
+  const before = 'a={x} b={y} a={x}'
+  expect(editedText(before, 'Write', { content: 'new' })).toBe('new')
+  expect(editedText(before, 'Edit', { old_string: 'b={y}', new_string: 'b={z}' })).toBe('a={x} b={z} a={x}')
+  // Edit needs one match unless it replaces every one.
+  expect(editedText(before, 'Edit', { old_string: 'a={x}', new_string: 'a={w}' })).toBe(undefined)
+  expect(editedText(before, 'Edit', { old_string: 'a={x}', new_string: 'a={w}', replace_all: true })).toBe('a={w} b={y} a={w}')
+  expect(editedText(before, 'Edit', { old_string: 'nowhere', new_string: 'x' })).toBe(undefined)
+  expect(editedText(before, 'MultiEdit', { edits: [{ old_string: 'b={y}', new_string: 'b={z}' }, { old_string: 'b={z}', new_string: 'b={q}' }] })).toBe('a={x} b={q} a={x}')
+  // A tool whose writes are not one file's text is never judged by it.
+  expect(editedText(before, 'NotebookEdit', { new_source: 'x' })).toBe(undefined)
+  expect(editedText(before, 'FutureWrite', { text: 'x' })).toBe(undefined)
+})
+
+test("a refused call's key is the same for the same call however its keys are ordered, and differs for any other", () => {
+  const a = callKey('Edit', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'b' })
+  expect(callKey('Edit', { new_string: 'b', old_string: 'a', file_path: '/r/page.tsx' })).toBe(a)
+  expect(callKey('Edit', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'c' })).not.toBe(a)
+  expect(callKey('Write', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'b' })).not.toBe(a)
+  expect(callKey('Bash', { command: 'echo x > a.css' })).not.toBe(callKey('Bash', { command: 'echo y > a.css' }))
+})
+
+test("the third answer to the skip question says it covers this one edit, in plain words", () => {
+  const subjects = [{ key: 'k', label: 'issue #978 in slate' }]
+  const third = skipOptions(subjects).find(o => o.label === NOT_LOOK)
+  expect(third?.description).toContain('this edit')
+  expect(DASHES.test(JSON.stringify(skipOptions(subjects)))).toBe(false)
 })

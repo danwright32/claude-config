@@ -168,6 +168,23 @@ overrides a `term-` rule in its own stylesheet, which comes after. The tool refu
 screen it does not ship, a builder declaring `Terminal` itself, and a builder using
 `Terminal` from a spec that did not ask for it. `example-terminal/` is a working round.
 
+## When there is nothing to render
+
+Before round one, name the round's one variable. If there is none, because the change
+alters nothing on screen (a prop's value, which data a page hands a component, logic in a
+screen file), there is nothing to draw and no round to run. On 2026-10-09 the only route
+here was a switcher, so a one prop data change on a page ended in "Is this design
+settled?" with nothing in front of Dan (claude-config#1010). So: say in one sentence that
+nothing on screen changes, build no switcher, and close one of two ways.
+
+- **A refused edit is waiting** (the design round guard named its id): ask the guard's own
+  question about it, one AskUserQuestion with
+  `"metadata": { "source": "design-round-guard:<the id the refusal named>" }` and the
+  question "Skip design rounds for this issue?". The guard words it, and its answer
+  **Not a look change** lets that one edit through, recorded as his word, while every
+  other look changing edit stays held. Then send the refused call again, unchanged.
+- **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
+
 ## The last step: is this design settled?
 
 Every run of this skill ends with one more picker, after the last round and before the
@@ -182,15 +199,21 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 ```json
 {
   "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
-  "metadata": { "source": "design-settled" }
+  "metadata": { "source": "design-settled", "call": "<the id the refusal named>" }
 }
 ```
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
-- It records the settlement for the issue this session's branch names (or the branch, when it
-  names none). When the branch names no issue, say on the default branch, add the number of
-  the issue this design is for, in this project, to the metadata as a number,
+- It records the settlement for the project and branch of the refused edit `"call"` names:
+  the issue that edit's branch names, or the branch when it names none. Never the folder
+  this session runs in, which can be another project altogether (claude-config#1010: a
+  Settled for a trypennie edit landed on a Slate issue). Left out, it is the refused edits
+  waiting in this session, when they all wait on the same answer. When no refused edit is
+  waiting, name the project instead, with
+  `"path": "<a folder or file in the project's checkout>"`, an absolute path.
+- When the branch names no issue, say on the default branch, add the number of the issue
+  this design is for, in that project, to the metadata as a number,
   `"issue": <the issue number>`, and Dan reads that issue in the question.
 - Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
   subagent, and never write anything else to record it: the guard refuses all three, and a
