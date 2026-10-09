@@ -1,7 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { HEADER, NOT_LOOK, callKey, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
+import { HEADER, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
@@ -71,6 +71,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 const withKit = { plugins: [secDefault, modKit] }
 
 const HOME = '/Users/dan'
+// The moment every test's clock starts at.
+const T0 = Date.UTC(2026, 9, 9, 15, 0, 0)
 const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34ef56.json`
 
 type Dialog = { answer?: string; afk?: boolean }
@@ -93,7 +95,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const gitRuns: string[] = []
   const reads: string[] = []
   const at = { cwd: init.cwd ?? '/w/slate', session: 's1' }
-  mock.clock(on)
+  const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: at.cwd }) as never)
   on('session.id', () => ({ value: at.session }) as never)
@@ -181,7 +183,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock }
 }
 type W = ReturnType<typeof world>
 
@@ -707,16 +709,35 @@ test("#1010: Dan's Not a look change holds only in the session and the folder th
   expect(w.ran.length).toBe(1)
 })
 
+// Lessons review of #1010 (L567): his word authorises a call, so it is refused on its age when used,
+// not trusted for as long as a session lasts. The call is resent within moments of his answer.
+test("#1010: Dan's Not a look change lapses an hour after he gave it", withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  const edit = { tool: 'Edit', file_path: RESULT, old_string: 'variant={plain}', new_string: 'variant={lead.variant}' }
+  await askSkip($, w, refusalOf(await call($, edit)), NOT_LOOK)
+  await w.clock.advance(60 * 60 * 1000 - 1)
+  expect(refusalOf(await call($, edit))).toBe('')
+  await w.clock.advance(1)
+  expect(refusalOf(await call($, edit))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 // Lessons review of #1010: the key is a hash, and the call's text is Claude's to write, so a record
 // found under a call's key lets it through only when it holds that very call.
 test("#1010: a Not a look change record found under a call's key lets it through only when it holds that very call", withKit, async ($, on) => {
   const w = world($, on)
   const edit = { tool: 'Edit', file_path: '/w/slate/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
   const { tool, ...input } = edit
-  // A record under this call's key, as a colliding call would have left it, holding another call.
-  w.store[`pass:${callKey(tool, input, { cwd: '/w/slate', session: 's1' })}`] = { kind: 'not-look', at: 0, tool, files: ['app/page.tsx'], subjects: [], why: 'x', call: 'another call' }
+  // A record under this call's key, as a colliding call would have left it, holding another call,
+  // given just now so its age is not what refuses it.
+  const at = { cwd: '/w/slate', session: 's1' }
+  const record = { kind: 'not-look', at: T0, tool, files: ['app/page.tsx'], subjects: [], why: 'x' }
+  w.store[`pass:${callKey(tool, input, at)}`] = { ...record, call: 'another call' }
   expect(refusalOf(await call($, edit))).toContain(SKIP_QUESTION)
   expect(w.ran).toEqual([])
+  // The same record holding this very call lets it through, so the refusal above is the mismatch.
+  w.store[`pass:${callKey(tool, input, at)}`] = { ...record, call: callText(tool, input, at) }
+  expect(refusalOf(await call($, edit))).toBe('')
 })
 
 // claude-config#1010: Dan's Settled was recorded for Slate issue #2210, the session's folder, while

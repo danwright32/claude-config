@@ -1956,8 +1956,9 @@ direction is what follows.
 - **A third answer.** The skip question offers Not a look change beside Skip them and Run
   /design-rounds. It lets that one refused call through, recognised when it is sent again unchanged
   by a hash of its tool, its input, the folder it runs in and the session (so a shell command's
-  relative path elsewhere, or the same edit in a later session, is asked about again), and keeps
-  his word with why under `pass:<that key>` in the store;
+  relative path elsewhere, or the same edit in a later session, is asked about again), within an
+  hour of his answer (it authorises a call, so it is judged on its age at use, L567), and keeps his
+  word with why, and the call written out whole, which must match exactly, under `pass:<that key>`;
   nothing is recorded for the issue, so the next look changing edit is asked about again.
 - **Settled is for the refused call's project.** It read the session's folder, so Dan's Settled for
   a trypennie edit was recorded for Slate issue #2210 and the edit stayed held. Now the settled

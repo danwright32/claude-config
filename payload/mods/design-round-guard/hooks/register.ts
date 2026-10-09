@@ -190,11 +190,15 @@ const keyOf = async ($: EngineInterface, tool: string, input: Record<string, unk
   const at = { cwd: await $.session.cwd(), session: await $.session.id() }
   return { key: callKey(tool, input, at), call: callText(tool, input, at) }
 }
+// His word authorises a call, so it is judged on its age when used (L567): the call is resent within
+// moments of his answer, and an hour on, the same call is asked about again.
+const PASS_LASTS_MS = 60 * 60 * 1000
 const passed = async ($: EngineInterface, c: Called): Promise<boolean> => {
   try {
     const p = (await $.store.get(passKey(c.key))) as Partial<DesignRoundPass> | undefined
     // The key is a hash, so the record holds the call itself, which must be this one exactly.
-    return p?.kind === 'not-look' && p.call === c.call
+    if (p?.kind !== 'not-look' || p.call !== c.call || typeof p.at !== 'number') return false
+    return (await $.clock.now()) - p.at < PASS_LASTS_MS
   } catch {
     return false
   }
