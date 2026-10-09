@@ -443,6 +443,8 @@ printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstarted=%s\ndeadline=30\nkind=pr\n'
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "an abandoned review refuses" "1" "$rc"
 check "saying the runner died" "never finished" "$out"
+# One review, one runner: the refusal says so once, without repeating its own record (review of #601).
+check_not "and does not repeat the recorded sentence beneath it" "passed with no answer written" "$out"
 [ -e "$(final_of "$HEAD_SHA").pending" ] && bad "the abandoned marker is cleared" || ok
 check "an abandoned review is in the outcome ledger" $'\tabandoned\t' "$(cat "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 
@@ -1068,6 +1070,7 @@ out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base
 check_eq "#601 a group that never finished leaves the branch unreviewed" "1" "$rc"
 check "#601 as abandoned" "never finished" "$out"
 check "#601 naming the group" "group 2" "$(cat "$(final_of "$GRP_SHA")")"
+check "#601 and the refusal itself names it" "no answer from group 2" "$out"
 [ ! -e "$GP" ] && ok || bad "#601 an abandoned grouped review's files are removed"
 # Groups nothing ever wrote up (the waiting process died, no check came) are swept after 14 days.
 reset_state

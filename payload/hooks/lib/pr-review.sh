@@ -175,11 +175,13 @@ meta_of() {   # $1 = file, $2 = field
 }
 
 # A review that could not begin still becomes a finished file, in its own words.
-record() {   # $1 = status, $2 = body, $3 = base or empty
+record() {   # $1 = status, $2 = body, $3 = base or empty, $4 = how many groups, for a review in groups
   local now; now="$(date +%s)"
   {
-    printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nkind=pr\nbase=%s\nfindings=\n\n' \
+    printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nkind=pr\nbase=%s\n' \
       "$repo_label" "$branch" "${full_sha:-$sha}" "$now" "$now" "$1" "${3:-}"
+    [ -n "${4:-}" ] && printf 'groups=%s\n' "$4"
+    printf 'findings=\n\n'
     printf '%s\n' "$2"
   } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" && ar_pr_ledger "$final" "$top"
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
@@ -619,7 +621,7 @@ do_check() {
     fi
     if [ $((now - st)) -gt $((dl + 60)) ]; then
       if [ -n "$gn" ]; then
-        record abandoned "The review was started in $gn groups of files and never finished: $(elapsed_text $((now - st))) passed with no answer from ${gmissing:-every group}, which means a background runner died. The branch was not read." "$(meta_of "$pending" base)"
+        record abandoned "The review was started in $gn groups of files and never finished: $(elapsed_text $((now - st))) passed with no answer from ${gmissing:-every group}, which means a background runner died. The branch was not read." "$(meta_of "$pending" base)" "$gn"
         rm -rf "$parts"
       else
         record abandoned "The review was started and never finished: $(elapsed_text $((now - st))) passed with no answer written, which means the background runner died. Nothing was read back." "$(meta_of "$pending" base)"
@@ -738,8 +740,7 @@ do_check() {
   # A review in groups says on its first line which group did not return (#601), and an abandoned
   # one which groups never answered.
   case "$status" in
-    timeout|empty) [ -n "$(meta_of "$final" groups)" ] && ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
-    abandoned) ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
+    timeout|empty|abandoned) [ -n "$(meta_of "$final" groups)" ] && ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
   esac
   remedy
   return 1
