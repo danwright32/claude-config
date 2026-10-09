@@ -1376,10 +1376,11 @@ re-run, exactly as `tools/tag-lessons.py` printed them.
 
 The re-run does not reproduce the old split. On 2026-09-24 the passes put 201 lessons as agreed
 unreviewable, 134 disputed and 400 agreed diff; on 2026-10-09, over 776 lessons, 223, 131 and 422.
-The seats are read from the list as it stands, as the lessons in the core both passes call diff, so
-the core Dan approved now holds 72 seats rather than 20: at least 52 lessons that were unreviewable
-or disputed in September are agreed diff now, and the re-rank treats them as seat holders that can be
-proposed out.
+Under the first build, which read the seats as the core lessons both passes call diff, the core Dan
+approved would have held 72 seats rather than 20: at least 52 lessons that were unreviewable or
+disputed in September are agreed diff now. That is why the seats became a tracked file (the seats
+paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
+protected.
 
 ## Things known to be wrong and left that way
 
