@@ -19,6 +19,14 @@ const HOUR = 60 * MIN
 const CACHE_MS = HOUR
 // How often git, the PR and the jobs are read again, and the cache warning is checked.
 const TICK_MS = MIN
+// How often GitHub is asked about the branch's PR when nothing on it is moving: no PR, or one whose
+// checks have finished (#1014). Each ask spends a point of the GraphQL allowance every session on
+// the Mac shares, 5,000 an hour, and asking every tick cost each open session 60 points an hour
+// whether or not anything could change; on 2026-10-09 the open sessions' status bars were about a fifth of
+// this Mac's measured spend. Running checks are still read every tick, and a turn's end always asks
+// (it may have pushed or opened a PR), so what waits up to this long is only a change made from
+// outside the session: a PR opened, merged or re-run elsewhere.
+const PR_IDLE_MS = 10 * MIN
 const MODES: readonly StatusBarMode[] = ['ASLEEP', 'NO BUILD', 'WINDING DOWN', 'AWAY']
 const SESSION_ID = /^[A-Za-z0-9-]+$/
 const MOD = 'status-bar'
@@ -37,6 +45,8 @@ let interactive = false
 // One reading at a time: a slow gh must not let the next tick start a second one beside it.
 let reading = false
 let pr: PrReading | null = null
+// When GitHub was last asked about the PR, answered or not (#1014).
+let prAskedAt: number | undefined
 let unpushed: UnpushedReading | null = null
 let unpushedNoted = false
 let jobs: Job[] = []
@@ -172,6 +182,7 @@ const readUnpushed = async ($: EngineInterface, root: string) => {
 // blank (L682); only gh saying there is no PR clears it.
 const readPr = async ($: EngineInterface, root: string) => {
   const now = await $.clock.now()
+  prAskedAt = now
   try {
     const r = await $.process.run(['gh', 'pr', 'view', '--json', 'number,state,statusCheckRollup'], { cwd: root, timeoutMs: 20_000 })
     if (r.exitCode === 0) {
@@ -281,7 +292,17 @@ const warnCache = async ($: EngineInterface) => {
   $.ui.toast(`The prompt cache goes cold in ${m} ${m === 1 ? 'minute' : 'minutes'}.`)
 }
 
-const tick = async ($: EngineInterface) => {
+// Whether this reading asks GitHub about the PR (#1014): always when told to (a turn just ended),
+// on the first reading, and while the last answer had checks running; otherwise once PR_IDLE_MS has
+// passed since the last ask.
+const prDue = (now: number, force: boolean): boolean =>
+  force || prAskedAt === undefined || pr?.checks === 'running' || now - prAskedAt >= PR_IDLE_MS
+// A turn's end that asked while a reading was already running: kept for the next reading rather
+// than dropped with the tick, so that ask still happens.
+let prForced = false
+
+const tick = async ($: EngineInterface, force = false) => {
+  if (force) prForced = true
   if (reading) return
   reading = true
   try {
@@ -294,7 +315,10 @@ const tick = async ($: EngineInterface) => {
 const read = async ($: EngineInterface) => {
   const root = await $.session.root().catch(() => startCwd)
   await readUnpushed($, root)
-  await readPr($, root)
+  if (prDue(await $.clock.now(), prForced)) {
+    prForced = false
+    await readPr($, root)
+  }
   await readJobs($)
   try {
     const p = (await $.session.usage()).context.percent
@@ -397,8 +421,9 @@ export const register: Register = on => {
       // The turn's end makes no request, so the cache clock stays where its last request put it;
       // only the band changes, since a cache warning waits for the turn to end.
       await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
-      // A turn may have committed or pushed: read git again now rather than at the next tick.
-      $.clock.after(0, () => void tick($))
+      // A turn may have committed, pushed or opened a PR: read git and ask about the PR now rather
+      // than at the next tick, however recently it was last asked (#1014).
+      $.clock.after(0, () => void tick($, true))
     }
     return next(e)
   })
