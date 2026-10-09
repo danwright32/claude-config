@@ -76,6 +76,25 @@ check_rc "a reader past its deadline is a refusal" 1 "$rc"
 check "naming the lessons it never tagged" "UNTAGGED L1" "$out"
 check "and saying the reader timed out" "timed out" "$out"
 
+# --skip-tagged FILE asks only about the lessons FILE does not tag (claude-config#566): the remedy the
+# monthly re-rank names when new lessons arrive untagged, so it must run and must produce only them
+# (L406). L1 and L2 are already tagged; only L3 may reach the reader.
+printf 'L1\tdiff\nL2\tdesign\nEND 2 lessons tagged\n' > "$WORK/have.tsv"
+out="$(FAKE_MODE=good run --skip-tagged "$WORK/have.tsv")"; rc=$?
+check_rc "tagging only the untagged succeeds" 0 "$rc"
+check "the untagged lesson is tagged" $'L3\toperate' "$out"
+args="$(tr '\036' '\n' < "$FAKE_LOG/args")"
+check "it is the only lesson the reader is asked about" "Judge a command by its exit code" "$args"
+case "$args" in *"A test is only real"*|*"State the data volume"*) fail=$((fail + 1)); echo "FAIL: an already tagged lesson was sent to the reader" ;; *) pass=$((pass + 1)) ;; esac
+case "$out" in *$'L1\t'*) fail=$((fail + 1)); echo "FAIL: an already tagged lesson is printed again" ;; *) pass=$((pass + 1)) ;; esac
+printf 'L1\tdiff\nL2\tdesign\nL3\toperate\n' > "$WORK/all.tsv"
+out="$(FAKE_MODE=good run --skip-tagged "$WORK/all.tsv")"; rc=$?
+check_rc "nothing left to tag is a success" 0 "$rc"
+check "and says so" "NOTHING TO TAG" "$out"
+[ ! -f "$FAKE_LOG/args" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: nothing left to tag asks the reader nothing"; }
+out="$(FAKE_MODE=good run --skip-tagged "$WORK/no-such.tsv")"; rc=$?
+check_rc "a skip file that is not there is refused, never read as tagging nothing" 1 "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

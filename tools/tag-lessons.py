@@ -3,6 +3,7 @@
 (claude-config#563).
 
     python3 tools/tag-lessons.py [--index-dir payload] [--batch 120] [--model sonnet]
+                                 [--skip-tagged lesson-tags.tsv]
 
 Reads every `- Lnnn. ...` line of the LESSONS-INDEX files and asks a reader to tag each one:
   diff     the mistake shows in a branch's diff, so the PR lessons review can catch it;
@@ -83,12 +84,27 @@ def main(argv):
     ap.add_argument("--batch", type=int, default=120)
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--timeout", type=int, default=600)
+    # Ask only about the lessons this tags file does not already tag (claude-config#566): what the
+    # monthly re-rank names as the remedy when new lessons arrive untagged. A file that is not there is
+    # refused, never read as tagging nothing, which would re-ask about every lesson (L320).
+    ap.add_argument("--skip-tagged", default="")
     a = ap.parse_args(argv)
 
     lessons = lesson_lines(a.index_dir)
     if not lessons:
         print(f"NO LESSONS: no `- Lnnn.` line in {a.index_dir}/LESSONS-INDEX-*.md")
         return 1
+    if a.skip_tagged:
+        try:
+            with open(a.skip_tagged, encoding="utf-8") as f:
+                have = {int(m.group(1)) for m in (ANSWER.match(line.strip("\r\n")) for line in f) if m}
+        except OSError as e:
+            print(f"--skip-tagged {a.skip_tagged} cannot be read ({e}), so nothing was tagged")
+            return 1
+        lessons = {n: t for n, t in lessons.items() if n not in have}
+        if not lessons:
+            print(f"NOTHING TO TAG: every lesson is already tagged in {a.skip_tagged}")
+            return 0
     tags, problems = {}, []
     items = sorted(lessons.items())
 

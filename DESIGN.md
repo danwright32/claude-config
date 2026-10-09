@@ -1302,6 +1302,55 @@ time:
   165 lessons state they are distinct from a named neighbour, #390 found one genuinely duplicate
   pair, and a member reduced to a number in its class loses the trigger that made it fire.
 
+## The monthly re-rank of the lessons core (#566)
+
+Decided while building it, 2026-10-09, inside Dan's rules of 2026-09-24 (#563). README "The monthly
+re-rank" says what it does; this is why it is shaped that way.
+
+**Seats, not the cap, bound what ranks.** The approved core is 355 lessons and about 50k characters,
+2.5 times the 20,000 cap, because the lessons no review can see are 335 of them and stay whatever
+their rank. Ranking "under the cap" would therefore admit nothing ever. The approved list kept 20
+reviewable lessons by rank, so the re-rank reads that number from the list as it stands (the core's
+seats) and swaps through it. The size is still reported against the cap with the over cap switch in
+the apply command, so the cap stays where Dan put it, in `core-set`, and the decision stays his.
+
+**A new lesson no review can see is an addition, not a seat holder.** Dan's rule says the rest of the
+core is the most cited REVIEWABLE lessons. Letting an unreviewable entrant take a seat would turn
+that seat permanent (it can never leave by rank), draining the seats month by month. So such a
+lesson enters as an addition, and only when cited at least as often as the last seat and at all
+("earn their way in by citations"). The core can grow this way, by at most the move cap a month,
+and the page says how much.
+
+**Ten moves a month, five places of hysteresis.** With 20 seats, 10 moves is at most 5 swaps, a
+quarter of the seats, so the reviewable part cannot turn over in under four months and the page
+stays short enough to judge in one sitting. A seat holder leaves only when it ranks more than 5
+places below the seats: the 2026-09-24 ranking showed counts that close are noise. Both are flags
+with these defaults; neither was measured against a real month, which the first real page will be.
+
+**Counts travel as a committed file per Mac, outside the payload.** Considered: syncing
+`~/.claude/state` (rejected: it holds per Mac state the README table says must never travel);
+putting the counts inside `payload/` (rejected: a mirrored tree has one authoritative side and
+deletes what the other lacks, L381, and they are evidence about the config, not config); having the
+job commit by itself (rejected: it would race the watcher's own commit and rebase). So
+`claude-sync record-lesson-counts` writes `lesson-counts/<host>.tsv` and commits it under the sync
+lock, exactly as `lesson-bands/` does, and the next sync pushes it.
+
+**Freshness is 14 days, derived rather than felt (L614).** The producer is each Mac's recount, due
+when its own counts are 7 days old; the consumer is the daily job. At the consumer's instant the
+other Mac's counts are at worst 8 days old while it is in use, so 14 refuses only a Mac that has been
+asleep or off for about six days more. The test evaluates the window at exactly that worst case gap.
+The job is daily and the delivery monthly, rather than one monthly launchd job, because two jobs
+ordered by their declared times are not ordered at all (L386) and a monthly job that fails costs the
+month (L533).
+
+**What it does not do yet.** The tags behind the 2026-09-24 approval were never committed. The two
+passes were written to `tags-pass1-sonnet.txt` and `tags-pass2-opus.txt` in that session's
+scratchpad, which no longer exists, and the session's transcript never printed them whole; a search
+on 2026-10-09 (the temp folders, Spotlight, the #563 and #575 threads) found no copy. So
+`lesson-tags.tsv` has to be seeded before the first re-rank, and until then it refuses with NO TAGS,
+which is the honest answer, rather than guessing which of the 355 were the 20 ranked ones or
+re-tagging without Dan.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons

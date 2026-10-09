@@ -264,6 +264,64 @@ payload import the core with no change to this repository, and an unrecorded imp
 push and pull. It also ratchets the core's own total (`CORE_RECORDED`, the approved list's 54,372
 bytes), since a re-rank can grow the core one list change at a time.
 
+#### The monthly re-rank
+
+Once the core is in use, a job on each Mac proposes moves in and out of it once a month, on a page
+for Dan (claude-config#566). It only proposes: nothing runs `core-set` until Dan approves. The rules
+are his decisions of 2026-09-24 (#563):
+
+- a lesson no PR review can see (tagged design or operate, or one the two tagging passes disputed)
+  stays in the core whatever its rank, and is never proposed out;
+- the rest of the core is the most cited reviewable lessons. Their number is the core's seats, read
+  from the list as it stands (20 in the approved list), so a re-rank swaps lessons through the seats
+  and does not add seats;
+- new lessons start in the library and earn their way in: a reviewable one by ranking inside the
+  seats, one no review can see by being cited at least as often as the last seat, after which it
+  stays like the rest of its kind.
+
+The rank is the one `tools/lessons-core-proposal.py` used, shared through
+`tools/lib/lessons_core.py`: prose and review citations from both Macs, per 30 days of exposure.
+At most 10 moves a month (`--max-moves`; a swap is two), so at most a quarter of the 20 seats turn
+over in a month; anything the cap holds back is listed as held, never dropped. A seat holder leaves
+only when it ranks more than 5 places below the seats (`--band`), so two lessons with nearly the
+same counts do not trade places every month. The page gives the core's size after the moves against
+the cap `core-set` enforces (`SYNC_CORE_CAP`, 20,000), and the exact command to apply it, with
+`SYNC_CORE_OVER_CAP=1` in it when the result is over, which is Dan's call as before.
+
+**How the counts travel.** Each Mac counts its own transcripts (`tools/lesson-citations.py`, whose
+header now carries `AT`, the UTC instant counted) and records them with
+`claude-sync record-lesson-counts <file>`, which writes `lesson-counts/<host>.tsv` in the repo and
+commits it under the sync lock; the next sync carries it, the same way `lesson-bands/` travels. One
+file per Mac, so two Macs never conflict. It refuses counts naming another Mac, counts with no time
+stamp, a file cut short, and any `SAMPLE` line (conversation text, and the repository is public).
+
+**Stale or missing counts refuse.** The Macs expected are the ones holding a lesson band. A Mac whose
+counts are missing, unstamped, dated in the future or older than 14 days is named as UNMEASURED with
+the age, and nothing is proposed: its counts are never read as zero. The 14 days come from the
+schedules: each Mac recounts once its counts are 7 days old and the job runs daily, so while both
+Macs are in use the other Mac's counts are at worst 8 days old, and 14 leaves about six days for a
+Mac that is asleep or off. A lesson with no tag refuses the whole re-rank by name, with the command
+that tags only the new ones: `python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv`. The
+settled tags live in `lesson-tags.tsv` at the repo root (and `lesson-tags-second.tsv`, the second
+pass, where disputes are kept), committed by hand after review, since a tag decides whether a
+lesson can ever leave the core.
+
+**The job.** `tools/run-lessons-core-rerank.sh` runs daily and delivers monthly: it recounts when due,
+then, unless this month's proposal is already out, re-ranks and writes
+`~/.claude/state/lessons-core-rerank/rerank-<YYYY-MM>.html`, with the moves and the list to apply
+(`core-<YYYY-MM>.txt`) beside it. It posts one notification per month per outcome (a proposal,
+refused, not measured), which opens the page in Chrome when clicked, and records it as given only
+once it was really posted, so asleep (sleep mode) or a missing notifier means the next day tries
+again. A core not in use is logged and never notified. Install it on each Mac, from the clone the
+sync runs from:
+
+```bash
+bash ~/claude-config-sync/tools/install-lessons-core-rerank-schedule.sh
+```
+
+It runs at 11:07 local time (a run missed while asleep happens on wake) and logs to
+`~/.claude-lessons-core-rerank.log`. `--remove` takes it out.
+
 ## When a merge cannot be done
 
 The other Mac's version is applied and yours is kept beside it as `<file>.conflict-<host>`, with one
@@ -1505,10 +1563,12 @@ following the overnight rules for hours, and a real usage limit.
 ## Local state (per Mac, never synced)
 
 Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
-so a fresh clone starts without them. (`lesson-bands/` and `lesson-citations.tsv` also sit outside
-`payload/` and are the two exceptions: both are tracked and shared on purpose. A band nobody else
-can see cannot stop anybody else claiming a number, and a record of what a citation was written
-about is a fact about the shared payload rather than about one Mac. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
+so a fresh clone starts without them. (`lesson-bands/`, `lesson-citations.tsv`, `lesson-counts/`
+and `lesson-tags.tsv` also sit outside `payload/` and are the exceptions: all are tracked and shared
+on purpose. A band nobody else can see cannot stop anybody else claiming a number, a record of what
+a citation was written about is a fact about the shared payload rather than about one Mac, and the
+lessons core re-rank needs both Macs' citation counts and one settled set of tags. See Lesson
+numbers and The monthly re-rank above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
 defined answer for being absent or untrustworthy.
 
 | File | Written by | Read by | Missing or stale |
