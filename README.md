@@ -555,10 +555,20 @@ leaves alone, for the monthly re-rank of the lessons core.
 Every opening and every finished review, whatever its outcome, is also recorded in
 `pr-opened.tsv` and `pr-reviews.tsv` beside it, which the sweep leaves alone too. They feed the
 measurement claude-config#562 gates the lessons core on: after two to three weeks, run
-`bash ~/.claude/hooks/lib/pr-review-report.sh` on each Mac. It prints pull requests opened, reviews
-by outcome, findings per review, how many reviews with findings were acted on (a later commit on the
-pull request changed a file a finding named), and this Mac's half of the gate, UNMEASURED under 5
-pull requests.
+`bash ~/.claude/hooks/lib/pr-review-report.sh` on each Mac. It prints pull requests opened, counted
+by pull request with the raw count of `gh pr create` openings beside it, reviews by outcome, findings
+per review, how many reviews with findings were acted on (the pull request's final head changed a
+file a finding named), and this Mac's half of the gate, read per pull request (one counts as
+reviewed when any of its openings had a finished review of that head), UNMEASURED under 5 pull
+requests.
+
+It is careful with the GitHub allowance every session on the Mac shares (claude-config#1006). Which
+pull request holds a commit comes from one batched GraphQL query per repository per 50 commits, held
+to `PR_REVIEW_REPORT_CALL_BUDGET` (100 by default); whatever the budget does not reach is reported as
+UNMEASURED with its count. Before the first call it reads the allowance left and refuses to start,
+exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (500). It never fetches
+into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
+the checkout's objects read only. `--no-github` asks GitHub nothing.
 
 ### What a push actually waits on
 
