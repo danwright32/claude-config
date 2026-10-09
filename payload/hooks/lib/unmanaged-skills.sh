@@ -35,22 +35,31 @@ PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
 # folder that happens to be called `synced` inside a real skill is ordinary config.
 PLATFORM_SKILL_DIRS=(synced)
 
+# Where Claude Code sets aside a skill it removes or replaces on the Mac it runs on:
+# skills/.trash/<stamp>/<skill>/. Per Mac working state, never config. On 2026-10-09 a send from
+# the work MacBook carried one to the shared repo holding copies of four plugin skills
+# (claude-config#1009). Matched at ANY depth under skills/, like the plugin skills, because a .trash
+# folder inside a skill is the same thing in a different place. Left out by the send and by the
+# apply alike: the apply mirrors with --delete, so an exclusion on the sending side alone would
+# have each pull delete the receiving Mac's own .trash.
+SKILL_TRASH_DIRS=(.trash)
+
 # One answer to "does the sync leave this skills/ entry alone entirely", for every reader that
 # walks skills/ by name, so a new kind of unmanaged entry is added once rather than per loop.
 unmanaged_skill_entry(){   # $1 = a top level name under skills/
   local s
-  for s in "${PLUGIN_SKILLS[@]}" "${PLATFORM_SKILL_DIRS[@]}"; do [ "$1" = "$s" ] && return 0; done
+  for s in "${PLUGIN_SKILLS[@]}" "${PLATFORM_SKILL_DIRS[@]}" "${SKILL_TRASH_DIRS[@]}"; do [ "$1" = "$s" ] && return 0; done
   return 1
 }
 
 # The rsync excludes, and the one statement of how each list is MATCHED. Plugin skill names stay
-# unanchored as they always were, so rsync drops them at any depth; the platform's entries are
+# unanchored as they always were, so rsync drops them at any depth, and so does a .trash folder; the platform's entries are
 # anchored to the top of skills/ with a leading slash, for the reason given where
 # PLATFORM_SKILL_DIRS is defined. check-home-paths.sh reads these lines rather than the arrays, so
 # the check follows whatever anchoring is written here.
 skill_excludes(){
   local s
-  for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done
+  for s in "${PLUGIN_SKILLS[@]}" "${SKILL_TRASH_DIRS[@]}"; do printf -- "--exclude=%s\n" "$s"; done
   for s in "${PLATFORM_SKILL_DIRS[@]}"; do printf -- "--exclude=/%s\n" "$s"; done
 }
 

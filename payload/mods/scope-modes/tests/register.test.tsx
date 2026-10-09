@@ -1104,6 +1104,8 @@ const FINALIZE = [
   /When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers/,
   // #917: the one way a PR stays open, and only on his answer.
   /A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open/,
+  // #1033: a PR closed without merging, settled the same way.
+  /A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed/,
 ]
 
 test('a session whose own PR is finished is not finished while a PR it opened is still open (#856)', withDeps, async ($, on) => {
@@ -1335,13 +1337,98 @@ test('leave_pr_open asks nothing about a PR it cannot read or that is not open, 
   const { w, clock } = world(on, { ask: 'Leave it open' })
   w.o.gh = { ...merged(), others: [{ ...openPr(31, 'aaa1111'), state: 'MERGED' }] }
   await start($ as never, clock)
-  expect(await call($ as never, leave(31, { repo: 'o/r' }))).toBe('PR #31 in o/r is MERGED, so there is nothing to leave open. Nothing was asked.')
+  expect(await call($ as never, leave(31, { repo: 'o/r' }))).toBe('PR #31 in o/r is MERGED, so there is nothing to leave as it is. Nothing was asked.')
   expect(await call($ as never, leave(77, { repo: 'o/r' }))).toBe('PR #77 in o/r could not be read (no pull requests found), so Dan was not asked and nothing was recorded: winding down still waits on it.')
   expect(await call($ as never, leave(31, { repo: 'not a repo' }))).toBe('"not a repo" is not a repository (owner/name), so Dan was not asked and nothing was recorded.')
   expect(await call($ as never, leave(0, { repo: 'o/r' }))).toBe('"0" is not a PR number, so Dan was not asked and nothing was recorded.')
   // Dan is never asked to leave a PR open for no stated reason.
-  expect(await call($ as never, leave(31, { repo: 'o/r', why: '  ' }))).toBe('Say what PR #31 would stay open for, so Dan can decide. He was not asked and nothing was recorded.')
+  expect(await call($ as never, leave(31, { repo: 'o/r', why: '  ' }))).toBe('Say why PR #31 would be left as it is (open for a reviewer, say, or closed because its work merged in another PR), so Dan can decide. He was not asked and nothing was recorded.')
   expect(w.asked).toEqual([])
+})
+
+// ---- A PR Dan chose to leave closed (#1033) ----
+// On 2026-10-09 danwright32/ovation#711 closed itself when its stacked base branch was deleted, its
+// work then merged as #716. Dan answered "leave it closed" twice, and winding down listed it on every
+// turn anyway: leave_pr_open asked nothing about a PR that is not open, so nothing could record his
+// answer. His own answer to it now settles a closed PR, by repository and number, and only that PR.
+const closedPr = (number: number, head: string) => ({ ...openPr(number, head), state: 'CLOSED' })
+const WHY_CLOSED = 'its work merged as #716'
+const CLOSED_LEFT = (n: number) => new RegExp(`PR #${n} was closed without merging: ask Dan whether to leave it closed \\(mcp__scope-modes__leave_pr_open\\)`)
+
+test('a PR closed without merging that Dan chose to leave closed settles winding down from the next turn, and his answer settles no other PR (#1033)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/711\n', ask: 'Leave it closed' })
+  w.o.gh = { ...merged(), others: [closedPr(711, 'aaa1111'), closedPr(712, 'bbb2222')] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title stacked', tool_use_id: 'g1' } as never)
+  w.o.created = 'https://github.com/o/r/pull/712\n'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title other', tool_use_id: 'g2' } as never)
+  await command($ as never, 'winddown')
+  // Nobody decided: each closed PR is outstanding, named with the one way to settle it.
+  const before = (await stop($ as never)).block ?? ''
+  expect(before).toMatch(CLOSED_LEFT(711))
+  expect(before).toMatch(CLOSED_LEFT(712))
+  const r = await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }))
+  expect(w.asked).toEqual(['Leave PR #711 in o/r closed without merging (its work merged as #716)? Winding down stops waiting on it unless it is reopened.'])
+  expect(w.askedOptions).toEqual([['Leave it closed', 'Reopen it']])
+  expect(r).toBe('Dan chose to leave PR #711 in o/r closed: winding down counts it settled unless it is reopened.')
+  // From the next turn #711 is settled and listed apart; #712, the same repository, still waits.
+  const after = (await stop($ as never)).block ?? ''
+  expect(after).toMatch(/^Winding down is not finished: PR #712 was closed without merging/)
+  expect(after).not.toMatch(CLOSED_LEFT(711))
+  expect(after).toMatch(/ Left closed by Dan's choice: PR #711 in o\/r \(its work merged as #716\)\. /)
+  // And on every turn after: the answer is kept, never asked for again.
+  await clock.advance(MIN)
+  expect((await stop($ as never)).block).not.toMatch(CLOSED_LEFT(711))
+  expect(w.asked.length).toBe(1)
+  expect(w.toasts).toEqual([])
+  // With #712 settled too, winding down finishes, saying what was left closed.
+  await call($ as never, leave(712, { repo: 'o/r', why: 'superseded by #716' }, 'l2'))
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left closed by your choice: PR #711 in o/r (its work merged as #716); PR #712 in o/r (superseded by #716).'])
+})
+
+test('only his "Leave it closed" settles a closed PR: Reopen it or anything typed records nothing and withdraws an earlier answer, and reopened it is outstanding until merged (#1033)', withDeps, async ($, on) => {
+  // The branch's own PR stays open throughout, so winding down never finishes and each turn end says
+  // what it holds #711 for.
+  const { w, clock } = world(on, { created: 'https://github.com/o/r/pull/711\n', ask: 'Reopen it' })
+  const withOwn = (pr711: ReturnType<typeof openPr>) => ({ ...merged('OPEN'), others: [pr711] })
+  w.o.gh = withOwn(closedPr(711, 'aaa1111'))
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title stacked', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  const held = async () => {
+    const block = (await stop($ as never)).block ?? ''
+    expect(block).toMatch(/^Winding down is not finished: PR #12 is not merged yet/)
+    return block
+  }
+  // The same words through Claude's own picker are never read as his choice.
+  await call($ as never, { tool: 'AskUserQuestion', questions: [{ question: 'Leave PR #711 closed?', options: [{ label: 'Leave it closed' }, { label: 'Reopen it' }] }], tool_use_id: 'q1' } as never)
+  expect(await held()).toMatch(CLOSED_LEFT(711))
+  expect(await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }))).toBe('Dan said reopen it: winding down waits on PR #711 in o/r until it is reopened and merged.')
+  expect(await held()).toMatch(CLOSED_LEFT(711))
+  w.o.ask = 'not sure yet'
+  expect(await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }, 'l2'))).toBe('Dan did not choose to leave PR #711 in o/r closed, so winding down still waits on it. He wrote: not sure yet')
+  expect(await held()).toMatch(CLOSED_LEFT(711))
+  // Left closed, then withdrawn by a later Reopen it.
+  w.o.ask = 'Leave it closed'
+  await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }, 'l3'))
+  expect(await held()).not.toMatch(/PR #711 was closed/)
+  w.o.ask = 'Reopen it'
+  await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }, 'l4'))
+  expect(await held()).toMatch(CLOSED_LEFT(711))
+  // Left closed, then reopened on GitHub: his answer was about a closed PR, never an open one.
+  w.o.ask = 'Leave it closed'
+  await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }, 'l5'))
+  w.o.gh = withOwn(openPr(711, 'aaa1111'))
+  const reopened = await held()
+  expect(reopened).toMatch(/PR #711 is not merged yet/)
+  expect(reopened).not.toMatch(/Left closed by Dan's choice/)
+  // Merged after all, it is finished as any merged PR is: its deploy and cleanup, nothing of his answer.
+  w.o.gh = withOwn({ ...openPr(711, 'aaa1111'), state: 'MERGED' })
+  const done = await held()
+  expect(done).toMatch(/PR #711 has no is it live card yet/)
+  expect(done).not.toMatch(/PR #711 (was closed|is not merged)|Left closed by/)
+  expect(w.toasts).toEqual([])
 })
 
 test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
@@ -1937,9 +2024,19 @@ test('a night with no proposals still starts the summary turn, and offers no pic
   expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
 })
 
+// A session started a minute before the moment a test is about, never at T0 (#1016). Once started,
+// the session checks every minute, so moving the mock clock from T0 to the evening ran about 1,400
+// of those checks, which took 5,105 ms beside 96 CPU burners on 2026-10-09 and failed the runner's
+// 5,000 ms limit with nothing broken. Before the start no check is due, so this costs nothing, and
+// the minute that follows still crosses one check, as a real session would.
+const startBefore = async ($: $T, clock: { set: (ms: number) => Promise<void>; settle: () => Promise<void> }, at: number) => {
+  await clock.set(at - MIN)
+  await start($, clock)
+}
+
 test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he is up, once a night, and never ends sleep (#837)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
-  await start($ as never, clock)
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 11, 59))
   // 6:59 AM ET on Thu Jan 1 1970 (EST) is 11:59 UTC: not yet.
   await clock.set(Date.UTC(1970, 0, 1, 11, 59))
   expect((await say($ as never, 'how did it go')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
@@ -1953,7 +2050,7 @@ test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he i
 
 test('the ask whether he is up counts as made only once its prompt went in, so a prompt that failed asks again (#837)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, promptFails: 1 })
-  await start($ as never, clock)
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
   await clock.set(Date.UTC(1970, 0, 1, 12, 0))
   await expect(say($ as never, 'how is it going')).rejects.toThrow()
   expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
@@ -1961,7 +2058,7 @@ test('the ask whether he is up counts as made only once its prompt went in, so a
 
 test('a message from Dan in the evening while asleep does not ask whether he is up (#837)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: Date.UTC(1970, 0, 2, 17) }) } })
-  await start($ as never, clock)
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 2, 0, 0))
   // 7:00 PM ET on Thu Jan 1 is 00:00 UTC on Jan 2: past the window.
   await clock.set(Date.UTC(1970, 0, 2, 0, 0))
   expect((await say($ as never, 'still going?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
@@ -1992,7 +2089,10 @@ test('while asleep every session is quiet as away: opening on the Mac is held, t
 
 test('the record ends by itself at noon ET: asleep a ms before, awake at noon, and the first to see it notes it and notifies once', withDeps, async ($, on) => {
   const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [CURRENT]: asleepRecord({ placeBefore: 'home' }) } })
-  await start($ as never, clock)
+  // Started five minutes before noon, off the minute as T0 is, so the check that ends the record
+  // still falls after noon rather than on it, without running a morning of checks first (#1016).
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
   await clock.set(UNTIL - 1)
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
@@ -2001,7 +2101,7 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   await clock.set(UNTIL)
   expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
   // The minute's check, counted from the session's start, is the first to see it.
-  const tick = T0 + Math.ceil((UNTIL - T0) / MIN) * MIN
+  const tick = began + Math.ceil((UNTIL - began) / MIN) * MIN
   await clock.set(tick)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(lastModes(w)).toEqual([])

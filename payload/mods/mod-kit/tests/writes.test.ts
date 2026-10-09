@@ -32,6 +32,34 @@ describe('writes: redirects and tee', () => {
   })
 })
 
+// claude-config#1010: a write to a Next.js dynamic route (src/app/booking/[SO_ID]/page.tsx) was given
+// as written, with no path, so the design round guard refused it as a write it could not follow,
+// relative or absolute. A segment shaped like a route parameter is read as the folder or file it names:
+// quoted the shell takes it literally, and unquoted bash leaves a pattern matching nothing as written
+// (measured 2026-10-09; zsh refuses the command instead, so it writes nothing).
+describe('writes: a bracketed route segment (#1010)', () => {
+  test("a segment shaped like a route parameter names its folder or file, relative or absolute, however it is quoted", () => {
+    expect(paths('echo x > /Users/dan/Apps/shop/src/app/booking/[SO_ID]/page.tsx')).toEqual(['/Users/dan/Apps/shop/src/app/booking/[SO_ID]/page.tsx'])
+    expect(paths("sed -i '' 's/a/b/' 'src/app/booking/[SO_ID]/page.tsx'")).toEqual([`${CWD}/src/app/booking/[SO_ID]/page.tsx`])
+    expect(paths('cd src/app && cp /tmp/p "booking/[SO_ID]/page.tsx"')).toEqual([`${CWD}/src/app/booking/[SO_ID]/page.tsx`])
+    // A catch all, an optional catch all, a matcher, a pages router file, and a route group beside them.
+    expect(paths('cp a "src/app/(shop)/[...slug]/page.tsx" && cp a "src/app/[[...rest]]/layout.tsx" && cp a "src/routes/[id=int]/+page.svelte" && cp a "pages/posts/[id].tsx"')).toEqual([
+      `${CWD}/src/app/(shop)/[...slug]/page.tsx`,
+      `${CWD}/src/app/[[...rest]]/layout.tsx`,
+      `${CWD}/src/routes/[id=int]/+page.svelte`,
+      `${CWD}/pages/posts/[id].tsx`,
+    ])
+  })
+  test('a bracket that is a pattern, anywhere else in the name, is still given as written, never guessed at', () => {
+    expect(read('echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]' }])
+    expect(read('echo x > app/[t]okens.json').files).toEqual([{ word: 'app/[t]okens.json' }])
+    expect(read('echo x > app/[a-z]*/page.tsx').files).toEqual([{ word: 'app/[a-z]*/page.tsx' }])
+    expect(read('echo x > app/[!x]/page.tsx').files).toEqual([{ word: 'app/[!x]/page.tsx' }])
+    // A range is a pattern too, even standing as a whole segment.
+    expect(read('echo x > app/[a-z]/page.tsx').files).toEqual([{ word: 'app/[a-z]/page.tsx' }])
+  })
+})
+
 describe('writes: <> opens a file for reading and writing (#760)', () => {
   test('which creates it, so it is written', () => {
     expect(paths('exec 3<>notes.txt')).toEqual([`${CWD}/notes.txt`])

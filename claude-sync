@@ -2238,6 +2238,12 @@ LESSON_CORE_PREFIX="LESSONS-CORE"
 LESSON_CORE_STATE=".lessons-core-state"
 LESSON_CORE_APPLIED=".lessons-core-applied"
 LESSON_CORE_SHRINK_PCT=50
+# The library's table of contents, rendered beside the core and imported after it (#566). Named
+# under the core prefix so the shape predicate, the sweep and the staging treat it as the core's
+# own, and with an underscore, which no section slug (lowercase letters, digits and hyphens) can
+# produce, so a section can never render over it. Capitals alone were not enough: macOS's default
+# filesystem ignores case, so a section titled "TOC" (slug toc) would have been the same file.
+LESSON_CORE_TOC="$LESSON_CORE_PREFIX-_TOC.md"
 
 # The file the index above is generated FROM. Named here so the merge recovery and the index
 # generator cannot drift into two spellings of one path (L41).
@@ -2825,6 +2831,29 @@ lesson_core_file_header(){   # $1 = the section title
   printf 'the whole entry before a rule decides anything: `~/claude-config-sync/claude-sync lesson L174`.\n\n'
 }
 
+# THE LIBRARY'S TABLE OF CONTENTS (#566, the text Dan approved on #563). With the core in use a
+# session no longer has the library in front of it, so it is told what the library holds and where,
+# one line per section with that section's lesson count and how many of them the core carries. The
+# counts are derived here from the same split rendering and list the core files are, never kept by
+# hand (L41), and every section is listed, including one the core carries none of, which is the
+# section a session would otherwise not know it lacks. Sorted by title, in the C locale, so the file
+# is byte identical on both Macs and is not rewritten on every run.
+lesson_core_toc(){   # $1 = the listed ids, one Lnnn per line, $2 = the split rendering
+  printf '# Lessons library: table of contents (generated, do not edit)\n\n'
+  printf 'The lessons core above is part of the library. Every lesson, core or not, is read by the PR\n'
+  printf 'lessons review before any merge; read any one in full with\n'
+  printf '`~/claude-config-sync/claude-sync lesson L174`, or a whole section in\n'
+  printf '~/.claude/LESSONS-INDEX-<section>.md.\n\n'
+  printf '%s\n' "$1" | awk -F'\t' '
+    NR == FNR { if ($1 != "") want["- " $1 "."] = 1; next }
+    !match($3, /^- L[0-9]+\./) { next }
+    { if (!($1 in title)) { title[$1] = $2; order[++n] = $1 }
+      total[$1]++
+      if (substr($3, 1, RLENGTH) in want) core[$1]++ }
+    END { for (i = 1; i <= n; i++) { s = order[i]; t = total[s]
+            printf "- %s (%s): %d %s, %d in the core\n", title[s], s, t, (t == 1 ? "lesson" : "lessons"), core[s] + 0 } }' - "$2" | LC_ALL=C sort
+}
+
 # Renders the core from the list, or sweeps it when the list is absent or unusable, records the
 # state, and prints the file names CLAUDE.md should import: the core's when it is in use, else the
 # library's ($3). The state and the applied count are recorded only for the LIVE tree: they describe
@@ -2851,6 +2880,18 @@ write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library nam
         wanted+="$name
 "
       done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$2")
+      # The table of contents goes LAST, so it is imported after the core it describes, and only
+      # beside a core that rendered something: added to an empty list it would be the only import,
+      # and the library would stop loading with nothing in its place.
+      if ! is_blank "$wanted" && out="$(scratch_file)"; then
+        lesson_core_toc "$ids" "$2" > "$out" 2>/dev/null
+        if [ -s "$out" ]; then
+          cmp -s "$out" "$1/$LESSON_CORE_TOC" || cat "$out" > "$1/$LESSON_CORE_TOC" 2>/dev/null || true
+          wanted+="$LESSON_CORE_TOC
+"
+        fi
+        rm -f "$out"
+      fi
       state="$state $chars chars"
       [ "$live" -eq 1 ] && printf '%s\n' "${state#active }" | awk '{ print $1 }' > "$1/$LESSON_CORE_APPLIED" 2>/dev/null
       ;;
@@ -3963,7 +4004,7 @@ last_applied_hook_block(){   # -> the hooks object of the last applied payload, 
 }
 
 # copy local config -> repo payload (no git)
-# A LEFTOVER COPY MUST NOT UNDO A DELETION (claude-config#331).
+# A LEFTOVER COPY MUST NOT UNDO A DELETION (claude-config#331, claude-config#1009).
 #
 # stage_local_to_payload mirrors this Mac's ~/.claude over the payload, so an entry the shared
 # config has deleted, but which is still sitting in this Mac's home, is re-added by the next send
@@ -3976,11 +4017,81 @@ last_applied_hook_block(){   # -> the hooks object of the last applied payload, 
 # recorded that it applied that, and the file is here anyway. That pair is what the production
 # commit shows, and it is what a run that died between merging and applying leaves behind.
 #
-# Content decides. A leftover is the deleted copy byte for byte; a deliberate re-creation under the
-# same name is different content and publishes normally, because a deletion must not become a
-# permanent ban on a name (L116, L362).
+# Content decides, and it is asked of EVERY version the repo ever held for the path, not only the
+# one it deleted (claude-config#1009). On 2026-10-09 the work MacBook sent back
+# mods/scope-modes/hooks/ghargs.ts as the version three edits before the one #995 deleted, and the
+# first form of this check, which compared against the deleted version alone, read that as a
+# deliberate new file and published it, turning main red (L625).
+#
+# So a leftover is: the version deleted, byte for byte (#331, whenever it was written), or an
+# EARLIER version that nothing on this Mac has written since the deletion reached this clone. The
+# second needs the time as well as the content, because putting an earlier version back on purpose
+# is a real edit too (the suite's own hook runner fixture does exactly that), and the content
+# alone cannot tell it from a copy that simply sat here. Both times are read off THIS Mac's clock:
+# the file's mtime, and the moment this clone's HEAD first held the deletion, from its reflog
+# (deletion_reached_clone_at). A tie, or a time that cannot be read, is read as a write, the
+# reading that publishes, as before this change.
+#
+# Anything else is this Mac's own work, changed since it last received or newly made under an old
+# name, and publishes, because a deletion must not become a permanent ban on a name (L116, L362).
+# It is never silent: the send says it is putting back a file the shared config deleted, and why,
+# so a re-add is read where it happens rather than found by a red main.
+#
+# When this clone first held a commit, on this Mac's clock: the reflog time of the earliest HEAD
+# entry whose commit contains it. HEAD in a sync clone moves forward (fast forwards, rebases of this
+# Mac's own commits on top), so the entries containing a commit are a run at the newest end, and a
+# binary search costs about a dozen git calls on a reflog of thousands. A reflog that has expired
+# past the arrival answers with its oldest entry, which is later than the real arrival, so an edit
+# made in between reads as untouched; such an edit would have been sent, and tracked, at the time.
+deletion_reached_clone_at(){   # $1 = commit -> epoch seconds, or nothing when it cannot be read
+  local entries n lo hi mid line found=""
+  entries="$(git -C "$SYNC_REPO" log -g --format='%H %gd' --date=unix HEAD 2>/dev/null | awk '{ sub(/^HEAD@\{/, "", $2); sub(/\}$/, "", $2); l[NR] = $1 " " $2 } END { for (i = NR; i >= 1; i--) print l[i] }' || true)"
+  [ -n "$entries" ] || return 0
+  # Here strings, and an awk that reads to the end: the list runs to thousands of lines, and a
+  # consumer leaving at the line it wants kills a piped writer, whose death pipefail then reports
+  # as this lookup failing (L183, second review of #1022).
+  n="$(awk 'END { print NR }' <<< "$entries")"
+  lo=1; hi="$n"
+  while [ "$lo" -le "$hi" ]; do
+    mid=$(( (lo + hi) / 2 ))
+    line="$(awk -v m="$mid" 'NR == m { print }' <<< "$entries")"
+    if git -C "$SYNC_REPO" merge-base --is-ancestor "$1" "${line%% *}" 2>/dev/null; then
+      found="${line#* }"; hi=$(( mid - 1 ))
+    else
+      lo=$(( mid + 1 ))
+    fi
+  done
+  case "$found" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$found"
+}
+# Which commit holds this version of a payload path, for the message that says where a leftover
+# can be recovered from, or nothing when the repo never held it.
+#
+# Every blob this path has had, on both sides of every change to it, newest first. Read whole,
+# then matched, so a consumer that stops early cannot turn the producer's SIGPIPE into a false
+# answer (L183). --root so a version the first commit added is seen, -m so one a merge made is.
+# The newest commit that WROTE this content is the answer. A blob seen only as the old side of a
+# change was written outside the history git walks here, and the parent of the commit that
+# replaced it is the nearest commit holding it. That parent is RESOLVED to its own id here, never
+# handed on as "<commit>^": the message prints the first eight characters of whatever it gets, which
+# dropped the ^ and named the commit that had replaced the copy (review of #1022). Nothing is
+# returned when the parent cannot be resolved, which reads as a copy the repo never held and
+# publishes with its own line, rather than naming a commit that does not hold it.
+commit_holding_version(){   # $1 = path relative to the repo  $2 = blob -> a full commit id, or nothing
+  local hist found
+  hist="$(git -C "$SYNC_REPO" log --root -m --format='commit %H' --raw --no-abbrev HEAD -- "$1" 2>/dev/null || true)"
+  # A here string, and an awk that reads to the end and decides in END, never one that leaves at its
+  # first match: that killed the piped writer past the pipe buffer, and pipefail reported the death
+  # as this lookup failing (L183, second review of #1022).
+  found="$(awk -v h="$2" '
+    $1 == "commit" { c = $2; next }
+    /^:/ { if (!found && $4 == h) { hit = c; found = 1 } if ($3 == h && old == "") old = c }
+    END { if (found) print hit; else if (old != "") print old "^" }' <<< "$hist")"
+  [ -n "$found" ] || return 0
+  git -C "$SYNC_REPO" rev-parse -q --verify "$found^{commit}" 2>/dev/null || true
+}
 refuse_resurrected_deletions(){
-  local p delcommit restored="" removed="" lastdel=""
+  local p delcommit restored="" removed="" readded="" rewritten="" where="" h vcommit arrived lt
   have_git || return 0
   git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
   while IFS= read -r p; do
@@ -3996,26 +4107,69 @@ refuse_resurrected_deletions(){
     # And is it still deleted? A path deleted and later re-added deliberately is an ordinary file
     # again, and blocking it would make one old deletion a permanent ban on the name (L362).
     git -C "$SYNC_REPO" cat-file -e "HEAD:$p" 2>/dev/null && continue
-    # The content the repo deleted, read from the commit before the one that removed it. If it
-    # cannot be read the file is LEFT ALONE: refusing to publish on the strength of a comparison
-    # that could not be made would discard somebody's work on a guess (L50).
-    git -C "$SYNC_REPO" show "$delcommit^:$p" 2>/dev/null | cmp -s - "$SYNC_REPO/$p" 2>/dev/null || continue
+    # The staged copy as git would store it. Already tokenized (tokenize_payload ran before this),
+    # which is the form every blob in the history is in. If it cannot be read the file is LEFT
+    # ALONE: refusing to publish on the strength of a comparison that could not be made would
+    # discard somebody's work on a guess (L50).
+    h="$(git -C "$SYNC_REPO" hash-object -- "$SYNC_REPO/$p" 2>/dev/null)" || continue
+    [ -n "$h" ] || continue
+    vcommit="$(commit_holding_version "$p" "$h")"
+    if [ -z "$vcommit" ]; then
+      # Content the repo never held: this Mac's own work, so it publishes, and says so below.
+      readded="${readded:+$readded }${p#payload/}"
+      continue
+    fi
+    # An EARLIER version than the one deleted is a leftover only while nothing here has written it
+    # since the deletion reached this clone. The version deleted is a leftover whenever it was
+    # written, as #331 decided.
+    if [ "$h" != "$(git -C "$SYNC_REPO" rev-parse -q --verify "$delcommit^:$p" 2>/dev/null || true)" ]; then
+      arrived="$(deletion_reached_clone_at "$delcommit")"
+      lt="$(file_mtime "$CLAUDE_HOME/${p#payload/}")"
+      case "$arrived" in ''|*[!0-9]*) arrived="" ;; esac
+      case "$lt" in ''|*[!0-9]*) lt="" ;; esac
+      if [ -z "$arrived" ] || [ -z "$lt" ] || [ "$lt" -ge "$arrived" ]; then
+        rewritten="${rewritten:+$rewritten }${p#payload/}"
+        continue
+      fi
+    fi
     rm -f "$SYNC_REPO/$p" 2>/dev/null || true
     # The LOCAL copy goes too, which completes the deletion in one step and ends the matter. That
     # is a product decision and not one this tool got to pick, so it was put to Dan and it is his
-    # (2026-09-07). What makes it safe is the byte for byte comparison above: this is the copy the
-    # shared config deleted, unchanged, so nothing unique to this Mac is removed and git still
-    # holds it in the commit the message names (L5, L9). SYNC_ACCEPT_DELETIONS=0 leaves it alone
-    # for anybody who wants to decide file by file, and then the message is said once per file
-    # rather than on every save, because the file stays and the watcher fires on every edit.
+    # (2026-09-07). What makes it safe is the content comparison above: this is a copy the shared
+    # config itself held, unchanged, so nothing unique to this Mac is removed and git still holds
+    # it in the commit the message names (L5, L9). SYNC_ACCEPT_DELETIONS=0 leaves it alone for
+    # anybody who wants to decide file by file, and then the message is said once per file rather
+    # than on every save, because the file stays and the watcher fires on every edit.
     if [ "${SYNC_ACCEPT_DELETIONS:-1}" != "0" ]; then
       rm -f "$CLAUDE_HOME/${p#payload/}" 2>/dev/null || true
       rmdir "$(dirname "$CLAUDE_HOME/${p#payload/}")" 2>/dev/null || true
       removed="${removed:+$removed }${p#payload/}"
     fi
     restored="${restored:+$restored }${p#payload/}"
-    lastdel="$delcommit"
+    where="${where:+$where; }${p#payload/} is in ${vcommit:0:8}, and ${delcommit:0:8} is the commit that removed it"
   done < <(git -C "$SYNC_REPO" ls-files --others --exclude-standard -- payload 2>/dev/null || true)
+  # Said once per path AND content, like the refusal below (third review of #1022). The send that
+  # says it normally commits the file, so it is not met again; but a later step can still hold it
+  # back (a hook whose suite fails), and the watcher then meets the same copy on every save.
+  local _ra_list _ra_p _ra_stamp _ra_kind
+  for _ra_kind in readded rewritten; do
+    _ra_list=""
+    for _ra_p in ${!_ra_kind}; do
+      _ra_stamp="$(printf 'publishing %s %s' "$_ra_p" "$(git -C "$SYNC_REPO" hash-object -- "$SYNC_REPO/payload/$_ra_p" 2>/dev/null || true)")"
+      grep -qxF -- "$_ra_stamp" "$RESURRECTED_REPORTED_FILE" 2>/dev/null && continue
+      printf '%s\n' "$_ra_stamp" >> "$RESURRECTED_REPORTED_FILE" 2>/dev/null || true
+      _ra_list="${_ra_list:+$_ra_list }$_ra_p"
+    done
+    printf -v "$_ra_kind" '%s' "$_ra_list"
+  done
+  if [ -n "$readded" ]; then
+    echo "claude-sync: publishing $readded although the shared config deleted it, because this Mac's copy holds changes the shared config never had, so it is work that exists only here. If putting it back was not meant, delete it on this Mac and the next send removes it again." >&2
+    sync_log_line "published $readded, which the shared config had deleted, because this Mac's copy holds changes the shared config never had"
+  fi
+  if [ -n "$rewritten" ]; then
+    echo "claude-sync: publishing $rewritten although the shared config deleted it, because this Mac's copy, an earlier version the shared config held, was written here after that deletion reached this Mac, so it reads as put back on purpose. If it was not, delete it on this Mac and the next send removes it again." >&2
+    sync_log_line "published $rewritten, which the shared config had deleted, because this Mac's copy was written after that deletion reached this Mac"
+  fi
   [ -n "$restored" ] || return 0
   # Kept back on EVERY send while the copy stays here (claude-config#849), though it is said once
   # per file below: a watcher tick that commits nothing because of it is a hold, not nothing to send.
@@ -4032,9 +4186,9 @@ refuse_resurrected_deletions(){
     fresh="${fresh:+$fresh }$p"
   done
   if [ -n "$removed" ]; then
-    echo "claude-sync: $removed was deleted from the shared config and this Mac still had that deleted copy unchanged, so it was NOT published back (that would undo the deletion for both Macs) and the local copy has been removed here too, which is what applying that deletion should have done. Set SYNC_ACCEPT_DELETIONS=0 if you would rather decide file by file. It is recoverable from ${lastdel:0:8}, the commit that removed it." >&2
+    echo "claude-sync: NOT publishing $removed: it was deleted from the shared config, and this Mac still had a copy the shared config itself once held, unchanged, so publishing it would undo the deletion for both Macs. The local copy has been removed here too, which is what applying that deletion should have done. Set SYNC_ACCEPT_DELETIONS=0 if you would rather decide file by file. It is recoverable from git: $where." >&2
   elif [ -n "$fresh" ]; then
-    echo "claude-sync: $fresh was deleted from the shared config and this Mac still has that deleted copy unchanged, so it was NOT published back: publishing it would undo the deletion for both Macs. Your copy is untouched and nothing here will remove it. Delete it yourself to accept the deletion, or change it and it publishes as your own. It is in ${lastdel:0:8}, the commit that removed it, if you want it back. Said once per file rather than on every edit." >&2
+    echo "claude-sync: NOT publishing $fresh: it was deleted from the shared config, and this Mac still has a copy the shared config itself once held, unchanged, so publishing it would undo the deletion for both Macs. Your copy is untouched and nothing here will remove it. Delete it yourself to accept the deletion, or change it and it publishes as your own. If you want the shared copy back: $where. Said once per file rather than on every edit." >&2
   fi
   return 0
 }

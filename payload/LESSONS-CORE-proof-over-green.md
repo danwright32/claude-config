@@ -1,0 +1,105 @@
+# Lessons core: Proof over green (generated, do not edit)
+
+The lessons of this section chosen for every session, one SHORTENED line each; the rest are in
+the library (~/.claude/LESSONS-INDEX-*.md), and every PR lessons review reads them all. Read
+the whole entry before a rule decides anything: `~/claude-config-sync/claude-sync lesson L174`.
+
+- L1001. A control that swaps back only the code while keeping the new tests cannot exonerate the change: the tests' own fault is in both arms.
+- L713. A determinism check that repeats a run back to back cannot see a dependence on the clock, so move the input or read the source instead.
+- L480. A command that failed partway still ran everything before the failure, so re-establish the cold state a timing depends on before measuring.
+- L277. Before fixing a defect, name what its output was incidentally recording, because the fix removes the only evidence the diagnosis was made from.
+- L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, or every test that crosses it waits for real.
+- L656. A duration measured in the same run is only a yardstick if it comes from SEVERAL samples
+- L216. When two readings of one input disagree, a rate CONCENTRATED and TOTAL on a few fields indicts the pipeline; a real data problem is spread and partial.
+- L203. A cause inferred from two things co-occurring is not established until you find a case where the suspected cause is present and the effect is ABSENT.
+- L681. A defect whose cause was inferred by reading code must have it REPRODUCED before the fix, or the fix is untestable and the real fault ships on.
+- L1. A test or guard is only real once it has been seen to fail.
+- L557. A monitor that has never once PASSED is measuring nothing, so record its outcomes and treat a lifetime success count of zero as the check being broken.
+- L584. Data archived as a serialized bundle is recoverable one record at a time and cannot be aggregated, so reaching the warehouse is not being analysable.
+- L177. When a failure reproduces only in an environment you cannot run, make that environment PRINT the fact in question before changing any code.
+- L182. A ratchet or violation count driven to ZERO stops being read as a measurement and reads as proof the thing cannot occur, so nobody re-examines it.
+- L246. A feasibility check must exercise the HARDEST thing the plan depends on, because a green on the easy case reads as permission to build.
+- L248. A finding that rules a capability OUT needs the same control as one ruling it in, because nothing downstream ever re-tests a closed door.
+- L322. Isolation set through an ENVIRONMENT VARIABLE is only real if the tool honours it, so measure where the writes LAND rather than trusting the variable.
+- L323. A duration compared against its own history measures the system only while the workload is constant, so divide it by a measure of the input first.
+- L3. Built is not wired, and wired is not proven.
+- L4. A merged fix is not a deployed fix.
+- L581. A merge writing its result to the LOCAL copy must read back the SHARED copy and confirm the entries are there, or resolved and propagated read alike.
+- L212. Counting source sites that CREATE a resource against those that RELEASE it cannot see a leak inside a shared helper; measure what survives at runtime.
+- L644. A check that an override EXISTS cannot see whether it WINS
+- L48. A test fixture that claims to come from real data must be measured from it, never shaped so the rule under test fires.
+- L58. Two systems that must agree cannot be verified against records one of them wrote into the other.
+- L56. Calibrate a new validator against a sample fetched through the same path it will guard, and watch one real cycle before letting it block.
+- L65. A guard shipped deliberately inactive needs the issue that activates it filed in the same change.
+- L345. A guard that can REFUSE a reading must not draw on the same source as the reading itself, or it falls silent exactly when that source fails.
+- L561. A record written so that a failure can be RECOVERED from must be written by a DIFFERENT operation than the one that fails
+- L82. When a platform's DOCUMENTED guarantee is the whole reason a guard is safe, measure that guarantee on the real target before shipping.
+- L188. A limit your code SETS holds only if nothing downstream recomputes it, so measure the value in the RUNNING system rather than trusting the assignment.
+- L84. A baseline, golden file or snapshot captures whatever the surface was showing, an error state included, then defends it as correct as long as it lives.
+- L85. Two changes that are each green can merge into a broken main, because each one was verified against a base that did not contain the other.
+- L93. A guard that avoids a wrong action by falling back to another has only chosen which defect ships, so name what the fallback gets wrong and how often.
+- L98. A watcher, poller or wait-for-completion step that reports SUCCESS when it found NOTHING to watch is indistinguishable from one that saw everything pass.
+- L171. A positive control proves the query SHAPE, never that it reached the period asked about, so one satisfiable by older data cannot see a lagging pipeline.
+- L172. Before shipping a threshold, measure where it lands in the REAL distribution it judges: one inside the dense middle turns its count into noise.
+- L179. A status query about work in flight must be scoped to the exact revision it asks about, or a superseded run answers for it in both directions.
+- L100. An operation that finds its target by matching text reports SUCCESS when it matches NOTHING, so the next step acts on a state nobody created.
+- L101. A path that switches behaviour on input SIZE always takes the small branch under test, so the mode that ships is the one never exercised.
+- L102. A cost measured while the expensive path is switched off measures the short circuit, not the work, and reassures about exactly the case nobody tested.
+- L107. A number justifying a design decision must come from the code's own predicate, never a query beside it, which drifts toward flattering the argument.
+- L115. A harness measuring whether content is VISIBLE must be checked against its renderer's placeholders: a placeholder is a mark and measures as presence.
+- L535. Code behind a flag that shipped OFF has never run, so turning it on ships untested code, and its error paths are the least exercised part of it.
+- L147. A guard seen to fail on a fixture you chose works only on the shape you had in mind, so measure how often it fires on the REAL values it will meet.
+- L220. A change that SPLITS work re-aims every guard calibrated against the whole: each goes on passing while now measuring only a fragment.
+- L142. When phasing a change into observe then enforce, check WHICH half is observed: the harm usually lives in the path the observe phase never ran.
+- L146. To check content reached a rendered surface, measure the surface WITHOUT it and take the difference: any whole surface quantity counts the chrome too.
+- L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its VALUE on a schedule: an audit cannot see a direct change.
+- L506. A guard branching on a field from OUTSIDE the system is real only once that field's presence is measured on live traffic, or it silently refuses nobody.
+- L551. A precise branch added beside an HONEST fallback is invisible when it never fires, because the fallback's truthful label reads as the system working.
+- L209. A threshold measured while a co-varying component is held constant attaches to the wrong variable: the part the fixture moves stands in for the sum.
+- L511. A test that times out names the assertion that was running, not the cost that caused it.
+- L239. Sampling a TRANSIENT surface cannot tell never appeared from already dismissed, so judge by the durable record the action would have written.
+- L250. A list like a gitignore is read by every other tool as a different instruction, so a guard built on it inherits an exclusion nobody chose for it.
+- L430. Before deleting a test the code has outgrown, find the decision it defended and confirm it was reversed; accident and intent produce the same red.
+- L254. A control whose press only RECORDS a request must not be timed from the press against a window sized for the work it does not govern.
+- L288. Judge a test run first by the count it EXECUTED against the count expected, especially before any change to how the suite runs, when half runs appear.
+- L329. A tool scanning for matching lines stops printing them and says only that the file MATCHED once it holds a byte the tool treats as binary.
+- L528. A detector reading production counters also reads your own canary, so check whether the canary ALONE can satisfy its floor before trusting any verdict.
+- L348. A build or compile check aimed at ONE target of a multi target project says nothing about the others
+- L350. An optimisation that lets work be SKIPPED shrinks the sample every rate over it is computed from, so a calibrated threshold becomes noise as it works.
+- L352. A validator comparing a step's output against the previous step's sees only that step's damage; earlier damage becomes the baseline guards defend.
+- L354. A fixture sized from real data measured once under-represents production as that data grows, and it fails GREEN, so the guard protects a smaller world.
+- L355. A sampled profile shows the SHAPE of a stack and measures COST only once the sample count is read; a few samples support no claim about where time went.
+- L356. A performance reading taken on the machine that also builds and tests measures both, so record what else was running rather than filtering it out later.
+- L540. Every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
+- L367. An alert or threshold on a SUM cannot see one of its components collapsing while another grows to replace it, because the total never moves.
+- L543. A feature whose data is a list of EXCEPTIONS ships INERT when that list is empty, and empty is legitimate, so quiet and never entered look alike.
+- L662. Before enforcing a rule whose permissive case is an explicit marker, count how many records carry it: nothing maintained it while the field did nothing.
+- L375. A before and after comparison of shared state blames whatever it bracketed for every change, so with another writer it accuses rather than finds.
+- L495. A measurement whose subject is a scheduled repair must read state from BEFORE it ran, or its zero means only that nothing survived.
+- L497. A probe detecting a dependence by shifting an input must shift it BOTH ways: the untried direction is where the untriggered failure sits.
+- L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion drawn from it may claim only what was actually searched for.
+- L391. A cost guard's fixture must record the dimension the COST scales with, often a pairing or a maximum rather than a total, or it exercises another load.
+- L396. A count of people reaching a LATE funnel stage is not a measure of arrivals, so read the entry point before concluding traffic has collapsed.
+- L400. A check's NAME is not a statement of its coverage, so read what a monitor or guard actually does before counting it as protection.
+- L411. A test depending on machine state it cannot SET must DETECT that state and report UNMEASURED, because a red there is indistinguishable from a real one.
+- L621. A behaviour each call site must OPT INTO cannot be enforced by a scan, so own it in a shared component that makes omission impossible.
+- L614. Derive a freshness window from the worst-case gap between the producing and consuming schedules, and test it at the consumer's scheduled instant.
+- L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and refuses only when the artifact RUNS.
+- L418. A count over a STORED field is a claim about the store, not about what anybody sees, so measure through the predicate the surface itself uses.
+- L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives, so drive every control as a person does before shipping.
+- L643. A reconciliation between two systems must compare the DECISIONS each one makes, never the list of who or what is ELIGIBLE to be chosen
+- L645. A tool reached through a shell FUNCTION is not the tool it is named after
+- L460. A claim that something CANNOT be measured must come from attempting it, never fixed text, or a test on its wording keeps a false claim green.
+- L462. Commit a file before a tool rewrites it in place: cleaning up its leftover damage means a revert, which also destroys uncommitted work.
+- L463. An isolation mechanism isolates only what it was built to: enumerate what it does NOT cover, because those stay shared and the isolation hides them.
+- L464. Reproduce a red from a run you NARROWED on the unchanged base at the same scope before blaming your change: a scope dependent test misleads as a pair.
+- L694. A subject in a monitor's registry but never instrumented reads as a FAILING one, so it is accused for ever with a remedy aimed at the wrong thing.
+- L699. A residual of outer minus inner span lies on BOTH sides of it, so measure each side from its own boundary before naming a cause.
+- L701. A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
+- L478. A rate compared across groups is only comparable where each group's outcome is DETECTED the same way, or a detection gap reads as poor performance.
+- L479. A line reference in an issue that has DRIFTED is the signal to re-derive the claim around it, never to confirm it.
+- L712. Measure a new derived figure's FILL RATE over the live population; null on every record is a derivation defect a sample check cannot see.
+- L714. A throwaway local database must reproduce the hosted platform's DEFAULT GRANTS, or a permission check passes on the mistake it exists to catch.
+- L487. Comparing two implementations against a live store measures the population change too, so snapshot the data once and run both halves against that.
+- L721. A monitor built to catch a gate deciding wrongly must not use that gate's own predicate, or the predicate's blind spot is invisible to both.
+- L724. Somebody redoing an action right after its SUCCESS screen means the screen failed them: ask that first, and pull the clicked text before theorising.

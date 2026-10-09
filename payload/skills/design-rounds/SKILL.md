@@ -168,9 +168,26 @@ overrides a `term-` rule in its own stylesheet, which comes after. The tool refu
 screen it does not ship, a builder declaring `Terminal` itself, and a builder using
 `Terminal` from a spec that did not ask for it. `example-terminal/` is a working round.
 
+## When there is nothing to render
+
+Before round one, name the round's one variable. If there is none, because the change
+alters nothing on screen (a prop's value, which data a page hands a component, logic in a
+screen file), there is nothing to draw and no round to run. On 2026-10-09 the only route
+here was a switcher, so a one prop data change on a page ended in "Is this design
+settled?" with nothing in front of Dan (claude-config#1010). So: say in one sentence that
+nothing on screen changes, build no switcher, and close one of two ways.
+
+- **A refused edit is waiting** (the design round guard named its id): ask the guard's own
+  question about it, one AskUserQuestion with
+  `"metadata": { "source": "design-round-guard:<the id the refusal named>" }` and the
+  question "Skip design rounds for this issue?". The guard words it, and its answer
+  **Not a look change** lets that one edit through, recorded as his word, while every
+  other look changing edit stays held. Then send the refused call again, unchanged.
+- **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
+
 ## The last step: is this design settled?
 
-Every run of this skill ends with one more picker, after the last round and before the
+Every run that rendered a round ends with one more picker, after the last round and before the
 deliverable is written: the question **"Is this design settled?"**. Dan's answer to it is
 what lets the build start. The design round guard mod holds every edit that changes how a
 screen looks (style files, screen and component files, SwiftUI views) until Dan has
@@ -182,16 +199,28 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 ```json
 {
   "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
-  "metadata": { "source": "design-settled" }
+  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>" }
 }
 ```
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
-- It records the settlement for the issue this session's branch names (or the branch, when it
-  names none). When the branch names no issue, say on the default branch, add the number of
-  the issue this design is for, in this project, to the metadata as a number,
-  `"issue": <the issue number>`, and Dan reads that issue in the question.
+- `"path"`, an absolute path (a relative one is refused, by name), names the project the
+  design is for, and the settlement is recorded for the issue its checkout's branch names
+  (or the branch, when it names none). Never the folder this session runs in, which can be
+  another project altogether (claude-config#1010: a Settled for a trypennie edit landed on
+  a Slate issue).
+- When the guard refused an edit and this round is for it, give
+  `"call": "<the id the refusal named>"` instead of `"path"`: the settlement is then for
+  exactly what that edit waits on, the issue the refusal named, as Skip them would be, so
+  the edit goes through when you send it again, with whatever new id it gets. With neither,
+  it is for the refused edits waiting in this session when they all wait on the same
+  answer, and refused when none is waiting.
+- When the branch names no issue, say on the default branch, add the number of the issue
+  this design is for, in that project, to the metadata as a number,
+  `"issue": <the issue number>`, and Dan reads that issue in the question. Beside `"call"`
+  it is recorded as well as what the refused edit waits on, never instead of it
+  (claude-config#1046: recorded instead, the edit sent again was refused again).
 - Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
   subagent, and never write anything else to record it: the guard refuses all three, and a
   write to its record. Not yet, or an answer in his own words, records nothing: carry on.
@@ -230,5 +259,5 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    prose, which is the same mistake wearing the rule as cover.
 9. Retyping the picker's options instead of reading the ones the tool wrote, which is how
    the tab and the picker come to disagree about what an option is called.
-10. Ending without the "Is this design settled?" picker, or asking it in prose: the design
+10. Ending a round without the "Is this design settled?" picker, or asking it in prose: the design
    is then settled in conversation only, and the guard holds every screen edit after it.

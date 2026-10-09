@@ -1,9 +1,10 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
+import type { DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
 import {
   GUARD,
   HEADER,
+  NOT_LOOK,
   SETTLED_NO,
   SETTLED_SOURCE,
   SETTLED_YES,
@@ -11,14 +12,21 @@ import {
   SKIP_SOURCE,
   SKIP_YES,
   agentRefusal,
+  callKey,
+  callText,
   cannotCheck,
   card,
   checked,
+  dataOnlyChange,
+  editedText,
   forged,
   isOwnRecord,
   isSwiftUI,
+  judgedByText,
   listed,
   lookKindIn,
+  notLookWhy,
+  patternExtension,
   relTo,
   shapeKind,
   mentionedLookFiles,
@@ -54,7 +62,12 @@ import {
 //   while he was away, a subagent's question and any file Claude writes record nothing, and a write
 //   to the guard's own record is refused.
 // - Kept in the mod's store (this Mac, every session) under the project's main working tree and the
-//   issue its branch names, or the branch; a new issue starts at yes (rules.ts subjectsOf).
+//   issue its branch names, or the branch; a new issue starts at yes (rules.ts subjectsOf). Settled
+//   is for the project of the refused call, or of a path the question names, never the session's
+//   folder (#1010).
+// - Since #1010: an edit whose one change is a component's data prop passes unasked (rules.ts
+//   dataOnlyChange), and the skip question's third answer, Not a look change, lets one refused call
+//   through when it is sent again unchanged (`pass:<rules.ts callKey>` in the store).
 // - A subagent is refused like the main session and told to stop and report; only the main session
 //   asks Dan. Which loop a call runs in is known only at tool.call, so a subagent's call is judged
 //   there; the main session's at tool.check, beneath every mod's tool.call hook and after the
@@ -149,9 +162,62 @@ const placeOf = async ($: EngineInterface, tree: string): Promise<Place | { why:
 }
 
 
+// What Dan's answers about a checkout are kept under: the one reading the judge and his Settled for a
+// named project share, so a project is never read one way to hold an edit and another to settle it
+// (#1010). With `issue`, that issue in the project, which git names even on a detached head.
+const subjectsIn = async ($: EngineInterface, tree: string, issue?: number): Promise<{ subjects: DesignRoundSubject[] } | { why: string }> => {
+  const place = await placeOf($, tree)
+  if (issue !== undefined) {
+    if (place.main === undefined || place.repo === undefined) return { why: 'why' in place ? place.why : 'no project named' }
+    return { subjects: subjectsOf({ main: place.main, repo: place.repo, session: '', issue }) }
+  }
+  if ('why' in place) return { why: place.why }
+  return { subjects: subjectsOf({ ...place, session: await $.session.id() }) }
+}
+
 const recordOf = (v: unknown): DesignRoundRecord | undefined => {
   const r = v as Partial<DesignRoundRecord> | undefined
   return r && (r.kind === 'settled' || r.kind === 'skipped') && typeof r.label === 'string' ? (r as DesignRoundRecord) : undefined
+}
+
+// Dan's Not a look change for this very call (#1010). A store that cannot be read here is read again
+// by the judgement that follows, which refuses saying so.
+const passKey = (key: string) => `pass:${key}`
+// A call as it is known: its key and its whole text, from its tool and input, in the folder it runs
+// in, in this session.
+type Called = { key: string; call: string }
+const keyOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Called> => {
+  const at = { cwd: await $.session.cwd(), session: await $.session.id() }
+  return { key: callKey(tool, input, at), call: callText(tool, input, at) }
+}
+// His word authorises a call, so it is judged on its age when used (L567): the call is resent within
+// moments of his answer, and an hour on, the same call is asked about again.
+const PASS_LASTS_MS = 60 * 60 * 1000
+const passed = async ($: EngineInterface, c: Called): Promise<boolean> => {
+  try {
+    const p = (await $.store.get(passKey(c.key))) as Partial<DesignRoundPass> | undefined
+    // The key is a hash, so the record holds the call itself, which must be this one exactly.
+    if (p?.kind !== 'not-look' || p.call !== c.call || typeof p.at !== 'number') return false
+    return (await $.clock.now()) - p.at < PASS_LASTS_MS
+  } catch {
+    return false
+  }
+}
+
+// Whether an edit to a React screen file changes nothing on screen, judged from the file as it is and
+// the text the call leaves (rules.ts dataOnlyChange). A shell write, a new file, a file that cannot be
+// read and a call naming more than one file are never judged so, and are asked about.
+const dataOnly = async ($: EngineInterface, path: string, tool: string, input: Record<string, unknown>): Promise<boolean> => {
+  if (tool === 'Bash' || !judgedByText(path) || pathsOf(input).length !== 1) return false
+  let before: string
+  try {
+    if (!(await $.fs.exists(path))) return false
+    before = await $.fs.read(path)
+  } catch {
+    return false
+  }
+  const after = editedText(before, tool, input)
+  return after !== undefined && dataOnlyChange(before, after)
 }
 
 type Verdict =
@@ -159,10 +225,18 @@ type Verdict =
   | { forged: string }
   | { unsure: string[]; why: string }
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
-  | { missing: { files: string[]; subjects: DesignRoundSubject[] } }
+  | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[] } }
 
-// The judgement every call gets, the main session's and a subagent's alike.
+// The judgement every call gets, the main session's and a subagent's alike. Dan's Not a look change
+// for this very call (#1010) is looked up only for a call that would otherwise wait on him, so no
+// other call pays a store read for it (lessons review of #1010).
 const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
+  const v = await judged($, tool, input)
+  if (!('unsure' in v || 'missing' in v)) return v
+  return (await passed($, await keyOf($, tool, input))) ? { pass: true } : v
+}
+
+const judged = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
   // Only the shell, and a tool carrying a file path it may write, can change a file at all.
   if (tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)) return { pass: true }
   const at = await whereOf($)
@@ -179,6 +253,12 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
   for (const t of targets) {
     const kind = shapeKind(t.path ?? t.word)
     if (kind === null) {
+      // A name whose extension is a pattern (`page.ts[x]`) may be expanded to a look changing file.
+      if (!t.path && patternExtension(t.word)) {
+        unsureFiles.push(t.word)
+        why ||= `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
+        continue
+      }
       // A destination the reader could not follow, spelled with no look changing name, may still be
       // one when the command names a look changing file anywhere: held, as ask before saving holds
       // lasting memory (lessons review of #991). A command naming none runs.
@@ -209,6 +289,8 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
     // Only now is a Swift file read for SwiftUI, so a test is never read, nor held when it cannot be
     // (lessons review of #991).
     if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
+    // An edit whose one change is a component's data prop changes nothing on screen (#1010).
+    if (await dataOnly($, t.path, tool, input)) continue
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)
@@ -217,17 +299,16 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
 
   const missingFiles: string[] = []
   const missing: DesignRoundSubject[] = []
-  let session: string | undefined
+  const missingTrees: string[] = []
   for (const [tree, paths] of byTree) {
     const shown = paths.map(p => relTo(p, tree))
-    const place = await placeOf($, tree)
-    if ('why' in place) {
+    const at = await subjectsIn($, tree)
+    if ('why' in at) {
       unsureFiles.push(...shown)
-      why ||= place.why
+      why ||= at.why
       continue
     }
-    session ??= await $.session.id()
-    const subjects = subjectsOf({ ...place, session })
+    const { subjects } = at
     const lacking: DesignRoundSubject[] = []
     try {
       for (const s of subjects) if (!recordOf(await $.store.get(s.key))) lacking.push(s)
@@ -236,10 +317,11 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
     }
     if (!lacking.length) continue
     missingFiles.push(...shown)
+    missingTrees.push(tree)
     for (const s of lacking) if (!missing.some(m => m.key === s.key)) missing.push(s)
   }
   if (unsureFiles.length) return { unsure: unsureFiles, why }
-  if (missing.length) return { missing: { files: missingFiles, subjects: missing } }
+  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees } }
   return { pass: true }
 }
 
@@ -254,7 +336,7 @@ const drawCard = async ($: EngineInterface, toolUseId: string, reason: string, s
 }
 
 // What a refused call is told, and the card drawn for it; a missing round is kept waiting on Dan.
-const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, call: { id: string; tool: string; agent: boolean }): Promise<string> => {
+const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, call: { id: string; tool: string; agent: boolean; called: Called }): Promise<string> => {
   if ('forged' in v) {
     await drawCard($, call.id, "This would change the design round guard's own record.", 'Only your answers to its two questions write it.')
     return forged(v.forged)
@@ -268,8 +350,8 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
     await drawCard($, call.id, `${listed(u.files)} changes how the screen looks, and the design round guard could not read its record of your answers.`, 'Claude tries again, or tells you.')
     return unreadable(u.files, u.subjects, u.why)
   }
-  const { files, subjects } = v.missing
-  const waiting: DesignRoundPending = { id: call.id, tool: call.tool, files, subjects, ...(call.agent ? { agent: true as const } : {}) }
+  const { files, subjects, trees } = v.missing
+  const waiting: DesignRoundPending = { id: call.id, tool: call.tool, files, subjects, trees, key: call.called.key, call: call.called.call, ...(call.agent ? { agent: true as const } : {}) }
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== call.id), waiting])
   const c = card(files, subjects)
   await drawCard($, call.id, c.reason, c.safeWay)
@@ -284,7 +366,110 @@ const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
   return checked(v.missing.files, v.missing.subjects)
 }
 
-type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown }; agentId?: string }
+// A refused call waiting on Dan, by its id: the one lookup the skip question and the settled question
+// naming a call share, so both answer for the project the refused call is in (#1010).
+// A refused call left waiting by the guard before #1010 kept no project, key or call text; after a
+// mod reload in the same session it is not waiting, so the edit is made again rather than settled or
+// let through on what it lacks (lessons review of #1010).
+const waitingAll = async ($: EngineInterface): Promise<DesignRoundPending[]> =>
+  ((await $.state.get(pendingRef)).value ?? []).filter(w => Array.isArray(w.trees) && typeof w.key === 'string' && typeof w.call === 'string')
+const waitingOf = async ($: EngineInterface, id: string): Promise<DesignRoundPending | undefined> => (await waitingAll($)).find(x => x.id === id)
+
+const NAME_PROJECT =
+  'No refused edit is waiting, and the design round guard never takes the project from the folder this session runs in, so nothing was asked. ' +
+  'Give metadata "path" with the absolute path of a folder or file in the checkout of the project this design is for (and "issue" when its branch names none), or "call" with the id a refusal named.'
+
+// A path the settled question names that is not absolute: refused by name, never as though no path
+// were given (#1046, where that read as the path being ignored), with the refused edits waiting.
+const notAbsolute = (path: unknown, waiting: readonly DesignRoundPending[]): string =>
+  `"${String(path)}" is not an absolute path, and the design round guard never reads a path from the folder this session runs in, so nothing was asked. ` +
+  (waiting.length
+    ? `Give metadata "call" with the id of the refused edit this design is for (${waiting.map(w => `${w.id}: ${listed(w.subjects.map(x => x.label))}`).join('; ')}), or "path" as an absolute path.`
+    : 'Give metadata "path" as the absolute path of a folder or file in the checkout of the project this design is for.')
+
+// The refused calls still waiting on an answer of Dan's: those whose subjects are not all answered.
+const unanswered = async ($: EngineInterface): Promise<DesignRoundPending[]> => {
+  const open: DesignRoundPending[] = []
+  for (const w of await waitingAll($)) {
+    let lacking = false
+    for (const x of w.subjects) if (!recordOf(await $.store.get(x.key))) lacking = true
+    if (lacking) open.push(w)
+  }
+  return open
+}
+
+// What an answer about a refused call records for: what that call waits on, the subjects the judge
+// found it lacking, which is all that lets it through when it is sent again. The skip question and the
+// settled question naming a call both answer through this (#1046: the settled question recorded only
+// an issue it named, so the call, waiting on another, was refused again and every answer looped).
+const waitsOn = (w: DesignRoundPending): DesignRoundSubject[] => [...w.subjects]
+// An issue the settled question names is recorded beside them, in the call's project, never instead.
+const callSubjects = async ($: EngineInterface, w: DesignRoundPending, issue: number | undefined): Promise<{ subjects: DesignRoundSubject[] } | { why: string }> => {
+  const subjects = waitsOn(w)
+  if (issue === undefined) return { subjects }
+  for (const tree of w.trees) {
+    const at = await subjectsIn($, tree, issue)
+    if ('why' in at) return at
+    for (const x of at.subjects) if (!subjects.some(y => y.key === x.key)) subjects.push(x)
+  }
+  return { subjects }
+}
+
+// What the settled question records for (#1010, where Dan's Settled landed on the session's folder,
+// Slate, while the refused edit was on trypennie): the refused call it names; else the path it names;
+// else the refused calls waiting in this session, when they all wait on the same answer. Never the
+// session's folder. `from` is each waiting call the answer is about.
+type Found = { subjects: DesignRoundSubject[]; from: DesignRoundPending[] } | { deny: string }
+const settledFor = async ($: EngineInterface, issue: number | undefined, call: unknown, path: unknown): Promise<Found> => {
+  const noProject = (why: string) => ({ deny: `The design round guard could not tell which project this is (${why}), so nothing was asked. Try again.` })
+  const forCall = async (w: DesignRoundPending, from: DesignRoundPending[]): Promise<Found> => {
+    const c = await callSubjects($, w, issue)
+    return 'why' in c ? noProject(c.why) : { subjects: c.subjects, from }
+  }
+  const inTrees = async (trees: readonly string[], from: DesignRoundPending[]): Promise<Found> => {
+    const subjects: DesignRoundSubject[] = []
+    for (const tree of trees) {
+      const at = await subjectsIn($, tree, issue)
+      if ('why' in at)
+        return {
+          deny:
+            issue === undefined
+              ? `The design round guard could not tell which issue or branch this design is for (${at.why}), so nothing was asked. Give metadata "issue" with the issue number, or check out its branch.`
+              : noProject(at.why).deny,
+        }
+      for (const x of at.subjects) if (!subjects.some(y => y.key === x.key)) subjects.push(x)
+    }
+    return { subjects, from }
+  }
+  if (call !== undefined) {
+    if (typeof call !== 'string' || !call) return { deny: `"${String(call)}" names no refused call: give metadata "call" as the id the refusal named, or leave it out.` }
+    const w = await waitingOf($, call)
+    if (!w) return { deny: `No look changing edit is waiting under ${call}: it was answered already, or the session ended. Give metadata "path" with the project's folder instead.` }
+    return forCall(w, [w])
+  }
+  if (path !== undefined) {
+    const home = (await $.env.get('HOME')) ?? ''
+    if (typeof path !== 'string' || !(path.startsWith('/') || (home && path.startsWith('~/')))) return { deny: notAbsolute(path, await unanswered($)) }
+    const abs = resolvePath(path, '/', home)
+    let tree: string | null
+    try {
+      tree = await $.modkit.workingTree({ path: abs })
+    } catch (err) {
+      return { deny: `The design round guard could not tell which checkout ${abs} is in (${message(err)}), so nothing was asked. Try again.` }
+    }
+    if (tree === null) return { deny: `${abs} is in no git checkout, so there is no project to settle the design for. Give metadata "path" with a folder or file in the project's checkout.` }
+    return inTrees([tree], [])
+  }
+  const open = await unanswered($)
+  const first = open[0]
+  if (!first) return { deny: NAME_PROJECT }
+  const sig = (w: DesignRoundPending) => w.subjects.map(x => x.key).sort().join('\n')
+  if (open.some(w => sig(w) !== sig(first)))
+    return { deny: `Refused edits are waiting on different answers (${open.map(w => `${w.id}: ${listed(w.subjects.map(x => x.label))}`).join('; ')}), so nothing was asked. Give metadata "call" with the id of the one this design is for.` }
+  return forCall(first, open)
+}
+
+type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown; call?: unknown; path?: unknown }; agentId?: string }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
@@ -294,9 +479,10 @@ export const register: Register = on => {
     if (e.agentId === undefined || e.tool === 'AskUserQuestion') return next(e)
     const raw = e as unknown as Record<string, unknown>
     const id = String(raw.tool_use_id ?? '')
-    const v = await judge($, e.tool, argsOf(raw))
+    const input = argsOf(raw)
+    const v = await judge($, e.tool, input)
     // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
-    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true }) : previewed(v) }
+    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, called: await keyOf($, e.tool, input) }) : previewed(v) }
     // An empty id names no one call, so it is never marked: any other call carrying it would skip its
     // judgement (lessons review of #991). Such a call is judged again beneath, the same way.
     if (!id) return next(e)
@@ -313,14 +499,15 @@ export const register: Register = on => {
   // refused in its words and never turned into a question for Dan.
   on('tool.check', async ($, e, next) => {
     if (e.tool_use_id !== undefined && fromAgent.has(e.tool_use_id)) return next(e)
-    const v = await judge($, e.tool, (e.input ?? {}) as Record<string, unknown>)
+    const input = (e.input ?? {}) as Record<string, unknown>
+    const v = await judge($, e.tool, input)
     if ('pass' in v) return next(e)
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
     // A check asked with no call id ($.tool.check) runs nothing: it is answered as the call would be,
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
     if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
-    return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false }) }
+    return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, called: await keyOf($, e.tool, input) }) }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(message(next.error)) }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its
@@ -370,21 +557,26 @@ export const register: Register = on => {
       return `${head}, so edits that change the look on ${left} stay blocked. Tell him, and ask again.`
     }
 
+    // What Claude is told to do with a refused call once Dan's answer lets it through.
+    const again = (w: DesignRoundPending) =>
+      w.agent ? 'The refused change was a subagent\'s: tell that agent, or a new one, to make it again, unchanged.' : `Send the ${w.tool} call to ${listed(w.files)} again now, unchanged.`
+
     const decide = async () => {
       if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about design rounds. Stop and report to the main session that this waits on him.' }
       const questions = Array.isArray(ask.questions) ? ask.questions : []
 
       if (isSkip) {
         const id = source.slice(SKIP_SOURCE.length + 1)
-        const waiting = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
+        const waiting = await waitingOf($, id)
         if (!waiting) return { deny: `No look changing edit is waiting under ${id}: it was answered already, or the session ended. Make the edit again, and you will be told how to ask.` }
         if (questions.length !== 1) return { deny: 'Ask Dan one question: "Skip design rounds for this issue?".' }
         if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
           return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
         // Only what still has no answer of his is asked about and recorded: a subject he has since
         // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
+        // What the refused call waits on, as the settled question naming it reads it (#1046).
         const open: DesignRoundSubject[] = []
-        for (const x of waiting.subjects) if (!recordOf(await $.store.get(x.key))) open.push(x)
+        for (const x of waitsOn(waiting)) if (!recordOf(await $.store.get(x.key))) open.push(x)
         if (!open.length) {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }
@@ -395,37 +587,37 @@ export const register: Register = on => {
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
         // (lessons review of #991).
-        if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to its closing question.`)
+        if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now, and ask its closing question with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}"}. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to it.`)
+        if (chosen === NOT_LOOK) {
+          // His word that this one call changes nothing on screen, kept with why (#1010): the same
+          // call sent again goes through, and nothing is recorded for the issue.
+          try {
+            const pass: DesignRoundPass = { kind: 'not-look', at: await $.clock.now(), tool: waiting.tool, files: waiting.files, subjects: open.map(x => x.label), why: notLookWhy(waiting.files), call: waiting.call }
+            await $.store.set(passKey(waiting.key), pass)
+          } catch (err) {
+            return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)
+          }
+          await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+          return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes nothing on screen. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
+        }
         if (chosen !== SKIP_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded, so edits that change the look on ${s} stay blocked. Act on what he said.`)
         const kept = await record(open, 'skipped')
         if (kept.why !== undefined) return say(r, partly(SKIP_YES, kept))
         await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
-        const again = waiting.agent
-          ? 'The refused change was a subagent\'s: tell that agent, or a new one, to make it again.'
-          : `Send the ${waiting.tool} call to ${listed(waiting.files)} again now, unchanged.`
-        return say(r, `Dan answered ${SKIP_YES}: edits that change the look go ahead on ${s} without a design round, until the next issue. ${again}`)
+        return say(r, `Dan answered ${SKIP_YES}: edits that change the look go ahead on ${s} without a design round, until the next issue. ${again(waiting)}`)
       }
 
-      // The design rounds skill's closing question: settled for this session's issue or branch, or
-      // for the issue the question names, which Dan reads in it.
+      // The design rounds skill's closing question: settled for the project of the refused call it
+      // names, of the refused calls waiting, or of the path it names, and for the issue it names
+      // there, which Dan reads in it. Never for the session's own folder (#1010).
       const named = ask.metadata?.issue
-      if (named !== undefined && !(typeof named === 'number' && Number.isInteger(named) && named > 0)) return { deny: `"${String(named)}" is not an issue number: give metadata "issue" as a number, or leave it out to settle the design for this branch's issue.` }
+      if (named !== undefined && !(typeof named === 'number' && Number.isInteger(named) && named > 0)) return { deny: `"${String(named)}" is not an issue number: give metadata "issue" as a number, or leave it out to settle the design for its branch's issue.` }
       if (questions.length !== 1) return { deny: 'Ask Dan one question: "Is this design settled?".' }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
-      const cwd = await $.session.cwd()
-      const tree = await $.modkit.workingTree({ path: cwd })
-      if (tree === null) return { deny: `This session is not in a git checkout (${cwd}), so there is no project to settle the design for. Ask from the project's checkout.` }
-      let subjects: DesignRoundSubject[]
-      const place = await placeOf($, tree)
-      if (typeof named === 'number') {
-        // The issue named needs only the project, which git names even on a detached head.
-        if (place.main === undefined || place.repo === undefined) return { deny: `The design round guard could not tell which project this is (${'why' in place ? place.why : 'no project named'}), so nothing was asked. Try again.` }
-        subjects = subjectsOf({ main: place.main, repo: place.repo, session: '', issue: named })
-      } else {
-        if ('why' in place) return { deny: `The design round guard could not tell which issue or branch this design is for (${place.why}), so nothing was asked. Give metadata "issue" with the issue number, or check out its branch.` }
-        subjects = subjectsOf({ ...place, session: await $.session.id() })
-      }
+      const found = await settledFor($, typeof named === 'number' ? named : undefined, ask.metadata?.call, ask.metadata?.path)
+      if ('deny' in found) return { deny: found.deny }
+      const { subjects, from } = found
       const s = listed(subjects.map(x => x.label))
       const { r, chosen, none } = await asked(settledQuestion(subjects), settledOptions(subjects))
       if (chosen === undefined) return none ? say(r, none) : r
@@ -433,7 +625,11 @@ export const register: Register = on => {
       if (chosen !== SETTLED_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded; act on what he said.`)
       const kept = await record(subjects, 'settled')
       if (kept.why !== undefined) return say(r, partly(SETTLED_YES, kept))
-      return say(r, `Dan answered ${SETTLED_YES}: the design is recorded as settled for ${s}, and edits that change the look go ahead there. Now write the settled design file the design rounds skill describes.`)
+      // Each refused call his answer covers in full can be sent again. It stays on the waiting list,
+      // where a skip question about it is told it already has his answer.
+      const done = new Set(kept.done.map(x => x.key))
+      const resend = from.filter(w => w.subjects.every(y => done.has(y.key))).map(again)
+      return say(r, `Dan answered ${SETTLED_YES}: the design is recorded as settled for ${s}, and edits that change the look go ahead there. Now write the settled design file the design rounds skill describes.${resend.length ? ` ${resend.join(' ')}` : ''}`)
     }
     try {
       return await decide()

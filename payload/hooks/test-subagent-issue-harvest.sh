@@ -2621,6 +2621,221 @@ contains "cannot be filed from this review" "$(cat "$r381_nofile" 2>/dev/null)" 
   && check "#381 and says why there is nothing to run" ok \
   || check "#381 and says why there is nothing to run" "file=$(tail -3 "$r381_nofile" 2>/dev/null)"
 
+# ---------------------------------------------------------------------------
+# A clear that cannot do its work SAYS so, and another session's finding is shown once (#1011).
+# ---------------------------------------------------------------------------
+# Seen in a Slate session on 2026-10-09: the same two findings from another session came back at
+# three reviews in a row. Each review ran its own clear line verbatim, the clear printed NOTHING, and
+# the spool was unchanged. Reproduced here: when the clear cannot move a pending file aside (the
+# spool directory is not writable from where the line runs), the rename's failure was swallowed, the
+# summary printed nothing for a run that failed and filed nothing, and the seen marks that stop a
+# finding coming back were never written anywhere (L98, L100). Driven through the real hook, so the
+# render and the line it writes are the two halves that must agree (L70).
+R1011_B="$TMPROOT/r1011-b.jsonl"; : > "$R1011_B"     # another session, in the same project
+r1011_hash="$(printf '%s' "$CLEARK/proj" | shasum | cut -c1-12)"
+r1011_cool="${TMPDIR%/}/claude-feature-issue-review-${r1011_hash}.stamp"
+r1011_review() { rm -f "$r1011_cool"; r381_render; }   # past the cooldown, so only content decides
+r1011_shown() { [ -n "$1" ] && cat "$1" 2>/dev/null; }
+
+# --- the control: a writable spool ---------------------------------------------------------------
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 a finding another session's agent made" agent-3327 "$R1011_B" >/dev/null 2>&1
+r1011_f1="$(r1011_review)"
+r1011_cmd="$(r381_cmd_of "$r1011_f1")"
+contains "another session's agent made" "$(r1011_shown "$r1011_f1")" \
+  && check "#1011 (writable) the first review shows the other session's finding" ok \
+  || check "#1011 (writable) the first review shows the other session's finding" "file=${r1011_f1:-<none>}"
+r1011_said="$(eval "$r1011_cmd" 2>&1)"
+[ -n "$r1011_said" ] \
+  && check "#1011 (writable) the clear says what it did" ok \
+  || check "#1011 (writable) the clear says what it did" "it printed nothing"
+# A finding of this session's own arrives after the clear, so the next review has something to show
+# and the absence below is measured against a review that really fired (L159).
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 this session's own later finding" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r1011_f2="$(r1011_review)"
+contains "own later finding" "$(r1011_shown "$r1011_f2")" \
+  && check "#1011 (writable) the next review fired" ok \
+  || check "#1011 (writable) the next review fired" "file=${r1011_f2:-<none>}"
+contains "another session's agent made" "$(r1011_shown "$r1011_f2")" \
+  && check "#1011 (writable) and does not show the other session's finding again" "it came back" \
+  || check "#1011 (writable) and does not show the other session's finding again" ok
+
+# --- the reported failure: the clear cannot move the pending file aside ---------------------------
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 a finding another session's agent made" agent-3327 "$R1011_B" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 this session's own finding" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r1011_f1="$(r1011_review)"
+r1011_cmd="$(r381_cmd_of "$r1011_f1")"
+r1011_before="$(cat "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null)"
+chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR"
+# A user chmod cannot restrict (root) would make every check below pass while measuring nothing, so
+# that is detected and reported as unmeasured rather than counted either way (L411).
+if ( : > "$CLAUDE_ISSUE_SPOOL_DIR/.r1011-probe" ) 2>/dev/null; then
+  rm -f "$CLAUDE_ISSUE_SPOOL_DIR/.r1011-probe"
+  chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR"
+  echo "UNMEASURED: #1011 an unwritable spool cannot be made here (chmod does not restrict this user)"
+else
+  r1011_said="$(eval "$r1011_cmd" 2>&1)"
+  r1011_rc=$?
+  chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR"
+  [ -n "$r1011_said" ] \
+    && check "#1011 a clear that cannot move the spool aside is not silent" ok \
+    || check "#1011 a clear that cannot move the spool aside is not silent" "printed nothing, exit $r1011_rc"
+  [ "$r1011_rc" -ne 0 ] \
+    && check "#1011 and fails" ok \
+    || check "#1011 and fails" "exit 0, said=${r1011_said:0:300}"
+  contains "could not move" "$r1011_said" \
+    && check "#1011 and names what it could not do" ok \
+    || check "#1011 and names what it could not do" "said=${r1011_said:0:500}"
+  contains "NOTHING was filed" "$r1011_said" \
+    && check "#1011 and says nothing was filed" ok \
+    || check "#1011 and says nothing was filed" "said=${r1011_said:0:500}"
+  contains "this session's own finding" "$(bash "$SPOOL_LIB" raw "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null)" \
+    && check "#1011 and really filed nothing" ok \
+    || check "#1011 and really filed nothing" "this session's finding is gone from the spool"
+  [ "$(cat "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null)" = "$r1011_before" ] \
+    && check "#1011 and left the spool exactly as it was" ok \
+    || check "#1011 and left the spool exactly as it was" "the spool changed"
+  # The other session's finding was shown and answered here, so it is recorded as seen somewhere the
+  # clear could write, and the next review does not show it again.
+  contains "marked as seen" "$r1011_said" \
+    && check "#1011 and says the other session's finding is recorded as seen" ok \
+    || check "#1011 and says the other session's finding is recorded as seen" "said=${r1011_said:0:600}"
+  r1011_f2="$(r1011_review)"
+  contains "this session's own finding" "$(r1011_shown "$r1011_f2")" \
+    && check "#1011 the next review shows this session's unfiled finding" ok \
+    || check "#1011 the next review shows this session's unfiled finding" "file=${r1011_f2:-<none>}"
+  contains "another session's agent made" "$(r1011_shown "$r1011_f2")" \
+    && check "#1011 and does not show the other session's finding a second time" "it came back" \
+    || check "#1011 and does not show the other session's finding a second time" ok
+  # The ledger is read as a set, so a clear retried against the same unwritable spool must not add
+  # the same mark again: retried at every review, it would grow without bound.
+  r1011_ledger="$(bash "$SPOOL_LIB" seen-ledger "$(printf '%s' "$r1011_cmd" | awk '{print $NF}')" 2>/dev/null)"
+  r1011_lines1="$(wc -l < "$r1011_ledger" 2>/dev/null | tr -d ' ')"
+  chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR"
+  eval "$r1011_cmd" >/dev/null 2>&1
+  chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR"
+  r1011_lines2="$(wc -l < "$r1011_ledger" 2>/dev/null | tr -d ' ')"
+  [ -n "$r1011_lines1" ] && [ "$r1011_lines1" -ge 2 ] && [ "$r1011_lines1" = "$r1011_lines2" ] \
+    && check "#1011 a retried clear does not add the same seen mark twice" ok \
+    || check "#1011 a retried clear does not add the same seen mark twice" "ledger lines ${r1011_lines1:-none} then ${r1011_lines2:-none} at ${r1011_ledger:-<no path>}"
+  # Recorded for THIS session only: the session that owns it is still offered it (L116).
+  contains "another session's agent made" "$(bash "$SPOOL_LIB" pending "$CLEARK/proj" "$R1011_B" 2>/dev/null)" \
+    && check "#1011 while the owning session is still offered it" ok \
+    || check "#1011 while the owning session is still offered it" "it was hidden from its owner"
+fi
+
+# --- SPOOL SOURCE counts what this reader is shown or can file ------------------------------------
+# The source line counted every raw line of a pending file, other sessions' records already shown
+# here included, so two reviews in a row could both say "(57 records)" after a clear had really filed
+# 42, and it read as the clear not draining (seen in the claude-config coordinator session,
+# 2026-10-09). Render, clear, render: the second count is what is still this reader's business.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+for r1011_i in 1 2 3; do
+  bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 other session's record $r1011_i" agent-3327 "$R1011_B" >/dev/null 2>&1
+done
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 own record to be filed" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r1011_f1="$(r1011_review)"
+case "$(r1011_shown "$r1011_f1")" in
+  *"SPOOL SOURCE: "*"(4 records)"*) check "#1011 the first source line counts all four records" ok ;;
+  *) check "#1011 the first source line counts all four records" "file=$(grep 'SPOOL SOURCE' "$r1011_f1" 2>/dev/null)" ;;
+esac
+eval "$(r381_cmd_of "$r1011_f1")" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 own record after the clear" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r1011_f2="$(r1011_review)"
+r1011_src2="$(grep 'SPOOL SOURCE' "$r1011_f2" 2>/dev/null)"
+# The pending file now holds 4 raw lines (not measured: the fixture above writes them), the 3
+# already shown here and the 1 new one.
+case "$r1011_src2" in
+  *"(1 records)"*) check "#1011 after the clear it counts only what this reader is shown or can file" ok ;;
+  *) check "#1011 after the clear it counts only what this reader is shown or can file" "line=${r1011_src2:-<none>}" ;;
+esac
+case "$r1011_src2" in
+  *"(4 records)"*) check "#1011 and not the raw lines, other sessions' already shown records included" "line=$r1011_src2" ;;
+  *) check "#1011 and not the raw lines, other sessions' already shown records included" ok ;;
+esac
+
+# --- a finding this session has already been shown does not make a review fire -----------------
+# The review bypasses its cooldown when a finding is pending. A finding marked seen here is never
+# shown here again, so counting it made a review fire at every turn with nothing in it.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+R1011_A="$TMPROOT/r1011-a.jsonl"; : > "$R1011_A"
+bash "$SPOOL_LIB" note "$REPO" "r1011 a finding only session B can settle" agent-3327 "$R1011_B" >/dev/null 2>&1
+bash "$SPOOL_LIB" has-findings "$REPO" "$R1011_A" >/dev/null 2>&1 \
+  && check "#1011 an unseen finding from another session counts as pending" ok \
+  || check "#1011 an unseen finding from another session counts as pending" "it did not"
+bash "$SPOOL_LIB" pending "$REPO" "$R1011_A" "$TMPROOT/r1011.manifest" >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$R1011_A" "$TMPROOT/r1011.manifest" >/dev/null 2>&1
+bash "$SPOOL_LIB" has-findings "$REPO" "$R1011_A" >/dev/null 2>&1 \
+  && check "#1011 once seen here it no longer counts as pending for this session" "has-findings still said yes" \
+  || check "#1011 once seen here it no longer counts as pending for this session" ok
+bash "$SPOOL_LIB" has-findings "$REPO" "$R1011_B" >/dev/null 2>&1 \
+  && check "#1011 while it still counts for the session that owns it" ok \
+  || check "#1011 while it still counts for the session that owns it" "has-findings said no"
+
+# --- the session split cannot run: nothing is filed, even without a stamp ------------------------
+# A clear files only the calling session's records (#222). When the split by session could not run,
+# the unsplit fallback used to file EVERY record, other sessions' included, and say only how many.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "r1011 session B's finding the split must protect" agent-3327 "$R1011_B" >/dev/null 2>&1
+r1011_shim="$TMPROOT/r1011-shim"; mkdir -p "$r1011_shim"
+printf '#!/bin/sh\nexit 1\n' > "$r1011_shim/python3"; chmod +x "$r1011_shim/python3"
+r1011_split="$(PATH="$r1011_shim:$PATH" bash "$SPOOL_LIB" clear "$REPO" "$R1011_A" 2>&1)"
+r1011_split_rc=$?
+contains "session B's finding the split must protect" "$(bash "$SPOOL_LIB" archive "$REPO" "$R1011_A" 2>/dev/null)" \
+  && check "#1011 a clear whose session split failed files nothing" "another session's record was archived" \
+  || check "#1011 a clear whose session split failed files nothing" ok
+[ "$r1011_split_rc" -ne 0 ] \
+  && check "#1011 and fails" ok \
+  || check "#1011 and fails" "exit 0, said=${r1011_split:0:300}"
+contains "NOTHING was filed" "$r1011_split" \
+  && check "#1011 and says nothing was filed" ok \
+  || check "#1011 and says nothing was filed" "said=${r1011_split:0:400}"
+contains "session B's finding the split must protect" "$(bash "$SPOOL_LIB" raw "$REPO" "$R1011_A" 2>/dev/null)" \
+  && check "#1011 and the record is still pending" ok \
+  || check "#1011 and the record is still pending" "it is gone"
+
+# --- the pending file is moved away between being found and being filed --------------------------
+# Another clear or a filing of failures can take the file in the instant before this one renames it.
+# That is not this clear failing, and not an empty key either, so it gets its own sentence.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "r1011 a finding another filing takes first" tester "$R1011_A" >/dev/null 2>&1
+r1011_pf="$(bash "$SPOOL_LIB" path "$REPO" "$R1011_A" 2>/dev/null)"
+r1011_race="$(CLAUDE_ISSUE_SPOOL_PRERENAME="mv '$r1011_pf' '$r1011_pf.taken'" bash "$SPOOL_LIB" clear "$REPO" "$R1011_A" 2>&1)"
+r1011_race_rc=$?
+[ "$r1011_race_rc" -eq 0 ] \
+  && check "#1011 a file taken by another filing is not this clear failing" ok \
+  || check "#1011 a file taken by another filing is not this clear failing" "exit $r1011_race_rc said=${r1011_race:0:300}"
+contains "moved away" "$r1011_race" \
+  && check "#1011 and says the file was taken from under it" ok \
+  || check "#1011 and says the file was taken from under it" "said=${r1011_race:0:400}"
+contains "nothing was pending under the key(s) this project reads" "$r1011_race" \
+  && check "#1011 and does not call the key empty" "said=${r1011_race:0:400}" \
+  || check "#1011 and does not call the key empty" ok
+
+# --- the review read records under a key this clear did not reach --------------------------------
+# A clear line retyped with a different directory (a path with a character that did not survive the
+# copy) reads a different set of keys. What the review read under the others was neither filed nor
+# left: it was not looked at, and that has to be said rather than reported as nothing pending.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-10-09T00:00:00Z","status":"found","agent":"tester","findings":["r1011 a finding only the directory key holds"]}' >/dev/null 2>&1
+bash "$SPOOL_LIB" pending "$REPO" "$R1011_A" "$TMPROOT/r1011-keys.manifest" >/dev/null 2>&1
+mkdir -p "$TMPROOT/r1011-elsewhere"
+r1011_keys="$(bash "$SPOOL_LIB" clear "$TMPROOT/r1011-elsewhere" "$R1011_A" "$TMPROOT/r1011-keys.manifest" 2>&1)"
+contains "did not reach" "$r1011_keys" \
+  && check "#1011 a clear that did not reach a key the review read says so" ok \
+  || check "#1011 a clear that did not reach a key the review read says so" "said=${r1011_keys:0:500}"
+contains "only the directory key holds" "$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null)" \
+  && check "#1011 and that record is still pending" ok \
+  || check "#1011 and that record is still pending" "it is gone"
+
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

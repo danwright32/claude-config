@@ -1,7 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { HEADER, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
+import { HEADER, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
@@ -71,6 +71,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 const withKit = { plugins: [secDefault, modKit] }
 
 const HOME = '/Users/dan'
+// The moment every test's clock starts at.
+const T0 = Date.UTC(2026, 9, 9, 15, 0, 0)
 const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34ef56.json`
 
 type Dialog = { answer?: string; afk?: boolean }
@@ -92,11 +94,12 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const cards: Record<string, unknown>[] = []
   const gitRuns: string[] = []
   const reads: string[] = []
-  const at = { cwd: init.cwd ?? '/w/slate' }
-  mock.clock(on)
+  const storeGets: string[] = []
+  const at ={ cwd: init.cwd ?? '/w/slate', session: 's1' }
+  const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: at.cwd }) as never)
-  on('session.id', () => ({ value: 's1' }) as never)
+  on('session.id', () => ({ value: at.session }) as never)
   on('agent.list', () => ({ value: (init.agents ?? []).map(id => ({ id, description: 'a task', agentType: 'general-purpose' })) }) as never)
   // git, as mod-kit's branch reader asks it in a checkout.
   const git: Run = async argv => {
@@ -142,6 +145,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: t } as never
   })
   on('store.get', ($, e) => {
+    storeGets.push(e.key)
     if (ctl.storeGetFails) throw new Error('the store could not be read')
     return { value: store[e.key] } as never
   })
@@ -181,7 +185,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets }
 }
 type W = ReturnType<typeof world>
 
@@ -223,7 +227,7 @@ const askSettled = async ($: Caller, w: W, answer: string | undefined, extra: Re
   })
 }
 
-test('a file that does not change the look passes untouched, with nothing asked of git', withKit, async ($, on) => {
+test('a file that does not change the look passes untouched, with nothing asked of git or the store', withKit, async ($, on) => {
   const w = world($, on)
   const r = await call($, ROUTE)
   expect(refusalOf(r)).toBe('')
@@ -234,6 +238,8 @@ test('a file that does not change the look passes untouched, with nothing asked 
   const b = await call($, { tool: 'Bash', command: "printf 'x\\n' >> /w/slate/lib/date.ts" })
   expect(refusalOf(b)).toBe('')
   expect(w.ran.length).toBe(2)
+  // Lessons review of #1010: Dan's Not a look change is looked up only for a call that would be held.
+  expect(w.storeGets).toEqual([])
 })
 
 // Dan, 2026-10-08: "On, but let tests through".
@@ -368,7 +374,7 @@ test("blocked, then let through for the rest of the issue by Dan's Skip them, in
   expect(q.question.startsWith(SKIP_QUESTION)).toBe(true)
   expect(q.question).toContain('app/page.tsx')
   expect(q.header).toBe(HEADER)
-  expect(q.options.map(o => o.label)).toEqual([SKIP_YES, SKIP_NO])
+  expect(q.options.map(o => o.label)).toEqual([SKIP_YES, SKIP_NO, NOT_LOOK])
   expect(contextOf(answered)).toContain('Send the Write call to app/page.tsx again')
   expect(w.store['record:/w/slate|issue:978']).toMatchObject({ kind: 'skipped' })
   expect(refusalOf(await call($, PAGE))).toBe('')
@@ -564,7 +570,7 @@ test('it fails closed, saying so, when the issue or branch cannot be told or the
   // Dan's answer that cannot be recorded is said, and records nothing.
   w.ctl.storeGetFails = false
   w.ctl.storeSetFails = true
-  expect(contextOf(await askSettled($, w, SETTLED_YES))).toContain('could not be recorded')
+  expect(contextOf(await askSettled($, w, SETTLED_YES, {}, { path: '/w/slate' }))).toContain('could not be recorded')
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
 })
 
@@ -591,7 +597,7 @@ test('the default branch is held for this session only: a no there does not carr
 test('the settled question may name the issue when the branch does not, and Dan reads that issue in it', withKit, async ($, on) => {
   const w = world($, on)
   w.branches['/w/slate'] = 'main'
-  await askSettled($, w, SETTLED_YES, {}, { issue: 978 })
+  await askSettled($, w, SETTLED_YES, {}, { issue: 978, path: '/w/slate' })
   expect(w.asked[0]?.questions[0]?.question).toContain('issue #978 in slate')
   w.branches['/w/slate'] = '978-design-round-guard'
   expect(refusalOf(await call($, PAGE))).toBe('')
@@ -619,4 +625,287 @@ test('a call a settings hook refuses is refused by that hook, never turned into 
   const why = refusalOf(await call($, PAGE))
   expect(why).toBe('Blocked by a settings hook.')
   expect(w.cards).toEqual([])
+})
+
+// claude-config#1010, trypennie PR #529: the edit was one prop on a page, `xbc={xbc}` to
+// `xbc={leadXbc ?? ''}`, which booking code the page hands its calendar. Nothing on screen changed,
+// and the guard held it for a design round because the file is a page.
+const RESULT = '/w/slate/src/app/my-offers/result/page.tsx'
+const RESULT_TEXT = [
+  "import { BookingCalendar } from '@/components/BookingCalendar'",
+  '',
+  'export default function Result({ xbc, leadXbc, slots }: Props) {',
+  '  return (',
+  '    <main className="p-4">',
+  '      <BookingCalendar slots={slots} xbc={xbc} variant={plain} />',
+  '    </main>',
+  '  )',
+  '}',
+  '',
+].join('\n')
+
+test('#1010: a data only prop change on a page goes through unasked, judged from the edit; a look change on the same page is still held', withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: RESULT, old_string: 'xbc={xbc}', new_string: "xbc={leadXbc ?? ''}" }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'MultiEdit', file_path: RESULT, edits: [{ old_string: 'slots={slots}', new_string: 'slots={open(slots)}' }] }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: RESULT, content: RESULT_TEXT.replace('xbc={xbc}', 'xbc={lead.xbc}') }))).toBe('')
+  expect(w.ran.length).toBe(3)
+  // The same page, changed where it shows: held, each one.
+  for (const [from, to] of [['className="p-4"', 'className="p-6"'], ['variant={plain}', 'variant={bold}'], ['xbc={xbc}', "xbc={'ABC'}"]] as const)
+    expect(refusalOf(await call($, { tool: 'Edit', file_path: RESULT, old_string: from, new_string: to }))).toContain(SKIP_QUESTION)
+  // A shell edit is never judged from its words, and a page the disk cannot read is held.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `sed -i '' 's/xbc={xbc}/xbc={lead}/' ${RESULT}` }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: '/w/slate/app/gone.tsx', old_string: 'xbc={xbc}', new_string: 'xbc={lead}' }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(3)
+  expect(Object.keys(w.store)).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+test("#1010: Dan's Not a look change lets that one refused edit through unchanged, records why, and holds the next", withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT }, agents: ['agent-a1'] })
+  // A prop whose name can carry a look is never judged from the edit, so Dan is asked.
+  const edit = { tool: 'Edit', file_path: RESULT, old_string: 'variant={plain}', new_string: 'variant={lead.variant}' }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain(NOT_LOOK)
+  const answered = await askSkip($, w, why, NOT_LOOK)
+  expect(w.asked[0]?.questions[0]?.options.map(o => o.label)).toEqual([SKIP_YES, SKIP_NO, NOT_LOOK])
+  expect(contextOf(answered)).toContain('again now, unchanged')
+  // His word is kept for that edit alone, with why; nothing is recorded for the issue.
+  const passes = Object.entries(w.store).filter(([k]) => k.startsWith('pass:'))
+  expect(passes.length).toBe(1)
+  expect(passes[0]?.[1]).toMatchObject({ kind: 'not-look', tool: 'Edit', files: ['src/app/my-offers/result/page.tsx'], subjects: ['issue #978 in slate'] })
+  expect(String((passes[0]?.[1] as { why?: string }).why)).toContain(NOT_LOOK)
+  expect(w.store['record:/w/slate|issue:978']).toBeUndefined()
+  expect(refusalOf(await call($, edit))).toBe('')
+  // Any other edit to the same page is judged afresh, and the answered call waits on nobody.
+  expect(refusalOf(await call($, { ...edit, new_string: 'variant={bold}' }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await askSkip($, w, why, NOT_LOOK))).toContain('No look changing edit is waiting')
+  // A shell edit and a subagent's edit are let through the same way, each once Dan answers.
+  const sh = { tool: 'Bash', command: `sed -i '' 's/variant={plain}/variant={v}/' ${RESULT}` }
+  await askSkip($, w, refusalOf(await call($, sh)), NOT_LOOK)
+  expect(refusalOf(await call($, sh))).toBe('')
+  const agents = { ...edit, new_string: 'variant={theirs}', agentId: 'agent-a1' }
+  const agentWhy = refusalOf(await call($, agents))
+  expect(agentWhy).toContain('Stop')
+  expect(contextOf(await askSkip($, w, agentWhy, NOT_LOOK))).toContain('agent')
+  expect(refusalOf(await call($, agents))).toBe('')
+  expect(w.ran.length).toBe(3)
+  expect(w.store['record:/w/slate|issue:978']).toBeUndefined()
+})
+
+// Lessons review of #1010: his word was kept under the call's tool and input alone, for ever, so the
+// same shell command with a relative path, sent from another checkout or in a later session, would
+// have gone through on an answer he gave about a different file.
+test("#1010: Dan's Not a look change holds only in the session and the folder the call ran in", withKit, async ($, on) => {
+  const w = world($, on)
+  w.files['/w/other/app/page.tsx'] = 'x'
+  const sh = { tool: 'Bash', command: "sed -i '' 's/a/b/' app/page.tsx" }
+  w.at.cwd = '/w/slate'
+  await askSkip($, w, refusalOf(await call($, sh)), NOT_LOOK)
+  expect(refusalOf(await call($, sh))).toBe('')
+  // The same words from another checkout write another file: asked about afresh.
+  w.at.cwd = '/w/other'
+  expect(refusalOf(await call($, sh))).toContain('issue #55 in other')
+  // And the same call in a later session is asked about again.
+  w.at.cwd = '/w/slate'
+  w.at.session = 's2'
+  expect(refusalOf(await call($, sh))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #1010: a refused call left waiting by the guard before #1010, which kept no
+// project, key or call text, survives a mod reload in the same session. It is no longer waiting: the
+// edit is made again, never settled or let through on what it lacks.
+test('#1010: a refused call left waiting by the earlier guard is asked about afresh, never settled or passed on what it lacks', withKit, async ($, on) => {
+  const w = world($, on)
+  const old = { id: 't900', tool: 'Write', files: ['app/page.tsx'], subjects: [{ key: 'record:/w/slate|issue:978', label: 'issue #978 in slate' }] }
+  on('state.get', ($, e, next) => {
+    if ((e as { key?: string }).key === 'pending') return { value: { value: [old], version: 1 } } as never
+    return next(e)
+  })
+  expect(refusalOf(await askSkip($, w, 'design-round-guard:t900', NOT_LOOK))).toContain('No look changing edit is waiting under t900')
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: 't900', issue: 978 }))).toContain('No look changing edit is waiting under t900')
+  expect(refusalOf(await askSettled($, w, SETTLED_YES))).toContain('"path"')
+  expect(w.asked).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
+})
+
+// Lessons review of #1010 (L567): his word authorises a call, so it is refused on its age when used,
+// not trusted for as long as a session lasts. The call is resent within moments of his answer.
+test("#1010: Dan's Not a look change lapses an hour after he gave it", withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  const edit = { tool: 'Edit', file_path: RESULT, old_string: 'variant={plain}', new_string: 'variant={lead.variant}' }
+  await askSkip($, w, refusalOf(await call($, edit)), NOT_LOOK)
+  await w.clock.advance(60 * 60 * 1000 - 1)
+  expect(refusalOf(await call($, edit))).toBe('')
+  await w.clock.advance(1)
+  expect(refusalOf(await call($, edit))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #1010: the key is a hash, and the call's text is Claude's to write, so a record
+// found under a call's key lets it through only when it holds that very call.
+test("#1010: a Not a look change record found under a call's key lets it through only when it holds that very call", withKit, async ($, on) => {
+  const w = world($, on)
+  const edit = { tool: 'Edit', file_path: '/w/slate/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
+  const { tool, ...input } = edit
+  // A record under this call's key, as a colliding call would have left it, holding another call,
+  // given just now so its age is not what refuses it.
+  const at = { cwd: '/w/slate', session: 's1' }
+  const record = { kind: 'not-look', at: T0, tool, files: ['app/page.tsx'], subjects: [], why: 'x' }
+  w.store[`pass:${callKey(tool, input, at)}`] = { ...record, call: 'another call' }
+  expect(refusalOf(await call($, edit))).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+  // The same record holding this very call lets it through, so the refusal above is the mismatch.
+  w.store[`pass:${callKey(tool, input, at)}`] = { ...record, call: callText(tool, input, at) }
+  expect(refusalOf(await call($, edit))).toBe('')
+})
+
+// claude-config#1010: Dan's Settled was recorded for Slate issue #2210, the session's folder, while
+// the refused edit was on trypennie. Here the session sits in /w/other and the edit is in /w/slate.
+test('#1010: Settled and Skip them record for the project and branch of the refused call, never the session folder', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/other' })
+  expect(refusalOf(await call($, PAGE))).toContain('issue #978 in slate')
+  const settled = await askSettled($, w, SETTLED_YES)
+  expect(w.asked[0]?.questions[0]?.question).toContain('issue #978 in slate')
+  expect(contextOf(settled)).toContain('issue #978 in slate')
+  expect(Object.keys(w.store)).toEqual(['record:/w/slate|issue:978'])
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  // The session's own project is untouched by it.
+  const other = refusalOf(await call($, { tool: 'Write', file_path: '/w/other/x.css', content: 'a{}' }))
+  expect(other).toContain('issue #55 in other')
+  // And a skip about that call is for its project too.
+  await askSkip($, w, other, SKIP_YES)
+  expect(Object.keys(w.store).sort()).toEqual(['record:/w/other|issue:55', 'record:/w/slate|issue:978'])
+})
+
+test('#1010: with refused edits waiting in two projects, Settled is asked only about the one named', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/other' })
+  const a = idIn(refusalOf(await call($, PAGE)))
+  const b = idIn(refusalOf(await call($, { tool: 'Write', file_path: '/w/other/x.css', content: 'a{}' })))
+  const unnamed = refusalOf(await askSettled($, w, SETTLED_YES))
+  expect(unnamed).toContain(String(a))
+  expect(unnamed).toContain(String(b))
+  expect(w.asked).toEqual([])
+  await askSettled($, w, SETTLED_YES, {}, { call: a })
+  expect(w.asked[0]?.questions[0]?.question).toContain('issue #978 in slate')
+  expect(Object.keys(w.store)).toEqual(['record:/w/slate|issue:978'])
+  // A call that is not waiting is refused by name.
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: 't999' }))).toContain('No look changing edit is waiting under t999')
+})
+
+test('#1010: with no refused edit waiting, Settled needs the project named by a path, never read from the session folder', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/other' })
+  expect(refusalOf(await askSettled($, w, SETTLED_YES))).toContain('"path"')
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { path: 'app' }))).toContain('"path"')
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { path: '/tmp/nowhere' }))).toContain('in no git checkout')
+  expect(w.asked).toEqual([])
+  await askSettled($, w, SETTLED_YES, {}, { path: '/w/slate/app' })
+  expect(Object.keys(w.store)).toEqual(['record:/w/slate|issue:978'])
+})
+
+// claude-config#1010: a write to src/app/booking/[SO_ID]/page.tsx was refused as a write the guard
+// could not follow, relative or absolute, so the proof it was making had to be done in memory.
+test('#1010: a Next.js dynamic segment is followed as the folder it names, relative or absolute, by the shell and by inline code', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/src/app/booking/[SO_ID]/page.tsx': 'export default function P() { return null }\n' } })
+  for (const [command, shown] of [
+    ['echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx', 'src/app/booking/[SO_ID]/page.tsx'],
+    ["cd /w/slate && sed -i '' 's/null/<p\\/>/' 'src/app/booking/[SO_ID]/page.tsx'", 'src/app/booking/[SO_ID]/page.tsx'],
+    ['cd /w/slate/src/app && cp /tmp/page.tsx "booking/[SO_ID]/page.tsx"', 'src/app/booking/[SO_ID]/page.tsx'],
+    [`cd /w/slate && python3 -c "open('src/app/(shop)/[...slug]/page.tsx','w').write('x')"`, 'src/app/(shop)/[...slug]/page.tsx'],
+  ] as const) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes('issue #978 in slate') && why.includes(shown) && !why.includes('could not be followed')]).toEqual([command, true])
+  }
+  // The edit tools were never in doubt, and once Dan answers, the shell write goes through.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/src/app/booking/[SO_ID]/page.tsx', content: 'x' }))).toContain('issue #978 in slate')
+  await askSkip($, w, refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' })), SKIP_YES)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' }))).toBe('')
+  // A bracket that is a pattern is still a write that cannot be followed.
+  w.branches['/w/slate'] = '979-next'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/app/page.ts[x]' }))).toContain('could not be followed')
+})
+
+// claude-config#1046, from a pet session: the session in the project's main checkout, the edit in a
+// worktree whose branch names the issue. Dan answered Settled with metadata "call" naming the refused
+// edit, and the same edit sent again (with a new id) was refused again, naming the same issue.
+const WT_PAGE = { tool: 'Edit', file_path: '/w/slate-wt/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
+const WT_STYLE = { tool: 'Edit', file_path: '/w/slate-wt/app/globals.css', old_string: 'a{}', new_string: 'a{color:red}' }
+for (const [form, metadataOf] of [
+  ['"call" naming the refused edit', (id: string) => ({ call: id })],
+  ['"path" naming the worktree and "issue"', () => ({ path: '/w/slate-wt', issue: 1548 })],
+  ['"path" naming a file in the worktree', () => ({ path: '/w/slate-wt/app/page.tsx' })],
+  ['nothing but the source', () => ({})],
+] as const)
+  test(`#1046: Settled with ${form} lets the resent edit and every later look changing edit on the issue through`, withKit, async ($, on) => {
+    const w = world($, on, { cwd: '/w/slate' })
+    w.branches['/w/slate'] = 'main'
+    w.branches['/w/slate-wt'] = '1548-enrollment-chart'
+    const why = refusalOf(await call($, WT_PAGE))
+    expect(why).toContain('issue #1548 in slate')
+    const id = idIn(why)
+    if (!id) throw new Error(`no refused call named in: ${why}`)
+    const settled = await askSettled($, w, SETTLED_YES, {}, metadataOf(id))
+    expect(refusalOf(settled)).toBe('')
+    expect(w.asked[0]?.questions[0]?.question).toContain('issue #1548 in slate')
+    expect(contextOf(settled)).toContain('recorded as settled for issue #1548 in slate')
+    // The edit sent again arrives with a new id, and goes through; so does another look change there.
+    expect(refusalOf(await call($, WT_PAGE))).toBe('')
+    expect(refusalOf(await call($, WT_STYLE))).toBe('')
+    expect(w.ran.map(x => x.input.file_path)).toEqual(['/w/slate-wt/app/page.tsx', '/w/slate-wt/app/globals.css'])
+  })
+
+// claude-config#1046: "issue" given beside "call" recorded only the issue named, never what the refused
+// edit waits on, so when the two differed the edit sent again was refused again, and every answer
+// after that looped. Naming a call now always records what that call waits on, as Skip them does.
+test('#1046: Settled naming a refused call records what that call waits on, whatever "issue" also names', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  w.branches['/w/slate'] = 'main'
+  w.branches['/w/slate-wt'] = '1548-enrollment-chart'
+  const id = idIn(refusalOf(await call($, WT_PAGE)))
+  if (!id) throw new Error('no refused call named')
+  const r = await askSettled($, w, SETTLED_YES, {}, { call: id, issue: 1549 })
+  expect(w.asked[0]?.questions[0]?.question).toContain('issue #1548 in slate and issue #1549 in slate')
+  expect(contextOf(r)).toContain('Send the Edit call to app/page.tsx again now')
+  expect(Object.keys(w.store).sort()).toEqual(['record:/w/slate|issue:1548', 'record:/w/slate|issue:1549'])
+  expect(refusalOf(await call($, WT_PAGE))).toBe('')
+})
+
+// claude-config#1046: a refused edit on the default branch waits on that branch for this session, and
+// the skill says to add the issue there, so Settled naming both recorded only the issue and the edit
+// was held again.
+test('#1046: on the default branch, Settled naming the refused call and its issue lets the edit through now and on the issue branch later', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  w.branches['/w/slate'] = 'main'
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call named')
+  const r = await askSettled($, w, SETTLED_YES, {}, { call: id, issue: 978 })
+  expect(w.asked[0]?.questions[0]?.question).toContain('main in slate, for this session and issue #978 in slate')
+  expect(contextOf(r)).toContain('Send the Write call to app/page.tsx again now')
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  w.branches['/w/slate'] = '978-design-round-guard'
+  expect(refusalOf(await call($, STYLE))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+// claude-config#1046: a path that is not absolute was refused with "No refused edit is waiting",
+// whether one was or not, which read as the path being ignored in favour of "call".
+test('#1046: a path that is not absolute is refused by name, naming the refused edits that are waiting', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  w.branches['/w/slate-wt'] = '1548-enrollment-chart'
+  const id = idIn(refusalOf(await call($, WT_PAGE)))
+  const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { path: 'slate-wt', issue: 1548 }))
+  expect(why).toContain('"slate-wt" is not an absolute path')
+  expect(why).toContain(`${id}: issue #1548 in slate`)
+  expect(why).not.toContain('No refused edit is waiting')
+  expect(w.asked).toEqual([])
+})
+
+test('#1046: with no refused edit waiting, a path that is not absolute is still refused by name, asking only for an absolute path', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { path: 42 }))
+  expect(why).toContain('"42" is not an absolute path')
+  expect(why).toContain('"path" as the absolute path')
+  expect(why).not.toContain('"call"')
+  expect(w.asked).toEqual([])
 })
