@@ -18937,7 +18937,7 @@ check "#413 and nothing is said about holding it back" \
   "out_lacks \"\$out_hr6\" 'hooks block' i"
 
 
-section "== the lessons index is one file per section, and every one of them loads (claude-config#473) =="
+section "== the lessons index is one file per section, and with no core list every one of them loads (claude-config#473) =="
 # LESSONS-INDEX.md reached 100,899 characters over 702 lessons and grew about 1,130 a day, so it
 # was about a month from the 140,000 byte budget in hooks/test-rule-file-budget.sh and not long
 # after that from the platform's own 150,000 character banner. Both limits are PER FILE, so the
@@ -18981,11 +18981,12 @@ check "#473 the single index file is not left behind" \
 
 # The imports are DERIVED from the sections rather than maintained by hand beside them (L41), and
 # the retired import goes with the retired file or every session dies on a dangling reference.
-# Which files are imported is no longer "every one of them": since Dan reversed that on 2026-09-24
-# (#565), a session loads the lessons core when a list is set and the whole library only when none
-# is, which the #564 section below holds. The check that CLAUDE.md imports every generated file
-# defended the reversed decision and was deleted with it (L252); what still matters is that the
-# library itself stays complete, which the union checks below and in #564 hold.
+# Which files are imported is no longer "every one of them, always": since Dan reversed that on
+# 2026-09-24 (#565), a session loads the lessons core when a list is set. What survives the reversal
+# is the FAIL SAFE: with no list, as in this fixture, the whole library is imported, every section of
+# it, and that is what this check holds now (the core side is the #564 section below).
+check "#473 with no core list CLAUDE.md imports every library file, the fail safe" \
+  "grep -q '^@LESSONS-INDEX-proof-over-green\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-data-safety\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-cross-system-reliability\.md\$' '$SPH/CLAUDE.md'"
 check "#473 and no longer imports the file that was retired" \
   "! grep -q '^@LESSONS-INDEX\.md\$' '$SPH/CLAUDE.md'"
 check "#473 the imports reached the payload too" \
