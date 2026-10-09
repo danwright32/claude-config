@@ -564,9 +564,12 @@ PER FILE: the 140,000 byte budget in `hooks/test-rule-file-budget.sh` and the pl
 large-memory-files banner at 150,000 characters. That was half right, corrected by #541 below the
 next paragraph. The single index measured 100,899 characters over 702 lessons on 2026-09-19 and
 was growing about 1,130 a day, so it was roughly a month from the budget. Rendering one file per
-section of `LESSONS.md` put the largest at 27,713, a fifth of the budget, and every file is still
-imported by `CLAUDE.md`, so every lesson still loads into every session. It saves no tokens, which
-is the point: the file size problem is separated from the token cost question, which is #474.
+section of `LESSONS.md` put the largest at 27,713, a fifth of the budget, and at the time every file
+was still imported by `CLAUDE.md`, so every lesson still loaded into every session. It saved no
+tokens, which was the point: the file size problem was separated from the token cost question, which
+is #474. That question was answered on 2026-09-24 by the lessons core (below, under the path scoped
+rules section): with a core list set, a session imports the core instead, and the whole library
+only as the fail safe when no list is set.
 
 **The banner also has a TOTAL, and neither figure is a constant** (#541, read out of the 2.1.281
 binary on 2026-09-23). The per file limit is the model's context window times 0.05 times a model
@@ -1167,6 +1170,18 @@ function's twin had been left unchanged, correctly, because a diff never shows t
 sibling. The input is now the diff followed by the full text of each changed file while a 300 KB
 budget lasts, and the same fixture is then caught.
 
+Since claude-config#599 the push gate (`pr-review-push-gate.sh`) holds every push of a branch other
+than the default one for the lessons review of the whole branch: merge base to head, every file
+type, the same runner, on both Macs. The advisory review reads the pushed range's code files only,
+so on a branch push it was the same work done twice per event (L301), a second model run over a
+subset of a diff the gate's review had already read. It now stands down wherever the gate holds the
+push (claude-config#1007) and runs only where the gate does not: a push of the default branch, and
+a push carrying the gate's override. It was kept rather than deleted because the default branch is
+the one place the gate never reads. Which pushes the gate holds is one function,
+`mt_push_gate_scope` in `lib/merge-target.sh`, read by both hooks, because two copies of that
+answer would drift apart in silence (L261). The advisory hook asks it after the push, so it judges
+the branch the command left the checkout on.
+
 ### What the thresholds measured
 
 Each is in its hook header with the date; the two that decided a design are here because they cut
@@ -1255,9 +1270,86 @@ Bash, Grep, and a Write of a new file never arm it, and Edit does only because i
 first. `InstructionsLoaded` carries no `agent_id`, so a hook cannot tell which agent a rule reached.
 And the saving was not there: coding sessions would still have loaded 81 to 94 percent of the
 lessons, while sessions driven through Bash or an MCP server, which open files without the Read
-tool, would have lost the lessons entirely. Interactive sessions therefore keep every lesson, and the saving is taken where nothing
-reads them: the headless runs hooks start, which switch the global config off or say why they keep
-it, enforced by `hooks/test-headless-claude-config.sh` (#538).
+tool, would have lost the lessons entirely. The conclusion drawn that day, that interactive sessions
+therefore keep every lesson, was REVERSED the next day (below); the headless runs hooks start still
+switch the global config off or say why they keep it, enforced by `hooks/test-headless-claude-config.sh` (#538).
+
+**Every lesson in every session was reversed on 2026-09-24, in favour of a core and a checkpoint**
+(milestone 17, plan record on #560, recorded here by #565). Dan's decisions: "Small core,
+checkpoints"; the core chosen by evidence with his approval; "I don't need it done at every turn, but
+definitely before a PR"; "Yes, PR is the net". So a session loads the lessons core
+(`LESSONS-CORE-<section>.md`, rendered by claude-sync from `LESSONS-CORE.txt`, README "The lessons
+core") and the whole library only when no list is set or the list is unusable, and the net for every
+lesson that is not in the core is the PR lessons review, which reads all of them before any merge
+(#560). The core is the lessons no PR review can see, because they are about design or operation
+rather than a diff (201 lessons two tagging passes agreed on, plus all 134 they disputed, which Dan
+settled as staying), plus the 20 most cited reviewable lessons: 355 lessons, about 50,000 index
+characters against about 105,000 for the library (#563). New lessons start in the library and earn
+their way in at the monthly re-rank (#566); the 30 day probation in the core the plan proposed was
+dropped by Dan, because at about 1,000 characters a day it would have held a month of intake
+permanently. The switch waited on #562's measurement that nearly every pull request opened had a
+finished review, met on both Macs on 2026-10-09 (91 and 94 percent of openings). The budget suite
+gates the core per file and as a whole (`hooks/test-rule-file-budget.sh`).
+
+Two more routes were measured and rejected on 2026-09-24, recorded so neither is planned a third
+time:
+
+- **Path scoped lesson rules, again.** Rejected above on 2026-09-23 and re-measured: such a rule arms
+  only on the Read tool, and 25 of 38 interactive tool using sessions on Daniels-MacBook-Pro-2 never
+  called Read at all. About 80 to 85 percent of lessons are design shaped, so a path scoped core
+  would not have been smaller either.
+- **Class consolidation** (folding near duplicate lessons into one): about a 6 percent fold rate.
+  165 lessons state they are distinct from a named neighbour, #390 found one genuinely duplicate
+  pair, and a member reduced to a number in its class loses the trigger that made it fire.
+
+## The monthly re-rank of the lessons core (#566)
+
+Decided while building it, 2026-10-09, inside Dan's rules of 2026-09-24 (#563). README "The monthly
+re-rank" says what it does; this is why it is shaped that way.
+
+**Seats, not the cap, bound what ranks.** The approved core is 355 lessons and about 50k characters,
+2.5 times the 20,000 cap, because the lessons no review can see are 335 of them and stay whatever
+their rank. Ranking "under the cap" would therefore admit nothing ever. The approved list kept 20
+reviewable lessons by rank, so the re-rank reads that number from the list as it stands (the core's
+seats) and swaps through it. The size is still reported against the cap with the over cap switch in
+the apply command, so the cap stays where Dan put it, in `core-set`, and the decision stays his.
+
+**A new lesson no review can see is an addition, not a seat holder.** Dan's rule says the rest of the
+core is the most cited REVIEWABLE lessons. Letting an unreviewable entrant take a seat would turn
+that seat permanent (it can never leave by rank), draining the seats month by month. So such a
+lesson enters as an addition, and only when cited at least as often as the last seat and at all
+("earn their way in by citations"). The core can grow this way, by at most the move cap a month,
+and the page says how much.
+
+**Ten moves a month, five places of hysteresis.** With 20 seats, 10 moves is at most 5 swaps, a
+quarter of the seats, so the reviewable part cannot turn over in under four months and the page
+stays short enough to judge in one sitting. A seat holder leaves only when it ranks more than 5
+places below the seats: the 2026-09-24 ranking showed counts that close are noise. Both are flags
+with these defaults; neither was measured against a real month, which the first real page will be.
+
+**Counts travel as a committed file per Mac, outside the payload.** Considered: syncing
+`~/.claude/state` (rejected: it holds per Mac state the README table says must never travel);
+putting the counts inside `payload/` (rejected: a mirrored tree has one authoritative side and
+deletes what the other lacks, L381, and they are evidence about the config, not config); having the
+job commit by itself (rejected: it would race the watcher's own commit and rebase). So
+`claude-sync record-lesson-counts` writes `lesson-counts/<host>.tsv` and commits it under the sync
+lock, exactly as `lesson-bands/` does, and the next sync pushes it.
+
+**Freshness is 14 days, derived rather than felt (L614).** The producer is each Mac's recount, due
+when its own counts are 7 days old; the consumer is the daily job. At the consumer's instant the
+other Mac's counts are at worst 8 days old while it is in use, so 14 refuses only a Mac that has been
+asleep or off for about six days more. The test evaluates the window at exactly that worst case gap.
+The job is daily and the delivery monthly, rather than one monthly launchd job, because two jobs
+ordered by their declared times are not ordered at all (L386) and a monthly job that fails costs the
+month (L533).
+
+**What it does not do yet.** The tags behind the 2026-09-24 approval were never committed. The two
+passes were written to `tags-pass1-sonnet.txt` and `tags-pass2-opus.txt` in that session's
+scratchpad, which no longer exists, and the session's transcript never printed them whole; a search
+on 2026-10-09 (the temp folders, Spotlight, the #563 and #575 threads) found no copy. So
+`lesson-tags.tsv` has to be seeded before the first re-rank, and until then it refuses with NO TAGS,
+which is the honest answer, rather than guessing which of the 355 were the 20 ranked ones or
+re-tagging without Dan.
 
 ## Things known to be wrong and left that way
 

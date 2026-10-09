@@ -2,7 +2,7 @@
 # Tests for the check that runs the moment a lesson is WRITTEN (claude-config#374).
 #
 # A lesson entry written into LESSONS.md in the wrong shape is invisible from the moment it is
-# saved: absent from the generated lessons index, which loads into every session in every project, unreadable
+# saved: absent from the generated lessons index, which the lessons core is chosen from and every PR lessons review reads, unreadable
 # by `claude-sync lesson`, uncounted by the duplicate check and by the number minter. Nothing
 # reported it. The only thing that noticed was the next sync, which can be days later, and by then
 # the malformed entry had been holding the ENTIRE lessons file back from publishing, so every
@@ -328,7 +328,10 @@ nopy_hook "$(payload_for Edit "$HOME_FIX/LESSONS.md")"; out="$NOPY_OUT"
 says "with no python3 a write to the lessons file is reported rather than passed in silence" "$out" "python3"
 if [ "$NOPY_RC" = 2 ]; then check "and it is reported in the one way a hook with no python3 can, on stderr with exit 2" ok
 else check "and it is reported in the one way a hook with no python3 can, on stderr with exit 2" "exited $NOPY_RC"; fi
-says "and it says what goes unnoticed when nothing checks the entry" "$out" "LESSONS-INDEX.md"
+# The index has been one file per section since #473, so the message names it by what it is rather
+# than the retired single file name, and says who reads it now that sessions may load only the
+# lessons core (#565).
+says "and it says what goes unnoticed when nothing checks the entry" "$out" "absent from the generated lessons index"
 
 # A write to something else takes nothing from the missing reader, so there is nothing to report
 # (L54, L324). With no python3 the target cannot be read, so this is narrowed on the raw payload:
