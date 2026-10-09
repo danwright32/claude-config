@@ -369,7 +369,8 @@ export type ModKitBandText = { text: string; href?: string; color?: string; bold
  * the label (`1: 7 days`), or the label alone when it has no hotkey (#667). `instead` is the text
  * drawn in the button's place wherever a click may not reach it (#939): a terminal's main screen,
  * and Apple Terminal, whose tab only reports clicks while View > Allow Mouse Reporting is ticked,
- * which no mod can read. An empty list draws nothing there, for a button whose content sits beside
+ * which no mod can read, unless this Mac's appleTerminalMouseReporting setting says it is kept on
+ * (#1012). An empty list draws nothing there, for a button whose content sits beside
  * it as text, and an instead run takes no indent, whole or wrap. Left out, mod-kit draws "type:
  * /press <mod> <button>" there, which presses it the same way.
  */

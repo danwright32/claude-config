@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
-import type { EngineInterface, Register, ResolveInput } from 'claude-code'
+import type { EngineInterface, On, Register, ResolveInput } from 'claude-code'
 import type { ModKit, ModKitBandButton, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandText, ModKitCall, ModKitCard, ModKitClickSite, ModKitPane, ModKitPress, ModKitRun } from '../types/index.d.ts'
-import { clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
+import { appleTerminalTrusted, clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
@@ -233,7 +233,9 @@ let passes: Promise<void> = Promise.resolve()
 const onePass = (fn: () => Promise<void>) => (passes = passes.then(fn, fn))
 
 export const register: Register = (on, options) => {
-  registerBand(on, options)
+  // Read from the options each time the module loads, never kept in a session (#1012).
+  const isAppleTerminalTrusted = appleTerminalTrusted(options)
+  registerBand(on, isAppleTerminalTrusted)
   // Every mod's message to another session, tried once more when refused (hooks/send.ts). Only a
   // mod's: Claude's own SendMessage, and anything else, is left as it is.
   on('session.send', async ($, e, next) => {
@@ -314,7 +316,7 @@ export const register: Register = (on, options) => {
       screen: async call => screenFailed(call, 'the check itself failed'),
       // The bottom of every press (#939): reached only when no publisher's modkit.press hook took it.
       press: async () => ({ isAnswered: false }),
-      clickable: async site => siteClickable(site, () => built.env.get('TERM_PROGRAM')),
+      clickable: async site => siteClickable(site, () => built.env.get('TERM_PROGRAM'), isAppleTerminalTrusted),
     }
     return { ...built, modkit }
   })
@@ -469,11 +471,14 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
 // Whether a click on a Button drawn at `site` reaches the mod (#939), for mod-kit's own drawing and
 // for any mod drawing its own Button ($.modkit.clickable). The terminal's name is read from the
 // session's environment; one that cannot be read is taken as unknown, which draws the text.
-const siteClickable = async (site: ModKitClickSite, terminalName: () => Promise<string | undefined>) => {
+// `isAppleTerminalTrusted` is this Mac's appleTerminalMouseReporting setting (band.ts
+// appleTerminalTrusted, #1012), read once from the options the module loaded with, so a redraw costs
+// nothing more.
+const siteClickable = async (site: ModKitClickSite, terminalName: () => Promise<string | undefined>, isAppleTerminalTrusted: boolean) => {
   const terminal = site.surface === 'terminal' ? await terminalName().catch(() => undefined) : undefined
-  return clicksReach({ surface: site.surface, isFullscreen: site.viewport?.isFullscreen, terminal })
+  return clicksReach({ surface: site.surface, isFullscreen: site.viewport?.isFullscreen, terminal, isAppleTerminalTrusted })
 }
-const clickable = ($: EngineInterface, e: ModKitClickSite) => siteClickable(e, () => $.env.get('TERM_PROGRAM'))
+const clickable = ($: EngineInterface, e: ModKitClickSite, isAppleTerminalTrusted: boolean) => siteClickable(e, () => $.env.get('TERM_PROGRAM'), isAppleTerminalTrusted)
 
 // A press on one of mod-kit's buttons, clicked or typed: raised as modkit.press for the publisher to
 // answer. Nothing answering, or the press failing, is said rather than left as a dead control.
@@ -495,7 +500,7 @@ const showing = async ($: EngineInterface): Promise<Map<string, ModKitBandButton
   return out
 }
 
-const registerBand: Register = on => {
+const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
   // #939: where a click cannot land, a button is drawn as "type: /press <mod> <button>", and this is
   // that command. Only a button showing now is pressed, so an old line typed again presses nothing.
   on('session.start', async ($, e, next) => {
@@ -542,13 +547,13 @@ const registerBand: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rows = compose((await read($, band)) ?? [])
     if (e.props.hasSurvey || rows.length === 0) return next(e)
-    const isClickable = await clickable($, e)
+    const isClickable = await clickable($, e, isAppleTerminalTrusted)
     const { Box } = $.ui.resolve(e)
     return <Box flexDirection="column">{rows.map(row => drawCard($, e, e.props.bodyColumns, row, isClickable))}</Box>
   })
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     const pane = ((await read($, panes)) ?? []).find(p => p.id === e.requestId)
     if (!pane) return next(e)
-    return drawCard($, e, e.props.bodyColumns, pane, await clickable($, e))
+    return drawCard($, e, e.props.bodyColumns, pane, await clickable($, e, isAppleTerminalTrusted))
   })
 }
