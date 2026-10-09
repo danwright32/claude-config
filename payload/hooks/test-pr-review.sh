@@ -1113,6 +1113,7 @@ for g in 1 2; do
 done
 printf '{"session_id":"gn1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 check_eq "#601 the nudge has a review in groups whose groups all answered written up from them" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+check_eq "#601 labelled with the pull request's own branch its pending marker records, never the checkout's" "feat/groups" "$(meta "$(final_of "$GRP_SHA")" branch)"
 [ ! -e "$(final_of "$GRP_SHA").pending" ] && ok || bad "#601 and its pending marker is gone"
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"

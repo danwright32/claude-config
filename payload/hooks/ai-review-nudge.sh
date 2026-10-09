@@ -183,7 +183,9 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
     # its groups: it writes the review up from answers that exist, or records it abandoned naming
     # the groups that never came. Only if that cannot run (its checkout gone) is it written up here.
     if [ -n "$m_groups" ] && [ -n "$m_dir" ] && [ -n "$m_sha" ]; then
-      bash "$HOOK_DIR/lib/pr-review.sh" check --dir "$m_dir" --sha "$m_sha" </dev/null >/dev/null 2>&1
+      # Labelled with the branch the pending marker records (the pull request's head branch), never
+      # whichever branch the checkout happens to stand on (claude-config#852).
+      bash "$HOOK_DIR/lib/pr-review.sh" check --dir "$m_dir" --sha "$m_sha" ${m_branch:+--branch "$m_branch"} </dev/null >/dev/null 2>&1
       if [ ! -e "$p" ]; then finished=( "$AR_STATE_DIR"/*.txt ); continue; fi
     fi
     if [ ! -e "$final" ]; then
