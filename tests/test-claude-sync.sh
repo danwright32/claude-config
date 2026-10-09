@@ -19163,6 +19163,54 @@ check "#564 a removal from the list travels too" \
 check "#564 and the receiving Mac treats a reviewed shrink as a decision, not damage" \
   "case \"\$(cat '$LCHB/.lessons-core-state' 2>/dev/null)\" in 'active 3'*) true ;; *) false ;; esac"
 
+section "== each Mac's lesson citation counts are committed, so the monthly re-rank can read both Macs (claude-config#566) =="
+# The re-rank of the lessons core adds both Macs' prose citation counts together, and ~/.claude/state
+# does not travel. So each Mac's counts are a file of their own under lesson-counts/ in the repo,
+# beside lesson-bands/: one file per writer, so two Macs recording can never conflict, committed here
+# so the next sync carries it. Recorded only through this command, which holds the sync lock, so it
+# can never land in the middle of a send's own commit or rebase. What it refuses, it refuses whole:
+# counts naming another Mac, counts with no time stamp (the re-rank judges staleness by it), a
+# truncated file, and anything carrying the counter's --sample sentences, which are conversation
+# text and the repository is public.
+LKR="$WORK/lcounts-repo"; git init -q -b main "$LKR" 2>/dev/null || { mkdir -p "$LKR"; git -C "$LKR" init -q; }
+mkdir -p "$LKR/payload"; printf 'seed\n' > "$LKR/payload/seed.txt"
+git -C "$LKR" add -A && git -C "$LKR" -c user.name=t -c user.email=t@e commit -q -m seed
+LKH="$WORK/lcounts-home"; mkdir -p "$LKH"
+lk_counts(){ # lk_counts <file> <host> <extra header words>: a counts file in lesson-citations.py's format
+  printf 'HOST %s DAYS 60 READ 12 UNREAD 0 EXCLUDED subagent=0 claude-config=0 recording=0 LEDGER read DISMISSED 0%s\nL1\t3\t4\t0\nL7\t1\t1\t2\nEND 2 lessons\n' "$2" "$3" > "$1"
+}
+lk_record(){ SYNC_HOSTNAME=MacCount SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LKH" SYNC_REPO="$LKR" bash "$SCRIPT" record-lesson-counts "$1" 2>&1; }
+lk_counts "$WORK/lk-good.txt" MacCount " AT 2026-10-09T15:00:00Z"
+out_lk="$(lk_record "$WORK/lk-good.txt")"; rc_lk=$?
+dbg "#566 record-lesson-counts said: $out_lk"
+check "#566 a Mac's counts land under lesson-counts, named for that Mac" \
+  "[ \$rc_lk -eq 0 ] && cmp -s '$WORK/lk-good.txt' '$LKR/lesson-counts/MacCount.tsv'"
+check "#566 and are committed, so the next sync carries them" \
+  "grep -q . <<< \"\$(git -C '$LKR' log --oneline -- lesson-counts)\""
+check "#566 leaving the working tree clean" "[ -z \"\$(git -C '$LKR' status --porcelain lesson-counts 2>/dev/null)\" ]"
+check "#566 and it says what it recorded" "case \"\$out_lk\" in *lesson-counts/MacCount.tsv*) true ;; *) false ;; esac"
+lk_commits(){ git -C "$LKR" log --oneline -- lesson-counts | grep -c .; }
+lk_before="$(lk_commits)"
+lk_record "$WORK/lk-good.txt" >/dev/null
+check "#566 recording the same counts again makes no second commit" "[ \"\$(lk_commits)\" = '$lk_before' ]"
+lk_refused(){ # lk_refused <description> <file> <word the refusal must name>
+  out_lkr="$(lk_record "$2")"; rc_lkr=$?
+  dbg "#566 $1: $out_lkr"
+  check "#566 $1 is refused" "[ \$rc_lkr -ne 0 ]"
+  check "#566 $1: the refusal names $3" "case \"\$out_lkr\" in *'$3'*) true ;; *) false ;; esac"
+  check "#566 $1 leaves the recorded counts as they were" "cmp -s '$WORK/lk-good.txt' '$LKR/lesson-counts/MacCount.tsv'"
+}
+lk_counts "$WORK/lk-other.txt" MacElse " AT 2026-10-09T15:00:00Z"
+lk_refused "counts taken on another Mac" "$WORK/lk-other.txt" "MacElse"
+lk_counts "$WORK/lk-nostamp.txt" MacCount ""
+lk_refused "counts with no time stamp" "$WORK/lk-nostamp.txt" "time stamp"
+lk_counts "$WORK/lk-short.txt" MacCount " AT 2026-10-09T15:00:00Z"; sed -i.bak '/^END/d' "$WORK/lk-short.txt"; rm -f "$WORK/lk-short.txt.bak"
+lk_refused "a truncated counts file" "$WORK/lk-short.txt" "END"
+lk_counts "$WORK/lk-sample.txt" MacCount " AT 2026-10-09T15:00:00Z"; printf 'SAMPLE L1\tsomething Claude said\n' >> "$WORK/lk-sample.txt"
+lk_refused "counts carrying sampled sentences" "$WORK/lk-sample.txt" "SAMPLE"
+out_lkno="$(lk_record "$WORK/lk-absent.txt")"; rc_lkno=$?
+check "#566 a counts file that is not there is refused" "[ \$rc_lkno -ne 0 ]"
+
 section "== mods travel to the other Mac and are wired into settings.json (#606) =="
 # A mod is a Claude Code plugin folder (.claude-plugin/plugin.json plus a hooks module). Claude Code
 # loads one from a folder named in CLAUDE_CODE_PLUGIN_DIRS, read from the env block of
