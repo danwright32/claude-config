@@ -19126,10 +19126,10 @@ check "#565 and the core stays in use" "case \"\$(lc_state)\" in 'active 4'*) tr
 # one a session would otherwise not know it is missing.
 printf '\n## Test speed\n\n- **L7. A test speed lesson that is not in the core.** body\n' >> "$LCH/LESSONS.md"
 lc_push >/dev/null
-LCTOC="$LCH/LESSONS-CORE-TOC.md"
+LCTOC="$LCH/LESSONS-CORE-_TOC.md"
 check "#566 with the core in use the library's table of contents is written" "[ -f '$LCTOC' ]"
 check "#566 and imported last, after every core file" \
-  "[ \"\$(grep '^@LESSONS-' '$LCH/CLAUDE.md' | tail -1)\" = '@LESSONS-CORE-TOC.md' ]"
+  "[ \"\$(grep '^@LESSONS-' '$LCH/CLAUDE.md' | tail -1)\" = '@LESSONS-CORE-_TOC.md' ]"
 check "#566 it counts each section's lessons and how many are in the core" \
   "grep -qF 'Proof over green (proof-over-green): 3 lessons, 2 in the core' '$LCTOC' && grep -qF 'Data safety (data-safety): 3 lessons, 2 in the core' '$LCTOC'"
 check "#566 a section with none in the core is listed too, in the singular where it is one" \
@@ -19138,7 +19138,21 @@ check "#566 it says where the whole library and any one lesson can be read" \
   "grep -qF '~/.claude/LESSONS-INDEX-<section>.md' '$LCTOC' && grep -qF 'claude-sync lesson' '$LCTOC'"
 check "#566 it carries no lesson line, so nothing counting core lessons counts it" \
   "! grep -q '^- L[0-9]' '$LCTOC'"
-check "#566 and it travels with the core" "[ -f '$LCR/payload/LESSONS-CORE-TOC.md' ]"
+check "#566 and it travels with the core" "[ -f '$LCR/payload/LESSONS-CORE-_TOC.md' ]"
+# NO SECTION CAN RENDER OVER IT, on a case insensitive filesystem too, which is macOS's default: a
+# section titled "TOC" has the slug toc, and its core file must stay a separate file from the table
+# of contents, each holding its own content.
+printf '\n## TOC\n\n- **L8. A lesson in a section whose name could collide.** body\n' >> "$LCH/LESSONS.md"
+printf 'L1\nL2\nL4\nL5\nL8\n' > "$WORK/lcore-toc.txt"
+CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-toc.txt" >/dev/null 2>&1
+lc_push >/dev/null
+check "#566 a section named TOC keeps its own core file holding its lesson" \
+  "grep -q '^- L8\.' '$LCH/LESSONS-CORE-toc.md'"
+check "#566 and the table of contents survives beside it, listing that section" \
+  "grep -qF 'TOC (toc): 1 lesson, 1 in the core' '$LCTOC' && grep -qF 'Proof over green (proof-over-green)' '$LCTOC'"
+# Back to the four lesson list the cases below are written against.
+CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-want.txt" >/dev/null 2>&1
+lc_push >/dev/null
 
 # 3 to 6. EVERY WAY THE LIST CAN BE WRONG loads the whole library, records why, and says so.
 lc_fallback(){ # lc_fallback <description> <state words>
@@ -19166,7 +19180,7 @@ CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT
 lc_push >/dev/null
 # One section file, plus the library's table of contents that loads beside any core (#566).
 check "#564 a shrink made through core-set renders the smaller core" \
-  "[ \"\$(lc_core_files)\" = 2 ] && [ -f '$LCH/LESSONS-CORE-TOC.md' ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
+  "[ \"\$(lc_core_files)\" = 2 ] && [ -f '$LCH/LESSONS-CORE-_TOC.md' ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
 
 # 7. THE CAP IS ENFORCED WHERE THE LIST IS EDITED, never at the send (a send that refused would stop
 #    every other file travelling with it, L371).

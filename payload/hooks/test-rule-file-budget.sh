@@ -169,7 +169,7 @@ recorded_size() {  # $1 = payload relative path
     LESSONS-CORE-test-speed.md)               printf '1700' ;;
     LESSONS-CORE-building-with-ai.md)         printf '1412' ;;
     # The library's table of contents, imported after the core (#566), measured the same way.
-    LESSONS-CORE-TOC.md)                      printf '1111' ;;
+    LESSONS-CORE-_TOC.md)                     printf '1111' ;;
     *)                                        printf '' ;;
   esac
 }
@@ -262,8 +262,8 @@ for _lib in "$PAYLOAD"/LESSONS-INDEX-*.md; do
 done
 # And the library's table of contents, which loads beside ANY core (#566). Its name is claude-sync's
 # LESSON_CORE_TOC, spelled here because this suite also runs from ~/.claude, where claude-sync is not.
-if [ -n "$(recorded_size LESSONS-CORE-TOC.md)" ]; then ok; else
-  bad "LESSONS-CORE-TOC.md has no recorded size, and it loads beside any lessons core. Measure it from a core render and add it to recorded_size."
+if [ -n "$(recorded_size LESSONS-CORE-_TOC.md)" ]; then ok; else
+  bad "LESSONS-CORE-_TOC.md has no recorded size, and it loads beside any lessons core. Measure it from a core render and add it to recorded_size."
 fi
 
 # THE CORE'S OWN TOTAL, ratcheted like a file. The per file ratchets above each allow at least

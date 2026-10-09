@@ -251,7 +251,7 @@ every number is a lesson, measures the core in characters and refuses past 20,00
 tell a deliberate change from a damaged list. From it the sync renders `LESSONS-CORE-<section>.md`,
 the same lines as the library, and CLAUDE.md imports those instead; the library files are still
 written and still travel, so `claude-sync lesson` and every PR lessons review keep all of them.
-Beside any core it also renders `LESSONS-CORE-TOC.md`, the library's table of contents, imported
+Beside any core it also renders `LESSONS-CORE-_TOC.md`, the library's table of contents, imported
 last: one line per section with its lesson count and how many of them the core carries, derived at
 render time, so a session knows what it is not holding and where to read it (#566).
 

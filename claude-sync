@@ -2240,9 +2240,10 @@ LESSON_CORE_APPLIED=".lessons-core-applied"
 LESSON_CORE_SHRINK_PCT=50
 # The library's table of contents, rendered beside the core and imported after it (#566). Named
 # under the core prefix so the shape predicate, the sweep and the staging treat it as the core's
-# own, and in capitals, which no section slug (lowercase letters, digits and hyphens) can produce,
-# so a section can never render over it.
-LESSON_CORE_TOC="$LESSON_CORE_PREFIX-TOC.md"
+# own, and with an underscore, which no section slug (lowercase letters, digits and hyphens) can
+# produce, so a section can never render over it. Capitals alone were not enough: macOS's default
+# filesystem ignores case, so a section titled "TOC" (slug toc) would have been the same file.
+LESSON_CORE_TOC="$LESSON_CORE_PREFIX-_TOC.md"
 
 # The file the index above is generated FROM. Named here so the merge recovery and the index
 # generator cannot drift into two spellings of one path (L41).
