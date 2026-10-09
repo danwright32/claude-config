@@ -1,5 +1,4 @@
-import type { ModKitCommand, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { ghApi, ghArgs, graphqlQuery } from './ghargs.ts'
+import type { ModKitCommand, ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { clientRefusal, sqlRefusal } from './sql.ts'
 
 // No build (#616): what Claude may and may not do while it is on, as the spec agreed with Dan.
@@ -14,8 +13,34 @@ import { clientRefusal, sqlRefusal } from './sql.ts'
 // what it reads is what Claude reaches for, and a determined route around it (a script that writes
 // what no word names) is not what it is for.
 
-/** One simple command, as `$.modkit.pipeline` gives it, with `$.modkit.git`'s reading when it is git. */
-export type Cmd = ModKitCommand & { git?: { sub?: string; args: string[]; dir?: string } }
+/**
+ * One simple command, as `$.modkit.pipeline` gives it, with `$.modkit.git`'s reading when it is git
+ * and `$.modkit.gh`'s readings (#961): `gh`, the words it runs gh with (ghWords), and `mergeHelper`,
+ * the merge helper's arguments as `gh pr merge` reads them (helperWords). Each is read once per
+ * command, beside the pipeline, and absent where the command runs neither.
+ */
+export type Cmd = ModKitCommand & { git?: { sub?: string; args: string[]; dir?: string }; gh?: ModKitGh; mergeHelper?: ModKitGh }
+
+/** The words a command runs gh with, any npx or bunx before it (and a flag of theirs) taken off; undefined when it runs no gh. */
+export const ghWords = (words: readonly string[]): string[] | undefined => {
+  let w = [...words]
+  while (['npx', 'bunx'].includes(name(w[0]))) w = w.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
+  return name(w[0]) === 'gh' ? w : undefined
+}
+
+const HELPER = /(?:^|\/)merge-when-ready\.sh$/
+/** Whether a command runs the merge helper, which merges by gh inside a script no reader sees. */
+export const runsHelper = (words: readonly string[]): boolean => words.some(w => HELPER.test(w))
+/** The merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them: those words, or undefined when it is not run. */
+export const helperWords = (words: readonly string[]): string[] | undefined => {
+  const at = words.findIndex(w => HELPER.test(w))
+  return at < 0 ? undefined : ['gh', 'pr', 'merge', ...words.slice(at + 1)]
+}
+
+/** The value of a flag gh read, by any of its names (the last one given wins, as in gh); undefined when absent. */
+export const flagOf = (a: ModKitGh, ...names: string[]): string | true | undefined => a.flags.filter(f => names.includes(f.name)).pop()?.value
+/** Whether any of these flags was given. */
+export const hasFlag = (a: ModKitGh, ...names: string[]): boolean => a.flags.some(f => names.includes(f.name))
 /** What the refused call would have done, and, where there is one, how what no build allows can still be done. */
 export type Refusal = { what: string; hint?: string }
 
@@ -101,10 +126,9 @@ export const operations = (doc: string): Operation[] => {
 }
 // Issue, milestone and label work is all allowed, through GraphQL too; a pull request is not.
 const ISSUE_WORK = (field: string) => /issue|label|milestone/i.test(field) && !/pullrequest/i.test(field)
-const graphqlRefusal = (words: string[]): string | undefined => {
-  // Read by ghargs.ts, the one reading of gh's arguments (#834): a query read from a file
+const graphqlRefusal = (query: string | null): string | undefined => {
+  // Read by mod-kit's one reading of gh's arguments (#834, #961): a query read from a file
   // (`-F query=@q.graphql`), sent by --input, or none at all, cannot be judged.
-  const query = graphqlQuery(ghArgs(words))
   if (query === null) return 'call the GitHub API with a query that could not be read'
   for (const op of operations(query)) {
     if (op.kind !== 'mutation') continue
@@ -125,14 +149,19 @@ const GH_READS: Record<string, Set<string>> = {
   secret: new Set(['list']),
   variable: new Set(['list', 'get']),
 }
-const ghRefusal = (words: string[]): string | undefined => {
-  const [, sub = '', act = ''] = words
+const ghRefusal = (gh: ModKitGh | undefined): string | undefined => {
+  // Read by mod-kit's one reading of gh's arguments (#834, #961), asked once per command, so the
+  // subcommand and action are found past gh's global flags (`gh -R o/x pr merge 5`), which a
+  // reading by position took for the subcommand. A command it gave no reading for, or one whose
+  // flags it cannot place, cannot be judged.
+  if (!gh || gh.unreadable) return 'run gh in a way that could not be read'
+  const { sub, act } = gh
   if (sub === 'issue') return act === 'develop' ? 'run gh issue develop' : undefined
   if (sub === 'api') {
-    // Read by ghargs.ts, the one reading of gh's arguments in this mod (#834).
-    const { method, endpoint } = ghApi(ghArgs(words))
+    if (!gh.api) return 'call the GitHub API in a way that could not be read'
+    const { method, endpoint, query } = gh.api
     // GraphQL is always a POST, so a read is told from a change by the document it sends (#702).
-    if (endpoint === 'graphql') return graphqlRefusal(words)
+    if (endpoint === 'graphql') return graphqlRefusal(query)
     if (method === 'GET') return undefined
     // Issue, milestone and label work is all allowed, through the API too.
     if (endpoint && /(?:^|\/)(?:issues|milestones|labels)(?:\/|$|\?)/.test(endpoint) && !/\/pulls(?:\/|$)/.test(endpoint)) return undefined
@@ -266,7 +295,7 @@ const commandRefusal = (c: Cmd): Refusal | undefined => {
   const why = (what: string | undefined): Refusal | undefined => (what === undefined ? undefined : { what })
   const cmd = name(words[0])
   if (c.git && gitRefusal(c.git)) return why(`run git ${c.git.sub}`)
-  if (cmd === 'gh') return why(ghRefusal(words))
+  if (cmd === 'gh') return why(ghRefusal(c.gh))
   const deploys = deployWith(words)
   if (deploys) return why(deploys)
   if (DB_CLIENTS.has(cmd)) return databaseRefusal({ ...c, words })

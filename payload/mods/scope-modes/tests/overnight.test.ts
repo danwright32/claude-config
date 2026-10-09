@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { Cmd } from '../hooks/nobuild.ts'
-import { NEVER_ASKED, normRepo, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from '../hooks/overnight.ts'
-import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from '../hooks/overnight.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
-import { githubRepo } from './mod-kit/hooks/repo.ts'
+import { ghRepo, githubRepo } from './mod-kit/hooks/repo.ts'
+import { readCommands } from './read.ts'
+import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
 // mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
@@ -24,13 +24,13 @@ const under = <T>(map: Record<string, T>, dir: string): T | null => {
 }
 const look: Look = { repoOf: async dir => under(REPOS, dir), isPrimary: async dir => under(PRIMARY, dir) }
 
-const cmds = (command: string): Cmd[] =>
-  pipeline(command).map(c => {
-    const g = git(c.words)
-    return g ? { ...c, git: { sub: g.sub, args: g.args, dir: g.dir } } : c
-  })
+// GH_REPO as the mod hands it over: read by mod-kit's ghRepo (its byte for byte copy), absent when
+// it is not set (#961).
 const bash = (command: string, o: { cwd?: string; ghRepo?: string; look?: Look } = {}) =>
-  overnightRefusal({ tool: 'Bash', input: { command }, raw: command, commands: cmds(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ghRepo: o.ghRepo }, o.look ?? look)
+  overnightRefusal(
+    { tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ...(o.ghRepo ? { ghRepo: ghRepo(o.ghRepo) } : {}) },
+    o.look ?? look,
+  )
 const NONE = { files: [], changes: [], unnamed: [] }
 const tool = (name: string, input: Record<string, unknown>) => overnightRefusal({ tool: name, input, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME }, look)
 
@@ -126,7 +126,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash')).toBe(other)
     expect(await bash('gh pr create -R other/x --title x --body y')).toBe(other)
   })
-  test('every spelling gh accepts is read the same (ghargs.ts)', async () => {
+  test('every spelling gh accepts is read the same (the mod-kit gh reader, #961)', async () => {
     expect(await bash('gh api --method=DELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
     expect(await bash('gh api -XDELETE repos/o/r/git/refs/heads/x')).toBe('delete a branch')
     expect(await bash('gh api -XPOST repos/other/x/issues/5/comments -fbody=x')).toBe(other)
@@ -263,6 +263,32 @@ describe('comments go only to the repository the checkout is', () => {
     expect(await bash('cd "$DIR" && gh issue comment 5 --body x')).toBe(unresolved)
     expect(await bash('gh issue comment 5 --body x', { look: { ...look, repoOf: async () => null } })).toBe(unresolved)
   })
+  // #961: an endpoint's repository is read as gh reaches it, by mod-kit's reader. A spelling gh does
+  // not send to repos/, and one placeholder beside a real name (gh fills it from the checkout, so the
+  // repository is another), were read as this one before; each now cannot be read.
+  test("a comment endpoint whose repository gh would not reach as spelled is refused (#961)", async () => {
+    const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
+    expect(await bash('gh api //repos/o/r/issues/834/comments -f body=x')).toBe(unresolved)
+    expect(await bash('gh api https://api.github.com//repos/o/r/issues/834/comments -f body=x')).toBe(unresolved)
+    expect(await bash(`gh api 'repos/{owner}/x/issues/834/comments' -f body=x`)).toBe(unresolved)
+    expect(await bash(`gh api 'repos/o/{repo}/issues/834/comments' -f body=x`)).toBe(unresolved)
+    // The spellings gh reaches it by go ahead as before.
+    expect(await bash('gh api /repos/o/r/issues/834/comments -f body=x')).toBeUndefined()
+    expect(await bash('gh api https://api.github.com/repos/O/R/issues/834/comments -f body=x')).toBeUndefined()
+  })
+  test('GH_REPO is read as gh reads it: one that names no repository refuses a write naming none itself (#961)', async () => {
+    const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
+    expect(await bash('gh issue comment 5 --body x', { ghRepo: 'https://github.com/O/R.git' })).toBeUndefined()
+    expect(await bash('gh issue comment 5 --body x', { ghRepo: 'nonsense' })).toBe(unresolved)
+    // A write that names its own repository is judged by that one, whatever GH_REPO says.
+    expect(await bash('gh issue comment 5 -R o/r --body x', { ghRepo: 'nonsense' })).toBeUndefined()
+  })
+  test('a gh command the mod was given no reading for cannot be judged, so it is refused (#961)', async () => {
+    const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
+    const command = 'gh issue comment 5 --body x'
+    const unread = readCommands(command).map(({ gh: _gh, ...c }) => c)
+    expect(await overnightRefusal({ tool: 'Bash', input: { command }, raw: command, commands: unread, writes: NONE, cwd: CWD, home: HOME }, look)).toBe(unresolved)
+  })
 })
 
 describe('LESSONS.md, written by any route in command position (L673)', () => {
@@ -344,14 +370,14 @@ describe('what is never approved, and the disk readers', () => {
   test('a question and the plan approval are never approved overnight (H8)', () => {
     expect([...NEVER_ASKED].sort()).toEqual(['AskUserQuestion', 'ExitPlanMode'])
   })
-  test('normRepo reads every spelling of a GitHub repository', () => {
-    expect(normRepo('O/R')).toBe('o/r')
-    expect(normRepo('github.com/o/r')).toBe('o/r')
-    expect(normRepo('https://github.com/o/r.git')).toBe('o/r')
-    expect(normRepo('git@github.com:o/r.git')).toBe('o/r')
-    expect(normRepo('ssh://git@github.com/o/r')).toBe('o/r')
-    expect(normRepo('https://gitlab.com/o/r')).toBeNull()
-    expect(normRepo('r')).toBeNull()
+  // #961: the repository a gh command's -R names, through the overnight rules, on the table every
+  // reading of a repository gh spells is pinned on: from a checkout of o/r, a comment there goes
+  // ahead, one elsewhere is refused naming where, and one that cannot be read is refused as such.
+  test("a comment's -R is read as gh reads it, on every shared case (#961)", async () => {
+    const got: { why: string; said: string | undefined }[] = []
+    for (const f of GH_REPO_FIXTURES) got.push({ why: f.why, said: await bash(`gh pr comment 5 -R '${f.spelling}' -b hi`) })
+    const want = (repo: string | null) => (repo === 'o/r' ? undefined : repo === null ? 'write to GitHub where the repository it reaches could not be resolved' : `write to ${repo} from a checkout of o/r`)
+    expect(got).toEqual(GH_REPO_FIXTURES.map(f => ({ why: f.why, said: want(f.repo) })))
   })
   test('one GitHub repository across the remotes, or none said', async () => {
     expect(await repoFromRemotes('origin\tgit@github.com:O/R.git (fetch)\norigin\tgit@github.com:o/r.git (push)\n', github)).toBe('o/r')

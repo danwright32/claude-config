@@ -1070,7 +1070,7 @@ the ban list knowing that an action it does not name is approved.
 - The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
   repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
   label and milestone writes by gh or gh api. Every other gh call is judged by two short lists,
-  read by one parser, `hooks/ghargs.ts`, as gh reads it (`--flag=value`, `-XDELETE`, `-Rowner/x`,
+  read by one parser, mod-kit's `hooks/gh.ts` (`$.modkit.gh`, moved from scope-modes in #961), as gh reads it (`--flag=value`, `-XDELETE`, `-Rowner/x`,
   clustered `-sd`, global flags before the subcommand, a dotted owner): a known read (view, list,
   status, diff, checks, watch, search, a GET to the API) goes ahead anywhere; the writes overnight
   work needs (an issue or PR comment, `pr create`, `pr edit` of title or body, `pr ready`, `pr
@@ -1201,7 +1201,7 @@ is still asked once at bedtime and closed if unanswered.
   repository on both lists, an entry GitHub does not know, a question unanswered in 10 minutes or
   with nobody to ask, a repository first met after sleep began (noted once a night), a call whose
   repository cannot be told (it changes folder first), and a record from before this phase.
-- While asleep, every session's Bash calls are judged by effect (`hooks/mergedeploy.ts`, gh read by phase 3's `ghargs.ts`, commands through
+- While asleep, every session's Bash calls are judged by effect (`hooks/mergedeploy.ts`, gh read by mod-kit's `$.modkit.gh`, commands through
   mod-kit's reader): merges (`gh pr merge` and `--auto`, `merge-when-ready.sh`, the REST merge
   endpoints, the GraphQL merge mutations, and a query that cannot be read), deploys (no build's own
   deploy tool list, shared, `gh workflow run`, a workflow dispatch, and a package script by name or

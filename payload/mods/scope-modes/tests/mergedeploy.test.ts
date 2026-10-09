@@ -1,15 +1,11 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { Cmd } from '../hooks/nobuild.ts'
 import { actsOf, addAnswer, HOLD_MERGES, isListed, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Scripts, type Where } from '../hooks/mergedeploy.ts'
-import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
+import { readCommands } from './read.ts'
 
-// Sleep mode phase 7 (#843). Commands are read by mod-kit's own reader (its byte for byte copy
-// under tests/mod-kit), as the mod reads them in a session.
-const cmds = (command: string): Cmd[] =>
-  pipeline(command).map(c => {
-    const g = git(c.words)
-    return g ? { ...c, git: { sub: g.sub, args: g.args } } : c
-  })
+// Sleep mode phase 7 (#843). Commands are read by mod-kit's own readers (byte for byte copies under
+// tests/mod-kit), as the mod reads them in a session.
+const cmds = readCommands
 const ON_BRANCH: Where = { defaultBranch: 'main', currentBranch: 'fix-843', scripts: null }
 const acts = (command: string, where: Where = ON_BRANCH) => cmds(command).flatMap(c => actsOf(c, where))
 const kinds = (command: string, where?: Where) => acts(command, where).map(a => a.kind)
@@ -171,11 +167,18 @@ describe('an owner whose every repository waits overnight (waitOwners)', () => {
 })
 
 describe('what a command does, by effect', () => {
+  // #961: the repository a merge names, by gh and by the merge helper, on the table every reading
+  // of a repository gh spells is pinned on (null is one that cannot be told, closed).
+  test('the repository a merge names is read as gh reads it, on every shared case (#961)', () => {
+    const repoOf = (command: string) => acts(command).find(a => a.kind === 'merge')?.repo
+    const got = GH_REPO_FIXTURES.map(f => ({ why: f.why, gh: repoOf(`gh pr merge 12 --squash -R '${f.spelling}'`), helper: repoOf(`bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --squash --repo '${f.spelling}'`) }))
+    expect(got).toEqual(GH_REPO_FIXTURES.map(f => ({ why: f.why, gh: f.repo, helper: f.repo })))
+  })
   test('every merge route: gh pr merge (and --auto), the merge helper, the REST merge endpoints and the GraphQL mutations', () => {
     expect(kinds('gh pr merge 12 --squash')).toEqual(['merge'])
     expect(acts('gh pr merge 12 --auto --squash')[0]?.what).toBe('merge a PR (auto merge)')
     expect(acts('gh pr merge 12 --repo Try-Pennie/slate')[0]?.repo).toBe('try-pennie/slate')
-    // Every spelling gh reads, through phase 3's one reading of gh's arguments (ghargs.ts): a joined
+    // Every spelling gh reads, through mod-kit's one reading of gh's arguments ($.modkit.gh, #961): a joined
     // -R, --repo=, a PR link naming its repository, and a joined --method.
     expect(acts('gh pr merge 12 -RTry-Pennie/slate')[0]?.repo).toBe('try-pennie/slate')
     expect(acts('gh pr merge 12 --repo=o/x')[0]?.repo).toBe('o/x')
@@ -188,7 +191,7 @@ describe('what a command does, by effect', () => {
     expect(kinds('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r --squash')).toEqual(['merge'])
     // The helper's joined -R names its repository as gh's does.
     expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 -Ro/x --squash')[0]?.repo).toBe('o/x')
-    // Read by ghargs, as gh pr merge reads what the helper hands it: a PR link names its repository.
+    // Read by mod-kit's gh reader, as gh pr merge reads what the helper hands it: a PR link names its repository.
     expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh https://github.com/o/z/pull/3 --squash')[0]?.repo).toBe('o/z')
     expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo=o/w')[0]?.repo).toBe('o/w')
     // The merge queue merges too; a mutation writing a branch directly can reach the default one.
@@ -201,6 +204,26 @@ describe('what a command does, by effect', () => {
     expect(kinds(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "x"}) { clientMutationId } }'`)).toEqual(['merge'])
     // A query that cannot be read is judged as the strictest thing it could be.
     expect(kinds('gh api graphql -F query=@q.graphql')).toEqual(['merge'])
+  })
+  // #961: the endpoint's repository is read as gh reaches it, by mod-kit's reader. A spelling gh does
+  // not send to repos/, one placeholder beside a name, or a name gh could not have, is a repository
+  // that cannot be told (closed); before, it was judged by the command's or the checkout's.
+  test("an endpoint's repository that cannot be read is one that cannot be told, never the checkout's (#961)", () => {
+    const repoOf = (command: string) => acts(command)[0]?.repo
+    expect(repoOf('gh api -X PUT //repos/o/r/pulls/12/merge')).toBeNull()
+    expect(repoOf('gh api -X PUT ///repos/o/r/pulls/12/merge')).toBeNull()
+    expect(repoOf('gh api -X PUT https://api.github.com//repos/o/r/pulls/12/merge')).toBeNull()
+    expect(repoOf(`gh api -X PUT 'repos/{owner}/x/pulls/12/merge'`)).toBeNull()
+    expect(repoOf(`gh api -X PUT 'repos/o?x/r/pulls/12/merge'`)).toBeNull()
+    // gh's placeholders for the current repository name none, so the one the command names decides.
+    expect(repoOf(`gh api -X PUT 'repos/{owner}/{repo}/pulls/12/merge'`)).toBeUndefined()
+    expect(repoOf(`gh -R o/x api -X PUT 'repos/{owner}/{repo}/pulls/12/merge'`)).toBe('o/x')
+    expect(repoOf('gh api -X PUT https://api.github.com/repos/O/R/pulls/12/merge')).toBe('o/r')
+  })
+  test('a command the mod was given no gh reading for is judged as a merge into a repository that cannot be told (#961)', () => {
+    const unread = (command: string) => readCommands(command).map(({ gh: _gh, mergeHelper: _m, ...c }) => c)
+    expect(unread('gh pr view 12').flatMap(c => actsOf(c, ON_BRANCH))).toEqual([{ kind: 'merge', what: 'run a gh command whose flags cannot be read', repo: null }])
+    expect(unread('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r').flatMap(c => actsOf(c, ON_BRANCH))).toEqual([{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: null }])
   })
   test('reads are not merges: viewing a PR, reading its merge state, a GraphQL query', () => {
     expect(kinds('gh pr view 12 --json mergeable')).toEqual([])
