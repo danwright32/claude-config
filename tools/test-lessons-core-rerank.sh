@@ -171,13 +171,22 @@ out="$(python3 "$TOOL" --index-dir "$IDX" --core "$WORK/core-approved.txt" --cou
 check_rc "asking for more seats than reviewable core lessons refuses" 1 "$rc"
 
 # 2d. THE COMMITTED SEATS FILE: exactly 20 seats (the reviewable lessons Dan's approved list kept by
-#     rank), each a real lesson, each named once. The re-rank refuses at run time if one is not in the
-#     core; this catches a damaged file before it is ever read.
+#     rank), each a real lesson, each named once, and, once the core list is in the payload, each in it.
+#     The re-rank also refuses at run time on a seat outside the core (SEAT NOT IN CORE).
 SEATS_FILE="$DIR/../lesson-core-seats.txt"
 check "the committed seats file holds twenty seats" "20" "$(seat_count "$SEATS_FILE")"
 real_seats="$(seat_list "$SEATS_FILE" | tr ' ' '\n' | awk 'NF' | while read -r l; do grep -qh "^- $l\. " "$DIR"/../payload/LESSONS-INDEX-*.md && printf '%s ' "$l"; done)"
 check "and every seat is a lesson in the index" "20" "$(printf '%s' "$real_seats" | wc -w | tr -d ' ')"
 check "and none is named twice" "20" "$(seat_list "$SEATS_FILE" | tr ' ' '\n' | awk 'NF' | sort -u | grep -c .)"
+CORE_FILE="$DIR/../payload/LESSONS-CORE.txt"
+if [ -f "$CORE_FILE" ]; then
+  in_core="$(seat_list "$SEATS_FILE" | tr ' ' '\n' | awk 'NF' | while read -r l; do grep -qx "$l" "$CORE_FILE" && printf '%s ' "$l"; done)"
+  check "and every seat is in the core list" "20" "$(printf '%s' "$in_core" | wc -w | tr -d ' ')"
+else
+  # Before the cutover there is no core list in the payload to check the seats against, which is
+  # said rather than passed (L411); the run time refusal covers it from the first re-rank.
+  echo "UNMEASURED: no payload/LESSONS-CORE.txt yet, so the committed seats were not checked against the core list"
+fi
 
 # 3. THE SIZE AFTER THE MOVES AGAINST THE CAP, in the unit core-set measures (chars of index lines).
 out="$(rerank)"
