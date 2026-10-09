@@ -504,6 +504,36 @@ got="$(ps_repo_dir "git -C $O commit -m x && git push" "$S" ps_is_git_commit)"
   || check "#1017 asked about a commit, the commit's own -C decides" "got [$got]"
 want_repo "git -C $O commit -m x && git push" "$S" \
   "#1017 asked about the push, a commit's -C beside it decides nothing"
+want_repo_both $'cat > /dev/null <<\'EOF\'\nit\'s a note\nEOF\ngit -C '"$T"' push' "$T" \
+  "#1017 a git -C push after a heredoc whose body has an apostrophe is read"
+
+# A push written after a reserved word is a push (#1017, folded in with Dan's approval): the walker
+# took `then` or `do` for the command, so `if x; then git push; fi` and a push in a loop were seen
+# by no push gate at all. The words looked past are lib/shell-words.py's own RESERVED list.
+want_push 'if true; then git push; fi' \
+  "#1017 a push after then is seen"
+want_push $'while false; do\n  git push origin feat\ndone' \
+  "#1017 a push after do, on its own line in a loop, is seen"
+want_push 'if [ -n x ]; then :; else git push; fi' \
+  "#1017 a push after else is seen"
+want_push 'if git push; then echo ok; fi' \
+  "#1017 a push that is an if's condition is seen"
+want_push 'if false; then :; elif git push --dry-run; then :; fi' \
+  "#1017 a push that is an elif's condition is seen"
+want_push '! git push' \
+  "#1017 a negated push is seen"
+want_notpush 'if true; then echo "git push"; fi' \
+  "#1017 a push quoted after then is still not a push"
+if ps_is_gh_pr_create 'if true; then gh pr create --fill; fi'; then check "#1017 a pr create after then is seen" ok
+else check "#1017 a pr create after then is seen" "not seen"; fi
+if ps_is_git_commit $'for f in a b; do\n  git commit -m "$f"\ndone'; then check "#1017 a commit inside a loop is seen" ok
+else check "#1017 a commit inside a loop is seen" "not seen"; fi
+want_repo "for r in a; do git -C $T push; done" "$T" \
+  "#1017 a git -C push right after do names its -C repository"
+want_repo "git -C $RD -C target push" "$T" \
+  "#1017 several -C compose the way git composes them"
+want_repo_both $'cd '"$T"$'\nif true; then\n  git push\nfi' "$T" \
+  "#1017 the cd before an if governs the push inside it"
 
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \

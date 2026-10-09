@@ -438,6 +438,57 @@ def commands(s):
     return out
 
 
+def command_words(text):
+    """One command's words as the shell reads them, quotes removed, past any leading reserved word.
+
+    `then git push` is git's command: the reserved words only open or continue a compound command,
+    and a walker that took `then` or `do` for the command name saw no push in `if x; then git push;
+    fi` (#1017). Looked past from RESERVED, the same list cd_target uses, so the two readings cannot
+    disagree about which word is the command. A command shlex cannot read (an unbalanced quote) is
+    split on whitespace instead, the reading that still lets a push be seen.
+    """
+    try:
+        words = shlex.split(text, posix=True)
+    except ValueError:
+        words = text.split()
+    i = 0
+    while i < len(words) and words[i] in RESERVED:
+        i += 1
+    return words[i:]
+
+
+GIT_VALUED = {"-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+
+
+def git_dir(text):
+    """The directory ONE command's `git -C` options move git to, or "" when it names none.
+
+    Several -C compose the way git composes them: each relative one is taken from the one before
+    (claude-config#589). Read past leading reserved words and assignments (command_words), so
+    `do git -C <wt> push` names <wt> (#1017). Only a leading tilde is expanded; a variable stays as
+    written, so the caller refuses it.
+    """
+    words = command_words(text)
+    i, n = 0, len(words)
+    while i < n and ASSIGNMENT.match(words[i]):
+        i += 1
+    if i < n and words[i].split("/")[-1] == "rtk":
+        i += 1
+    if i >= n or words[i].split("/")[-1] != "git":
+        return ""
+    i += 1
+    where = ""
+    while i < n and words[i].startswith("-"):
+        if words[i] == "-C" and i + 1 < n:
+            p = words[i + 1]
+            p = os.path.expanduser(p) if p.startswith("~") else p
+            where = p if (not where or p.startswith("/")) else os.path.join(where, p)
+            i += 2
+        else:
+            i += 2 if words[i] in GIT_VALUED else 1
+    return where
+
+
 def crude_commands(s):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
 
@@ -459,6 +510,10 @@ def main(argv):
     data = sys.stdin.read()
     if mode == "segments":
         sys.stdout.write("".join(seg + "\n" for seg in segments(data)))
+    elif mode == "words":
+        sys.stdout.write("\x1f".join(command_words(data)))
+    elif mode == "gitdir":
+        sys.stdout.write(git_dir(data))
     elif mode == "commands":
         # Exit 3 says only the crude reading was possible; its records are printed all the same.
         try:
@@ -473,7 +528,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py segments|split|commands < text\n")
+        sys.stderr.write("usage: shell-words.py segments|split|commands|words < text\n")
         return 64
     return 0
 

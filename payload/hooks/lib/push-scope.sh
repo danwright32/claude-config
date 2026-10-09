@@ -204,12 +204,14 @@ ps__shell_commands() {   # $1 = command
 # for the segment questions below, so a fix to how a segment is read reaches every one of them.
 # A segment python cannot read (an unbalanced quote, no python3) falls back to whitespace words,
 # the direction that still lets a push be seen and the gates fire.
+#
+# Leading reserved words (then, do, else, elif, if, while, until, {, !, time) are looked past, so the
+# first word is the command's own (#1017): read by lib/shell-words.py's words mode from the RESERVED
+# list its commands reader already uses, so one list says which word is the command.
 ps__seg_words() {   # $1 = one segment
   local words
-  if words="$(PS_SEG="$1" python3 -c '
-import os, shlex, sys
-sys.stdout.write("\x1f".join(shlex.split(os.environ["PS_SEG"], posix=True)))
-' 2>/dev/null)" && [ -n "$words" ]; then
+  if [ -f "$PS_SHELL_WORDS" ] \
+    && words="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" words 2>/dev/null)" && [ -n "$words" ]; then
     printf '%s' "$words"
   else
     printf '%s\n' "$1" | awk '{ $1 = $1; gsub(/ /, "\037"); printf "%s", $0 }'
@@ -458,71 +460,19 @@ ps__action_record() {   # $1 = command  $2 = the action's predicate
   return 1
 }
 
-# The directory a `git -C <path>` in COMMAND position names (claude-config#589): the push's own -C
-# when the push carries one, otherwise the first git command's. ps_repo_dir asks it of the action's
-# own command alone since #1017, so the "first git command" is that command. Read with the same shell tokenizer as ps_cd_target, because the pattern took
-# everything up to the first space, so `git -C "/a b/wt" push` became `"/a`, which resolved to
-# nothing, and every global push gate stood down on a push it should have judged. It also only
-# saw a -C straight after `git`, so `git -c k=v -C <wt> push` judged the SESSION repository. Several
-# -C options compose the way git composes them: each relative one is taken from the one before.
-# Only a leading tilde is expanded; a variable is printed as written, so the caller refuses it.
-ps_git_c_target() {   # $1 = command; prints the path, or nothing
-  PS_CMD="$1" python3 -c '
-import os, re, shlex
-lex = shlex.shlex(os.environ.get("PS_CMD", ""), posix=True, punctuation_chars=True)
-lex.whitespace_split = True
-OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
-ENDERS = OPENERS | {")", "}"}
-ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-VALUED = {"-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
-toks = []
-while True:
-    try:
-        t = lex.get_token()
-    except ValueError:
-        break
-    if t is None or t == lex.eof:
-        break
-    toks.append(t)
-def expand(p):
-    return os.path.expanduser(p) if p.startswith("~") else p
-first, i, n, at_start = "", 0, len(toks), True
-while i < n:
-    t = toks[i]
-    if at_start and ASSIGN.match(t):
-        i += 1
-        continue
-    if not at_start:
-        at_start = t in OPENERS
-        i += 1
-        continue
-    j = i
-    if toks[j].split("/")[-1] == "rtk":
-        j += 1
-    if j >= n or toks[j].split("/")[-1] != "git":
-        at_start = t in OPENERS
-        i += 1
-        continue
-    j += 1
-    where = ""
-    while j < n and toks[j].startswith("-") and toks[j] not in ENDERS:
-        if toks[j] == "-C" and j + 1 < n and toks[j + 1] not in ENDERS:
-            p = expand(toks[j + 1])
-            where = p if (not where or p.startswith("/")) else os.path.join(where, p)
-            j += 2
-        elif toks[j] in VALUED:
-            j += 2
-        else:
-            j += 1
-    if where:
-        if j < n and toks[j] in ("push", "push)", "push}"):
-            print(where, end="")
-            raise SystemExit(0)
-        first = first or where
-    at_start = False
-    i = j
-print(first, end="")
-' 2>/dev/null
+# The directory ONE command's `git -C <path>` options name (claude-config#589), read by
+# lib/shell-words.py's gitdir mode. Since #1017 ps_repo_dir asks it of the action's own command
+# only: it used to walk the whole command with a tokenizer of its own, answer with the push's -C or
+# else the FIRST git -C anywhere, and stop at the first word it could not read, so an unrelated
+# `git -C <other> status` decided where a later push was judged and a -C push after a heredoc
+# holding an apostrophe was not found at all. It reads the words the way the push recogniser does
+# (past leading reserved words and assignments, so `do git -C <wt> push` names <wt>), keeps a quoted
+# path with a space whole, and composes several -C the way git does. Only a leading tilde is
+# expanded; a variable is printed as written, so the caller refuses it.
+ps_git_c_target() {   # $1 = one command; prints the path, or nothing
+  command -v python3 >/dev/null 2>&1 || return 0
+  [ -f "$PS_SHELL_WORDS" ] || return 0
+  printf '%s' "$1" | python3 "$PS_SHELL_WORDS" gitdir 2>/dev/null
 }
 
 # The command is handed to grep as a here-string in the three questions below, never piped from

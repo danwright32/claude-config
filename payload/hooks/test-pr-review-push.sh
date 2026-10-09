@@ -368,6 +368,21 @@ out="$(fire_push_in "$REPO" $'git commit -m "$(cat <<\'EOF\'\nfix: the gate read
 check_eq "a commit whose message quotes a push is not refused as a commit and a push" "0" "$rc"
 check_eq "and the gate says nothing about it" "" "$out"
 
+# A push after a reserved word was seen by no push gate; it is held now (#1017).
+reset_state
+out="$(FAKE_SLEEP_WAITS=1 fire_push_in "$OTHER" "cd $REPO; if true; then git push -u origin feat/sync; fi")"; rc=$?
+check_eq "a push right after an if's then is held" "2" "$rc"
+check "and meets the branch's findings" "deleteEvent still swallows" "$out"
+out="$(fire_push_in "$OTHER" "for r in a; do git -C $REPO push origin feat/sync; done")"; rc=$?
+check_eq "a git -C push inside a loop is held in the -C repository" "2" "$rc"
+
+# Nothing the gate held before is let through: the plain shapes, from a session in another checkout.
+for c in "cd $REPO && git push" "(cd $REPO && git push origin feat/sync)" "git -C $REPO push" \
+         $'git status\ncd '"$REPO"$'\ngit push'; do
+  out="$(fire_push_in "$OTHER" "$c")"; rc=$?
+  check_eq "still held: $c" "2" "$rc"
+done
+
 # The commit time start asks where the COMMIT runs, not where a push later in the command does.
 reset_state
 out="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]},"tool_response":{"exit_code":0}}))' \
