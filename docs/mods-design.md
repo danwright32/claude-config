@@ -1890,7 +1890,7 @@ the issue approved; what follows is that plan as built, with the readings taken 
   branch. Where a checkout stands is read by mod-kit's new `$.modkit.branch`, the one reader of a
   checkout's main working tree, branch, default branch and issues, so the guard keeps no copy of its
   own; its issue rule is the one winding down has used since #702. Scope modes and the collision
-  guard each still read part of this their own way; moving them onto the reader is its own change. A new issue
+  guard read it too since #980, which deleted their own readings. A new issue
   starts held. Reading where the plan is silent, the stricter way: on the default branch a record
   holds for that session only, since every later issue may be built there and a lasting skip would
   cover them all; and a skip is never single use, since the plan has it cover the rest of the issue.
