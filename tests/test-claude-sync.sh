@@ -3080,6 +3080,219 @@ check "#331 status names exactly the two folders that claim the same job, and no
 check "#331 and says why two of them is a problem rather than just listing them" \
   "grep -q 'competing for one job and the choice between them is arbitrary' <<< \"\$out_dup\""
 
+section "== a send does not restore an OLDER copy of a file the shared repo deleted (#1009) =="
+# On 2026-10-09 the work MacBook's send (bab3a15a) added payload/mods/scope-modes/hooks/ghargs.ts
+# back, after #995 had deleted it. The copy it sent was not the version #995 deleted but the one
+# three edits before it (the payload's copy before a85d3cb2), so the #331 guard above, which
+# recognised a leftover only when it was byte for byte the version DELETED, read it as a deliberate
+# new file and published it. main then failed tests/test-mods.sh. Built against the STATE the
+# commit shows, the way #331 is: the repo has deleted the file, this Mac's applied marker is past
+# the deletion, and the copy here is one the repo held earlier and this Mac never changed.
+RDB="$WORK/olddel-bare.git"; git init -q --bare -b main "$RDB"
+RDA="$WORK/olddel-repoA"; git clone -q "$RDB" "$RDA" 2>/dev/null
+RDR="$WORK/olddel-repoB"; git clone -q "$RDB" "$RDR" 2>/dev/null
+RDHA="$WORK/olddel-homeA"; RDHB="$WORK/olddel-homeB"
+RDMOD="mods/scope-modes"; RDREL="$RDMOD/hooks/ghargs.ts"
+mkdir -p "$RDHA/$RDMOD/.claude-plugin" "$RDHA/$RDMOD/hooks" "$RDHB"
+echo '{"hooks":{}}' > "$RDHA/settings.json"; echo '{"hooks":{}}' > "$RDHB/settings.json"
+printf '{ "name": "scope-modes", "version": "0.1.0", "description": "a test mod" }\n' > "$RDHA/$RDMOD/.claude-plugin/plugin.json"
+printf 'export const register = () => {}\n' > "$RDHA/$RDMOD/hooks/register.ts"
+printf 'export const ghargs = "version one"\n' > "$RDHA/$RDREL"
+# No claude command to ask about the mods: the load check says it could not check, at once, rather
+# than asking the real one (and none of what it says is asserted on here).
+RDENV=(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_CLAUDE_BIN="$WORK/olddel-no-claude")
+env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" sync >/dev/null 2>&1
+check "#1009 the other Mac received version one before anything changed" \
+  "grep -q 'version one' '$RDHB/$RDREL'"
+# The commit holding the copy this Mac is about to send back, read before anything else moves.
+rd_v1="$(git -C "$RDR" log --format=%H -1 -- "payload/$RDREL" 2>/dev/null)"
+# A edits it, then deletes it, and publishes both. The version the repo deleted is version two.
+printf 'export const ghargs = "version two"\n' > "$RDHA/$RDREL"
+env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+rm -f "$RDHA/$RDREL"
+env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+check "#1009 the deletion really did reach the shared repo" \
+  "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/register.ts' 2>/dev/null && ! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+# B receives both, so its applied marker is past the deletion, and then the version it held before
+# them is back in its home, unchanged: the pair the incident commit shows.
+env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull >/dev/null 2>&1
+check "#1009 the pull applied the deletion on the other Mac" "[ ! -e '$RDHB/$RDREL' ]"
+printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
+# Untouched since B last received it, which was before the deletion reached B's clone. Aged rather
+# than waited for, so both ends of the comparison are pinned (L130, L290): a day ago is before the
+# pull above whatever the clock says.
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDREL"
+# And something of B's own in the same send, which must still go out (L159).
+printf 'export const own = "only on B"\n' > "$RDHB/$RDMOD/hooks/b-own.ts"
+out_olddel="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 older copy send: $out_olddel"
+check "#1009 an older copy of a deleted file is not published back to the shared repo" \
+  "! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+check "#1009 while this Mac's own new file in the same send still goes out" \
+  "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/b-own.ts' 2>/dev/null"
+check "#1009 and the send names the file it did not publish, on the line saying so" \
+  "line_has \"\$out_olddel\" 'NOT publishing' 'mods/scope-modes/hooks/ghargs\.ts' 'deleted from the shared config'"
+check "#1009 and names the commit that copy is in, so it can be recovered" \
+  "[ -n '$rd_v1' ] && line_has \"\$out_olddel\" 'mods/scope-modes/hooks/ghargs\.ts' '${rd_v1:0:8}'"
+check "#1009 the local copy goes too, as #331 decided for a copy that carries nothing of this Mac's" \
+  "[ ! -e '$RDHB/$RDREL' ]"
+
+# The same earlier version WRITTEN BACK after the deletion reached this Mac is a decision, not a
+# leftover (putting an older version back on purpose), so the content alone does not decide it: it
+# publishes, and says why. Made here on B, then deleted on B and sent, which deletes it from the
+# shared repo again, so the case after it starts from the same deleted state.
+printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
+out_olddel1b="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 earlier version written back: $out_olddel1b"
+check "#1009 an earlier version written back after the deletion arrived is published" \
+  "git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+check "#1009 and the send says it is putting back a deleted file, and why" \
+  "line_has \"\$out_olddel1b\" 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted it' 'written here after that deletion reached this Mac'"
+rm -f "$RDHB/$RDREL"
+env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send >/dev/null 2>&1
+check "#1009 (the shared repo is back to the deleted state for the next case)" \
+  "! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+
+# THE OTHER CASE: this Mac changed the file after it last received it. That is work that exists
+# nowhere else, and a deletion is not a permanent ban on a name (L116, L362), so it is published,
+# but never in silence: the send says it is putting back a file the shared repo deleted, so a
+# re-add like bab3a15a is read where it happens rather than found by a red main.
+printf 'export const ghargs = "version one"\n// changed on B after it last received\n' > "$RDHB/$RDREL"
+out_olddel2="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 edited copy send: $out_olddel2"
+rd_main_copy="$(git -C "$RDB" show "main:payload/$RDREL" 2>/dev/null || true)"
+check "#1009 a copy this Mac changed after its last receive is published" \
+  "case \"\$rd_main_copy\" in *'changed on B after it last received'*) true ;; *) false ;; esac"
+check "#1009 and the send says it is putting back a file the shared repo deleted" \
+  "line_has \"\$out_olddel2\" 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted it' 'changes the shared config never had'"
+
+# THE COMMIT THE MESSAGE NAMES must hold that copy (review of #1022). A version git only ever saw as
+# the OLD side of a change (its writing commit outside what the walk reaches) is named through the
+# commit that replaced it, and the message prints eight characters of whatever it was handed, so
+# "<replacing commit>^" lost its ^ and named the commit that had REPLACED the copy. Real histories
+# reach that branch only past a graft or a shallow boundary, so the walk's output is stood in for
+# here by a history in which the writing commit is missing, and the answer is judged the way a
+# person recovering the file would use it: the eight characters the message prints, read with git.
+CVR="$WORK/holding-repo"; git init -q -b main "$CVR"
+mkdir -p "$CVR/payload"
+printf 'version one\n' > "$CVR/payload/x.ts"
+git -C "$CVR" add payload/x.ts; git -C "$CVR" -c user.name=t -c user.email=t@t commit -q -m one
+printf 'version two\n' > "$CVR/payload/x.ts"
+git -C "$CVR" -c user.name=t -c user.email=t@t commit -q -am two
+git -C "$CVR" rm -q payload/x.ts; git -C "$CVR" -c user.name=t -c user.email=t@t commit -q -m gone
+cv_c1="$(git -C "$CVR" rev-parse HEAD~2)"; cv_c2="$(git -C "$CVR" rev-parse HEAD~1)"; cv_c3="$(git -C "$CVR" rev-parse HEAD)"
+cv_v1="$(git -C "$CVR" rev-parse "$cv_c1:payload/x.ts")"; cv_v2="$(git -C "$CVR" rev-parse "$cv_c2:payload/x.ts")"
+CV_FN="$WORK/holding-fn.sh"
+sed -n '/^commit_holding_version(){/,/^}/p' "$SCRIPT" > "$CV_FN"
+cv_named_real="$(SYNC_REPO="$CVR" bash -c '. "$1"; commit_holding_version payload/x.ts "$2"' _ "$CV_FN" "$cv_v1" 2>/dev/null)"
+cv_named_old="$(SYNC_REPO="$CVR" CV_HIST="$(printf 'commit %s\n:100644 000000 %s 0000000000000000000000000000000000000000 D\tpayload/x.ts\ncommit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c3" "$cv_v2" "$cv_c2" "$cv_v1" "$cv_v2")" \
+  bash -c 'git(){ case " $* " in *" log --root "*) printf "%s\n" "$CV_HIST" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CV_FN" "$cv_v1" 2>/dev/null)"
+dbg "#1022 named from the real walk: $cv_named_real, from the old side only: $cv_named_old"
+check "#1022 the helper is in the tool to be judged" "[ -s '$CV_FN' ]"
+check "#1022 a version the walk saw written is named by the commit that wrote it" \
+  "[ \"\$(git -C '$CVR' show \"\${cv_named_real:0:8}:payload/x.ts\" 2>/dev/null)\" = 'version one' ]"
+check "#1022 a version seen only as the old side is named by a commit that HOLDS it, as printed" \
+  "[ -n \"\$cv_named_old\" ] && [ \"\$(git -C '$CVR' show \"\${cv_named_old:0:8}:payload/x.ts\" 2>/dev/null)\" = 'version one' ]"
+
+# BOTH LOOKUPS READ THEIR WHOLE INPUT (second review of #1022, L183). claude-sync runs under
+# set -euo pipefail, and each lookup fed a long text through a pipe into an awk that left at its
+# first match. Past the pipe buffer the writer then dies of SIGPIPE, and the pipeline's status is
+# that death, so a correct answer came back as a failure. Driven here with input well past the
+# buffer (5,000 reflog entries, about 260KB, and a history of the same size), each helper called
+# directly under the tool's own options, so a failed status ends the run as it would in the tool.
+CVL="$WORK/reflog-repo"; git init -q -b main "$CVL"
+printf 'one\n' > "$CVL/f"; git -C "$CVL" add f; git -C "$CVL" -c user.name=t -c user.email=t@t commit -q -m one
+printf 'two\n' > "$CVL/f"; git -C "$CVL" -c user.name=t -c user.email=t@t commit -q -am two
+cvl_c1="$(git -C "$CVL" rev-parse HEAD~1)"; cvl_c2="$(git -C "$CVL" rev-parse HEAD)"
+# 5,000 entries, oldest first: the first 4,000 at the commit before, the rest at the one being asked
+# about, one second apart from a pinned start, so the arrival is entry 4,001 by construction (L130).
+awk -v a="$cvl_c1" -v b="$cvl_c2" 'BEGIN { z = "0000000000000000000000000000000000000000"; p = z
+  for (i = 1; i <= 5000; i++) { n = (i <= 4000) ? a : b; printf "%s %s t <t@t> %d +0000\tfixture %d\n", p, n, 1700000000 + i, i; p = n } }' > "$CVL/.git/logs/HEAD"
+CVL_FN="$WORK/reflog-fn.sh"
+sed -n '/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p' "$SCRIPT" > "$CVL_FN"
+cvl_rc=0
+cvl_out="$(SYNC_REPO="$CVL" bash -c 'set -euo pipefail; . "$1"; deletion_reached_clone_at "$2"' _ "$CVL_FN" "$cvl_c2" 2>/dev/null)" || cvl_rc=$?
+dbg "#1022 arrival over 5000 reflog entries: rc=$cvl_rc out=$cvl_out"
+check "#1022 the reflog fixture really is past the pipe buffer" \
+  "[ \"\$(git -C '$CVL' log -g --format=%H HEAD | wc -l | tr -d ' ')\" -eq 5000 ] && [ \"\$(wc -c < '$CVL/.git/logs/HEAD' | tr -d ' ')\" -gt 200000 ]"
+check "#1022 the arrival lookup survives 5,000 reflog entries under pipefail, with the right time" \
+  "[ \"\$cvl_rc\" -eq 0 ] && [ \"\$cvl_out\" = '1700004001' ]"
+# The history the version lookup reads, matched on its FIRST entry and followed by 5,000 more.
+cvh_hist="$(printf 'commit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c2" "$cv_v1" "$cv_v2"
+  awk 'BEGIN { for (i = 1; i <= 5000; i++) printf "commit %040d\n:100644 100644 %040d %040d M\tpayload/x.ts\n", i, i, i }')"
+# Handed over in a FILE, never an environment variable: Linux refuses to start a process whose
+# single environment string passes 128KB, which is how CI first failed this check (run 37977468100)
+# while it passed on the Mac.
+CVH_FILE="$WORK/holding-long-hist.txt"; printf '%s\n' "$cvh_hist" > "$CVH_FILE"
+cvh_rc=0
+cvh_out="$(SYNC_REPO="$CVR" CV_HIST_FILE="$CVH_FILE" bash -c 'set -euo pipefail; git(){ case " $* " in *" log --root "*) cat "$CV_HIST_FILE" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CVL_FN" "$cv_v2" 2>/dev/null)" || cvh_rc=$?
+dbg "#1022 version lookup over a long history: rc=$cvh_rc out=$cvh_out"
+check "#1022 the version lookup survives a history past the pipe buffer under pipefail, with the right commit" \
+  "[ \"\${#cvh_hist}\" -gt 200000 ] && [ \"\$cvh_rc\" -eq 0 ] && [ \"\$cvh_out\" = '$cv_c2' ]"
+
+# SAID ONCE PER COPY (third review of #1022). A copy the guard lets through is published by the same
+# send, so normally it is never seen again; but a later step of the send can still hold it back (a
+# hook whose suite fails), and then the next save meets it untracked again. The watcher sends on
+# every save, so the "publishing" line has to be said once per path and content, as the refusal
+# beside it already is. Driven by calling the guard twice over the same staged copy, the state a
+# held back send leaves.
+RGR="$WORK/once-repo"; git init -q -b main "$RGR"; RGH="$WORK/once-home"; mkdir -p "$RGR/payload/hooks" "$RGH/hooks"
+printf 'old\n' > "$RGR/payload/hooks/x.sh"; git -C "$RGR" add payload; git -C "$RGR" -c user.name=t -c user.email=t@t commit -q -m add
+git -C "$RGR" rm -q payload/hooks/x.sh; git -C "$RGR" -c user.name=t -c user.email=t@t commit -q -m gone
+printf 'old\nchanged here\n' > "$RGH/hooks/x.sh"; mkdir -p "$RGR/payload/hooks"; cp "$RGH/hooks/x.sh" "$RGR/payload/hooks/x.sh"
+RG_FN="$WORK/once-fn.sh"
+{ printf 'have_git(){ return 0; }\nsync_log_line(){ :; }\nnote_held_back(){ :; }\n'
+  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
+rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" bash -c 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' _ "$RG_FN" 2>&1; }
+rg_out1="$(rg_run)"; rg_out2="$(rg_run)"
+dbg "#1022 once: first [$rg_out1] second [$rg_out2]"
+check "#1022 the first send says it is putting back the deleted file" \
+  "line_has \"\$rg_out1\" 'publishing hooks/x\.sh' 'shared config deleted it'"
+check "#1022 and the same copy met again does not say it a second time" \
+  "[ -f '$RGR/payload/hooks/x.sh' ] && ! line_has \"\$rg_out2\" 'publishing hooks/x\.sh' 'shared config deleted it'"
+
+section "== a skills .trash folder is never sent, and a pull leaves each Mac's own alone (#1009) =="
+# Claude Code moves a skill it removes or replaces into skills/.trash/<stamp>/<skill>/ on the Mac it
+# runs on. On 2026-10-09 the work MacBook's send (989614f4) carried one of those to main, holding
+# copies of four plugin skills. It is per Mac working state, so it is left out like the plugin
+# skills are, by the send AND by the apply: the apply mirrors with --delete, and an exclusion on the
+# sending side alone would have each pull delete the receiving Mac's own .trash.
+TRB="$WORK/trash-bare.git"; git init -q --bare -b main "$TRB"
+TRA="$WORK/trash-repoA"; git clone -q "$TRB" "$TRA" 2>/dev/null
+TRR="$WORK/trash-repoB"; git clone -q "$TRB" "$TRR" 2>/dev/null
+TRHA="$WORK/trash-homeA"; TRHB="$WORK/trash-homeB"
+mkdir -p "$TRHA" "$TRHB"; echo '{"hooks":{}}' > "$TRHA/settings.json"; echo '{"hooks":{}}' > "$TRHB/settings.json"
+mkskill "$TRHA/skills/real-skill/SKILL.md" 'a skill that travels'
+mkskill "$TRHA/skills/.trash/1791476936467-87889-68vS0Y/built-in-browser/SKILL.md" 'a plugin skill Claude Code set aside'
+# At any depth: a .trash inside a skill is the same thing in a different place.
+mkdir -p "$TRHA/skills/real-skill/.trash"; echo 'an older file set aside' > "$TRHA/skills/real-skill/.trash/old.md"
+out_trash="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 CLAUDE_HOME="$TRHA" SYNC_REPO="$TRA" SYNC_HOSTNAME=trashMacA bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 trash send: $out_trash"
+check "#1009 the skill beside the .trash folder is sent" \
+  "git -C '$TRB' cat-file -e 'main:payload/skills/real-skill/SKILL.md' 2>/dev/null"
+# Read whole, then matched: a grep -q that stops early can kill the listing under pipefail, and a
+# negated check would then pass on the failure (L183).
+trash_tree="$(git -C "$TRB" ls-tree -r --name-only main -- payload/skills 2>/dev/null || true)"
+check "#1009 a .trash folder at the top of skills/ is not sent" \
+  "[ -n \"\$trash_tree\" ] && ! grep -q '^payload/skills/\.trash/' <<< \"\$trash_tree\""
+check "#1009 nor one inside a skill" \
+  "[ -n \"\$trash_tree\" ] && ! grep -q '/\.trash/' <<< \"\$trash_tree\""
+# The receiving side. A payload that already holds a .trash folder (main does today, until this
+# change removes it) is not written onto the other Mac, and that Mac's own .trash is not deleted.
+mkdir -p "$TRA/payload/skills/.trash/stray/old-skill"
+mkskill "$TRA/payload/skills/.trash/stray/old-skill/SKILL.md" 'a set aside copy already on main'
+git -C "$TRA" add payload/skills/.trash >/dev/null 2>&1
+git -C "$TRA" -c user.name=t -c user.email=t@t commit -q -m 'a .trash folder reaches main' >/dev/null 2>&1
+git -C "$TRA" push -q origin main >/dev/null 2>&1
+mkskill "$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md" 'this Mac set this aside itself'
+out_trash2="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 CLAUDE_HOME="$TRHB" SYNC_REPO="$TRR" SYNC_HOSTNAME=trashMacB bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#1009 trash pull: $out_trash2"
+check "#1009 the pull brings the real skill" "[ -f '$TRHB/skills/real-skill/SKILL.md' ]"
+check "#1009 but not a .trash folder the payload holds" "[ ! -e '$TRHB/skills/.trash/stray' ]"
+check "#1009 and leaves this Mac's own .trash folder where it is" \
+  "[ -f '$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md' ]"
+
 section "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
 WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
 WR11="$WORK/w11repo"; git clone -q "$WB11" "$WR11"
