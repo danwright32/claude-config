@@ -528,6 +528,17 @@ if ps_is_gh_pr_create 'if true; then gh pr create --fill; fi'; then check "#1017
 else check "#1017 a pr create after then is seen" "not seen"; fi
 if ps_is_git_commit $'for f in a b; do\n  git commit -m "$f"\ndone'; then check "#1017 a commit inside a loop is seen" ok
 else check "#1017 a commit inside a loop is seen" "not seen"; fi
+# A command after a heredoc opener on the same line, in text that holds real newlines (how the merge
+# hooks read it): the "; " there is a separator, never the line break that starts the body (lessons
+# review of #1017). The flattened text the push hooks read cannot tell the two apart.
+if ps_is_git_push $'cat > /dev/null <<EOF; git push\nbody line\nEOF'; then
+  check "#1017 a push after a heredoc opener and ; on the same line is seen" ok
+else check "#1017 a push after a heredoc opener and ; on the same line is seen" "not seen"; fi
+want_repo $'cat > /dev/null <<EOF; cd '"$T"$' && git push\nbody line\nEOF' "$T" \
+  "#1017 the cd after a heredoc opener and ; on the same line governs the push"
+if ps_is_git_push $'cat > /dev/null <<EOF; echo hi\ngit push is only body text\nEOF'; then
+  check "#1017 and the body after it is still not a push" "seen as a push"
+else check "#1017 and the body after it is still not a push" ok; fi
 want_repo "for r in a; do git -C $T push; done" "$T" \
   "#1017 a git -C push right after do names its -C repository"
 want_repo "git -C $RD -C target push" "$T" \

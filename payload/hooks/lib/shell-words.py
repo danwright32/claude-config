@@ -252,12 +252,15 @@ def commands(s):
     inside the command that holds it as well as being read as commands of its own, which come first.
     A subshell group is not part of the command around it. Heredoc bodies and comments are nobody's
     text. s may be the command as typed or with every newline flattened to "; " (how the push hooks
-    read it): "; " then also counts as a line break where a heredoc body is looked for, and ends a
-    comment when s holds no newline at all, which can only read more commands, never fewer.
-    Raises Unreadable when anything is still open at the end.
+    read it). Which one is decided by whether s holds a newline at all: with one, only a newline is
+    a line break, so in `cat <<EOF; git push` the "; " is the separator it is and the push is read
+    (lessons review of #1017); with none, "; " is the line break that starts a heredoc body and ends
+    a comment, because the flattened text cannot tell a newline from a separator there (main read
+    it the same way). Raises Unreadable when anything is still open at the end.
     """
     n = len(s)
-    comment_ends = "\n" if "\n" in s else "; "
+    line_break = "\n" if "\n" in s else "; "
+    closing_line = re.escape(line_break) + "%s%s" + (r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)")
     out, pending = [], []
     frames = [{"k": "top", "start": 0, "cwd": "", "old": None}]
 
@@ -370,7 +373,7 @@ def commands(s):
         # Where commands begin and end: only here, in a frame that holds commands.
         if c == "#" and (i == 0 or s[i - 1] in " \t\n;&|()"):
             cut(f, i, "#")
-            j = s.find(comment_ends, i)
+            j = s.find(line_break, i)
             i = n if j < 0 else j
             f["start"] = i
             continue
@@ -386,13 +389,12 @@ def commands(s):
             else:
                 i += 2
             continue
-        if pending and (c == "\n" or s.startswith("; ", i)):
+        if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden.
             j = i
             for word, strip_tabs in pending:
-                m = re.compile(r"(?:\n|; )" + ("\t*" if strip_tabs else "") + re.escape(word)
-                               + r"(?=\n|;|$)").search(s, j)
+                m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
                 if not m:
                     j = None
                     break

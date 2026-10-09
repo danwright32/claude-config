@@ -520,10 +520,23 @@ ps__commit_stages_all() {
 ps__read_adds() {   # $1 = command  $2 = scope | takes
   # The command goes in on stdin, never in the environment: a heredoc commit message can pass the
   # platform's limit on argument and environment size, and python then never starts at all.
-  printf '%s' "$1" | PS_MODE="${2:-scope}" python3 -c '
-import os, re, shlex, sys
+  #
+  # The reserved words that lead a command (then, do, else, ...) are looked past, read from
+  # lib/shell-words.py's RESERVED, the list the push recogniser uses, so `if x; then git add -A; fi`
+  # is an add here as it is to ps_is_git_add (lessons review of #1017). With that file missing the
+  # list is empty, which only reads fewer adds, the reading every release before #1017 had.
+  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -c '
+import importlib.util, os, re, shlex, sys
 cmd = sys.stdin.read()
 mode = os.environ.get("PS_MODE", "scope")
+RESERVED = set()
+try:
+    spec = importlib.util.spec_from_file_location("shell_words", os.environ["PS_SHELL_WORDS"])
+    shell_words = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shell_words)
+    RESERVED = shell_words.RESERVED
+except Exception:
+    pass
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
 ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -537,7 +550,7 @@ for seg in re.split(r"&&|\|\||;|\||\n", cmd):
     i = 0
     while i < len(toks):
         t = toks[i].lstrip("({")
-        if t == "" or ASSIGN.match(t):
+        if t == "" or ASSIGN.match(t) or t in RESERVED:
             i += 1
             continue
         toks[i] = t

@@ -223,6 +223,10 @@ refused "an unscoped add inside a subshell is refused"
 # The repository is the one the ADD's cd names, from a session standing outside it, on any line
 # and whatever cd follows (claude-config#1017). ps_repo_dir reads the cd in force for the action it
 # is asked about, and an add is not a push, so a hook asking about a push here would find no cd.
+run "if true; then git add -A; fi"
+refused "an unscoped add right after then is refused (lessons review of #1017)"
+run "for f in x; do git add .; done"
+refused "and so is one right after do"
 REPO_SAVED="$REPO"; REPO="$FIX"
 run $'echo starting\ncd '"$REPO_SAVED"$' && git add -A\ncd '"$FIX"
 REPO="$REPO_SAVED"
