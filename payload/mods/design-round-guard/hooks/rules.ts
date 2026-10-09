@@ -16,6 +16,8 @@ export const SKIP_YES = 'Skip them'
 export const SKIP_NO = 'Run /design-rounds'
 export const SETTLED_YES = 'Settled'
 export const SETTLED_NO = 'Not yet'
+/** The skip question's third answer (#1010): this one refused edit changes nothing on screen. */
+export const NOT_LOOK = 'Not a look change'
 
 // The plan's list (Dan, 2026-10-08): style files (CSS and its preprocessors, the Tailwind config,
 // design tokens), screen and component files (.tsx, .jsx, .vue, .svelte, .html), and SwiftUI views.
@@ -101,14 +103,166 @@ export const textsOf = (input: Record<string, unknown>): string[] => {
 /** Whether Swift source is a SwiftUI view: it imports SwiftUI, or declares a view or its body. */
 export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(text) || /\bsome\s+View\b/.test(text) || /:\s*View\s*\{/.test(text)
 
-/** The look changing files a command's text names, for a write its words do not name (an inline script, a patch). */
+/**
+ * The look changing files a command's text names, for a write its words do not name (an inline
+ * script, a patch). A Next.js dynamic segment or route group (`[SO_ID]`, `(shop)`) is part of the
+ * name (#1010): read as where the name starts, `src/app/booking/[SO_ID]/page.tsx` was `/page.tsx`, a
+ * file at the top of the disk in no project, and passed. A call's own name and parenthesis before a
+ * name (`open(app/page.tsx`) may not be part of it, and a folder holding one (`x(1)`) is, so both
+ * readings are given.
+ */
 export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
-  for (const m of text.matchAll(/[\w./~@+*-]+\.[A-Za-z]+\b/g)) {
-    const word = m[0].replace(/^[.]+(?=[^./])/, '')
-    if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
+  for (const m of text.matchAll(/[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g)) {
+    // `open(app/page.tsx` is a call around a name and `x(1)/page.tsx` a folder holding parentheses,
+    // and the spelling cannot tell them apart, so both readings are kept and either holds. Only an
+    // absolute name after a call's parenthesis is that name alone (lessons review of #1010).
+    const raw = m[0]
+    const call = raw.replace(/^(?:[\w$.]+\()+/, '')
+    for (let word of call === raw || /^[/~$]/.test(call) ? [call] : [call, raw]) {
+      word = word.replace(/^[.]+(?=[^./])/, '')
+      // A ) closing nothing in the name closes the call around it (`open(app/page.tsx).read`).
+      let depth = 0
+      for (let i = 0; i < word.length; i++) {
+        if (word[i] === '(') depth++
+        else if (word[i] === ')' && --depth < 0) {
+          word = word.slice(0, i)
+          break
+        }
+      }
+      if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
+    }
   }
   return out
+}
+
+/**
+ * Whether a name the write reader could not follow may still be a look changing file, its extension
+ * being a pattern the shell can expand to one (`page.ts[x]`, `site.c?s`, `x.{css,md}`, `out.*`)
+ * (#1010). One that cannot (`x.l[o]g`, `x.{md,txt}`) is not (lessons review of #1010), and one this
+ * cannot read as a pattern is taken as one that may.
+ */
+export const patternExtension = (word: string): boolean => {
+  const base = word.split('/').pop() ?? ''
+  const dot = base.lastIndexOf('.')
+  if (dot < 0 || !/[*?[\]{}]/.test(base.slice(dot + 1))) return false
+  const ext = base.slice(dot + 1)
+  let re = ''
+  for (let i = 0; i < ext.length; i++) {
+    const c = ext[i] as string
+    if (c === '*') re += '.*'
+    else if (c === '?') re += '.'
+    else if (c === '[') {
+      const end = ext.indexOf(']', i + 2)
+      if (end < 0) return true
+      const body = ext.slice(i + 1, end).replace(/^[!^]/, '^').replace(/[\\\]]/g, '\\$&')
+      re += `[${body}]`
+      i = end
+    } else if (c === '{') {
+      const end = ext.indexOf('}', i)
+      if (end < 0) return true
+      re += `(?:${ext.slice(i + 1, end).split(',').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`
+      i = end
+    } else re += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  const may = new RegExp(`^${re}$`, 'i')
+  return [...STYLE, ...SCREEN, 'swift'].some(x => may.test(x))
+}
+
+/**
+ * The text a call leaves in a file it edits, from the file as it is: a Write's content, an Edit's
+ * (one match, or every match with replace_all, as Edit itself requires), MultiEdit's edits in turn.
+ * Undefined for an edit that would not apply and for any other tool, which is never judged by it.
+ */
+export const editedText = (before: string, tool: string, input: Record<string, unknown>): string | undefined => {
+  const apply = (text: string, edit: unknown): string | undefined => {
+    const e = (edit ?? {}) as Record<string, unknown>
+    if (typeof e.old_string !== 'string' || typeof e.new_string !== 'string' || !e.old_string) return undefined
+    const parts = text.split(e.old_string)
+    if (parts.length < 2 || (parts.length > 2 && e.replace_all !== true)) return undefined
+    return parts.join(e.new_string)
+  }
+  if (tool === 'Write') return typeof input.content === 'string' ? input.content : undefined
+  if (tool === 'Edit') return apply(before, input)
+  if (tool !== 'MultiEdit' || !Array.isArray(input.edits) || !input.edits.length) return undefined
+  let text: string | undefined = before
+  for (const e of input.edits) if ((text = apply(text, e)) === undefined) return undefined
+  return text
+}
+
+/** The screen files whose edits are judged by their text (dataOnlyChange): React's .tsx and .jsx. */
+export const judgedByText = (path: string): boolean => /\.(tsx|jsx)$/i.test(path)
+
+// A prop whose name can carry a look or what is shown, read anywhere in the name and in any case
+// (`containerClassName`, `maxWidth`, `defaultOpen`), so a near miss holds rather than passes. A hold
+// costs Dan one answer; a pass is a look he never saw. Plus a boolean's prefix, read by its case.
+const LOOK_WORD = /class|style|css|^sx$|^tw$|colou?r|variant|size|theme|tone|intent|appearance|kind|layout|mode|compact|dense|emphasis|open|show|hide|hidden|visible|disabled|checked|selected|active|expand|collapse|loading|width|height|icon|image|img|src|alt|title|label|text|value|placeholder|children|content|heading|caption|message|align|justify|gap|pad|margin|radius|round|shadow|font|weight|border|^bg|background|fill|stroke|opacity|position|order|span|grid|flex|display|render|^as$|tag|component|^id$/i
+const LOOK_PROP = { test: (name: string) => LOOK_WORD.test(name) || /^(is|has|should|with|can)[A-Z]/.test(name) }
+// An expression that only carries data along: names, property access, calls, ?? || && ! and ?:, with
+// no literal but the empty string, so nothing in it can be text shown on screen or a class.
+const PLUMBING = /^[\w$.?!|&(),:\s[\]]+$/
+
+/**
+ * Whether changing a React screen file's text from `before` to `after` changes nothing on screen, by
+ * a rule narrow enough to be sure (#1010). Dan's edit, `xbc={xbc}` to `xbc={leadXbc ?? ''}`, which
+ * booking code a page hands its calendar, is the shape: the one difference lies inside the value of
+ * one prop on a component (a capitalised tag), the prop's name does not name a look or what is shown,
+ * and both values only carry data along. A changed className, style, look naming prop, literal, JSX,
+ * copy, import, or anything outside one prop's value is not judged here, so it is asked about.
+ */
+export const dataOnlyChange = (before: string, after: string): boolean => {
+  if (before === after) return false
+  const max = Math.min(before.length, after.length)
+  let p = 0
+  while (p < max && before[p] === after[p]) p++
+  let s = 0
+  while (s < max - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s++
+  // The braces around the change: the nearest { before it and the nearest } after it, the same brace
+  // in both texts. A value holding a brace fails PLUMBING below, so these enclose the change only.
+  const open = before.lastIndexOf('{', p - 1)
+  if (open < 0) return false
+  const closeB = before.indexOf('}', p)
+  const closeA = after.indexOf('}', p)
+  if (closeB < before.length - s || closeA < after.length - s || before.length - closeB !== after.length - closeA) return false
+  const empty = (v: string) => v.replace(/''|""/g, 'x')
+  const values = [before.slice(open + 1, closeB), after.slice(open + 1, closeA)].map(empty)
+  if (!values.every(v => PLUMBING.test(v) && !/(^|[^\w$])\d/.test(v) && !/\b(true|false)\b/.test(v))) return false
+  // The prop, and the component it is on.
+  const head = before.slice(0, open)
+  const prop = /\s([A-Za-z_][A-Za-z0-9_]*)=$/.exec(head)
+  if (!prop || LOOK_PROP.test(prop[1] as string)) return false
+  const lt = head.lastIndexOf('<')
+  const tag = head.slice(lt, head.length - (prop[0] as string).length).replace(/=>/g, '')
+  return lt >= 0 && /^<[A-Z][\w.]*(\s|$)/.test(tag) && !tag.includes('>')
+}
+
+/** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
+export const callText = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canon((v as Record<string, unknown>)[k])])) : v
+  return JSON.stringify([tool, canon(input), at.cwd, at.session])
+}
+
+/**
+ * What a refused call is known by, so the same call sent again is recognised when Dan has answered
+ * Not a look change for it: the tool and every key of its input, in a fixed order, with the folder it
+ * runs in and the session, hashed (cyrb53). The folder because a shell command's relative path names
+ * another file elsewhere; the session so his word about one edit does not stand for ever (lessons
+ * review of #1010). The hash only finds the record: the record keeps callText, and a call is let
+ * through only when its own text is that text, since the call's input is Claude's to write.
+ */
+export const callKey = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
+  const text = callText(tool, input, at)
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 2654435761)
+    h2 = Math.imul(h2 ^ c, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return `${tool}:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16)}:${text.length}`
 }
 
 /** Whether a path is this mod's own store file, which only Dan's answers may write: in the plugin store, or by its name wherever its folder could not be followed. */
@@ -143,8 +297,8 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
   const s = named(subjects)
   return (
     `Blocked: ${f} changes how the screen looks, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
-    `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", look changing edits on ${s} go through. ` +
-    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}"} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round. ` +
+    `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}"}, look changing edits on ${s} go through. ` +
+    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}"} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
     `Do not change ${f} any other way.`
   )
 }
@@ -167,7 +321,7 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
 /** The card Dan sees for a refused look changing edit, drawn by mod-kit as every guard's is. */
 export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
   reason: `${listed(files)} changes how the screen looks, and ${named(subjects)} has no settled design round.`,
-  safeWay: `Claude starts /design-rounds, or asks you whether to skip them for this issue.`,
+  safeWay: `Claude starts /design-rounds, or asks you whether to skip them for this issue, or whether this edit changes the look at all.`,
 })
 
 /** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
@@ -193,7 +347,12 @@ export const skipQuestion = (files: readonly string[], subjects: readonly Design
 export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
   { label: SKIP_YES, description: `Edits that change the look go ahead on ${named(subjects)} without a design round; the next issue asks again` },
   { label: SKIP_NO, description: 'Nothing that changes the look is edited until you settle a design round' },
+  { label: NOT_LOOK, description: 'Nothing on screen changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
+
+/** Dan's Not a look change, kept with the refused call (#1010): what it let through, and why. */
+export const notLookWhy = (files: readonly string[]): string =>
+  `Dan answered "${NOT_LOOK}" to "${SKIP_QUESTION}": this edit to ${listed(files)} changes nothing on screen, so it went ahead with no design round.`
 
 /** The design rounds skill's closing question as Dan reads it. */
 export const settledQuestion = (subjects: readonly DesignRoundSubject[]): string =>
