@@ -275,6 +275,24 @@ check_not "and not about the rows that already name their pull request" "c$S1:" 
 check_not "nor the one in a gone folder" "c$S3:" "$(cat "$GH_LOG")"
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
 
+# 14. An EMPTY first input to a two file awk: FNR == NR then stays true through the second file,
+# which would be read as the first. A window with reviews and no openings must count no openings;
+# one with openings and no reviews must count every opening as unreviewed.
+export AI_REVIEW_STATE_DIR="$WORKDIR/state-noopen"; mkdir -p "$AI_REVIEW_STATE_DIR"
+printf '%s\t%s\t%s\t%s\t%s\n' "$((now - 40 * 86400))" test-mac repo "$REPO" "$S1" > "$AI_REVIEW_STATE_DIR/pr-opened.tsv"
+review "$S1" ok 1 "App/A.swift:1: a finding (L11). Should be: fixed. [severity: minor]"
+review "$S5" ok 0 "No issues found."
+out="$(run)"
+check "reviews with no opening in the window are not read as openings" "pull requests opened: 0 (from 0 gh pr create openings" "$out"
+check "and there is no opening to share" "openings with a finished review of that head: 0 of 0" "$out"
+check "the review with findings is still measured" "acted on 1" "$out"
+export AI_REVIEW_STATE_DIR="$WORKDIR/state-noreview"; mkdir -p "$AI_REVIEW_STATE_DIR"
+opened "$S1" "$REPO" "$U1"; opened "$S3" "$REPO" "https://github.com/test-owner/repo/pull/2"
+out="$(run)"
+check "openings with no review in the window are all unreviewed" "openings with a finished review of that head: 0 of 2" "$out"
+check "and so are their pull requests" "pull requests with a finished review of a head they were opened at: 0 of 2 (0%)" "$out"
+export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

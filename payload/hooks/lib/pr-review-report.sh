@@ -106,7 +106,10 @@ awk -F '\t' -v s="$since" 'NF && $1 >= s' "$AR_PR_LEDGER" > "$work/reviews" 2>/d
 # none is counted as unmeasured below, and needs no lookup). kind, timestamp, folder, sha, files
 # (comma joined, reviews only), and for an opening whose row carries the pull request URL (written
 # since #1006), its owner/name and number, which it is placed by with no lookup at all.
-awk -F '\t' 'FNR == NR {
+# Every two file awk here names its first file (FILENAME == ARGV[1]), never FNR == NR, which stays
+# true through the second file when the first is empty: a window with no openings would read every
+# review as one.
+awk -F '\t' 'FILENAME == ARGV[1] {
     slug = ""; num = ""
     if (match($6, /github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[0-9]+/)) {
       split(substr($6, RSTART, RLENGTH), p, "/"); slug = p[2] "/" p[3]; num = p[5]
@@ -142,7 +145,7 @@ done < "$work/dirlist"
 
 # The distinct commits to look up, by repository: only items whose folder was placed and whose sha
 # is a full commit id, since GitHub refuses a whole query over one malformed id.
-awk -F '\t' 'FNR == NR { slug[$1] = $2; next }
+awk -F '\t' 'FILENAME == ARGV[1] { slug[$1] = $2; next }
   $7 == "" && ($3 in slug) && slug[$3] != "" && $4 ~ /^[0-9a-f]{40}$/ { print slug[$3] "\t" $4 }' \
   "$work/dirs" "$work/items" | sort -u > "$work/wanted"
 awk -F '\t' -v b="$batch" '
@@ -242,7 +245,7 @@ reasons() { # $1 = a file of status words: prints "word count, word count" in a 
 
 # Openings, by pull request and by opening. Both share one predicate: an opening is covered when its
 # own folder and head have a finished review (the pair both ledgers write).
-awk -F '\t' 'FNR == NR { if ($7 == "ok" || $7 == "empty-diff") done[$4 "\t" $5] = 1; next }
+awk -F '\t' 'FILENAME == ARGV[1] { if ($7 == "ok" || $7 == "empty-diff") done[$4 "\t" $5] = 1; next }
   { print (($3 "\t" $4) in done) ? 1 : 0 }' "$work/reviews" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/covered"
 paste "$work/covered" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/openings"
 read -r n_open hit_open n_pr hit_pr <<< "$(awk -F '\t' '
