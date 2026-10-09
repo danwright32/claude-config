@@ -30,9 +30,6 @@ const storeKey = (repo: string) => `${CARDS}${fold(repo)}`
 const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
 const verdictKey = (repo: string, pr: number) => `${fold(repo)}#${pr}`
 
-// owner/name as GitHub's own link for the PR spells it: after a rename, the name it has now.
-const repoOfUrl = (url: string | undefined): string | undefined => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/.exec(url ?? '')?.[1]
-
 const run = async ($: EngineInterface, argv: string[]) => {
   try {
     const r = await $.process.run(argv, { timeoutMs: 20_000 })
@@ -207,7 +204,15 @@ export const register: Register = on => {
     const now = await $.clock.now()
     // Kept under the repository as GitHub's own link names it, so a card Claude typed in another
     // case or under an old name is found by /live, by Copy and Mark sent, and by wind down (#702).
-    const repo = repoOfUrl(facts.url) ?? input.repo
+    // The link is read by mod-kit's one reader of a github.com link (#961); one it cannot read keeps
+    // the card under the repository Claude gave, and says so.
+    let linked: string | null = null
+    try {
+      linked = facts.url ? await $.modkit.linkRepo({ link: facts.url }) : null
+    } catch (err) {
+      notes.push(`GitHub's link for #${input.pr} could not be read (${String((err as Error)?.message ?? err)}), so the card is kept under ${input.repo} as given.`)
+    }
+    const repo = linked ?? input.repo
     const had = await cardsOf($, repo)
     const before = had.find(c => c.pr === input.pr)
     const kept: IsItLiveCard = { repo, pr: input.pr, title, url: facts.url ?? '', state, at: now }

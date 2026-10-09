@@ -5,7 +5,8 @@ import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
-import { ghRepo, githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
 
@@ -55,9 +56,10 @@ const deps: { name: string; register: Register } = {
           pipeline: async (input: { command: string }) => kit('pipeline', input),
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
-          repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           gh: async (input: { words: string[] }) => kit('gh', input),
+          repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
+          linkRepo: async (input: { link: string }) => kit('linkRepo', input),
           bandRow: async (row: Row) => {
             built.ui.log('BAND ' + JSON.stringify(row))
             await built.state.set({ plugin: 'mod-kit', key: 'band' }, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
@@ -77,7 +79,6 @@ const deps: { name: string; register: Register } = {
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
-          linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         },
@@ -236,8 +237,11 @@ type Opts = {
   cwd?: string
   /** mod-kit's repo reader fails (#979 review). */
   repoReaderFails?: boolean
-  /** mod-kit's reader of a repository gh spells fails (#961). */
+  /** mod-kit's readers of a repository gh spells and of a github.com link fail (#961). */
   ghRepoReaderFails?: boolean
+  linkReaderFails?: boolean
+  /** mod-kit's link reader fails only for a link holding this text (#961). */
+  linkReaderFailsOn?: string
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
@@ -409,7 +413,7 @@ const world = (on: On, o: Opts = {}) => {
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
     if (cmd === '__modkit') {
-      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string }
+      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string; link?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
       if (a[0] === 'repo' && o.repoReaderFails) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
@@ -424,6 +428,8 @@ const world = (on: On, o: Opts = {}) => {
         const git = async (args: string[]) => ((await answer($, { ...e, argv: args })) as { value: { exitCode: number; stdout: string; stderr: string } }).value
         return branchAt(input.path ?? '', walk, git).then(b => ok(b === null ? '' : JSON.stringify(b)))
       }
+      if (a[0] === 'linkRepo' && (o.linkReaderFails || (o.linkReaderFailsOn !== undefined && (input.link ?? '').includes(o.linkReaderFailsOn)))) return fail(1, 'mod-kit is not loaded')
+      if (a[0] === 'linkRepo') return ok(JSON.stringify(linkRepo(input.link)))
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
@@ -1207,6 +1213,33 @@ test('only his answer to leave_pr_open leaves a PR open: a picker of Claude\'s o
   expect(w.toasts).toEqual([])
 })
 
+// #961: the branch's own PR is matched to Dan's choice by the repository its link names, read by
+// mod-kit's one reader of a github.com link, on the table every reading of a link is pinned on. The
+// session's own repository is another, so a link naming none is never taken for o/r.
+test("the branch's own PR is matched to Dan's choice to leave it open by the repository its link names, on every shared case (#961)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Leave it open' })
+  const own = (url: string) => ({ ...merged('OPEN'), pr: { ...merged('OPEN').pr, url, headRefOid: 'ccc3333' }, others: [] })
+  w.o.gh = own('https://github.com/o/r/pull/12')
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, leave(12, { repo: 'o/r' }))
+  w.o.remote = 'git@github.com:x/y.git'
+  const got: { why: string; settled: boolean }[] = []
+  for (const f of LINK_FIXTURES) {
+    w.o.gh = own(f.link)
+    await command($ as never, 'winddown')
+    got.push({ why: f.why, settled: (await stop($ as never)).block === undefined })
+  }
+  expect(got).toEqual(LINK_FIXTURES.map(f => ({ why: f.why, settled: f.repo?.toLowerCase() === 'o/r' })))
+})
+
+test("a PR link mod-kit cannot read refuses the turn end rather than finish winding down (#961)", withDeps, async ($, on) => {
+  const { clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, linkReaderFails: true })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the finish check failed \(.*mod-kit is not loaded/)
+})
+
 test('asleep, GH_REPO is read as gh reads it, and one that cannot be read refuses a write naming no repository (#961)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s9'] }) }, ghRepoEnv: 'https://github.com/Other/X.git' })
   await start($ as never, clock)
@@ -1218,6 +1251,31 @@ test('asleep, GH_REPO is read as gh reads it, and one that cannot be read refuse
   w.o.ghRepoEnv = 'o/r'
   w.o.ghRepoReaderFails = true
   expect(await call($ as never, bash('gh issue comment 5 --body hi'))).toMatch(/did not write to GitHub where the repository it reaches could not be resolved/)
+})
+
+// #961: the deploy verdict is asked for under the repository the PR's link names, read by mod-kit's
+// link reader, as is it live keys its cards; a link it cannot read is said, never taken as live.
+test("a merged PR's deploy is read under the repository its link names, in any case, and a link that cannot be read is said (#961)", withDeps, async ($, on) => {
+  const pr31 = (url: string) => ({ number: 31, state: 'MERGED', url, headRefName: 'fix-31', closingIssuesReferences: [] })
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31('HTTPS://GITHUB.COM/o/r/pull/31'), issues: {} }, verdict: { state: 'live', at: T0 }, branchHere: false, branchOnGitHub: false, linkReaderFailsOn: '#unreadable' })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  w.o.gh = { pr: pr31('https://github.com/o/r/pull/31#unreadable'), issues: {} }
+  expect((await stop($ as never)).block).toMatch(/could not be read \(GitHub's link for PR #31 could not be read \(mod-kit is not loaded\)\)/)
+  w.o.gh = { pr: pr31('HTTPS://GITHUB.COM/o/r/pull/31'), issues: {} }
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+// #961: the PR a gh pr create opened is the last link in its output that mod-kit's link reader
+// reads, whatever its case or www, and a link to another host is passed over.
+test('the PR gh pr create printed is noted from the last GitHub link its output holds (#961)', withDeps, async ($, on) => {
+  const pr31 = { number: 31, state: 'OPEN', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
+  const { clock } = world(on, { branch: 'main', created: 'https://www.github.com/o/r/pull/31\nsee also https://gitlab.example.com/o/r/pull/40\n', gh: { pr: pr31, issues: {} } })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 is not merged yet\./)
 })
 
 // With no repository named, leave_pr_open asks about the PR in the session's own, read from its

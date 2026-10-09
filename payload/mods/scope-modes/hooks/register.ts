@@ -1658,7 +1658,13 @@ type IsItLiveNoun = { verdict: (q: { repo: string; pr: number }) => Promise<{ st
 // the one GitHub's own link for the PR names. An absent mod is unmeasured, never live; a read that
 // throws (a withheld noun, a state that cannot be read) is said as unreadable.
 const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string }): Promise<Reading['deploy']> => {
-  const repo = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/.exec(pr.url ?? '')?.[1]
+  // Read by mod-kit's one reader of a github.com link (#961), as is it live keys its cards.
+  let repo: string | null
+  try {
+    repo = pr.url ? await $.modkit.linkRepo({ link: pr.url }) : null
+  } catch (err) {
+    return { unreadable: `GitHub's link for PR #${pr.number} could not be read (${msg(err)})` }
+  }
   if (!repo) return { unreadable: `GitHub gave no link for PR #${pr.number}` }
   try {
     const v = await ($ as unknown as { isItLive: IsItLiveNoun }).isItLive.verdict({ repo, pr: pr.number })
@@ -1771,8 +1777,9 @@ const keepFound = async ($: EngineInterface, t: ScopeModesTarget, found: Found |
 }
 
 const leftOpenOf = async ($: EngineInterface) => (await $.state.get(leftOpenRef)).value ?? []
-// owner/name a PR's link names, or undefined for no link.
-const repoOfLink = (url: string | undefined) => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+$/i.exec(url ?? '')?.[1]
+// owner/name a PR's link names, read by mod-kit's one reader of a github.com link (#961), or
+// undefined for no link or none it names.
+const repoOfLink = async ($: EngineInterface, url: string | undefined): Promise<string | undefined> => (url ? ((await $.modkit.linkRepo({ link: url })) ?? undefined) : undefined)
 // How a PR left open on Dan's choice is listed: by number, repository and the reason he was asked about.
 const keptLine = (d: ScopeModesLeftOpen) => `PR #${d.number} in ${d.repo} (${d.why})`
 
@@ -1815,7 +1822,7 @@ const check = ($: EngineInterface): Promise<Checked | null> => {
         if (d && keptOpen(withChoice)) kept.push(keptLine(d))
         return outstanding(withChoice)
       }
-      const left = toDo(reading, repoOfLink(found?.url) ?? (choices.length ? await sessionSlug($) : undefined))
+      const left = toDo(reading, (await repoOfLink($, found?.url)) ?? (choices.length ? await sessionSlug($) : undefined))
       // Winding down finalizes everything the session has open, so every PR this session opened is
       // outstanding until merged, whether or not the session's own branch has a PR (#856: a session
       // whose branch PR was finished parked three PRs it had opened "waiting on you"). An agent's in a
@@ -1928,15 +1935,21 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
 // winding down would then not know to finish that PR.
 const noteOpened = async ($: EngineInterface, raw: string, result: { text?: string }) => {
   try {
-    const links = [...String(result.text ?? '').matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)]
-    const link = links[links.length - 1]
-    if (!link) return
+    // The last pull request link gh printed, its repository read by mod-kit's one reader of a
+    // github.com link (#961).
+    const links = [...String(result.text ?? '').matchAll(/https?:\/\/\S+?\/pull\/(\d+)/gi)]
+    if (!links.length) return
     // Read as the judge reads it, so `bash -lc 'gh pr create'` is seen too (lessons review of #714),
     // and gh past its global flags (`gh -R o/r pr create`, #961).
     const cmds = await readCommands($, raw)
     if (!cmds.some(c => c.gh?.sub === 'pr' && c.gh.act === 'create')) return
-    const repo = link[1] as string
-    const number = Number(link[2])
+    let found: { repo: string; number: number } | undefined
+    for (const l of links) {
+      const r = await $.modkit.linkRepo({ link: l[0] })
+      if (r) found = { repo: r, number: Number(l[1]) }
+    }
+    if (!found) return
+    const { repo, number } = found
     const opened = await openedOf($)
     if (opened.some(o => o.repo.toLowerCase() === repo.toLowerCase() && o.number === number)) return
     await $.state.set(openedRef, [...opened, { repo, number }])
