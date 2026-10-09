@@ -564,9 +564,12 @@ PER FILE: the 140,000 byte budget in `hooks/test-rule-file-budget.sh` and the pl
 large-memory-files banner at 150,000 characters. That was half right, corrected by #541 below the
 next paragraph. The single index measured 100,899 characters over 702 lessons on 2026-09-19 and
 was growing about 1,130 a day, so it was roughly a month from the budget. Rendering one file per
-section of `LESSONS.md` put the largest at 27,713, a fifth of the budget, and every file is still
-imported by `CLAUDE.md`, so every lesson still loads into every session. It saves no tokens, which
-is the point: the file size problem is separated from the token cost question, which is #474.
+section of `LESSONS.md` put the largest at 27,713, a fifth of the budget, and at the time every file
+was still imported by `CLAUDE.md`, so every lesson still loaded into every session. It saved no
+tokens, which was the point: the file size problem was separated from the token cost question, which
+is #474. That question was answered on 2026-09-24 by the lessons core (below, under the path scoped
+rules section): with a core list set, a session imports the core instead, and the whole library
+only as the fail safe when no list is set.
 
 **The banner also has a TOTAL, and neither figure is a constant** (#541, read out of the 2.1.281
 binary on 2026-09-23). The per file limit is the model's context window times 0.05 times a model
