@@ -168,6 +168,8 @@ recorded_size() {  # $1 = payload relative path
     LESSONS-CORE-security-and-privacy.md)     printf '2187' ;;
     LESSONS-CORE-test-speed.md)               printf '1700' ;;
     LESSONS-CORE-building-with-ai.md)         printf '1412' ;;
+    # The library's table of contents, imported after the core (#566), measured the same way.
+    LESSONS-CORE-TOC.md)                      printf '1111' ;;
     *)                                        printf '' ;;
   esac
 }
@@ -258,16 +260,21 @@ for _lib in "$PAYLOAD"/LESSONS-INDEX-*.md; do
     bad "$_core has no recorded size, and the lessons core renders it the moment a core list names a lesson in that section. Measure it from a core render (see recorded_size) and add it, so switching the core on cannot fail this suite."
   fi
 done
+# And the library's table of contents, which loads beside ANY core (#566). Its name is claude-sync's
+# LESSON_CORE_TOC, spelled here because this suite also runs from ~/.claude, where claude-sync is not.
+if [ -n "$(recorded_size LESSONS-CORE-TOC.md)" ]; then ok; else
+  bad "LESSONS-CORE-TOC.md has no recorded size, and it loads beside any lessons core. Measure it from a core render and add it to recorded_size."
+fi
 
 # THE CORE'S OWN TOTAL, ratcheted like a file. The per file ratchets above each allow at least
 # MIN_RATCHET_HEADROOM of growth, which over a dozen core files is more than the whole core, so they
 # cannot see the core as a whole doubling. A re-rank that moves lessons in is a list change nobody
 # reviews here, so this is what makes growth in the core a deliberate act (L316). Recorded from the
 # list Dan approved on 2026-09-24 (#563): 355 lessons, 50,246 index characters, 54,372 bytes with
-# the file headers, rendered against LESSONS.md on 2026-10-09. The cap `claude-sync core-set`
-# enforces (SYNC_CORE_CAP, 20,000) is a separate decision, made at the list, and Dan chose to go
-# over it for this list.
-CORE_RECORDED=54372
+# the file headers, plus 1,111 for the library's table of contents (#566), rendered against
+# LESSONS.md on 2026-10-09. The cap `claude-sync core-set` enforces (SYNC_CORE_CAP, 20,000) is a
+# separate decision, made at the list, and Dan chose to go over it for this list.
+CORE_RECORDED=55483
 core_total=0
 core_files=0
 while IFS= read -r rel; do

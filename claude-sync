@@ -2238,6 +2238,11 @@ LESSON_CORE_PREFIX="LESSONS-CORE"
 LESSON_CORE_STATE=".lessons-core-state"
 LESSON_CORE_APPLIED=".lessons-core-applied"
 LESSON_CORE_SHRINK_PCT=50
+# The library's table of contents, rendered beside the core and imported after it (#566). Named
+# under the core prefix so the shape predicate, the sweep and the staging treat it as the core's
+# own, and in capitals, which no section slug (lowercase letters, digits and hyphens) can produce,
+# so a section can never render over it.
+LESSON_CORE_TOC="$LESSON_CORE_PREFIX-TOC.md"
 
 # The file the index above is generated FROM. Named here so the merge recovery and the index
 # generator cannot drift into two spellings of one path (L41).
@@ -2825,6 +2830,29 @@ lesson_core_file_header(){   # $1 = the section title
   printf 'the whole entry before a rule decides anything: `~/claude-config-sync/claude-sync lesson L174`.\n\n'
 }
 
+# THE LIBRARY'S TABLE OF CONTENTS (#566, the text Dan approved on #563). With the core in use a
+# session no longer has the library in front of it, so it is told what the library holds and where,
+# one line per section with that section's lesson count and how many of them the core carries. The
+# counts are derived here from the same split rendering and list the core files are, never kept by
+# hand (L41), and every section is listed, including one the core carries none of, which is the
+# section a session would otherwise not know it lacks. Sorted by title, in the C locale, so the file
+# is byte identical on both Macs and is not rewritten on every run.
+lesson_core_toc(){   # $1 = the listed ids, one Lnnn per line, $2 = the split rendering
+  printf '# Lessons library: table of contents (generated, do not edit)\n\n'
+  printf 'The lessons core above is part of the library. Every lesson, core or not, is read by the PR\n'
+  printf 'lessons review before any merge; read any one in full with\n'
+  printf '`~/claude-config-sync/claude-sync lesson L174`, or a whole section in\n'
+  printf '~/.claude/LESSONS-INDEX-<section>.md.\n\n'
+  printf '%s\n' "$1" | awk -F'\t' '
+    NR == FNR { if ($1 != "") want["- " $1 "."] = 1; next }
+    !match($3, /^- L[0-9]+\./) { next }
+    { if (!($1 in title)) { title[$1] = $2; order[++n] = $1 }
+      total[$1]++
+      if (substr($3, 1, RLENGTH) in want) core[$1]++ }
+    END { for (i = 1; i <= n; i++) { s = order[i]; t = total[s]
+            printf "- %s (%s): %d %s, %d in the core\n", title[s], s, t, (t == 1 ? "lesson" : "lessons"), core[s] + 0 } }' - "$2" | LC_ALL=C sort
+}
+
 # Renders the core from the list, or sweeps it when the list is absent or unusable, records the
 # state, and prints the file names CLAUDE.md should import: the core's when it is in use, else the
 # library's ($3). The state and the applied count are recorded only for the LIVE tree: they describe
@@ -2851,6 +2879,18 @@ write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library nam
         wanted+="$name
 "
       done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$2")
+      # The table of contents goes LAST, so it is imported after the core it describes, and only
+      # beside a core that rendered something: added to an empty list it would be the only import,
+      # and the library would stop loading with nothing in its place.
+      if ! is_blank "$wanted" && out="$(scratch_file)"; then
+        lesson_core_toc "$ids" "$2" > "$out" 2>/dev/null
+        if [ -s "$out" ]; then
+          cmp -s "$out" "$1/$LESSON_CORE_TOC" || cat "$out" > "$1/$LESSON_CORE_TOC" 2>/dev/null || true
+          wanted+="$LESSON_CORE_TOC
+"
+        fi
+        rm -f "$out"
+      fi
       state="$state $chars chars"
       [ "$live" -eq 1 ] && printf '%s\n' "${state#active }" | awk '{ print $1 }' > "$1/$LESSON_CORE_APPLIED" 2>/dev/null
       ;;

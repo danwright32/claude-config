@@ -19119,6 +19119,27 @@ check "#565 and does not join the core on its own" \
   "! grep -q '^- L6\.' '$LCH/LESSONS-CORE-data-safety.md'"
 check "#565 and the core stays in use" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
 
+# THE LIBRARY'S TABLE OF CONTENTS, loaded beside the core (#566, the text Dan approved on #563). A
+# session with the core in use no longer has the library in front of it, so it is told what the
+# library holds and where, section by section, with counts DERIVED at render time rather than kept
+# by hand (L41). A section none of whose lessons is in the core is listed too: that is exactly the
+# one a session would otherwise not know it is missing.
+printf '\n## Test speed\n\n- **L7. A test speed lesson that is not in the core.** body\n' >> "$LCH/LESSONS.md"
+lc_push >/dev/null
+LCTOC="$LCH/LESSONS-CORE-TOC.md"
+check "#566 with the core in use the library's table of contents is written" "[ -f '$LCTOC' ]"
+check "#566 and imported last, after every core file" \
+  "[ \"\$(grep '^@LESSONS-' '$LCH/CLAUDE.md' | tail -1)\" = '@LESSONS-CORE-TOC.md' ]"
+check "#566 it counts each section's lessons and how many are in the core" \
+  "grep -qF 'Proof over green (proof-over-green): 3 lessons, 2 in the core' '$LCTOC' && grep -qF 'Data safety (data-safety): 3 lessons, 2 in the core' '$LCTOC'"
+check "#566 a section with none in the core is listed too, in the singular where it is one" \
+  "grep -qF 'Test speed (test-speed): 1 lesson, 0 in the core' '$LCTOC'"
+check "#566 it says where the whole library and any one lesson can be read" \
+  "grep -qF '~/.claude/LESSONS-INDEX-<section>.md' '$LCTOC' && grep -qF 'claude-sync lesson' '$LCTOC'"
+check "#566 it carries no lesson line, so nothing counting core lessons counts it" \
+  "! grep -q '^- L[0-9]' '$LCTOC'"
+check "#566 and it travels with the core" "[ -f '$LCR/payload/LESSONS-CORE-TOC.md' ]"
+
 # 3 to 6. EVERY WAY THE LIST CAN BE WRONG loads the whole library, records why, and says so.
 lc_fallback(){ # lc_fallback <description> <state words>
   local out; out="$(lc_push)"
@@ -19143,8 +19164,9 @@ fi
 printf 'L1\n' > "$WORK/lcore-small.txt"
 CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-small.txt" >/dev/null 2>&1
 lc_push >/dev/null
+# One section file, plus the library's table of contents that loads beside any core (#566).
 check "#564 a shrink made through core-set renders the smaller core" \
-  "[ \"\$(lc_core_files)\" = 1 ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
+  "[ \"\$(lc_core_files)\" = 2 ] && [ -f '$LCH/LESSONS-CORE-TOC.md' ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
 
 # 7. THE CAP IS ENFORCED WHERE THE LIST IS EDITED, never at the send (a send that refused would stop
 #    every other file travelling with it, L371).
