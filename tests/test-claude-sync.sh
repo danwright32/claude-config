@@ -3140,8 +3140,8 @@ check "#1009 the local copy goes too, as #331 decided for a copy that carries no
 
 # The same earlier version WRITTEN BACK after the deletion reached this Mac is a decision, not a
 # leftover (putting an older version back on purpose), so the content alone does not decide it: it
-# publishes, and says why. Made here on B, then removed again from the shared repo by hand, so the
-# case after it starts from the same deleted state.
+# publishes, and says why. Made here on B, then deleted on B and sent, which deletes it from the
+# shared repo again, so the case after it starts from the same deleted state.
 printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
 out_olddel1b="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
 dbg "#1009 earlier version written back: $out_olddel1b"
@@ -3221,8 +3221,12 @@ check "#1022 the arrival lookup survives 5,000 reflog entries under pipefail, wi
 # The history the version lookup reads, matched on its FIRST entry and followed by 5,000 more.
 cvh_hist="$(printf 'commit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c2" "$cv_v1" "$cv_v2"
   awk 'BEGIN { for (i = 1; i <= 5000; i++) printf "commit %040d\n:100644 100644 %040d %040d M\tpayload/x.ts\n", i, i, i }')"
+# Handed over in a FILE, never an environment variable: Linux refuses to start a process whose
+# single environment string passes 128KB, which is how CI first failed this check (run 37977468100)
+# while it passed on the Mac.
+CVH_FILE="$WORK/holding-long-hist.txt"; printf '%s\n' "$cvh_hist" > "$CVH_FILE"
 cvh_rc=0
-cvh_out="$(SYNC_REPO="$CVR" CV_HIST="$cvh_hist" bash -c 'set -euo pipefail; git(){ case " $* " in *" log --root "*) printf "%s\n" "$CV_HIST" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CVL_FN" "$cv_v2" 2>/dev/null)" || cvh_rc=$?
+cvh_out="$(SYNC_REPO="$CVR" CV_HIST_FILE="$CVH_FILE" bash -c 'set -euo pipefail; git(){ case " $* " in *" log --root "*) cat "$CV_HIST_FILE" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CVL_FN" "$cv_v2" 2>/dev/null)" || cvh_rc=$?
 dbg "#1022 version lookup over a long history: rc=$cvh_rc out=$cvh_out"
 check "#1022 the version lookup survives a history past the pipe buffer under pipefail, with the right commit" \
   "[ \"\${#cvh_hist}\" -gt 200000 ] && [ \"\$cvh_rc\" -eq 0 ] && [ \"\$cvh_out\" = '$cv_c2' ]"
