@@ -825,3 +825,87 @@ test('#1010: a Next.js dynamic segment is followed as the folder it names, relat
   w.branches['/w/slate'] = '979-next'
   expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/app/page.ts[x]' }))).toContain('could not be followed')
 })
+
+// claude-config#1046, from a pet session: the session in the project's main checkout, the edit in a
+// worktree whose branch names the issue. Dan answered Settled with metadata "call" naming the refused
+// edit, and the same edit sent again (with a new id) was refused again, naming the same issue.
+const WT_PAGE = { tool: 'Edit', file_path: '/w/slate-wt/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
+const WT_STYLE = { tool: 'Edit', file_path: '/w/slate-wt/app/globals.css', old_string: 'a{}', new_string: 'a{color:red}' }
+for (const [form, metadataOf] of [
+  ['"call" naming the refused edit', (id: string) => ({ call: id })],
+  ['"path" naming the worktree and "issue"', () => ({ path: '/w/slate-wt', issue: 1548 })],
+  ['"path" naming a file in the worktree', () => ({ path: '/w/slate-wt/app/page.tsx' })],
+  ['nothing but the source', () => ({})],
+] as const)
+  test(`#1046: Settled with ${form} lets the resent edit and every later look changing edit on the issue through`, withKit, async ($, on) => {
+    const w = world($, on, { cwd: '/w/slate' })
+    w.branches['/w/slate'] = 'main'
+    w.branches['/w/slate-wt'] = '1548-enrollment-chart'
+    const why = refusalOf(await call($, WT_PAGE))
+    expect(why).toContain('issue #1548 in slate')
+    const id = idIn(why)
+    if (!id) throw new Error(`no refused call named in: ${why}`)
+    const settled = await askSettled($, w, SETTLED_YES, {}, metadataOf(id))
+    expect(refusalOf(settled)).toBe('')
+    expect(w.asked[0]?.questions[0]?.question).toContain('issue #1548 in slate')
+    expect(contextOf(settled)).toContain('recorded as settled for issue #1548 in slate')
+    // The edit sent again arrives with a new id, and goes through; so does another look change there.
+    expect(refusalOf(await call($, WT_PAGE))).toBe('')
+    expect(refusalOf(await call($, WT_STYLE))).toBe('')
+    expect(w.ran.map(x => x.input.file_path)).toEqual(['/w/slate-wt/app/page.tsx', '/w/slate-wt/app/globals.css'])
+  })
+
+// claude-config#1046: "issue" given beside "call" recorded only the issue named, never what the refused
+// edit waits on, so when the two differed the edit sent again was refused again, and every answer
+// after that looped. Naming a call now always records what that call waits on, as Skip them does.
+test('#1046: Settled naming a refused call records what that call waits on, whatever "issue" also names', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  w.branches['/w/slate'] = 'main'
+  w.branches['/w/slate-wt'] = '1548-enrollment-chart'
+  const id = idIn(refusalOf(await call($, WT_PAGE)))
+  if (!id) throw new Error('no refused call named')
+  const r = await askSettled($, w, SETTLED_YES, {}, { call: id, issue: 1549 })
+  expect(w.asked[0]?.questions[0]?.question).toContain('issue #1548 in slate and issue #1549 in slate')
+  expect(contextOf(r)).toContain('Send the Edit call to app/page.tsx again now')
+  expect(Object.keys(w.store).sort()).toEqual(['record:/w/slate|issue:1548', 'record:/w/slate|issue:1549'])
+  expect(refusalOf(await call($, WT_PAGE))).toBe('')
+})
+
+// claude-config#1046: a refused edit on the default branch waits on that branch for this session, and
+// the skill says to add the issue there, so Settled naming both recorded only the issue and the edit
+// was held again.
+test('#1046: on the default branch, Settled naming the refused call and its issue lets the edit through now and on the issue branch later', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  w.branches['/w/slate'] = 'main'
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call named')
+  const r = await askSettled($, w, SETTLED_YES, {}, { call: id, issue: 978 })
+  expect(w.asked[0]?.questions[0]?.question).toContain('main in slate, for this session and issue #978 in slate')
+  expect(contextOf(r)).toContain('Send the Write call to app/page.tsx again now')
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  w.branches['/w/slate'] = '978-design-round-guard'
+  expect(refusalOf(await call($, STYLE))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+// claude-config#1046: a path that is not absolute was refused with "No refused edit is waiting",
+// whether one was or not, which read as the path being ignored in favour of "call".
+test('#1046: a path that is not absolute is refused by name, naming the refused edits that are waiting', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  w.branches['/w/slate-wt'] = '1548-enrollment-chart'
+  const id = idIn(refusalOf(await call($, WT_PAGE)))
+  const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { path: 'slate-wt', issue: 1548 }))
+  expect(why).toContain('"slate-wt" is not an absolute path')
+  expect(why).toContain(`${id}: issue #1548 in slate`)
+  expect(why).not.toContain('No refused edit is waiting')
+  expect(w.asked).toEqual([])
+})
+
+test('#1046: with no refused edit waiting, a path that is not absolute is still refused by name, asking only for an absolute path', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { path: 42 }))
+  expect(why).toContain('"42" is not an absolute path')
+  expect(why).toContain('"path" as the absolute path')
+  expect(why).not.toContain('"call"')
+  expect(w.asked).toEqual([])
+})
