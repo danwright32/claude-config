@@ -289,6 +289,15 @@ check_eq "and is read as decimal days" 8 "$(q 'd["window_days"]')"
 check_eq "and the now beside it as decimal seconds" "2026-06-15T12:00:00Z" "$(q 'd["until"]')"
 scan --root "$ROOT" --days 00
 if [ "$RC" -ne 0 ]; then ok; else bad "a window of zero days written as 00 is refused"; fi
+# An empty --root (an unset variable in the caller) must not widen the scan to all of HOME (L320).
+scan --root "" --now "$NOW"
+if [ "$RC" -ne 0 ]; then ok; else bad "an empty --root is refused, never searched as HOME (got $RC)"; fi
+check "and says why" "--root" "$(cat "$ERR")"
+check_eq "and nothing is printed as a result" "" "$(cat "$OUT")"
+scan --root "$ROOT/mine" --ignore "" --now "$NOW"
+if [ "$RC" -ne 0 ]; then ok; else bad "an empty --ignore is refused (got $RC)"; fi
+scan --root "$ROOT/mine" --author "" --now "$NOW"
+if [ "$RC" -ne 0 ]; then ok; else bad "an empty --author is refused (got $RC)"; fi
 scan --root "$ROOT" --days thirty
 if [ "$RC" -ne 0 ]; then ok; else bad "a window that is not a number of days is refused"; fi
 check "and says why" "days" "$(cat "$ERR")"

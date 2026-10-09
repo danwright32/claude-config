@@ -82,6 +82,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --root|--ignore|--author|--days|--now)
       [ $# -ge 2 ] || die "$1 needs a value."
+      # An empty value is refused, never dropped: an empty --root (a caller's unset variable)
+      # would otherwise leave no root and widen the scan to all of HOME (L320).
+      [ -n "$2" ] || die "$1 was given an empty value."
       case "$1" in
         --root) roots_arg="${roots_arg}$2"$'\n' ;;
         --ignore) ignores="${ignores}$2"$'\n' ;;
