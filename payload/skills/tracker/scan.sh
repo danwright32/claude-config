@@ -237,8 +237,11 @@ EOF
     if [ "$rc" -ne 0 ]; then rec ERROR "rev-list failed: $(sed -n 1p "$ERRF")"; total=""; fi
     rec F commit_count "$total"
 
-    rc=0; last="$(gitr log -1 --format=%aI $revs 2> "$ERRF")" || rc=$?
-    if [ "$rc" -ne 0 ]; then rec ERROR "log for the last commit failed: $(sed -n 1p "$ERRF")"; last=""; fi
+    # The newest AUTHOR date over every commit, not git log -1: the walk is in committer date
+    # order, so a commit rebased or amended later, but authored earlier, would come first.
+    rc=0; dates="$(gitr log --format='%at %aI' $revs 2> "$ERRF")" || rc=$?
+    if [ "$rc" -ne 0 ]; then rec ERROR "log for the last commit failed: $(sed -n 1p "$ERRF")"; dates=""; fi
+    last="$(printf '%s\n' "$dates" | sort -n | sed -n '$s/^[0-9-]* //p')"
     rec F last_commit_date "$last"
 
     rc=0; roots_out="$(gitr log --max-parents=0 --format='%at %aI' $revs 2> "$ERRF")" || rc=$?

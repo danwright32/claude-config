@@ -103,6 +103,13 @@ git clone -q --depth 1 "file://$REAL_ROOT/strangers" "$ROOT/shallow" 2>/dev/null
 
 # a remote carrying credentials in its address.
 newrepo "$ROOT/secret" "https://dan:hunter2tokenvalue@github.com/o/secret-repo.git"
+# rebased: the commit made last (newest committer date) was AUTHORED earlier than the one before it,
+# so the newest author date is not the first commit in git's walk order.
+newrepo "$ROOT/rebased" "https://github.com/o/rebased"
+commit "$ROOT/rebased" -3 "$ME_NAME" "$ME_EMAIL" "authored three days ago"
+GIT_AUTHOR_NAME="$ME_NAME" GIT_AUTHOR_EMAIL="$ME_EMAIL" GIT_COMMITTER_NAME="$ME_NAME" GIT_COMMITTER_EMAIL="$ME_EMAIL" \
+  GIT_AUTHOR_DATE="$(at -10) +0000" GIT_COMMITTER_DATE="$(at -1) +0000" \
+  git -C "$ROOT/rebased" commit -q --allow-empty -m "authored ten days ago, rebased yesterday"
 # a password that itself holds an @, which a match stopping at the first @ would only half remove.
 newrepo "$ROOT/atpass" "https://dan:pass@word99@github.com/o/atpass-repo.git"
 commit "$ROOT/atpass" -1 "$ME_NAME" "$ME_EMAIL" "at in the password"
@@ -154,8 +161,8 @@ check_not "and its output is JSON" "PARSE-ERROR" "$(q 'd["repo_count"]')"
 
 repos="$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
 check_eq "it finds exactly the wanted repositories, each once" \
-  '["atpass", "empty", "mine", "secret", "shallow", "strangers", "wt/mine-feature"]' "$repos"
-check_eq "and counts them" 7 "$(q 'd["repo_count"]')"
+  '["atpass", "empty", "mine", "rebased", "secret", "shallow", "strangers", "wt/mine-feature"]' "$repos"
+check_eq "and counts them" 8 "$(q 'd["repo_count"]')"
 check_eq "and says it found some" "repos_found" "$(q 'd["outcome"]')"
 check_eq "and names the root it searched, resolved" "[\"$REAL_ROOT\"]" "$(q 'd["roots_searched"]')"
 
@@ -180,6 +187,7 @@ check_not "a commit after the reference now is outside it" "after the reference 
 check_eq "the window is reported as ending at the reference now" "2026-06-15T12:00:00Z" "$(q 'd["until"]')"
 check_eq "and starting the given days before it" "2026-05-16T12:00:00Z" "$(q 'd["since"]')"
 check_eq "first_commit_date is the oldest commit's" "$(iso_day "$(at -40)")" "$(q 'R("mine")["first_commit_date"][:10]')"
+check_eq "last_commit_date is the newest AUTHOR date, even when a rebased commit was committed after it" "$(iso_day "$(at -3)")" "$(q 'R("rebased")["last_commit_date"][:10]')"
 check_eq "last_commit_date is the newest commit's" "$(iso_day "$(at 2)")" "$(q 'R("mine")["last_commit_date"][:10]')"
 
 # zero matches is still a repository, and zero is not the same as unmeasured.
