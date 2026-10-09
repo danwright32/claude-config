@@ -952,6 +952,19 @@ changed in the meantime is restored, newer, because a deletion against an edit i
 where restoring is what loses nothing (L5). No manifest was added: `.last-applied` already names
 the commit, and git already holds its tree.
 
+A PRESENT FILE the shared repo deleted (#331, #1009) is the same question the other way round. It
+is judged by content against every version the repo ever held for that path, never by
+`.last-applied` alone: on 2026-10-09 the work MacBook's marker was already past #995's deletion of
+`mods/scope-modes/hooks/ghargs.ts` while the version three edits before it sat in its home, and
+the first form of the guard, which compared against the deleted version only, published it and
+turned main red. The version deleted is a leftover whenever it was written. An earlier version is
+one only when its mtime is older than the moment this clone's HEAD first held the deletion (read
+from the reflog, both on this Mac's clock), because writing an older version back on purpose is a
+decision the content alone cannot tell from a copy that sat there. A leftover is not sent; anything
+else is this Mac's work and is sent, with a line saying it puts back a deleted file and why. A
+tombstone list was considered and not built: the history already records every deletion and every
+version, and a second record of the same facts is one more thing for the two Macs to disagree on.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on
