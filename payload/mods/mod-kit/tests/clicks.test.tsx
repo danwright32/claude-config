@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../types/index.d.ts'
-import { clicksReach, mostRows } from '../hooks/band.ts'
+import { appleTerminalTrusted, clicksReach, mostRows } from '../hooks/band.ts'
 
 // #939: a band or pane Button is pressed by a click only where the surface reports clicks. The
 // terminal reports them in the fullscreen layout alone, and Apple Terminal only while its per tab
@@ -85,21 +85,54 @@ type Found = { text: string; children: unknown[]; props?: Record<string, unknown
 type Ui = { find: (q: object) => Promise<{ props: Record<string, unknown> } | undefined>; findAll: (q: { type: string }) => Promise<Found[]>; press: (q: { key: string }) => Promise<unknown>; unmount: () => Promise<void> }
 const texts = async (ui: Ui) => (await ui.findAll({ type: 'Text' })).filter(t => t.children.every(c => typeof c === 'string')).map(t => t.text)
 
+// A site as clicksReach is asked about it, with this Mac's Apple Terminal setting (#1012) off unless
+// a case says otherwise.
+const site = (surface: string, isFullscreen: boolean | undefined, terminal: string | undefined, isAppleTerminalTrusted = false) => ({ surface, isFullscreen, terminal, isAppleTerminalTrusted })
+
 test('clicksReach: only a terminal in the fullscreen layout that is not Apple Terminal, or a surface drawing native buttons', () => {
-  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'iTerm.app' })).toBe(true)
-  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'ghostty' })).toBe(true)
+  expect(clicksReach(site('terminal', true, 'iTerm.app'))).toBe(true)
+  expect(clicksReach(site('terminal', true, 'ghostty'))).toBe(true)
   // Apple Terminal reports clicks only while a per tab switch is on, which no mod can read.
-  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'Apple_Terminal' })).toBe(false)
+  expect(clicksReach(site('terminal', true, 'Apple_Terminal'))).toBe(false)
   // A multiplexer names itself, not the terminal behind it, which may be Apple Terminal (#946 review).
-  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'tmux' })).toBe(false)
-  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: 'screen' })).toBe(false)
+  expect(clicksReach(site('terminal', true, 'tmux'))).toBe(false)
+  expect(clicksReach(site('terminal', true, 'screen'))).toBe(false)
   // The main screen reports no clicks in any terminal.
-  expect(clicksReach({ surface: 'terminal', isFullscreen: false, terminal: 'iTerm.app' })).toBe(false)
+  expect(clicksReach(site('terminal', false, 'iTerm.app'))).toBe(false)
   // Not measured, or a terminal that could not be read: taken as a click that may not land.
-  expect(clicksReach({ surface: 'terminal', isFullscreen: undefined, terminal: 'iTerm.app' })).toBe(false)
-  expect(clicksReach({ surface: 'terminal', isFullscreen: true, terminal: undefined })).toBe(false)
+  expect(clicksReach(site('terminal', undefined, 'iTerm.app'))).toBe(false)
+  expect(clicksReach(site('terminal', true, undefined))).toBe(false)
+  expect(clicksReach(site('terminal', true, ''))).toBe(false)
   // A remote surface draws its own native buttons, whatever terminal the session runs in.
-  for (const surface of ['desktop', 'vscode', 'mobile'] as const) expect(clicksReach({ surface, isFullscreen: false, terminal: 'Apple_Terminal' })).toBe(true)
+  for (const surface of ['desktop', 'vscode', 'mobile'] as const) expect(clicksReach(site(surface, false, 'Apple_Terminal'))).toBe(true)
+})
+
+// #1012, Dan 2026-10-09: "Buttons always, I keep it on". With this Mac's setting saying Apple
+// Terminal's Allow Mouse Reporting is kept on, Apple Terminal in the fullscreen layout is trusted like
+// any other named terminal. Nothing else moves: the main screen still reports no clicks, a
+// multiplexer still hides which terminal is behind it (and passes a click on only under its own mouse
+// mode, which the setting says nothing about), and an unnamed terminal is still unknown.
+test('clicksReach with the Apple Terminal setting on: Apple Terminal fullscreen is trusted, and every other unsure case is not', () => {
+  expect(clicksReach(site('terminal', true, 'Apple_Terminal', true))).toBe(true)
+  expect(clicksReach(site('terminal', false, 'Apple_Terminal', true))).toBe(false)
+  expect(clicksReach(site('terminal', undefined, 'Apple_Terminal', true))).toBe(false)
+  expect(clicksReach(site('terminal', true, 'tmux', true))).toBe(false)
+  expect(clicksReach(site('terminal', true, 'screen', true))).toBe(false)
+  expect(clicksReach(site('terminal', true, undefined, true))).toBe(false)
+  expect(clicksReach(site('terminal', true, '', true))).toBe(false)
+  expect(clicksReach(site('terminal', true, 'iTerm.app', true))).toBe(true)
+  for (const surface of ['desktop', 'vscode', 'mobile'] as const) expect(clicksReach(site(surface, false, 'Apple_Terminal', true))).toBe(true)
+})
+
+// Claude Code hands mod-kit the setting as a boolean (`claude plugin configure` stores "true" as
+// true, measured 2026-10-09). Anything else is taken as off, the side where no button is dead.
+test('the Apple Terminal setting is on only for a true value; absent, false or anything else leaves it off', () => {
+  expect(appleTerminalTrusted({ appleTerminalMouseReporting: true })).toBe(true)
+  expect(appleTerminalTrusted({})).toBe(false)
+  expect(appleTerminalTrusted(undefined)).toBe(false)
+  expect(appleTerminalTrusted({ appleTerminalMouseReporting: false })).toBe(false)
+  expect(appleTerminalTrusted({ appleTerminalMouseReporting: 'yes' })).toBe(false)
+  expect(appleTerminalTrusted({ appleTerminalMouseReporting: 1 })).toBe(false)
 })
 
 test('in Apple Terminal, even fullscreen, no button is drawn: one with instead is that text, one without says the /press that presses it', withPublisher, async ($, on) => {
@@ -159,6 +192,90 @@ test('the desktop draws its native Button even when the session runs in Apple Te
   const ui = (await $.ui.mount(pane('desktop', MAIN))) as unknown as Ui
   expect((await ui.find({ type: 'Button', key: 'publisher:done' }))?.props.label).toBe('Done')
   await ui.unmount()
+})
+
+// #1012: the setting as Claude Code hands it to mod-kit (from pluginConfigs in this Mac's own
+// settings.json), injected here so no test reads the real one.
+const SETTING_ON = { plugins: [publisher], options: { appleTerminalMouseReporting: true } }
+const SETTING_OFF = { plugins: [publisher], options: { appleTerminalMouseReporting: false } }
+
+test('with the Apple Terminal setting on, Apple Terminal fullscreen draws real Buttons in the band and a pane, and a click reaches the publisher', SETTING_ON, async ($, on) => {
+  engine(on)
+  const seen = toasts(on)
+  const sent = submits(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  await run($, `pane ${JSON.stringify({ ...row, slot: undefined })}`)
+  for (const target of [band('terminal', FULL), pane('terminal', FULL)]) {
+    const ui = (await $.ui.mount(target)) as unknown as Ui
+    expect((await ui.find({ type: 'Button', key: 'publisher:done' }))?.props.label).toBe('Done')
+    expect((await ui.find({ type: 'Button', key: 'publisher:compact' }))?.props.label).toBe('Compact')
+    const shown = await texts(ui)
+    expect(shown).not.toContain('step 1 done')
+    expect(shown).not.toContain('/press publisher compact')
+    await ui.unmount()
+  }
+  const ui = (await $.ui.mount(band('terminal', FULL))) as unknown as Ui
+  await ui.press({ key: 'publisher:done' })
+  expect(seen).toEqual(['pressed publisher:done by click on terminal'])
+  expect(sent).toEqual(['step 1 done'])
+  await ui.unmount()
+})
+
+test('with the Apple Terminal setting off, Apple Terminal fullscreen still draws the typed fallback', SETTING_OFF, async ($, on) => {
+  engine(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  const ui = (await $.ui.mount(band('terminal', FULL))) as unknown as Ui
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect(await texts(ui)).toContain('step 1 done')
+  expect(await texts(ui)).toContain('/press publisher compact')
+  await ui.unmount()
+})
+
+// Whether a band drawn here shows the typed fallback and no Button at all.
+const typedOnly = async ($: { ui: { mount: (t: never) => Promise<unknown> } }, viewport: Viewport) => {
+  const ui = (await $.ui.mount(band('terminal', viewport))) as unknown as Ui
+  const button = await ui.find({ type: 'Button' })
+  const shown = await texts(ui)
+  await ui.unmount()
+  return button === undefined && shown.includes('step 1 done') && shown.includes('/press publisher compact')
+}
+
+test('with the Apple Terminal setting on, Apple Terminal on the main screen or an unmeasured layout still draws the typed fallback', SETTING_ON, async ($, on) => {
+  engine(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  expect(await typedOnly($ as never, MAIN)).toBe(true)
+  expect(await typedOnly($ as never, undefined)).toBe(true)
+})
+
+// A multiplexer names itself, so the terminal behind it is unknown, and it passes a click on only
+// under its own mouse mode: the Apple Terminal setting vouches for neither.
+for (const multiplexer of ['tmux', 'screen'])
+  test(`with the Apple Terminal setting on, ${multiplexer} fullscreen still draws the typed fallback`, SETTING_ON, async ($, on) => {
+    engine(on)
+    mock.env(on, { TERM_PROGRAM: multiplexer })
+    await run($, `show ${JSON.stringify(row)}`)
+    expect(await typedOnly($ as never, FULL)).toBe(true)
+  })
+
+test('with the Apple Terminal setting on, a remote surface is unchanged: its native Button', SETTING_ON, async ($, on) => {
+  engine(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `pane ${JSON.stringify({ ...row, slot: undefined })}`)
+  const ui = (await $.ui.mount(pane('desktop', MAIN))) as unknown as Ui
+  expect((await ui.find({ type: 'Button', key: 'publisher:done' }))?.props.label).toBe('Done')
+  await ui.unmount()
+})
+
+test('$.modkit.clickable gives the same answer with the Apple Terminal setting on', SETTING_ON, async ($, on) => {
+  engine(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  const ask = (site: object) => run($, `clickable ${JSON.stringify(site)}`)
+  expect(await ask({ surface: 'terminal', viewport: FULL })).toBe('clickable true')
+  expect(await ask({ surface: 'terminal', viewport: MAIN })).toBe('clickable false')
+  expect(await ask({ surface: 'desktop', viewport: MAIN })).toBe('clickable true')
 })
 
 test('a terminal whose name cannot be read draws the text, never a Button that may not answer', withPublisher, async ($, on) => {
