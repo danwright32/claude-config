@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# Tests for scan.sh, the read only git repo discovery helper behind /tracker --scan
+# (claude-config#1030, milestone "Tracker scan for git work").
+#
+# Every repository here is built in a throwaway directory with pinned author and committer dates,
+# and every scan is given its reference "now" with --now, so both ends of the window are fixed and
+# no assertion depends on the day the suite runs (L130). HOME is pointed at a throwaway directory
+# too, so not even the default root can reach the real home directory (L2).
+set -uo pipefail
+
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCAN="$DIR/scan.sh"
+TMP="$(mktemp -d)"
+case "${TMP%/}" in
+  ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$TMP'." >&2; exit 2 ;;
+esac
+trap 'rm -rf "$TMP"' EXIT
+
+pass=0
+fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); echo "FAIL: $1"; }
+check() { # check <description> <expected-substring> <actual>
+  if [[ "$3" == *"$2"* ]]; then ok; else
+    bad "$1"; echo "  expected to contain: $2"; echo "  actual: $3"
+  fi
+}
+check_not() { # check_not <description> <forbidden-substring> <actual>
+  if [[ "$3" != *"$2"* ]]; then ok; else bad "$1 (output should not contain '$2')"; fi
+}
+check_eq() { # check_eq <description> <expected> <actual>
+  if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3')"; fi
+}
+
+# --- a world with no access to the real one -----------------------------------
+export HOME="$TMP/home"
+mkdir -p "$HOME"
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
+printf '[init]\n\tdefaultBranch = main\n[protocol "file"]\n\tallow = always\n' > "$GIT_CONFIG_GLOBAL"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
+# The reference now every scan is given: 2026-06-15 12:00 UTC, a fixed instant.
+NOW="$(python3 -c 'import calendar; print(calendar.timegm((2026, 6, 15, 12, 0, 0)))')"
+DAY=86400
+at(){ echo $((NOW + $1 * DAY)); }                # at <days from NOW> -> epoch seconds
+iso_day(){ python3 -c 'import sys,datetime; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%d"))' "$1"; }
+
+ROOT="$TMP/root"
+mkdir -p "$ROOT"
+REAL_ROOT="$(cd "$ROOT" && pwd -P)"   # mktemp hands back /var/..., which resolves to /private/var/...
+
+commit(){ # commit <repo dir> <days from NOW> <author name> <author email> <subject>
+  local when; when="$(at "$2")"
+  GIT_AUTHOR_NAME="$3" GIT_AUTHOR_EMAIL="$4" GIT_COMMITTER_NAME="$3" GIT_COMMITTER_EMAIL="$4" \
+    GIT_AUTHOR_DATE="$when +0000" GIT_COMMITTER_DATE="$when +0000" \
+    git -C "$1" commit -q --allow-empty -m "$5"
+}
+newrepo(){ # newrepo <dir> [remote url]
+  mkdir -p "$1" && git -C "$1" init -q
+  if [ -n "${2:-}" ]; then git -C "$1" remote add origin "$2"; fi
+}
+
+ME_NAME="Dan Wright"
+ME_EMAIL="dan@example.com"
+
+# mine: every way a commit can or cannot be the user's.
+newrepo "$ROOT/mine" "git@github.com:DanWright32/Mine-Repo.git"
+commit "$ROOT/mine" -40 "$ME_NAME" "$ME_EMAIL" "before the window"
+commit "$ROOT/mine" -20 "$ME_NAME" "$ME_EMAIL" "matched by name and email"
+commit "$ROOT/mine" -10 "Daniel Someone Else" "$ME_EMAIL" "matched by email alone"
+commit "$ROOT/mine" -5 "  dan   WRIGHT " "dan@laptop.local" "matched by name alone"
+commit "$ROOT/mine" -3 "Stranger Person" "stranger@example.org" "a stranger's work"
+commit "$ROOT/mine" -2 "dependabot[bot]" "49699333+dependabot[bot]@users.noreply.github.com" "bump a dependency"
+commit "$ROOT/mine" -1 "$ME_NAME" "dan-wright[bot]@users.noreply.github.com" "a bot wearing the user's name"
+commit "$ROOT/mine" 2 "$ME_NAME" "$ME_EMAIL" "after the reference now"
+
+# strangers: commits in the window, none of them the user's.
+newrepo "$ROOT/strangers" "https://github.com/someone/their-repo.git"
+commit "$ROOT/strangers" -4 "Stranger Person" "stranger@example.org" "only strangers here"
+
+# empty: a repository with no commits at all.
+newrepo "$ROOT/empty"
+
+# a worktree, whose .git is a FILE pointing back at mine.
+git -C "$ROOT/mine" worktree add -q "$ROOT/wt/mine-feature" -b feature 2>/dev/null
+commit "$ROOT/wt/mine-feature" -6 "$ME_NAME" "$ME_EMAIL" "work on the feature branch"
+
+# a .git file pointing at nothing.
+mkdir -p "$ROOT/broken"
+printf 'gitdir: %s/nowhere/.git\n' "$TMP" > "$ROOT/broken/.git"
+
+# a shallow clone.
+git clone -q --depth 1 "file://$REAL_ROOT/strangers" "$ROOT/shallow" 2>/dev/null
+
+# a remote carrying credentials in its address.
+newrepo "$ROOT/secret" "https://dan:hunter2tokenvalue@github.com/o/secret-repo.git"
+commit "$ROOT/secret" -1 "$ME_NAME" "$ME_EMAIL" "secret work"
+
+# noise directories, whose repositories are never wanted, and one ignored on purpose.
+for noise in node_modules/pkg mine-app/node_modules/dep Library/Thing .Trash/old .claude/worktrees/agent-x claude-backup-20261001/copy; do
+  newrepo "$ROOT/$noise"
+  commit "$ROOT/$noise" -1 "$ME_NAME" "$ME_EMAIL" "noise"
+done
+newrepo "$ROOT/ignored-repo" "https://github.com/o/ignored-repo"
+commit "$ROOT/ignored-repo" -1 "$ME_NAME" "$ME_EMAIL" "ignored on purpose"
+
+# The fixture's own premises, checked before anything is concluded from them (L475).
+[ -f "$ROOT/wt/mine-feature/.git" ] && ok || bad "premise: the worktree's .git is a file"
+[ "$(git -C "$ROOT/shallow" rev-parse --is-shallow-repository)" = "true" ] && ok || bad "premise: the clone is shallow"
+
+OUT="$TMP/out.json"
+ERR="$TMP/err.txt"
+scan(){ # scan <args...>; writes stdout to $OUT, stderr to $ERR, sets RC
+  RC=0
+  bash "$SCAN" "$@" > "$OUT" 2> "$ERR" || RC=$?
+}
+# q <python expression>: evaluated against the last scan's JSON as d, with R(name) the repo whose
+# path is <scanned root>/<name>. Prints PARSE-ERROR when the output is not JSON at all.
+q(){
+  python3 - "$OUT" "$REAL_ROOT" "$1" <<'PY'
+import json, sys
+path, root, expr = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path))
+except Exception as e:
+    print("PARSE-ERROR %s" % type(e).__name__); sys.exit(0)
+def R(name):
+    hits = [r for r in d.get("repos", []) if r.get("path") == root + "/" + name]
+    return hits[0] if len(hits) == 1 else {"__found__": len(hits)}
+try:
+    v = eval(expr)
+except Exception as e:
+    print("EVAL-ERROR %s: %s" % (type(e).__name__, e)); sys.exit(0)
+print(json.dumps(v) if not isinstance(v, str) else v)
+PY
+}
+
+# --- the main scan --------------------------------------------------------------
+scan --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL" --author "dan wright" --ignore "$ROOT/ignored-repo"
+check_eq "a scan over the fixture succeeds" 0 "$RC"
+check_not "and its output is JSON" "PARSE-ERROR" "$(q 'd["repo_count"]')"
+
+repos="$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
+check_eq "it finds exactly the wanted repositories, each once" \
+  '["empty", "mine", "secret", "shallow", "strangers", "wt/mine-feature"]' "$repos"
+check_eq "and counts them" 6 "$(q 'd["repo_count"]')"
+check_eq "and says it found some" "repos_found" "$(q 'd["outcome"]')"
+check_eq "and names the root it searched, resolved" "[\"$REAL_ROOT\"]" "$(q 'd["roots_searched"]')"
+
+# authors: matched by email, by name (case and spacing folded), never a stranger or a bot. The
+# worktree's feature branch belongs to mine too (one repository, every branch), so its commit counts.
+check_eq "mine: four window commits are the user's (email and name, email alone, name alone, the feature branch)" 4 "$(q 'R("mine")["window_commit_count"]')"
+check_eq "and their subjects, newest first" \
+  '["matched by name alone", "work on the feature branch", "matched by email alone", "matched by name and email"]' "$(q 'R("mine")["window_subjects"]')"
+check_eq "every commit in the window is counted apart from whose it is" 7 "$(q 'R("mine")["window_commit_count_all"]')"
+check_not "a stranger's commit is never the user's" "a stranger's work" "$(q 'R("mine")["window_subjects"]')"
+check_not "a bot's commit is never the user's, even under the user's name" "bot wearing" "$(q 'R("mine")["window_subjects"]')"
+check_eq "the bots' window commits are counted on their own" 2 "$(q 'R("mine")["bot_commits_in_window"]')"
+authors="$(q 'sorted("%s <%s> %d" % (a["name"], a["email"], a["commits"]) for a in R("mine")["authors_in_window"])')"
+check "authors_in_window lists the user under each identity" "Dan Wright <dan@example.com> 2" "$authors"
+check "and the stranger" "Stranger Person <stranger@example.org> 1" "$authors"
+check_not "and never a bot" "[bot]" "$authors"
+check_eq "and says which of them matched the given authors" 3 "$(q 'sum(1 for a in R("mine")["authors_in_window"] if a["matched"])')"
+
+# the window: both ends pinned by the injected now.
+check_not "a commit before the window is outside it" "before the window" "$(q 'R("mine")["window_subjects"]')"
+check_not "a commit after the reference now is outside it" "after the reference now" "$(q 'R("mine")["window_subjects"]')"
+check_eq "the window is reported as ending at the reference now" "2026-06-15T12:00:00Z" "$(q 'd["until"]')"
+check_eq "and starting the given days before it" "2026-05-16T12:00:00Z" "$(q 'd["since"]')"
+check_eq "first_commit_date is the oldest commit's" "$(iso_day "$(at -40)")" "$(q 'R("mine")["first_commit_date"][:10]')"
+check_eq "last_commit_date is the newest commit's" "$(iso_day "$(at 2)")" "$(q 'R("mine")["last_commit_date"][:10]')"
+
+# zero matches is still a repository, and zero is not the same as unmeasured.
+check_eq "a repository with no commits by the user is still emitted, with zero" 0 "$(q 'R("strangers")["window_commit_count"]')"
+check_eq "and its commits in the window still counted" 1 "$(q 'R("strangers")["window_commit_count_all"]')"
+
+# remotes.
+check_eq "mine: the remote is normalized to host/owner/repo" "github.com/danwright32/mine-repo" "$(q 'R("mine")["normalized_url"]')"
+check_eq "and repo_name comes from the remote, as written there" "Mine-Repo" "$(q 'R("mine")["repo_name"]')"
+check_eq "and the raw remote is kept" "git@github.com:DanWright32/Mine-Repo.git" "$(q 'R("mine")["remote_url"]')"
+check_eq "a repository with no remote has no normalized url" "null" "$(q 'R("empty")["normalized_url"]')"
+check_eq "and no repo_name invented from its folder" "null" "$(q 'R("empty")["repo_name"]')"
+check_eq "secret: credentials in a remote address are normalized away" "github.com/o/secret-repo" "$(q 'R("secret")["normalized_url"]')"
+check_not "and never printed anywhere in the output" "hunter2tokenvalue" "$(cat "$OUT")"
+
+# .git as a file, worktrees and broken pointers.
+check_eq "the worktree, whose .git is a file, resolves to its own toplevel" 1 "$(q 'len([r for r in d["repos"] if r["path"].endswith("/wt/mine-feature")])')"
+check_eq "and reads its branch's work" 1 "$(q 'sum(1 for s in R("wt/mine-feature")["window_subjects"] if s == "work on the feature branch")')"
+check "a .git file pointing at nothing is reported as unresolved" "broken" "$(q 'd["unresolved"]')"
+check_eq "and is not emitted as a repository" '{"__found__": 0}' "$(q 'R("broken")')"
+
+# shallow and empty.
+check_eq "the shallow clone is flagged" "true" "$(q 'R("shallow")["is_shallow"]')"
+check_eq "a full clone is not" "false" "$(q 'R("mine")["is_shallow"]')"
+check_eq "a file:// remote is not a hosted one, so it has no normalized url" "null" "$(q 'R("shallow")["normalized_url"]')"
+check_eq "the empty repository is emitted and flagged empty" "true" "$(q 'R("empty")["is_empty"]')"
+check_eq "with no dates" "[null, null]" "$(q '[R("empty")["first_commit_date"], R("empty")["last_commit_date"]]')"
+check_eq "and zero commits, not null, since authors were given" 0 "$(q 'R("empty")["window_commit_count"]')"
+
+# noise and the ignore list.
+check_eq "no repository under a noise directory is emitted" "[]" \
+  "$(q '[r["path"] for r in d["repos"] if any(n in r["path"] for n in ("node_modules", "/Library/", "/.Trash/", "/.claude/", "claude-backup-"))]')"
+check_eq "the ignored repository is not emitted" '{"__found__": 0}' "$(q 'R("ignored-repo")')"
+check_eq "and is listed as ignored, matched although the ignore path was given unresolved" "[\"$REAL_ROOT/ignored-repo\"]" "$(q 'd["ignored"]')"
+
+# read only: nothing under the scanned root was written by the scan.
+touch "$TMP/marker"
+scan --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL"
+check_eq "a second scan succeeds" 0 "$RC"
+check_eq "and writes nothing under the root it scans" "" "$(find "$ROOT" -newer "$TMP/marker" 2>&1)"
+
+# --- the injected now moves the window, in both directions (L497) --------------
+scan --root "$ROOT/mine" --now "$(at 30)" --days 30 --author "$ME_EMAIL"
+check_eq "a later now takes in the commit after the first reference now, and only it" \
+  '["after the reference now"]' "$(q 'R("mine")["window_subjects"]')"
+scan --root "$ROOT/mine" --now "$(at -15)" --days 30 --author "$ME_EMAIL"
+check_eq "an earlier now takes in the commit before the first window" \
+  '["matched by name and email", "before the window"]' "$(q 'R("mine")["window_subjects"]')"
+
+# --- no authors given: matching is unmeasured, never zero ------------------------
+scan --root "$ROOT/mine" --now "$NOW" --days 30
+check_eq "with no authors the user's count is null, not zero" "null" "$(q 'R("mine")["window_commit_count"]')"
+check_eq "and so are the subjects" "null" "$(q 'R("mine")["window_subjects"]')"
+check "while authors_in_window still lists who committed, for the first run's picker" "Stranger Person" "$(q 'R("mine")["authors_in_window"]')"
+check_not "without the bots" "[bot]" "$(q 'R("mine")["authors_in_window"]')"
+
+# --- overlapping roots find a repository once -------------------------------------
+scan --root "$ROOT/mine" --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL"
+check_eq "a repository under two roots is emitted once" 1 "$(q 'len([r for r in d["repos"] if r["path"] == sys.argv[2] + "/mine"])')"
+
+# --- an inherited GIT_DIR cannot make every repository the same one ---------------
+RC=0; GIT_DIR="$ROOT/strangers/.git" bash "$SCAN" --root "$ROOT/mine" --now "$NOW" --days 30 --author "$ME_EMAIL" > "$OUT" 2> "$ERR" || RC=$?
+check_eq "with GIT_DIR set by a caller, mine is still read as itself (email given, so three)" 3 "$(q 'R("mine")["window_commit_count"]')"
+
+# --- a root with no repositories is its own outcome -------------------------------
+mkdir -p "$TMP/emptyroot/just-files"
+echo hello > "$TMP/emptyroot/just-files/readme.txt"
+scan --root "$TMP/emptyroot" --now "$NOW"
+check_eq "a root with no repositories succeeds" 0 "$RC"
+check_eq "and reports zero repositories" 0 "$(q 'd["repo_count"]')"
+check_eq "as an outcome of its own" "no_repos" "$(q 'd["outcome"]')"
+check "and names the root it searched" "emptyroot" "$(q 'd["roots_searched"]')"
+check_eq "with an empty list, not a missing one" "[]" "$(q 'd["repos"]')"
+
+# --- the default root is HOME, applied in the shell -------------------------------
+newrepo "$HOME/proj" "https://github.com/o/home-proj"
+commit "$HOME/proj" -1 "$ME_NAME" "$ME_EMAIL" "home work"
+scan --now "$NOW" --author "$ME_EMAIL"
+check_eq "with no --root the scan searches HOME" "[\"$(cd "$HOME" && pwd -P)\"]" "$(q 'd["roots_searched"]')"
+check_eq "and finds the repository there" '["github.com/o/home-proj"]' "$(q '[r["normalized_url"] for r in d["repos"]]')"
+check "and defaults the window to some number of days" "window_days" "$(q 'list(d)')"
+
+# --- refusals ---------------------------------------------------------------------
+scan --root "$TMP/does-not-exist" --now "$NOW"
+if [ "$RC" -ne 0 ]; then ok; else bad "a root that does not exist is refused (got $RC)"; fi
+check "and named" "does-not-exist" "$(cat "$ERR")"
+check_eq "and nothing is printed as a result" "" "$(cat "$OUT")"
+scan --root "$ROOT/mine" --root "$TMP/does-not-exist" --now "$NOW"
+if [ "$RC" -ne 0 ]; then ok; else bad "a missing root beside a good one is refused, not skipped (got $RC)"; fi
+check_eq "and the good root's results are not printed as if the scan were whole" "" "$(cat "$OUT")"
+scan --root "$ROOT" --days thirty
+if [ "$RC" -ne 0 ]; then ok; else bad "a window that is not a number of days is refused"; fi
+check "and says why" "days" "$(cat "$ERR")"
+scan --root "$ROOT" --now yesterday
+if [ "$RC" -ne 0 ]; then ok; else bad "a now that is not epoch seconds is refused"; fi
+check "and says why" "now" "$(cat "$ERR")"
+scan --frobnicate
+if [ "$RC" -ne 0 ]; then ok; else bad "an unknown argument is refused"; fi
+
+# --- url normalization, every form, through the one shared function ---------------
+norm(){ bash "$SCAN" --normalize-url "$1" 2>/dev/null; }
+while IFS='|' read -r input want; do
+  [ -n "$input" ] || continue
+  check_eq "normalize $input" "$want" "$(norm "$input")"
+done <<'TABLE'
+git@github.com:Owner/Repo.git|github.com/owner/repo
+git@github.com:owner/repo|github.com/owner/repo
+ssh://git@github.com/owner/repo.git|github.com/owner/repo
+ssh://git@github.com:22/owner/repo.git|github.com/owner/repo
+git+ssh://git@github.com/owner/repo|github.com/owner/repo
+https://github.com/owner/repo|github.com/owner/repo
+https://github.com/owner/repo.git|github.com/owner/repo
+https://github.com/owner/repo/|github.com/owner/repo
+https://github.com/owner/repo.git/|github.com/owner/repo
+https://user@github.com/owner/repo.git|github.com/owner/repo
+https://user:tok@GitHub.com/owner/repo|github.com/owner/repo
+http://gitlab.com/group/sub/repo.git|gitlab.com/group/sub/repo
+https://github.com/owner/my.github.repo|github.com/owner/my.github.repo
+https://github.com/gitter/git.github.io.git|github.com/gitter/git.github.io
+https://github.com/owner/repo.gitx|github.com/owner/repo.gitx
+https://github.com/git/github.com|github.com/git/github.com
+TABLE
+for notours in "/srv/repos/thing.git" "file:///srv/repos/thing.git" "../sibling" "https://github.com/onlyowner" ""; do
+  RC=0; got="$(bash "$SCAN" --normalize-url "$notours" 2>/dev/null)" || RC=$?
+  if [ "$RC" -ne 0 ] && [ -z "$got" ]; then ok; else bad "normalize '$notours' is refused, not guessed (rc $RC, got '$got')"; fi
+done
+
+echo
+echo "passed: $pass, failed: $fail"
+echo "SUITE-RESULT passed=$pass failed=$fail"
+[ "$fail" -eq 0 ]
