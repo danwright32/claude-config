@@ -379,6 +379,14 @@ eq "$(mt_repo_dir "(cd $root/plain && $MERGE 7)" "$root/parent")" "$root/plain" 
 eq "$(cd / && mt_repo_dir "cd ../plain && $MERGE 7" "$root/deep")" "$root/deep/../plain" "a relative cd resolves against the session cwd"
 # Words inside a quoted string are not a cd.
 eq "$(mt_repo_dir "echo \"cd $root/plain\" && $MERGE 7" "$root/deep/a/b")" "$root/deep" "a quoted cd is not a cd"
+# The cd that decides is the last one before the MERGE, on any line, in the merge's own shell
+# (claude-config#1017): a merge hook reads the command as typed, newlines and all, and the reader
+# saw a cd on the first line only.
+eq "$(mt_repo_dir $'echo checking\ncd '"$root/plain"$'\n'"$MERGE 7" "$root/deep/a/b")" "$root/plain" "a cd on a later line decides"
+eq "$(mt_repo_dir $'cat > /dev/null <<\'EOF\'\nit\'s a note\nEOF\ncd '"$root/plain && $MERGE 7" "$root/deep/a/b")" "$root/plain" "a cd after a heredoc with an apostrophe decides"
+eq "$(mt_repo_dir "cd $root/deep && git status; cd $root/plain && $MERGE 7" "$root/parent")" "$root/plain" "of two cds the last before the merge decides"
+eq "$(mt_repo_dir "cd $root/plain && $MERGE 7 && cd $root/deep" "$root/parent")" "$root/plain" "a cd after the merge does not decide"
+eq "$(mt_repo_dir "(cd $root/deep && git status); $MERGE 7" "$root/plain")" "$root/plain" "a cd in a subshell closed before the merge does not decide"
 
 echo "merge-target: the repository a merge names with --repo (#463)"
 

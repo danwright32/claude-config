@@ -220,6 +220,13 @@ MSG"
 refused "an unscoped add before a heredoc with an apostrophe is still refused"
 run "(cd $REPO && git add .)"
 refused "an unscoped add inside a subshell is refused"
+# The repository is the one the ADD's cd names, from a session standing outside it, on any line
+# and whatever cd follows (claude-config#1017). ps_repo_dir reads the cd in force for the action it
+# is asked about, and an add is not a push, so a hook asking about a push here would find no cd.
+REPO_SAVED="$REPO"; REPO="$FIX"
+run $'echo starting\ncd '"$REPO_SAVED"$' && git add -A\ncd '"$FIX"
+REPO="$REPO_SAVED"
+refused "an unscoped add whose cd is on a later line is refused from a session outside the repo"
 run "git add :/"
 refused "and so is :/, which is the whole tree from anywhere"
 

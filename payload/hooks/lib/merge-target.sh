@@ -504,9 +504,10 @@ MTEOF
 # all. That produced a false block on a green pull request the first time this
 # ran.
 #
-# Order: a `cd` in command position wins, because that is where the merge itself
-# will run: at the head, after an assignment, or inside a subshell, as
-# ps_cd_target reads it. This used to honour only a LEADING cd, so
+# Order: the cd in force for the merge wins, because that is where the merge itself
+# will run: the last cd before it in its own shell, on any line, after an
+# assignment or inside a subshell, as ps_cd_target reads it (claude-config#1017).
+# This used to honour only a LEADING cd, so
 # `H=$(...) ; cd <repo> && <merge>` was judged in the session's folder
 # (claude-config#463). A relative cd is relative to the session cwd, where the
 # command runs, not to wherever the hook process stands. A cd to a directory that
@@ -519,7 +520,8 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
   local command="$1" d="$2" from_cd=""
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
 
-  from_cd="$(ps_cd_target "$command")"
+  # The cd in force for the MERGE itself, the last before it in its own shell (claude-config#1017).
+  from_cd="$(ps_cd_target "$command" mt_runs_merge)"
   case "$from_cd" in
     "~") from_cd="$HOME" ;;
     "~/"*) from_cd="$HOME/${from_cd#"~/"}" ;;

@@ -82,7 +82,8 @@ else
   fi
 fi
 
-repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
+# The repository the ADD runs in: the cd in force for it, not for a push later in the command.
+repo="$(ps_repo_dir "$cmd" "$cwd" ps_is_git_add)" || exit 0
 [ -n "$repo" ] || exit 0
 
 # Everything the add would sweep up. --porcelain gives "XY path"; a rename gives "old -> new" and

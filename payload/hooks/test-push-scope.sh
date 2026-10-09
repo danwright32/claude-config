@@ -430,6 +430,111 @@ want_notpush "(cd /tmp/x && git status)" \
   "#439 a subshell with no push in it is not a push"
 
 # ---------------------------------------------------------------------------
+# The cd that governs a push is the LAST one the shell runs before it, in the same shell, on ANY
+# line (claude-config#1017). ps_cd_target read only the first cd it met and stopped at the first
+# thing its tokenizer could not read, so a cd after a heredoc whose body held an apostrophe was
+# never seen, a cd written inside a heredoc body was taken for one, a first cd beat a later one, and
+# a cd inside a subshell that had already closed still counted. Each answer fell back to, or
+# landed in, a repository the push never touched, and on 2026-10-09 the push gate refused a push
+# from one worktree twice with another repository's findings. Every case is asked twice, as the
+# command was typed (real newlines, how the merge hooks read it) and as the push hooks read it
+# (each newline flattened to "; "), and the session directory is a DIFFERENT repository, so a fall
+# through shows as the wrong answer rather than no answer.
+# ---------------------------------------------------------------------------
+O="$RD/other"; git init -q "$O" 2>/dev/null
+want_repo_both() { # want_repo_both <command as typed> <expected dir> <description>
+  want_repo "$1" "$2" "$3 (as typed)"
+  want_repo "${1//$'\n'/; }" "$2" "$3 (as a push hook reads it)"
+}
+want_repo_both $'echo hi\ncd '"$T"' && git push' "$T" \
+  "#1017 the issue's reproduction: a cd on the line after another command is read"
+want_repo_both $'cat > /dev/null <<\'EOF\'\nit\'s a note\nEOF\ncd '"$T"' && git push' "$T" \
+  "#1017 a cd after a heredoc whose body has an apostrophe is read"
+want_repo_both $'cat > /dev/null <<\'EOF\'\ncd '"$O"$'\nEOF\ngit push' "$S" \
+  "#1017 a cd written inside a heredoc body is not a cd"
+want_repo_both $'echo a\necho b\ncd '"$T"$'\ngit push' "$T" \
+  "#1017 a cd on line 3 is read"
+want_repo_both $'cd '"$O"$' && git status\ncd '"$T"' && git push' "$T" \
+  "#1017 of two cds before the push, the last one wins"
+want_repo_both "cd $T && git push && cd $O" "$T" \
+  "#1017 a cd after the push does not govern it"
+want_repo_both $'(cd '"$O"$' && git status)\ngit push' "$S" \
+  "#1017 a cd inside a subshell that closed before the push does not govern it"
+want_repo_both "(cd $O && git status) && (cd $T && git push)" "$T" \
+  "#1017 a cd inside the push's own subshell governs it, a closed sibling's does not"
+want_repo_both "top=\$(cd $O && pwd); git push" "$S" \
+  "#1017 a cd inside a command substitution does not govern the push after it"
+want_repo_both "cd $RD && cd target && git push" "$T" \
+  "#1017 a relative cd is taken from the cd before it"
+want_repo_both "cd $T && cd $O && cd - && git push" "$T" \
+  "#1017 cd - returns to the directory the cd before it left"
+want_repo_both $'# don\'t cd '"$O"$' here\ncd '"$T"$'\ngit push' "$T" \
+  "#1017 a cd named inside a comment is not a cd"
+want_repo_both $'git commit -m "$(cat <<\'EOF\'\nfix: cd '"$O"$' && git push "now"\nEOF\n)"\ncd '"$T"' && git push' "$T" \
+  "#1017 a cd inside a heredoc body inside a command substitution is not a cd"
+want_repo_both "echo 'cd $O' && git push" "$S" \
+  "#1017 control: a cd inside a quoted string is still not a cd"
+
+# The cd is the one in force for the action the CALLER asks about, so a hook judging a commit or a
+# merge passes its own question and gets the directory that one runs in.
+got="$(ps_cd_target "cd $T && git commit -m x; cd $O && git push" ps_is_git_commit)"
+[ "$got" = "$T" ] && check "#1017 the cd for a commit is the one before the commit" ok \
+  || check "#1017 the cd for a commit is the one before the commit" "got [$got]"
+got="$(ps_cd_target "cd $T && git commit -m x; cd $O && git push")"
+[ "$got" = "$O" ] && check "#1017 asked about nothing in particular, the cd is the push's" ok \
+  || check "#1017 asked about nothing in particular, the cd is the push's" "got [$got]"
+got="$(ps_cd_target "cd $T && git status")"
+[ -z "$got" ] && check "#1017 a command with no push names no directory for one" ok \
+  || check "#1017 a command with no push names no directory for one" "got [$got]"
+got="$(ps_repo_dir "cd $T && git add -A; cd $O && git push" "$S" ps_is_git_add)"
+[ "$got" = "$T" ] && check "#1017 ps_repo_dir asked about an add reads the add's cd" ok \
+  || check "#1017 ps_repo_dir asked about an add reads the add's cd" "got [$got]"
+# The reader's edges, each one a way a plausible scanner gets the directory wrong.
+want_repo "cd $T &>/dev/null && git push" "$T" \
+  "#1017 &> is a redirect, not a cd sent to the background"
+want_repo "cd $T 2>&1 && git push 2>&1 | tee /dev/null" "$T" \
+  "#1017 2>&1 is a redirect, and a push piped onward keeps its cd"
+want_repo "cd $O | cat; git push" "$S" \
+  "#1017 a cd in a pipeline runs in a shell of its own and governs nothing after it"
+want_repo "f() { echo hi; }; (( n = 1 + 2 )); cd $T && git push" "$T" \
+  "#1017 a function's and an arithmetic command's parentheses are not subshells"
+want_notpush 'words=(git push origin); echo "${words[@]}"' \
+  "#1017 an array's parentheses hold words, not a subshell running them"
+refuses "cd - && git push" \
+  "#1017 cd - with no earlier cd names a directory nobody can know, so it refuses"
+recs="$(ps__shell_commands $'cd '"$T"$' && git add "x\ngit push')"; rc=$?
+[ "$rc" -eq 3 ] && check "#1017 a quote never closed says the reading could not be trusted" ok \
+  || check "#1017 a quote never closed says the reading could not be trusted" "exit $rc"
+got="$(ps_cd_target $'cd '"$T"$' && git add "x\ngit push')"
+[ "$got" = "$T" ] && check "#1017 and the crude reading still finds the cd before the push" ok \
+  || check "#1017 and the crude reading still finds the cd before the push" "got [$got]"
+if ps_is_git_add 'git add -A' && ps_is_git_add '(cd x && rtk git add a.ts)' \
+  && ! ps_is_git_add 'echo "git add -A"' && ! ps_is_git_add 'git commit -m "git add"'; then
+  check "#1017 ps_is_git_add sees an add in command position and only there" ok
+else check "#1017 ps_is_git_add sees an add in command position and only there" "misread"; fi
+
+# And the second half of #1017: a push verb that sits only inside text is not a push. The quote
+# reader opened a quote at an apostrophe in a comment and at the escaped quote of a $'...' string,
+# never closed it, and fell back to the crude split, which reads quoted text as commands; and it
+# did not know that quotes open afresh inside "$( )", so a double quote in a commit message's
+# heredoc body ended the message and what followed read as a command (L673).
+want_notpush $'# don\'t run this: cd /x && git push origin main\nbash t.sh' \
+  "#1017 a push named in a comment with an apostrophe is not a push"
+want_notpush $'printf $\'it\\\'s\\n\'; echo \'x && git push origin\'' \
+  "#1017 a push inside quotes after a \$'...' string with an escaped quote is not a push"
+want_notpush $'git commit -m "$(cat <<\'EOF\'\nfix: the gate read "cd /x; git push origin " as a push\nEOF\n)"' \
+  "#1017 a push in double quotes inside a heredoc message inside \"\$( )\" is not a push"
+want_notpush $'bash test.sh \'cd ~/a && git push origin main\' "git push -u origin feat"' \
+  "#1017 push verbs inside quoted test strings are not a push"
+# The pushes the shell really runs are still seen, including the forms the old reader missed.
+want_push 'out=$(git push 2>&1); echo "$out"' \
+  "#1017 a push inside a command substitution is seen"
+want_push $'# a comment\ngit push' \
+  "#1017 a push on the line after a comment is seen"
+want_push 'make & git push' \
+  "#1017 a push after a backgrounded command is seen"
+
+# ---------------------------------------------------------------------------
 # Where a push's range starts, in the three situations a push hook meets (claude-config#441).
 # ps_merge_base alone dropped to HEAD~1 whenever the merge base was HEAD, which is right for a plain
 # push with no upstream and wrong for the other two, and two hooks had each worked around it
