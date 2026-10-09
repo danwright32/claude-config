@@ -2747,7 +2747,8 @@ eval "$(r381_cmd_of "$r1011_f1")" >/dev/null 2>&1
 bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 own record after the clear" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
 r1011_f2="$(r1011_review)"
 r1011_src2="$(grep 'SPOOL SOURCE' "$r1011_f2" 2>/dev/null)"
-# The pending file now holds 4 raw lines: the 3 already shown here and the 1 new one.
+# The pending file now holds 4 raw lines (not measured: the fixture above writes them), the 3
+# already shown here and the 1 new one.
 case "$r1011_src2" in
   *"(1 records)"*) check "#1011 after the clear it counts only what this reader is shown or can file" ok ;;
   *) check "#1011 after the clear it counts only what this reader is shown or can file" "line=${r1011_src2:-<none>}" ;;
