@@ -211,20 +211,26 @@ PAIRS="$WORK/pairs"; : > "$PAIRS"
 exec 3< "$WORK/tops.sorted"
 while IFS= read -r -u 3 top; do
   [ -n "$top" ] || continue
-  skip=""
-  while IFS= read -r ig; do
-    [ -n "$ig" ] || continue
-    case "$top" in "$ig"|"$ig"/*) skip=1 ;; esac
-  done <<EOF
-$resolved_ignores
-EOF
-  if [ -n "$skip" ]; then rec IGNORED "$top"; continue; fi
   rc=0; common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2> "$ERRF" < /dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$common" ] && common="$(cd "$common" 2>/dev/null && pwd -P)"; then :; else
     # Unknown, so it is grouped with nothing: an entry of its own, and the run says so.
     rec WARN "$top: its common git dir could not be read, so it is listed alone: $(sed -n 1p "$ERRF")"
     common="$top"
   fi
+  # The ignore list is judged against the working tree AND its repository's main checkout:
+  # ignoring a repository leaves out every worktree of it too, wherever they were found, while
+  # ignoring only a worktree's path leaves out that worktree alone.
+  main=""
+  case "$common" in */.git) main="${common%/.git}" ;; esac
+  skip=""
+  while IFS= read -r ig; do
+    [ -n "$ig" ] || continue
+    case "$top" in "$ig"|"$ig"/*) skip=1 ;; esac
+    if [ -n "$main" ]; then case "$main" in "$ig"|"$ig"/*) skip=1 ;; esac; fi
+  done <<EOF
+$resolved_ignores
+EOF
+  if [ -n "$skip" ]; then rec IGNORED "$top"; continue; fi
   printf '%s\t%s\n' "$common" "$top" >> "$PAIRS"
 done
 exec 3<&-

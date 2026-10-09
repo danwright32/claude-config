@@ -358,6 +358,15 @@ check_eq "and reading the whole repository's work" 3 "$(q 'R("wt/mine-feature")[
 scan --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL" --ignore "$ROOT/wt/mine-feature"
 check_eq "an ignored worktree is left off its repository's entry" "[\"$REAL_ROOT/a-early-wt\"]" "$(q 'R("mine")["worktrees"]')"
 check "and listed as ignored" "wt/mine-feature" "$(q 'd["ignored"]')"
+# Ignoring a repository's main checkout ignores the repository: a worktree of it found elsewhere
+# must not come back as its one entry.
+scan --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL" --ignore "$ROOT/mine"
+check_eq "an ignored repository's worktrees are not emitted in its place" "[]" \
+  "$(q '[r["path"] for r in d["repos"] if r["git_common_dir"] == sys.argv[2] + "/mine/.git"]')"
+check_eq "and are listed as ignored with it" \
+  "[\"$REAL_ROOT/a-early-wt\", \"$REAL_ROOT/mine\", \"$REAL_ROOT/wt/mine-feature\"]" "$(q 'sorted(d["ignored"])')"
+scan --root "$ROOT/wt" --now "$NOW" --days 30 --author "$ME_EMAIL" --ignore "$ROOT/mine"
+check_eq "even when the scan never reached the main checkout" "[]" "$(q 'd["repos"]')"
 
 # --- an inherited GIT_DIR cannot make every repository the same one ---------------
 RC=0; GIT_DIR="$ROOT/strangers/.git" bash "$SCAN" --root "$ROOT/mine" --now "$NOW" --days 30 --author "$ME_EMAIL" > "$OUT" 2> "$ERR" || RC=$?
