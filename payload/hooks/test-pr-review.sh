@@ -905,6 +905,10 @@ done
 nout="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
 [ "${#nout}" -lt 10000 ] && ok || bad "#583 the nudge stays under the hook cap with left out notes counted (${#nout} chars)"
 check "#583 holding back what does not fit, and saying so" "not shown" "$nout"
+# And keeps that promise: the next prompt takes the full path and shows what was held, rather than
+# the fast path, which would hide it until something else wrote to the state folder (review of #601).
+nout2="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"again"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "#583 a review held back is shown on the next prompt" "Lessons review of the whole branch" "$nout2"
 # A review with findings names them as well, in the refusal that carries the findings.
 reset_state
 PR_REVIEW_MAX_BYTES=$DCAP prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE" >/dev/null

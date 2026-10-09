@@ -271,4 +271,11 @@ IFS=$' \t\n'
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
 find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.leftout' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 [ -n "$LIST" ] && { touch "$LIST" 2>/dev/null || true; }
+# Unless something was held back: then the list is dated before any write, so the next prompt takes
+# the full path and shows it, as the line above promises, rather than the fast path hiding it until
+# something else writes to the state folder (lessons review of #601).
+if [ -n "$LIST" ] && [ "$held" -gt 0 ]; then
+  touch -t 197001020000 "$LIST" 2>/dev/null || true
+  touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
+fi
 exit 0
