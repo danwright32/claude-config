@@ -54,8 +54,9 @@ export const cleanName = (reply: string): Cleaned => {
 
 /**
  * The repository a session runs in, as its prefix label (#945): its name as mod-kit's one reader
- * gives it ($.modkit.repo, #951: the origin's name on any host, else the checkout folder, a worktree
- * naming its parent), in lower case with brackets removed; null outside a repository.
+ * gives it ($.modkit.repo, #951: the origin's name on any host, else the folder of the project's
+ * main checkout, which $.session.repo() gives even for a session in a linked worktree, #996), in
+ * lower case with brackets removed; null outside a repository.
  */
 export const repoLabel = (name: string | null): string | null => {
   if (!name) return null
