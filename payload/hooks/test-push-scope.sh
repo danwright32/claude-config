@@ -546,6 +546,22 @@ want_repo "git -C $RD -C target push" "$T" \
 want_repo_both $'cd '"$T"$'\nif true; then\n  git push\nfi' "$T" \
   "#1017 the cd before an if governs the push inside it"
 
+# With lib/shell-words.py missing, a command that names a directory is REFUSED by name, never judged
+# in the session directory (lessons review of #1017, L490): a reader that cannot run reads no cd,
+# and no cd is exactly what sends a push to the wrong repository. A command naming no directory is
+# still the session's.
+LONE="$RD/lone-lib"; mkdir -p "$LONE"; cp "$LIB" "$LONE/push-scope.sh"
+lone() { bash -c '. "$1"; shift; "$@"' _ "$LONE/push-scope.sh" "$@"; }
+got="$(lone ps_repo_dir "cd $T && git push" "$S" 2>"$RD/lone.err")"; rc=$?
+if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -q "shell-words.py" "$RD/lone.err"; then
+  check "#1017 with no reader beside it, a cd is refused by name rather than judged in the session" ok
+else check "#1017 with no reader beside it, a cd is refused by name rather than judged in the session" "rc=$rc got [$got] said [$(cat "$RD/lone.err")]"; fi
+got="$(lone ps_repo_dir "git -C $T push" "$S" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 2 ] && check "#1017 and so is a git -C" ok || check "#1017 and so is a git -C" "rc=$rc got [$got]"
+got="$(lone ps_repo_dir "git push" "$S" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = "$S" ] && check "#1017 a push naming no directory is still the session's" ok \
+  || check "#1017 a push naming no directory is still the session's" "rc=$rc got [$got]"
+
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \
   "#1017 &> is a redirect, not a cd sent to the background"

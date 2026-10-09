@@ -19,6 +19,12 @@ hook that slow is killed and the command goes unscreened.
       every simple command the shell would run, each as "<dir>" 0x1f "<text>" 0x1e, where <dir>
       is the directory the cd commands before it have moved its shell to (empty for none). The
       reader behind lib/push-scope.sh's questions about a push (claude-config#1017); see commands().
+  shell-words.py words      stdin: one command
+      its words as the shell reads them, quotes removed, joined by 0x1f, past any leading reserved
+      word (then, do, else, ...), so the first word is the command's own; see command_words().
+  shell-words.py gitdir     stdin: one command
+      the directory its `git -C` options name, several composed as git composes them, or nothing
+      when it is not git or names no -C; see git_dir().
 
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
@@ -530,7 +536,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py segments|split|commands|words < text\n")
+        sys.stderr.write("usage: shell-words.py segments|split|commands|words|gitdir < text\n")
         return 64
     return 0
 

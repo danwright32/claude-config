@@ -367,10 +367,19 @@ ps__segment_is_pr_create() {   # $1 = one segment
 # `git -C <other> status` earlier in the command decided where a later push was judged (lessons
 # review of #1017). With no command satisfying the predicate, nothing in the command is read as the
 # action's directory, and the session directory answers.
+#
+# With nothing to read the command (lib/shell-words.py missing, or no python3), a command that names
+# a directory with a cd or a -C is REFUSED by name with exit 2 (lessons review of #1017, L490): the
+# reader that cannot run reads no cd, and no cd is exactly what judged a push in the session's
+# repository. A command naming neither is the session's either way.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text=""
-  if rec="$(ps__action_record "$cmd" "$pred")"; then
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text="" rc
+  rec="$(ps__action_record "$cmd" "$pred")"; rc=$?
+  if [ "$rc" -eq 0 ]; then
     dir="${rec%%$'\x1f'*}"; text="${rec#*$'\x1f'}"
+  elif [ "$rc" -eq 2 ] && grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd"; then
+    echo "push-scope: this command names a directory with a cd or a git -C, and nothing here could read which one is in force: $PS_SHELL_WORDS is missing or python3 is not on PATH. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017, L490). Reinstall the hooks (claude-sync pull) or install python3." >&2
+    return 2
   fi
 
   # `git -C <path> … push`, the path read as the shell reads it (claude-config#589). A relative -C
@@ -447,10 +456,12 @@ ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_gi
 }
 
 # The action's own record from ps__shell_commands, "<dir>" 0x1f "<command>": the first command that
-# satisfies $2 (ps_is_git_push by default). Fails when none does or nothing could read the command.
+# satisfies $2 (ps_is_git_push by default). Exit 1 when no command does, 2 when nothing could read
+# the command at all, which the caller has to say rather than read as "no directory named" (L490).
 ps__action_record() {   # $1 = command  $2 = the action's predicate
-  local pred="${2:-ps_is_git_push}" recs rec
-  recs="$(ps__shell_commands "$1")" || true
+  local pred="${2:-ps_is_git_push}" recs rec rc
+  recs="$(ps__shell_commands "$1")"; rc=$?
+  [ "$rc" -eq 1 ] && return 2
   [ -n "$recs" ] || return 1
   while IFS= read -r -d $'\x1e' rec; do
     "$pred" "${rec#*$'\x1f'}" || continue

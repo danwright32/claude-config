@@ -578,8 +578,8 @@ MTSEOF
 #
 # Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is
 # about that view. Read with a shell tokenizer, in command position only, so a merge quoted
-# inside an echo names nothing, and the walk stops at the first token it cannot read, as
-# ps_cd_target's does. Heredoc bodies are removed first, so prose about merging names nothing
+# inside an echo names nothing, and the walk stops at the first token it cannot read. Heredoc
+# bodies are removed first, so prose about merging names nothing
 # and a real merge written after a heredoc is still read (L673).
 #
 # The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
