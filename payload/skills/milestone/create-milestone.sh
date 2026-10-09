@@ -27,10 +27,12 @@
 # restricted to any vocabulary: any label counts, as long as it is not just a priority
 # level. Apply as many as genuinely apply.
 #
-# A category label the repo does not have yet is created before anything else is
-# written (grey, with a description naming the plan that first used it), because gh
-# refuses an issue carrying an unknown label. A missing label that is not a short kebab
-# case name, or one that cannot be created, files nothing at all (exit 9).
+# A category label the repo does not have yet is created once the milestone's own
+# refusals have been checked and before the milestone is touched (grey, with a
+# description naming the plan that first used it), because gh refuses an issue carrying
+# an unknown label. A missing label that is not a short kebab case name, or one that
+# cannot be created, files nothing at all (exit 9), and a refused milestone creates no
+# label.
 #
 # This script is the ONE issue-filing path the PreToolUse gates cannot see (they read
 # the Bash command, and here the create runs inside a script), so both rules are
@@ -149,11 +151,12 @@ fi
 # --- make sure every category label the plan uses exists (claude-config#1034) ---
 # gh fails the WHOLE issue create on an unknown label, so the first run of a plan whose
 # phases used a label new to the repo filed none of those phases and had to be re-run
-# once the label was made by hand. Every label is collected across the whole plan, the
-# repo's list is read once, and whatever is missing is created, all BEFORE the
-# milestone is touched, so a label that cannot be made leaves nothing half filed.
-# Re-running is safe: a label already there is left alone.
+# once the label was made by hand. Every label is collected across the whole plan and
+# the repo's list is read once. The missing ones are made only after the milestone's
+# own refusals have been checked, and before the milestone is touched, so a refused
+# plan creates nothing at all. Re-running is safe: a label already there is left alone.
 plan_labels=""
+missing_labels=""
 seen_labels=""  # the same names lowercased, which is how GitHub tells two labels apart
 i=0
 while [[ "$i" -lt "$n_issues" ]]; do
@@ -196,6 +199,36 @@ if [[ -n "$plan_labels" ]]; then
     rm -f "$label_err"
     exit 9
   fi
+  rm -f "$label_err"
+fi
+
+# --- the milestone's own refusals, before anything is written ---------------
+# The plan's own issue count is passed through, so the "2 or more issues" threshold
+# is enforced on this path too rather than only on the ad hoc filing paths. A plan
+# with a single phase is a label with extra steps just as much as a single ad hoc
+# issue is, so it gets the same refusal and the same visible override.
+ensure_args=("$repo" "$title" --create-approved --for-issues "$n_issues" --description "$description")
+[[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")
+
+# The labels below must not be made for a plan the milestone step then refuses (a
+# closed or near duplicate milestone, a title not shaped like a feature, a single
+# issue), or a refused plan would leave labels behind. So the helper first classifies
+# the title without writing anything, and every one of its refusals stops the plan
+# here. Only a change on GitHub between this read and the real resolution below, a
+# milestone created or closed in those seconds, can still refuse after the labels exist.
+if [[ -z "$dry" && -n "$missing_labels" ]]; then
+  pre_out="$(DRY_RUN=1 bash "$ENSURE" "${ensure_args[@]}" 2>&1)"
+  pre_rc=$?
+  if [[ "$pre_rc" -ne 0 ]]; then
+    printf '%s\n' "$pre_out"
+    echo "ABORTED: no issues were filed, and nothing was created, because the milestone could not be resolved."
+    exit "$pre_rc"
+  fi
+fi
+
+# --- create the labels the repo is missing ----------------------------------
+if [[ -n "$missing_labels" ]]; then
+  label_err="$(mktemp)"
   label_failed=0
   while IFS= read -r l; do
     [[ -z "$l" ]] && continue
@@ -219,13 +252,6 @@ if [[ -n "$plan_labels" ]]; then
 fi
 
 # --- resolve the milestone through the shared helper ----------------------
-# The plan's own issue count is passed through, so the "2 or more issues" threshold
-# is enforced on this path too rather than only on the ad hoc filing paths. A plan
-# with a single phase is a label with extra steps just as much as a single ad hoc
-# issue is, so it gets the same refusal and the same visible override.
-ensure_args=("$repo" "$title" --create-approved --for-issues "$n_issues" --description "$description")
-[[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")
-
 ms_out="$(bash "$ENSURE" "${ensure_args[@]}" 2>&1)"
 ms_rc=$?
 

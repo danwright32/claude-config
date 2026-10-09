@@ -483,6 +483,40 @@ check "the read failure explains itself" "Could not read the label list for acme
 check_eq "the read failure creates no label" "0" "$(grep -c '^label create' "$TMP/calls.log")"
 check_eq "and files nothing" "0" "$(issues_filed)"
 
+# A plan the MILESTONE step refuses creates nothing either: a refused plan must not leave the labels
+# it would have used behind. One case per refusal that can come from the milestone list or the title.
+labels_are enhancement "good first issue"
+out="$(run "$TMP/near.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a near duplicate milestone with new labels still exits 4" "4" "$rc"
+check_eq "the near duplicate refusal leaves no label behind" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+check_eq "and files nothing" "0" "$(issues_filed)"
+# Each case starts from a repo missing both labels, so "nothing created" is never just "nothing
+# left to create" from the case before (L159).
+labels_are enhancement "good first issue"
+out="$(run "$TMP/closed.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a closed milestone with new labels still exits 3" "3" "$rc"
+check_eq "the closed milestone refusal leaves no label behind" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+cat >"$TMP/plan-sentence.json" <<'JSON'
+{
+  "title": "Fix the onboarding, then ship it.",
+  "priority": "p2",
+  "issues": [
+    { "title": "Phase 1", "body": "b", "labels": ["tracker"] },
+    { "title": "Phase 2", "body": "b", "labels": ["tests"] }
+  ]
+}
+JSON
+labels_are enhancement
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-sentence.json")"; rc=$?
+check_eq "a title not shaped like a feature with new labels still exits 8" "8" "$rc"
+check_eq "the title shape refusal leaves no label behind" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+check "and says nothing was created" "nothing was created" "$out"
+# The check that runs first writes nothing, so the plan that passes it gets exactly one milestone.
+labels_are enhancement "good first issue"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a plan that passes the milestone check exits 0" "0" "$rc"
+check_eq "and creates its milestone exactly once" "1" "$(milestone_writes)"
+
 # A NEW label must be a short kebab case name (NAMING.md); one that is not is refused, not made.
 cat >"$TMP/plan-badlabel.json" <<'JSON'
 {

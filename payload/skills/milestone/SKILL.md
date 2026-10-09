@@ -37,7 +37,7 @@ Write a temp JSON file in the shape the helper expects:
       ]
     }
 
-Every issue needs a priority and at least one category label, either its own or the plan-level default. The helper refuses the whole plan and files nothing if any phase is missing either, because this is the one filing path the gates cannot see into. A category label the repo does not have yet is created first, so a new label needs no manual step, as long as it is a short kebab case name.
+Every issue needs a priority and at least one category label, either its own or the plan-level default. The helper refuses the whole plan and files nothing if any phase is missing either, because this is the one filing path the gates cannot see into. A category label the repo does not have yet is created once the milestone check has passed and before the milestone is touched, so a new label needs no manual step, as long as it is a short kebab case name; a plan that is refused creates nothing.
 
 `due_on` is optional; omit the key if there's no date. `issues` may be empty to create a milestone with no issues yet.
 

@@ -248,10 +248,11 @@ This is a **starting list, not a closed one.** Two rules govern going outside it
    Keep new names short, kebab-case, and reusable across issues. A label used once
    is a note, not a label.
 
-   A plan filed through `create-milestone.sh` needs no manual step: before anything
-   is written it creates every label the plan uses that the repo lacks, and names
-   each one it made. It refuses the whole plan, filing nothing, when a missing label
-   is not kebab case or cannot be created (claude-config#1034).
+   A plan filed through `create-milestone.sh` needs no manual step: once the
+   milestone check has passed, and before the milestone is touched, it creates every
+   label the plan uses that the repo lacks, and names each one it made. A plan it
+   refuses creates nothing: not when a missing label is not kebab case or cannot be
+   created, and not when the milestone is refused (claude-config#1034).
 
 Never apply `claude-suggested` or any label attributing the issue to Claude or AI.
 Never apply `sev-*` or `severity:*`: priority is the only urgency scale.
