@@ -224,12 +224,12 @@ Read one in full with `./claude-sync lesson L174`, or open the entry in `~/.clau
 body is where the failure behind the rule is described, so read it whenever a rule is about to
 decide something.
 
-The index is ONE FILE PER SECTION of `LESSONS.md`, named `LESSONS-INDEX-<section>.md`, and CLAUDE.md
-imports every one of them between two markers it also generates. Both limits on a file loaded into
-every session are per file (the 140,000 byte budget in `hooks/test-rule-file-budget.sh` and the
-platform's own banner at 150,000 characters), and the single file was 100,899 characters on
-2026-09-19 and growing about 1,130 a day. Splitting removes that deadline and loses no rule: every
-file still loads. It saves no tokens, which is the point.
+The index is ONE FILE PER SECTION of `LESSONS.md`, named `LESSONS-INDEX-<section>.md`: the library.
+CLAUDE.md imports it between two markers it also generates, every file of it while no lessons core
+is in use (below). Both limits on a file loaded into every session are per file (the 140,000 byte
+budget in `hooks/test-rule-file-budget.sh` and the platform's own banner at 150,000 characters), and
+the single file was 100,899 characters on 2026-09-19 and growing about 1,130 a day. Splitting removed
+that deadline and lost no rule. It saved no tokens either; the core is what does that.
 
 The files are generated from `LESSONS.md` on every send and every apply, never maintained beside it.
 A hand edit to one is overwritten on the next run, and a file whose section has been renamed or
@@ -237,6 +237,12 @@ removed is deleted, which is the point: a list kept by hand next to the thing it
 the drift is silent.
 
 ### The lessons core (built, not yet switched on)
+
+Every lesson loading into every session was REVERSED by Dan on 2026-09-24 ("Small core,
+checkpoints"; DESIGN.md has the decision and the routes rejected on the way). Sessions are to load a
+core, and the net for the rest is the PR lessons review, which reads every lesson before any merge.
+The list Dan approved on #563 is 355 lessons, about 50,000 index characters against about 105,000 for
+the library: the lessons no PR review can see, plus the 20 most cited ones it can.
 
 A subset of the index can load in place of the whole library (claude-config#564). The list is
 `LESSONS-CORE.txt`, set only with `./claude-sync core-set <file of lesson numbers>`, which checks
@@ -249,8 +255,72 @@ written and still travel, so `claude-sync lesson` and every PR lessons review ke
 With no list nothing changes, which is how it ships. A list that is empty, unreadable, names a
 lesson that does not exist, or holds fewer lessons than it declares (or, undeclared, under half the
 last one applied) loads the whole library instead, records why in `~/.claude/.lessons-core-state`,
-and `lessons-core-notice.sh` says so once in each session. Switching it on is claude-config#566,
-after the measurement in #562.
+and `lessons-core-notice.sh` says so once in each session. Switching it on is claude-config#566;
+the measurement in #562 it waited on was met on both Macs on 2026-10-09.
+
+`hooks/test-rule-file-budget.sh` already carries a recorded size for every core file a section can
+produce, derived from the library files present, because setting a list on a live Mac makes the
+payload import the core with no change to this repository, and an unrecorded import fails every
+push and pull. It also ratchets the core's own total (`CORE_RECORDED`, the approved list's 54,372
+bytes), since a re-rank can grow the core one list change at a time.
+
+#### The monthly re-rank
+
+Once the core is in use, a job on each Mac proposes moves in and out of it once a month, on a page
+for Dan (claude-config#566). It only proposes: nothing runs `core-set` until Dan approves. The rules
+are his decisions of 2026-09-24 (#563):
+
+- a lesson no PR review can see (tagged design or operate, or one the two tagging passes disputed)
+  stays in the core whatever its rank, and is never proposed out;
+- the rest of the core is the most cited reviewable lessons. Their number is the core's seats, read
+  from the list as it stands (20 in the approved list), so a re-rank swaps lessons through the seats
+  and does not add seats;
+- new lessons start in the library and earn their way in: a reviewable one by ranking inside the
+  seats, one no review can see by being cited at least as often as the last seat, after which it
+  stays like the rest of its kind.
+
+The rank is the one `tools/lessons-core-proposal.py` used, shared through
+`tools/lib/lessons_core.py`: prose and review citations from both Macs, per 30 days of exposure.
+At most 10 moves a month (`--max-moves`; a swap is two), so at most a quarter of the 20 seats turn
+over in a month; anything the cap holds back is listed as held, never dropped. A seat holder leaves
+only when it ranks more than 5 places below the seats (`--band`), so two lessons with nearly the
+same counts do not trade places every month. The page gives the core's size after the moves against
+the cap `core-set` enforces (`SYNC_CORE_CAP`, 20,000), and the exact command to apply it, with
+`SYNC_CORE_OVER_CAP=1` in it when the result is over, which is Dan's call as before.
+
+**How the counts travel.** Each Mac counts its own transcripts (`tools/lesson-citations.py`, whose
+header now carries `AT`, the UTC instant counted) and records them with
+`claude-sync record-lesson-counts <file>`, which writes `lesson-counts/<host>.tsv` in the repo and
+commits it under the sync lock; the next sync carries it, the same way `lesson-bands/` travels. One
+file per Mac, so two Macs never conflict. It refuses counts naming another Mac, counts with no time
+stamp, a file cut short, and any `SAMPLE` line (conversation text, and the repository is public).
+
+**Stale or missing counts refuse.** The Macs expected are the ones holding a lesson band. A Mac whose
+counts are missing, unstamped, dated in the future or older than 14 days is named as UNMEASURED with
+the age, and nothing is proposed: its counts are never read as zero. The 14 days come from the
+schedules: each Mac recounts once its counts are 7 days old and the job runs daily, so while both
+Macs are in use the other Mac's counts are at worst 8 days old, and 14 leaves about six days for a
+Mac that is asleep or off. A lesson with no tag refuses the whole re-rank by name, with the command
+that tags only the new ones: `python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv`. The
+settled tags live in `lesson-tags.tsv` at the repo root (and `lesson-tags-second.tsv`, the second
+pass, where disputes are kept), committed by hand after review, since a tag decides whether a
+lesson can ever leave the core.
+
+**The job.** `tools/run-lessons-core-rerank.sh` runs daily and delivers monthly: it recounts when due,
+then, unless this month's proposal is already out, re-ranks and writes
+`~/.claude/state/lessons-core-rerank/rerank-<YYYY-MM>.html`, with the moves and the list to apply
+(`core-<YYYY-MM>.txt`) beside it. It posts one notification per month per outcome (a proposal,
+refused, not measured), which opens the page in Chrome when clicked, and records it as given only
+once it was really posted, so asleep (sleep mode) or a missing notifier means the next day tries
+again. A core not in use is logged and never notified. Install it on each Mac, from the clone the
+sync runs from:
+
+```bash
+bash ~/claude-config-sync/tools/install-lessons-core-rerank-schedule.sh
+```
+
+It runs at 11:07 local time (a run missed while asleep happens on wake) and logs to
+`~/.claude-lessons-core-rerank.log`. `--remove` takes it out.
 
 ## When a merge cannot be done
 
@@ -442,7 +512,7 @@ does not catch.
 | `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
 | `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
 | `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. The record follows every total that passes, so it never drifts behind main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
-| `ai-review-on-push.sh` | Nothing. It is advisory: after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
+| `ai-review-on-push.sh` | Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
 
 What each one measured, and what it does not catch, is in the hook's own header. Two worth knowing
 without opening them. The duplication guard does not catch a copied two line block under 160
@@ -457,6 +527,16 @@ deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonn
 2026-09-18. It runs only on the computers `AI_REVIEW_HOSTS` names, which by default is the work Mac
 (`Dans-MacBook-Pro`), because Dan wants it there and not on the personal Mac; every other computer
 says in one line that it skipped. Set `AI_REVIEW_HOSTS='*'` to run it everywhere.
+
+Since claude-config#1007 it also stands down on every push `pr-review-push-gate.sh` holds for the
+lessons review of the whole branch (below): that review reads merge base to head, every file type,
+with the same reviewer, so this one would be a second model run over a subset of the same diff.
+It still runs on a push of the default branch, which the gate does not hold, and on a push carrying
+the gate's override `SKIP_PR_REVIEW=1`, which the gate did not read. Both hooks ask one function,
+`mt_push_gate_scope` in `lib/merge-target.sh`, which pushes the gate holds, so they cannot come to
+disagree about it. The same answer says when a push sent no commits at all (one that only deletes
+remote branches), and the advisory review skips those too rather than reviewing whatever the head
+last pushed.
 
 ### The lessons review before a merge
 
@@ -555,10 +635,22 @@ leaves alone, for the monthly re-rank of the lessons core.
 Every opening and every finished review, whatever its outcome, is also recorded in
 `pr-opened.tsv` and `pr-reviews.tsv` beside it, which the sweep leaves alone too. They feed the
 measurement claude-config#562 gates the lessons core on: after two to three weeks, run
-`bash ~/.claude/hooks/lib/pr-review-report.sh` on each Mac. It prints pull requests opened, reviews
-by outcome, findings per review, how many reviews with findings were acted on (a later commit on the
-pull request changed a file a finding named), and this Mac's half of the gate, UNMEASURED under 5
-pull requests.
+`bash ~/.claude/hooks/lib/pr-review-report.sh` on each Mac. It prints pull requests opened, counted
+by pull request with the raw count of `gh pr create` openings beside it, reviews by outcome, findings
+per review, how many reviews with findings were acted on (the pull request's final head changed a
+file a finding named), and this Mac's half of the gate, read per pull request (one counts as
+reviewed when any of its openings had a finished review of that head), UNMEASURED under 5 pull
+requests.
+
+It is careful with the GitHub allowance every session on the Mac shares (claude-config#1006). Each
+opening records the pull request URL `gh pr create` printed (also when it refused because one
+already exists), so those rows are counted with no lookup. For older rows, which pull request holds
+a commit comes from one batched GraphQL query per repository per 50 commits, held
+to `PR_REVIEW_REPORT_CALL_BUDGET` (100 by default); whatever the budget does not reach is reported as
+UNMEASURED with its count. Before the first call it reads the allowance left and refuses to start,
+exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (500). It never fetches
+into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
+the checkout's objects read only. `--no-github` asks GitHub nothing.
 
 ### What a push actually waits on
 
@@ -1483,10 +1575,12 @@ following the overnight rules for hours, and a real usage limit.
 ## Local state (per Mac, never synced)
 
 Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
-so a fresh clone starts without them. (`lesson-bands/` and `lesson-citations.tsv` also sit outside
-`payload/` and are the two exceptions: both are tracked and shared on purpose. A band nobody else
-can see cannot stop anybody else claiming a number, and a record of what a citation was written
-about is a fact about the shared payload rather than about one Mac. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
+so a fresh clone starts without them. (`lesson-bands/`, `lesson-citations.tsv`, `lesson-counts/`
+and `lesson-tags.tsv` also sit outside `payload/` and are the exceptions: all are tracked and shared
+on purpose. A band nobody else can see cannot stop anybody else claiming a number, a record of what
+a citation was written about is a fact about the shared payload rather than about one Mac, and the
+lessons core re-rank needs both Macs' citation counts and one settled set of tags. See Lesson
+numbers and The monthly re-rank above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
 defined answer for being absent or untrustworthy.
 
 | File | Written by | Read by | Missing or stale |

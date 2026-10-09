@@ -82,6 +82,14 @@ out="$(python3 "$TOOL" --index-dir "$IDX" --counts "$WORK/counts-a.txt" --ages "
 check_rc "untagged lessons refuse the proposal" 1 "$rc"
 check "naming them" "UNTAGGED" "$out"
 
+# A counts row that is not numbers is a damaged file: refused by name, never a traceback and never
+# dropped as if the lesson were uncited (found by the PR lessons review of #566).
+printf 'HOST mac-a DAYS 60 READ 100 UNREAD 0\nL3\t30\tx\t2\nEND\n' > "$WORK/counts-bad.txt"
+out="$(python3 "$TOOL" --index-dir "$IDX" --counts "$WORK/counts-bad.txt" --ages "$WORK/ages.txt" --tags "$WORK/tags.txt" --out-tsv "$WORK/o.tsv" --out-html "$WORK/o.html" 2>&1)"; rc=$?
+check_rc "a damaged counts file refuses the proposal" 1 "$rc"
+check "naming the file" "counts-bad.txt" "$out"
+case "$out" in *Traceback*) fail=$((fail + 1)); echo "FAIL: a damaged counts file is not a traceback" ;; *) pass=$((pass + 1)) ;; esac
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
