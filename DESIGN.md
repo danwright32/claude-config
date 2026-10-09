@@ -1310,14 +1310,36 @@ re-rank" says what it does; this is why it is shaped that way.
 **Seats, not the cap, bound what ranks.** The approved core is 355 lessons and about 50k characters,
 2.5 times the 20,000 cap, because the lessons no review can see are 335 of them and stay whatever
 their rank. Ranking "under the cap" would therefore admit nothing ever. The approved list kept 20
-reviewable lessons by rank, so the re-rank reads that number from the list as it stands (the core's
-seats) and swaps through it. The size is still reported against the cap with the over cap switch in
-the apply command, so the cap stays where Dan put it, in `core-set`, and the decision stays his.
+reviewable lessons by rank, so the re-rank swaps through 20 seats. The size is still reported against
+the cap with the over cap switch in the apply command, so the cap stays where Dan put it, in
+`core-set`, and the decision stays his.
+
+**The seats are a tracked file, and everything else Dan approved is protected by not being in it
+(Dan, 2026-10-09: "Keep your 355 protected").** The first build derived the seats from the tags: a
+core lesson tagged diff by both passes was a seat. Under the re-run tags of #1036, 72 of the 355
+approved lessons are diff by both passes, so that rule would have made 72 lessons swappable where
+Dan approved 20, and any later re-tag could silently unprotect more. So protection is explicit data:
+`lesson-core-seats.txt` names the 20 seats, every other core lesson is protected whatever its tag,
+and only a seat can be ranked out. A swap moves the seat to its entrant, so the count holds at 20;
+an addition no review can see is never a seat. A lesson leaves protection only by leaving the core,
+which only an approved re-rank (core-set plus the seats file it proposed) or Dan by hand can do.
+
+**How the 20 seats were chosen, an approximation of 2026-09-24.** The original 20 cannot be
+recovered: the tags they were ranked under are lost. So on 2026-10-09 they were seeded with
+`tools/lessons-core-rerank.py --seed-seats 20`, which takes the 72 approved lessons both re-run
+passes call diff and keeps the 20 most cited by the re-rank's own ranking (prose plus review
+citations per 30 days of exposure). The counts were this Mac's, taken that day (4,848 transcripts
+read), and the work MacBook's from its #563 comment of 2026-09-24 (2,082 read, the newest it has
+published), both over 60 days; ages from the lessons file's history. Each line of the file carries
+its rank and rate. Seat 20 (L657, 6.0 a month) and the next candidate (L1010, 5.6) do not tie. The
+other 52 of the 72 are protected, as Dan decided. Because both the tags and the work MacBook's counts
+differ from those of 2026-09-24, these 20 approximate the original seats and cannot be shown to be
+the same set.
 
 **A new lesson no review can see is an addition, not a seat holder.** Dan's rule says the rest of the
-core is the most cited REVIEWABLE lessons. Letting an unreviewable entrant take a seat would turn
-that seat permanent (it can never leave by rank), draining the seats month by month. So such a
-lesson enters as an addition, and only when cited at least as often as the last seat and at all
+core is the most cited REVIEWABLE lessons. Letting an unreviewable entrant take a seat would put a
+lesson no review can see up for swapping next month. So such a lesson enters as an addition,
+protected once in, and only when cited at least as often as the last seat and at all
 ("earn their way in by citations"). The core can grow this way, by at most the move cap a month,
 and the page says how much.
 
