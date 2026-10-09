@@ -110,14 +110,15 @@ function doPost(e) {
   const data = body.data;
 
   const norm = norm_;
-  const byHeader = {};
-  Object.keys(data).forEach(function (k) { byHeader[norm(k)] = data[k]; });
+  // A Map, never a plain object, so a column named "constructor" is not found on Object.prototype.
+  const byHeader = new Map();
+  Object.keys(data).forEach(function (k) { byHeader.set(norm(k), data[k]); });
 
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 
   const row = heads.map(function (h) {
     const key = norm(h);
-    if (key in byHeader) return literal_(byHeader[key]);
+    if (byHeader.has(key)) return literal_(byHeader.get(key));
     // Literal like every date a caller sends, so one column never mixes real dates and text.
     if (/(date|timestamp|added|updated|created)/.test(key)) return literal_(today);
     return '';

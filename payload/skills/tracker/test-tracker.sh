@@ -802,6 +802,12 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
     '["=HYPERLINK(\"https://evil.example\",\"x\")","2026-1-5","","-1+2",42,"0042","@x"]' "$(jget "$r" '[d["rows"][-1][i] for i in (0,1,2,3,6,7,8)]')"
   check_eq "and the answer's row is the row as the sheet shows it, never the escaped values sent" \
     '["=HYPERLINK(\"https://evil.example\",\"x\")","2026-1-5","","-1+2","42","0042","@x"]' "$(jget "$r" '[d["response"]["row"][i] for i in (0,1,2,3,6,7,8)]')"
+  # A column named like an inherited property (constructor, toString) is found only if the caller
+  # named it: a header lookup on a plain object would find Object.prototype's and write a function.
+  printf '%s\n' '{"rows":[["Project Name","constructor","toString"]]}' > "$TMP/sheet-proto.json"
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"data\":{\"Project Name\":\"x\"}}" POST "$TMP/sheet-proto.json")"
+  check_eq "append: columns named constructor and toString that the caller did not name stay empty" '["x","",""]' "$(jget "$r" 'd["rows"][-1]')"
+
   # A date column left empty is filled with today, and as literal text like every caller's date,
   # so one column never mixes real dates with text dates.
   r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"Theta","Date Started":"2026-05-01"}}))' "$REAL")" POST "$SHEET")"
