@@ -58,7 +58,7 @@ env > "$FAKE_LOG/env"
 cat > "$FAKE_LOG/stdin.$$"
 cp "$FAKE_LOG/stdin.$$" "$FAKE_LOG/stdin"
 # A group's reviewer answers from FAKE_GROUP_<n>_OUT and sleeps FAKE_GROUP_<n>_SLEEP when set.
-grp="$(grep -o 'THIS REVIEW IS GROUP [0-9]*' "$FAKE_LOG/stdin.$$" | head -1 | awk '{ print $NF }')"
+grp="$(awk 'match($0, /THIS REVIEW IS GROUP [0-9]+/) { print substr($0, RSTART + 21, RLENGTH - 21); exit }' "$FAKE_LOG/stdin.$$")"
 if [ -n "$grp" ]; then
   mv "$FAKE_LOG/stdin.$$" "$FAKE_LOG/stdin.g$grp"
   v="FAKE_GROUP_${grp}_SLEEP"; sleep "${!v:-0}"
@@ -961,7 +961,7 @@ check_not "#583 a file marked generated only by this branch is not" "new.gen" "$
 
 # ===========================================================================================
 # 12. A branch still over the cap is reviewed in groups of files, each fitting, rather than refused
-#     (claude-config#601). Slate #3049 (456 KB across about 86 files) could only merge by Dan
+#     (claude-config#601). Slate #3049 (456 KB across about 86 files, 2026-10-02) could only merge by Dan
 #     clicking merge on GitHub. Every group is read by the same runner with the same deadline, the
 #     branch counts as reviewed only when every group returned, and any group that did not blocks.
 # ===========================================================================================
