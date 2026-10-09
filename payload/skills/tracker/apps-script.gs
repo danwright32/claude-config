@@ -18,6 +18,11 @@
  *           { ok, action: "update", preview: true, rowNumber, before, row, headers }.
  *           With expect: { Header: value } (the preview's before) it writes only while each of
  *           those cells still holds that value, so an edit since the preview is never lost.
+ *           Text is written as literal text (never a formula, date or number); every answer
+ *           carries `restore`, the values that put the cells back, a formula as { formula } and
+ *           a date as { date }; only restore: true (with expect covering every cell) accepts
+ *           those marked values, as an undo.
+ * append writes every text value as literal text too.
  * The body field is "key", not "token": the first version of this script read "token", so a
  * caller written for one version is refused by the other rather than half understood. For the
  * same reason an update carries its cells as "cells", never "data": a script deployed before
@@ -112,7 +117,7 @@ function doPost(e) {
 
   const row = heads.map(function (h) {
     const key = norm(h);
-    if (key in byHeader) return byHeader[key];
+    if (key in byHeader) return literal_(byHeader[key]);
     if (/(date|timestamp|added|updated|created)/.test(key)) return today;
     return '';
   });
@@ -122,6 +127,47 @@ function doPost(e) {
 }
 
 function norm_(s) { return String(s).trim().toLowerCase(); }
+
+// Every text value a caller sends is written as LITERAL text: Sheets reads a leading apostrophe
+// as "store the rest as text" and does not show it. Without it, text starting = + - or @ becomes
+// a live formula (text built from commit subjects could run IMPORTXML and send the sheet's
+// contents anywhere), and date or number shaped text is converted. Numbers and true or false,
+// sent as such, carry no formula and are written as they are. Only update's restore (an undo)
+// writes raw, so it can put a formula or a date back.
+function literal_(v) {
+  return typeof v === 'string' && v !== '' ? "'" + v : v;
+}
+
+// What, written back with restore, puts a cell back as it is: a formula as { formula }, a date as
+// { date } holding the date as the sheet shows it (Sheets reads it back as that date), text as
+// text, and a number or true or false as itself. Marked objects rather than raw strings, so a
+// restore never needs an apostrophe a shell cannot quote, and plain text stays literal even then.
+// Dates are told apart with toString, which works for a Date from any realm, where instanceof
+// does not.
+function restoreValue_(rawValue, formula, shown) {
+  if (formula) return { formula: formula };
+  if (Object.prototype.toString.call(rawValue) === '[object Date]') return { date: shown };
+  return rawValue;
+}
+
+// The value setValue is given: a marked formula or date (accepted only with restore) raw, so
+// Sheets makes it a formula or a date again; anything else literal.
+function cellInput_(v) {
+  if (v && typeof v === 'object') return v.formula !== undefined ? v.formula : v.date;
+  return literal_(v);
+}
+
+// A cell value update accepts: text, a number, true or false; and with restore only, a marked
+// { formula: "=..." } or { date: "..." }, each the single key. Returns a refusal or ''.
+function cellValueProblem_(header, v, restore) {
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return '';
+  if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1) {
+    if (!restore) return 'a { formula } or { date } value for "' + header + '" is written only with restore: true (an undo)';
+    if (typeof v.formula === 'string' && v.formula.charAt(0) === '=') return '';
+    if (typeof v.date === 'string' && v.date !== '') return '';
+  }
+  return 'the value for "' + header + '" must be text, a number, or true or false (or, with restore, { formula: "=..." } or { date: "..." })';
+}
 
 // How long an update waits for another request that is writing the sheet, before refusing.
 const LOCK_WAIT_MS = 10000;
@@ -142,6 +188,13 @@ function update_(sheet, body) {
   if (!cells || typeof cells !== 'object' || Array.isArray(cells) || Object.keys(cells).length === 0) {
     return { ok: false, error: 'nothing to update: send cells, an object of Header: value' };
   }
+  // restore (an undo) is the one write that may put a formula or a date back: it accepts the
+  // answer's marked { formula } and { date } values, and only with expect covering every cell it
+  // writes (checked below), so it can only overwrite the very values it is undoing.
+  if (body.restore !== undefined && typeof body.restore !== 'boolean') {
+    return { ok: false, error: 'restore must be true or false' };
+  }
+  const restore = body.restore === true;
   // Each header named once, each value something a cell holds. A Map, never a plain object,
   // so a header named "constructor" is not found on Object.prototype.
   const named = new Map();
@@ -152,10 +205,8 @@ function update_(sheet, body) {
       return { ok: false, error: 'cells names the column "' + keys[i] + '" more than once (also as "' + named.get(k) + '")' };
     }
     named.set(k, keys[i]);
-    const v = cells[keys[i]];
-    if (!(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) {
-      return { ok: false, error: 'the value for "' + keys[i] + '" must be text, a number, or true or false' };
-    }
+    const problem = cellValueProblem_(keys[i], cells[keys[i]], restore);
+    if (problem) return { ok: false, error: problem };
   }
 
   if (body.preview !== undefined && typeof body.preview !== 'boolean') {
@@ -179,6 +230,16 @@ function update_(sheet, body) {
         return { ok: false, error: 'the expected value for "' + ek[i] + '" must be text, a number, or true or false' };
       }
       expect.set(norm_(ek[i]), String(v));
+    }
+  }
+  if (restore) {
+    if (body.expect === undefined) {
+      return { ok: false, error: 'restore puts formulas and dates back, so it needs expect: what every cell it writes holds now' };
+    }
+    for (let i = 0; i < keys.length; i++) {
+      if (!expect.has(norm_(keys[i]))) {
+        return { ok: false, error: 'restore puts formulas and dates back, so expect must cover every cell it writes; it has no "' + keys[i] + '"' };
+      }
     }
   }
   // A preview finds and checks the row exactly as the update would, writes nothing, and answers
@@ -257,11 +318,17 @@ function findAndUpdate_(sheet, link, name, cells, keys, expect, preview) {
     return { ok: false, error: 'the sheet changed while updating (row ' + rowNumber + ' no longer holds Link ' + link + ' and Project Name "' + name + '"); nothing was changed. Read it again and retry' };
   }
 
-  // What each named cell held, in the form that restores it when written back (an undo): a
-  // formula as its formula, never its result, and anything else as the sheet shows it.
+  // What each named cell holds: `before` as a person reads it (a formula as its formula, never
+  // its result, anything else as the sheet shows it), which is what expect is compared with; and
+  // `restore`, what written back with restore puts the cell back exactly (see restoreValue_).
   const formulas = target.getFormulas()[0];
+  const rawValues = target.getValues()[0];
   const before = {};
-  targets.forEach(function (t) { before[t.header] = formulas[t.col - 1] || current[t.col - 1]; });
+  const restoreWith = {};
+  targets.forEach(function (t) {
+    before[t.header] = formulas[t.col - 1] || current[t.col - 1];
+    restoreWith[t.header] = restoreValue_(rawValues[t.col - 1], formulas[t.col - 1], current[t.col - 1]);
+  });
   for (let i = 0; i < targets.length; i++) {
     const want = expect.get(norm_(targets[i].header));
     const has = String(before[targets[i].header]);
@@ -270,10 +337,12 @@ function findAndUpdate_(sheet, link, name, cells, keys, expect, preview) {
     }
   }
   if (preview) {
-    return { ok: true, action: 'update', preview: true, rowNumber: rowNumber, before: before, row: current, headers: heads };
+    return { ok: true, action: 'update', preview: true, rowNumber: rowNumber, before: before, restore: restoreWith, row: current, headers: heads };
   }
-  targets.forEach(function (t) { sheet.getRange(rowNumber, t.col).setValue(t.value); });
+  targets.forEach(function (t) {
+    sheet.getRange(rowNumber, t.col).setValue(cellInput_(t.value));
+  });
   SpreadsheetApp.flush();
   const row = sheet.getRange(rowNumber, 1, 1, heads.length).getDisplayValues()[0];
-  return { ok: true, action: 'update', rowNumber: rowNumber, before: before, row: row, headers: heads };
+  return { ok: true, action: 'update', rowNumber: rowNumber, before: before, restore: restoreWith, row: row, headers: heads };
 }

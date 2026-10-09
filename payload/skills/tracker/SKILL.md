@@ -127,6 +127,9 @@ across by hand (AirDrop), never through the repository.
      column with today. Because this sheet has both *Date Started* and *Date Completed*,
      always set both explicitly (computed start date; `""` for completed-if-unfinished) so
      neither gets a wrong "today".
+   - Every text value is stored as literal text, exactly as sent: a value starting `=`, `+`,
+     `-` or `@` never becomes a formula, and a date sent as `"2026-05-20"` stays that text
+     (written `yyyy-mm-dd`, it still sorts by date).
    - If a column that clearly needs a value (e.g. Project Name, Problem/Goal) can't be
      inferred, ask the user one short question rather than guessing.
    - **Skills Used, never "Claude Code".** This column is for resume-grade skills: the actual
@@ -175,14 +178,24 @@ Always get approval first, as for an append:
 3. Run it without `--preview`, adding the preview's `before` as a fourth argument. The update
    then writes only while every one of those cells still holds what the user approved over; if
    someone edited one since, it refuses (`now holds ...`) and nothing changes: preview again.
-   The answer, `{"ok":true,"action":"update","rowNumber":N,"before":{...},"row":[...]}`, again
-   carries in `before` what each changed cell held just before the write: a formula as its
-   formula and anything else as the sheet showed it, which is exactly what an undo writes back
-   with another update.
+   The answer, `{"ok":true,"action":"update","rowNumber":N,"before":{...},"restore":{...},
+   "row":[...]}`, carries in `before` what each changed cell held just before the write, and in
+   `restore` the exact values that put each one back.
+
+Every text value is written as literal text: a value starting `=`, `+`, `-` or `@` stays that
+text and never becomes a formula, and date or number shaped text stays as typed. A JSON number
+or true or false is written as itself. (Append does the same.)
+
+To undo, run `update --restore` with the answer's `restore` as the cells and, as the fourth
+argument, the values the update wrote (what the cells hold now). In `restore` a formula comes as
+`{"formula":"=..."}` and a date as `{"date":"2026-11-01"}`; restore is the only write that
+accepts those, and puts them back as a live formula and a real date. Text stays literal even
+then. It refuses unless every cell still holds what the fourth argument says.
 
 ```
 bash tracker.sh update --preview 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
 bash tracker.sh update 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}' '{"Outcome/Results":"Flow works, tests pending","My Actions":"Built login and session handling"}'
+bash tracker.sh update --restore 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Flow works, tests pending","My Actions":"Built login and session handling"}' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
 ```
 
 Needs the one time redeploy in "Turning on update" above.

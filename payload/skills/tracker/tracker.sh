@@ -181,19 +181,26 @@ case "${1:-}" in
     # cell holds now, so the old and new values can be shown for approval before the real update.
     # An optional fourth argument is what the preview read (its "before"): the update then writes
     # only while every one of those cells still holds it.
-    USAGE="usage: tracker.sh update [--preview] '<link>' '<project name>' '<json object of header:value>' ['<json of what the preview read>']"
+    # --restore is the undo: it writes the cells raw (a formula live, a date as a date), so it takes
+    # the answer's "restore" values as the cells and requires the fourth argument, what the cells
+    # hold now. Without it every text value is written as literal text.
+    USAGE="usage: tracker.sh update [--preview | --restore] '<link>' '<project name>' '<json object of header:value>' ['<json of what the cells hold now>']"
     shift
     MODE=update
-    if [ "${1-}" = "--preview" ]; then MODE=preview; shift; fi
-    BODY="$(python3 - "$USAGE" "${1-}" "${2-}" "${3-}" "$#" "$MODE" "${4-}" <<'PY'
+    RESTORE=no
+    if [ "${1-}" = "--preview" ]; then MODE=preview; shift
+    elif [ "${1-}" = "--restore" ]; then RESTORE=yes; shift; fi
+    BODY="$(python3 - "$USAGE" "${1-}" "${2-}" "${3-}" "$#" "$MODE" "${4-}" "$RESTORE" <<'PY'
 import json, sys
 usage, link, name, cells, argc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
-preview, expect = sys.argv[6] == "preview", sys.argv[7]
+preview, expect, restore = sys.argv[6] == "preview", sys.argv[7], sys.argv[8] == "yes"
 def refuse(why):
     sys.stderr.write("tracker.sh: %s. %s\n" % (why, usage))
     sys.exit(1)
 if argc not in (3, 4):
     refuse("update takes three arguments, or four with what the preview read")
+if restore and argc != 4:
+    refuse("restore needs a fourth argument, what the cells hold now, so it can only undo those values")
 if not link.strip():
     refuse("the link is empty")
 if not name.strip():
@@ -215,6 +222,8 @@ if argc == 4:
     body["expect"] = expected
 if preview:
     body["preview"] = True
+if restore:
+    body["restore"] = True
 print(json.dumps(body))
 PY
 )" || exit 1

