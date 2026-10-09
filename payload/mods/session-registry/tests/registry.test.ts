@@ -741,9 +741,18 @@ const timed = async (f: () => Promise<unknown>) => {
   return performance.now() - t
 }
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] as number
+// A test that times its subject against a yardstick taken in the same run is judged by that
+// comparison alone, so its own time limit is set where only a hang reaches it (#1016, L224, L743).
+// The runner's 5,000 ms default is a fixed number, and it measured the machine instead: on
+// 2026-10-09 the #911 test ran in 600 ms on a quiet Mac, and failed three times out of three at
+// 6,500 to 8,200 ms with 96 processes burning the CPU beside it, with nothing broken. Under that
+// load, given room, it passed five times out of five in 7,200 to 14,200 ms, every list after the
+// archive still over fifty times faster than the yardstick. Two minutes is over eight times the
+// slowest of those, and a list that never answers still fails.
+const HANG_MS = 120_000
 const job = { id: 'b1', command: 'npm run dev', outputPath: '/tmp/b1.output', pgid: 4242, startedAt: NOW - 3 * HOUR }
 
-test('2,000 closed records and 2 open ones are listed in a tenth of what reading every record costs in the same run (#911)', withConsumer, async ($, on) => {
+test('2,000 closed records and 2 open ones are listed in a tenth of what reading every record costs in the same run (#911)', { ...withConsumer, timeoutMs: HANG_MS }, async ($, on) => {
   const ended = NOW - 2 * HOUR
   const open = { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }), [`${DIR}/o2.json`]: recOf('o2', { lastSeen: NOW - MIN }) }
   const w = world(on, { files: { ...open } })
