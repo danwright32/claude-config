@@ -205,18 +205,22 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
-- `"path"`, an absolute path, names the project the design is for, and the settlement is
-  recorded for the issue its checkout's branch names (or the branch, when it names none).
-  Never the folder this session runs in, which can be another project altogether
-  (claude-config#1010: a Settled for a trypennie edit landed on a Slate issue).
+- `"path"`, an absolute path (a relative one is refused, by name), names the project the
+  design is for, and the settlement is recorded for the issue its checkout's branch names
+  (or the branch, when it names none). Never the folder this session runs in, which can be
+  another project altogether (claude-config#1010: a Settled for a trypennie edit landed on
+  a Slate issue).
 - When the guard refused an edit and this round is for it, give
   `"call": "<the id the refusal named>"` instead of `"path"`: the settlement is then for
-  that edit's project and branch, and you are told to send it again. With neither, it is
-  for the refused edits waiting in this session when they all wait on the same answer, and
-  refused when none is waiting.
+  exactly what that edit waits on, the issue the refusal named, as Skip them would be, so
+  the edit goes through when you send it again, with whatever new id it gets. With neither,
+  it is for the refused edits waiting in this session when they all wait on the same
+  answer, and refused when none is waiting.
 - When the branch names no issue, say on the default branch, add the number of the issue
   this design is for, in that project, to the metadata as a number,
-  `"issue": <the issue number>`, and Dan reads that issue in the question.
+  `"issue": <the issue number>`, and Dan reads that issue in the question. Beside `"call"`
+  it is recorded as well as what the refused edit waits on, never instead of it
+  (claude-config#1046: recorded instead, the edit sent again was refused again).
 - Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
   subagent, and never write anything else to record it: the guard refuses all three, and a
   write to its record. Not yet, or an answer in his own words, records nothing: carry on.
