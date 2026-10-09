@@ -25,6 +25,7 @@ import {
   skipQuestion,
   subjectsOf,
   textsOf,
+  patternExtension,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -109,6 +110,13 @@ test('the look changing files a command only mentions are found by their names',
   // A name that starts with a route group keeps it.
   expect(mentionedLookFiles(`open('(shop)/page.tsx','w')`)).toEqual(['(shop)/page.tsx'])
   expect(mentionedLookFiles(`cd src/app && python3 -c "open('(shop)/[id]/page.tsx','w')"`)).toEqual(['(shop)/[id]/page.tsx'])
+})
+
+// #1010 and its lessons review: a name whose extension is a pattern the shell may expand is held
+// only when the pattern can expand to a look changing extension.
+test('a pattern extension may be a look changing file only where it can expand to one', () => {
+  for (const w of ['app/page.ts[x]', 'out.*', 'site.c?s', 'x.{css,md}', 'a.[js]sx', 'View.swi*']) expect([w, patternExtension(w)]).toEqual([w, true])
+  for (const w of ['logs/x.l[o]g', 'x.{md,txt}', 'x.t?t', 'notes.m*', 'page.tsx', 'build/*']) expect([w, patternExtension(w)]).toEqual([w, false])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

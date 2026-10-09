@@ -138,12 +138,35 @@ export const mentionedLookFiles = (text: string): string[] => {
 
 /**
  * Whether a name the write reader could not follow may still be a look changing file, its extension
- * being a pattern the shell can expand to one (`page.ts[x]`, `site.c?s`, `x.{css,md}`) (#1010).
+ * being a pattern the shell can expand to one (`page.ts[x]`, `site.c?s`, `x.{css,md}`, `out.*`)
+ * (#1010). One that cannot (`x.l[o]g`, `x.{md,txt}`) is not (lessons review of #1010), and one this
+ * cannot read as a pattern is taken as one that may.
  */
 export const patternExtension = (word: string): boolean => {
   const base = word.split('/').pop() ?? ''
   const dot = base.lastIndexOf('.')
-  return dot >= 0 && /[*?[\]{}]/.test(base.slice(dot + 1))
+  if (dot < 0 || !/[*?[\]{}]/.test(base.slice(dot + 1))) return false
+  const ext = base.slice(dot + 1)
+  let re = ''
+  for (let i = 0; i < ext.length; i++) {
+    const c = ext[i] as string
+    if (c === '*') re += '.*'
+    else if (c === '?') re += '.'
+    else if (c === '[') {
+      const end = ext.indexOf(']', i + 2)
+      if (end < 0) return true
+      const body = ext.slice(i + 1, end).replace(/^[!^]/, '^').replace(/[\\\]]/g, '\\$&')
+      re += `[${body}]`
+      i = end
+    } else if (c === '{') {
+      const end = ext.indexOf('}', i)
+      if (end < 0) return true
+      re += `(?:${ext.slice(i + 1, end).split(',').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`
+      i = end
+    } else re += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  const may = new RegExp(`^${re}$`, 'i')
+  return [...STYLE, ...SCREEN, 'swift'].some(x => may.test(x))
 }
 
 /**
