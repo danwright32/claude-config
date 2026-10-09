@@ -175,6 +175,11 @@ def main(argv):
             remedies.append("Seed it once with this tool's --seed-seats 20, and commit it as lesson-core-seats.txt.")
         else:
             seats = core_ids(a.seats)
+            if not seats:
+                # Zero seats would propose nothing and read as a healthy month (L98).
+                problems.append(f"NO SEATS: the seats file {a.seats} names no lesson, so nothing could ever swap "
+                                "and a month with no moves would mean nothing.")
+                remedies.append("Restore lesson-core-seats.txt from git, or seed it again with --seed-seats 20.")
             outside = [n for n in seats if n not in set(core)]
             if outside:
                 problems.append("SEAT NOT IN CORE: " + ", ".join(f"L{n}" for n in outside) + f" is named in {a.seats} "

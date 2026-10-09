@@ -140,6 +140,13 @@ check "with the one swap that fit" "L3 L5 L6 " "$(seat_list "$OUT/seats.txt")"
 out="$(rerank --seats "$WORK/no-seats.txt")"; rc=$?
 check_rc "no seats file refuses" 1 "$rc"
 check "saying so" "NO SEATS" "$out"
+# A seats file naming no lesson (emptied, or only comments) is not "no moves this month": refused by
+# name (found by the PR lessons review of this change, L98).
+printf '# The seats\n# nothing here\n' > "$WORK/seats-empty.txt"
+out="$(rerank --seats "$WORK/seats-empty.txt")"; rc=$?
+check_rc "a seats file naming no lesson refuses" 1 "$rc"
+check "saying it names none" "names no lesson" "$out"
+check_not "and never as a healthy month" "No moves this month" "$(cat "$OUT/rerank.html" 2>/dev/null)"
 # A seat that is not in the core is a half applied re-rank (core-set ran, the seats file was not
 # committed with it), so it refuses rather than shrinking the seats.
 printf 'L3\nL4\nL6\n' > "$WORK/seats-drift.txt"
