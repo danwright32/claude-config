@@ -34,6 +34,10 @@
 #                      naming a repository that is not the checkout it runs in
 #   mt_pinned_tool_remote
 #                    the same question as mt_pinned_tool, asked of GitHub
+#   mt_push_gate_scope
+#                    whether the push gate holds a push for the lessons review of
+#                      the whole branch, the one answer that gate and the
+#                      advisory push review both read (#1007)
 #
 # Every one of these was learned the hard way by block-red-merge.sh and is
 # commented there with the incident that produced it. They are here rather than
@@ -295,6 +299,66 @@ mt_presented_read_key() {  # $1 = command, $2 = the predicate the action's segme
   done <<MTEOF
 $(mt_raw_segments "$1")
 MTEOF
+  return 0
+}
+
+# Does pr-review-push-gate.sh hold this push for the lessons review of the whole branch? The ONE
+# answer to that question (claude-config#1007, L261). The gate reads it to decide whether it runs,
+# and ai-review-on-push.sh reads it to decide whether its own review would be a second model run
+# over a subset of the same diff (L301), so the two cannot come to disagree about which pushes the
+# gate covers. Asked in this order, which is the gate's order, so each answer is the one the gate
+# acts on:
+#   3  not held: SKIP_PR_REVIEW=1 sits on the push (the gate's override)
+#   6  not held: the push sends nothing any review could read. MT_PUSH_GATE_WHY says which: every
+#      push in the command only deletes, no repository was found, or it has no commit yet
+#   4  refused by the gate: the command also commits, so the head it pushes does not exist yet
+#   5  refused by the gate: the command names a directory that cannot be used (ps_repo_dir has
+#      already said why on stderr)
+#   2  not held: it pushes the default branch, which is not a branch to review. It still sends
+#      commits, so it is the one "not held" answer that leaves something for another review to read
+#   0  held: MT_PUSH_GATE_TOP, MT_PUSH_GATE_HEAD and MT_PUSH_GATE_BRANCH (empty when detached) say
+#      what the review reads
+#   1  not a push at all
+# 2 and 6 were one answer until a delete pushed from the default branch was found to start the
+# advisory review of a range the delete never sent (claude-config#1007): the gate stands down on
+# both, and only 2 means commits went out.
+# The default branch is judged from the checkout as it stands when this is asked, so a caller after
+# the push (a PostToolUse hook) reads the state the command left, which differs from the gate's
+# only when the same command also switched branch after pushing.
+mt_push_gate_scope() {  # $1 = command (segmented reading)  $2 = command (raw reading)  $3 = cwd
+  local cmd="$1" raw="$2" cwd="${3:-}" seg only_deletes=0 repo_dir rd top head
+  MT_PUSH_GATE_TOP=""; MT_PUSH_GATE_HEAD=""; MT_PUSH_GATE_BRANCH=""; MT_PUSH_GATE_WHY=""
+  ps_is_git_push "$cmd" || return 1
+  ps_has_override "$cmd" SKIP_PR_REVIEW && return 3
+  # A push that only deletes a remote branch sends no commits to review. Judged on each PUSH
+  # segment's own words, and exempt only when every push in the command deletes: a delete flag
+  # anywhere else (another push, an `rm -d`) says nothing about the push beside it (L673, lessons
+  # review of #1002).
+  while IFS= read -r seg; do
+    mt_split_assignments "$seg"
+    [ -n "$MT_REST" ] && ps_is_git_push "$MT_REST" || continue
+    case " $MT_REST " in
+      *" --delete "*|*" -d "*) [ "$only_deletes" -eq 0 ] && only_deletes=1 ;;
+      *) only_deletes=2; break ;;
+    esac
+  done <<MTEOF
+$(mt_raw_segments "$raw")
+MTEOF
+  if [ "$only_deletes" -eq 1 ]; then MT_PUSH_GATE_WHY="the push only deletes, so it sends no commits"; return 6; fi
+  # The head a chained commit makes does not exist yet, so no review can have read it, and judging
+  # the OLD head would wave the new commit through unread. Asked before the default branch, because
+  # a chain can create a branch and commit on it in one go.
+  ps_is_git_commit "$cmd" && return 4
+  repo_dir="$(ps_repo_dir "$cmd" "$cwd")"; rd=$?
+  [ "$rd" -eq 2 ] && return 5
+  if [ "$rd" -ne 0 ] || [ -z "$repo_dir" ]; then MT_PUSH_GATE_WHY="no repository was found for it"; return 6; fi
+  top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" \
+    || { MT_PUSH_GATE_WHY="$repo_dir is not inside a repository"; return 6; }
+  head="$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null)"
+  [ -n "$head" ] || { MT_PUSH_GATE_WHY="the repository has no commit yet"; return 6; }
+  if ps_on_default_branch "$top"; then MT_PUSH_GATE_WHY="it pushes the default branch"; return 2; fi
+  MT_PUSH_GATE_TOP="$top"; MT_PUSH_GATE_HEAD="$head"
+  MT_PUSH_GATE_BRANCH="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
   return 0
 }
 
