@@ -10,8 +10,8 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --started EPOCH
 
 It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
-<model> --settings {"disableAllHooks":true} --disallowedTools ReportFindings` with the diff on
-stdin (the last two are explained where the command is built).
+<model> --settings {"disableAllHooks":true} --strict-mcp-config --disallowedTools ReportFindings` with
+the diff on stdin (the last three are explained where the command is built).
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
 hook inherits that variable from the session that fired it. Removing it here rather than in the
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
@@ -271,8 +271,16 @@ def main(argv):
         # and the findings existed only in a tool call nobody reads. Disallowed, the tool is gone
         # from the run's tool list (checked against the run's own init event), so the text this
         # runner parses is the review's only channel. Last on the line because the flag takes a list.
+        # MCP servers OFF (claude-config#956). Without it the reviewer started every server Dan has
+        # connected (claude.ai connectors, plugin servers, his own), none of which a review of a diff
+        # calls: 12 in the run's init event on 2026-10-08, and 0 with --strict-mcp-config and no
+        # --mcp-config, which is what the flag means ("only use MCP servers from --mcp-config").
+        # The servers cost startup on every review (median 2.39 s to the init event with them, 1.68 s
+        # without, five runs each) and one stored answer ended with the reviewer's aside that they
+        # needed authorizing, text that is neither a finding nor "No issues found.". So never name
+        # an --mcp-config here: one would bring its servers straight back.
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
-               "--model", a.model, "--settings", '{"disableAllHooks":true}',
+               "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
                "--disallowedTools", "ReportFindings"]
         with open(a.diff_file, "rb") as diff:
             # Its own process group, so the deadline can kill everything claude started and not

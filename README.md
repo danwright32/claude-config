@@ -500,7 +500,9 @@ empty diff. All but the clean ones, the read ones and the empty diff refuse, nam
 override `SKIP_PR_REVIEW=1`, which is explained to Dan before it is used. The reviewer runs with
 hooks off and with Claude Code's built in `ReportFindings` tool disallowed, because a review
 reported through that tool leaves no finding line to read and came back `unparsed` in 6 of about 10
-rounds on one pull request (#804).
+rounds on one pull request (#804). It also starts with no MCP servers (`--strict-mcp-config` and no
+`--mcp-config`), since a review of a diff calls none of them and loading every connected one cost
+startup on each review (#956).
 
 Measured 2026-09-24: across the last 150 squash merges of claude-config, Overture, Ovation and
 PostRoll, 11 of 600 branches were over the 300 KB cap it shares with the push review. Two real
