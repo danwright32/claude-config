@@ -168,6 +168,35 @@ overrides a `term-` rule in its own stylesheet, which comes after. The tool refu
 screen it does not ship, a builder declaring `Terminal` itself, and a builder using
 `Terminal` from a spec that did not ask for it. `example-terminal/` is a working round.
 
+## The last step: is this design settled?
+
+Every run of this skill ends with one more picker, after the last round and before the
+deliverable is written: the question **"Is this design settled?"**. Dan's answer to it is
+what lets the build start. The design round guard mod holds every edit that changes how a
+screen looks (style files, screen and component files, SwiftUI views) until Dan has
+answered Settled for the issue, or has said to skip design rounds for it (claude-config#978,
+his words: "claude should never design something without my input").
+
+Ask it exactly like this, one question in one AskUserQuestion call:
+
+```json
+{
+  "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
+  "metadata": { "source": "design-settled" }
+}
+```
+
+- The guard words the question and its two answers itself (Settled, Not yet), naming the
+  issue it records for, so what you put there is replaced; the metadata is what matters.
+- It records the settlement for the issue this session's branch names (or the branch, when it
+  names none). When the branch names no issue, say on the default branch, add the number of
+  the issue this design is for, in this project, to the metadata as a number,
+  `"issue": <the issue number>`, and Dan reads that issue in the question.
+- Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
+  subagent, and never write anything else to record it: the guard refuses all three, and a
+  write to its record. Not yet, or an answer in his own words, records nothing: carry on.
+- Then write the deliverable below. Look changing edits on that issue now go through.
+
 ## The deliverable
 
 The settled design is ONE self contained file committed in the repo: no build step, no
@@ -201,3 +230,5 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    prose, which is the same mistake wearing the rule as cover.
 9. Retyping the picker's options instead of reading the ones the tool wrote, which is how
    the tab and the picker come to disagree about what an option is called.
+10. Ending without the "Is this design settled?" picker, or asking it in prose: the design
+   is then settled in conversation only, and the guard holds every screen edit after it.
