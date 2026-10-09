@@ -16,6 +16,14 @@ export type ScopeModesOpened = { repo: string; number: number; closes?: number[]
  * number, the head commit it was on when he answered (a new push asks again), and why, as asked.
  */
 export type ScopeModesLeftOpen = { repo: string; number: number; head: string; why: string }
+/**
+ * A PR closed without merging that Dan himself chose to leave closed (#1033), from his answer to
+ * leave_pr_open: the repository and number, and why, as asked. It carries no head: a closed PR
+ * merges nothing until it is reopened, and reopened it is open, which this answer never covers.
+ */
+export type ScopeModesLeftClosed = { repo: string; number: number; closed: true; why: string }
+/** Dan's own answer about one PR, open or closed, found by its repository and number; one per PR. */
+export type ScopeModesLeftAsIs = ScopeModesLeftOpen | ScopeModesLeftClosed
 
 /** Called from another mod (manual steps, #614, holds its items here while Dan is away): await it. */
 export type ScopeModes = {
@@ -62,8 +70,12 @@ declare module 'claude-code' {
       target: ScopeModesTarget | null | { unreadable: string }
       /** The PRs this session opened, which winding down finishes when the session's own branch has none (#702). */
       opened: ScopeModesOpened[]
-      /** The PRs Dan chose to leave open (#917), which winding down counts settled at that head. */
-      leftOpen: ScopeModesLeftOpen[]
+      /**
+       * The PRs Dan chose to leave as they are: open (#917), settled at that head, or closed without
+       * merging (#1033), settled while closed. The key keeps its first name, so an answer recorded
+       * before #1033 still reads.
+       */
+      leftOpen: ScopeModesLeftAsIs[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
     }
