@@ -164,6 +164,91 @@ for d in "${mods[@]}"; do
   done <<< "$cs"
 done
 
+# A mod test that times its subject sets a time limit of its own (#1016). The test runner's default,
+# 5,000 ms, is a fixed number, so a test timing its subject under it is judged by how busy the
+# machine is (L224): session-registry's #911 test, which compares a list against a yardstick
+# measured in the same run, failed at it three times out of three beside 96 CPU burners with
+# nothing broken. Timing is performance.now, process.hrtime, or Date.now arithmetic, in the test
+# itself or in a helper it calls, however many helpers deep. A test's limit is the timeoutMs in its
+# options, written in place or in the named object it passes; a timeoutMs elsewhere in its body
+# (a command's bound) is not its limit. Tests and helpers are found by indentation, as every mod
+# here is formatted: one ends at the next line indented no deeper that does not close a bracket.
+# Whole comment lines are taken out first, so a comment naming a clock is not timing. Prints
+# "<file>:<line><TAB><test name><TAB><what times>" for each test without a limit.
+# Filesystem only, so it holds on CI's runner too.
+untimed_of(){   # $1 = mod dir
+  perl -MFile::Find -e '
+    my @f;
+    find({ wanted => sub { push @f, $File::Find::name if -f $_ && /\.test\.tsx?$/ },
+           preprocess => sub { grep { $_ ne "node_modules" && $_ ne ".claude-plugin" } @_ } }, $ARGV[0]);
+    my $clock = qr{\bperformance\.now\s*\(|\bprocess\.hrtime\b|\bDate\.now\s*\(\s*\)\s*-|-\s*Date\.now\s*\(\s*\)};
+    for my $f (sort @f) {
+      open(my $h, "<", $f) or die "cannot read $f: $!\n";
+      my @l = <$h>; close $h;
+      chomp @l;
+      s{^\s*//.*}{} for @l;
+      my $indent = sub { $_[0] =~ /^(\s*)/; length $1 };
+      # The text of the statement starting on line $i: to the next line indented no deeper that
+      # does not close a bracket.
+      my $stmt = sub {
+        my $i = shift; my $k = $indent->($l[$i]); my $j = $i + 1;
+        $j++ while $j < @l && ($l[$j] !~ /\S/ || $indent->($l[$j]) > $k || $l[$j] =~ /^\s*[\}\)\]]/);
+        join("\n", @l[$i .. $j - 1]);
+      };
+      my %def;
+      for my $i (0 .. $#l) {
+        next unless $l[$i] =~ /^\s*(?:export\s+)?(?:(?:const|let|var)\s+([A-Za-z_\$][\w\$]*)\s*(?::[^=]*)?=(?!=)|(?:async\s+)?function\s*\*?\s*([A-Za-z_\$][\w\$]*))/;
+        my $n = defined $1 ? $1 : $2;
+        $def{$n} .= $stmt->($i) . "\n";
+      }
+      # Helpers that time, directly or through another that does, to a fixed point.
+      my %times;
+      $times{$_} = "the clock" for grep { $def{$_} =~ $clock } keys %def;
+      for (my $grew = 1; $grew; ) {
+        $grew = 0;
+        for my $n (sort keys %def) {
+          next if $times{$n};
+          for my $m (sort keys %times) {
+            if ($def{$n} =~ /(?<![\w\$.])\Q$m\E\s*\(/) { $times{$n} = $m; $grew = 1; last }
+          }
+        }
+      }
+      (my $rel = $f) =~ s{^\Q$ARGV[0]\E/}{};
+      for my $i (0 .. $#l) {
+        next unless $l[$i] =~ /^\s*(?:test|it)\s*\(\s*([\x27"`])/;
+        my $q = $1;
+        my $t = $stmt->($i);
+        my $via;
+        if ($t =~ $clock) { ($via) = $t =~ /(performance\.now|process\.hrtime|Date\.now)/ }
+        else {
+          for my $m (sort keys %times) {
+            if ($t =~ /(?<![\w\$.])\Q$m\E\s*\(/) { $via = $m; last }
+          }
+        }
+        next unless $via;
+        $t =~ /^\s*(?:test|it)\s*\(\s*\Q$q\E((?:[^\\\Q$q\E]|\\.)*)\Q$q\E\s*,\s*/s or next;
+        my ($name, $rest) = ($1, substr($t, $+[0]));
+        my $limited = 0;
+        if ($rest =~ /^(\{(?:[^{}]|(?1))*\})/) { $limited = $1 =~ /\btimeoutMs\b/ }
+        elsif ($rest =~ /^([A-Za-z_\$][\w\$]*)\s*,/) { $limited = ($def{$1} // "") =~ /\btimeoutMs\b/ }
+        print "$rel:", $i + 1, "\t$name\t$via\n" unless $limited;
+      }
+    }' "$1"
+}
+for d in "${mods[@]}"; do
+  name="$(basename "$d")"
+  if ! ut="$(untimed_of "$d")"; then
+    echo "check-mods: $name: could not read its tests to see whether one times its subject under the default time limit (the reason is above), so it was stopped"
+    failed=1
+    continue
+  fi
+  while IFS=$'\t' read -r where test via; do
+    [ -n "$where" ] || continue
+    echo "check-mods: $name/$where: test '$test' times its subject (through $via) under the test runner's fixed 5,000 ms limit, which measures how busy the machine is, not the code (#1016, L224). Let a comparison against a yardstick from the same run be the judgement, and give the test a timeoutMs only a hang reaches."
+    failed=1
+  done <<< "$ut"
+done
+
 # The strict type check (#758), against types taken from this repository alone (#953). Claude Code
 # lays a mod's types only in the copy it loads, and its MCP part lists whatever tools the session had
 # connected when that copy last reloaded, so a check borrowing an installed copy's types gave the
