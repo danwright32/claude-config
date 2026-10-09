@@ -26,6 +26,9 @@ esac
 # trap, and says the suite's EXIT trap is where scratch goes. Recorded here and asserted below, so
 # the day the helper does take EXIT, this line stops silently replacing it.
 EXIT_TRAP_BEFORE_OURS="$(trap -p EXIT)"
+# The control (L1): the same capture sees the USR1 trap the helper DOES set, so an empty EXIT
+# answer above means there was none, not that a command substitution cannot see traps.
+USR1_TRAP_SEEN="$(trap -p USR1)"
 trap 'rm -rf "$TMP"' EXIT
 
 pass=0
@@ -136,6 +139,7 @@ commit "$ROOT/withsub" -1 "$ME_NAME" "$ME_EMAIL" "the superproject"
 git -C "$ROOT/withsub" submodule add -q "file://$REAL_ROOT/strangers" sub 2>/dev/null
 
 check_eq "the deadline helper had set no EXIT trap for this suite's own to replace" "" "$EXIT_TRAP_BEFORE_OURS"
+check "and the same capture does see the helper's USR1 trap, so that empty answer is a reading" "_suite_deadline_expired" "$USR1_TRAP_SEEN"
 # The fixture's own premises, checked before anything is concluded from them (L475).
 [ -f "$ROOT/wt/mine-feature/.git" ] && ok || bad "premise: the worktree's .git is a file"
 [ -f "$ROOT/withsub/sub/.git" ] && ok || bad "premise: the submodule's .git is a file"
@@ -338,6 +342,15 @@ check "and says why" "days" "$(cat "$ERR")"
 scan --root "$ROOT" --now yesterday
 if [ "$RC" -ne 0 ]; then ok; else bad "a now that is not epoch seconds is refused"; fi
 check "and says why" "now" "$(cat "$ERR")"
+scan --frobnicate
+if [ "$RC" -ne 0 ]; then ok; else bad "an unknown argument is refused"; fi
+
+# --help prints the whole leading comment, contract included, and nothing of the code after it.
+scan --help
+check_eq "--help succeeds" 0 "$RC"
+check "and reaches the one entry per repository contract" "ONE ENTRY PER REPOSITORY" "$(cat "$OUT")"
+check "and the paragraph after it" "macOS bash 3.2" "$(cat "$OUT")"
+check_not "and stops at the end of the comment" "set -euo pipefail" "$(cat "$OUT")"
 scan --frobnicate
 if [ "$RC" -ne 0 ]; then ok; else bad "an unknown argument is refused"; fi
 

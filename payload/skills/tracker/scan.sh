@@ -108,7 +108,9 @@ while [ $# -gt 0 ]; do
       echo "$prog: '$2' is not the address of a hosted repository (host/owner/repo)." >&2
       exit 1 ;;
     -h|--help)
-      sed -n '2,25p' "$0"; exit 0 ;;
+      # The whole leading comment, however long it grows: from line 2 to the first line that is
+      # not a comment, never a fixed range that silently stops mid paragraph.
+      awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) die "unknown argument '$1'. See --help." ;;
   esac
 done
