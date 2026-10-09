@@ -22,6 +22,10 @@ TMP="$(mktemp -d)"
 case "${TMP%/}" in
   ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$TMP'." >&2; exit 2 ;;
 esac
+# The deadline helper stops children through its own watchdog and a USR1 handler, never an EXIT
+# trap, and says the suite's EXIT trap is where scratch goes. Recorded here and asserted below, so
+# the day the helper does take EXIT, this line stops silently replacing it.
+EXIT_TRAP_BEFORE_OURS="$(trap -p EXIT)"
 trap 'rm -rf "$TMP"' EXIT
 
 pass=0
@@ -93,6 +97,9 @@ newrepo "$ROOT/empty"
 # a worktree, whose .git is a FILE pointing back at mine.
 git -C "$ROOT/mine" worktree add -q "$ROOT/wt/mine-feature" -b feature 2>/dev/null
 commit "$ROOT/wt/mine-feature" -6 "$ME_NAME" "$ME_EMAIL" "work on the feature branch"
+# and one whose path sorts BEFORE mine, so the main checkout is chosen as the entry by rule, not
+# by happening to sort first.
+git -C "$ROOT/mine" worktree add -q "$ROOT/a-early-wt" -b early 2>/dev/null
 
 # a .git file pointing at nothing.
 mkdir -p "$ROOT/broken"
@@ -123,8 +130,15 @@ done
 newrepo "$ROOT/ignored-repo" "https://github.com/o/ignored-repo"
 commit "$ROOT/ignored-repo" -1 "$ME_NAME" "$ME_EMAIL" "ignored on purpose"
 
+# a repository with a submodule, which has a git dir of its own and so is a repository of its own.
+newrepo "$ROOT/withsub" "https://github.com/o/withsub"
+commit "$ROOT/withsub" -1 "$ME_NAME" "$ME_EMAIL" "the superproject"
+git -C "$ROOT/withsub" submodule add -q "file://$REAL_ROOT/strangers" sub 2>/dev/null
+
+check_eq "the deadline helper had set no EXIT trap for this suite's own to replace" "" "$EXIT_TRAP_BEFORE_OURS"
 # The fixture's own premises, checked before anything is concluded from them (L475).
 [ -f "$ROOT/wt/mine-feature/.git" ] && ok || bad "premise: the worktree's .git is a file"
+[ -f "$ROOT/withsub/sub/.git" ] && ok || bad "premise: the submodule's .git is a file"
 [ "$(git -C "$ROOT/shallow" rev-parse --is-shallow-repository)" = "true" ] && ok || bad "premise: the clone is shallow"
 
 OUT="$TMP/out.json"
@@ -161,8 +175,8 @@ check_not "and its output is JSON" "PARSE-ERROR" "$(q 'd["repo_count"]')"
 
 repos="$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
 check_eq "it finds exactly the wanted repositories, each once" \
-  '["atpass", "empty", "mine", "rebased", "secret", "shallow", "strangers", "wt/mine-feature"]' "$repos"
-check_eq "and counts them" 8 "$(q 'd["repo_count"]')"
+  '["atpass", "empty", "mine", "rebased", "secret", "shallow", "strangers", "withsub", "withsub/sub"]' "$repos"
+check_eq "and counts them" 9 "$(q 'd["repo_count"]')"
 check_eq "and says it found some" "repos_found" "$(q 'd["outcome"]')"
 check_eq "and names the root it searched, resolved" "[\"$REAL_ROOT\"]" "$(q 'd["roots_searched"]')"
 
@@ -207,8 +221,18 @@ check_eq "and from the normalized url" "github.com/o/atpass-repo" "$(q 'R("atpas
 check_not "and no piece of it is printed anywhere" "word99" "$(cat "$OUT")"
 
 # .git as a file, worktrees and broken pointers.
-check_eq "the worktree, whose .git is a file, resolves to its own toplevel" 1 "$(q 'len([r for r in d["repos"] if r["path"].endswith("/wt/mine-feature")])')"
-check_eq "and reads its branch's work" 1 "$(q 'sum(1 for s in R("wt/mine-feature")["window_subjects"] if s == "work on the feature branch")')"
+# One entry per repository: a linked worktree shares mine's commits, so it is listed on mine's
+# entry, never as an entry of its own that would count the same work twice.
+check_eq "the worktree, whose .git is a file, is not an entry of its own" '{"__found__": 0}' "$(q 'R("wt/mine-feature")')"
+check_eq "it is listed on its repository's entry, resolved, beside the other worktree" "[\"$REAL_ROOT/a-early-wt\", \"$REAL_ROOT/wt/mine-feature\"]" "$(q 'R("mine")["worktrees"]')"
+check_eq "and the entry is the main checkout, though another worktree's path sorts first" '{"__found__": 0}' "$(q 'R("a-early-wt")')"
+check_eq "which names the git dir they share" "$REAL_ROOT/mine/.git" "$(q 'R("mine")["git_common_dir"]')"
+check_eq "and the feature branch's commit is counted once in the whole output" 1 \
+  "$(q 'sum(1 for r in d["repos"] for s in (r["window_subjects"] or []) if s == "work on the feature branch")')"
+check_eq "a repository with no worktrees lists none" "[]" "$(q 'R("strangers")["worktrees"]')"
+check_eq "a submodule, whose .git is also a file, is a repository of its own" 1 "$(q 'len([r for r in d["repos"] if r["path"] == sys.argv[2] + "/withsub/sub"])')"
+check "with its own git dir" "/withsub/.git/modules/sub" "$(q 'R("withsub/sub")["git_common_dir"]')"
+check_eq "and is not counted as a worktree of its superproject" "[]" "$(q 'R("withsub")["worktrees"]')"
 check "a .git file pointing at nothing is reported as unresolved" "broken" "$(q 'd["unresolved"]')"
 check_eq "and is not emitted as a repository" '{"__found__": 0}' "$(q 'R("broken")')"
 
@@ -250,6 +274,16 @@ check_not "without the bots" "[bot]" "$(q 'R("mine")["authors_in_window"]')"
 # --- overlapping roots find a repository once -------------------------------------
 scan --root "$ROOT/mine" --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL"
 check_eq "a repository under two roots is emitted once" 1 "$(q 'len([r for r in d["repos"] if r["path"] == sys.argv[2] + "/mine"])')"
+
+# --- a worktree whose main checkout the scan did not reach ------------------------
+scan --root "$ROOT/wt" --now "$NOW" --days 30 --author "$ME_EMAIL"
+check_eq "a worktree found without its main checkout is the repository's one entry" '["wt/mine-feature"]' \
+  "$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
+check_eq "naming the git dir it shares with the main checkout" "$REAL_ROOT/mine/.git" "$(q 'R("wt/mine-feature")["git_common_dir"]')"
+check_eq "and reading the whole repository's work" 3 "$(q 'R("wt/mine-feature")["window_commit_count"]')"
+scan --root "$ROOT" --now "$NOW" --days 30 --author "$ME_EMAIL" --ignore "$ROOT/wt/mine-feature"
+check_eq "an ignored worktree is left off its repository's entry" "[\"$REAL_ROOT/a-early-wt\"]" "$(q 'R("mine")["worktrees"]')"
+check "and listed as ignored" "wt/mine-feature" "$(q 'd["ignored"]')"
 
 # --- an inherited GIT_DIR cannot make every repository the same one ---------------
 RC=0; GIT_DIR="$ROOT/strangers/.git" bash "$SCAN" --root "$ROOT/mine" --now "$NOW" --days 30 --author "$ME_EMAIL" > "$OUT" 2> "$ERR" || RC=$?

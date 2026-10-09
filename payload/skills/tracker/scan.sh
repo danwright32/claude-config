@@ -23,6 +23,15 @@
 # outcome beside the roots it searched, so an empty answer is never mistaken for a broken one. A
 # root that does not exist is refused, never quietly searched as nothing (L320).
 #
+# ONE ENTRY PER REPOSITORY, NOT PER WORKING TREE. This is the contract the reconcile relies on.
+# A linked worktree shares its repository's commits and branches, so its commits are counted once,
+# on one entry. Working trees are grouped by their common git dir (field git_common_dir). The
+# entry's path is the main checkout when the scan found it, otherwise the first working tree it
+# found, and every other working tree it found is listed in that entry's "worktrees". A submodule
+# has its own git dir, so it is its own entry. Two entries can still share a normalized_url (two
+# separate clones of one project), so the reconcile matches on normalized_url and treats more
+# than one as a question, never as two projects.
+#
 # macOS bash 3.2 and set -e safe: lists are newline separated strings rather than arrays where
 # they can be empty (L486), and every git call that can legitimately fail has its status captured
 # (L612).
@@ -188,8 +197,13 @@ exec 3<&-
 
 sort -u "$TOPS" > "$WORK/tops.sorted"
 
-# --- each repository ----------------------------------------------------------------
-gitr(){ git -C "$top" "$@" < /dev/null; }
+# --- the ignore list, then one entry per repository, never one per working tree -----
+# A linked worktree shares its repository's object store and every branch, so reading it as a
+# repository of its own would report the same commits twice. Working trees are grouped by their
+# common git dir: the entry's path is the main checkout when the scan found it (else the first
+# working tree it found), and the other working trees it found are listed under "worktrees". A
+# submodule has a common git dir of its own, so it stays an entry of its own.
+PAIRS="$WORK/pairs"; : > "$PAIRS"
 exec 3< "$WORK/tops.sorted"
 while IFS= read -r -u 3 top; do
   [ -n "$top" ] || continue
@@ -201,8 +215,47 @@ while IFS= read -r -u 3 top; do
 $resolved_ignores
 EOF
   if [ -n "$skip" ]; then rec IGNORED "$top"; continue; fi
+  rc=0; common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2> "$ERRF" < /dev/null)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$common" ] && common="$(cd "$common" 2>/dev/null && pwd -P)"; then :; else
+    # Unknown, so it is grouped with nothing: an entry of its own, and the run says so.
+    rec WARN "$top: its common git dir could not be read, so it is listed alone: $(sed -n 1p "$ERRF")"
+    common="$top"
+  fi
+  printf '%s\t%s\n' "$common" "$top" >> "$PAIRS"
+done
+exec 3<&-
+
+# One line per repository: primary working tree, common git dir, then the other working trees
+# found, joined by \035. The primary is listed first and the common dir is never empty, so the
+# tab separated read below cannot lose a field to an empty one.
+LC_ALL=C sort "$PAIRS" | awk -F '\t' '
+  function flush(   i, primary, others, main) {
+    if (n == 0) return
+    main = common; sub(/\/\.git$/, "", main)
+    primary = tops[1]
+    if (common ~ /\/\.git$/) for (i = 1; i <= n; i++) if (tops[i] == main) primary = main
+    others = ""
+    for (i = 1; i <= n; i++) if (tops[i] != primary) others = others (others == "" ? "" : "\035") tops[i]
+    printf "%s\t%s\t%s\n", primary, common, others
+    n = 0
+  }
+  $1 != common { flush(); common = $1 }
+  { tops[++n] = $2 }
+  END { flush() }
+' | LC_ALL=C sort > "$WORK/groups"
+
+# --- each repository ----------------------------------------------------------------
+gitr(){ git -C "$top" "$@" < /dev/null; }
+exec 3< "$WORK/groups"
+while IFS=$'\t' read -r -u 3 top common others; do
+  [ -n "$top" ] || continue
 
   rec REPO "$top"
+  rec F git_common_dir "$common"
+  if [ -n "$others" ]; then
+    printf '%s\n' "$others" | tr '\035' '\n' > "$WORK/others"
+    while IFS= read -r wt; do if [ -n "$wt" ]; then rec W "$wt"; fi; done < "$WORK/others"
+  fi
 
   rc=0; shallow="$(gitr rev-parse --is-shallow-repository 2> "$ERRF")" || rc=$?
   if [ "$rc" -ne 0 ]; then rec ERROR "is-shallow-repository failed: $(sed -n 1p "$ERRF")"; shallow=""; fi
@@ -323,7 +376,8 @@ with open(rec_path, encoding="utf-8", errors="replace") as f:
                 "window_commit_count": 0 if given else None,
                 "window_commit_count_all": 0,
                 "window_subjects": [] if given else None,
-                "authors_in_window": [], "bot_commits_in_window": 0, "errors": [],
+                "authors_in_window": [], "bot_commits_in_window": 0,
+                "git_common_dir": None, "worktrees": [], "errors": [],
             }
             out["repos"].append(repo)
         elif kind == "F":
@@ -335,6 +389,8 @@ with open(rec_path, encoding="utf-8", errors="replace") as f:
                 repo["is_empty"] = None if repo[key] is None else repo[key] == 0
             else:
                 repo[key] = val or None
+        elif kind == "W":
+            repo["worktrees"].append(rest)
         elif kind == "ERROR":
             repo["errors"].append(rest)
         elif kind == "C":
