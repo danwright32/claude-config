@@ -453,7 +453,9 @@ with open(rec_path, encoding="utf-8", errors="replace") as f:
                 repo["bot_commits_in_window"] += n
             else:
                 repo["authors_in_window"].append(
-                    {"name": name, "email": email, "commits": n, "matched": matched(name, email)})
+                    # With no --author there is nothing to match against, so null, not false.
+                    {"name": name, "email": email, "commits": n,
+                     "matched": matched(name, email) if given else None})
 
 out["repo_count"] = len(out["repos"])
 out["outcome"] = "repos_found" if out["repos"] else "no_repos"

@@ -309,6 +309,9 @@ check_eq "with no authors the user's count is null, not zero" "null" "$(q 'R("mi
 check_eq "and so are the subjects" "null" "$(q 'R("mine")["window_subjects"]')"
 check "while authors_in_window still lists who committed, for the first run's picker" "Stranger Person" "$(q 'R("mine")["authors_in_window"]')"
 check_not "without the bots" "[bot]" "$(q 'R("mine")["authors_in_window"]')"
+check_eq "and no author's matched is a verdict, since nothing was matched against" 0 \
+  "$(q 'sum(1 for a in R("mine")["authors_in_window"] if a["matched"] is not None)')"
+check_eq "it is null on each of the four" 4 "$(q 'sum(1 for a in R("mine")["authors_in_window"] if "matched" in a and a["matched"] is None)')"
 
 # --- a window read that FAILS is unmeasured, never a measured zero ---------------
 # A git placed first on PATH fails only the windowed log or shortlog it is told to, and hands
