@@ -1083,8 +1083,9 @@ done
 out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
 check_eq "#601 every group answered, though a dead writer left its lock: the review is written and allows" "0" "$rc"
 check_eq "#601 as ok, not abandoned" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
-# The nudge leaves a review in groups to the check, which knows its groups: it never writes one up as
-# abandoned without them (review of #601).
+# A review in groups past its deadline is settled by the nudge through the check, which knows its
+# groups: written up from answers that exist, never called abandoned over them, and abandoned naming
+# a group that never answered, so its pending marker never outlives it (reviews of #601).
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
 printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
@@ -1092,9 +1093,16 @@ for g in 1 2; do
   printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
 done
 printf '{"session_id":"gn1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
-[ ! -e "$(final_of "$GRP_SHA")" ] && ok || bad "#601 the nudge does not write up a review in groups as abandoned ($(meta "$(final_of "$GRP_SHA")" status))"
-out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
-check_eq "#601 and the check then writes it from its groups" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+check_eq "#601 the nudge has a review in groups whose groups all answered written up from them" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+[ ! -e "$(final_of "$GRP_SHA").pending" ] && ok || bad "#601 and its pending marker is gone"
+reset_state
+GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g1.txt"
+printf '{"session_id":"gn2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+check_eq "#601 one whose group never answered is recorded abandoned" "abandoned" "$(meta "$(final_of "$GRP_SHA")" status)"
+check "#601 naming that group" "no answer from group 2" "$(cat "$(final_of "$GRP_SHA")" 2>/dev/null)"
+[ ! -e "$(final_of "$GRP_SHA").pending" ] && ok || bad "#601 and its pending marker is gone too"
 # Groups nothing ever wrote up (the waiting process died, no check came) are swept after 14 days.
 reset_state
 mkdir -p "$AI_REVIEW_STATE_DIR/parts/old-pr-dead"; touch -t 202601010000 "$AI_REVIEW_STATE_DIR/parts/old-pr-dead"

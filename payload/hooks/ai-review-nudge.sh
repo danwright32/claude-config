@@ -175,13 +175,17 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
   case "$base" in "$key"-*) ;; *) continue ;; esac
   read_meta "$p"
   case "$m_started" in ''|*[!0-9]*) continue ;; esac
-  # A pull request review read in groups (#601) is left to lib/pr-review.sh check, which knows its
-  # groups: it writes the review up from answers that exist, and names the groups that never came.
-  [ -n "$m_groups" ] && continue
   limit="${m_deadline:-$AR_DEADLINE}"
   case "$limit" in ''|*[!0-9]*) limit="$AR_DEADLINE" ;; esac
   if [ $((now - m_started)) -gt $((limit + 60)) ]; then
     final="${p%.pending}"
+    # A pull request review read in groups (#601) is settled by lib/pr-review.sh check, which knows
+    # its groups: it writes the review up from answers that exist, or records it abandoned naming
+    # the groups that never came. Only if that cannot run (its checkout gone) is it written up here.
+    if [ -n "$m_groups" ] && [ -n "$m_dir" ] && [ -n "$m_sha" ]; then
+      bash "$HOOK_DIR/lib/pr-review.sh" check --dir "$m_dir" --sha "$m_sha" </dev/null >/dev/null 2>&1
+      if [ ! -e "$p" ]; then finished=( "$AR_STATE_DIR"/*.txt ); continue; fi
+    fi
     if [ ! -e "$final" ]; then
       {
         printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=abandoned\n\n' \
