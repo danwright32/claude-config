@@ -92,9 +92,21 @@ for m in re.finditer(r"tracker\.sh append '(\{.*?\})'", open(sys.argv[1]).read()
     if "claude code" in str(row.get("Skills Used", "")).lower():
         print("an example lists Claude Code under Skills Used")
 print("examples=%d" % found)
+updates = 0
+for m in re.finditer(r"tracker\.sh update '([^']+)' '([^']+)' '(\{.*?\})'", open(sys.argv[1]).read()):
+    try:
+        row = json.loads(m.group(3))
+    except Exception:
+        print("unparseable example"); continue
+    updates += 1
+    if "claude code" in str(row.get("Skills Used", "")).lower():
+        print("an example lists Claude Code under Skills Used")
+print("update-examples=%d" % updates)
 PY
 )"
 check "SKILL.md carries a worked append example to judge" "examples=1" "$example_verdict"
+check "SKILL.md carries a worked update example to judge" "update-examples=" "$example_verdict"
+check_not "and at least one" "update-examples=0" "$example_verdict"
 check_not "and no worked example lists Claude Code under Skills Used, which the rule forbids" "Claude Code" "$example_verdict"
 check_not "and every worked example is valid JSON" "unparseable" "$example_verdict"
 
@@ -119,7 +131,7 @@ for block in re.split(r"(?m)^## ", text)[1:]:
     sections[head.strip()] = body
 opens = re.compile(r"Extensions, Apps Script|\b[Oo]pen the sheet\b")
 judged = 0
-for want in ("First run / setup", "Rotating the token"):
+for want in ("First run / setup", "Rotating the token", "Turning on update"):
     body = next((b for h, b in sections.items() if h.startswith(want)), None)
     if body is None:
         print("%s: section missing" % want); continue
@@ -138,7 +150,22 @@ print("judged=%d" % judged)
 PY
 }
 gaps="$(sheet_step_gaps "$DIR/SKILL.md")"
-check_eq "every setup and rotation step that opens the sheet carries its name and link" "judged=2" "$gaps"
+check_eq "every setup, rotation and update redeploy step that opens the sheet carries its name and link" "judged=3" "$gaps"
+# The update verb works only once the deployed script is the one that has it, so SKILL.md must
+# say how to deploy a new version: judged inside its own section, whitespace collapsed (L278).
+redeploy="$(python3 - "$DIR/SKILL.md" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+body = next((b.partition("\n")[2] for b in re.split(r"(?m)^## ", text)[1:] if b.startswith("Turning on update")), None)
+if body is None:
+    print("no Turning on update section"); sys.exit(0)
+body = " ".join(body.split())
+for want in ("Deploy, Manage deployments", "New version", "tracker.sh update"):
+    print("%s: %s" % (want, "yes" if want in body else "MISSING"))
+PY
+)"
+check_not "SKILL.md's Turning on update section names the redeploy (Deploy, Manage deployments, New version) and how to check it" "MISSING" "$redeploy"
+check "and that section exists" "New version: yes" "$redeploy"
 # Answered yes or no, so a failure prints a word rather than the whole file (L445). Whitespace is
 # collapsed first so a rewrapped line still counts (L278).
 warns="$(python3 -c 'import re,sys; t=" ".join(open(sys.argv[1]).read().split()); print("yes" if ("a second sheet named \"%s\"" % sys.argv[2]) in t else "no")' "$DIR/SKILL.md" "$SHEET_NAME" 2>&1)"
@@ -150,7 +177,7 @@ check "the check names a rotation step whose link was removed" "Rotating the tok
 check_not "and only that step" "First run / setup step" "$(sheet_step_gaps "$TMP/no-link.md")"
 # A step that rewraps the name across a line break still names the sheet (L278), so it passes.
 python3 -c 'import sys; t=open(sys.argv[1]).read(); print(t.replace("**Dan Work Project Tracker**", "**Dan Work\n   Project Tracker**"), end="")' "$DIR/SKILL.md" > "$TMP/rewrapped.md"
-check_eq "and a step whose sheet name is rewrapped across lines still counts as naming it" "judged=2" "$(sheet_step_gaps "$TMP/rewrapped.md")"
+check_eq "and a step whose sheet name is rewrapped across lines still counts as naming it" "judged=3" "$(sheet_step_gaps "$TMP/rewrapped.md")"
 printf '## First run / setup\n\n1. Run something.\n\n## Rotating the token\n\n1. Run something.\n' > "$TMP/no-steps.md"
 check "and refuses steps that never open the sheet, rather than passing on zero" "no step sends the reader into the sheet" "$(sheet_step_gaps "$TMP/no-steps.md")"
 
@@ -212,6 +239,45 @@ check "and sends the key in the request body" "\"key\": \"$GOOD_TOKEN\"" "$(grep
 check "and the row with it" '"data": {"Project Name": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
 check_not "and never under the old field name the first script read" '"token"' "$(grep '^STDIN:' "$CURL_LOG")"
 check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
+
+# update: the row's Link, its Project Name and the cells to change, in the body with the key.
+FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+check_eq "a configured skill's update succeeds" 0 "$RC"
+check "and prints the web app's answer" '"rowNumber":2' "$OUT"
+check_eq "and reaches curl exactly once" 1 "$(curl_calls)"
+update_body="$(sed -n 's/^STDIN://p' "$CURL_LOG" | python3 -c 'import json,sys; b=json.load(sys.stdin); k=b.pop("key",None); print(json.dumps(b, sort_keys=True)); print("key-sent" if k else "no-key")' 2>&1)"
+check_eq "and sends the action, Link, Project Name and cells, and the key, in the body" \
+  "$(printf '%s\n%s' '{"action": "update", "cells": {"My Actions": "x"}, "link": "https://github.com/example/alpha", "projectName": "Alpha"}' key-sent)" "$update_body"
+check "with the configured key" "\"key\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "$CURL_LOG")"
+check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
+# A script deployed before update reads any body with a "data" object as a row to APPEND, so
+# the cells travel as "cells": that script then refuses the body ("nothing to append", tested
+# below against the web app) instead of adding a duplicate row.
+check_not "and the cells never travel as \"data\", which a script without update would append" '"data"' "$(grep '^STDIN:' "$CURL_LOG")"
+FAKE_ANSWER='{"ok":false,"error":"nothing to append: send action \"headers\" or a data object"}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "an update refused by a script without update exits 1 (got $RC)"; fi
+check "and says the deployed script predates update and needs a new version" "Turning on update" "$OUT"
+# A success answer that is not an update's (an append's, from some other script) is a failure.
+FAKE_ANSWER='{"ok":true,"rowNumber":7,"row":["x"]}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "an update answered by something other than an update exits 1 (got $RC)"; fi
+check "and says the answer was not an update's" "not an update" "$OUT"
+FAKE_ANSWER='{"ok":false,"error":"the row with that Link is Beta, not Alpha"}' run update "https://github.com/example/beta" "Alpha" '{"My Actions":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "a refused update exits 1 (got $RC)"; fi
+check "and names the web app's own error" "is Beta, not Alpha" "$OUT"
+refuses_update_call(){ # refuses_update_call <description> <args to update...>
+  local what="$1"; shift
+  run update "$@"
+  if [ "$RC" -ne 0 ]; then ok; else bad "update with $what: exits non zero (got $RC)"; fi
+  check_eq "update with $what: reaches nothing" 0 "$(curl_calls)"
+  check "update with $what: says how to call it" "usage: tracker.sh update" "$OUT"
+}
+refuses_update_call "no arguments"
+refuses_update_call "no cells" "https://github.com/example/alpha" "Alpha"
+refuses_update_call "cells that are not JSON" "https://github.com/example/alpha" "Alpha" '{not json'
+refuses_update_call "cells that are a list, not an object" "https://github.com/example/alpha" "Alpha" '[1]'
+refuses_update_call "no cells in the object" "https://github.com/example/alpha" "Alpha" '{}'
+refuses_update_call "an empty Link" "" "Alpha" '{"a":1}'
+refuses_update_call "an empty Project Name" "https://github.com/example/alpha" "" '{"a":1}'
 
 # --- the web app's own refusal is a failure, never a printed success (claude-config#677) ---
 # The Apps Script answers HTTP 200 for its refusals too, so curl --fail passes them: the answer
@@ -345,24 +411,76 @@ check_not "and it is readable by its owner only" "mode=6" "$(grep -v 'mode=600' 
 if ! command -v node >/dev/null 2>&1; then
   bad "node is not on PATH, so apps-script.gs could not be run. Install node; this is UNMEASURED, not passed."
 else
+  # The sheet is an in memory double: a grid of rows (row 1 the headers) that records every cell
+  # the script writes, every read, and every row appended. A fixture file can give it other rows,
+  # a change to make to the sheet straight after the script's first read of more than one row
+  # (standing in for a person sorting or editing between the script's read and its write), and a
+  # lock already held by another run. The request may be one body or a list of bodies run in
+  # turn against the same sheet; "diffs" holds, per request, every cell whose value it changed.
   cat > "$TMP/gs-harness.js" <<'JS'
 const fs = require('fs'), vm = require('vm');
-const [src, token, requestJson, method] = process.argv.slice(2);
+const [src, token, requestJson, method, fixturePath] = process.argv.slice(2);
 let code = fs.readFileSync(src, 'utf8');
 if (token !== '-') {
   const before = code;
   code = code.replace(/^const TOKEN = '[^']*';/m, "const TOKEN = '" + token + "';");
   if (code === before) { console.log(JSON.stringify({ harness: 'no TOKEN line to set' })); process.exit(0); }
 }
-const appended = [];
+const fx = fixturePath && fixturePath !== '-'
+  ? JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
+  : { rows: [['Project Name', 'Date Started']] };
+const rows = fx.rows.map((r) => r.slice());
+const appended = [], writes = [];
+let reads = 0, mutated = false;
+const lock = { taken: 0, released: 0, busy: !!fx.lockBusy };
+const width = () => rows.reduce((m, r) => Math.max(m, r.length), 0);
+const cell = (r, c) => (rows[r - 1] && c - 1 < rows[r - 1].length ? rows[r - 1][c - 1] : '');
+function applyChange(ops) {
+  ops.forEach((op) => {
+    if (op.set) { const [r, c, v] = op.set; while (rows[r - 1].length < c) rows[r - 1].push(''); rows[r - 1][c - 1] = v; }
+    else if (op.swap) { const [a, b] = op.swap; const t = rows[a - 1]; rows[a - 1] = rows[b - 1]; rows[b - 1] = t; }
+    else if (op.insertColumn) { const [c, name] = op.insertColumn; rows.forEach((r, i) => r.splice(c - 1, 0, i === 0 ? name : '')); }
+    else throw new Error('unknown fixture change ' + JSON.stringify(op));
+  });
+}
+function range(r, c, nr, nc) {
+  nr = nr === undefined ? 1 : nr; nc = nc === undefined ? 1 : nc;
+  if (!(r >= 1 && c >= 1 && nr >= 1 && nc >= 1)) throw new Error('bad range ' + [r, c, nr, nc]);
+  return {
+    getValues() {
+      reads++;
+      const out = [];
+      for (let i = 0; i < nr; i++) { const row = []; for (let j = 0; j < nc; j++) row.push(cell(r + i, c + j)); out.push(row); }
+      if (nr > 1 && !mutated && fx.afterBulkRead) { applyChange(fx.afterBulkRead); mutated = true; }
+      return out;
+    },
+    setValue(v) {
+      if (nr !== 1 || nc !== 1) throw new Error('setValue on a range of more than one cell');
+      while (rows.length < r) rows.push([]);
+      while (rows[r - 1].length < c) rows[r - 1].push('');
+      rows[r - 1][c - 1] = v;
+      writes.push([r, c, v]);
+    },
+    setValues(vals) {
+      vals.forEach((row, i) => row.forEach((v, j) => { range(r + i, c + j).setValue(v); }));
+    },
+  };
+}
 const sheet = {
-  getLastColumn: () => 2,
-  getRange: () => ({ getValues: () => [['Project Name', 'Date Started']] }),
-  appendRow: (r) => appended.push(r),
-  getLastRow: () => 1 + appended.length,
+  getLastColumn: () => width(),
+  getLastRow: () => rows.length,
+  getRange: range,
+  getDataRange: () => range(1, 1, Math.max(rows.length, 1), Math.max(width(), 1)),
+  appendRow: (r) => { appended.push(r); rows.push(r.slice()); },
 };
 const ctx = {
-  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getSheetByName: () => sheet }) },
+  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getSheetByName: () => sheet }), flush: () => {} },
+  LockService: { getScriptLock: () => ({
+    tryLock: () => { if (lock.busy) return false; lock.taken++; return true; },
+    waitLock: () => { if (lock.busy) throw new Error('Lock timeout'); lock.taken++; },
+    releaseLock: () => { lock.released++; },
+    hasLock: () => lock.taken > lock.released,
+  }) },
   ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (s) => ({ setMimeType: () => s }) },
   Utilities: { formatDate: () => '2026-01-01' },
   Session: { getScriptTimeZone: () => 'UTC' },
@@ -376,15 +494,45 @@ const proto = vm.runInContext('String.prototype', ctx);
 const realCharCodeAt = proto.charCodeAt;
 proto.charCodeAt = function (i) { charReads++; return realCharCodeAt.call(this, i); };
 vm.runInContext(code, ctx);
-const out = method === 'GET'
-  ? ctx.doGet({ parameter: JSON.parse(requestJson) })
-  : ctx.doPost({ postData: { contents: requestJson } });
-console.log(JSON.stringify({ response: JSON.parse(out), appended: appended.length, charReads: charReads }));
+const snapshot = () => rows.map((r) => r.slice());
+function diff(a, b) {
+  const out = [];
+  for (let r = 0; r < Math.max(a.length, b.length); r++) {
+    const ra = a[r] || [], rb = b[r] || [];
+    for (let c = 0; c < Math.max(ra.length, rb.length); c++) {
+      const va = c < ra.length ? ra[c] : '', vb = c < rb.length ? rb[c] : '';
+      if (va !== vb) out.push([r + 1, c + 1, va, vb]);
+    }
+  }
+  return out;
+}
+const parsed = JSON.parse(requestJson);
+const requests = Array.isArray(parsed) ? parsed : [parsed];
+const responses = [], diffs = [];
+requests.forEach((req) => {
+  const before = snapshot();
+  const out = method === 'GET'
+    ? ctx.doGet({ parameter: req })
+    : ctx.doPost({ postData: { contents: typeof req === 'string' ? req : JSON.stringify(req) } });
+  responses.push(JSON.parse(out));
+  diffs.push(diff(before, rows));
+});
+console.log(JSON.stringify({ response: responses[responses.length - 1], appended: appended.length, charReads: charReads,
+  responses, diffs, writes, reads, mutated, lock, rows }));
 JS
   GS="$DIR/apps-script.gs"
   # Built from parts so this file never holds a token shaped run of its own.
   REAL="abcdefghijklmnop""0123456789ABCDEFGHIJKLMN"
-  gs(){ node "$TMP/gs-harness.js" "$GS" "$1" "$2" "${3:-POST}" 2>&1; }
+  gs(){ node "$TMP/gs-harness.js" "$GS" "$1" "$2" "${3:-POST}" "${4:--}" 2>&1; }
+  # jget <harness output> <python expression over d>: one field of the harness's report, as
+  # compact JSON. Prints HARNESS-UNREADABLE when the output was not the harness's JSON, so a
+  # crash is never read as an empty field.
+  jget(){ python3 -c 'import json,sys
+try:
+    d=json.loads(sys.argv[1])
+except ValueError:
+    print("HARNESS-UNREADABLE: %r" % sys.argv[1][:300]); sys.exit(0)
+print(json.dumps(eval(sys.argv[2]), separators=(",",":")))' "$1" "$2" 2>&1; }
 
   r="$(gs "$REAL" "{\"key\":\"$REAL\",\"action\":\"headers\"}")"
   check "web app, real token: the right key asks for the headers" '"ok":true,"headers":["Project Name","Date Started"]' "$r"
@@ -423,7 +571,7 @@ JS
   check "and appends nothing, never an empty dated row" '"appended":0' "$r"
   r="$(gs "$REAL" "{\"token\":\"$REAL\"}" GET)"
   check "web app: a GET is refused even with the right token in its address" '"ok":false' "$r"
-  check_not "and reveals no headers" "Project Name" "$r"
+  check_not "and reveals no headers" "Project Name" "$(jget "$r" 'd["response"]')"
 
   # Fails closed: the shipped placeholder, or a token too short to be real, refuses everything,
   # including a caller that sends that very placeholder as its key.
@@ -431,11 +579,131 @@ JS
     t="${tok%%|*}"; key="$t"; [ "$t" = "-" ] && key="$GS_TOKEN"
     r="$(gs "$t" "{\"key\":\"$key\",\"action\":\"headers\"}")"
     check "web app with ${tok#*|} as TOKEN: refuses even the matching key" '"error":"token not set' "$r"
-    check_not "and reveals no headers" "Project Name" "$r"
+    check_not "and reveals no headers" "Project Name" "$(jget "$r" 'd["response"]')"
     r="$(gs "$t" "{\"key\":\"$key\",\"data\":{\"a\":1}}")"
     check "web app with ${tok#*|} as TOKEN: refuses an append" '"ok":false' "$r"
     check "and appends nothing" '"appended":0' "$r"
   done
+
+  # --- update: one row changed in place, found by its Link (claude-config#1031) ---
+  # The sheet as Dan has it, plus a column nobody's code knows about (Notes), a row with an empty
+  # Date Completed that must stay empty (append dates empty date columns; update must not), and a
+  # ragged row with no Link at all. Fixtures and bodies are built by python, never by hand quoting.
+  python3 - "$TMP" <<'PY'
+import json, os, sys
+tmp = sys.argv[1]
+H = ["Project Name", "Date Started", "Date Completed", "Problem/Goal", "My Actions",
+     "Outcome/Results", "When to Check Results", "Skills Used", "Link", "Notes"]
+rows = [H,
+  ["Alpha", "2026-01-05", "", "Goal A", "Did A", "Out A", "2026-11-01", "TypeScript", "https://github.com/example/alpha", "note a"],
+  ["Beta", "2026-02-01", "2026-03-01", "Goal B", "Did B", "Out B", "", "Python", "https://github.com/example/beta", "note b"],
+  ["Gamma", "2026-03-01", "", "Goal G", "Did G"],
+  ["Delta", "2026-04-01", "", "Goal D", "Did D", "Out D", "2026-12-01", "Go", "https://github.com/example/delta", ""]]
+def fixture(name, **extra):
+    d = {"rows": rows}; d.update(extra)
+    json.dump(d, open(os.path.join(tmp, name + ".json"), "w"))
+fixture("sheet")
+dup = [r[:] for r in rows]; dup[4][8] = "https://github.com/example/alpha"
+json.dump({"rows": dup}, open(os.path.join(tmp, "sheet-dup.json"), "w"))
+fixture("sheet-renamed", afterBulkRead=[{"set": [2, 1, "Alpha renamed"]}])
+fixture("sheet-sorted", afterBulkRead=[{"swap": [2, 3]}])
+fixture("sheet-relinked", afterBulkRead=[{"set": [2, 9, "https://github.com/example/other"]}])
+fixture("sheet-column", afterBulkRead=[{"insertColumn": [10, "Inserted"]}])
+fixture("sheet-locked", lockBusy=True)
+PY
+  SHEET="$TMP/sheet.json"
+  ALPHA="https://github.com/example/alpha"
+  # upd <key> <link> <project name> <data json>: an update body, printed as JSON.
+  upd(){ python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"action":"update","link":sys.argv[2],"projectName":sys.argv[3],"cells":json.loads(sys.argv[4])}))' "$@"; }
+  # unchanged <harness output>: yes when every cell of the sheet still holds the fixture's value.
+  unchanged(){ python3 -c 'import json,sys
+d=json.loads(sys.argv[1]); f=json.load(open(sys.argv[2]))["rows"]
+pad=lambda r,n: r+[""]*(n-len(r))
+w=max(len(r) for r in f)
+print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s" % d["diffs"])' "$1" "$SHEET" 2>&1; }
+
+  # Append a row, then update it by its Link: exactly the named cells change.
+  APPEND_E="$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"Epsilon","Date Started":"2026-05-01","Date Completed":"","Problem/Goal":"Goal E","My Actions":"Did E","Outcome/Results":"Out E","When to Check Results":"2026-12-15","Skills Used":"Bash","Link":"https://github.com/example/epsilon","Notes":"keep me"}}))' "$REAL")"
+  UPDATE_E="$(upd "$REAL" "https://github.com/example/epsilon" "Epsilon" '{"My Actions":"Did E and more","outcome/results":"Shipped"}')"
+  r="$(gs "$REAL" "[$APPEND_E,$UPDATE_E]" POST "$SHEET")"
+  check_eq "update: the appended row lands first" 'true' "$(jget "$r" 'd["responses"][0]["ok"]')"
+  check_eq "update: the update by Link succeeds" 'true' "$(jget "$r" 'd["responses"][1]["ok"]')"
+  check_eq "and names the row it changed" '6' "$(jget "$r" 'd["responses"][1]["rowNumber"]')"
+  check_eq "and changes exactly the two named cells, matching a header in any case" \
+    '[[6,5,"Did E","Did E and more"],[6,6,"Out E","Shipped"]]' "$(jget "$r" 'd["diffs"][1]')"
+  check_eq "and writes no other cell at all, not even with its own value" \
+    '[[6,5,"Did E and more"],[6,6,"Shipped"]]' "$(jget "$r" 'd["writes"]')"
+  check_eq "and every unlisted column keeps its value (empty Date Completed stays empty, When to Check Results and Notes kept)" \
+    '["Epsilon","2026-05-01","","Goal E","Did E and more","Shipped","2026-12-15","Bash","https://github.com/example/epsilon","keep me"]' \
+    "$(jget "$r" 'd["rows"][5]')"
+  check_eq "and every other row is as it was" "yes" "$(unchanged "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["rows"]=d["rows"][:5]; print(json.dumps(d))' "$r")")"
+  check_eq "and the answer carries what the changed cells held before, for an undo" \
+    '{"My Actions":"Did E","Outcome/Results":"Out E"}' "$(jget "$r" 'd["responses"][1]["before"]')"
+  # The double was reached (L143): the script read the sheet and took and gave back its lock.
+  check_eq "and the update took the script lock once and released it" '{"taken":1,"released":1,"busy":false}' "$(jget "$r" 'd["lock"]')"
+
+  # An existing row, found among others, carrying a column after Link.
+  r="$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/beta" "Beta" '{"Notes":"note b2"}')" POST "$SHEET")"
+  check_eq "update: an existing row's cell after Link changes, and only it" '[[3,10,"note b","note b2"]]' "$(jget "$r" 'd["diffs"][0]')"
+
+  # Every refusal: named, and the sheet untouched, not one cell written.
+  refuses_update(){ # refuses_update <description> <expected words in the error> <harness output>
+    check "update, $1: refused" '"ok":false' "$(jget "$3" 'd["response"]')"
+    check "update, $1: says why" "$2" "$(jget "$3" 'd["response"].get("error")')"
+    check_eq "update, $1: writes no cell" '[]' "$(jget "$3" 'd["writes"]')"
+    check_eq "update, $1: appends no row" '0' "$(jget "$3" 'd["appended"]')"
+  }
+  refuses_update "a Link no row holds" "no row" "$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/nope" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
+  # The message names what the row really holds, never "the sheet changed", which would send
+  # somebody to re-read a sheet that did not move (L11).
+  refuses_update "Beta's Link sent with Alpha's Project Name" 'has Project Name \"Beta\", not \"Alpha\"' "$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/beta" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
+  refuses_update "a Link two rows hold" "more than one row" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$TMP/sheet-dup.json")"
+  refuses_update "a header the sheet does not have" "Not A Column" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x","Not A Column":"y"}')" POST "$SHEET")"
+  refuses_update "no cells to change" "nothing to update" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{}')" POST "$SHEET")"
+  refuses_update "one header named twice in different case" "more than once" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x","my actions":"y"}')" POST "$SHEET")"
+  refuses_update "a value that is not text, a number or true or false" "My Actions" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":{"nested":1}}')" POST "$SHEET")"
+  refuses_update "an empty Link" "link" "$(gs "$REAL" "$(upd "$REAL" "" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
+  refuses_update "an empty Project Name" "projectName" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "" '{"My Actions":"x"}')" POST "$SHEET")"
+  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"action":"update","link":"https://github.com/example/alpha","cells":{"My Actions":"x"}}))' "$REAL")" POST "$SHEET")"
+  refuses_update "no Project Name at all" "projectName" "$r"
+  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"action":"update","link":"https://github.com/example/alpha","projectName":"Alpha","data":{"My Actions":"x"}}))' "$REAL")" POST "$SHEET")"
+  refuses_update "its cells sent as data, the append field" "cells" "$r"
+  check_eq "update: a successful answer names itself an update, so a caller can tell it from an append's" '"update"' \
+    "$(jget "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")" 'd["response"].get("action")')"
+  refuses_update "another run holding the lock" "busy" "$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$TMP/sheet-locked.json")"
+
+  # The token guards update exactly as it guards append, and is judged before the sheet is read.
+  for case in "a wrong key|nope|bad token" "no key|-|bad token" "the placeholder as the key|$GS_TOKEN|bad token"; do
+    IFS='|' read -r what key why <<< "$case"
+    body="$(upd "$key" "$ALPHA" "Alpha" '{"My Actions":"x"}')"
+    [ "$key" = "-" ] && body="$(python3 -c 'import json,sys; b=json.loads(sys.argv[1]); del b["key"]; print(json.dumps(b))' "$body")"
+    r="$(gs "$REAL" "$body" POST "$SHEET")"
+    refuses_update "$what" "$why" "$r"
+    check_eq "update, $what: never reads the sheet" '0' "$(jget "$r" 'd["reads"]')"
+  done
+  r="$(gs "-" "$(upd "$GS_TOKEN" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
+  refuses_update "with the shipped placeholder as TOKEN" "token not set" "$r"
+
+  # Re-verified straight before the write: the sheet changed after the script found the row.
+  # Each fixture's change fires on the script's first read of more than one row, and "mutated"
+  # proves it did fire, so a refusal here is the re-check's and not a missed lookup (L143).
+  for case in "sheet-renamed|its Project Name changed after it was found" \
+              "sheet-sorted|the sheet was sorted after it was found" \
+              "sheet-relinked|its Link changed after it was found"; do
+    r="$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$TMP/${case%%|*}.json")"
+    check_eq "update, ${case#*|}: the change to the sheet did happen" 'true' "$(jget "$r" 'd["mutated"]')"
+    refuses_update "${case#*|}" "changed" "$r"
+  done
+  r="$(gs "$REAL" "$(upd "$REAL" "$ALPHA" "Alpha" '{"Notes":"x"}')" POST "$TMP/sheet-column.json")"
+  check_eq "update, a column inserted after it was found: the change to the sheet did happen" 'true' "$(jget "$r" 'd["mutated"]')"
+  refuses_update "a column inserted after it was found, moving the target column" "changed" "$r"
+  check_eq "and the lock is given back after a refusal too" '{"taken":1,"released":1,"busy":false}' "$(jget "$r" 'd["lock"]')"
+
+  # An action the script does not know is refused, never read as an append.
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"action\":\"updat\",\"data\":{\"Project Name\":\"x\"}}")"
+  check "web app: an unknown action is refused" '"ok":false' "$(jget "$r" 'd["response"]')"
+  check "and named" "updat" "$(jget "$r" 'd["response"].get("error")')"
+  check_eq "and appends nothing" '0' "$(jget "$r" 'd["appended"]')"
 fi
 
 echo

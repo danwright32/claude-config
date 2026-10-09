@@ -2,6 +2,8 @@
 # Personal Project Tracker helper.
 #   tracker.sh headers                              # print the sheet's column names
 #   tracker.sh append '{"Project":"X","Status":"Y"}'  # append a row (keys = header names)
+#   tracker.sh update '<link>' '<project name>' '{"Status":"Z"}'
+#                                                   # change named cells of the row with that Link
 #   tracker.sh new-token                            # write a fresh token into config.local.json
 #
 # The write token lives ONLY in config.local.json beside this script. That file is ignored by
@@ -119,7 +121,7 @@ TOKEN="${CHECKED#*$'\n'}"
 # matching apps-script.gs reads; the first version of the script read "token", so this caller
 # and that deployment refuse each other ("bad token") rather than half understanding.
 # The body is built by python with the token from its environment, and reaches curl on stdin.
-post(){   # $1 = the request body without its key, as a JSON object
+post(){   # $1 = the request body without its key, as a JSON object; $2 = "update" for an update
   local payload
   payload=$(TRACKER_TOKEN="$TOKEN" python3 -c "import json,os,sys;b=json.loads(sys.argv[1]);b['key']=os.environ['TRACKER_TOKEN'];print(json.dumps(b))" "$1")
   # NOTE: no -X POST. --data makes the first request a POST; Apps Script 302-redirects
@@ -135,7 +137,7 @@ post(){   # $1 = the request body without its key, as a JSON object
   # failure naming the web app's own error (claude-config#677).
   python3 -c '
 import json, sys
-body = sys.argv[1]
+body, expect = sys.argv[1], sys.argv[2]
 try:
     reply = json.loads(body)
 except ValueError:
@@ -144,9 +146,15 @@ except ValueError:
 if not isinstance(reply, dict) or reply.get("ok") is not True:
     why = reply.get("error") if isinstance(reply, dict) else None
     sys.stderr.write("tracker.sh: the web app refused: %s\n" % (why or body[:200]))
+    if expect == "update" and "nothing to append" in str(why):
+        # The deployed script has no update, and refused the body because it carries no data.
+        sys.stderr.write("tracker.sh: the deployed web app predates update, so nothing was changed. Deploy the current apps-script.gs as a new version (SKILL.md, Turning on update).\n")
+    sys.exit(1)
+if expect == "update" and reply.get("action") != "update":
+    sys.stderr.write("tracker.sh: the answer was ok but not an update'"'"'s, so what changed in the sheet is unknown; check the sheet. It began: %r\n" % body[:200])
     sys.exit(1)
 print(body)
-' "$answer"
+' "$answer" "${2:-}"
 }
 
 case "${1:-}" in
@@ -158,8 +166,37 @@ case "${1:-}" in
     BODY=$(python3 -c "import json,sys;print(json.dumps({'data':json.loads(sys.argv[1])}))" "$DATA")
     post "$BODY"
     ;;
+  update)
+    # Changes only the named cells of the one row whose Link is <link>, once the web app has
+    # confirmed that row's Project Name is <project name>. Every other cell is left as it is.
+    # The cells go as "cells", never "data": a deployed script older than update would read a
+    # "data" object as a row to append, and refuses a body without one instead.
+    USAGE="usage: tracker.sh update '<link>' '<project name>' '<json object of header:value>'"
+    BODY="$(python3 - "$USAGE" "${2-}" "${3-}" "${4-}" "$#" <<'PY'
+import json, sys
+usage, link, name, cells, argc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+def refuse(why):
+    sys.stderr.write("tracker.sh: %s. %s\n" % (why, usage))
+    sys.exit(1)
+if argc != 4:
+    refuse("update takes exactly three arguments")
+if not link.strip():
+    refuse("the link is empty")
+if not name.strip():
+    refuse("the project name is empty")
+try:
+    parsed = json.loads(cells)
+except ValueError:
+    refuse("the cells are not JSON")
+if not isinstance(parsed, dict) or not parsed:
+    refuse("the cells must be a JSON object naming at least one column")
+print(json.dumps({"action": "update", "link": link, "projectName": name, "cells": parsed}))
+PY
+)" || exit 1
+    post "$BODY" update
+    ;;
   *)
-    echo "usage: tracker.sh {headers | append '<json>' | new-token}" >&2
+    echo "usage: tracker.sh {headers | append '<json>' | update '<link>' '<project name>' '<json>' | new-token}" >&2
     exit 1
     ;;
 esac

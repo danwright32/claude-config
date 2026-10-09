@@ -26,6 +26,9 @@ credentials are stored locally and the skill works from any project on any machi
 /tracker --headers                        # just print the sheet's column names
 ```
 
+Rows can also be changed in place by their Link (`tracker.sh update`, see "Updating a row in
+place"), once the deployed script has update ("Turning on update").
+
 ## First run / setup (`--setup`)
 
 If `config.local.json` is missing, the skill is not configured. The token that guards writes
@@ -54,6 +57,29 @@ placeholder.
 
 > If the user later changes the script, they must **Deploy, Manage deployments, Edit,
 > New version** for changes to take effect. The `/exec` URL stays the same.
+
+## Turning on update (one time, after claude-config#1031)
+
+`tracker.sh update` needs the deployed script to be the current `apps-script.gs`, which has the
+`update` action. A deployment made before #1031 does not, and refuses every update with
+`nothing to append` (it changes nothing; `tracker.sh` then says the script predates update).
+Do this once, on one Mac; the `/exec` URL and the token stay the same:
+
+1. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
+   name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
+   Then **Extensions, Apps Script**.
+2. Select all the code there and paste the entire contents of the current `apps-script.gs`
+   over it.
+3. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
+   command in setup step 2. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING`
+   with the `token` value from that file, keeping the single quotes around it, and save.
+4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
+5. Check it, without changing anything, by asking to update a Link no row has:
+   `bash tracker.sh update 'https://example.invalid/check-update' 'Check' '{"My Actions":"x"}'`
+   The answer `no row has the Link https://example.invalid/check-update; nothing was changed`
+   means update is live. `the deployed web app predates update` means step 4 did not deploy a
+   new version. `bad token` or `token not set` means the TOKEN line does not hold the token from
+   `config.local.json`: set it as in step 3 and deploy a new version again.
 
 ## Rotating the token
 
@@ -123,6 +149,30 @@ across by hand (AirDrop), never through the repository.
    ```
 6. **Confirm**: the script returns `{"ok":true,"rowNumber":N,"row":[...]}`. Tell the user the
    row was added and summarize what went in. If `ok` is false, surface the `error`.
+
+## Updating a row in place
+
+`tracker.sh update '<link>' '<project name>' '<json of header:value>'` changes only the named
+cells of the one row whose Link is `<link>`. Every other cell in that row (When to Check
+Results, any column added later) is never written. Pass the Link and Project Name exactly as
+the sheet shows them; the web app refuses, changing nothing, when:
+
+- no row, or more than one row, has that Link;
+- the row with that Link has a different Project Name;
+- the sheet changed between finding the row and writing it (a sort, an inserted row or column,
+  an edit to that row's Link or Project Name): read the sheet again and retry;
+- a header in the JSON is not a column of the sheet, or is named twice;
+- another request is writing the sheet at that moment (`busy`): try again.
+
+Always show the user the old and new value of every cell first and get approval, as for an
+append. The answer, `{"ok":true,"action":"update","rowNumber":N,"before":{...},"row":[...]}`,
+carries in `before` what each changed cell held, which is what an undo writes back.
+
+```
+bash tracker.sh update 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
+```
+
+Needs the one time redeploy in "Turning on update" above.
 
 ## Notes
 
