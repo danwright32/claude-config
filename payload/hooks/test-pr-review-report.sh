@@ -293,6 +293,34 @@ check "openings with no review in the window are all unreviewed" "openings with 
 check "and so are their pull requests" "pull requests with a finished review of a head they were opened at: 0 of 2 (0%)" "$out"
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
 
+# 15. Openings that cannot be placed on a pull request (folder gone, no URL) are unknowns, not
+# absences: a verdict is given only when it holds however they fall. Each pull request here is
+# named by its URL, and reviewed when its opening head has a finished review.
+reviewed_prs(){ # reviewed_prs <first> <last> <reviewed: yes|no>
+  local i
+  for i in $(seq "$1" "$2"); do
+    opened "feed$i" "$REPO" "https://github.com/test-owner/repo/pull/$((100 + i))"
+    [ "$3" = yes ] && review "feed$i" ok 0 "No issues found."
+  done
+  return 0
+}
+export AI_REVIEW_STATE_DIR="$WORKDIR/state-bounds"; mkdir -p "$AI_REVIEW_STATE_DIR"
+reviewed_prs 1 5 yes
+opened "$S7" "$WORKDIR/nowhere/z"
+out="$(run)"
+check "5 of 5 reviewed, plus one unplaced opening that may be an unreviewed pull request, has no verdict" "UNMEASURED (#562)" "$out"
+check_not "rather than reading as met on the placed ones alone" "GATE MET" "$out"
+check "and gives the range the unknown allows" "from 83% to 100%" "$out"
+reviewed_prs 6 10 yes
+out="$(run)"
+check "10 of 10 reviewed is met even if the unplaced opening was an unreviewed pull request" "GATE MET" "$out"
+export AI_REVIEW_STATE_DIR="$WORKDIR/state-bounds-low"; mkdir -p "$AI_REVIEW_STATE_DIR"
+reviewed_prs 1 5 no
+opened "$S7" "$WORKDIR/nowhere/z"
+out="$(run)"
+check "0 of 5 reviewed is not met however the unplaced opening falls" "GATE NOT MET" "$out"
+export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

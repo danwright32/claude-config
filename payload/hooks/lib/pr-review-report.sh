@@ -248,11 +248,16 @@ reasons() { # $1 = a file of status words: prints "word count, word count" in a 
 awk -F '\t' 'FILENAME == ARGV[1] { if ($7 == "ok" || $7 == "empty-diff") done[$4 "\t" $5] = 1; next }
   { print (($3 "\t" $4) in done) ? 1 : 0 }' "$work/reviews" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/covered"
 paste "$work/covered" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/openings"
-read -r n_open hit_open n_pr hit_pr <<< "$(awk -F '\t' '
+# Unknowns: openings that could not be placed on a pull request because the folder is gone or no
+# commit was recorded. Each MAY be a pull request of its own, so they are counted, split by whether
+# the opening had a finished review (uk_hit) or not (uk_miss), for the verdict's range below. GitHub
+# finding no pull request is a measurement (that create opened none) and is not an unknown.
+read -r n_open hit_open n_pr hit_pr uk_hit uk_miss <<< "$(awk -F '\t' '
   { o++; if ($1) oh++ }
   # Keyed case blind: a recorded URL and a checkout remote can spell the same owner/name differently.
   $7 == "pr" { k = tolower($8) "#" $9; if (!(k in seen)) { seen[k] = 1; p++ } if ($1 && !(k in hit)) { hit[k] = 1; ph++ } }
-  END { print o + 0, oh + 0, p + 0, ph + 0 }' "$work/openings")"
+  $7 == "gone" || $7 == "nocommit" { if ($1) uh++; else um++ }
+  END { print o + 0, oh + 0, p + 0, ph + 0, uh + 0, um + 0 }' "$work/openings")"
 awk -F '\t' '$7 != "pr" { print $7 }' "$work/openings" > "$work/untied"
 n_untied="$(awk 'END { print NR + 0 }' "$work/untied")"
 # Partial: openings that were never looked up (past the budget, or --no-github) or whose lookup
@@ -368,8 +373,19 @@ if [ "$n_partial" -gt 0 ]; then
   echo "UNMEASURED (#562): $n_partial of $n_open openings on $host were not looked up or their lookup failed ($why), so the share per pull request covers only part of the window. To measure it, $remedy."
 elif [ "$n_pr" -lt 5 ]; then
   echo "UNMEASURED (#562): only $n_pr pull request(s) opened on $host in the window, too few to say whether nearly every one is reviewed. Keep recording."
-elif [ "$pct" -ge 90 ]; then
-  echo "GATE MET on $host (#562): $pct% of pull requests opened had a finished review (90 percent is the chosen reading of nearly every, not a measurement). The gate needs the other Mac's report too, and the decision is Dan's."
 else
-  echo "GATE NOT MET on $host (#562): $pct% of pull requests opened had a finished review, under the 90 percent read as nearly every. Nothing leaves the session imports; the outcomes above say why reviews did not finish."
+  # The verdict must hold however the unknowns fall. At worst each unreviewed one is an unreviewed
+  # pull request of its own (and each reviewed one is a duplicate); at best each reviewed one is a
+  # reviewed pull request (and each unreviewed one opened nothing). Compared exactly, not on the
+  # rounded percentages printed.
+  lo_n=$(( n_pr + uk_miss )); hi_n=$(( n_pr + uk_hit )); hi_hit=$(( hit_pr + uk_hit ))
+  unknown=$(( uk_hit + uk_miss ))
+  also=""; [ "$unknown" -gt 0 ] && also=", counting the $unknown opening(s) that could not be placed on a pull request whichever way is least favourable"
+  if [ $(( hit_pr * 100 )) -ge $(( 90 * lo_n )) ]; then
+    echo "GATE MET on $host (#562): $pct% of pull requests opened had a finished review$also (90 percent is the chosen reading of nearly every, not a measurement). The gate needs the other Mac's report too, and the decision is Dan's."
+  elif [ $(( hi_hit * 100 )) -lt $(( 90 * hi_n )) ]; then
+    echo "GATE NOT MET on $host (#562): $pct% of pull requests opened had a finished review$also, under the 90 percent read as nearly every. Nothing leaves the session imports; the outcomes above say why reviews did not finish."
+  else
+    echo "UNMEASURED (#562): $pct% of the pull requests placed had a finished review, but $unknown opening(s) on $host could not be placed on a pull request (folder or GitHub remote gone, or no commit recorded), so the share could be anywhere from $(( hit_pr * 100 / lo_n ))% to $(( hi_hit * 100 / hi_n ))%, either side of the 90 percent read as nearly every."
+  fi
 fi
