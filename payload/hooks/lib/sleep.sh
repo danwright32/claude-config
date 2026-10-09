@@ -17,9 +17,17 @@
 # it ends must never hold (L523): a page that should not have come beats a silence nobody can see.
 #
 # Arguments, each optional, for a caller that already has them and for the tests: the record's path,
-# now in ms since the epoch, and this boot's start in seconds (`none` when it is not known, when only
-# the record's end decides). Every
-# answer comes back on stdout, never through a variable, since a caller reads it in a subshell.
+# now in ms since the epoch, this boot's start in seconds and this boot's session (each `none` when
+# it is not known; with neither known only the record's end decides). Every answer comes back on
+# stdout, never through a variable, since a caller reads it in a subshell.
+#
+# Which boot a record belongs to is decided by its `bootSession` (kern.bootsessionuuid), which only a
+# restart changes, whenever the record carries one and this boot's session could be read. Only
+# otherwise by `bootTime`, and then within 300 seconds, never exactly: macOS derives kern.boottime
+# from the wall clock minus uptime, so a clock correction moves it by seconds with no restart (2 s on
+# 2026-10-08, which ended the night here while the mod still said asleep). A real restart moves it
+# by the whole time the Mac had been up. The mod's readSleep keeps the same rule and the same
+# tolerance (BOOT_TIME_TOLERANCE_S), held to the shared fixtures at both edges of it.
 
 # This boot's start in seconds, from what `sysctl -n kern.boottime` prints ("{ sec = N, usec = M }
 # ..."): the number after the first `sec =`, as the mod's bootOf reads it, never the microseconds
@@ -28,20 +36,29 @@ sleep_boot_of() {
   printf '%s\n' "${1:-}" | sed -n '1s/^[^0-9]*sec *= *\([0-9][0-9]*\).*/\1/p'
 }
 
+# This boot's session from what `sysctl -n kern.bootsessionuuid` prints: its first line when that is
+# a UUID, in upper case, as the mod's bootSessionOf reads it. Nothing otherwise. Held to the mod's
+# cases in SESSION_FIXTURES.
+sleep_boot_session_of() {
+  printf '%s\n' "${1:-}" | sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;/^[0-9A-Fa-f]\{8\}-[0-9A-Fa-f]\{4\}-[0-9A-Fa-f]\{4\}-[0-9A-Fa-f]\{4\}-[0-9A-Fa-f]\{12\}$/{y/abcdef/ABCDEF/;p;};}'
+}
+
 # The state on the first line and why on the second (empty but for unreadable).
 _sleep_read() {
-  local file="${1:-$HOME/.claude/state/sleep/current.json}" now="${2:-}" boot="${3:-}" out
+  local file="${1:-$HOME/.claude/state/sleep/current.json}" now="${2:-}" boot="${3:-}" session="${4:-}" out
   if [ ! -e "$file" ]; then
     printf 'none\n\n'
     return 0
   fi
   [ -n "$now" ] || now="$(date +%s)000"
   [ -n "$boot" ] || boot="$(sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)")"
+  [ -n "$session" ] || session="$(sleep_boot_session_of "$(sysctl -n kern.bootsessionuuid 2>/dev/null)")"
+  [ "$session" = none ] && session=""
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'unreadable\npython3 is not installed, so the sleep record cannot be read\n'
     return 0
   fi
-  out="$(python3 - "$file" "$now" "$boot" <<'PY' 2>&1
+  out="$(python3 - "$file" "$now" "$boot" "$session" <<'PY' 2>&1
 import json, math, sys
 
 def num(x):
@@ -52,7 +69,11 @@ def say(state, why=""):
     print(why)
     sys.exit(0)
 
-path, now, boot = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+# How far this boot start may sit from the record one and still be the same boot, when no boot
+# session decides (the mod: BOOT_TIME_TOLERANCE_S).
+TOLERANCE_S = 300
+
+path, now, boot, session = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 try:
     with open(path) as fh:
         text = fh.read()
@@ -70,9 +91,18 @@ if not num(r.get("until")):
     say("unreadable", "the sleep record names no end")
 if not num(r.get("bootTime")):
     say("unreadable", "the sleep record names no boot")
-# This boot unknown (sysctl failed) only skips the boot check: the end of the record still bounds it.
+if "bootSession" in r and not (isinstance(r["bootSession"], str) and r["bootSession"]):
+    say("unreadable", "the sleep record names a boot session this reader cannot read")
+# The session decides when both sides have one; else the start, within the tolerance. This boot
+# unknown both ways (sysctl failed) only skips the boot check: the end of the record still bounds it.
 # (No apostrophe in this program: macOS bash 3.2 reads quotes inside a heredoc in a command substitution.)
-if boot.isdigit() and r["bootTime"] != int(boot):
+if "bootSession" in r and session:
+    same = r["bootSession"].upper() == session.upper()
+elif boot.isdigit():
+    same = abs(r["bootTime"] - int(boot)) <= TOLERANCE_S
+else:
+    same = True
+if not same:
     say("other-boot")
 if now >= r["until"]:
     say("expired")
@@ -120,15 +150,15 @@ sleep_active() {
 # own predicate, asked first), appended as one line to notes/<generation>.jsonl, and the report in
 # Downloads is rendered again. Exit 0 once the note is written, even when the report could not be
 # rendered after it (said on stderr: the note is the record, and the report is rendered again at
-# wake); 1 when the note was refused or not written, with why on stderr. The record, now and this
-# boot may follow, as for sleep_state, for the tests.
+# wake); 1 when the note was refused or not written, with why on stderr. The record, now, this
+# boot's start and its session may follow, as for sleep_state, for the tests.
 # The script beside this file when bash sourced it; under a shell with no BASH_SOURCE (zsh) this
 # file cannot know where it is, so the installed copy is used, never one in the caller's folder.
 _SLEEP_LIB_DIR=""
 [ -n "${BASH_SOURCE[0]:-}" ] && _SLEEP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 sleep_note() {
   local line="${1:-}" file="${2:-$HOME/.claude/state/sleep/current.json}" state script
-  state="$(sleep_state "$file" "${3:-}" "${4:-}")"
+  state="$(sleep_state "$file" "${3:-}" "${4:-}" "${5:-}")"
   if [ "$state" != asleep ]; then
     printf 'sleep_note: not written, since the Mac is not asleep (the sleep record reads as %s)\n' "$state" >&2
     return 1

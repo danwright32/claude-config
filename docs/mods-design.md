@@ -874,6 +874,16 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   read a sound record as another boot's and so as awake: no claim, no note, and every silenced
   route still paging Dan. Both suites had written their fixtures' boot the same wrong way they read
   it, so they agreed with themselves (L70); the real engine run (#838) found it.
+- `bootSession` is `sysctl kern.bootsessionuuid`, a UUID only a restart changes, written beside
+  `bootTime` whenever it can be read (the mod's `bootSessionOf` and the shell's
+  `sleep_boot_session_of`, held to `SESSION_FIXTURES`). Which boot a record belongs to is decided by
+  it whenever both the record and this side have one; only otherwise by `bootTime`, and then within
+  300 seconds (`BOOT_TIME_TOLERANCE_S`, the shell's `TOLERANCE_S`), never exactly. macOS derives
+  kern.boottime from the wall clock minus uptime, so a clock correction moves it with no restart:
+  on 2026-10-08 it read 2 seconds earlier than the record 38 minutes after `/sleep`, and the shell's
+  exact comparison read the night as another boot's (no claim, no release, no note) while the mod,
+  holding its first reading, still said asleep. A real restart moves it by the whole time the Mac
+  had been up, so a record of another boot still reads as awake.
 - Written whole to a temp file beside it, read back, then `ln`ed into place: a link fails when a
   record is there, so two `/sleep` at once place one, and the other says sleep is already on. A
   second `/sleep` says when (ET) and in which folder sleep started and changes nothing; so does one
