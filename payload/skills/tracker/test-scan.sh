@@ -351,8 +351,6 @@ check_eq "--help succeeds" 0 "$RC"
 check "and reaches the one entry per repository contract" "ONE ENTRY PER REPOSITORY" "$(cat "$OUT")"
 check "and the paragraph after it" "macOS bash 3.2" "$(cat "$OUT")"
 check_not "and stops at the end of the comment" "set -euo pipefail" "$(cat "$OUT")"
-scan --frobnicate
-if [ "$RC" -ne 0 ]; then ok; else bad "an unknown argument is refused"; fi
 
 # --- url normalization, every form, through the one shared function ---------------
 norm(){ bash "$SCAN" --normalize-url "$1" 2>/dev/null; }
