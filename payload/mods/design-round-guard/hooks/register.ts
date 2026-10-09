@@ -13,6 +13,7 @@ import {
   SKIP_YES,
   agentRefusal,
   callKey,
+  callText,
   cannotCheck,
   card,
   checked,
@@ -182,12 +183,18 @@ const recordOf = (v: unknown): DesignRoundRecord | undefined => {
 // Dan's Not a look change for this very call (#1010). A store that cannot be read here is read again
 // by the judgement that follows, which refuses saying so.
 const passKey = (key: string) => `pass:${key}`
-// The key a call is known by: its tool and input, in the folder it runs in, in this session.
-const keyOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string> =>
-  callKey(tool, input, { cwd: await $.session.cwd(), session: await $.session.id() })
-const passed = async ($: EngineInterface, key: string): Promise<boolean> => {
+// A call as it is known: its key and its whole text, from its tool and input, in the folder it runs
+// in, in this session.
+type Called = { key: string; call: string }
+const keyOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Called> => {
+  const at = { cwd: await $.session.cwd(), session: await $.session.id() }
+  return { key: callKey(tool, input, at), call: callText(tool, input, at) }
+}
+const passed = async ($: EngineInterface, c: Called): Promise<boolean> => {
   try {
-    return ((await $.store.get(passKey(key))) as Partial<DesignRoundPass> | undefined)?.kind === 'not-look'
+    const p = (await $.store.get(passKey(c.key))) as Partial<DesignRoundPass> | undefined
+    // The key is a hash, so the record holds the call itself, which must be this one exactly.
+    return p?.kind === 'not-look' && p.call === c.call
   } catch {
     return false
   }
@@ -319,7 +326,7 @@ const drawCard = async ($: EngineInterface, toolUseId: string, reason: string, s
 }
 
 // What a refused call is told, and the card drawn for it; a missing round is kept waiting on Dan.
-const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, call: { id: string; tool: string; agent: boolean; key: string }): Promise<string> => {
+const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, call: { id: string; tool: string; agent: boolean; called: Called }): Promise<string> => {
   if ('forged' in v) {
     await drawCard($, call.id, "This would change the design round guard's own record.", 'Only your answers to its two questions write it.')
     return forged(v.forged)
@@ -334,7 +341,7 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
     return unreadable(u.files, u.subjects, u.why)
   }
   const { files, subjects, trees } = v.missing
-  const waiting: DesignRoundPending = { id: call.id, tool: call.tool, files, subjects, trees, key: call.key, ...(call.agent ? { agent: true as const } : {}) }
+  const waiting: DesignRoundPending = { id: call.id, tool: call.tool, files, subjects, trees, key: call.called.key, call: call.called.call, ...(call.agent ? { agent: true as const } : {}) }
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== call.id), waiting])
   const c = card(files, subjects)
   await drawCard($, call.id, c.reason, c.safeWay)
@@ -424,7 +431,7 @@ export const register: Register = on => {
     const input = argsOf(raw)
     const v = await judge($, e.tool, input)
     // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
-    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, key: await keyOf($, e.tool, input) }) : previewed(v) }
+    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, called: await keyOf($, e.tool, input) }) : previewed(v) }
     // An empty id names no one call, so it is never marked: any other call carrying it would skip its
     // judgement (lessons review of #991). Such a call is judged again beneath, the same way.
     if (!id) return next(e)
@@ -449,7 +456,7 @@ export const register: Register = on => {
     // A check asked with no call id ($.tool.check) runs nothing: it is answered as the call would be,
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
     if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
-    return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, key: await keyOf($, e.tool, input) }) }
+    return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, called: await keyOf($, e.tool, input) }) }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(message(next.error)) }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its
@@ -533,7 +540,7 @@ export const register: Register = on => {
           // His word that this one call changes nothing on screen, kept with why (#1010): the same
           // call sent again goes through, and nothing is recorded for the issue.
           try {
-            const pass: DesignRoundPass = { kind: 'not-look', at: await $.clock.now(), tool: waiting.tool, files: waiting.files, subjects: open.map(x => x.label), why: notLookWhy(waiting.files) }
+            const pass: DesignRoundPass = { kind: 'not-look', at: await $.clock.now(), tool: waiting.tool, files: waiting.files, subjects: open.map(x => x.label), why: notLookWhy(waiting.files), call: waiting.call }
             await $.store.set(passKey(waiting.key), pass)
           } catch (err) {
             return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)

@@ -20,6 +20,8 @@ export type DesignRoundPending = {
   trees: string[]
   /** The call itself, as rules.ts callKey knows it, so the same call sent again is recognised after Not a look change. */
   key: string
+  /** The call written out whole (rules.ts callText), which a pass must match exactly, the key being a hash. */
+  call: string
   /** Set when a subagent's call was refused: the agent is told to make the change again, not the main loop. */
   agent?: true
 }
@@ -36,6 +38,8 @@ export type DesignRoundPass = {
   subjects: string[]
   /** Why it went ahead, in words. */
   why: string
+  /** The call written out whole (rules.ts callText): only a call whose own text this is goes through. */
+  call: string
 }
 
 /** Dan's own answer, kept in the mod's store under its subject's key (this Mac, every session). */

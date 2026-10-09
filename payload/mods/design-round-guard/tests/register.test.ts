@@ -1,7 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { HEADER, NOT_LOOK, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
+import { HEADER, NOT_LOOK, callKey, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
@@ -705,6 +705,18 @@ test("#1010: Dan's Not a look change holds only in the session and the folder th
   w.at.session = 's2'
   expect(refusalOf(await call($, sh))).toContain(SKIP_QUESTION)
   expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #1010: the key is a hash, and the call's text is Claude's to write, so a record
+// found under a call's key lets it through only when it holds that very call.
+test("#1010: a Not a look change record found under a call's key lets it through only when it holds that very call", withKit, async ($, on) => {
+  const w = world($, on)
+  const edit = { tool: 'Edit', file_path: '/w/slate/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
+  const { tool, ...input } = edit
+  // A record under this call's key, as a colliding call would have left it, holding another call.
+  w.store[`pass:${callKey(tool, input, { cwd: '/w/slate', session: 's1' })}`] = { kind: 'not-look', at: 0, tool, files: ['app/page.tsx'], subjects: [], why: 'x', call: 'another call' }
+  expect(refusalOf(await call($, edit))).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
 })
 
 // claude-config#1010: Dan's Settled was recorded for Slate issue #2210, the session's folder, while
