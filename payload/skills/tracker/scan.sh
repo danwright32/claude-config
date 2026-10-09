@@ -77,12 +77,14 @@ lower(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # LAST @ before the first slash, so a password holding an @ is removed whole, not cut at its own @.
 redact_url(){
   local u="$1"
-  u="${u%%\?*}"; u="${u%%#*}"
+  # Credentials FIRST: a password may hold a raw # or ?, so cutting the query and fragment before
+  # would truncate inside it, leave no @ to find, and print the password's first half.
   if [[ "$u" =~ ^(https?)://[^/]*@(.*)$ ]]; then
     u="${BASH_REMATCH[1]}://${BASH_REMATCH[2]}"
   elif [[ "$u" =~ ^([A-Za-z0-9+]+)://[^/@]*:[^/]*@(.*)$ ]]; then
     u="${BASH_REMATCH[1]}://${BASH_REMATCH[2]}"
   fi
+  u="${u%%\?*}"; u="${u%%#*}"
   printf '%s' "$u"
 }
 

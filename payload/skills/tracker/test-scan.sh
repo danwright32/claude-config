@@ -123,6 +123,10 @@ GIT_AUTHOR_NAME="$ME_NAME" GIT_AUTHOR_EMAIL="$ME_EMAIL" GIT_COMMITTER_NAME="$ME_
 # a password that itself holds an @, which a match stopping at the first @ would only half remove.
 newrepo "$ROOT/atpass" "https://dan:pass@word99@github.com/o/atpass-repo.git"
 commit "$ROOT/atpass" -1 "$ME_NAME" "$ME_EMAIL" "at in the password"
+# and one holding a # and a ?, which a query or fragment cut made BEFORE the credentials are
+# removed would truncate at, leaving the first half of the password in what is printed.
+newrepo "$ROOT/hashpass" "https://dan:frag#qu?ery55@github.com/o/hashpass-repo.git"
+commit "$ROOT/hashpass" -1 "$ME_NAME" "$ME_EMAIL" "hash and question mark in the password"
 commit "$ROOT/secret" -1 "$ME_NAME" "$ME_EMAIL" "secret work"
 
 # noise directories, whose repositories are never wanted, and one ignored on purpose.
@@ -199,8 +203,8 @@ check_not "and its output is JSON" "PARSE-ERROR" "$(q 'd["repo_count"]')"
 
 repos="$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
 check_eq "it finds exactly the wanted repositories, each once" \
-  '["atpass", "empty", "heads", "mine", "rebased", "secret", "shallow", "strangers", "withsub", "withsub/sub"]' "$repos"
-check_eq "and counts them" 10 "$(q 'd["repo_count"]')"
+  '["atpass", "empty", "hashpass", "heads", "mine", "rebased", "secret", "shallow", "strangers", "withsub", "withsub/sub"]' "$repos"
+check_eq "and counts them" 11 "$(q 'd["repo_count"]')"
 check_eq "and says it found some" "repos_found" "$(q 'd["outcome"]')"
 check_eq "and names the root it searched, resolved" "[\"$REAL_ROOT\"]" "$(q 'd["roots_searched"]')"
 
@@ -243,6 +247,10 @@ check_not "and never printed anywhere in the output" "hunter2tokenvalue" "$(cat 
 check_eq "a password holding an @ is removed whole from the remote shown" "https://github.com/o/atpass-repo.git" "$(q 'R("atpass")["remote_url"]')"
 check_eq "and from the normalized url" "github.com/o/atpass-repo" "$(q 'R("atpass")["normalized_url"]')"
 check_not "and no piece of it is printed anywhere" "word99" "$(cat "$OUT")"
+check_eq "a password holding a # and a ? is removed whole from the remote shown" "https://github.com/o/hashpass-repo.git" "$(q 'R("hashpass")["remote_url"]')"
+check_eq "and from the normalized url" "github.com/o/hashpass-repo" "$(q 'R("hashpass")["normalized_url"]')"
+check_not "and its first half is never printed" "frag" "$(cat "$OUT")"
+check_not "nor its second" "ery55" "$(cat "$OUT")"
 
 # .git as a file, worktrees and broken pointers.
 # One entry per repository: a linked worktree shares mine's commits, so it is listed on mine's
@@ -397,6 +405,9 @@ https://github.com/owner/repo.git/|github.com/owner/repo
 https://user@github.com/owner/repo.git|github.com/owner/repo
 https://user:tok@GitHub.com/owner/repo|github.com/owner/repo
 https://user:p@ss@github.com/owner/repo|github.com/owner/repo
+https://user:pa#ss@github.com/owner/repo|github.com/owner/repo
+https://user:pa?ss@github.com/owner/repo.git|github.com/owner/repo
+https://github.com/owner/repo.git?ref=x#frag|github.com/owner/repo
 ssh://u:p@ss@github.com/owner/repo|github.com/owner/repo
 http://gitlab.com/group/sub/repo.git|gitlab.com/group/sub/repo
 https://github.com/owner/my.github.repo|github.com/owner/my.github.repo
