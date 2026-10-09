@@ -1563,8 +1563,8 @@ following the overnight rules for hours, and a real usage limit.
 ## Local state (per Mac, never synced)
 
 Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
-so a fresh clone starts without them. (`lesson-bands/`, `lesson-citations.tsv`, `lesson-counts/`
-and `lesson-tags.tsv` also sit outside `payload/` and are the exceptions: all are tracked and shared
+so a fresh clone starts without them. (`lesson-bands/`, `lesson-citations.tsv`, `lesson-counts/`,
+`lesson-tags.tsv` and `lesson-tags-second.tsv` also sit outside `payload/` and are the exceptions: all are tracked and shared
 on purpose. A band nobody else can see cannot stop anybody else claiming a number, a record of what
 a citation was written about is a fact about the shared payload rather than about one Mac, and the
 lessons core re-rank needs both Macs' citation counts and one settled set of tags. See Lesson
