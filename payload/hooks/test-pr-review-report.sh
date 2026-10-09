@@ -200,7 +200,7 @@ check_eq "still one lookup call for five pull requests" 1 "$(lookups)"
 
 # 8. The call budget: past it, the rest is UNMEASURED with its count, never zero (L90, L331).
 shas_sorted="$(printf '%s\n' "$S1" "$S2" "$S3" "$S5" "$S6" "$S7" "$S8" "$S10" | sort)"
-looked="$(printf '%s\n' "$shas_sorted" | head -2)"
+looked="$(printf '%s\n' "$shas_sorted" | awk 'NR <= 2')"
 skipped(){ local n=0 s; for s in "$@"; do case "$looked" in *"$s"*) ;; *) n=$((n + 1)) ;; esac; done; echo "$n"; }
 # Every opening in the window whose folder resolves (the one in no checkout is never looked up).
 exp_o="$(skipped "$S1" "$S1" "$S2" "$S3" "$S5" "$S6" "$S7" "$S3")"

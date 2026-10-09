@@ -163,10 +163,10 @@ if [ "$github" = 1 ] && [ "$needed" -gt 0 ]; then
   rl="$(gh api graphql -f query='query { rateLimit { limit remaining resetAt } }' \
     --jq '.data.rateLimit | "\(.remaining) \(.limit) \(.resetAt | fromdateiso8601)"' 2>&1)"; rl_rc=$?
   case "$rl_rc:$rl" in
-    0:*) printf '%s' "$rl" | grep -qE '^[0-9]+ [0-9]+ [0-9]+$' || rl_rc=1 ;;
+    0:*) [[ "$rl" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]] || rl_rc=1 ;;
   esac
   if [ "$rl_rc" -ne 0 ]; then
-    refuse "refusing to start, because it could not read GitHub's rate limit (gh said: $(printf '%s' "$rl" | head -1)), and it does not spend calls against an allowance it cannot see. Run it again later, or with --no-github for the figures the ledgers alone can give."
+    refuse "refusing to start, because it could not read GitHub's rate limit (gh said: ${rl%%$'\n'*}), and it does not spend calls against an allowance it cannot see. Run it again later, or with --no-github for the figures the ledgers alone can give."
   fi
   read -r rl_left rl_limit rl_reset <<< "$rl"
   if [ "$rl_left" -lt $((budget + margin)) ]; then
