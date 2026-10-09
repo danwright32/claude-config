@@ -6008,6 +6008,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   (Try-Pennie/bidspoke#1893, 2026-10-08)
   SHORT: Escape person-edited text for its target format (Slack, HTML, email) at the one shared send point, never per call site.
 
+- **L758. Never give the browser a credential for a third party service (a Salesforce, Google or
+  vendor API token), even from your own route: anything the browser receives, every visitor and
+  anyone calling that route directly receives too, so the browser calls purpose built server routes
+  and the credential stays on the server.**
+  (Halo-lab-Trypennie/trypennie#531, 2026-10-09)
+  SHORT: Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can

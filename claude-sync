@@ -25,6 +25,7 @@
 #   claude-sync lesson-short-forms [FILE] # every short form beside the rule it stands for
 #   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
+#   claude-sync record-lesson-counts F # commit this Mac's lesson citation counts for the core re-rank
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
 #   claude-sync help
@@ -2906,6 +2907,57 @@ do_core_set(){   # $1 = a file of lesson numbers
   } > "$tmp" && mv -f "$tmp" "$CLAUDE_HOME/$LESSON_CORE_LIST" || { rm -f "$tmp"; die "core-set could not write $CLAUDE_HOME/$LESSON_CORE_LIST."; }
   printf '%s\n' "$n" > "$CLAUDE_HOME/$LESSON_CORE_APPLIED" 2>/dev/null
   echo "lessons core set: $n lessons, $chars chars (cap $cap). It loads from the next sync here, and travels to the other Mac with it."
+}
+
+# EACH MAC'S LESSON CITATION COUNTS (claude-config#566). The monthly re-rank of the core adds both
+# Macs' prose citation counts together (tools/lessons-core-rerank.py), and ~/.claude/state does not
+# travel. So each Mac's counts are a file of their own, lesson-counts/<host>.tsv in the repo beside
+# lesson-bands/, outside the payload: they are evidence about the config, not config, and nothing
+# loads them into a session. One file per writer, so two Macs recording can never conflict, and a
+# commit so the next sync carries it, exactly as a band claim travels. Written only here, under the
+# lock every sync takes, so it can never land in the middle of a send's own commit or rebase (L453).
+#
+# What it cannot vouch for it refuses whole, writing nothing: counts taken on another Mac (filed
+# under this Mac's name they would be read as this Mac's), counts with no AT time stamp (the re-rank
+# judges staleness by it, L567), a file whose last line is not END (truncated), and any SAMPLE line,
+# which is a sentence of conversation from the counter's --sample mode and the repository is public
+# (L222). Refusals go to stderr and NOT through die, whose desktop notification a daily job would
+# repeat every day; the job logs them and the re-rank's own UNMEASURED says what it cost.
+LESSON_COUNTS_DIR="$SYNC_REPO/lesson-counts"
+do_record_lesson_counts(){   # $1 = a counts file written by tools/lesson-citations.py
+  local host rel head from tmp
+  host="$(sync_hostname)"; rel="lesson-counts/$host.tsv"
+  refuse_counts(){ echo "claude-sync: record-lesson-counts: $1 Nothing was recorded; $rel is as it was." >&2; return 1; }
+  [ -n "${1:-}" ] && [ -f "$1" ] && [ -r "$1" ] || { refuse_counts "'${1:-}' is not a counts file this can read."; return 1; }
+  head="$(head -n 1 "$1")"
+  case "$head" in
+    "HOST $host "*) ;;
+    "HOST "*) from="$(printf '%s\n' "$head" | awk '{ print $2 }')"
+              refuse_counts "these counts were taken on $from, not on this Mac ($host), so filed here they would be read as this Mac's."; return 1 ;;
+    *) refuse_counts "the first line is not the counter's HOST header, so whose counts these are cannot be told."; return 1 ;;
+  esac
+  # Matched with case on values already read, never `producer | grep -q`, which under pipefail can
+  # report a failure that never happened (L183).
+  case " $head " in
+    *" AT "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z" "*) ;;
+    *) refuse_counts "the header carries no AT time stamp, so how old these counts are could never be told. Count again with the current tools/lesson-citations.py."; return 1 ;;
+  esac
+  if grep -q '^SAMPLE' "$1"; then
+    refuse_counts "the file holds SAMPLE lines, sentences of conversation from the counter's --sample mode, and the repository is public. Count again without --sample."; return 1
+  fi
+  local last; last="$(tail -n 1 "$1")"
+  case "$last" in END*) ;; *) refuse_counts "the last line is not END, so the file is cut short."; return 1 ;; esac
+  mkdir -p "$LESSON_COUNTS_DIR" || { refuse_counts "$LESSON_COUNTS_DIR could not be made."; return 1; }
+  tmp="$LESSON_COUNTS_DIR/.$host.tsv.$$"
+  cp "$1" "$tmp" && mv -f "$tmp" "$LESSON_COUNTS_DIR/$host.tsv" || { rm -f "$tmp"; refuse_counts "the file could not be written."; return 1; }
+  if have_git && git -C "$SYNC_REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$SYNC_REPO" add -- "$rel" >/dev/null 2>&1 || { refuse_counts "git would not stage $rel."; return 1; }
+    if ! git -C "$SYNC_REPO" diff --cached --quiet -- "$rel" 2>/dev/null; then
+      git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" commit -q -m "$host records its lesson citation counts" -- "$rel" >/dev/null 2>&1 \
+        || { echo "claude-sync: record-lesson-counts wrote $rel but git would not commit it, so it will not travel until it is committed." >&2; return 1; }
+    fi
+  fi
+  echo "claude-sync: recorded this Mac's lesson citation counts in $rel. The next sync carries them to the other Mac."
 }
 
 # Writes the index beside the lessons file, and ONLY when it differs. CLAUDE.md and everything it
@@ -11336,6 +11388,7 @@ case "$cmd" in
   cite-check) do_cite_check ;;          # read-only: has any cited number come to mean something else
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   core-set) with_lock do_core_set "${2:-}" ;;   # the one way the lessons core list is edited (#564)
+  record-lesson-counts) with_lock do_record_lesson_counts "${2:-}" ;;   # this Mac's citation counts, committed for the re-rank (#566)
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   # Read only, LOCK FREE, and silent when there is nothing wrong: what a hook runs the moment a
   # lesson is written, so the session that wrote it is still there to fix it (claude-config#374).

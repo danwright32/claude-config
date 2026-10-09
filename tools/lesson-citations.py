@@ -2,7 +2,7 @@
 """How often each lesson is cited in Claude's own PROSE on this Mac (claude-config#563).
 
     python3 tools/lesson-citations.py [--days 60] [--projects DIR] [--exclude-session ID]
-                                      [--ledger PATH] [--sample L1,L2,L3]
+                                      [--ledger PATH] [--sample L1,L2,L3] [--now 2026-10-09T15:00:00Z]
 
 The 2026-09-24 ranking behind the lessons core plan counted every lesson number Claude wrote, and
 84 percent of this Mac's (lesson, session) pairs came from numbers written INTO artifacts: heredocs
@@ -19,13 +19,15 @@ sessions but in prose in 13. That ranking measured annotation habit, so this one
 Plus the PR lessons review's own citations, from the ledger it keeps (--ledger, default
 ~/.claude/state/ai-review/citations.tsv), counted as the number of reviews citing each lesson.
 
-Prints a header line (host, window, files read, unread, excluded by reason), then one line per
+Prints a header line (host, window, files read, unread, excluded by reason, and AT, the UTC instant
+the counts describe, which is --now when given), then one line per
 lesson, tab separated: lesson, prose sessions, prose mentions, reviews citing, then END. Prints
 lesson numbers and counts only, never conversation text, except under --sample, which prints each
 sentence that cited the named lessons so a person can judge the counter's precision (L147).
 Exits 1 when no transcript could be read, since an empty table would read as nothing cited (L98).
 """
 import argparse
+import datetime
 import glob
 import json
 import os
@@ -62,9 +64,22 @@ def main(argv):
     ap.add_argument("--exclude-session", action="append", default=[])
     ap.add_argument("--ledger", default=os.path.expanduser("~/.claude/state/ai-review/citations.tsv"))
     ap.add_argument("--sample", default="")
+    # The instant the counts describe, written into the header as AT so the monthly re-rank can tell
+    # fresh counts from stale ones (claude-config#566), and the instant the window is measured back
+    # from. Given, so a test or a scheduled job sets the clock rather than reading it (L130).
+    ap.add_argument("--now", default="")
     a = ap.parse_args(argv)
 
-    cutoff = time.time() - a.days * 86400
+    if a.now:
+        try:
+            now = datetime.datetime.strptime(a.now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+        except ValueError:
+            print(f"--now '{a.now}' is not a UTC time like 2026-10-09T15:00:00Z, so nothing was counted")
+            return 2
+    else:
+        now = time.time()
+    stamp = datetime.datetime.fromtimestamp(int(now), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = now - a.days * 86400
     want_sample = {int(x.strip().lstrip("L")) for x in a.sample.split(",") if x.strip()}
     sessions, mentions, reviews = {}, {}, {}
     read = unread = 0
@@ -145,7 +160,7 @@ def main(argv):
 
     host = socket.gethostname().split(".")[0]
     ex = " ".join(f"{k}={v}" for k, v in excluded.items())
-    print(f"HOST {host} DAYS {a.days} READ {read} UNREAD {unread} EXCLUDED {ex} LEDGER {ledger_state} DISMISSED {dismissed}")
+    print(f"HOST {host} DAYS {a.days} READ {read} UNREAD {unread} EXCLUDED {ex} LEDGER {ledger_state} DISMISSED {dismissed} AT {stamp}")
     if read == 0:
         print("NOTHING READ: no transcript in the window could be read, so these counts measure nothing")
         return 1

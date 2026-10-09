@@ -104,6 +104,22 @@ out="$(python3 "$TOOL" --projects "$WORK/nothing" --days 60 --ledger "$LEDGER" 2
 check "no transcript read says so" "NOTHING READ" "$out"
 [ "$rc" -ne 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: nothing read must not exit 0"; }
 
+# THE TIME STAMP (claude-config#566). The monthly re-rank adds both Macs' counts together and refuses
+# when either Mac's are stale, so every header says WHEN it was counted, from the clock the counter
+# was given, never one it reads behind the caller's back (L130).
+at_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+out="$(python3 "$TOOL" --projects "$P" --days 60 --exclude-session sessREC --ledger "$LEDGER" --now "$at_now" 2>&1)"
+check "the header carries the time the counts were taken" "AT $at_now" "${out%%$'\n'*}"
+check "and the counts themselves are unchanged by it" $'L1\t2\t3\t1' "$(row "$out" L1)"
+# The window is measured back from that same instant: 59 days on, the ledger row an hour old is still
+# in and the one a day old has gone, which a cutoff read from the real clock would keep.
+later="$(python3 -c 'import datetime,sys; print((datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc) + datetime.timedelta(days=59, hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$now_s")"
+out="$(python3 "$TOOL" --projects "$P" --days 60 --exclude-session sessREC --ledger "$LEDGER" --now "$later" 2>&1)"
+check "the review window is measured from the given instant" $'L11\t0\t0\t1' "$(row "$out" L11)"
+out="$(python3 "$TOOL" --projects "$P" --days 60 --ledger "$LEDGER" --now "yesterday" 2>&1)"; rc=$?
+check "a stamp that is not a time is refused, never guessed" "--now" "$out"
+[ "$rc" -ne 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a bad --now must not exit 0"; }
+
 # Precision sampling: --sample prints each prose sentence for the lessons named, for a person to judge.
 out="$(python3 "$TOOL" --projects "$P" --days 60 --exclude-session sessREC --ledger "$LEDGER" --sample L2 2>&1)"
 check "a sample shows the sentence that cited the lesson" "plus L2" "$out"

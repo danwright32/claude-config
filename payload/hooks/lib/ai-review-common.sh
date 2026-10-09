@@ -392,7 +392,33 @@ ar_pr_ledger() {   # $1 = a finished pr review file, $2 = the repository's direc
     }' "$1" >> "$AR_PR_LEDGER" 2>/dev/null
 }
 
-ar_pr_opened() {   # $1 = repository label, $2 = its directory, $3 = the head sha
+# pr-opened.tsv, tab separated: when, host, repo label, repo dir, head sha, and since
+# claude-config#1006 the pull request URL gh printed (empty when it printed none). The URL is what
+# lets lib/pr-review-report.sh count by pull request without asking GitHub; rows written before it
+# have five columns, and the report looks those up.
+ar_pr_opened() {   # $1 = repository label, $2 = its directory, $3 = the head sha, $4 = pull request URL
   mkdir -p "$AR_STATE_DIR" 2>/dev/null
-  printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$(ar_host)" "$1" "$2" "$3" >> "$AR_PR_OPENED" 2>/dev/null
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$(ar_host)" "$1" "$2" "$3" "${4:-}" >> "$AR_PR_OPENED" 2>/dev/null
+}
+
+# The pull request URL a `gh pr create` printed, from a PostToolUse payload's stdout and stderr. gh
+# prints it on stdout when it opens one, and on stderr when it refuses because one already exists
+# ("a pull request for branch ... already exists:" then the URL), which is the repeat that records a
+# second opening of the same pull request. Prints nothing when there is none.
+ar_payload_pr_url() {   # $1 = payload JSON
+  local text
+  if command -v jq >/dev/null 2>&1; then
+    text="$(printf '%s' "$1" | jq -r '(.tool_response // "") | if type == "object" then ((.stdout // "") + "\n" + (.stderr // "")) elif type == "string" then . else "" end' 2>/dev/null)"
+  else
+    text="$(printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin).get("tool_response") or ""
+except Exception:
+    sys.exit(0)
+if isinstance(r, dict):
+    r = str(r.get("stdout") or "") + "\n" + str(r.get("stderr") or "")
+sys.stdout.write(r if isinstance(r, str) else "")' 2>/dev/null)"
+  fi
+  printf '%s\n' "$text" | grep -oE 'https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+' | tail -1
 }

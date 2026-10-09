@@ -18937,7 +18937,7 @@ check "#413 and nothing is said about holding it back" \
   "out_lacks \"\$out_hr6\" 'hooks block' i"
 
 
-section "== the lessons index is one file per section, and every one of them loads (claude-config#473) =="
+section "== the lessons index is one file per section, and with no core list every one of them loads (claude-config#473) =="
 # LESSONS-INDEX.md reached 100,899 characters over 702 lessons and grew about 1,130 a day, so it
 # was about a month from the 140,000 byte budget in hooks/test-rule-file-budget.sh and not long
 # after that from the platform's own 150,000 character banner. Both limits are PER FILE, so the
@@ -18979,10 +18979,13 @@ check "#473 and every one of them travels to the other Mac" \
 check "#473 the single index file is not left behind" \
   "[ ! -f '$SPH/LESSONS-INDEX.md' ] && [ ! -f '$SPR/payload/LESSONS-INDEX.md' ]"
 
-# A file that nothing imports does not travel and does not load, so the imports are DERIVED from
-# the sections rather than maintained by hand beside them (L41), and the retired import goes with
-# the retired file or every session dies on a dangling reference.
-check "#473 CLAUDE.md imports every generated file" \
+# The imports are DERIVED from the sections rather than maintained by hand beside them (L41), and
+# the retired import goes with the retired file or every session dies on a dangling reference.
+# Which files are imported is no longer "every one of them, always": since Dan reversed that on
+# 2026-09-24 (#565), a session loads the lessons core when a list is set. What survives the reversal
+# is the FAIL SAFE: with no list, as in this fixture, the whole library is imported, every section of
+# it, and that is what this check holds now (the core side is the #564 section below).
+check "#473 with no core list CLAUDE.md imports every library file, the fail safe" \
   "grep -q '^@LESSONS-INDEX-proof-over-green\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-data-safety\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-cross-system-reliability\.md\$' '$SPH/CLAUDE.md'"
 check "#473 and no longer imports the file that was retired" \
   "! grep -q '^@LESSONS-INDEX\.md\$' '$SPH/CLAUDE.md'"
@@ -19098,6 +19101,23 @@ check "#564 the library files are still written, and current, beside it" \
 check "#564 and the library and the list both still travel" \
   "[ -f '$LCR/payload/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$LCR/payload/LESSONS-CORE.txt' ]"
 check "#564 the state records the core in use and its size" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
+# THE LIBRARY STAYS COMPLETE while the core is in use (#565). Once a session no longer loads the
+# library, the only readers left are `claude-sync lesson`, the PR lessons review and the re-rank, so
+# a lesson lost from it is lost everywhere at once and nothing in a session would notice.
+lc_union(){ cat "$1"/LESSONS-INDEX-*.md 2>/dev/null | grep -oE '^- L[0-9]+\.' | grep -oE '[0-9]+' | sort -n | tr '\n' ' '; }
+check "#565 with the core in use the library still holds every lesson exactly once" \
+  "[ \"\$(lc_union '$LCH')\" = '1 2 3 4 5 ' ]"
+check "#565 and so does the library that travels" \
+  "[ \"\$(lc_union '$LCR/payload')\" = '1 2 3 4 5 ' ]"
+# A lesson recorded while the core is in use goes to the library, never the core: new lessons earn
+# their way in by citations at the re-rank (Dan, 2026-09-24, #563).
+printf '\n- **L6. A data lesson recorded while the core is in use.** body\n' >> "$LCH/LESSONS.md"
+lc_push >/dev/null
+check "#565 a lesson recorded while the core is in use reaches the library" \
+  "grep -q '^- L6\.' '$LCH/LESSONS-INDEX-data-safety.md' && [ \"\$(lc_union '$LCH')\" = '1 2 3 4 5 6 ' ]"
+check "#565 and does not join the core on its own" \
+  "! grep -q '^- L6\.' '$LCH/LESSONS-CORE-data-safety.md'"
+check "#565 and the core stays in use" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
 
 # 3 to 6. EVERY WAY THE LIST CAN BE WRONG loads the whole library, records why, and says so.
 lc_fallback(){ # lc_fallback <description> <state words>
@@ -19162,6 +19182,54 @@ check "#564 a removal from the list travels too" \
   "! grep -qx L5 '$LCHB/LESSONS-CORE.txt' && grep -qx L4 '$LCHB/LESSONS-CORE.txt'"
 check "#564 and the receiving Mac treats a reviewed shrink as a decision, not damage" \
   "case \"\$(cat '$LCHB/.lessons-core-state' 2>/dev/null)\" in 'active 3'*) true ;; *) false ;; esac"
+
+section "== each Mac's lesson citation counts are committed, so the monthly re-rank can read both Macs (claude-config#566) =="
+# The re-rank of the lessons core adds both Macs' prose citation counts together, and ~/.claude/state
+# does not travel. So each Mac's counts are a file of their own under lesson-counts/ in the repo,
+# beside lesson-bands/: one file per writer, so two Macs recording can never conflict, committed here
+# so the next sync carries it. Recorded only through this command, which holds the sync lock, so it
+# can never land in the middle of a send's own commit or rebase. What it refuses, it refuses whole:
+# counts naming another Mac, counts with no time stamp (the re-rank judges staleness by it), a
+# truncated file, and anything carrying the counter's --sample sentences, which are conversation
+# text and the repository is public.
+LKR="$WORK/lcounts-repo"; git init -q -b main "$LKR" 2>/dev/null || { mkdir -p "$LKR"; git -C "$LKR" init -q; }
+mkdir -p "$LKR/payload"; printf 'seed\n' > "$LKR/payload/seed.txt"
+git -C "$LKR" add -A && git -C "$LKR" -c user.name=t -c user.email=t@e commit -q -m seed
+LKH="$WORK/lcounts-home"; mkdir -p "$LKH"
+lk_counts(){ # lk_counts <file> <host> <extra header words>: a counts file in lesson-citations.py's format
+  printf 'HOST %s DAYS 60 READ 12 UNREAD 0 EXCLUDED subagent=0 claude-config=0 recording=0 LEDGER read DISMISSED 0%s\nL1\t3\t4\t0\nL7\t1\t1\t2\nEND 2 lessons\n' "$2" "$3" > "$1"
+}
+lk_record(){ SYNC_HOSTNAME=MacCount SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LKH" SYNC_REPO="$LKR" bash "$SCRIPT" record-lesson-counts "$1" 2>&1; }
+lk_counts "$WORK/lk-good.txt" MacCount " AT 2026-10-09T15:00:00Z"
+out_lk="$(lk_record "$WORK/lk-good.txt")"; rc_lk=$?
+dbg "#566 record-lesson-counts said: $out_lk"
+check "#566 a Mac's counts land under lesson-counts, named for that Mac" \
+  "[ \$rc_lk -eq 0 ] && cmp -s '$WORK/lk-good.txt' '$LKR/lesson-counts/MacCount.tsv'"
+check "#566 and are committed, so the next sync carries them" \
+  "grep -q . <<< \"\$(git -C '$LKR' log --oneline -- lesson-counts)\""
+check "#566 leaving the working tree clean" "[ -z \"\$(git -C '$LKR' status --porcelain lesson-counts 2>/dev/null)\" ]"
+check "#566 and it says what it recorded" "case \"\$out_lk\" in *lesson-counts/MacCount.tsv*) true ;; *) false ;; esac"
+lk_commits(){ git -C "$LKR" log --oneline -- lesson-counts | grep -c .; }
+lk_before="$(lk_commits)"
+lk_record "$WORK/lk-good.txt" >/dev/null
+check "#566 recording the same counts again makes no second commit" "[ \"\$(lk_commits)\" = '$lk_before' ]"
+lk_refused(){ # lk_refused <description> <file> <word the refusal must name>
+  out_lkr="$(lk_record "$2")"; rc_lkr=$?
+  dbg "#566 $1: $out_lkr"
+  check "#566 $1 is refused" "[ \$rc_lkr -ne 0 ]"
+  check "#566 $1: the refusal names $3" "case \"\$out_lkr\" in *'$3'*) true ;; *) false ;; esac"
+  check "#566 $1 leaves the recorded counts as they were" "cmp -s '$WORK/lk-good.txt' '$LKR/lesson-counts/MacCount.tsv'"
+}
+lk_counts "$WORK/lk-other.txt" MacElse " AT 2026-10-09T15:00:00Z"
+lk_refused "counts taken on another Mac" "$WORK/lk-other.txt" "MacElse"
+lk_counts "$WORK/lk-nostamp.txt" MacCount ""
+lk_refused "counts with no time stamp" "$WORK/lk-nostamp.txt" "time stamp"
+lk_counts "$WORK/lk-short.txt" MacCount " AT 2026-10-09T15:00:00Z"; sed -i.bak '/^END/d' "$WORK/lk-short.txt"; rm -f "$WORK/lk-short.txt.bak"
+lk_refused "a truncated counts file" "$WORK/lk-short.txt" "END"
+lk_counts "$WORK/lk-sample.txt" MacCount " AT 2026-10-09T15:00:00Z"; printf 'SAMPLE L1\tsomething Claude said\n' >> "$WORK/lk-sample.txt"
+lk_refused "counts carrying sampled sentences" "$WORK/lk-sample.txt" "SAMPLE"
+out_lkno="$(lk_record "$WORK/lk-absent.txt")"; rc_lkno=$?
+check "#566 a counts file that is not there is refused" "[ \$rc_lkno -ne 0 ]"
 
 section "== mods travel to the other Mac and are wired into settings.json (#606) =="
 # A mod is a Claude Code plugin folder (.claude-plugin/plugin.json plus a hooks module). Claude Code

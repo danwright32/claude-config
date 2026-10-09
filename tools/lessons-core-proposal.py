@@ -25,37 +25,13 @@ A lesson missing a tag or an age refuses the whole proposal (exit 1), since eith
 lesson loads, and a default would decide it silently (L113).
 """
 import argparse
-import glob
 import html
 import os
-import re
 import sys
 
-LINE = re.compile(r"^- L([0-9]+)\. (.+)$")
-
-
-def read_index(index_dir):
-    lines, sections = {}, {}
-    for path in sorted(glob.glob(os.path.join(index_dir, "LESSONS-INDEX-*.md"))):
-        section = os.path.basename(path)[len("LESSONS-INDEX-"):-3]
-        with open(path, encoding="utf-8") as f:
-            for raw in f:
-                m = LINE.match(raw.rstrip("\n"))
-                if m:
-                    n = int(m.group(1))
-                    lines[n] = raw.rstrip("\n")
-                    sections[n] = section
-    return lines, sections
-
-
-def read_tsv(path, cols):
-    out = {}
-    with open(path, encoding="utf-8") as f:
-        for raw in f:
-            parts = raw.rstrip("\n").split("\t")
-            if len(parts) >= cols and re.fullmatch(r"L[0-9]+", parts[0]):
-                out[int(parts[0][1:])] = parts[1:]
-    return out
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+# The reading and the ranking are shared with the monthly re-rank (claude-config#566, L370).
+from lessons_core import html_page, line_chars, rank_order, rate, read_counts, read_index, read_tsv, review_class  # noqa: E402
 
 
 def main(argv):
@@ -85,13 +61,16 @@ def main(argv):
     ages = {n: int(v[1]) for n, v in read_tsv(a.ages, 3).items()}
     cites, hosts, window = {}, [], 60
     for path in a.counts:
-        with open(path, encoding="utf-8") as f:
-            head = f.readline().split()
-        if len(head) >= 4 and head[0] == "HOST":
-            hosts.append(head[1])
-            window = int(head[3])
-        for n, v in read_tsv(path, 4).items():
-            s, _m, r = (int(x) for x in v[:3])
+        got = read_counts(path)
+        if got["bad"]:
+            print(f"DAMAGED {path}: rows that are not numbers (" + ", ".join(f"L{n}" for n in got["bad"][:10])
+                  + "). REFUSED: a dropped row would read as a lesson nobody cited.")
+            return 1
+        if got["host"]:
+            hosts.append(got["host"])
+        if got["days"]:
+            window = got["days"]
+        for n, (s, _m, r) in got["rows"].items():
             c = cites.setdefault(n, [0, 0])
             c[0] += s
             c[1] += r
@@ -103,26 +82,22 @@ def main(argv):
         print("REFUSED: every lesson needs a tag and an age before a proposal can decide it.")
         return 1
 
-    size = {n: len(lines[n]) + 1 for n in lines}
+    size = {n: line_chars(lines[n]) for n in lines}
     rows, ranked = {}, []
     for n in sorted(lines):
         s, r = cites.get(n, [0, 0])
-        exposure = max(1, min(ages[n], window))
-        rate = (s + r) * 30.0 / exposure
-        rows[n] = {"tag": tags[n], "age": ages[n], "sessions": s, "reviews": r, "rate": rate}
-        # A dispute only where the passes disagree about REVIEWABILITY: design against operate keeps
-        # the lesson loading either way, so there is nothing for Dan to settle.
-        if tags2 and n in tags2 and (tags2[n] == "diff") != (tags[n] == "diff"):
-            rows[n]["tag"] = f"{tags[n]}, then {tags2[n]}"
+        rows[n] = {"age": ages[n], "sessions": s, "reviews": r, "rate": rate(s + r, ages[n], window)}
+        kind, rows[n]["tag"] = review_class(n, tags, tags2)
+        if kind == "disputed":
             rows[n]["decision"] = "core-disputed"
-        elif tags[n] in ("design", "operate"):
+        elif kind == "unreviewable":
             rows[n]["decision"] = "core-unreviewable"
         elif ages[n] < a.probation_days:
             rows[n]["decision"] = "core-probation"
         else:
             ranked.append(n)
     mandatory = sum(size[n] for n in rows if rows[n].get("decision"))
-    ranked.sort(key=lambda n: (-rows[n]["rate"], n))
+    ranked = rank_order(ranked, {n: rows[n]["rate"] for n in ranked})
     left, cut = a.budget - mandatory, 0
     for n in ranked:
         if size[n] <= left:
@@ -207,30 +182,13 @@ def write_html(path, rows, lines, sections, size, summary, over, mandatory, a, h
     for h in missing:
         warn += (f'<p class="alert"><b>UNMEASURED: {e(h)}.</b> No counts from that Mac yet, so these ranks '
                  'come from one Mac only. Run tools/lesson-citations.py there before approving.</p>')
-    doc = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lessons core proposal</title>
-<style>
-:root {{ --bg:#fbfaf7; --fg:#1d1d1b; --muted:#6b6a64; --line:#e4e1d8; --accent:#8a4b12; --alert:#fff3e6; }}
-@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ --bg:#161614; --fg:#ecebe6; --muted:#a19f97; --line:#34332e; --accent:#e0a25e; --alert:#2e2416; }} }}
-:root[data-theme="dark"] {{ --bg:#161614; --fg:#ecebe6; --muted:#a19f97; --line:#34332e; --accent:#e0a25e; --alert:#2e2416; }}
-body {{ background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, system-ui, sans-serif; margin:0 auto; max-width:1100px; padding:24px 16px; }}
-h1 {{ font-size:24px; margin:0 0 4px; }} h2 {{ font-size:17px; margin:32px 0 8px; }}
-.meta, .sec {{ color:var(--muted); font-weight:400; font-size:13px; }}
-.alert {{ background:var(--alert); border-left:3px solid var(--accent); padding:10px 14px; }}
-table {{ border-collapse:collapse; width:100%; }} td, th {{ border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }}
-th {{ font-size:13px; color:var(--muted); font-weight:600; }} .n {{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }}
-.wrap {{ overflow-x:auto; }}
-</style></head><body>
-<h1>Lessons core proposal</h1>
+    body = f"""<h1>Lessons core proposal</h1>
 <p class="meta">Counted from {e(", ".join(hosts) or "no Mac")} over {window} days, prose only (issue 563). {e(summary)}.</p>
 {warn}
 <p>Approve, move or strike lessons by telling Claude which. Nothing here changes what loads until the core generator (issue 564) is switched on, and the PR lessons review measurement (issue 562) says it is safe.</p>
-<div class="wrap">{"".join(parts)}</div>
-</body></html>
-"""
+<div class="wrap">{"".join(parts)}</div>"""
     with open(path, "w", encoding="utf-8") as f:
-        f.write(doc)
+        f.write(html_page("Lessons core proposal", body))
 
 
 if __name__ == "__main__":

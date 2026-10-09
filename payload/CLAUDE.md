@@ -14,20 +14,26 @@
 @LESSONS-INDEX-pipeline-speed.md
 <!-- end lessons index -->
 
-The files above are the lessons index, one per section of LESSONS.md and generated from it, and
-between them they carry one line per lesson. Each line is a SHORTENED form of the rule, not the
-rule itself: it carries the condition and the instruction, and routinely drops the clause saying
-what the failure looks like. The full sentence and the evidence live in ~/.claude/LESSONS.md,
-which is deliberately NOT loaded into the session. So read the whole entry whenever a rule is about
-to decide something, with `~/claude-config-sync/claude-sync lesson L174` or by reading the entry in
-that file. The index line is enough to tell you a rule APPLIES; it is not enough to apply it.
+The files above are lessons, one line each, generated from LESSONS.md and split by section. Which
+files they are depends on whether a lessons core is set on this Mac. LESSONS-CORE files are the core:
+the lessons chosen to load in every session (the ones no PR review can see, plus the most cited).
+LESSONS-INDEX files are the whole library, imported only when no core is set or its list is
+unusable. The whole library is on disk either way, one file per section at
+~/.claude/LESSONS-INDEX-<section>.md, and the PR lessons review reads every lesson in it before any
+merge. So when work enters an area the core above may not cover, read that section's library file.
 
-They are split by section to keep each file under the per file limits, the budget in
-hooks/test-rule-file-budget.sh and the platform's per file large-memory-files banner. The split does
-nothing for the platform's SEPARATE total banner (150,000 on a 1M window, summed over every loaded
-file, a project's own CLAUDE.md or AGENTS.md included), which this set alone nearly fills, so that
-banner is expected in most projects. Past either banner every file still loads in full, so no rule
-is anywhere except in front of you.
+Each line is a SHORTENED form of the rule, not the rule itself: it carries the condition and the
+instruction, and routinely drops the clause saying what the failure looks like. The full sentence
+and the evidence live in ~/.claude/LESSONS.md, which is deliberately NOT loaded into the session. So
+read the whole entry whenever a rule is about to decide something, with
+`~/claude-config-sync/claude-sync lesson L174` or by reading the entry in that file. The line is
+enough to tell you a rule APPLIES; it is not enough to apply it.
+
+Splitting by section keeps each file under the per file limits, the budget in
+hooks/test-rule-file-budget.sh and the platform's per file large-memory-files banner. The platform
+also has a SEPARATE total banner (150,000 on a 1M window, summed over every loaded file, a project's
+own CLAUDE.md or AGENTS.md included). The whole library alone nearly fills it; the core is about half
+the size. Past either banner every file still loads in full.
 
 ## General Behavior
 
