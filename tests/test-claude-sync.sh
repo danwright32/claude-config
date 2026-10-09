@@ -3195,6 +3195,38 @@ check "#1022 a version the walk saw written is named by the commit that wrote it
 check "#1022 a version seen only as the old side is named by a commit that HOLDS it, as printed" \
   "[ -n \"\$cv_named_old\" ] && [ \"\$(git -C '$CVR' show \"\${cv_named_old:0:8}:payload/x.ts\" 2>/dev/null)\" = 'version one' ]"
 
+# BOTH LOOKUPS READ THEIR WHOLE INPUT (second review of #1022, L183). claude-sync runs under
+# set -euo pipefail, and each lookup fed a long text through a pipe into an awk that left at its
+# first match. Past the pipe buffer the writer then dies of SIGPIPE, and the pipeline's status is
+# that death, so a correct answer came back as a failure. Driven here with input well past the
+# buffer (5,000 reflog entries, about 260KB, and a history of the same size), each helper called
+# directly under the tool's own options, so a failed status ends the run as it would in the tool.
+CVL="$WORK/reflog-repo"; git init -q -b main "$CVL"
+printf 'one\n' > "$CVL/f"; git -C "$CVL" add f; git -C "$CVL" -c user.name=t -c user.email=t@t commit -q -m one
+printf 'two\n' > "$CVL/f"; git -C "$CVL" -c user.name=t -c user.email=t@t commit -q -am two
+cvl_c1="$(git -C "$CVL" rev-parse HEAD~1)"; cvl_c2="$(git -C "$CVL" rev-parse HEAD)"
+# 5,000 entries, oldest first: the first 4,000 at the commit before, the rest at the one being asked
+# about, one second apart from a pinned start, so the arrival is entry 4,001 by construction (L130).
+awk -v a="$cvl_c1" -v b="$cvl_c2" 'BEGIN { z = "0000000000000000000000000000000000000000"; p = z
+  for (i = 1; i <= 5000; i++) { n = (i <= 4000) ? a : b; printf "%s %s t <t@t> %d +0000\tfixture %d\n", p, n, 1700000000 + i, i; p = n } }' > "$CVL/.git/logs/HEAD"
+CVL_FN="$WORK/reflog-fn.sh"
+sed -n '/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p' "$SCRIPT" > "$CVL_FN"
+cvl_rc=0
+cvl_out="$(SYNC_REPO="$CVL" bash -c 'set -euo pipefail; . "$1"; deletion_reached_clone_at "$2"' _ "$CVL_FN" "$cvl_c2" 2>/dev/null)" || cvl_rc=$?
+dbg "#1022 arrival over 5000 reflog entries: rc=$cvl_rc out=$cvl_out"
+check "#1022 the reflog fixture really is past the pipe buffer" \
+  "[ \"\$(git -C '$CVL' log -g --format=%H HEAD | wc -l | tr -d ' ')\" -eq 5000 ] && [ \"\$(wc -c < '$CVL/.git/logs/HEAD' | tr -d ' ')\" -gt 200000 ]"
+check "#1022 the arrival lookup survives 5,000 reflog entries under pipefail, with the right time" \
+  "[ \"\$cvl_rc\" -eq 0 ] && [ \"\$cvl_out\" = '1700004001' ]"
+# The history the version lookup reads, matched on its FIRST entry and followed by 5,000 more.
+cvh_hist="$(printf 'commit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c2" "$cv_v1" "$cv_v2"
+  awk 'BEGIN { for (i = 1; i <= 5000; i++) printf "commit %040d\n:100644 100644 %040d %040d M\tpayload/x.ts\n", i, i, i }')"
+cvh_rc=0
+cvh_out="$(SYNC_REPO="$CVR" CV_HIST="$cvh_hist" bash -c 'set -euo pipefail; git(){ case " $* " in *" log --root "*) printf "%s\n" "$CV_HIST" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CVL_FN" "$cv_v2" 2>/dev/null)" || cvh_rc=$?
+dbg "#1022 version lookup over a long history: rc=$cvh_rc out=$cvh_out"
+check "#1022 the version lookup survives a history past the pipe buffer under pipefail, with the right commit" \
+  "[ \"\${#cvh_hist}\" -gt 200000 ] && [ \"\$cvh_rc\" -eq 0 ] && [ \"\$cvh_out\" = '$cv_c2' ]"
+
 section "== a skills .trash folder is never sent, and a pull leaves each Mac's own alone (#1009) =="
 # Claude Code moves a skill it removes or replaces into skills/.trash/<stamp>/<skill>/ on the Mac it
 # runs on. On 2026-10-09 the work MacBook's send (989614f4) carried one of those to main, holding

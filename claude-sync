@@ -4047,11 +4047,14 @@ deletion_reached_clone_at(){   # $1 = commit -> epoch seconds, or nothing when i
   local entries n lo hi mid line found=""
   entries="$(git -C "$SYNC_REPO" log -g --format='%H %gd' --date=unix HEAD 2>/dev/null | awk '{ sub(/^HEAD@\{/, "", $2); sub(/\}$/, "", $2); l[NR] = $1 " " $2 } END { for (i = NR; i >= 1; i--) print l[i] }' || true)"
   [ -n "$entries" ] || return 0
-  n="$(printf '%s\n' "$entries" | awk 'END { print NR }')"
+  # Here strings, and an awk that reads to the end: the list runs to thousands of lines, and a
+  # consumer leaving at the line it wants kills a piped writer, whose death pipefail then reports
+  # as this lookup failing (L183, second review of #1022).
+  n="$(awk 'END { print NR }' <<< "$entries")"
   lo=1; hi="$n"
   while [ "$lo" -le "$hi" ]; do
     mid=$(( (lo + hi) / 2 ))
-    line="$(printf '%s\n' "$entries" | awk -v m="$mid" 'NR == m { print; exit }')"
+    line="$(awk -v m="$mid" 'NR == m { print }' <<< "$entries")"
     if git -C "$SYNC_REPO" merge-base --is-ancestor "$1" "${line%% *}" 2>/dev/null; then
       found="${line#* }"; hi=$(( mid - 1 ))
     else
@@ -4077,10 +4080,13 @@ deletion_reached_clone_at(){   # $1 = commit -> epoch seconds, or nothing when i
 commit_holding_version(){   # $1 = path relative to the repo  $2 = blob -> a full commit id, or nothing
   local hist found
   hist="$(git -C "$SYNC_REPO" log --root -m --format='commit %H' --raw --no-abbrev HEAD -- "$1" 2>/dev/null || true)"
-  found="$(printf '%s\n' "$hist" | awk -v h="$2" '
+  # A here string, and an awk that reads to the end and decides in END, never one that leaves at its
+  # first match: that killed the piped writer past the pipe buffer, and pipefail reported the death
+  # as this lookup failing (L183, second review of #1022).
+  found="$(awk -v h="$2" '
     $1 == "commit" { c = $2; next }
-    /^:/ { if ($4 == h) { print c; found = 1; exit } if ($3 == h && old == "") old = c }
-    END { if (!found && old != "") print old "^" }')"
+    /^:/ { if (!found && $4 == h) { hit = c; found = 1 } if ($3 == h && old == "") old = c }
+    END { if (found) print hit; else if (old != "") print old "^" }' <<< "$hist")"
   [ -n "$found" ] || return 0
   git -C "$SYNC_REPO" rev-parse -q --verify "$found^{commit}" 2>/dev/null || true
 }
