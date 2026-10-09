@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { keptOpen, leftOpenFor, newWork, outstanding, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { choiceFor, newWork, outstanding, settledByDan, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
@@ -89,8 +89,8 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
   test('no PR yet on a working branch', () => {
     expect(outstanding({ ...merged, pr: null })).toEqual(['there is no PR for scope-modes-616 yet'])
   })
-  test('a PR closed without merging needs Dan', () => {
-    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', issues: [] } })).toEqual(['PR #12 was closed without merging; ask Dan what to do'])
+  test('a PR closed without merging needs Dan, and names the one way his answer is recorded (#1033)', () => {
+    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', issues: [] } })).toEqual(['PR #12 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
   })
   test('on the default branch with no PR and nothing uncommitted, there is nothing to finish', () => {
     expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null })).toEqual([])
@@ -108,36 +108,75 @@ describe('a PR Dan chose to leave open (#917)', () => {
   const choice: LeftOpen = { repo: 'o/r', number: 12, head: 'aaa1111', why: "awaiting Denys's review" }
   const open = (head?: string): Reading => ({ ...merged, pr: { number: 12, state: 'OPEN', head, issues: [{ number: 616, state: 'OPEN' }] }, deploy: null })
   test('left open by Dan at the head it has now is settled, its open issue and branch included', () => {
-    const r = { ...open('aaa1111'), leftOpen: choice }
+    const r = { ...open('aaa1111'), choice }
     expect(outstanding(r)).toEqual([])
-    expect(keptOpen(r)).toBe(true)
+    expect(settledByDan(r)).toBe(true)
   })
   test('nobody decided: still not merged yet (#856)', () => {
     expect(outstanding(open('aaa1111'))).toEqual(['PR #12 is not merged yet'])
-    expect(keptOpen(open('aaa1111'))).toBe(false)
+    expect(settledByDan(open('aaa1111'))).toBe(false)
   })
   test('pushed to since Dan chose: asked again, never carried over to the new commits', () => {
-    const r = { ...open('bbb2222'), leftOpen: choice }
+    const r = { ...open('bbb2222'), choice }
     expect(outstanding(r)).toEqual(['PR #12 has new commits since Dan chose to leave it open: merge it, or ask him again (mcp__scope-modes__leave_pr_open)'])
-    expect(keptOpen(r)).toBe(false)
+    expect(settledByDan(r)).toBe(false)
   })
   test('a head GitHub did not give cannot be matched to his choice, and says so (L11)', () => {
-    const r = { ...open(undefined), leftOpen: choice }
+    const r = { ...open(undefined), choice }
     expect(outstanding(r)).toEqual(["PR #12's latest commit could not be read, so Dan's choice to leave it open cannot be matched to it"])
-    expect(keptOpen(r)).toBe(false)
+    expect(settledByDan(r)).toBe(false)
   })
   test('a choice about a PR since merged or closed changes nothing about finishing it', () => {
     const done = { number: 12, state: 'MERGED' as const, head: 'aaa1111', issues: [{ number: 616, state: 'CLOSED' as const }] }
-    expect(outstanding({ ...merged, pr: done, leftOpen: choice })).toEqual([])
-    expect(keptOpen({ ...merged, pr: done, leftOpen: choice })).toBe(false)
-    expect(outstanding({ ...merged, pr: done, deploy: null, leftOpen: choice })).toEqual(['PR #12 has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)'])
-    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', head: 'aaa1111', issues: [] }, leftOpen: choice })).toEqual(['PR #12 was closed without merging; ask Dan what to do'])
+    expect(outstanding({ ...merged, pr: done, choice })).toEqual([])
+    expect(settledByDan({ ...merged, pr: done, choice })).toBe(false)
+    expect(outstanding({ ...merged, pr: done, deploy: null, choice })).toEqual(['PR #12 has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)'])
+    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', head: 'aaa1111', issues: [] }, choice })).toEqual(['PR #12 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
   })
   test('found by repository and number: the same number in another repository is another PR', () => {
     const all: LeftOpen[] = [choice, { ...choice, repo: 'o/other', number: 31 }]
-    expect(leftOpenFor(all, 'O/R', 12)).toEqual(choice)
-    expect(leftOpenFor(all, 'o/other', 12)).toBeUndefined()
-    expect(leftOpenFor(all, 'o/r', 31)).toBeUndefined()
-    expect(leftOpenFor([], 'o/r', 12)).toBeUndefined()
+    expect(choiceFor(all, 'O/R', 12)).toEqual(choice)
+    expect(choiceFor(all, 'o/other', 12)).toBeUndefined()
+    expect(choiceFor(all, 'o/r', 31)).toBeUndefined()
+    expect(choiceFor([], 'o/r', 12)).toBeUndefined()
+  })
+})
+
+// #1033: a PR closed without merging (ovation#711, closed when its stacked base branch was deleted,
+// its work merged as #716) is settled by Dan's own answer to leave it closed, recorded by repository
+// and number. It carries no head: a closed PR merges nothing until reopened, and reopened it is open,
+// which his answer about a closed PR never covers.
+describe('a PR Dan chose to leave closed (#1033)', () => {
+  const choice: LeftClosed = { repo: 'o/r', number: 12, closed: true, why: 'its work merged as #716' }
+  const closed = (head?: string): Reading => ({ ...merged, pr: { number: 12, state: 'CLOSED', head, issues: [{ number: 616, state: 'OPEN' }] }, deploy: null })
+  test('left closed by Dan is settled, whatever its head, its open issue and branch included', () => {
+    for (const head of ['aaa1111', 'bbb2222', undefined]) {
+      expect(outstanding({ ...closed(head), choice })).toEqual([])
+      expect(settledByDan({ ...closed(head), choice })).toBe(true)
+    }
+  })
+  test('nobody decided: outstanding, naming the tool that records his answer', () => {
+    expect(outstanding(closed('aaa1111'))).toEqual(['PR #12 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
+    expect(settledByDan(closed('aaa1111'))).toBe(false)
+  })
+  test('reopened since he answered: an open PR, outstanding until merged, his answer never carried over', () => {
+    const reopened: Reading = { ...merged, pr: { number: 12, state: 'OPEN', head: 'aaa1111', issues: [] }, deploy: null, choice }
+    expect(outstanding(reopened)).toEqual(['PR #12 is not merged yet'])
+    expect(settledByDan(reopened)).toBe(false)
+  })
+  test('merged after all: finished as any merged PR is', () => {
+    const done = { number: 12, state: 'MERGED' as const, issues: [{ number: 616, state: 'CLOSED' as const }] }
+    expect(outstanding({ ...merged, pr: done, choice })).toEqual([])
+    expect(outstanding({ ...merged, pr: done, deploy: null, choice })).toEqual(['PR #12 has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)'])
+    expect(settledByDan({ ...merged, pr: done, choice })).toBe(false)
+  })
+  test('one answer per PR, found by repository and number: his answer about one closed PR settles no other', () => {
+    const open: LeftOpen = { repo: 'o/r', number: 31, head: 'ccc3333', why: 'awaiting review' }
+    const all = [choice, open]
+    expect(choiceFor(all, 'O/R', 12)).toEqual(choice)
+    expect(choiceFor(all, 'o/other', 12)).toBeUndefined()
+    expect(choiceFor(all, 'o/r', 13)).toBeUndefined()
+    const other: Reading = { ...merged, pr: { number: 13, state: 'CLOSED', issues: [] }, deploy: null, choice: choiceFor(all, 'o/r', 13) }
+    expect(outstanding(other)).toEqual(['PR #13 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
   })
 })
