@@ -2,10 +2,14 @@
 // no mod tests its reading against cases another never sees. A mod's tests use a byte for byte copy
 // of this file under their tests/mod-kit/tests, held to this one by tools/check-mod-shared-parts.sh.
 //
-// Each row is what $.session.repo() gives (`root`, the main working tree, and `remote`, the origin's
-// address or null) and the two answers mod-kit's repo reader gives for it: `github`, the GitHub
-// repository as owner/name in the case written (a mod that keys on lower case lowers it itself),
-// and `name`, what the repository is called, from the origin on any host, else from the checkout.
+// Each row is a repository as a mod hands it to mod-kit's repo reader (`root`, a checkout folder, and
+// `remote`, the origin's address or null) and the two answers the reader gives for it: `github`, the
+// GitHub repository as owner/name in the case written (a mod that keys on lower case lowers it
+// itself), and `name`, what the repository is called, from the origin on any host, else from the
+// checkout. A root from $.session.repo() is the project's main working tree, even for a session in a
+// linked worktree (measured on Claude Code 2.1.295, #996: from a worktree under .claude/worktrees, a
+// subfolder of one, and one outside the main tree, it named the main tree each time). A worktree's
+// own folder comes only from elsewhere, such as $.modkit.branch's `root`; its rows say so.
 
 export type RepoFixture = { why: string; root: string; remote: string | null; github: string | null; name: string | null }
 
@@ -40,9 +44,11 @@ export const REPO_FIXTURES: readonly RepoFixture[] = [
   { why: 'github.com/o/r with no scheme, which git reads as a relative path', root: ROOT, remote: 'github.com/o/r', github: null, name: 'r' },
   { why: 'no origin: the checkout folder', root: '/Users/x/Apps/Overture', remote: null, github: null, name: 'Overture' },
   { why: 'an empty origin: the checkout folder', root: '/Users/x/Apps/Overture', remote: '', github: null, name: 'Overture' },
-  { why: 'a worktree names its parent', root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-ac031537', remote: null, github: null, name: 'claude-config' },
-  { why: 'a worktree with a trailing slash', root: '/Users/x/Apps/claude-config/.claude/worktrees/issue-945/', remote: null, github: null, name: 'claude-config' },
-  { why: 'a worktree under spaces and a curly apostrophe', root: `${DOCS}/Bidspoke/.claude/worktrees/agent-1`, remote: null, github: null, name: 'Bidspoke' },
+  { why: "a session in a linked worktree, as $.session.repo() gives it: the main working tree", root: '/Users/x/Apps/claude-config', remote: null, github: null, name: 'claude-config' },
+  { why: "a session in a linked worktree under spaces and a curly apostrophe, as $.session.repo() gives it", root: `${DOCS}/Bidspoke`, remote: null, github: null, name: 'Bidspoke' },
+  { why: "a worktree's own folder (never from $.session.repo()) names its parent", root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-ac031537', remote: null, github: null, name: 'claude-config' },
+  { why: "a worktree's own folder with a trailing slash", root: '/Users/x/Apps/claude-config/.claude/worktrees/issue-945/', remote: null, github: null, name: 'claude-config' },
+  { why: "a worktree's own folder under spaces and a curly apostrophe", root: `${DOCS}/Bidspoke/.claude/worktrees/agent-1`, remote: null, github: null, name: 'Bidspoke' },
   { why: 'the origin wins over the folder', root: '/Users/x/Apps/old-folder-name', remote: 'git@github.com:danwright32/PostRoll.git', github: 'danwright32/PostRoll', name: 'PostRoll' },
-  { why: 'the origin wins over a worktree', root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: 'git@github.com:danwright32/claude-config.git', github: 'danwright32/claude-config', name: 'claude-config' },
+  { why: "the origin wins over a worktree's own folder", root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: 'git@github.com:danwright32/claude-config.git', github: 'danwright32/claude-config', name: 'claude-config' },
 ]

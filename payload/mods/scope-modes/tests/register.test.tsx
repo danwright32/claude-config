@@ -77,7 +77,7 @@ const deps: { name: string; register: Register } = {
           // The kit's other members, which these tests never reach: each refuses by name if one ever is.
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
-          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          workingTree: async (input: { path: string }) => (await kit('workingTree', input)) ?? null,
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
@@ -231,6 +231,8 @@ type Opts = {
   noRepo?: boolean
   /** The session's origin as $.session.repo() gives it (#951); by default git@github.com:o/r.git. */
   remote?: string | null
+  /** mod-kit's walk for the checkout a folder sits in fails (#996), with what it threw. */
+  workingTreeFails?: string
   /** mod-kit's branch reader fails (#980), with what it threw. */
   branchReaderFails?: string
   /** The session's folder, /repo unless said: a linked worktree of /repo, whose main working tree stays /repo (#980 review). */
@@ -422,6 +424,9 @@ const world = (on: On, o: Opts = {}) => {
       // Where a checkout stands (#980), read by mod-kit's own reader asking this world's git. Every
       // folder is a checkout of its own here, as the git answers below treat it, except the
       // session's when it is in no repository.
+      // The checkout a folder sits in (#996), as the branch reader's walk below finds it.
+      if (a[0] === 'workingTree' && o.workingTreeFails) return fail(1, o.workingTreeFails)
+      if (a[0] === 'workingTree') return ok(JSON.stringify(o.noRepo && input.path === '/repo' ? null : (input.path ?? null)))
       if (a[0] === 'branch') {
         if (o.branchReaderFails) return fail(1, o.branchReaderFails)
         const walk = async (p: string) => (o.noRepo && p === '/repo' ? null : p)
@@ -1617,6 +1622,36 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   // The report is started at once from the record just placed, so it exists from the first minute (#835).
   expect(w.reports).toEqual([{ op: 'start', record: CURRENT }])
   expect(w.runs.some(r => r[0] === 'python3')).toBe(false)
+})
+
+// $.session.repo().root is the project's main working tree even from a linked worktree (measured on
+// Claude Code 2.1.295, #996), while the session registry gives every other worker's own checkout
+// (git rev-parse --show-toplevel from its folder). So this session's repository is read from its
+// own checkout too, mod-kit's walk from its folder, never the main tree $.session.repo() names.
+test("/sleep reads this session's repository from its own checkout, as the registry gives the other workers' (#996)", withDeps, async ($, on) => {
+  const own = '/repo/.claude/worktrees/wt'
+  const { w, clock } = world(on, {
+    cwd: own,
+    open: [{ ...interactive('s2'), repoRoot: '/other' }],
+    origins: { [own]: 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' },
+    files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/other', mergeDeploys: false }]) },
+    githubRepos: { default: ['o/r', 'o/other'] },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  const remotesIn = w.runs.filter(r => r[0] === 'git' && r.includes('remote')).map(r => r[r.indexOf('-C') + 1])
+  expect(remotesIn).toEqual([own, '/other'])
+  expect((recordOf(w) as { repos: unknown }).repos).toEqual({ mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/other', mergeDeploys: false }], closed: [] })
+})
+
+// Read before #996 as no repository, so this session's repository went unasked at bedtime with
+// nothing said; now said, as a worker folder mod-kit cannot read is (#979 review).
+test("/sleep whose own checkout mod-kit's walk cannot read does not start, and says why (#996)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { workingTreeFails: 'the disk cannot read /repo', files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]) }, githubRepos: { default: ['o/r'] } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe("Sleep mode did not start: this session's checkout could not be read (the disk cannot read /repo).")
+  expect(w.files[CURRENT]).toBeUndefined()
 })
 
 test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
@@ -3177,9 +3212,13 @@ test('an unanswered list that cannot be written stops sleep starting, since the 
 })
 
 test('a /sleep that throws after the questions leaves no unanswered list behind, and releases its marker', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE }, githubRepos: { default: ['o/r'] }, issueAnswers: { 'o/r#20: Rename it?': 'Skip this one' } })
+  // The folder stops reading once the question is answered, so the throw comes after the questions:
+  // /sleep reads it before them too, for this session's own checkout (#996).
+  const late = { o: undefined as { cwdThrows?: boolean } | undefined }
+  const answered = { then: <T,>(reply: (a: string) => T) => Promise.resolve().then(() => { if (late.o) late.o.cwdThrows = true; return reply('Skip this one') }) } as unknown as Promise<string>
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ONE_NOTE }, githubRepos: { default: ['o/r'] }, issueAnswers: { 'o/r#20: Rename it?': answered } })
+  late.o = w.o
   await start($ as never, clock)
-  w.o.cwdThrows = true
   // The engine reports the folder read failing as its own HooksError around the command.
   const thrown = await command($ as never, 'sleep').then(() => 'did not throw', (err: unknown) => String(err))
   expect(thrown).toMatch(/^HooksError: no implementation for command\.run/)

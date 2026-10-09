@@ -154,8 +154,9 @@ export type ModKit = {
    */
   workingTree: (input: { path: string }) => Promise<string | null>
   /**
-   * A repository read from what `$.session.repo()` gives (`root`, the main working tree, and
-   * `remote`, the origin's address), or from a remote's address alone (#951). Two answers, since
+   * A repository read from what `$.session.repo()` gives (`root`, the main working tree, which it
+   * is even for a session in a linked worktree (#996), and `remote`, the origin's address), or
+   * from a remote's address alone (#951). Two answers, since
    * they are two questions: `github`, the GitHub repository as owner/name in the case written, null
    * for another host, a local path (owner/name alone is one to git) or no remote; and `name`, what
    * the repository is called, the origin's last part on any host, else the checkout folder's name,
@@ -167,7 +168,8 @@ export type ModKit = {
   repo: (input: { root?: string | null; remote: string | null }) => Promise<ModKitRepo>
   /**
    * Where the checkout an absolute path sits in stands (#978): `root`, the checkout (found as
-   * `workingTree` finds it); `main`, its project's main working tree, which every worktree of it
+   * `workingTree` finds it), a linked worktree's own folder where `$.session.repo().root` is the
+   * main tree (#996); `main`, its project's main working tree, which every worktree of it
    * shares; `branch`; `defaultBranch`, the one origin/HEAD names, null when it names none;
    * `isDefault`, that branch, or main or master when there is none; and `issues`, every run of 2 to
    * 6 digits the branch name holds on its own (`978-guard`, `fix/issue-41-and-52`). Null when the

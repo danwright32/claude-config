@@ -1009,11 +1009,17 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
   const generation = `${now}-${self}`
   try {
     e = await enrol($, self)
+    // This session's own checkout, found by mod-kit's walk from its folder, as the session registry
+    // gives every other worker's (rev-parse --show-toplevel from its folder). Never
+    // $.session.repo().root, which is the project's main working tree even from a linked worktree
+    // (measured on Claude Code 2.1.295, #996). In no checkout there is no repository to ask about; a
+    // walk that fails is said, never read as none, which would leave this repository unasked.
     let ownRoot: string | undefined
     try {
-      ownRoot = e.workers.includes(self) ? (await $.session.repo())?.root : undefined
-    } catch {
-      ownRoot = undefined
+      ownRoot = e.workers.includes(self) ? ((await $.modkit.workingTree({ path: await $.session.cwd() })) ?? undefined) : undefined
+    } catch (err) {
+      await releaseMarker($, p.preparing, claim.claimed)
+      return `Sleep mode did not start: this session's checkout could not be read (${msg(err)}).`
     }
     const worked = await workerRepos($, [...(ownRoot ? [ownRoot] : []), ...e.roots])
     if (!Array.isArray(worked)) {
@@ -1362,7 +1368,10 @@ const saveDriver = async ($: EngineInterface, en: Enrolled, d: DriverRecord): Pr
 }
 
 // The session's repository: its root, and owner/name from its origin, lower case as the queue keeps it.
-// The origin is read by mod-kit's one reader (#951); a reading that fails leaves the root known.
+// The root is the project's main working tree, which $.session.repo() gives even for a session in a
+// linked worktree (measured on Claude Code 2.1.295, #996): the folder the overnight rules name to
+// sleep-queue.sh, which claims by repository and makes each claim's worktree beside the primary
+// checkout. The origin is read by mod-kit's one reader (#951); a reading that fails leaves the root known.
 const repoOf = async ($: EngineInterface): Promise<{ root: string | null; slug: string | null }> => {
   let r: Awaited<ReturnType<EngineInterface['session']['repo']>>
   try {
