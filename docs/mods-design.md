@@ -1511,7 +1511,12 @@ character of a wrapping line, since a terminal row holds at least one), so the r
 every wrapped row however wide the band is. A button may carry `instead`, a list of text runs drawn in
 its place wherever a click may not reach it (#939, `clicksReach` in hooks/band.ts): a terminal not
 in the fullscreen layout, Apple Terminal (its per tab Allow Mouse Reporting switch cannot be read),
-and a terminal whose name or layout is unknown. An empty list draws nothing there. A button without
+and a terminal whose name or layout is unknown. An empty list draws nothing there. A Mac whose
+Apple Terminal tabs keep that switch on can say so once, with mod-kit's `appleTerminalMouseReporting`
+setting (#1012, Dan 2026-10-09: "Buttons always, I keep it on"), and Apple Terminal in the fullscreen
+layout then draws real buttons. The setting vouches for Apple Terminal alone: tmux, screen, the main
+screen and an unnamed terminal keep the typed text. Its risk, accepted: the switch is per tab and
+Cmd+R flips it, so in a tab where it is off a button looks live and a click does nothing. A button without
 `instead` is drawn there as "type: /press <mod> <button>": mod-kit's `/press` presses a button
 showing in the band or a pane the way a click does. A click (the Button's own press) and a typed
 /press both raise `modkit.press`, which every publisher answers, so no button anywhere is left dead.
