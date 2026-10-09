@@ -251,6 +251,9 @@ every number is a lesson, measures the core in characters and refuses past 20,00
 tell a deliberate change from a damaged list. From it the sync renders `LESSONS-CORE-<section>.md`,
 the same lines as the library, and CLAUDE.md imports those instead; the library files are still
 written and still travel, so `claude-sync lesson` and every PR lessons review keep all of them.
+Beside any core it also renders `LESSONS-CORE-_TOC.md`, the library's table of contents, imported
+last: one line per section with its lesson count and how many of them the core carries, derived at
+render time, so a session knows what it is not holding and where to read it (#566).
 
 With no list nothing changes, which is how it ships. A list that is empty, unreadable, names a
 lesson that does not exist, or holds fewer lessons than it declares (or, undeclared, under half the
@@ -261,8 +264,9 @@ the measurement in #562 it waited on was met on both Macs on 2026-10-09.
 `hooks/test-rule-file-budget.sh` already carries a recorded size for every core file a section can
 produce, derived from the library files present, because setting a list on a live Mac makes the
 payload import the core with no change to this repository, and an unrecorded import fails every
-push and pull. It also ratchets the core's own total (`CORE_RECORDED`, the approved list's 54,372
-bytes), since a re-rank can grow the core one list change at a time.
+push and pull. It also ratchets the core's own total (`CORE_RECORDED`, 55,483 bytes: the approved
+list's 54,372 plus the 1,111 byte table of contents), since a re-rank can grow the core one list
+change at a time. The table of contents has its own recorded size too.
 
 #### The monthly re-rank
 
