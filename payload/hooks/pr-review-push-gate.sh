@@ -79,8 +79,23 @@ if ps_has_override "$command" SKIP_PR_REVIEW; then
   exit 0
 fi
 
-# A push that only deletes a remote branch sends no commits to review.
-case " $command " in *" --delete "*|*" -d "*) exit 0 ;; esac
+# A push that only deletes a remote branch sends no commits to review. Judged on each PUSH segment's
+# own words, and exempt only when every push in the command deletes: a delete flag anywhere else
+# (another push, an `rm -d`) says nothing about the push beside it (L673, lessons review of #1002).
+raw="$(ps_parse_payload "$payload" raw)" || raw=""
+raw="${raw%%$'\x1f'*}"
+only_deletes=0
+while IFS= read -r seg; do
+  mt_split_assignments "$seg"
+  [ -n "$MT_REST" ] && ps_is_git_push "$MT_REST" || continue
+  case " $MT_REST " in
+    *" --delete "*|*" -d "*) [ "$only_deletes" -eq 0 ] && only_deletes=1 ;;
+    *) only_deletes=2; break ;;
+  esac
+done <<SEGEOF
+$(mt_raw_segments "$raw")
+SEGEOF
+[ "$only_deletes" -eq 1 ] && exit 0
 
 # The head a chained commit makes does not exist yet, so no review can have read it, and judging the
 # OLD head would wave the new commit through unread.
@@ -105,8 +120,7 @@ branch="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
   || refuse "Refusing to push: the lessons review could not run, because $HOOK_DIR/lib/pr-review.sh is missing. $OVERRIDE_HOW"
 
 # The read key, only as an assignment in front of the PUSH itself (the merge gate's own reader).
-raw="$(ps_parse_payload "$payload" raw)" || raw=""
-read_key="$(mt_presented_read_key "${raw%%$'\x1f'*}" ps_is_git_push)"
+read_key="$(mt_presented_read_key "$raw" ps_is_git_push)"
 
 WAIT="${PR_REVIEW_PUSH_WAIT_SECONDS:-100}"
 case "$WAIT" in ''|*[!0-9]*) WAIT=100 ;; esac

@@ -302,9 +302,15 @@ check_eq "a commit chained to a push is refused" "2" "$rc"
 check "asking for the commit on its own first" "commit first" "$out"
 check_eq "and no review of the old head was started" "0" "$(calls)"
 
-# 4h. a delete push sends no commits.
+# 4h. a delete push sends no commits. Judged on the push's OWN segment: a delete flag anywhere else
+#     in the command (another push, an rm) must not wave a real push through (L673; lessons review).
 out="$(fire_push "git push origin --delete feat/old")"; rc=$?
 check_eq "a push that only deletes a branch is not gated" "0" "$rc"
+out="$(FAKE_SLEEP_WAITS=1 fire_push "git push -d origin feat/old; git push origin feat/sync")"; rc=$?
+check_eq "a delete beside a real push does not exempt the real push" "2" "$rc"
+check "the real push meets the findings" "deleteEvent still swallows" "$out"
+out="$(fire_push "rm -d /tmp/nothing-here && git push origin feat/sync")"; rc=$?
+check_eq "an rm -d before a push does not exempt it" "2" "$rc"
 
 # ===========================================================================================
 # 5. The commit starts the review, so it has usually finished by the push.
