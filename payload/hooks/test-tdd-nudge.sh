@@ -45,6 +45,15 @@ check "it still names the test-first skill" $?
 grep -qF 'LESSONS-INDEX-test-speed.md' <<< "$out"
 check "it points a coding turn at the Test speed lessons file" $?
 
+# Once a lessons core is set, a session loads LESSONS-CORE-test-speed.md (some of the section) and
+# NOT the library file the nudge names (#565), so telling Claude the file is "already loaded" sends
+# it to its context for lessons that are not there. The nudge names the file where it can be READ
+# instead, which is true whichever of the two a session loaded.
+grep -qF '~/.claude/LESSONS-INDEX-test-speed.md' <<< "$out"
+check "it names the Test speed library file by a path that can be read" $?
+if grep -qiF 'already loaded' <<< "$out"; then check "it does not claim the Test speed file is already in context" 1
+else check "it does not claim the Test speed file is already in context" 0; fi
+
 # Whether the file is THERE is asked first, and separately. Without this, an absent file answers
 # the question below in the same word as a renamed section, and the reader is sent to look for a
 # heading that is exactly where it always was (L11, L98).

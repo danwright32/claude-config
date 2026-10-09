@@ -24,8 +24,11 @@ const FRAMES: Record<ModKitBandFrame['kind'], true> = { box: true, 'left-rule': 
 
 export const isDivider = (l: ModKitBandLine): l is { divider: true } => !Array.isArray(l) && !!l && (l as { divider?: unknown }).divider === true
 
-/** What decides whether a click on a drawn Button reaches the mod (#939). */
-export type ClickSite = { surface: string; isFullscreen: boolean | undefined; terminal: string | undefined }
+/**
+ * What decides whether a click on a drawn Button reaches the mod (#939). `isAppleTerminalTrusted` is
+ * this Mac's appleTerminalMouseReporting setting (#1012), required so no caller can leave it out.
+ */
+export type ClickSite = { surface: string; isFullscreen: boolean | undefined; terminal: string | undefined; isAppleTerminalTrusted: boolean }
 
 /**
  * Whether a click on a Button drawn here reaches the mod. A remote surface (desktop, VS Code, mobile)
@@ -35,16 +38,39 @@ export type ClickSite = { surface: string; isFullscreen: boolean | undefined; te
  * terminal is trusted only when it is fullscreen, named, and not Apple Terminal; anything unmeasured
  * is taken as a click that may not land, since a dead control is worse than a typed fallback. A
  * multiplexer (tmux, screen) is unknown too: it names itself, not the terminal behind it.
+ *
+ * The one exception is this Mac's own word (#1012): with appleTerminalMouseReporting on, Apple
+ * Terminal fullscreen is trusted like any other named terminal. Dan, 2026-10-09: "Buttons always, I
+ * keep it on". It vouches for Apple Terminal alone, never for a multiplexer in front of it, which
+ * passes a click on only under its own mouse mode.
  */
 export const clicksReach = (site: ClickSite): boolean => {
   if (site.surface !== 'terminal') return true
   if (site.isFullscreen !== true) return false
-  return typeof site.terminal === 'string' && site.terminal !== '' && !UNSURE_TERMINALS.has(site.terminal)
+  if (typeof site.terminal !== 'string' || site.terminal === '') return false
+  if (site.terminal === APPLE_TERMINAL) return site.isAppleTerminalTrusted
+  return !MULTIPLEXERS.has(site.terminal)
 }
 
-// Terminals a click may not reach through: Apple Terminal (its per tab switch), and the multiplexers,
-// which name themselves rather than the terminal behind them, Apple Terminal among those (#946 review).
-const UNSURE_TERMINALS = new Set(['Apple_Terminal', 'tmux', 'screen'])
+/**
+ * This Mac's appleTerminalMouseReporting setting, as Claude Code hands mod-kit its options when the
+ * module loads (pluginConfigs in this Mac's own settings.json, which the sync never carries). On only
+ * for true, the value `claude plugin configure` stores (measured 2026-10-09); anything else is off,
+ * the side where no button is dead.
+ *
+ * The risk Dan accepted with it on (2026-10-09): Apple Terminal's View > Allow Mouse Reporting is per
+ * tab and cmd R flips it, and no mod can read it. In a tab where it is off, every button is still
+ * drawn, looks live, and a click on it does nothing. Turn the switch back on in that tab, or type the
+ * button's /press command.
+ */
+export const appleTerminalTrusted = (options: unknown): boolean =>
+  !!options && typeof options === 'object' && (options as { appleTerminalMouseReporting?: unknown }).appleTerminalMouseReporting === true
+
+// The name Apple Terminal gives itself in TERM_PROGRAM.
+const APPLE_TERMINAL = 'Apple_Terminal'
+// The multiplexers, which name themselves rather than the terminal behind them, Apple Terminal among
+// those (#946 review).
+const MULTIPLEXERS = new Set(['tmux', 'screen'])
 
 /** What Dan types to press `mod`'s button `button` where a click cannot land (#939): mod-kit's /press. */
 export const pressCommand = (mod: string, button: string): string => `/press ${mod} ${button}`
