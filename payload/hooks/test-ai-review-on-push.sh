@@ -533,6 +533,10 @@ GG symbolic-ref HEAD refs/heads/main
 mkdir -p "$GR/src"; printf 'export const g = 0;\n' > "$GR/src/g.ts"
 GG add src/g.ts; GG commit -q -m seed
 GG remote add origin "$GR_ORIGIN"; GG push -q -u origin main 2>/dev/null
+# Section 7's review runs detached and is not waited for there, so its call to the fake can land
+# AFTER this baseline is read, and did on CI (4 calls counted where 3 were made here). Waited for
+# first, so the difference below counts this section's pushes and nothing else (L134).
+wait_for_final "$(G3 rev-parse HEAD)" 20 && ok || bad "section 7's review finishes before this section counts calls"
 before_gated="$(calls)"
 
 # A branch push: the gate reads it, so nothing starts here, and the skip says so out loud.
