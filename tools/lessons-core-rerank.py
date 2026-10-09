@@ -4,20 +4,31 @@
     python3 tools/lessons-core-rerank.py --index-dir payload --core payload/LESSONS-CORE.txt
         --counts-dir lesson-counts (--bands-dir lesson-bands | --expect-hosts A,B)
         --ages AGES --tags lesson-tags.tsv [--second-tags lesson-tags-second.tsv]
+        --seats lesson-core-seats.txt --out-seats P
         [--now 2026-10-09T15:00:00Z] [--stale-days 14] [--max-moves 10] [--band 5] [--cap N]
         --out-tsv P --out-html P --out-list P
+    ... --seed-seats 20 --out-seats lesson-core-seats.txt     (once: choose the seats, see below)
 
 It only PROPOSES. Nothing here runs `claude-sync core-set`: the page names the command, and Dan
-approves. The rules are his decisions of 2026-09-24 (#563):
+approves. The rules are his decisions of 2026-09-24 (#563) and 2026-10-09 (#566, "Keep your 355
+protected"):
 
-  - a lesson no PR review can see (tagged design or operate, or one the two tagging passes disputed)
-    STAYS in the core whatever its rank, so it is never proposed out;
-  - the rest of the core is the most cited reviewable lessons. Their number is the core's SEATS, read
-    from the list as it stands (20 when Dan approved it), so a re-rank swaps lessons through the
-    seats and never grows them;
+  - the core is PROTECTED except for its SEATS, which are named in a tracked file
+    (lesson-core-seats.txt). A protected lesson is never proposed out, whatever its tag or rank.
+    Protection is that file, not the tags, so a re-tag can never unprotect a lesson Dan approved;
+  - only the seats swap: a seat holder leaves when reviewable lessons outside the core out-rank it,
+    and the lesson that replaces it takes its seat, so the number of seats never changes (20, the
+    reviewable lessons Dan's approved list kept by rank);
   - new lessons start in the library and earn their way in by citations: a reviewable one by ranking
     inside the seats, one no review can see by being cited at least as often as the last seat (and
-    at all), after which it stays like the rest of its kind.
+    at all). That one comes in as an addition, not a seat, so once in it is protected like the rest.
+
+Applying a proposal is two writes that belong together: `core-set` with the proposed list, and the
+proposed seats file committed as lesson-core-seats.txt. A seat that is not in the core is what one
+without the other leaves behind, and refuses (SEAT NOT IN CORE) rather than shrinking the seats.
+
+--seed-seats N writes the first seats file: the N most cited reviewable core lessons (tagged diff
+by both passes), by this same ranking, each line saying its rank and rate.
 
 The rank is the proposal tool's, from tools/lib/lessons_core.py (L370): prose citations plus review
 citations, both Macs added together, per 30 days of exposure.
@@ -31,7 +42,8 @@ counts do not trade places every month.
 
 Refuses rather than guessing, each with its own exit code so the job can tell them apart (L11):
   1  REFUSED: a lesson with no tag (or no tags file), no age, a tag outside diff, design and operate,
-     a core list naming no lesson, or two Macs that counted over different windows (L711);
+     a core list naming no lesson, no seats file or a seat outside the core, or two Macs that
+     counted over different windows (L711);
   2  UNMEASURED: a Mac whose counts are missing, carry no time stamp, name another Mac, are dated in
      the future, or are older than --stale-days. Never read as zero (L90, L530);
   3  INACTIVE: there is no core list, so the core is not in use and there is nothing to re-rank.
@@ -103,7 +115,14 @@ def main(argv):
     ap.add_argument("--out-tsv", required=True)
     ap.add_argument("--out-html", required=True)
     ap.add_argument("--out-list", required=True)
+    # The seats (Dan, 2026-10-09): the only core lessons a re-rank may swap; the rest are protected.
+    ap.add_argument("--seats", default="")
+    ap.add_argument("--out-seats", default="")
+    ap.add_argument("--seed-seats", type=int, default=0)
     a = ap.parse_args(argv)
+    if a.seed_seats and not a.out_seats:
+        print("--seed-seats needs --out-seats, the file to write the seats into")
+        return EXIT_REFUSED
 
     if a.now:
         now = parse_stamp(a.now)
@@ -122,8 +141,9 @@ def main(argv):
             print(r)
         with open(a.out_tsv, "w", encoding="utf-8") as f:
             f.write("move\tlesson\ttag\tsessions\treviews\trate\trank\tchars\treason\n")
-        if os.path.exists(a.out_list):
-            os.remove(a.out_list)
+        for stale in (a.out_list, "" if a.seed_seats else a.out_seats):
+            if stale and os.path.exists(stale):
+                os.remove(stale)
         e = html.escape
         body = (f'<h1>{e(title)}</h1><p class="meta">Re-rank of {e(when)}. Nothing is proposed this time, '
                 'and nothing has changed: the core loads exactly as before.</p>'
@@ -147,6 +167,26 @@ def main(argv):
         problems.append("NOT A LESSON: the core list names " + ", ".join(f"L{n}" for n in unknown)
                         + ", which the index does not hold, so claude-sync is already loading the whole library instead.")
         remedies.append("Set the list again with claude-sync core-set, without those numbers.")
+    seats = []
+    if not a.seed_seats:
+        if not a.seats or not os.path.exists(a.seats):
+            problems.append(f"NO SEATS: there is no seats file at {a.seats or '(none given)'}, so which core lessons may be "
+                            "swapped cannot be told, and every other one is protected by not being named there.")
+            remedies.append("Seed it once with this tool's --seed-seats 20, and commit it as lesson-core-seats.txt.")
+        else:
+            seats = core_ids(a.seats)
+            if not seats:
+                # Zero seats would propose nothing and read as a healthy month (L98).
+                problems.append(f"NO SEATS: the seats file {a.seats} names no lesson, so nothing could ever swap "
+                                "and a month with no moves would mean nothing.")
+                remedies.append("Restore lesson-core-seats.txt from git, or seed it again with --seed-seats 20.")
+            outside = [n for n in seats if n not in set(core)]
+            if outside:
+                problems.append("SEAT NOT IN CORE: " + ", ".join(f"L{n}" for n in outside) + f" is named in {a.seats} "
+                                "but is not in the core list, so the seats file and the core disagree.")
+                remedies.append("That is a re-rank applied by half: core-set ran with a proposed list, and the seats "
+                                "file proposed with it was not committed. Commit that month's seats file as "
+                                "lesson-core-seats.txt (or set the core back), then run again.")
 
     tags, tags2 = {}, {}
     for path, into in ((a.tags, tags), (a.second_tags, tags2)):
@@ -233,10 +273,33 @@ def main(argv):
         kind[n], shown[n] = review_class(n, tags, tags2)
     size = {n: line_chars(lines[n]) for n in lines}
     in_core = set(core)
-    protected = [n for n in core if kind[n] != "diff"]
-    seat_holders = [n for n in core if kind[n] == "diff"]
+
+    if a.seed_seats:
+        # The first seats, by the same ranking every later re-rank uses: the N most cited core lessons
+        # both passes call reviewable (L370). Disputed and unreviewable ones are never candidates.
+        pool = rank_order([n for n in core if kind[n] == "diff"], rates)
+        if len(pool) < a.seed_seats:
+            return refuse(EXIT_REFUSED, "Seeding refused",
+                          [f"REFUSED: {a.seed_seats} seats were asked for, but only {len(pool)} core lessons are reviewable."], [])
+        with open(a.out_seats, "w", encoding="utf-8") as f:
+            f.write(f"# The seats of the lessons core (claude-config#566): the only core lessons a re-rank may swap.\n")
+            f.write("# Every other lesson in the core is protected by not being named here, whatever its tag.\n")
+            f.write(f"# Seeded {when} by tools/lessons-core-rerank.py --seed-seats {a.seed_seats}: the most cited of the "
+                    f"{len(pool)} core lessons both tagging passes call diff, counted on "
+                    + ", ".join(f"{g['host']} ({g['at']:%Y-%m-%d})" for g in used) + f" over {window} days.\n")
+            for i, n in enumerate(pool[:a.seed_seats]):
+                f.write(f"L{n}  # rank {i + 1} of {len(pool)}, {rates[n]:.1f} citations per 30 days\n")
+        for i, n in enumerate(pool[:a.seed_seats]):
+            print(f"SEAT L{n}: rank {i + 1} of {len(pool)}, {rates[n]:.1f} per 30 days")
+        print(f"seeded {a.seed_seats} seats from {len(pool)} reviewable core lessons into {a.out_seats}")
+        return 0
+
+    seat_holders = list(seats)
+    protected = [n for n in core if n not in set(seats)]
     seats = len(seat_holders)
-    ranked = rank_order([n for n in lines if kind[n] == "diff"], rates)
+    # Candidates for a seat: the seat holders, whatever their tag, and every lesson outside the core
+    # both passes call reviewable. A protected lesson is never a candidate, so it can never be ranked out.
+    ranked = rank_order(seat_holders + [n for n in lines if kind[n] == "diff" and n not in in_core], rates)
     rank_of = {n: i + 1 for i, n in enumerate(ranked)}
     cut = rates[ranked[seats - 1]] if 0 < seats <= len(ranked) else None
     entrants = [n for n in ranked[:seats] if n not in in_core]
@@ -256,6 +319,8 @@ def main(argv):
     ins = [e for e, _ in moves]
     outs = [l for _, l in moves if l is not None]
     new_core = sorted((in_core - set(outs)) | set(ins))
+    # A swap's entrant takes the leaver's seat; an addition is not a seat, so it is protected once in.
+    new_seats = sorted((set(seat_holders) - set(outs)) | {e for e, l in moves if l is not None})
     before, after = sum(size[n] for n in core), sum(size[n] for n in new_core)
     over = after > cap
 
@@ -270,7 +335,7 @@ def main(argv):
             rows.append(row("in", e, f"no PR review can see it, and at {rates[e]:.1f} citations per 30 days it is cited "
                                      f"at least as often as the last seat ({cut:.1f}); once in, it stays"))
         else:
-            rows.append(row("in", e, f"ranked {rank_of[e]} of {len(ranked)} reviewable lessons, inside the {seats} seats; takes L{l}'s seat"))
+            rows.append(row("in", e, f"ranked {rank_of[e]} of {len(ranked)} candidates for the seats, inside the {seats} seats; takes L{l}'s seat"))
             rows.append(row("out", l, f"ranked {rank_of[l]} of {len(ranked)}, more than {a.band} places below the {seats} seats; gives its seat to L{e}"))
     for e, l in held:
         rows.append(row("held-in", e, f"held back by the move cap of {a.max_moves}; next month, if it still ranks here"))
@@ -289,11 +354,16 @@ def main(argv):
         f.write("# `claude-sync core-set` on this file, which checks the cap; the re-rank never applies it.\n")
         f.write(f"# count {len(new_core)}\n")
         f.write("".join(f"L{n}\n" for n in new_core))
+    if a.out_seats:
+        with open(a.out_seats, "w", encoding="utf-8") as f:
+            f.write(f"# The seats of the lessons core as the re-rank of {when} proposes them (claude-config#566).\n")
+            f.write("# Commit this as lesson-core-seats.txt in the same change that applies the core list beside it.\n")
+            f.write("".join(f"L{n}\n" for n in new_seats))
 
     for x in rows:
         print(f"{x['move'].upper()} L{x['n']}: {x['reason']}")
     summary = (f"{len(ins) + len(outs)} moves ({len(ins)} in, {len(outs)} out, {len(held)} held back), move cap {a.max_moves}; "
-               f"core now {len(core)} lessons, {before} chars ({len(protected)} no review can see, {seats} seats); "
+               f"core now {len(core)} lessons, {before} chars ({len(protected)} protected, {seats} seats); "
                f"after the moves {len(new_core)} lessons, {after} chars; cap {cap}")
     print(summary)
     for g in used:
@@ -303,6 +373,8 @@ def main(argv):
               "enforces, so applying it needs SYNC_CORE_OVER_CAP=1, which is Dan's decision.")
     command = f"{'SYNC_CORE_OVER_CAP=1 ' if over else ''}~/claude-config-sync/claude-sync core-set {os.path.abspath(a.out_list)}"
     print(f"APPLY: {command}")
+    if a.out_seats:
+        print(f"SEATS: commit {os.path.abspath(a.out_seats)} as lesson-core-seats.txt in the same change")
     write_page(a, rows, lines, sections, size, summary, over, after, cap, command, used, window, when, notes, len(ins) + len(outs))
     return 0
 
@@ -345,9 +417,12 @@ def write_page(a, rows, lines, sections, size, summary, over, after, cap, comman
             f'<p class="meta">Counted on {counted}, prose and review citations over {window} days. {e(summary)}.</p>'
             f"{warn}"
             + "".join(f'<p class="meta">{e(n)}</p>' for n in notes)
-            + "<p>Nothing changes until you approve. To apply exactly this, tell Claude, or run:</p>"
+            + "<p>Nothing changes until you approve. To apply exactly this, tell Claude. It is two writes that "
+            "belong together: the core list, with</p>"
             f"<pre>{e(command)}</pre>"
-            f'<div class="wrap">{"".join(parts)}</div>')
+            + (f"<p>and the seats beside it, committed as lesson-core-seats.txt in the same change:</p>"
+               f"<pre>{e(os.path.abspath(a.out_seats))}</pre>" if a.out_seats else "")
+            + f'<div class="wrap">{"".join(parts)}</div>')
     with open(a.out_html, "w", encoding="utf-8") as f:
         f.write(html_page("Lessons core re-rank", body))
 
