@@ -474,6 +474,29 @@ with no review gets one started by the gate. A repo whose own script merges insi
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
 allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
 
+The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
+and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
+after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).
+`ai-review-on-pr.sh` starts the review of a branch's new head when a `git commit` succeeds there,
+so it has usually finished by the push, and `pr-review-push-gate.sh` asks `lib/pr-review.sh check
+--gate push` before any push of a branch other than the default one. A review still running is
+waited for, polling, for at most 100 seconds (`PR_REVIEW_PUSH_WAIT_SECONDS`, inside the hook's 150
+second timeout so a slow review can never time the hook out into allowing); past that the push is
+refused with how long it waited, and the review goes on for the next attempt. Unread findings
+refuse the push with their read key, and `PR_REVIEW_READ=<key> <the push command>` goes through; 0
+findings and an empty diff pass; a review that could not run refuses in its own words with the
+restart command and `SKIP_PR_REVIEW=1 <the push command>`, explained to Dan first. A commit and a
+push in one command is refused, because the head it pushes does not exist yet for anything to read.
+
+The merge gate is exactly as strict as before. Reviews are keyed by repository (a hash of the origin
+URL, so every worktree and clone of one repository shares them) and commit, so the merge finds the
+push's review of the same head and starts no second one. But a key presented to a push is recorded
+in `<review>.push-acknowledged`, which only pushes read, so the merge still needs the key itself
+(the one the push was shown reads the same review). And because the push reviews from the default
+branch, a merge into another base reuses a review only when that review's own base is an ancestor
+of the merge base it is asked about, so it read every commit the merge brings; otherwise it is
+started again over the whole range.
+
 The review is the PULL REQUEST's, wherever the merge is run from (claude-config#852). The gate
 labels it with the pull request's own head branch (`--branch`, from `headRefName`), never the branch
 the merging checkout happens to be on, which on a shared primary checkout is another session's work;
@@ -500,7 +523,9 @@ empty diff. All but the clean ones, the read ones and the empty diff refuse, nam
 override `SKIP_PR_REVIEW=1`, which is explained to Dan before it is used. The reviewer runs with
 hooks off and with Claude Code's built in `ReportFindings` tool disallowed, because a review
 reported through that tool leaves no finding line to read and came back `unparsed` in 6 of about 10
-rounds on one pull request (#804).
+rounds on one pull request (#804). It also starts with no MCP servers (`--strict-mcp-config` and no
+`--mcp-config`), since a review of a diff calls none of them and loading every connected one cost
+startup on each review (#956).
 
 A branch over the cap first leaves out the files proven to need no reading (claude-config#583): a
 file `.gitattributes` marks generated at both the base and the head (so a branch cannot excuse its

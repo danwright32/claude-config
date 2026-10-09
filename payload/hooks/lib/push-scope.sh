@@ -139,11 +139,17 @@ ps_add_scope_unreadable() {   # $1 = command
   ps_reader_missing python3
 }
 
-ps_is_git_push() {
-  local cmd="$1" seg segs
-  # Most commands never mention a push, and this runs before every Bash call, so they leave here
+ps_is_git_push() { ps__runs_git_sub "$1" push; }
+
+# Is this command a `git commit`, in COMMAND POSITION (claude-config#599)? The same walker as the
+# push, so a commit message or a heredoc that only mentions one is not a commit (L673).
+ps_is_git_commit() { ps__runs_git_sub "$1" commit; }
+
+ps__runs_git_sub() {   # $1 = command, $2 = the git subcommand
+  local cmd="$1" sub="$2" seg segs
+  # Most commands never mention it, and this runs before every Bash call, so they leave here
   # without starting anything.
-  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in *"$sub"*) ;; *) return 1 ;; esac
   # Split where the SHELL would, outside quotes and heredoc bodies (claude-config#532). The old
   # split cut on every separator in the text, so a push quoted inside an argument (an issue body, a
   # commit message) started a segment of its own and read as a push. Read whole before walking, so
@@ -151,12 +157,12 @@ ps_is_git_push() {
   # crude split below still runs, because missing a real push ships unjudged work (L42).
   if segs="$(ps__shell_segments "$cmd")"; then
     while IFS= read -r -d $'\x1e' seg; do
-      ps__segment_is_push "$seg" && return 0
+      ps__segment_git_sub "$seg" "$sub" && return 0
     done < <(printf '%s' "$segs")
     return 1
   fi
   while IFS= read -r seg; do
-    ps__segment_is_push "$seg" && return 0
+    ps__segment_git_sub "$seg" "$sub" && return 0
   done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
   return 1
 }
@@ -252,7 +258,9 @@ sys.stdout.write("\x1f".join(shlex.split(os.environ["PS_SEG"], posix=True)))
   fi
 }
 
-ps__segment_is_push() {
+ps__segment_is_push() { ps__segment_git_sub "$1" push; }
+
+ps__segment_git_sub() {   # $1 = one segment, $2 = the git subcommand
   # Tokenize the way the shell does, quotes and all (claude-config#589). This used to split on
   # whitespace on the grounds that quoting only matters for arguments it skips, and it matters for
   # exactly those: `git -C "/a b/wt" push` became -C, "/a, b/wt", push, the skip after -C landed on
@@ -312,7 +320,7 @@ ps__segment_is_push() {
       -*) i=$((i+1)) ;;
       [A-Za-z_]*=*) i=$((i+1)) ;;
       # `(cd x && git push)` leaves `push)` as the last word of its segment.
-      push|push\)*|push\}*) return 0 ;;
+      "$2"|"$2)"*|"$2}"*) return 0 ;;
       *) return 1 ;;   # some other subcommand
     esac
   done
@@ -823,6 +831,23 @@ ps__default_ref() {
   for c in origin/main origin/master; do
     if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
   done
+  return 1
+}
+
+# Is the checkout at $1 standing on the remote's default branch (claude-config#599)? Work there is
+# not a branch, so the lessons review of a branch is neither started at its commits nor asked at its
+# pushes. With no default branch known at all (the first push of a new repository), main and master
+# count as it. A detached HEAD is not on it.
+ps_on_default_branch() {   # $1 = a directory inside the repository
+  local branch def
+  branch="$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null)" || return 1
+  [ -n "$branch" ] || return 1
+  def="$(cd "$1" 2>/dev/null && ps__default_ref)"
+  if [ -n "$def" ]; then
+    [ "$branch" = "${def#origin/}" ]
+    return
+  fi
+  case "$branch" in main|master) return 0 ;; esac
   return 1
 }
 

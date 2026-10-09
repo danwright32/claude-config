@@ -277,6 +277,27 @@ mt_split_assignments() {  # $1 = one segment
   MT_REST="$s"
 }
 
+# The lessons review read key (claude-config#788) a command presents to ONE action: the value of a
+# PR_REVIEW_READ assignment in front of the segment that action runs in, judged by the predicate
+# named in $2 (mt_runs_merge for the merge gate, ps_is_git_push for the push gate, #599). Text in
+# an echo, or an assignment in front of some other command, says nothing about this action (L673).
+# Prints the key when it is hex, nothing otherwise. One reader for both gates, so the two cannot come
+# to disagree about what presenting a key looks like.
+mt_presented_read_key() {  # $1 = command, $2 = the predicate the action's segment must satisfy
+  local seg found
+  while IFS= read -r seg; do
+    mt_split_assignments "$seg"
+    found="$(printf '%s' "$MT_ASSIGNS" | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
+    if [ -n "$found" ] && [ -n "$MT_REST" ] && "$2" "$MT_REST"; then
+      case "$found" in *[!a-f0-9]*) ;; *) printf '%s' "$found" ;; esac
+      return 0
+    fi
+  done <<MTEOF
+$(mt_raw_segments "$1")
+MTEOF
+  return 0
+}
+
 mt_command_heads() {  # $1 = command
   local seg first second third rest
   while IFS= read -r seg; do

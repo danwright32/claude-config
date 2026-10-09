@@ -10,9 +10,9 @@
 # file type, on BOTH Macs, with the same reviewer (lib/ai-review-run.py, --kind pr), and the merge
 # gate waits for it.
 #
-#   pr-review.sh start   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]
-#   pr-review.sh check   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]
-#   pr-review.sh restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]
+#   pr-review.sh start   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--gate merge|push]
+#   pr-review.sh check   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--gate merge|push]
+#   pr-review.sh restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--gate merge|push]
 #
 # start: begins a detached review of <base>..<head> and returns at once. <base> is the merge base
 #   of the head with --base-ref (default: origin's default branch). A ref on origin is FETCHED
@@ -34,6 +34,12 @@
 #   different pull request (claude-config#852).
 # restart: throws away this head's review, whatever state it is in, and starts it again. The remedy
 #   the refusals name for a review that failed or ran out of time.
+# --gate push: the push gate asking (pr-review-push-gate.sh, claude-config#599). Same verdicts, its
+#   own words, and a presented read key recorded where only pushes read it (see below).
+# A finished review is reused by check only when it covers the range asked about: with --base-ref,
+#   its recorded base must be an ancestor of (or be) that ref's merge base with the head, else it is
+#   started again (claude-config#599), because a review started at commit or push time reads from the
+#   default branch and a merge into an older base brings commits it never read.
 #
 # THE OUTCOMES, each its own named state and its own words (L260: two outcomes with one
 # consequence are one outcome, so each consequence is stated):
@@ -91,21 +97,27 @@ PRR_SHOW_LINES=20
 PRR_LINE_CHARS=300
 PRR_OVERRIDE="SKIP_PR_REVIEW=1"
 
-usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>]" >&2; exit 64; }
+usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--gate merge|push]" >&2; exit 64; }
 
 verb="${1:-}"; shift || true
-dir="."; sha=""; base_ref=""; branch_arg=""
+dir="."; sha=""; base_ref=""; branch_arg=""; gate="merge"
 while [ $# -gt 0 ]; do
   case "$1" in
     # A flag given last has no value, and `shift 2` then fails WITHOUT shifting, which loops.
-    --dir|--sha|--base-ref|--branch)
+    --dir|--sha|--base-ref|--branch|--gate)
       [ $# -ge 2 ] || { echo "pr-review.sh: $1 needs a value." >&2; usage; }
-      case "$1" in --dir) dir="$2" ;; --sha) sha="$2" ;; --base-ref) base_ref="$2" ;; --branch) branch_arg="$2" ;; esac
+      case "$1" in --dir) dir="$2" ;; --sha) sha="$2" ;; --base-ref) base_ref="$2" ;; --branch) branch_arg="$2" ;; --gate) gate="$2" ;; esac
       shift 2 ;;
     *) usage ;;
   esac
 done
 case "$verb" in start|check|restart) ;; *) usage ;; esac
+# --gate: which action is asking (claude-config#599). It changes the WORDS of check's answers and
+# where a presented read key is recorded, never the verdict: a push presenting the key records it in
+# <review>.push-acknowledged, which a later push reads and a merge does NOT, so the merge gate asks
+# for the key itself exactly as before (the key the push was shown still reads the same review).
+case "$gate" in merge|push) ;; *) usage ;; esac
+act="$gate"
 
 top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || {
   echo "The lessons review could not run: $dir is not inside a git repository. Override for one merge, explained to Dan first: $PRR_OVERRIDE <the merge command>."
@@ -127,6 +139,7 @@ name="$key-pr-${full_sha:-$sha}"
 final="$AR_STATE_DIR/$name.txt"
 pending="$final.pending"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
+push_acknowledged="$final.push-acknowledged"  # a push presented it; allows later pushes, never a merge
 leftout="$final.leftout"            # the files this review did not read, for its verdict (#583)
 repo_label="$(basename "$top")"
 # The label: the caller's (the pull request's head branch), else this checkout's branch only when the
@@ -287,7 +300,7 @@ do_start() {
   fi
   # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
   # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
-  rm -f "$acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" 2>/dev/null
+  rm -f "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" 2>/dev/null
   if [ -z "$full_sha" ]; then
     record could-not-run "The commit $sha is not in this checkout and could not be fetched from origin, so there is nothing to review."
     echo "The lessons review could not run: $sha is not in this checkout."; return 0
@@ -359,12 +372,12 @@ do_start() {
     --diff-file "$diff_file" --deadline "$PRR_DEADLINE" --started "$started" \
     </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null || true
-  echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the merge waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
+  echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
   ar_left_out_note "$leftout"
 }
 
 remedy() {
-  printf 'Run it again with: bash ~/.claude/hooks/lib/pr-review.sh restart --dir %s --sha %s\nOr, only after telling Dan why, merge with the one command override: %s <the merge command>.\n' "$top" "${full_sha:-$sha}" "$PRR_OVERRIDE"
+  printf 'Run it again with: bash ~/.claude/hooks/lib/pr-review.sh restart --dir %s --sha %s\nOr, only after telling Dan why, %s with the one command override: %s <the %s command>.\n' "$top" "${full_sha:-$sha}" "$act" "$PRR_OVERRIDE" "$act"
 }
 
 do_check() {
@@ -378,18 +391,46 @@ do_check() {
       record abandoned "The review was started and never finished: $(elapsed_text $((now - st))) passed with no answer written, which means the background runner died. Nothing was read back." "$(meta_of "$pending" base)"
       rm -f "$pending"
     else
-      echo "Refusing to merge yet: the lessons review of $repo_label $branch at $short is still running ($(elapsed_text $((now - st))) of its $(elapsed_text "$dl") deadline). Run the merge again once it has finished."
+      echo "Refusing to $act yet: the lessons review of $repo_label $branch at $short is still running ($(elapsed_text $((now - st))) of its $(elapsed_text "$dl") deadline). Run the $act again once it has finished."
       return 3
+    fi
+  fi
+  # A finished review answers for this check only if it READ everything the check is asked about
+  # (claude-config#599). Reviews are keyed by repository and commit, not by base, so a review started
+  # at commit or push time, from the default branch, is the one a merge into another base finds. It
+  # covers the merge when its own base is an ancestor of (or is) the merge base the check is given:
+  # then every commit the merge brings is in the range it read. Otherwise it is started again over the
+  # whole range, never reused for commits nobody read. Compared on this checkout's copy of the base
+  # first, and only when that disagrees is the base fetched, because a stale copy can only make the
+  # merge base OLDER and so ask for more, never less.
+  if [ -e "$final" ] && [ -n "$base_ref" ] && [ -n "$full_sha" ]; then
+    local rbase need
+    rbase="$(meta_of "$final" base)"
+    if [ -n "$rbase" ]; then
+      need="$(git merge-base "$base_ref" "$full_sha" 2>/dev/null)"
+      if [ -n "$need" ] && ! git merge-base --is-ancestor "$rbase" "$need" 2>/dev/null; then
+        refresh_base_ref "$base_ref"
+        need="$(git merge-base "$base_ref" "$full_sha" 2>/dev/null)"
+        if [ -n "$need" ] && ! git merge-base --is-ancestor "$rbase" "$need" 2>/dev/null; then
+          local again_msg
+          rm -f "$final" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* 2>/dev/null
+          again_msg="$(do_start)"
+          if [ -e "$pending" ]; then
+            echo "Refusing to $act yet: the lessons review of $repo_label $branch at $short read from ${rbase:0:7}, which does not cover everything $base_ref brings in from ${need:0:7}, so it was started again over the whole range. $again_msg Run the $act again once it has finished."
+            return 3
+          fi
+        fi
+      fi
     fi
   fi
   if [ ! -e "$final" ]; then
     local started_msg
     started_msg="$(do_start)"
     if [ -e "$pending" ]; then
-      echo "Refusing to merge yet: no lessons review existed for $repo_label at $short, so one was started now. $started_msg Run the merge again once it has finished."
+      echo "Refusing to $act yet: no lessons review existed for $repo_label at $short, so one was started now. $started_msg Run the $act again once it has finished."
       return 3
     fi
-    [ -e "$final" ] || { echo "Refusing to merge: the lessons review could neither start nor record why. $started_msg"; remedy; return 1; }
+    [ -e "$final" ] || { echo "Refusing to $act: the lessons review could neither start nor record why. $started_msg"; remedy; return 1; }
   fi
   local status findings took
   status="$(meta_of "$final" status)"
@@ -408,25 +449,34 @@ do_check() {
       # again for this head, by any route, is unread until its own findings are acknowledged.
       local fin
       fin="$(meta_of "$final" finished)"
+      # A merge reads only a merge's acknowledgement; a push reads either, since a merge that read
+      # them has already shown them to a session (claude-config#599).
+      local read_by="" ack_file="$acknowledged"
+      [ "$gate" = push ] && ack_file="$push_acknowledged"
       if [ -n "$fin" ] && [ "$(cat "$acknowledged" 2>/dev/null)" = "finished=$fin" ]; then
-        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a merge that presented their key."
+        read_by="merge"
+      elif [ -n "$fin" ] && [ "$gate" = push ] && [ "$(cat "$push_acknowledged" 2>/dev/null)" = "finished=$fin" ]; then
+        read_by="push"
+      fi
+      if [ -n "$read_by" ]; then
+        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a $read_by that presented their key."
         return 0
       fi
       if [ -n "$fin" ] && ar_review_key_valid "$final" "${PR_REVIEW_READ:-}"; then
         # Braced, so a refused redirection is silenced too; a failed write is said, since the next
         # attempt will then need the key again.
-        { printf 'finished=%s\n' "$fin" > "$acknowledged"; } 2>/dev/null \
-          || echo "(The read could not be recorded beside $final, so a later merge of this head will need the key again.)"
-        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this merge presented their key."
+        { printf 'finished=%s\n' "$fin" > "$ack_file"; } 2>/dev/null \
+          || echo "(The read could not be recorded beside $final, so a later $act of this head will need the key again.)"
+        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this $act presented their key."
         return 0
       fi
       local noun="findings"; [ "$findings" -eq 1 ] && noun="finding"
       local readkey keyrc=0
       readkey="$(ar_review_issue_key "$final")" || keyrc=$?
-      echo "Refusing to merge until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun. Here they are. Check each against the code, fix what is real or say why it is not, then merge with their read key in front of the merge command:"
+      echo "Refusing to $act until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun. Here they are. Check each against the code, fix what is real or say why it is not, then $act with their read key in front of the $act command:"
       if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
-        echo "    PR_REVIEW_READ=$readkey <the merge command>"
-        echo "The key is only in this message, so a merge carrying it proves the findings were shown. A merge without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
+        echo "    PR_REVIEW_READ=$readkey <the $act command>"
+        echo "The key is only in this message, so a $act carrying it proves the findings were shown. A $act without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
       else
         echo "    ($(ar_review_key_failure "$keyrc" "$final" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir $top --sha ${full_sha:-$sha}"))"
       fi
@@ -439,14 +489,14 @@ do_check() {
       echo "The lessons review had nothing to read: the diff was empty. $(ar_capped_body "$final" 2 "$PRR_LINE_CHARS")"
       return 0
       ;;
-    timeout) echo "Refusing to merge: the lessons review of $repo_label at $short did not finish inside its deadline ($took), so the branch was never read." ;;
-    error) echo "Refusing to merge: the lessons review of $repo_label at $short failed:" ; ar_capped_body "$final" 8 "$PRR_LINE_CHARS" ;;
-    unparsed) echo "Refusing to merge: the lessons review of $repo_label at $short answered, but not in the review's format, so it is not a review. The start of what it said:"; ar_capped_body "$final" 6 "$PRR_LINE_CHARS" ;;
-    empty) echo "Refusing to merge: the lessons review of $repo_label at $short came back empty (the reviewer printed nothing), which is not the same as finding nothing." ;;
-    abandoned) echo "Refusing to merge: the lessons review of $repo_label at $short was started and never finished; the background runner died." ;;
-    could-not-run) echo "Refusing to merge: the lessons review of $repo_label at $short could not run:"; ar_capped_body "$final" 4 "$PRR_LINE_CHARS" ;;
-    too-large) echo "Refusing to merge: the lessons review of $repo_label at $short could not run, the branch is too large to review:"; ar_capped_body "$final" 2 "$PRR_LINE_CHARS" ;;
-    *) echo "Refusing to merge: the lessons review of $repo_label at $short recorded an outcome this gate does not know (${status:-none})." ;;
+    timeout) echo "Refusing to $act: the lessons review of $repo_label at $short did not finish inside its deadline ($took), so the branch was never read." ;;
+    error) echo "Refusing to $act: the lessons review of $repo_label at $short failed:" ; ar_capped_body "$final" 8 "$PRR_LINE_CHARS" ;;
+    unparsed) echo "Refusing to $act: the lessons review of $repo_label at $short answered, but not in the review's format, so it is not a review. The start of what it said:"; ar_capped_body "$final" 6 "$PRR_LINE_CHARS" ;;
+    empty) echo "Refusing to $act: the lessons review of $repo_label at $short came back empty (the reviewer printed nothing), which is not the same as finding nothing." ;;
+    abandoned) echo "Refusing to $act: the lessons review of $repo_label at $short was started and never finished; the background runner died." ;;
+    could-not-run) echo "Refusing to $act: the lessons review of $repo_label at $short could not run:"; ar_capped_body "$final" 4 "$PRR_LINE_CHARS" ;;
+    too-large) echo "Refusing to $act: the lessons review of $repo_label at $short could not run, the branch is too large to review:"; ar_capped_body "$final" 2 "$PRR_LINE_CHARS" ;;
+    *) echo "Refusing to $act: the lessons review of $repo_label at $short recorded an outcome this gate does not know (${status:-none})." ;;
   esac
   remedy
   return 1
@@ -457,6 +507,6 @@ case "$verb" in
   # Every verdict names what the review did not read (#583); a review still running is said by
   # its start line, which named them already.
   check) do_check; rc=$?; [ "$rc" -eq 3 ] || ar_left_out_note "$leftout" "$(meta_of "$final" status)"; exit "$rc" ;;
-  restart) rm -f "$final" "$pending" "$acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout"; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout"; do_start ;;
 esac
 exit 0

@@ -86,21 +86,10 @@ args=(check --dir "$repo_dir" --sha "$head")
 #
 # Only as an assignment in front of the MERGE segment itself: text in an echo, or an assignment in
 # front of some other command, says nothing about this merge (L673). Segments are cut the way the
-# merge matcher cuts them, so the segment judged a merge here is the one mt_runs_merge judged.
-read_key=""
-while IFS= read -r rk_seg; do
-  # The segment's leading assignments read as the shell reads them (mt_split_assignments, the same
-  # reader the merge matcher uses), so a key before `GH_TOKEN=$(gh auth token -u x) gh pr merge`
-  # is found, and quotes around the key are removed as the shell would.
-  mt_split_assignments "$rk_seg"
-  rk_found="$(printf '%s' "$MT_ASSIGNS" | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
-  if [ -n "$rk_found" ] && [ -n "$MT_REST" ] && mt_runs_merge "$MT_REST"; then
-    case "$rk_found" in *[!a-f0-9]*) ;; *) read_key="$rk_found" ;; esac
-    break
-  fi
-done <<RKEOF
-$(mt_raw_segments "$command")
-RKEOF
+# merge matcher cuts them, so the segment judged a merge here is the one mt_runs_merge judged, and
+# its leading assignments are read as the shell reads them, so a key before
+# `GH_TOKEN=$(gh auth token -u x) gh pr merge` is found and quotes around it are removed.
+read_key="$(mt_presented_read_key "$command" mt_runs_merge)"
 out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && { printf 'pr-review-gate: %s\n' "$out"; exit 0; }
 refuse "$out"
