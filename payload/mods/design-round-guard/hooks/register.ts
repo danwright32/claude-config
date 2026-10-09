@@ -379,12 +379,53 @@ const NAME_PROJECT =
   'No refused edit is waiting, and the design round guard never takes the project from the folder this session runs in, so nothing was asked. ' +
   'Give metadata "path" with the absolute path of a folder or file in the checkout of the project this design is for (and "issue" when its branch names none), or "call" with the id a refusal named.'
 
+// A path the settled question names that is not absolute: refused by name, never as though no path
+// were given (#1046, where that read as the path being ignored), with the refused edits waiting.
+const notAbsolute = (path: unknown, waiting: readonly DesignRoundPending[]): string =>
+  `"${String(path)}" is not an absolute path, and the design round guard never reads a path from the folder this session runs in, so nothing was asked. ` +
+  (waiting.length
+    ? `Give metadata "call" with the id of the refused edit this design is for (${waiting.map(w => `${w.id}: ${listed(w.subjects.map(x => x.label))}`).join('; ')}), or "path" as an absolute path.`
+    : 'Give metadata "path" as the absolute path of a folder or file in the checkout of the project this design is for.')
+
+// The refused calls still waiting on an answer of Dan's: those whose subjects are not all answered.
+const unanswered = async ($: EngineInterface): Promise<DesignRoundPending[]> => {
+  const open: DesignRoundPending[] = []
+  for (const w of await waitingAll($)) {
+    let lacking = false
+    for (const x of w.subjects) if (!recordOf(await $.store.get(x.key))) lacking = true
+    if (lacking) open.push(w)
+  }
+  return open
+}
+
+// What an answer about a refused call records for: what that call waits on, the subjects the judge
+// found it lacking, which is all that lets it through when it is sent again. The skip question and the
+// settled question naming a call both answer through this (#1046: the settled question recorded only
+// an issue it named, so the call, waiting on another, was refused again and every answer looped).
+const waitsOn = (w: DesignRoundPending): DesignRoundSubject[] => [...w.subjects]
+// An issue the settled question names is recorded beside them, in the call's project, never instead.
+const callSubjects = async ($: EngineInterface, w: DesignRoundPending, issue: number | undefined): Promise<{ subjects: DesignRoundSubject[] } | { why: string }> => {
+  const subjects = waitsOn(w)
+  if (issue === undefined) return { subjects }
+  for (const tree of w.trees) {
+    const at = await subjectsIn($, tree, issue)
+    if ('why' in at) return at
+    for (const x of at.subjects) if (!subjects.some(y => y.key === x.key)) subjects.push(x)
+  }
+  return { subjects }
+}
+
 // What the settled question records for (#1010, where Dan's Settled landed on the session's folder,
 // Slate, while the refused edit was on trypennie): the refused call it names; else the path it names;
 // else the refused calls waiting in this session, when they all wait on the same answer. Never the
 // session's folder. `from` is each waiting call the answer is about.
 type Found = { subjects: DesignRoundSubject[]; from: DesignRoundPending[] } | { deny: string }
 const settledFor = async ($: EngineInterface, issue: number | undefined, call: unknown, path: unknown): Promise<Found> => {
+  const noProject = (why: string) => ({ deny: `The design round guard could not tell which project this is (${why}), so nothing was asked. Try again.` })
+  const forCall = async (w: DesignRoundPending, from: DesignRoundPending[]): Promise<Found> => {
+    const c = await callSubjects($, w, issue)
+    return 'why' in c ? noProject(c.why) : { subjects: c.subjects, from }
+  }
   const inTrees = async (trees: readonly string[], from: DesignRoundPending[]): Promise<Found> => {
     const subjects: DesignRoundSubject[] = []
     for (const tree of trees) {
@@ -394,7 +435,7 @@ const settledFor = async ($: EngineInterface, issue: number | undefined, call: u
           deny:
             issue === undefined
               ? `The design round guard could not tell which issue or branch this design is for (${at.why}), so nothing was asked. Give metadata "issue" with the issue number, or check out its branch.`
-              : `The design round guard could not tell which project this is (${at.why}), so nothing was asked. Try again.`,
+              : noProject(at.why).deny,
         }
       for (const x of at.subjects) if (!subjects.some(y => y.key === x.key)) subjects.push(x)
     }
@@ -404,11 +445,11 @@ const settledFor = async ($: EngineInterface, issue: number | undefined, call: u
     if (typeof call !== 'string' || !call) return { deny: `"${String(call)}" names no refused call: give metadata "call" as the id the refusal named, or leave it out.` }
     const w = await waitingOf($, call)
     if (!w) return { deny: `No look changing edit is waiting under ${call}: it was answered already, or the session ended. Give metadata "path" with the project's folder instead.` }
-    return issue === undefined ? { subjects: w.subjects, from: [w] } : inTrees(w.trees, [w])
+    return forCall(w, [w])
   }
   if (path !== undefined) {
     const home = (await $.env.get('HOME')) ?? ''
-    if (typeof path !== 'string' || !(path.startsWith('/') || (home && path.startsWith('~/')))) return { deny: NAME_PROJECT }
+    if (typeof path !== 'string' || !(path.startsWith('/') || (home && path.startsWith('~/')))) return { deny: notAbsolute(path, await unanswered($)) }
     const abs = resolvePath(path, '/', home)
     let tree: string | null
     try {
@@ -419,18 +460,13 @@ const settledFor = async ($: EngineInterface, issue: number | undefined, call: u
     if (tree === null) return { deny: `${abs} is in no git checkout, so there is no project to settle the design for. Give metadata "path" with a folder or file in the project's checkout.` }
     return inTrees([tree], [])
   }
-  const open: DesignRoundPending[] = []
-  for (const w of await waitingAll($)) {
-    let lacking = false
-    for (const x of w.subjects) if (!recordOf(await $.store.get(x.key))) lacking = true
-    if (lacking) open.push(w)
-  }
+  const open = await unanswered($)
   const first = open[0]
   if (!first) return { deny: NAME_PROJECT }
   const sig = (w: DesignRoundPending) => w.subjects.map(x => x.key).sort().join('\n')
   if (open.some(w => sig(w) !== sig(first)))
     return { deny: `Refused edits are waiting on different answers (${open.map(w => `${w.id}: ${listed(w.subjects.map(x => x.label))}`).join('; ')}), so nothing was asked. Give metadata "call" with the id of the one this design is for.` }
-  return issue === undefined ? { subjects: first.subjects, from: open } : inTrees(first.trees, open)
+  return forCall(first, open)
 }
 
 type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown; call?: unknown; path?: unknown }; agentId?: string }
@@ -538,8 +574,9 @@ export const register: Register = on => {
           return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
         // Only what still has no answer of his is asked about and recorded: a subject he has since
         // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
+        // What the refused call waits on, as the settled question naming it reads it (#1046).
         const open: DesignRoundSubject[] = []
-        for (const x of waiting.subjects) if (!recordOf(await $.store.get(x.key))) open.push(x)
+        for (const x of waitsOn(waiting)) if (!recordOf(await $.store.get(x.key))) open.push(x)
         if (!open.length) {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }

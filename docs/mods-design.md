@@ -1966,6 +1966,13 @@ direction is what follows.
   when they all wait on one answer; with none waiting it needs `metadata.path`, a folder or file in
   the project's checkout, and refuses without one. Settle and the judge read a checkout through one
   resolver, and settle and skip find a refused call through one lookup.
+- **Settled for a refused call covers what that call waits on (#1046).** An `issue` named beside
+  `call` was recorded instead of the subjects the judge found the call lacking, so where the two
+  differed (an issue other than the branch's, or any issue on the default branch, where the call
+  waits on the branch for that session) the call sent again was refused again, and each answer
+  looped. Now settle and skip read what a refused call waits on through one resolver, and a named
+  issue is recorded beside it, never instead. A `path` that is not absolute is refused by name,
+  with the refused calls waiting, rather than as though none were given and none waited.
 - **Route parameters are path parts.** mod-kit's write reader read `src/app/booking/[SO_ID]/page.tsx`
   as a pattern and named no file, so the write was refused as one it could not follow. A part shaped
   like a route parameter (`[id]`, `[...slug]`, `[[...slug]]`, `[id=matcher]`, `[id].tsx`) now names
