@@ -800,6 +800,13 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
   r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"=HYPERLINK(\"https://evil.example\",\"x\")","Date Started":"2026-1-5","Date Completed":"","Problem/Goal":"-1+2","Skills Used":"0042","Link":"@x","When to Check Results":42}}))' "$REAL")" POST "$SHEET")"
   check_eq "append: formula, date, sign and number shaped text is stored as the literal text sent; a JSON number stays a number" \
     '["=HYPERLINK(\"https://evil.example\",\"x\")","2026-1-5","","-1+2",42,"0042","@x"]' "$(jget "$r" '[d["rows"][-1][i] for i in (0,1,2,3,6,7,8)]')"
+  check_eq "and the answer's row is the row as the sheet shows it, never the escaped values sent" \
+    '["=HYPERLINK(\"https://evil.example\",\"x\")","2026-1-5","","-1+2","42","0042","@x"]' "$(jget "$r" '[d["response"]["row"][i] for i in (0,1,2,3,6,7,8)]')"
+  # A date column left empty is filled with today, and as literal text like every caller's date,
+  # so one column never mixes real dates with text dates.
+  r="$(gs "$REAL" "$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"Theta","Date Started":"2026-05-01"}}))' "$REAL")" POST "$SHEET")"
+  check_eq "append: an empty date column is filled with today as literal text, the same kind as a date sent" \
+    '["2026-05-01","2026-01-01"]' "$(jget "$r" '[d["rows"][-1][1], d["rows"][-1][2]]')"
 
   # restore: the one raw write, for an undo. It puts back exactly what the answer's "restore"
   # recorded (a formula as a live formula, a date as a date, text as text), and only together with

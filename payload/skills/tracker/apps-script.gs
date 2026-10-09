@@ -118,12 +118,16 @@ function doPost(e) {
   const row = heads.map(function (h) {
     const key = norm(h);
     if (key in byHeader) return literal_(byHeader[key]);
-    if (/(date|timestamp|added|updated|created)/.test(key)) return today;
+    // Literal like every date a caller sends, so one column never mixes real dates and text.
+    if (/(date|timestamp|added|updated|created)/.test(key)) return literal_(today);
     return '';
   });
 
   sheet.appendRow(row);
-  return json_({ ok: true, rowNumber: sheet.getLastRow(), row: row, headers: heads });
+  // Answer with the row as the sheet shows it, never the escaped values handed to appendRow.
+  const rowNumber = sheet.getLastRow();
+  const shown = sheet.getRange(rowNumber, 1, 1, heads.length).getDisplayValues()[0];
+  return json_({ ok: true, rowNumber: rowNumber, row: shown, headers: heads });
 }
 
 function norm_(s) { return String(s).trim().toLowerCase(); }
