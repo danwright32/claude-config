@@ -489,6 +489,22 @@ got="$(ps_cd_target "cd $T && git status")"
 got="$(ps_repo_dir "cd $T && git add -A; cd $O && git push" "$S" ps_is_git_add)"
 [ "$got" = "$T" ] && check "#1017 ps_repo_dir asked about an add reads the add's cd" ok \
   || check "#1017 ps_repo_dir asked about an add reads the add's cd" "got [$got]"
+# A `git -C` counts only on the action's own command, and is taken from the cd in force for it
+# (lessons review of #1017). ps_repo_dir used to take the push's -C or else the FIRST git -C anywhere
+# in the command, and ask it before any cd, so an unrelated `git -C <other> status` decided which
+# repository a later push was judged in.
+want_repo_both "git -C $O status; cd $T && git push" "$T" \
+  "#1017 a git -C on another command does not decide the push's repository"
+want_repo_both "cd $RD && git -C target push" "$T" \
+  "#1017 a relative git -C on the push is taken from the cd in force for it"
+want_repo_both "cd $O && git -C $T push" "$T" \
+  "#1017 an absolute git -C on the push wins over the cd before it"
+got="$(ps_repo_dir "git -C $O commit -m x && git push" "$S" ps_is_git_commit)"
+[ "$got" = "$O" ] && check "#1017 asked about a commit, the commit's own -C decides" ok \
+  || check "#1017 asked about a commit, the commit's own -C decides" "got [$got]"
+want_repo "git -C $O commit -m x && git push" "$S" \
+  "#1017 asked about the push, a commit's -C beside it decides nothing"
+
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \
   "#1017 &> is a redirect, not a cd sent to the background"

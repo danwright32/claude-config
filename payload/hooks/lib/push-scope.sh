@@ -357,15 +357,25 @@ ps__segment_is_pr_create() {   # $1 = one segment
 # (L11, L75). A relative path is relative to the session directory, as the shell running the
 # command would read it.
 #
-# $3 is the action the repository is wanted for, a predicate ps_cd_target reads the governing cd for
-# (claude-config#1017): ps_is_git_push by default, since almost every caller guards a push, and the
-# caller's own question otherwise (a commit, an add, a pull request creation).
+# $3 is the action the repository is wanted for (claude-config#1017): a predicate taking one
+# command, ps_is_git_push by default, since almost every caller guards a push, and the caller's own
+# question otherwise (a commit, an add, a pull request creation). Both the -C and the cd are read for
+# THAT command alone: its own `git -C`, then the cd in force for it. The -C used to be the push's or
+# else the FIRST git -C anywhere in the command, asked before any cd, so an unrelated
+# `git -C <other> status` earlier in the command decided where a later push was judged (lessons
+# review of #1017). With no command satisfying the predicate, nothing in the command is read as the
+# action's directory, and the session directory answers.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named=""
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text=""
+  if rec="$(ps__action_record "$cmd" "$pred")"; then
+    dir="${rec%%$'\x1f'*}"; text="${rec#*$'\x1f'}"
+  fi
 
-  # `git -C <path> … push`, the path read as the shell reads it (claude-config#589).
-  cand="$(ps_git_c_target "$cmd")"
+  # `git -C <path> … push`, the path read as the shell reads it (claude-config#589). A relative -C
+  # is taken from the cd in force, which is where git starts from.
+  [ -n "$text" ] && cand="$(ps_git_c_target "$text")"
   if [ -n "$cand" ]; then
+    case "$cand" in /*|"~"*) ;; *) [ -n "$dir" ] && cand="${dir%/}/$cand" ;; esac
     named="$(ps__named_path "$cand" "$cwd")"
     if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
     ps__refuse_named "git -C $cand" "$named" "$cwd"; return 2
@@ -376,11 +386,10 @@ ps_repo_dir() {
   # whitespace or a separator before it, so the subshell form fell through to the SESSION's
   # directory and a gate judged, and refused, a repository the command never touched
   # (claude-config#439, L11). The LAST cd before the action, on any line (claude-config#1017).
-  cand="$(ps_cd_target "$cmd" "$pred")"
-  if [ -n "$cand" ]; then
-    named="$(ps__named_path "$cand" "$cwd")"
+  if [ -n "$dir" ]; then
+    named="$(ps__named_path "$dir" "$cwd")"
     if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
-    ps__refuse_named "cd $cand" "$named" "$cwd"; return 2
+    ps__refuse_named "cd $dir" "$named" "$cwd"; return 2
   fi
 
   if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
@@ -430,20 +439,28 @@ ps__is_worktree() {
 # When the reading cannot be trusted (a quote never closed) the crude cut's records are used, the
 # same reading ps_is_git_push falls back to, so the action it saw is the one found here.
 ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_git_push)
+  local rec
+  rec="$(ps__action_record "$1" "${2:-}")" || return 0
+  printf '%s' "${rec%%$'\x1f'*}"
+}
+
+# The action's own record from ps__shell_commands, "<dir>" 0x1f "<command>": the first command that
+# satisfies $2 (ps_is_git_push by default). Fails when none does or nothing could read the command.
+ps__action_record() {   # $1 = command  $2 = the action's predicate
   local pred="${2:-ps_is_git_push}" recs rec
   recs="$(ps__shell_commands "$1")" || true
-  [ -n "$recs" ] || return 0
+  [ -n "$recs" ] || return 1
   while IFS= read -r -d $'\x1e' rec; do
     "$pred" "${rec#*$'\x1f'}" || continue
-    printf '%s' "${rec%%$'\x1f'*}"
+    printf '%s' "$rec"
     return 0
   done <<< "$recs"
-  return 0
+  return 1
 }
 
 # The directory a `git -C <path>` in COMMAND position names (claude-config#589): the push's own -C
-# when the push carries one, otherwise the first git command's, which is what the pattern this
-# replaced answered. Read with the same shell tokenizer as ps_cd_target, because the pattern took
+# when the push carries one, otherwise the first git command's. ps_repo_dir asks it of the action's
+# own command alone since #1017, so the "first git command" is that command. Read with the same shell tokenizer as ps_cd_target, because the pattern took
 # everything up to the first space, so `git -C "/a b/wt" push` became `"/a`, which resolved to
 # nothing, and every global push gate stood down on a push it should have judged. It also only
 # saw a -C straight after `git`, so `git -c k=v -C <wt> push` judged the SESSION repository. Several
