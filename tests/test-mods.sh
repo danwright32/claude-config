@@ -144,7 +144,7 @@ printf '%s\n' "$out" | grep -q 'cast-multi-line/tests/register.test.ts:4:.*as ne
 
 # 3b3. A mod test that times its subject sets its own time limit (#1016). The test runner's default,
 #     5,000 ms, is a fixed number, so a test timing a list against a yardstick from the same run
-#     failed at it on a busy Mac with nothing broken (L224). Timing is performance.now, process.hrtime
+#     failed at it on a busy Mac with nothing broken (L224; measured 2026-10-09). Timing is performance.now, process.hrtime
 #     or Date.now arithmetic, in the test or in a helper it calls, however deep. A test with a limit
 #     of its own passes, whether written in place or in a named options object; one that times
 #     nothing passes, and so does one whose comment merely names a clock.

@@ -168,7 +168,7 @@ done
 # 5,000 ms, is a fixed number, so a test timing its subject under it is judged by how busy the
 # machine is (L224): session-registry's #911 test, which compares a list against a yardstick
 # measured in the same run, failed at it three times out of three beside 96 CPU burners with
-# nothing broken. Timing is performance.now, process.hrtime, or Date.now arithmetic, in the test
+# nothing broken (measured 2026-10-09, when the runner's own error named the 5,000 ms). Timing is performance.now, process.hrtime, or Date.now arithmetic, in the test
 # itself or in a helper it calls, however many helpers deep. A test's limit is the timeoutMs in its
 # options, written in place or in the named object it passes; a timeoutMs elsewhere in its body
 # (a command's bound) is not its limit. Tests and helpers are found by indentation, as every mod
