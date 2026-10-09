@@ -42,7 +42,8 @@ export GIT_OPTIONAL_LOCKS=0
 # deleting a substring wherever it happens to appear (a repo named my.github.repo keeps its name).
 normalize_remote(){
   local u="$1" host="" path=""
-  local re_url='^(ssh|git|http|https|git\+ssh|ssh\+git)://([^/@]*@)?([A-Za-z0-9][A-Za-z0-9.-]*)(:[0-9]*)?/(.*)$'
+  # The user information runs to the LAST @ before the first slash, since a password can hold one.
+  local re_url='^(ssh|git|http|https|git\+ssh|ssh\+git)://([^/]*@)?([A-Za-z0-9][A-Za-z0-9.-]*)(:[0-9]*)?/(.*)$'
   local re_scp='^([^/@:]+@)?([A-Za-z0-9][A-Za-z0-9.-]*):(.*)$'
   if [[ "$u" =~ $re_url ]]; then
     host="${BASH_REMATCH[3]}"; path="${BASH_REMATCH[5]}"
@@ -63,13 +64,14 @@ lower(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # redact_url <url>: the remote as shown in the output. Credentials in an http(s) address (a token
 # is often the user name alone) and any other user:password are dropped, and so are a query and a
-# fragment (L741). A plain ssh user such as git@ is kept.
+# fragment (L741). A plain ssh user such as git@ is kept. The user information is matched to the
+# LAST @ before the first slash, so a password holding an @ is removed whole, not cut at its own @.
 redact_url(){
   local u="$1"
   u="${u%%\?*}"; u="${u%%#*}"
-  if [[ "$u" =~ ^(https?)://[^/@]*@(.*)$ ]]; then
+  if [[ "$u" =~ ^(https?)://[^/]*@(.*)$ ]]; then
     u="${BASH_REMATCH[1]}://${BASH_REMATCH[2]}"
-  elif [[ "$u" =~ ^([A-Za-z0-9+]+)://[^/@]*:[^/@]*@(.*)$ ]]; then
+  elif [[ "$u" =~ ^([A-Za-z0-9+]+)://[^/@]*:[^/]*@(.*)$ ]]; then
     u="${BASH_REMATCH[1]}://${BASH_REMATCH[2]}"
   fi
   printf '%s' "$u"
@@ -106,11 +108,16 @@ command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH, so the JSON c
 scan_roots="${roots_arg%$'\n'}"
 scan_roots="${scan_roots:-${HOME:?HOME is not set, so there is no default root}}"
 scan_window_days="${days:-30}"
-case "$scan_window_days" in ''|*[!0-9]*|0) die "--days must be a whole number of days above zero, not '$scan_window_days'." ;; esac
+case "$scan_window_days" in ''|*[!0-9]*) die "--days must be a whole number of days above zero, not '$scan_window_days'." ;; esac
+# 10# reads the digits as decimal: shell arithmetic takes a leading zero as octal, so 08 would be an
+# error and 0123 would quietly be 83.
+scan_window_days=$((10#$scan_window_days))
+[ "$scan_window_days" -gt 0 ] || die "--days must be a whole number of days above zero, not '${days}'."
 case "$now" in
   '') now="$(date +%s)" ;;
   *[!0-9]*) die "--now must be epoch seconds, not '$now'." ;;
 esac
+now=$((10#$now))
 since=$((now - scan_window_days * 86400))
 
 WORK="$(mktemp -d)"

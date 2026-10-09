@@ -103,6 +103,9 @@ git clone -q --depth 1 "file://$REAL_ROOT/strangers" "$ROOT/shallow" 2>/dev/null
 
 # a remote carrying credentials in its address.
 newrepo "$ROOT/secret" "https://dan:hunter2tokenvalue@github.com/o/secret-repo.git"
+# a password that itself holds an @, which a match stopping at the first @ would only half remove.
+newrepo "$ROOT/atpass" "https://dan:pass@word99@github.com/o/atpass-repo.git"
+commit "$ROOT/atpass" -1 "$ME_NAME" "$ME_EMAIL" "at in the password"
 commit "$ROOT/secret" -1 "$ME_NAME" "$ME_EMAIL" "secret work"
 
 # noise directories, whose repositories are never wanted, and one ignored on purpose.
@@ -151,8 +154,8 @@ check_not "and its output is JSON" "PARSE-ERROR" "$(q 'd["repo_count"]')"
 
 repos="$(q 'sorted(r["path"][len(sys.argv[2])+1:] for r in d["repos"])')"
 check_eq "it finds exactly the wanted repositories, each once" \
-  '["empty", "mine", "secret", "shallow", "strangers", "wt/mine-feature"]' "$repos"
-check_eq "and counts them" 6 "$(q 'd["repo_count"]')"
+  '["atpass", "empty", "mine", "secret", "shallow", "strangers", "wt/mine-feature"]' "$repos"
+check_eq "and counts them" 7 "$(q 'd["repo_count"]')"
 check_eq "and says it found some" "repos_found" "$(q 'd["outcome"]')"
 check_eq "and names the root it searched, resolved" "[\"$REAL_ROOT\"]" "$(q 'd["roots_searched"]')"
 
@@ -191,6 +194,9 @@ check_eq "a repository with no remote has no normalized url" "null" "$(q 'R("emp
 check_eq "and no repo_name invented from its folder" "null" "$(q 'R("empty")["repo_name"]')"
 check_eq "secret: credentials in a remote address are normalized away" "github.com/o/secret-repo" "$(q 'R("secret")["normalized_url"]')"
 check_not "and never printed anywhere in the output" "hunter2tokenvalue" "$(cat "$OUT")"
+check_eq "a password holding an @ is removed whole from the remote shown" "https://github.com/o/atpass-repo.git" "$(q 'R("atpass")["remote_url"]')"
+check_eq "and from the normalized url" "github.com/o/atpass-repo" "$(q 'R("atpass")["normalized_url"]')"
+check_not "and no piece of it is printed anywhere" "word99" "$(cat "$OUT")"
 
 # .git as a file, worktrees and broken pointers.
 check_eq "the worktree, whose .git is a file, resolves to its own toplevel" 1 "$(q 'len([r for r in d["repos"] if r["path"].endswith("/wt/mine-feature")])')"
@@ -257,7 +263,8 @@ commit "$HOME/proj" -1 "$ME_NAME" "$ME_EMAIL" "home work"
 scan --now "$NOW" --author "$ME_EMAIL"
 check_eq "with no --root the scan searches HOME" "[\"$(cd "$HOME" && pwd -P)\"]" "$(q 'd["roots_searched"]')"
 check_eq "and finds the repository there" '["github.com/o/home-proj"]' "$(q '[r["normalized_url"] for r in d["repos"]]')"
-check "and defaults the window to some number of days" "window_days" "$(q 'list(d)')"
+check_eq "and defaults the window to 30 days" 30 "$(q 'd["window_days"]')"
+check_eq "ending at the given now and starting 30 days before it" "2026-05-16T12:00:00Z 2026-06-15T12:00:00Z" "$(q 'd["since"] + " " + d["until"]')"
 
 # --- refusals ---------------------------------------------------------------------
 scan --root "$TMP/does-not-exist" --now "$NOW"
@@ -267,6 +274,13 @@ check_eq "and nothing is printed as a result" "" "$(cat "$OUT")"
 scan --root "$ROOT/mine" --root "$TMP/does-not-exist" --now "$NOW"
 if [ "$RC" -ne 0 ]; then ok; else bad "a missing root beside a good one is refused, not skipped (got $RC)"; fi
 check_eq "and the good root's results are not printed as if the scan were whole" "" "$(cat "$OUT")"
+# A leading zero is still decimal: 08 is eight days, never an octal error (or 0123 read as 83).
+scan --root "$ROOT/mine" --days 08 --now "0$NOW" --author "$ME_EMAIL"
+check_eq "a window given with a leading zero succeeds" 0 "$RC"
+check_eq "and is read as decimal days" 8 "$(q 'd["window_days"]')"
+check_eq "and the now beside it as decimal seconds" "2026-06-15T12:00:00Z" "$(q 'd["until"]')"
+scan --root "$ROOT" --days 00
+if [ "$RC" -ne 0 ]; then ok; else bad "a window of zero days written as 00 is refused"; fi
 scan --root "$ROOT" --days thirty
 if [ "$RC" -ne 0 ]; then ok; else bad "a window that is not a number of days is refused"; fi
 check "and says why" "days" "$(cat "$ERR")"
@@ -293,6 +307,8 @@ https://github.com/owner/repo/|github.com/owner/repo
 https://github.com/owner/repo.git/|github.com/owner/repo
 https://user@github.com/owner/repo.git|github.com/owner/repo
 https://user:tok@GitHub.com/owner/repo|github.com/owner/repo
+https://user:p@ss@github.com/owner/repo|github.com/owner/repo
+ssh://u:p@ss@github.com/owner/repo|github.com/owner/repo
 http://gitlab.com/group/sub/repo.git|gitlab.com/group/sub/repo
 https://github.com/owner/my.github.repo|github.com/owner/my.github.repo
 https://github.com/gitter/git.github.io.git|github.com/gitter/git.github.io
