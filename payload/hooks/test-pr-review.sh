@@ -139,6 +139,29 @@ G push -q -u origin feat/sync 2>/dev/null
 HEAD_SHA="$(G rev-parse HEAD)"
 BASE_SHA="$(G merge-base origin/main HEAD)"
 
+# A PATH holding every tool this machine has in the usual places except the ones named (each a
+# shell pattern), so a case needing a tool to be ABSENT is produced on a machine that has it
+# installed, never by removing it. Prints the directory, built under WORKDIR on first use.
+path_without(){ # path_without <directory name> <tool pattern>...
+  local dest="$WORKDIR/$1" d t b n skip
+  shift
+  if [ ! -d "$dest" ]; then
+    mkdir -p "$dest"
+    for d in /bin /usr/bin /usr/local/bin /opt/homebrew/bin "$FAKEBIN"; do
+      [ -d "$d" ] || continue
+      for t in "$d"/*; do
+        b="$(basename "$t")"; skip=0
+        for n in "$@"; do
+          # shellcheck disable=SC2254 # each name is a pattern on purpose: 'python3*'
+          case "$b" in $n) skip=1 ;; esac
+        done
+        [ "$skip" = 1 ] && continue
+        [ -e "$dest/$b" ] || ln -s "$t" "$dest/$b" 2>/dev/null
+      done
+    done
+  fi
+  printf '%s' "$dest"
+}
 prr(){ bash "$LIB" "$@" 2>&1; }
 key(){ bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repo_key '$REPO'"; }
 KEY="$(key)"
@@ -176,17 +199,16 @@ done
 # 2. The PostToolUse hook: a successful creation starts a detached review of the WHOLE branch,
 #    every file type, on this Mac too.
 # ===========================================================================================
-fire_create(){ # fire_create <command> <exit code, or "" for a payload carrying none> [stdout] [stderr]
-  local p
-  p="$(python3 -c '
+create_payload(){ # create_payload <command> <exit code, or "" for a payload carrying none> [stdout] [stderr]
+  python3 -c '
 import json, sys
 r = {"stdout": sys.argv[4], "stderr": sys.argv[5]}
 if sys.argv[3] != "":
     r["exit_code"] = int(sys.argv[3])
 print(json.dumps({"session_id": "s1", "cwd": sys.argv[1], "hook_event_name": "PostToolUse", "tool_name": "Bash",
-                  "tool_input": {"command": sys.argv[2]}, "tool_response": r}))' "$REPO" "$1" "$2" "${3:-}" "${4:-}")"
-  printf '%s' "$p" | bash "$CREATE_HOOK" 2>&1
+                  "tool_input": {"command": sys.argv[2]}, "tool_response": r}))' "$REPO" "$1" "$2" "${3:-}" "${4:-}"
 }
+fire_create(){ create_payload "$@" | bash "$CREATE_HOOK" 2>&1; }
 opened_url(){ awk -F '\t' -v s="$HEAD_SHA" '$5 == s { u = $6 } END { print u }' "$AI_REVIEW_STATE_DIR/pr-opened.tsv" 2>/dev/null; }
 opened_rows(){ awk -F '\t' -v s="$HEAD_SHA" '$5 == s { n++ } END { print n + 0 }' "$AI_REVIEW_STATE_DIR/pr-opened.tsv" 2>/dev/null; }
 reset_state
@@ -237,6 +259,37 @@ before_rows="$(opened_rows)"
 fire_create "gh pr create --fill" "" "" $'a pull request for branch "feature" into branch "main" already exists:\nhttps://github.com/test-owner/repo/pull/42\n' >/dev/null
 check_eq "the repeat is recorded as an opening" "$((before_rows + 1))" "$(opened_rows)"
 check_eq "naming the pull request that already exists" "https://github.com/test-owner/repo/pull/42" "$(opened_url)"
+
+# claude-config#1029: the same two openings on a machine with no jq. The hook then reads its payload
+# through the python3 fallbacks (ps_parse_payload, ar_payload_fields, ar_payload_pr_url), which no
+# test reached before, so a broken fallback would record no row, or a row with no URL, and say
+# nothing (L535). Each case runs with jq and then without it, on a URL of its own so the row read
+# back can only be the one that run wrote, and both must record exactly the URL gh printed.
+NOJQ="$(path_without nojq jq)"
+# Asked of a fresh shell, the way the hook will ask, so this shell's command hash cannot answer.
+check_eq "the jq free PATH really has no jq" "" "$(PATH="$NOJQ" bash -c 'command -v jq')"
+PATH="$NOJQ" bash -c 'command -v python3' >/dev/null && ok || bad "the jq free PATH keeps python3, which the fallback reads with"
+nojq_case(){ # nojq_case <label> <url> <exit code, or ""> <stdout> <stderr>
+  local label="$1" url="$2" arm rows with_jq=""; shift 2
+  for arm in jq nojq; do
+    rows="$(opened_rows)"
+    if [ "$arm" = jq ]; then create_payload "gh pr create --fill" "$@" | bash "$CREATE_HOOK" >/dev/null 2>&1
+    else create_payload "gh pr create --fill" "$@" | PATH="$NOJQ" bash "$CREATE_HOOK" >/dev/null 2>&1
+    fi
+    check_eq "$label, $arm: one opening recorded" "$((rows + 1))" "$(opened_rows)"
+    [ "$arm" = jq ] && with_jq="$(opened_url)"
+  done
+  check_eq "$label: with jq the URL column is the one gh printed" "$url" "$with_jq"
+  check_eq "$label: without jq the URL column is the same" "$with_jq" "$(opened_url)"
+}
+nojq_case "a successful creation" "https://github.com/test-owner/repo/pull/43" 0 $'https://github.com/test-owner/repo/pull/43\n' ""
+nojq_case "the already exists refusal" "https://github.com/test-owner/repo/pull/44" "" "" $'a pull request for branch "feature" into branch "main" already exists:\nhttps://github.com/test-owner/repo/pull/44\n'
+# And the exit code is read without jq too: a failed creation records nothing, as it does with jq,
+# rather than reading as a success because the field reader came back empty.
+rows="$(opened_rows)"
+out="$(create_payload "gh pr create --fill" 1 "" "pull request create failed" | PATH="$NOJQ" bash "$CREATE_HOOK" 2>&1)"
+check "a failed creation without jq says it did not succeed" "did not succeed" "$out"
+check_eq "and records no opening" "$rows" "$(opened_rows)"
 
 # ===========================================================================================
 # 3. check: every outcome the merge gate can meet.
@@ -484,15 +537,7 @@ check "the nudge's abandoned row carries the repository directory" $'\t'"$(git -
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.
 reset_state
-NOCLAUDE="$WORKDIR/noclaude"; mkdir -p "$NOCLAUDE"
-for d in /bin /usr/bin /usr/local/bin /opt/homebrew/bin "$FAKEBIN"; do
-  [ -d "$d" ] || continue
-  for t in "$d"/*; do
-    b="$(basename "$t")"
-    [ "$b" = claude ] && continue
-    [ -e "$NOCLAUDE/$b" ] || ln -s "$t" "$NOCLAUDE/$b" 2>/dev/null
-  done
-done
+NOCLAUDE="$(path_without noclaude claude)"
 out="$(PATH="$NOCLAUDE" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
 check_eq "no claude refuses" "1" "$rc"
 check "naming what is missing" "could not run" "$out"
@@ -501,15 +546,7 @@ check "a review that could not run is in the outcome ledger too" $'\tcould-not-r
 
 # 3i. could not run: no python3 (the runner's interpreter). A PATH built from every tool but python3.
 reset_state
-NOPY="$WORKDIR/nopy"; mkdir -p "$NOPY"
-for d in /bin /usr/bin /usr/local/bin /opt/homebrew/bin "$FAKEBIN"; do
-  [ -d "$d" ] || continue
-  for t in "$d"/*; do
-    b="$(basename "$t")"
-    case "$b" in python3*|python) continue ;; esac
-    [ -e "$NOPY/$b" ] || ln -s "$t" "$NOPY/$b" 2>/dev/null
-  done
-done
+NOPY="$(path_without nopy 'python3*' python)"
 out="$(PATH="$NOPY" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
 check_eq "no python3 refuses" "1" "$rc"
 check "naming python3" "python3" "$out"
