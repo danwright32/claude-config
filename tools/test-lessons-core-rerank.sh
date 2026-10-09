@@ -54,6 +54,9 @@ IDX="$REPO/payload"; mkdir -p "$IDX" "$REPO/lesson-counts" "$REPO/lesson-bands"
   for n in 1 2 3 4 5 6 7 8 9 10 11 12; do printf -- '- L%s. Lesson number %s says something worth a line of about sixty chars.\n' "$n" "$n"; done
 } > "$IDX/LESSONS-INDEX-proof.md"
 printf '# The lessons core\n# count 6\nL1\nL2\nL3\nL4\nL5\nL12\n' > "$IDX/LESSONS-CORE.txt"
+# The SEATS (Dan, 2026-10-09: "Keep your 355 protected"): the only core lessons a re-rank may swap.
+# Every other core lesson is protected because it is not a seat, whatever its tag.
+printf '# The seats\nL3\nL4\nL5\n' > "$REPO/lesson-core-seats.txt"
 printf 'L1\tdesign\nL2\toperate\nL3\tdiff\nL4\tdiff\nL5\tdiff\nL6\tdiff\nL7\tdiff\nL8\tdesign\nL9\tdesign\nL10\tdiff\nL11\tdiff\nL12\tdesign\nEND 12 lessons tagged\n' > "$REPO/lesson-tags.tsv"
 printf 'L1\tdesign\nL2\toperate\nL3\tdiff\nL4\tdiff\nL5\tdiff\nL6\tdiff\nL7\tdiff\nL8\tdesign\nL9\tdesign\nL10\tdiff\nL11\tdiff\nL12\tdiff\nEND 12 lessons tagged\n' > "$REPO/lesson-tags-second.tsv"
 { for n in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'L%s\t2026-07-16\t85\n' "$n"; done; printf 'END\n'; } > "$WORK/ages.txt"
@@ -77,7 +80,10 @@ fresh_counts
 OUT="$WORK/out"; mkdir -p "$OUT"
 rerank(){ rm -f "$OUT"/*; python3 "$TOOL" --index-dir "$IDX" --core "$IDX/LESSONS-CORE.txt" --counts-dir "$REPO/lesson-counts" \
   --bands-dir "$REPO/lesson-bands" --ages "$WORK/ages.txt" --tags "$REPO/lesson-tags.tsv" --second-tags "$REPO/lesson-tags-second.tsv" \
+  --seats "$REPO/lesson-core-seats.txt" --out-seats "$OUT/seats.txt" \
   --now "$NOW" --band 1 --out-tsv "$OUT/moves.tsv" --out-html "$OUT/rerank.html" --out-list "$OUT/core.txt" "$@" 2>&1; }
+seat_list(){ awk '{ sub(/#.*/, ""); for (i = 1; i <= NF; i++) if ($i ~ /^L[0-9]+$/) printf "%s ", $i }' "$1" 2>/dev/null; }
+seat_count(){ seat_list "$1" | wc -w | tr -d ' '; }
 
 # 1. MOVES IN AND OUT, from both Macs' counts.
 out="$(rerank)"; rc=$?
@@ -103,7 +109,87 @@ check "and carries the lessons coming in" " L6 " " $list"
 check_not "and drops the lessons going out" " L4 " " $list"
 check "the proposed list declares its count, the shape core-set writes" "# count 7" "$(cat "$OUT/core.txt" 2>/dev/null)"
 
+# 2b. ONLY THE SEATS SWAP (Dan, 2026-10-09: "Keep your 355 protected"). Protection is the seats
+#     file, not the tags: a core lesson that is not a seat never leaves, whatever both passes call it,
+#     so a re-tag can never unprotect an approved lesson.
+check "the proposed seats are the seats after the swaps" "L3 L6 L7 " "$(seat_list "$OUT/seats.txt")"
+check "and the seat count stays three" "3" "$(seat_count "$OUT/seats.txt")"
+check_not "an addition no review can see never takes a seat" "L8" "$(seat_list "$OUT/seats.txt")"
+# L10 is called diff by BOTH passes and never cited, so by rank it is the worst lesson there is. It is
+# on the approved list but not a seat, so it stays.
+printf 'L1\nL2\nL3\nL4\nL5\nL10\nL12\n' > "$WORK/core-approved.txt"
+out="$(rerank --core "$WORK/core-approved.txt")"; rc=$?
+check_rc "a core holding a protected reviewable lesson still re-ranks" 0 "$rc"
+[ -z "$(move "$OUT/moves.tsv" L10)" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a protected lesson both passes call diff is never proposed out (got $(move "$OUT/moves.tsv" L10))"; }
+check "the seats still swap beside it" "out" "$(move "$OUT/moves.tsv" L4)"
+check "and the seat count stays three" "3" "$(seat_count "$OUT/seats.txt")"
+check "the summary names the protected count, from the seats file" "4 protected" "$out"
+# Re-tagged: L1, L2 and L12 called diff by both passes now. Still protected, because still not seats.
+printf 'L1\tdiff\nL2\tdiff\nL3\tdiff\nL4\tdiff\nL5\tdiff\nL6\tdiff\nL7\tdiff\nL8\tdesign\nL9\tdesign\nL10\tdiff\nL11\tdiff\nL12\tdiff\n' > "$WORK/tags-all-diff.tsv"
+out="$(rerank --core "$WORK/core-approved.txt" --tags "$WORK/tags-all-diff.tsv" --second-tags "$WORK/tags-all-diff.tsv")"; rc=$?
+check_rc "a re-tag calling every approved lesson diff still re-ranks" 0 "$rc"
+for l in L1 L2 L10 L12; do
+  [ -z "$(move "$OUT/moves.tsv" "$l")" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: $l, approved and not a seat, stays whatever its tag (got $(move "$OUT/moves.tsv" "$l"))"; }
+done
+check "and the seat count stays three" "3" "$(seat_count "$OUT/seats.txt")"
+# The cap holds the seats at three too: one swap fits in three moves, with the addition.
+out="$(rerank --max-moves 3)"
+check "a capped re-rank keeps the seat count" "3" "$(seat_count "$OUT/seats.txt")"
+check "with the one swap that fit" "L3 L5 L6 " "$(seat_list "$OUT/seats.txt")"
+# No seats file: refused by name, never derived from the tags (which is the side effect this replaces).
+out="$(rerank --seats "$WORK/no-seats.txt")"; rc=$?
+check_rc "no seats file refuses" 1 "$rc"
+check "saying so" "NO SEATS" "$out"
+# A seats file naming no lesson (emptied, or only comments) is not "no moves this month": refused by
+# name (found by the PR lessons review of this change, L98).
+printf '# The seats\n# nothing here\n' > "$WORK/seats-empty.txt"
+out="$(rerank --seats "$WORK/seats-empty.txt")"; rc=$?
+check_rc "a seats file naming no lesson refuses" 1 "$rc"
+check "saying it names none" "names no lesson" "$out"
+check_not "and never as a healthy month" "No moves this month" "$(cat "$OUT/rerank.html" 2>/dev/null)"
+# A seat that is not in the core is a half applied re-rank (core-set ran, the seats file was not
+# committed with it), so it refuses rather than shrinking the seats.
+printf 'L3\nL4\nL6\n' > "$WORK/seats-drift.txt"
+out="$(rerank --seats "$WORK/seats-drift.txt")"; rc=$?
+check_rc "a seat outside the core refuses" 1 "$rc"
+check "naming it" "L6" "$out"
+check "and saying the seats file and the core disagree" "SEAT NOT IN CORE" "$out"
+
+# 2c. SEEDING THE SEATS once, by the re-rank's own ranking: the N most cited reviewable core lessons.
+#     In core-approved the reviewable lessons are L3 (cited 30), L5 (2), L4 and L10 (never); L12 is
+#     disputed and never a candidate.
+rm -f "$OUT"/*
+out="$(python3 "$TOOL" --index-dir "$IDX" --core "$WORK/core-approved.txt" --counts-dir "$REPO/lesson-counts" \
+  --bands-dir "$REPO/lesson-bands" --ages "$WORK/ages.txt" --tags "$REPO/lesson-tags.tsv" --second-tags "$REPO/lesson-tags-second.tsv" \
+  --now "$NOW" --seed-seats 2 --out-seats "$OUT/seeded.txt" --out-tsv "$OUT/moves.tsv" --out-html "$OUT/rerank.html" --out-list "$OUT/core.txt" 2>&1)"; rc=$?
+check_rc "seeding the seats succeeds" 0 "$rc"
+check "the two most cited reviewable core lessons become the seats" "L3 L5 " "$(seat_list "$OUT/seeded.txt")"
+check "and the file says how each was chosen" "rank 1" "$(cat "$OUT/seeded.txt" 2>/dev/null)"
+out="$(python3 "$TOOL" --index-dir "$IDX" --core "$WORK/core-approved.txt" --counts-dir "$REPO/lesson-counts" \
+  --bands-dir "$REPO/lesson-bands" --ages "$WORK/ages.txt" --tags "$REPO/lesson-tags.tsv" --second-tags "$REPO/lesson-tags-second.tsv" \
+  --now "$NOW" --seed-seats 9 --out-seats "$OUT/seeded.txt" --out-tsv "$OUT/moves.tsv" --out-html "$OUT/rerank.html" --out-list "$OUT/core.txt" 2>&1)"; rc=$?
+check_rc "asking for more seats than reviewable core lessons refuses" 1 "$rc"
+
+# 2d. THE COMMITTED SEATS FILE: exactly 20 seats (the reviewable lessons Dan's approved list kept by
+#     rank), each a real lesson, each named once, and, once the core list is in the payload, each in it.
+#     The re-rank also refuses at run time on a seat outside the core (SEAT NOT IN CORE).
+SEATS_FILE="$DIR/../lesson-core-seats.txt"
+check "the committed seats file holds twenty seats" "20" "$(seat_count "$SEATS_FILE")"
+real_seats="$(seat_list "$SEATS_FILE" | tr ' ' '\n' | awk 'NF' | while read -r l; do grep -qh "^- $l\. " "$DIR"/../payload/LESSONS-INDEX-*.md && printf '%s ' "$l"; done)"
+check "and every seat is a lesson in the index" "20" "$(printf '%s' "$real_seats" | wc -w | tr -d ' ')"
+check "and none is named twice" "20" "$(seat_list "$SEATS_FILE" | tr ' ' '\n' | awk 'NF' | sort -u | grep -c .)"
+CORE_FILE="$DIR/../payload/LESSONS-CORE.txt"
+if [ -f "$CORE_FILE" ]; then
+  in_core="$(seat_list "$SEATS_FILE" | tr ' ' '\n' | awk 'NF' | while read -r l; do grep -qx "$l" "$CORE_FILE" && printf '%s ' "$l"; done)"
+  check "and every seat is in the core list" "20" "$(printf '%s' "$in_core" | wc -w | tr -d ' ')"
+else
+  # Before the cutover there is no core list in the payload to check the seats against, which is
+  # said rather than passed (L411); the run time refusal covers it from the first re-rank.
+  echo "UNMEASURED: no payload/LESSONS-CORE.txt yet, so the committed seats were not checked against the core list"
+fi
+
 # 3. THE SIZE AFTER THE MOVES AGAINST THE CAP, in the unit core-set measures (chars of index lines).
+out="$(rerank)"
 check "the summary gives the core's size before and after" "after the moves 7 lessons" "$out"
 out_over="$(rerank --cap 300)"
 check "over the cap, it says so" "OVER CAP" "$out_over"
@@ -297,6 +383,7 @@ check "and clicking it opens the page in Chrome, never a bare open" "Google Chro
 page="$(ls "$STATE"/rerank-2026-10.html 2>/dev/null)"
 check "the page is left in the state folder, by month" "rerank-2026-10.html" "$page"
 check "and the list to apply beside it" "core-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
+check "and the seats to commit with it" "seats-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
 out="$(job "2026-10-10T15:00:00Z")"
 check "a second run in the same month does not notify again" "0" "$(notices)"
 

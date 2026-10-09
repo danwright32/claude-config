@@ -2024,9 +2024,19 @@ test('a night with no proposals still starts the summary turn, and offers no pic
   expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
 })
 
+// A session started a minute before the moment a test is about, never at T0 (#1016). Once started,
+// the session checks every minute, so moving the mock clock from T0 to the evening ran about 1,400
+// of those checks, which took 5,105 ms beside 96 CPU burners on 2026-10-09 and failed the runner's
+// 5,000 ms limit with nothing broken. Before the start no check is due, so this costs nothing, and
+// the minute that follows still crosses one check, as a real session would.
+const startBefore = async ($: $T, clock: { set: (ms: number) => Promise<void>; settle: () => Promise<void> }, at: number) => {
+  await clock.set(at - MIN)
+  await start($, clock)
+}
+
 test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he is up, once a night, and never ends sleep (#837)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
-  await start($ as never, clock)
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 11, 59))
   // 6:59 AM ET on Thu Jan 1 1970 (EST) is 11:59 UTC: not yet.
   await clock.set(Date.UTC(1970, 0, 1, 11, 59))
   expect((await say($ as never, 'how did it go')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
@@ -2040,7 +2050,7 @@ test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he i
 
 test('the ask whether he is up counts as made only once its prompt went in, so a prompt that failed asks again (#837)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, promptFails: 1 })
-  await start($ as never, clock)
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
   await clock.set(Date.UTC(1970, 0, 1, 12, 0))
   await expect(say($ as never, 'how is it going')).rejects.toThrow()
   expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
@@ -2048,7 +2058,7 @@ test('the ask whether he is up counts as made only once its prompt went in, so a
 
 test('a message from Dan in the evening while asleep does not ask whether he is up (#837)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ until: Date.UTC(1970, 0, 2, 17) }) } })
-  await start($ as never, clock)
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 2, 0, 0))
   // 7:00 PM ET on Thu Jan 1 is 00:00 UTC on Jan 2: past the window.
   await clock.set(Date.UTC(1970, 0, 2, 0, 0))
   expect((await say($ as never, 'still going?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
@@ -2079,7 +2089,10 @@ test('while asleep every session is quiet as away: opening on the Mac is held, t
 
 test('the record ends by itself at noon ET: asleep a ms before, awake at noon, and the first to see it notes it and notifies once', withDeps, async ($, on) => {
   const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [CURRENT]: asleepRecord({ placeBefore: 'home' }) } })
-  await start($ as never, clock)
+  // Started five minutes before noon, off the minute as T0 is, so the check that ends the record
+  // still falls after noon rather than on it, without running a morning of checks first (#1016).
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
   await clock.set(UNTIL - 1)
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
@@ -2088,7 +2101,7 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   await clock.set(UNTIL)
   expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
   // The minute's check, counted from the session's start, is the first to see it.
-  const tick = T0 + Math.ceil((UNTIL - T0) / MIN) * MIN
+  const tick = began + Math.ceil((UNTIL - began) / MIN) * MIN
   await clock.set(tick)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(lastModes(w)).toEqual([])
