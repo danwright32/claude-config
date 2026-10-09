@@ -251,7 +251,7 @@ COLLECT_KEYS
 
 # Removes everything issue_spool_collect made. One definition, because the collect grew a third
 # sidecar and four callers each listing the files by hand is how one of them keeps leaking it.
-issue_spool_collect_done() { rm -f "$1" "$1.sources" "$1.ranges" "$1.snap"; }
+issue_spool_collect_done() { rm -f "$1" "$1.sources" "$1.ranges" "$1.snap" "$1.seen"; }
 
 # WHAT A RENDER READ, written down so the clear that follows files exactly that (claude-config#381).
 #
@@ -771,8 +771,19 @@ unparsed = []
 corrupt = 0
 already_seen = 0
 findings = []
+# WHICH KEY each collected line came from, from the ranges the collect wrote, so the records skipped
+# as already shown here can be taken off the SPOOL SOURCE count of the file they sit in (#1011).
+LINE_KEYS = []
+try:
+    for _rl in open(sys.argv[1] + ".ranges", encoding="utf-8"):
+        _parts = _rl.split()
+        if len(_parts) == 2:
+            LINE_KEYS.extend([_parts[0]] * int(_parts[1]))
+except (OSError, ValueError):
+    LINE_KEYS = []
+seen_by_key = {}
 
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+for line_no, line in enumerate(open(sys.argv[1], encoding="utf-8", errors="replace")):
     line = line.strip()
     if not line:
         continue
@@ -796,6 +807,8 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     # delivered every turn, is what teaches a person to skip the whole panel (L36).
     if seen_here(line, rec, READER_SESSION, LEDGER_IDS):
         already_seen += 1
+        if line_no < len(LINE_KEYS):
+            seen_by_key[LINE_KEYS[line_no]] = seen_by_key.get(LINE_KEYS[line_no], 0) + 1
         continue
     if status == "found":
         for f in rec.get("findings") or []:
@@ -926,15 +939,36 @@ if STAMP and shown:
         sys.stderr.write("issue-spool: could not write the record of what this review read (%s): %s\n"
                          % (STAMP, exc))
 
+# How many records per key this reader was NOT given because it has already been shown them and
+# cannot settle them, for the SPOOL SOURCE line below (#1011). A write that fails leaves the line on
+# raw counts, which over counts rather than hides anything.
+try:
+    with open(sys.argv[1] + ".seen", "w", encoding="utf-8") as sk:
+        for k, n in seen_by_key.items():
+            sk.write("%s %d\n" % (k, n))
+except OSError:
+    pass
+
 sys.exit(0 if shown else 1)
 PY
   rc=$?
   # Named only when something was actually shown, because a source line over an empty report is a
   # line about nothing. It goes LAST, so it cannot be mistaken for a finding, and it names the
   # same files `clear` names when it files them: the two are meant to be compared.
-  if [ "$rc" -eq 0 ] && [ -s "$file.sources" ]; then
+  #
+  # COUNTED AS WHAT THIS READER IS SHOWN OR CAN FILE (#1011), not as raw lines. Other sessions'
+  # records already shown here stay in the file, and counting them made two reviews in a row both
+  # say "(57 records)" after a clear had really filed 42, which read as the clear not draining. A
+  # file holding nothing but those is left off; the render's own line says how many there are.
+  local src_list
+  : >> "$file.seen" 2>/dev/null
+  src_list="$(awk 'FILENAME == ARGV[1] { seen[$1 ".jsonl"] = $2; next }
+    { name = $1; n = $2; sub(/^\(/, "", n); n = n - ((name in seen) ? seen[name] : 0)
+      if (n > 0) printf "%s%s (%d records)", (out++ ? ", " : ""), name, n }' \
+    "$file.seen" "$file.sources" 2>/dev/null)"
+  if [ "$rc" -eq 0 ] && [ -n "$src_list" ]; then
     printf 'SPOOL SOURCE: %s, under %s. A clear files exactly these, and says how many it filed; if this list comes back after one, that is the fact to report.\n' \
-      "$(tr '\n' ';' < "$file.sources" | sed 's/;$//; s/;/, /g')" "$(issue_spool_root)"
+      "$src_list" "$(issue_spool_root)"
   fi
   issue_spool_collect_done "$file"
   return $rc
@@ -1450,12 +1484,27 @@ if mode == "split":
     o.close()
     print(later)
 else:
+    # Read as a SET, so only marks it does not already hold are added: a clear retried against the
+    # same unwritable spool at every review would otherwise grow it without bound. A ledger whose
+    # header cannot be read is started again rather than appended to, since nothing would read
+    # what was added after a bad header.
     path = sys.argv[6]
-    fresh = not os.path.exists(path) or os.path.getsize(path) == 0
-    with open(path, "a", encoding="utf-8") as lf:
-        if fresh:
-            lf.write(os.environ["CLAUDE_SPOOL_LEDGER_HEADER"] + "\n")
-        for ident in marks:
+    header = os.environ["CLAUDE_SPOOL_LEDGER_HEADER"]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as lf:
+            readable = lf.readline().strip() == header
+    except OSError:
+        readable = False
+    held = load_seen_ledger(path, sid) if readable else set()
+    new = []
+    for ident in marks:
+        if ident not in held:
+            held.add(ident)
+            new.append(ident)
+    with open(path, "a" if readable else "w", encoding="utf-8") as lf:
+        if not readable:
+            lf.write(header + "\n")
+        for ident in new:
             lf.write("%s %s\n" % (sid, ident))
     print(len(marks))
 ' "$@"

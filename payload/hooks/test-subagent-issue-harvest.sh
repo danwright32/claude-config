@@ -2710,11 +2710,52 @@ else
   contains "another session's agent made" "$(r1011_shown "$r1011_f2")" \
     && check "#1011 and does not show the other session's finding a second time" "it came back" \
     || check "#1011 and does not show the other session's finding a second time" ok
+  # The ledger is read as a set, so a clear retried against the same unwritable spool must not add
+  # the same mark again: retried at every review, it would grow without bound.
+  r1011_ledger="$(bash "$SPOOL_LIB" seen-ledger "$(printf '%s' "$r1011_cmd" | awk '{print $NF}')" 2>/dev/null)"
+  r1011_lines1="$(wc -l < "$r1011_ledger" 2>/dev/null | tr -d ' ')"
+  chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR"
+  eval "$r1011_cmd" >/dev/null 2>&1
+  chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR"
+  r1011_lines2="$(wc -l < "$r1011_ledger" 2>/dev/null | tr -d ' ')"
+  [ -n "$r1011_lines1" ] && [ "$r1011_lines1" -ge 2 ] && [ "$r1011_lines1" = "$r1011_lines2" ] \
+    && check "#1011 a retried clear does not add the same seen mark twice" ok \
+    || check "#1011 a retried clear does not add the same seen mark twice" "ledger lines ${r1011_lines1:-none} then ${r1011_lines2:-none} at ${r1011_ledger:-<no path>}"
   # Recorded for THIS session only: the session that owns it is still offered it (L116).
   contains "another session's agent made" "$(bash "$SPOOL_LIB" pending "$CLEARK/proj" "$R1011_B" 2>/dev/null)" \
     && check "#1011 while the owning session is still offered it" ok \
     || check "#1011 while the owning session is still offered it" "it was hidden from its owner"
 fi
+
+# --- SPOOL SOURCE counts what this reader is shown or can file ------------------------------------
+# The source line counted every raw line of a pending file, other sessions' records already shown
+# here included, so two reviews in a row could both say "(57 records)" after a clear had really filed
+# 42, and it read as the clear not draining (seen in the claude-config coordinator session,
+# 2026-10-09). Render, clear, render: the second count is what is still this reader's business.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+for r1011_i in 1 2 3; do
+  bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 other session's record $r1011_i" agent-3327 "$R1011_B" >/dev/null 2>&1
+done
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 own record to be filed" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r1011_f1="$(r1011_review)"
+case "$(r1011_shown "$r1011_f1")" in
+  *"SPOOL SOURCE: "*"(4 records)"*) check "#1011 the first source line counts all four records" ok ;;
+  *) check "#1011 the first source line counts all four records" "file=$(grep 'SPOOL SOURCE' "$r1011_f1" 2>/dev/null)" ;;
+esac
+eval "$(r381_cmd_of "$r1011_f1")" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "r1011 own record after the clear" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r1011_f2="$(r1011_review)"
+r1011_src2="$(grep 'SPOOL SOURCE' "$r1011_f2" 2>/dev/null)"
+# The pending file now holds 4 raw lines: the 3 already shown here and the 1 new one.
+case "$r1011_src2" in
+  *"(1 records)"*) check "#1011 after the clear it counts only what this reader is shown or can file" ok ;;
+  *) check "#1011 after the clear it counts only what this reader is shown or can file" "line=${r1011_src2:-<none>}" ;;
+esac
+case "$r1011_src2" in
+  *"(4 records)"*) check "#1011 and not the raw lines, other sessions' already shown records included" "line=$r1011_src2" ;;
+  *) check "#1011 and not the raw lines, other sessions' already shown records included" ok ;;
+esac
 
 # --- a finding this session has already been shown does not make a review fire -----------------
 # The review bypasses its cooldown when a finding is pending. A finding marked seen here is never
