@@ -214,21 +214,6 @@ ar__marked_generated() {   # $1 = ar__check_attr output
     END { for (i = 1; i <= n; i++) if (order[i] in gen) print order[i] }'
 }
 
-# FILES A REVIEW OVER THE CAP MAY LEAVE OUT, because each is PROVEN to need no reading
-# (claude-config#583). Slate PR #2794 was refused at 314 KB when 219 KB of it was one regenerated
-# test fixture, and on 2026-10-08 four claude-config branches went over the cap (315 to 472 KB)
-# mostly on byte for byte copies of mod-kit's readers. Prints "<path><TAB><kind><TAB><reason>" for each file
-# changed between $1 and $2 that is one of:
-#   generated   marked so by .gitattributes (ar_generated_paths' rule) at BOTH the base and the
-#               head, so a branch cannot excuse its own file from review by adding the mark in the
-#               same branch; a git that cannot read attributes from a commit proves nothing
-#   fixture     a data file (json, jsonl, ndjson, csv, tsv, xml, txt) under a fixtures or
-#               __fixtures__ folder; code there (a script, a test) is read like any other
-#   copy        <prefix>mods/<mod>/tests/mod-kit/<path> whose content at the head is byte for byte
-#               that of <prefix>mods/mod-kit/<path> at the head (the copy that
-#               tools/check-mod-shared-parts.sh holds identical), proven here by comparing the two
-#               blobs, never by trusting that check
-# Anything not proven is not printed, and so is read: an unproven file is never left out (L93).
 # A size as the review's messages give it, "812 bytes" or "145.3 KB": one awk function, so the file
 # list, the start line, the verdict and the nudge cannot spell one size two ways.
 AR_AWK_SIZE='function size(b) { return b >= 1024 ? sprintf("%d.%d KB", int(b / 1024), int((b % 1024) * 10 / 1024)) : sprintf("%d bytes", b) }'
@@ -264,6 +249,21 @@ ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
     }'
 }
 
+# FILES A REVIEW OVER THE CAP MAY LEAVE OUT, because each is PROVEN to need no reading
+# (claude-config#583). Slate PR #2794 was refused at 314 KB when 219 KB of it was one regenerated
+# test fixture, and on 2026-10-08 four claude-config branches went over the cap (315 to 472 KB)
+# mostly on byte for byte copies of mod-kit's readers. Prints "<path><TAB><kind><TAB><reason>" for
+# each file changed between $1 and $2 that is one of:
+#   generated   marked so by .gitattributes (ar_generated_paths' rule) at BOTH the base and the
+#               head, so a branch cannot excuse its own file from review by adding the mark in the
+#               same branch; a git that cannot read attributes from a commit proves nothing
+#   fixture     a data file (json, jsonl, ndjson, csv, tsv, xml, txt) under a fixtures or
+#               __fixtures__ folder; code there (a script, a test) is read like any other
+#   copy        <prefix>mods/<mod>/tests/mod-kit/<path> whose content at the head is byte for byte
+#               that of <prefix>mods/mod-kit/<path> at the head (the copy that
+#               tools/check-mod-shared-parts.sh holds identical), proven here by comparing the two
+#               blobs, never by trusting that check
+# Anything not proven is not printed, and so is read: an unproven file is never left out (L93).
 AR_FIXTURE_DATA_RE='(^|/)(fixtures|__fixtures__)/(.*/)?[^/]+\.(json|jsonl|ndjson|csv|tsv|xml|txt)$'
 AR_MODKIT_COPY_RE='^(.*/)?mods/([^/]+)/tests/mod-kit/(.+)$'
 ar_left_out_candidates() {   # $1 = base, $2 = head
