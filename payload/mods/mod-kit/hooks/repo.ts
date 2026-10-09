@@ -81,15 +81,21 @@ export const repoName = (repo: { root?: string | null; remote: string | null | u
  * IS a repository, where to git it is a local path, so a git remote is never read with this.
  */
 export const ghRepo = (spelling: string | null | undefined): string | null => {
-  let t = (spelling ?? '').trim().replace(/\.git$/, '').replace(/\/+$/, '')
-  // A host only where the spelling says so (a scheme, a user@, or github.com itself), so an owner
-  // with a dot in it (my.org/x) is an owner, never a host.
-  const host = /^(?:[a-z+]+:\/\/(?:[^@/]+@)?|[^@/:]+@)([^/:]+)[:/](.*)$/i.exec(t) ?? /^((?:www\.)?github\.com)\/(.*)$/i.exec(t)
-  if (host) {
-    if ((host[1] as string).toLowerCase().replace(/^www\./, '') !== GITHUB) return null
-    t = host[2] as string
+  const t = (spelling ?? '').trim()
+  let parts: string[]
+  // gh reads a spelling as an address only when it has a scheme or starts with git@ (its own
+  // git.IsURL), and then as git does: through addressOf, the one reading of an address here, so a
+  // port, a user and a trailing .git/ are read as for a remote (#961).
+  if (SCHEME.test(t) || t.startsWith('git@')) {
+    const a = addressOf(t)
+    if (!a || a.host === null || a.host.replace(/^www\./, '') !== GITHUB) return null
+    parts = a.parts
+  } else {
+    // Otherwise [HOST/]OWNER/REPO, so an owner with a dot in it (my.org/x) is an owner, never a
+    // host; a host gh names must be GitHub's.
+    parts = t.replace(/\.git$/, '').split('/').filter(Boolean)
+    if (/^(?:www\.)?github\.com$/i.test(parts[0] ?? '')) parts = parts.slice(1)
   }
-  const parts = t.split('/').filter(Boolean)
   if (parts.length !== 2 || parts.some(p => !NAME_PART.test(p))) return null
   return parts.join('/').toLowerCase()
 }
