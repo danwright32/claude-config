@@ -654,6 +654,11 @@ check "one finding is singular" "with 1 finding " "$out"
 touch -t 202601010000 "$AI_REVIEW_STATE_DIR/citations.tsv"
 printf '{"session_id":"n2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 [ -s "$AI_REVIEW_STATE_DIR/citations.tsv" ] && ok || bad "the citation ledger survives the sweep"
+# A review's list of files it left out (#583) is swept with the review it belongs to.
+printf '1\tx.json\tfixture\tfixture data\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.leftout"
+touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.leftout"
+printf '{"session_id":"n3","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+[ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.leftout" ] && ok || bad "#583 a left out list older than 14 days is swept with its review"
 
 # ===========================================================================================
 # 7. A push to a branch with an OPEN pull request starts the review of the new head
@@ -799,6 +804,147 @@ mv "$ORIGIN.away" "$ORIGIN"
 check "#852 an unreachable origin still starts the review" "started" "$out"
 check "#852 and says the base came from this checkout's copy, which may be stale" "could not fetch origin/main" "$out"
 wait_final "$HEAD_SHA" || bad "#852 the offline review finished: $out"
+
+# ===========================================================================================
+# 11. Files proven to need no reading are left out of a branch over the cap, and named
+#     (claude-config#583). Slate PR #2794 was refused at 314 KB when 219 KB of it was one regenerated
+#     test fixture, and on 2026-10-08 four claude-config branches had to be split, mostly for the
+#     byte for byte copies of mod-kit's readers under payload/mods/*/tests/mod-kit. Left out only
+#     when the whole diff is over the cap, only what is PROVEN to be data or a copy, and every file
+#     left out is named with its size in the start line and in the verdict (L98).
+# ===========================================================================================
+reset_state
+G checkout -q -b feat/data main
+mkdir -p "$REPO/payload/mods/mod-kit/hooks" "$REPO/scripts/fixtures"
+seq 1 600 | sed 's/^/reader line /' > "$REPO/payload/mods/mod-kit/hooks/reader.ts"
+printf 'export const drift = 1\n' > "$REPO/payload/mods/mod-kit/hooks/drift.ts"
+G add payload/mods/mod-kit/hooks/reader.ts payload/mods/mod-kit/hooks/drift.ts
+printf 'gen.txt linguist-generated\n' > "$REPO/.gitattributes"; G add .gitattributes
+G commit -q -m "data base"
+DATA_BASE="$(G rev-parse HEAD)"
+mkdir -p "$REPO/payload/mods/demo/tests/mod-kit/hooks" "$REPO/payload/mods/other/tests/mod-kit/hooks"
+cp "$REPO/payload/mods/mod-kit/hooks/reader.ts" "$REPO/payload/mods/demo/tests/mod-kit/hooks/reader.ts"
+printf 'export const drift = 2  // drifted copy\n' > "$REPO/payload/mods/other/tests/mod-kit/hooks/drift.ts"
+seq 1 600 | sed 's/^/bigdata /' > "$REPO/scripts/fixtures/big.json"
+printf 'smalldata 1\n' > "$REPO/scripts/fixtures/small.json"
+printf 'echo fixture helper code\n' > "$REPO/scripts/fixtures/helper.sh"
+seq 1 600 | sed 's/^/genwritten /' > "$REPO/gen.txt"
+printf 'func codeChange() {}\n' > "$REPO/Code.swift"
+# Enough smaller fixtures that naming every file left out would make the verdict as long as the list.
+mkdir -p "$REPO/scripts/fixtures/many"
+for n in 01 02 03 04 05 06 07 08 09 10 11 12; do seq 1 300 | sed "s/^/md$n /" > "$REPO/scripts/fixtures/many/f$n.json"; done
+G add payload/mods/demo/tests/mod-kit/hooks/reader.ts payload/mods/other/tests/mod-kit/hooks/drift.ts \
+  scripts/fixtures/big.json scripts/fixtures/small.json scripts/fixtures/helper.sh gen.txt Code.swift scripts/fixtures/many
+G commit -q -m "data change"
+DATA_SHA="$(G rev-parse HEAD)"
+G checkout -q feat/sync
+DCAP=6000
+
+# Under the cap nothing changes: every file is in the diff, as before.
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"
+wait_final "$DATA_SHA" || bad "#583 the branch under the cap was reviewed: $out"
+stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+check "#583 under the cap a fixture is still read" "+bigdata 600" "$stdin"
+check "#583 under the cap a copy is still read" "b/payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$stdin"
+check_not "#583 and nothing is said to be left out" "left out of this review" "$out"
+
+# Over the cap, the code fits once the proven data and copies are left out.
+reset_state
+out="$(PR_REVIEW_MAX_BYTES=$DCAP FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"
+start_out="$out"
+check "#583 a branch over the cap only because of data and copies is reviewed" "started" "$out"
+check_not "#583 and is not refused as too large" "too large" "$out"
+wait_final "$DATA_SHA" || bad "#583 the branch with data left out was reviewed: $out"
+stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+check "#583 the code is read" "+func codeChange" "$stdin"
+check "#583 code under a fixtures folder is read: only data is left out there" "+echo fixture helper code" "$stdin"
+check "#583 a copy that DIFFERS from mod-kit's is read" "+export const drift = 2" "$stdin"
+check "#583 a small fixture that fits beside the code is still read" "+smalldata 1" "$stdin"
+check_not "#583 the large fixture is not in the diff" "+bigdata 1" "$stdin"
+check_not "#583 the identical copy is not in the diff" "b/payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$stdin"
+check_not "#583 the generated file is not in the diff" "+genwritten 1" "$stdin"
+check "#583 the reviewer's file list says which files were left out" $'scripts/fixtures/big.json\tleft out' "$stdin"
+for f in scripts/fixtures/big.json payload/mods/demo/tests/mod-kit/hooks/reader.ts gen.txt; do
+  check "#583 the start line names $f as left out" "$f" "$(printf '%s\n' "$out" | grep -i 'left out')"
+done
+check "#583 with the reason a copy needs no reading" "identical to payload/mods/mod-kit/hooks/reader.ts" "$out"
+check "#583 and each one's size" "KB" "$(printf '%s\n' "$out" | grep -i 'left out')"
+check_not "#583 the drifted copy is not called left out" "other/tests/mod-kit/hooks/drift.ts (" "$out"
+check_not "#583 nor the helper code" "helper.sh (" "$out"
+out="$(PR_REVIEW_MAX_BYTES=$DCAP prr check --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"; rc=$?
+check_eq "#583 the clean review of the rest allows the merge" "0" "$rc"
+check "#583 and the verdict names every file left out, so none is silently unreviewed" "scripts/fixtures/big.json" "$out"
+check "#583 the copy too" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$out"
+check "#583 and the generated file" "gen.txt" "$out"
+# Named largest first and capped, with a count and where the whole list is, so a branch with hundreds
+# of fixtures cannot push the verdict past the hook output cap and cut it silently (lessons review of
+# #1003, L351).
+note="$(printf '%s\n' "$out" | grep 'Not read by this review')"
+check "#583 the verdict says how many more were left out and where they are all listed" "more, all listed in $(final_of "$DATA_SHA").leftout" "$note"
+named="$(printf '%s\n' "$note" | grep -o 'many/f[0-9]*\.json' | sort -u | wc -l | tr -d '[:space:]')"
+[ "$named" -lt 12 ] && ok || bad "#583 the verdict does not name every one of the 12 small fixtures ($named named)"
+check "#583 the largest are the ones named" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$note"
+[ "${#note}" -lt 2500 ] && ok || bad "#583 the left out note stays short (${#note} chars)"
+check "#583 the start line is capped the same way" "more, all listed in" "$start_out"
+# The nudge shows a finished review too, so it names what that review did not read (#1003).
+nout="$(printf '{"session_id":"lo1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "#583 the nudge's report of the review names the files it left out" "scripts/fixtures/big.json" "$nout"
+# And counts that note against its own output budget, so three long reviews cannot push it past the
+# 10,000 character hook cap (lessons review of #1003, L351).
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+long="$(printf 'x%.0s' $(seq 1 110))"
+for n in 1 2 3; do
+  lf="$(final_of "fake$n")"
+  {
+    printf 'repo=repo\nbranch=b%s\nsha=fake%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=15\n\n' "$n" "$n"
+    for l in $(seq 1 15); do printf 'App/F%s.swift:%s: %s (L1). Should be: y.\n' "$n" "$l" "$long"; done
+  } > "$lf"
+  for l in $(seq 1 12); do printf '%s\tscripts/fixtures/%s/%s%s.json\tfixture\tfixture data\n' "$((5000 - l))" "$long" "$long" "$l"; done > "$lf.leftout"
+done
+nout="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+[ "${#nout}" -lt 10000 ] && ok || bad "#583 the nudge stays under the hook cap with left out notes counted (${#nout} chars)"
+check "#583 holding back what does not fit, and saying so" "not shown" "$nout"
+# And keeps that promise: the next prompt takes the full path and shows what was held, rather than
+# the fast path, which would hide it until something else wrote to the state folder (review of #601).
+nout2="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"again"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "#583 a review held back is shown on the next prompt" "Lessons review of the whole branch" "$nout2"
+# A review with findings names them as well, in the refusal that carries the findings.
+reset_state
+PR_REVIEW_MAX_BYTES=$DCAP prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE" >/dev/null
+wait_final "$DATA_SHA" || bad "#583 the review with findings finished"
+out="$(PR_REVIEW_MAX_BYTES=$DCAP prr check --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"; rc=$?
+check_eq "#583 findings on the rest still refuse" "1" "$rc"
+check "#583 and that refusal names what was left out" "scripts/fixtures/big.json" "$out"
+# When the code itself is over the cap, it is still refused as too large.
+reset_state
+out="$(PR_REVIEW_MAX_BYTES=300 prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"
+out="$(PR_REVIEW_MAX_BYTES=300 prr check --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"; rc=$?
+check_eq "#583 code over the cap with the data left out is still refused" "1" "$rc"
+check "#583 as too large" "too large" "$out"
+check "#583 saying how large the rest still was" "proven to need no reading still leaves" "$out"
+check "#583 and naming, uncut, what it would have left out" "scripts/fixtures/big.json (fixture data" "$(printf '%s\n' "$out" | grep 'Would have been left out')"
+check_not "#583 never saying a review left them out, since none ran" "Not read by this review" "$out"
+check_eq "#583 and no reviewer ran" "0" "$(calls)"
+# The proof is the content: a copy is identical only to the file at the same path in mod-kit.
+cand="$(cd "$REPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DATA_BASE' '$DATA_SHA'")"
+check "#583 the identical copy is a candidate" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$cand"
+check_not "#583 the drifted copy is not" "drift.ts" "$cand"
+check_not "#583 code under fixtures is not" "helper.sh" "$cand"
+check_not "#583 hand written code is not" "Code.swift" "$cand"
+# A generated mark counts only when the base already had it, so a branch cannot excuse its own file
+# by marking it in the same branch. The file marked at both ends in the same fixture is the control
+# that the rule fires at all (L159).
+MREPO="$WORKDIR/marked"; git init -q "$MREPO"
+MG(){ git -C "$MREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+printf 'old.gen linguist-generated\n' > "$MREPO/.gitattributes"; printf 'a\n' > "$MREPO/old.gen"; printf 'a\n' > "$MREPO/new.gen"
+MG add .gitattributes old.gen new.gen; MG commit -q -m base; MB="$(MG rev-parse HEAD)"
+printf 'old.gen linguist-generated\nnew.gen linguist-generated\n' > "$MREPO/.gitattributes"
+printf 'b\n' > "$MREPO/old.gen"; printf 'b\n' > "$MREPO/new.gen"
+MG commit -q -am change; MH="$(MG rev-parse HEAD)"
+mcand="$(cd "$MREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$MB' '$MH'")"
+check "#583 a file the base already marked generated is a candidate" "old.gen" "$mcand"
+check_not "#583 a file marked generated only by this branch is not" "new.gen" "$mcand"
 
 echo
 echo "passed: $pass, failed: $fail"

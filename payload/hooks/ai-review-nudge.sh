@@ -203,7 +203,14 @@ for base in $todo; do
   short="${m_sha:0:7}"
   took="$(elapsed_text $((${m_finished:-0} - ${m_started:-0})))"
   body="$(ar_capped_body "$f" "$NUDGE_LINES" "$NUDGE_CHARS")"
-  printed=$((printed + ${#body} + 300))
+  # What a pull request review over the size cap left out (#583), counted with the rest: a review
+  # is shown whole or held whole, and a later one only when it still fits the budget, so the output
+  # never reaches the hook cap that would cut it silently (L351).
+  left_note=""
+  [ "$m_kind" = "pr" ] && left_note="$(ar_left_out_note "$f.leftout" "$m_status")"
+  cost=$((${#body} + ${#left_note} + 300))
+  if [ "$printed" -gt 0 ] && [ $((printed + cost)) -gt "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
+  printed=$((printed + cost))
   if [ "$m_kind" = "pr" ]; then
     case "$m_status" in
       ok)
@@ -227,6 +234,8 @@ for base in $todo; do
       *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
     esac
+    # What a review over the size cap left out, so no report of it reads as covering them (#583).
+    [ -n "$left_note" ] && printf '%s\n' "$left_note"
     mark_shown "$base"
     continue
   fi
@@ -260,6 +269,13 @@ IFS=$' \t\n'
 
 # Housekeeping and the fast path stamp: this session has now seen everything written so far.
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
-find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.leftout' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 [ -n "$LIST" ] && { touch "$LIST" 2>/dev/null || true; }
+# Unless something was held back: then the list is dated before any write, so the next prompt takes
+# the full path and shows it, as the line above promises, rather than the fast path hiding it until
+# something else writes to the state folder (lessons review of #601).
+if [ -n "$LIST" ] && [ "$held" -gt 0 ]; then
+  touch -t 197001020000 "$LIST" 2>/dev/null || true
+  touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
+fi
 exit 0

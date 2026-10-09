@@ -183,15 +183,26 @@ ar_generated_paths() {   # $1 = base, $2 = head, $3.. = pathspecs (none means ev
   [ -n "$names" ] || return 0
   # --source needs git 2.40; an older git reads the working tree's attributes instead, which is the
   # checkout rather than the head and is said nowhere, so it is the fallback and not the rule.
-  # NUL separated both ways (-z), because check-attr C-quotes a non-ASCII name in its ordinary
-  # output whatever core.quotepath says, and a quoted name matches no file. Each answer is then
-  # three fields, path, attribute, value, turned into three lines for awk. pipefail inside each
-  # substitution, or the status is tr's and a git refusing --source never reaches the fallback.
-  attrs="$(set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
-    | git check-attr -z --source "$head" --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')" \
-    || attrs="$(set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
-    | git check-attr -z --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')"
-  printf '%s\n' "$attrs" | awk '
+  attrs="$(ar__check_attr "$names" --source "$head")" || attrs="$(ar__check_attr "$names")"
+  ar__marked_generated "$attrs"
+}
+
+# The attributes that mark a file generated, for each of the newline separated names in $1, read
+# with any further arguments (--source <commit>) handed to check-attr. NUL separated both ways (-z),
+# because check-attr C-quotes a non-ASCII name in its ordinary output whatever core.quotepath says,
+# and a quoted name matches no file. Each answer is then three fields, path, attribute, value,
+# turned into three lines. pipefail inside, or the status is tr's and a git refusing --source would
+# read as an answer and never reach a fallback.
+ar__check_attr() {   # $1 = names, $2.. = check-attr options
+  local names="$1"
+  shift
+  (set -o pipefail; printf '%s\n' "$names" | tr '\n' '\0' \
+    | git check-attr -z "$@" --stdin linguist-generated merge 2>/dev/null | tr '\0' '\n')
+}
+
+# The names an ar__check_attr answer marks generated, one per line, in the order asked.
+ar__marked_generated() {   # $1 = ar__check_attr output
+  printf '%s\n' "$1" | awk '
     NR % 3 == 1 { p = $0; next }
     NR % 3 == 2 { a = $0; next }
     {
@@ -201,6 +212,90 @@ ar_generated_paths() {   # $1 = base, $2 = head, $3.. = pathspecs (none means ev
       if (!(p in seen)) { seen[p] = 1; order[++n] = p }
     }
     END { for (i = 1; i <= n; i++) if (order[i] in gen) print order[i] }'
+}
+
+# A size as the review's messages give it, "812 bytes" or "145.3 KB": one awk function, so the file
+# list, the start line, the verdict and the nudge cannot spell one size two ways.
+AR_AWK_SIZE='function size(b) { return b >= 1024 ? sprintf("%d.%d KB", int(b / 1024), int((b % 1024) * 10 / 1024)) : sprintf("%d bytes", b) }'
+ar_size_text() {   # $1 = bytes
+  case "$1" in ''|*[!0-9]*) printf 'an unknown size'; return ;; esac
+  awk -v b="$1" "$AR_AWK_SIZE"' BEGIN { printf "%s", size(b) }'
+}
+
+# The one sentence naming what a pull request review left out (claude-config#583), from the
+# "<bytes><TAB><path><TAB><kind><TAB><why>" rows lib/pr-review.sh writes beside the review as
+# <review>.leftout. Largest first, by name only while the names stay under 1,500 characters and ten
+# files, then how many more and the file holding them all: a branch with hundreds of fixtures must
+# not push a refusal past the 10,000 character hook output cap, which cuts it silently so the first
+# names read as the whole list (L351). Prints nothing when nothing was left out. Every surface that
+# reports a review prints it (the gate's verdicts, the start line, the nudge), so none reports a
+# review without saying what it did not read. A review refused as too large never ran, so for that
+# outcome ($2) it says what WOULD have been left out, never that a review left it out (L11).
+ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
+  [ -s "$1" ] || return 0
+  LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null | LC_ALL=C awk -F '\t' -v file="$1" -v max=10 -v chars=1500 -v status="${2:-}" "$AR_AWK_SIZE"'
+    NF >= 4 && $2 != "" {
+      n++; total += $1
+      item = $2 " (" $4 ", " size($1) ")"
+      if (shown < max && length(list) + length(item) <= chars) { list = list (list == "" ? "" : "; ") item; shown++ }
+    }
+    END {
+      if (!n) exit
+      more = (n > shown) ? sprintf("%s%d %s, all listed in %s", shown ? "; and " : "", n - shown, shown ? "more" : "file(s)", file) : ""
+      if (status == "too-large")
+        printf "Would have been left out of the review as proven to need no reading, had the rest fitted: %d file(s), %s in all: %s%s.\n", n, size(total), list, more
+      else
+        printf "Not read by this review: %d file(s), %s in all, left out because the branch was over the size cap and each is proven to need no reading: %s%s.\n", n, size(total), list, more
+    }'
+}
+
+# FILES A REVIEW OVER THE CAP MAY LEAVE OUT, because each is PROVEN to need no reading
+# (claude-config#583). Slate PR #2794 was refused at 314 KB when 219 KB of it was one regenerated
+# test fixture, and on 2026-10-08 four claude-config branches went over the cap (315 to 472 KB)
+# mostly on byte for byte copies of mod-kit's readers. Prints "<path><TAB><kind><TAB><reason>" for
+# each file changed between $1 and $2 that is one of:
+#   generated   marked so by .gitattributes (ar_generated_paths' rule) at BOTH the base and the
+#               head, so a branch cannot excuse its own file from review by adding the mark in the
+#               same branch; a git that cannot read attributes from a commit proves nothing
+#   fixture     a data file (json, jsonl, ndjson, csv, tsv, xml, txt) under a fixtures or
+#               __fixtures__ folder; code there (a script, a test) is read like any other
+#   copy        <prefix>mods/<mod>/tests/mod-kit/<path> whose content at the head is byte for byte
+#               that of <prefix>mods/mod-kit/<path> at the head (the copy that
+#               tools/check-mod-shared-parts.sh holds identical), proven here by comparing the two
+#               blobs, never by trusting that check
+# Anything not proven is not printed, and so is read: an unproven file is never left out (L93).
+AR_FIXTURE_DATA_RE='(^|/)(fixtures|__fixtures__)/(.*/)?[^/]+\.(json|jsonl|ndjson|csv|tsv|xml|txt)$'
+AR_MODKIT_COPY_RE='^(.*/)?mods/([^/]+)/tests/mod-kit/(.+)$'
+ar_left_out_candidates() {   # $1 = base, $2 = head
+  local base="$1" head="$2" names gen p src a b
+  names="$(git -c core.quotepath=false diff --name-only "$base" "$head" 2>/dev/null)"
+  [ -n "$names" ] || return 0
+  gen="$(ar_generated_paths "$base" "$head")"
+  if [ -n "$gen" ]; then
+    # Marked at the base too, read from the base commit itself, or it is not proven.
+    if gen="$(ar__check_attr "$gen" --source "$base")"; then gen="$(ar__marked_generated "$gen")"; else gen=""; fi
+  fi
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "
+$gen
+" in *"
+$p
+"*) printf '%s\tgenerated\tmarked generated in .gitattributes\n' "$p"; continue ;; esac
+    if [[ "$p" =~ $AR_FIXTURE_DATA_RE ]]; then
+      printf '%s\tfixture\tfixture data\n' "$p"; continue
+    fi
+    if [[ "$p" =~ $AR_MODKIT_COPY_RE ]] && [ "${BASH_REMATCH[2]}" != "mod-kit" ]; then
+      src="${BASH_REMATCH[1]}mods/mod-kit/${BASH_REMATCH[3]}"
+      a="$(git rev-parse -q --verify "$head:$p" 2>/dev/null)"
+      b="$(git rev-parse -q --verify "$head:$src" 2>/dev/null)"
+      if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        printf '%s\tcopy\tidentical to %s\n' "$p" "$src"; continue
+      fi
+    fi
+  done <<NAMES
+$names
+NAMES
 }
 
 # The review diff: every file at -U20, except the generated ones, which follow under a header saying
