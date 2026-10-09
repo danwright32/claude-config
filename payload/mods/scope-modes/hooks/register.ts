@@ -1653,10 +1653,13 @@ const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
   }
   if (!b) return null
   // The checkout winding down reads (gh's folder, the branch and worktree lists, uncommitted work)
-  // is the project's main working tree, as $.session.repo().root named it before #980: Claude Code
-  // resolves a linked worktree to its main tree there, and mod-kit's `main` is that same folder.
-  if ('unreadable' in b) return b.unreadable === DETACHED ? { root: b.main ?? b.root, branch: '', isDefault: true, issues: [], pr: null } : { unreadable: b.unreadable }
-  return { root: b.main, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null }
+  // is the session's own, mod-kit's `root`, a linked worktree's own folder included (#996): the
+  // uncommitted work it must finish is there. The branch and worktree lists and gh's repository are
+  // the same from any worktree of the project. Not $.session.repo().root, which is the main working
+  // tree even from a linked worktree (measured on Claude Code 2.1.295), whose changes are another
+  // session's.
+  if ('unreadable' in b) return b.unreadable === DETACHED ? { root: b.root, branch: '', isDefault: true, issues: [], pr: null } : { unreadable: b.unreadable }
+  return { root: b.root, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null }
 }
 
 type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences?: { number?: number }[] }
