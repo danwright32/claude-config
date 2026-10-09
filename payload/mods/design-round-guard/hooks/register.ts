@@ -227,8 +227,16 @@ type Verdict =
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
   | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[] } }
 
-// The judgement every call gets, the main session's and a subagent's alike.
+// The judgement every call gets, the main session's and a subagent's alike. Dan's Not a look change
+// for this very call (#1010) is looked up only for a call that would otherwise wait on him, so no
+// other call pays a store read for it (lessons review of #1010).
 const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
+  const v = await judged($, tool, input)
+  if (!('unsure' in v || 'missing' in v)) return v
+  return (await passed($, await keyOf($, tool, input))) ? { pass: true } : v
+}
+
+const judged = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
   // Only the shell, and a tool carrying a file path it may write, can change a file at all.
   if (tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)) return { pass: true }
   const at = await whereOf($)
@@ -237,8 +245,6 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
   const own = targets.find(t => isOwnRecord(t.path ?? t.word))
   if (own) return { forged: own.path ?? own.word }
   if (storeMentioned) return { forged: 'the plugin store, which this command names' }
-  // This very call, which Dan answered changes nothing on screen (#1010).
-  if (await passed($, await keyOf($, tool, input))) return { pass: true }
 
   // The look changing files, each with the checkout it is in; a file in none is in no project.
   const byTree = new Map<string, string[]>()
@@ -362,7 +368,12 @@ const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
 
 // A refused call waiting on Dan, by its id: the one lookup the skip question and the settled question
 // naming a call share, so both answer for the project the refused call is in (#1010).
-const waitingOf = async ($: EngineInterface, id: string): Promise<DesignRoundPending | undefined> => ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
+// A refused call left waiting by the guard before #1010 kept no project, key or call text; after a
+// mod reload in the same session it is not waiting, so the edit is made again rather than settled or
+// let through on what it lacks (lessons review of #1010).
+const waitingAll = async ($: EngineInterface): Promise<DesignRoundPending[]> =>
+  ((await $.state.get(pendingRef)).value ?? []).filter(w => Array.isArray(w.trees) && typeof w.key === 'string' && typeof w.call === 'string')
+const waitingOf = async ($: EngineInterface, id: string): Promise<DesignRoundPending | undefined> => (await waitingAll($)).find(x => x.id === id)
 
 const NAME_PROJECT =
   'No refused edit is waiting, and the design round guard never takes the project from the folder this session runs in, so nothing was asked. ' +
@@ -409,7 +420,7 @@ const settledFor = async ($: EngineInterface, issue: number | undefined, call: u
     return inTrees([tree], [])
   }
   const open: DesignRoundPending[] = []
-  for (const w of (await $.state.get(pendingRef)).value ?? []) {
+  for (const w of await waitingAll($)) {
     let lacking = false
     for (const x of w.subjects) if (!recordOf(await $.store.get(x.key))) lacking = true
     if (lacking) open.push(w)

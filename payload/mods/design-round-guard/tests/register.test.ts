@@ -94,7 +94,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const cards: Record<string, unknown>[] = []
   const gitRuns: string[] = []
   const reads: string[] = []
-  const at = { cwd: init.cwd ?? '/w/slate', session: 's1' }
+  const storeGets: string[] = []
+  const at ={ cwd: init.cwd ?? '/w/slate', session: 's1' }
   const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: at.cwd }) as never)
@@ -144,6 +145,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: t } as never
   })
   on('store.get', ($, e) => {
+    storeGets.push(e.key)
     if (ctl.storeGetFails) throw new Error('the store could not be read')
     return { value: store[e.key] } as never
   })
@@ -183,7 +185,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets }
 }
 type W = ReturnType<typeof world>
 
@@ -225,7 +227,7 @@ const askSettled = async ($: Caller, w: W, answer: string | undefined, extra: Re
   })
 }
 
-test('a file that does not change the look passes untouched, with nothing asked of git', withKit, async ($, on) => {
+test('a file that does not change the look passes untouched, with nothing asked of git or the store', withKit, async ($, on) => {
   const w = world($, on)
   const r = await call($, ROUTE)
   expect(refusalOf(r)).toBe('')
@@ -236,6 +238,8 @@ test('a file that does not change the look passes untouched, with nothing asked 
   const b = await call($, { tool: 'Bash', command: "printf 'x\\n' >> /w/slate/lib/date.ts" })
   expect(refusalOf(b)).toBe('')
   expect(w.ran.length).toBe(2)
+  // Lessons review of #1010: Dan's Not a look change is looked up only for a call that would be held.
+  expect(w.storeGets).toEqual([])
 })
 
 // Dan, 2026-10-08: "On, but let tests through".
@@ -707,6 +711,23 @@ test("#1010: Dan's Not a look change holds only in the session and the folder th
   w.at.session = 's2'
   expect(refusalOf(await call($, sh))).toContain(SKIP_QUESTION)
   expect(w.ran.length).toBe(1)
+})
+
+// Lessons review of #1010: a refused call left waiting by the guard before #1010, which kept no
+// project, key or call text, survives a mod reload in the same session. It is no longer waiting: the
+// edit is made again, never settled or let through on what it lacks.
+test('#1010: a refused call left waiting by the earlier guard is asked about afresh, never settled or passed on what it lacks', withKit, async ($, on) => {
+  const w = world($, on)
+  const old = { id: 't900', tool: 'Write', files: ['app/page.tsx'], subjects: [{ key: 'record:/w/slate|issue:978', label: 'issue #978 in slate' }] }
+  on('state.get', ($, e, next) => {
+    if ((e as { key?: string }).key === 'pending') return { value: { value: [old], version: 1 } } as never
+    return next(e)
+  })
+  expect(refusalOf(await askSkip($, w, 'design-round-guard:t900', NOT_LOOK))).toContain('No look changing edit is waiting under t900')
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: 't900', issue: 978 }))).toContain('No look changing edit is waiting under t900')
+  expect(refusalOf(await askSettled($, w, SETTLED_YES))).toContain('"path"')
+  expect(w.asked).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
 })
 
 // Lessons review of #1010 (L567): his word authorises a call, so it is refused on its age when used,
