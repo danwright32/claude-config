@@ -62,6 +62,10 @@ def main(argv):
     cites, hosts, window = {}, [], 60
     for path in a.counts:
         got = read_counts(path)
+        if got["bad"]:
+            print(f"DAMAGED {path}: rows that are not numbers (" + ", ".join(f"L{n}" for n in got["bad"][:10])
+                  + "). REFUSED: a dropped row would read as a lesson nobody cited.")
+            return 1
         if got["host"]:
             hosts.append(got["host"])
         if got["days"]:

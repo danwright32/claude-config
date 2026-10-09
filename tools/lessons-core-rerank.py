@@ -186,6 +186,11 @@ def main(argv):
         got = read_counts(path)
         if got["host"] != h:
             unmeasured.append(f"UNMEASURED: {h}: the counts filed under {h} were taken on {got['host'] or 'no Mac it names'}.")
+        elif got["bad"]:
+            unmeasured.append(f"UNMEASURED: {h}: its counts file has rows that are not numbers ("
+                              + ", ".join(f"L{n}" for n in got["bad"][:10]) + f"), so it is damaged: {path}.")
+        elif not got["days"]:
+            unmeasured.append(f"UNMEASURED: {h}: its counts header carries no window (DAYS), so its rate cannot be computed.")
         elif got["at"] is None:
             unmeasured.append(f"UNMEASURED: {h}: its counts carry no time stamp, so how old they are cannot be told.")
         elif got["at"] > now:
@@ -202,7 +207,7 @@ def main(argv):
             if f.endswith(".tsv") and f[:-4] not in hosts:
                 notes.append(f"NOTE: counts from {f[:-4]} are left out: that Mac holds no lesson band, so it is not one of the Macs expected.")
     windows = sorted({g["days"] for g in used})
-    if len(windows) > 1 or None in windows:
+    if len(windows) > 1:
         problems.append("WINDOWS DIFFER: " + ", ".join(f"{g['host']} counted {g['days']} days" for g in used)
                         + "; citations over different windows cannot be added into one rate.")
     if unmeasured:

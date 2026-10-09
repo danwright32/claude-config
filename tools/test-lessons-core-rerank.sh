@@ -176,6 +176,19 @@ counts mac-b "2026-10-20T11:00:00Z" $'L6\t25\t30\t0'
 out="$(rerank)"; rc=$?
 check_rc "counts dated in the future refuse" 2 "$rc"
 check "saying so" "in the future" "$out"
+# A damaged counts file (a row that is not numbers, or a header with no window) is unmeasured and
+# named, never a traceback (found by the PR lessons review of this change).
+counts mac-b "2026-10-01T11:00:00Z" $'L6\t25\tx\t0'
+out="$(rerank)"; rc=$?
+check_rc "a counts row that is not numbers refuses as unmeasured" 2 "$rc"
+check "naming the row" "L6" "$out"
+check_not "and never as a traceback" "Traceback" "$out"
+counts mac-b "2026-10-01T11:00:00Z" $'L6\t25\t30\t0'
+sed -i.bak 's/ DAYS 60 / DAYS sixty /' "$REPO/lesson-counts/mac-b.tsv"; rm -f "$REPO/lesson-counts/mac-b.tsv.bak"
+out="$(rerank)"; rc=$?
+check_rc "a counts header with no window refuses as unmeasured" 2 "$rc"
+check "saying the window cannot be read" "window" "$out"
+check_not "and never as a traceback" "Traceback" "$out"
 # A file under one Mac's name holding another Mac's counts is not that Mac's counts.
 counts mac-b "2026-10-01T11:00:00Z" $'L6\t25\t30\t0'
 sed -i.bak 's/^HOST mac-b/HOST mac-z/' "$REPO/lesson-counts/mac-b.tsv"; rm -f "$REPO/lesson-counts/mac-b.tsv.bak"

@@ -82,10 +82,15 @@ def read_counts(path):
             days = None
     if "AT" in head and head.index("AT") + 1 < len(head):
         at = parse_stamp(head[head.index("AT") + 1])
-    rows = {}
+    rows, bad = {}, []
     for n, v in read_tsv(path, 4).items():
-        rows[n] = tuple(int(x) for x in v[:3])
-    return {"host": host, "days": days, "at": at, "rows": rows}
+        try:
+            rows[n] = tuple(int(x) for x in v[:3])
+        except ValueError:
+            # A damaged or half written row is named for the caller to refuse on, never dropped (a
+            # dropped row reads as a lesson nobody cited) and never a traceback (L11).
+            bad.append(n)
+    return {"host": host, "days": days, "at": at, "rows": rows, "bad": bad}
 
 
 def review_class(n, tags, tags2):
