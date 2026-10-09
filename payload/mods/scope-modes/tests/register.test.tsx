@@ -146,6 +146,7 @@ const withoutIsItLive = { plugins: [deps] }
 const MIN = 60_000
 const T0 = 1_000_000
 const BOOT = 1759800000
+const SESSION = '11111111-2222-3333-4444-555555555555'
 const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/s1/scratchpad'
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
@@ -174,6 +175,8 @@ type Opts = {
   files?: Record<string, string>
   /** This boot's start, as sysctl gives it; null when sysctl fails. */
   boot?: number | null
+  /** This boot's session (kern.bootsessionuuid), as sysctl gives it; null when sysctl fails. */
+  session?: string | null
   /** A move or link of the sleep record that fails for a reason other than the file being gone. */
   mvFails?: string
   lnFails?: string
@@ -341,7 +344,8 @@ const world = (on: On, o: Opts = {}) => {
     const [cmd, ...a] = argv
     const ops = a.filter(x => !x.startsWith('-'))
     if (cmd === 'mv' || cmd === 'ln' || cmd === 'rm') w.fileOps.push(argv)
-    if (cmd === 'sysctl') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
+    if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
+    if (cmd === 'sysctl' && ops[0] === 'kern.bootsessionuuid') return o.session === null ? fail(1, 'sysctl: unknown oid') : ok(`${o.session ?? SESSION}\n`)
     if (cmd === 'mkdir') return ok()
     // A folder's names, from the files beneath it (#836).
     if (cmd === 'ls') {
@@ -1632,6 +1636,7 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     until: UNTIL,
     night: '1969-12-31',
     bootTime: BOOT,
+    bootSession: SESSION,
     report: '/Users/x/Downloads/Sleep report 1969-12-31.md',
     startedBy: { sessionId: 's1', cwd: '/repo' },
     workers: ['s1', 's2'],
@@ -2028,6 +2033,34 @@ test('a record from another boot reads as awake, and is ended with that reason',
   await clock.advance(MIN)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
+})
+
+// 2026-10-08: a clock correction moved kern.boottime by 2 seconds with no restart. The boot session
+// decides, so the night goes on; another boot's session ends it whatever the start says.
+test('a record whose start moved 2 seconds, with this boot session, is still asleep', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootTime: BOOT + 2, bootSession: SESSION }) } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on: /)
+  await clock.advance(MIN)
+  expect(w.files[CURRENT]).toBe(asleepRecord({ bootTime: BOOT + 2, bootSession: SESSION }))
+  expect(w.notified).toEqual([])
+})
+
+test('a record naming another boot session is ended as a restart, though its start matches', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootSession: 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE' }) } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  await clock.advance(MIN)
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
+})
+
+test('/sleep with this boot session unreadable writes the record without one, judged by its start', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { session: null })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is on until /)
+  expect(recordOf(w).bootTime).toBe(BOOT)
+  expect('bootSession' in recordOf(w)).toBe(false)
 })
 
 test('a notification that cannot be sent is said in the session', withDeps, async ($, on) => {
