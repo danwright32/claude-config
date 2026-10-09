@@ -532,10 +532,19 @@ file `.gitattributes` marks generated at both the base and the head (so a branch
 own file by adding the mark), a data file (json, csv, xml, txt and the like) under a `fixtures`
 folder, and a file under `mods/<mod>/tests/mod-kit/` whose content is byte for byte that of the
 same path in `mods/mod-kit/`, compared blob to blob. Any that still fit are put back, smallest
-first. The review goes ahead when the rest fits and is refused as too large when it does not. Every
-file left out is named, with why and its size, in the start line, the reviewer's own file list, and
-every verdict the gate prints, so none is unread without saying so. A branch under the cap leaves
-out nothing.
+first. The review goes ahead when the rest fits. Every file left out is named, with why and its
+size, in the start line, the reviewer's own file list, every verdict the gate prints, and the
+nudge, so none is unread without saying so. A branch under the cap leaves out nothing.
+
+When the rest is still over the cap, the branch is read in groups of files that each fit
+(claude-config#601), packed in path order, every group by the same reviewer with the same deadline,
+all at once. Each group sees the complete file list, marked with where every other file is read,
+and its own files' changes and full text. The branch counts as reviewed only when every group
+returned a review: a group that runs out of time, fails or answers in another shape makes the whole
+review that outcome, which refuses as before. The findings come back in one review, under one
+header per group, with one read key. It is refused as too large only when no split fits, because
+one file's own diff is over what a group can hold, or because it would take more than
+`PR_REVIEW_MAX_GROUPS` (8) groups.
 
 Measured 2026-09-24: across the last 150 squash merges of claude-config, Overture, Ovation and
 PostRoll, 11 of 600 branches were over the 300 KB cap it shares with the push review. Two real

@@ -54,7 +54,18 @@ cat > "$FAKEBIN/claude" <<'EOS'
 printf 'called\n' >> "$FAKE_LOG/calls"
 printf '%s\x1e' "$@" > "$FAKE_LOG/args"
 env > "$FAKE_LOG/env"
-cat > "$FAKE_LOG/stdin"
+# Read into this call's own file first: the groups of one branch (#601) are reviewed at once.
+cat > "$FAKE_LOG/stdin.$$"
+cp "$FAKE_LOG/stdin.$$" "$FAKE_LOG/stdin"
+# A group's reviewer answers from FAKE_GROUP_<n>_OUT and sleeps FAKE_GROUP_<n>_SLEEP when set.
+grp="$(grep -o 'THIS REVIEW IS GROUP [0-9]*' "$FAKE_LOG/stdin.$$" | head -1 | awk '{ print $NF }')"
+if [ -n "$grp" ]; then
+  mv "$FAKE_LOG/stdin.$$" "$FAKE_LOG/stdin.g$grp"
+  v="FAKE_GROUP_${grp}_SLEEP"; sleep "${!v:-0}"
+  v="FAKE_GROUP_${grp}_OUT"; [ -n "${!v:-}" ] && { printf '%s\n' "${!v}"; exit 0; }
+else
+  rm -f "$FAKE_LOG/stdin.$$"
+fi
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
 [ -n "${FAKE_CLAUDE_STDERR_FILE:-}" ] && cat "$FAKE_CLAUDE_STDERR_FILE" >&2
 [ -n "${FAKE_CLAUDE_EXIT:-}" ] && { echo "fake claude: simulated failure" >&2; exit "$FAKE_CLAUDE_EXIT"; }
@@ -945,6 +956,127 @@ MG commit -q -am change; MH="$(MG rev-parse HEAD)"
 mcand="$(cd "$MREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$MB' '$MH'")"
 check "#583 a file the base already marked generated is a candidate" "old.gen" "$mcand"
 check_not "#583 a file marked generated only by this branch is not" "new.gen" "$mcand"
+
+# ===========================================================================================
+# 12. A branch still over the cap is reviewed in groups of files, each fitting, rather than refused
+#     (claude-config#601). Slate #3049 (456 KB across about 86 files) could only merge by Dan
+#     clicking merge on GitHub. Every group is read by the same runner with the same deadline, the
+#     branch counts as reviewed only when every group returned, and any group that did not blocks.
+# ===========================================================================================
+reset_state
+G checkout -q -b feat/groups main
+for n in 1 2 3 4; do seq 1 120 | sed "s/^/func g${n}_/; s/\$/() {}/" > "$REPO/G$n.swift"; done
+G add G1.swift G2.swift G3.swift G4.swift
+G commit -q -m "four files"
+GRP_SHA="$(G rev-parse HEAD)"
+GRP_BASE="$(G rev-parse main)"
+G checkout -q feat/sync
+GCAP=6000
+GF1='G1.swift:3: the first group finding (L1). Should be: x. [severity: minor]'
+GF2='G4.swift:5: the second group finding (L2). Should be: y. [severity: minor]'
+grp_parts(){ printf '%s/parts/%s-pr-%s' "$AI_REVIEW_STATE_DIR" "$KEY" "$1"; }
+out="$(PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_1_OUT="$GF1" FAKE_GROUP_2_OUT="$GF2" prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
+check "#601 a branch over the cap that splits is reviewed, not refused" "started" "$out"
+check "#601 in groups of files, said with how many" "in 2 groups" "$out"
+check_not "#601 and is not called too large" "too large" "$out"
+wait_final "$GRP_SHA" || bad "#601 the grouped review finished: $out"
+F="$(final_of "$GRP_SHA")"
+check_eq "#601 one reviewer per group, the same runner each time" "2" "$(calls)"
+check_eq "#601 every group returned, so the branch review is ok" "ok" "$(meta "$F" status)"
+check_eq "#601 its findings are every group's together" "2" "$(meta "$F" findings)"
+check_eq "#601 it records how many groups read it" "2" "$(meta "$F" groups)"
+g1="$(cat "$FAKE_LOG/stdin.g1" 2>/dev/null)"; g2="$(cat "$FAKE_LOG/stdin.g2" 2>/dev/null)"
+check "#601 group 1 reads its own files" "+func g1_1() {}" "$g1"
+check_not "#601 and not another group's" "+func g3_1() {}" "$g1"
+check "#601 group 2 reads its own files" "+func g4_1() {}" "$g2"
+check_not "#601 and not another group's" "+func g1_1() {}" "$g2"
+check "#601 every group is given the complete file list, saying where the rest are read" $'G3.swift\t(changed, reviewed in another group' "$g1"
+check "#601 and is told it is one group of the branch" "THIS REVIEW IS GROUP 2 OF 2" "$g2"
+check_not "#601 a group never carries another group's full text" "FULL FILE at ${GRP_SHA:0:7}: G3.swift" "$g1"
+for g in 1 2; do
+  [ "$(wc -c < "$FAKE_LOG/stdin.g$g")" -le "$GCAP" ] && ok || bad "#601 group $g fits under the cap ($(wc -c < "$FAKE_LOG/stdin.g$g") bytes)"
+done
+[ ! -e "$(grp_parts "$GRP_SHA")" ] && ok || bad "#601 the groups' own files are removed once the branch's review is written"
+check_eq "#601 the outcome ledger counts the branch once, not once per group" "1" "$(grep -c "$GRP_SHA" "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
+check "#601 the lessons each group cited reach the citation ledger" "L2" "$(cat "$AI_REVIEW_STATE_DIR/citations.tsv" 2>/dev/null)"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 findings from the groups refuse until read" "1" "$rc"
+check "#601 the refusal carries group 1's finding" "the first group finding" "$out"
+check "#601 and group 2's" "the second group finding" "$out"
+check "#601 each under its own group" "Group 2 of 2" "$out"
+gk="$(key_in "$out")"
+[ -n "$gk" ] && ok || bad "#601 one read key covers every group's findings: $out"
+out="$(PR_REVIEW_READ="$gk" PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 and that one key allows the merge" "0" "$rc"
+
+# While the groups run, the check says how many have returned.
+reset_state
+out="$(PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_2_SLEEP=4 FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 a grouped review still running refuses as still to come" "3" "$rc"
+check "#601 and says how many of its groups have returned" "of 2 groups" "$out"
+wait_final "$GRP_SHA" || bad "#601 the slow grouped review finished"
+check_eq "#601 two clean groups make a clean branch" "0" "$(meta "$(final_of "$GRP_SHA")" findings)"
+
+# A group that does not finish inside the deadline blocks the branch, as one review that did not would.
+reset_state
+PR_REVIEW_DEADLINE_SECONDS=2 PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_1_OUT="$GF1" FAKE_GROUP_2_SLEEP=8 prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE" >/dev/null
+wait_final "$GRP_SHA" || bad "#601 the review with a slow group finished"
+check_eq "#601 a group past its deadline makes the branch's review a timeout" "timeout" "$(meta "$(final_of "$GRP_SHA")" status)"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 which refuses the merge" "1" "$rc"
+check "#601 naming the group that did not finish" "Group 2 of 2" "$out"
+
+# A group that answers in some other shape blocks too.
+reset_state
+PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_1_OUT='I could not review this.' FAKE_GROUP_2_OUT="$GF2" prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE" >/dev/null
+wait_final "$GRP_SHA" || bad "#601 the review with an unparsed group finished"
+check_eq "#601 an unparsed group makes the branch's review unparsed" "unparsed" "$(meta "$(final_of "$GRP_SHA")" status)"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 and refuses the merge" "1" "$rc"
+check "#601 naming that group" "Group 1 of 2" "$out"
+
+# A file whose own diff is over what a group can hold cannot be split, so it is still too large.
+reset_state
+out="$(PR_REVIEW_MAX_BYTES=2000 prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
+check "#601 a file too large for any group is still refused as too large" "too large" "$out"
+check "#601 naming the file" "G1.swift" "$(meta "$(final_of "$GRP_SHA")" status; cat "$(final_of "$GRP_SHA")")"
+check_eq "#601 and no reviewer ran" "0" "$(calls)"
+# And a branch needing more groups than may run at once.
+reset_state
+out="$(PR_REVIEW_MAX_BYTES=$GCAP PR_REVIEW_MAX_GROUPS=1 prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
+check "#601 a branch needing more groups than PR_REVIEW_MAX_GROUPS is still too large" "too large" "$out"
+check "#601 saying how many groups it would need" "2 groups" "$(cat "$(final_of "$GRP_SHA")")"
+
+# The check writes the branch's review itself when every group finished but the process that waits
+# on them died before it could, and calls it abandoned when a group never finished.
+reset_state
+GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
+now="$(date +%s)"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=600\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$now" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+for g in 1 2; do
+  printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=%s\nfinished=%s\nstatus=ok\nmodel=sonnet\ndeadline=600\nkind=pr\nbase=%s\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" "$now" "$now" "$GRP_BASE" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
+done
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 every group finished: the check writes the branch's review and allows" "0" "$rc"
+check_eq "#601 as ok" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+reset_state
+GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g1.txt"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 a group that never finished leaves the branch unreviewed" "1" "$rc"
+check "#601 as abandoned" "never finished" "$out"
+check "#601 naming the group" "group 2" "$(cat "$(final_of "$GRP_SHA")")"
+[ ! -e "$GP" ] && ok || bad "#601 an abandoned grouped review's files are removed"
+# Groups nothing ever wrote up (the waiting process died, no check came) are swept after 14 days.
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR/parts/old-pr-dead"; touch -t 202601010000 "$AI_REVIEW_STATE_DIR/parts/old-pr-dead"
+mkdir -p "$AI_REVIEW_STATE_DIR/parts/new-pr-live"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "#601 the review beside the sweep finished"
+[ ! -e "$AI_REVIEW_STATE_DIR/parts/old-pr-dead" ] && ok || bad "#601 a stale group folder is swept"
+[ -e "$AI_REVIEW_STATE_DIR/parts/new-pr-live" ] && ok || bad "#601 and a recent one is left alone"
 
 echo
 echo "passed: $pass, failed: $fail"
