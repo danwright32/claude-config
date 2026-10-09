@@ -233,6 +233,8 @@ type Opts = {
   remote?: string | null
   /** mod-kit's walk for the checkout a folder sits in fails (#996), with what it threw. */
   workingTreeFails?: string
+  /** The folders git status finds uncommitted changes in (#996); none by default. */
+  dirty?: string[]
   /** mod-kit's branch reader fails (#980), with what it threw. */
   branchReaderFails?: string
   /** The session's folder, /repo unless said: a linked worktree of /repo, whose main working tree stays /repo (#980 review). */
@@ -494,7 +496,7 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a.includes('--list')) return ok(o.branchHere === false ? '' : `  ${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('ls-remote')) return o.branchOnGitHub === false ? fail(2) : ok(`abc\trefs/heads/${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('worktree')) return ok(o.worktrees ?? `worktree /repo\nbranch refs/heads/main\n`)
-    if (cmd === 'git' && a.includes('status')) return ok('')
+    if (cmd === 'git' && a.includes('status')) return ok(o.dirty?.includes(a[a.indexOf('-C') + 1] as string) ? ' M app.ts\n' : '')
     // What the overnight rules ask of the disk (#834): /repo is a primary checkout of o/r unless a
     // test says otherwise, and every other folder is in no repository.
     if (cmd === 'git' && a.includes('remote')) {
@@ -980,17 +982,42 @@ test("winding down whose branch mod-kit's reader cannot give says so, never read
   expect(w.toasts).toEqual([])
 })
 
-// $.session.repo().root, which winding down read its checkout from before #980, is the project's
-// main working tree even in a linked worktree (Claude Code resolves a worktree's .git file to its
-// canonical root), so the target's checkout is mod-kit's `main`, never the worktree's own folder.
-test('winding down from a linked worktree reads the main working tree, as $.session.repo() named it (#980 review)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { cwd: '/repo/.claude/worktrees/wt', branch: 'main' })
+// Winding down finishes this session's own work, so its checkout is the session's own (mod-kit's
+// `root`), a linked worktree's folder included (#996). Until #996 it was the project's main working
+// tree, as $.session.repo().root names it even from a worktree (measured on Claude Code 2.1.295),
+// so a worktree session was held by changes left in the main checkout, which are another
+// session's, and let through with its own changes uncommitted.
+test("winding down from a linked worktree reads that worktree's uncommitted work, never the main checkout's (#996)", withDeps, async ($, on) => {
+  const own = '/repo/.claude/worktrees/wt'
+  const { w, clock } = world(on, { cwd: own, branch: 'main', dirty: [own] })
   await start($ as never, clock)
   await command($ as never, 'winddown')
-  await stop($ as never)
+  expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
   const statuses = w.runs.filter(r => r.includes('status') && r.includes('--porcelain'))
   expect(statuses.length).toBeGreaterThan(0)
-  expect(statuses.every(r => r[2] === '/repo')).toBe(true)
+  expect(statuses.every(r => r[2] === own)).toBe(true)
+})
+
+test("winding down from a linked worktree is not held by changes in the main checkout, which are another session's (#996)", withDeps, async ($, on) => {
+  const { clock } = world(on, { cwd: '/repo/.claude/worktrees/wt', branch: 'main', dirty: ['/repo'] })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('winding down in the main checkout still reads its uncommitted work there (#996)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'] })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
+})
+
+test('winding down from a detached head in a linked worktree reads that worktree (#996)', withDeps, async ($, on) => {
+  const own = '/repo/.claude/worktrees/wt'
+  const { clock } = world(on, { cwd: own, branch: '', dirty: [own] })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
 })
 
 test('winding down in no repository has nothing to finish (#980)', withDeps, async ($, on) => {
