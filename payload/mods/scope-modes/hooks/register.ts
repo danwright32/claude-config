@@ -51,7 +51,7 @@ import {
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
-import { bootOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { keptOpen, leftOpenFor, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
@@ -107,9 +107,28 @@ const heldOf = async ($: EngineInterface) => (await $.state.get(heldRef)).value 
 
 // ---- Sleep mode (#840): the machine wide record ----
 
-// This boot's start. A session's process lives inside one boot, so once read it cannot change under
-// it (unlike the record, which is read every time); a failed read is not kept, and is tried again.
-let boot: number | undefined
+// This boot: its start and its session. A session's process lives inside one boot, so once read
+// neither is read again (unlike the record, which is read every time): the session cannot change
+// within a boot, and the start, which a clock correction moves by seconds, is only ever judged within
+// readSleep's tolerance. A failed read is not kept, and is tried again.
+let bootTime: number | undefined
+let bootSession: string | undefined
+const BOOT_OIDS = ['kern.boottime', 'kern.bootsessionuuid'] as const
+type BootOid = (typeof BOOT_OIDS)[number]
+const bootUnread = (): BootOid[] => BOOT_OIDS.filter(o => (o === 'kern.boottime' ? bootTime : bootSession) === undefined)
+const bootNow = (): Boot => ({ time: bootTime ?? null, session: bootSession ?? null })
+// Keeps what `sysctl -n <oid>` answered for this boot; a failed read keeps nothing and says why.
+const keepBoot = (oid: BootOid, r: { exitCode: number; stdout: string; stderr: string }): string | undefined => {
+  if (oid === 'kern.boottime') {
+    const b = r.exitCode === 0 ? bootOf(r.stdout) : null
+    if (b !== null) bootTime = b
+  } else {
+    const s = r.exitCode === 0 ? bootSessionOf(r.stdout) : null
+    if (s !== null) bootSession = s
+  }
+  if ((oid === 'kern.boottime' ? bootTime : bootSession) !== undefined) return undefined
+  return r.stderr.trim() || `sysctl answered ${JSON.stringify(r.stdout.trim().slice(0, 80))}`
+}
 // Whether this session has a person at its prompt, from its start: a -p or detached run never works overnight.
 let interactive = false
 // The last state the band was given, so the minute's tick redraws it only when sleep began or ended.
@@ -124,13 +143,14 @@ const sleepPaths = async ($: EngineInterface) => {
   return { home, dir, current: `${dir}/current.json`, ended: `${dir}/ended`, notes: `${dir}/notes`, preparing: `${dir}/preparing` }
 }
 
-const thisBoot = async ($: EngineInterface): Promise<{ boot: number } | { why: string }> => {
-  if (boot !== undefined) return { boot }
-  const r = await run($, ['sysctl', '-n', 'kern.boottime'])
-  const b = r.exitCode === 0 ? bootOf(r.stdout) : null
-  if (b === null) return { why: r.stderr.trim() || `sysctl answered ${JSON.stringify(r.stdout.trim().slice(0, 80))}` }
-  boot = b
-  return { boot: b }
+// This boot, each half read until it answers; `timeWhy` says why the start could not be read.
+const thisBoot = async ($: EngineInterface): Promise<{ boot: Boot; timeWhy?: string }> => {
+  let timeWhy: string | undefined
+  for (const oid of bootUnread()) {
+    const why = keepBoot(oid, await run($, ['sysctl', '-n', oid]))
+    if (oid === 'kern.boottime') timeWhy = why
+  }
+  return { boot: bootNow(), ...(timeWhy ? { timeWhy } : {}) }
 }
 
 // The one predicate, read live (L83, L175): the record as it stands on disk now, asked of readSleep.
@@ -147,8 +167,7 @@ const sleepNow = async ($: EngineInterface): Promise<SleepReading> => {
       if (!(await $.fs.exists(p.current))) return { state: 'none' }
       return { state: 'unreadable', why: `the sleep record could not be read (${msg(err)})` }
     }
-    const b = await thisBoot($)
-    return readSleep(text, await $.clock.now(), 'boot' in b ? b.boot : null)
+    return readSleep(text, await $.clock.now(), (await thisBoot($)).boot)
   } catch (err) {
     return { state: 'unreadable', why: `the sleep record could not be read (${msg(err)})` }
   }
@@ -962,8 +981,11 @@ const startedWhere = (r: SleepRecord) => `it started at ${etWhen(r.since)} in ${
 const startSleep = async ($: EngineInterface): Promise<string> => {
   // This boot first: without it no record can be judged, and one that is sound must never be
   // called broken for it (L11), nor a new one written that could not be told from an old boot's.
+  // The session is kept beside the start when it can be read; without it the record is judged by
+  // its start alone, within readSleep's tolerance.
   const b = await thisBoot($)
-  if (!('boot' in b)) return `Sleep mode did not start: this boot's start could not be read (${b.why}).`
+  const startedBoot = b.boot.time
+  if (startedBoot === null) return `Sleep mode did not start: this boot's start could not be read (${b.timeWhy ?? 'sysctl gave no reason'}).`
   let reading = await sleepNow($)
   if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
   if (reading.state === 'unreadable') {
@@ -1056,7 +1078,8 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
     since: now,
     until: untilOf(night),
     night,
-    bootTime: b.boot,
+    bootTime: startedBoot,
+    ...(b.boot.session !== null ? { bootSession: b.boot.session } : {}),
     // Named as Dan asked (decision 4, 2026-10-06): "Sleep report <night>.md", the night's ET date.
     report: `${p.home}/Downloads/Sleep report ${night}.md`,
     startedBy: { sessionId: self, cwd: startedIn },
@@ -2110,13 +2133,9 @@ export const register: Register = on => {
         const current = `${sleepDir(home)}/current.json`
         if (!(await built.fs.exists(current))) return { home, reading: { state: 'none' } }
         const text = await built.fs.read(current)
-        if (boot === undefined) {
-          // Under Claude Code's 10 s cut off for a noun call (#744); sysctl answers in milliseconds.
-          const r = await built.process.run(['sysctl', '-n', 'kern.boottime'], { timeoutMs: BOOT_MS })
-          const b = r.exitCode === 0 ? bootOf(r.stdout) : null
-          if (b !== null) boot = b
-        }
-        return { home, reading: readSleep(text, await built.clock.now(), boot ?? null) }
+        // Under Claude Code's 10 s cut off for a noun call (#744); sysctl answers in milliseconds.
+        for (const oid of bootUnread()) keepBoot(oid, await built.process.run(['sysctl', '-n', oid], { timeoutMs: BOOT_MS }))
+        return { home, reading: readSleep(text, await built.clock.now(), bootNow()) }
       } catch {
         return null
       }

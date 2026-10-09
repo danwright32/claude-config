@@ -1,15 +1,17 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { bootOf, etWhen, isDaytimeEt, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
-import { BOOT_FIXTURES, SLEEP_FIXTURES } from './sleep-fixtures.ts'
+import { BOOT_TIME_TOLERANCE_S, bootOf, bootSessionOf, etWhen, isDaytimeEt, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
+import { BOOT_FIXTURES, SESSION_FIXTURES, SLEEP_FIXTURES } from './sleep-fixtures.ts'
 
-type Fixture = { name: string; text: string | null; now: number; boot: number | null; state: string }
+type Fixture = { name: string; text: string | null; now: number; boot: number | null; session?: string | null; state: string }
+const bootIn = (f: Fixture) => ({ time: f.boot, session: f.session ?? null })
+const UNKNOWN = { time: null, session: null }
 
 // One fixture set for both readers (L26): the shell's sleep_state is held to the same states in
 // payload/hooks/test-sleep-state.sh, so the two cannot drift apart.
 describe('readSleep, against the fixture set the shell reader shares', () => {
   for (const f of SLEEP_FIXTURES as Fixture[]) {
     test(f.name, () => {
-      expect(readSleep(f.text, f.now, f.boot).state).toBe(f.state)
+      expect(readSleep(f.text, f.now, bootIn(f)).state).toBe(f.state)
     })
   }
   test('the set covers every state, so neither reader can agree by never meeting one', () => {
@@ -17,13 +19,27 @@ describe('readSleep, against the fixture set the shell reader shares', () => {
   })
   test('asleep carries the record; unreadable says why', () => {
     const f = (SLEEP_FIXTURES as Fixture[])[0] as Fixture
-    const r = readSleep(f.text, f.now, f.boot)
+    const r = readSleep(f.text, f.now, bootIn(f))
     expect(r.state === 'asleep' && r.record.generation).toBe('g1')
-    const bad = readSleep('{"v":1', f.now, f.boot)
+    const bad = readSleep('{"v":1', f.now, bootIn(f))
     expect(bad.state === 'unreadable' && bad.why).toMatch(/not JSON/)
     // An unknown boot never makes a sound record read as broken: its end still bounds it.
-    expect(readSleep(f.text, f.now, null).state).toBe('asleep')
+    expect(readSleep(f.text, f.now, UNKNOWN).state).toBe('asleep')
   })
+  // The edge fixtures (300 s and 301 s off, both ways) are written against this value; the shell's
+  // TOLERANCE_S is held to the same edges, so a change to either fails one of the two suites.
+  test('the start may sit as far as the tolerance from the record one, and no further', () => {
+    expect(BOOT_TIME_TOLERANCE_S).toBe(300)
+  })
+})
+
+describe('bootSessionOf: this boot, from sysctl kern.bootsessionuuid', () => {
+  // The shell's sleep_boot_session_of is held to the same cases in payload/hooks/test-sleep-state.sh (L26).
+  for (const f of SESSION_FIXTURES as { name: string; text: string; session: string | null }[]) {
+    test(`the fixture the shell shares: ${f.name}`, () => {
+      expect(bootSessionOf(f.text)).toBe(f.session)
+    })
+  }
 })
 
 // Noon ET the day after the night, computed in America/New_York whatever zone the Mac is set to.
