@@ -142,6 +142,86 @@ printf '%s\n' "$out" | grep -q 'cast-multi-line/tests/register.test.ts:4:.*as ne
 ! printf '%s\n' "$out" | grep -q 'uncast/' && check "while an uncast return and casts elsewhere in a hook pass" ok \
   || check "while an uncast return and casts elsewhere in a hook pass" "$out"
 
+# 3b3. A mod test that times its subject sets its own time limit (#1016). The test runner's default,
+#     5,000 ms, is a fixed number, so a test timing a list against a yardstick from the same run
+#     failed at it on a busy Mac with nothing broken (L224; measured 2026-10-09). Timing is performance.now, process.hrtime
+#     or Date.now arithmetic, in the test or in a helper it calls, however deep. A test with a limit
+#     of its own passes, whether written in place or in a named options object; one that times
+#     nothing passes, and so does one whose comment merely names a clock.
+M3T="$TMPROOT/m3t"; mkmod "$M3T" timed-bare; mkmod "$M3T" timed-direct; mkmod "$M3T" timed-room
+mkdir -p "$M3T/timed-bare/tests" "$M3T/timed-direct/tests" "$M3T/timed-room/tests"
+cat > "$M3T/timed-bare/tests/speed.test.ts" <<'TS'
+import { expect, test } from 'claude-code/testing'
+const withX = { plugins: [] }
+test('a list names its sessions (no clock here)', withX, async ($, on) => {
+  expect(1).toBe(1)
+})
+const timed = async (f: () => Promise<unknown>) => {
+  const t = performance.now()
+  await f()
+  return performance.now() - t
+}
+test('a list is fast against the yardstick', withX, async ($, on) => {
+  const yard = await timed(async () => {})
+  expect(await timed(async () => {})).toBeLessThan(yard * 10)
+})
+describe('nested', () => {
+  test("a nested list is fast too", async () => {
+    expect(await timed(async () => {})).toBeLessThan(1)
+  })
+})
+TS
+cat > "$M3T/timed-direct/tests/clock.test.ts" <<'TS'
+import { expect, test } from 'claude-code/testing'
+const withX = { plugins: [] }
+test(`a command is bounded and quick`, withX, async ($, on) => {
+  const t = Date.now()
+  const bounds = [{ timeoutMs: 3000 }]
+  expect(bounds[0].timeoutMs).toBe(3000)
+  expect(Date.now() - t).toBeLessThan(100)
+})
+test('a comment naming the clock is not timing', withX, async ($, on) => {
+  // performance.now() would measure the machine here, so it is not used
+  expect(Date.now()).toBeGreaterThan(0)
+})
+TS
+cat > "$M3T/timed-room/tests/room.test.ts" <<'TS'
+import { expect, test } from 'claude-code/testing'
+const withX = { plugins: [] }
+const slow = { ...withX, timeoutMs: 60_000 }
+function timed(f: () => void) {
+  const t = performance.now()
+  f()
+  return performance.now() - t
+}
+const sample = () => [timed(() => {}), timed(() => {})]
+test('room in place', { ...withX, timeoutMs: 120_000 }, async ($, on) => {
+  expect(sample()[0]).toBeLessThan(sample()[1] * 10)
+})
+test('room by name', slow, async ($, on) => {
+  expect(sample()[0]).toBeLessThan(1)
+})
+TS
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M3T" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod test timing its subject under the fixed default limit fails the run, with no claude command" ok \
+  || check "a mod test timing its subject under the fixed default limit fails the run, with no claude command" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q "timed-bare/tests/speed.test.ts:11: test 'a list is fast against the yardstick'.*through timed" \
+  && check "naming the file, line and test, and the helper that times" ok \
+  || check "naming the file, line and test, and the helper that times" "$out"
+printf '%s\n' "$out" | grep -q "timed-bare/tests/speed.test.ts:16: test 'a nested list is fast too'" \
+  && check "a test nested in a describe is found too" ok || check "a test nested in a describe is found too" "$out"
+printf '%s\n' "$out" | grep -q "timed-direct/tests/clock.test.ts:3: test 'a command is bounded and quick'.*through Date.now" \
+  && check "Date.now arithmetic in the test itself counts, and a timeoutMs in its body is not its limit" ok \
+  || check "Date.now arithmetic in the test itself counts, and a timeoutMs in its body is not its limit" "$out"
+! printf '%s\n' "$out" | grep -q "no clock here" && check "a test before the timing helper's definition is not blamed for it" ok \
+  || check "a test before the timing helper's definition is not blamed for it" "$out"
+! printf '%s\n' "$out" | grep -q "a comment naming the clock" && check "a comment naming a clock, and Date.now with no arithmetic, are not timing" ok \
+  || check "a comment naming a clock, and Date.now with no arithmetic, are not timing" "$out"
+! printf '%s\n' "$out" | grep -q "timed-room" && check "a timing test with its own limit, in place or in a named options object, passes" ok \
+  || check "a timing test with its own limit, in place or in a named options object, passes" "$out"
+[ "$(printf '%s\n' "$out" | grep -c 'times its subject')" -eq 3 ] && check "and exactly the three bare timing tests are named" ok \
+  || check "and exactly the three bare timing tests are named" "$out"
+
 # 3c. The tsconfig.json rule needs only the filesystem, so it holds where no claude command exists
 #     (CI's Linux runner) instead of hiding behind UNMEASURED (lessons review of #645).
 out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M3B" 2>&1)"; code=$?

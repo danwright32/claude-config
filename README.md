@@ -1469,6 +1469,13 @@ returned their object cast to `never`, which passes any shape; removing those ca
 them, in seven mods, hiding a missing member or a parameter narrower than the real one. Every one is
 now returned uncast, typed with the real noun's types, and `check-mods.sh` refuses such a cast in
 any mod file, by file and line, without needing Claude Code (#833).
+It also fails a mod test that times its subject (`performance.now`, `process.hrtime` or `Date.now`
+arithmetic, in the test or in any helper it calls) without a `timeoutMs` in its own options, by
+file, line and test name, again from the files alone (#1016). `claude plugin test` gives every test
+5,000 ms, a fixed number, so such a test is judged by how busy the Mac is: session-registry's #911
+test, which compares a list against a yardstick measured in the same run, failed at that limit
+three times out of three beside 96 CPU burners with nothing broken. The comparison is the
+judgement, and the test's own limit is set where only a hang reaches it.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
