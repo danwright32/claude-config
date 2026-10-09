@@ -40,6 +40,10 @@
 #   a commit and a push in ONE command                       refused: the head it pushes does not
 #                                                            exist yet, so nothing has read it
 #   a missing library, reader or checker                     refused, saying which (L42, L488)
+# Which pushes are held at all is ONE function, mt_push_gate_scope in lib/merge-target.sh, because
+# ai-review-on-push.sh reads the same answer to stand down wherever this review reads the branch
+# (claude-config#1007, L261): a second model review of a subset of the same diff is the same work
+# done twice per push (L301).
 #
 # Override, one command, visible: SKIP_PR_REVIEW=1 on the push, the merge gate's own. Explain to
 # Dan first. The head judged is the local HEAD, as every push gate here judges it.
@@ -60,7 +64,8 @@ OVERRIDE_HOW="Override for one push, explained to Dan first: SKIP_PR_REVIEW=1 <t
 
 # The libraries it reads through (merge-target.sh sources push-scope.sh). Missing, it cannot tell a
 # push from anything else, so it refuses only what could be one, by the cheap filter above.
-if ! . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || ! declare -F ps_is_git_push >/dev/null; then
+if ! . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || ! declare -F ps_is_git_push >/dev/null \
+  || ! declare -F mt_push_gate_scope >/dev/null; then
   case "$payload" in *SKIP_PR_REVIEW=1*) exit 0 ;; esac
   refuse "Refusing to push: lib/merge-target.sh or lib/push-scope.sh is missing, so pr-review-push-gate.sh cannot tell whether this command pushes, and the lessons review of the branch cannot be asked. $OVERRIDE_HOW"
 fi
@@ -74,47 +79,25 @@ command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$command" || exit 0
 
-if ps_has_override "$command" SKIP_PR_REVIEW; then
-  echo "pr-review-push-gate: SKIP_PR_REVIEW=1 was set, so this push was NOT held for the lessons review. Tell Dan why it was skipped; never skip it silently."
-  exit 0
-fi
-
-# A push that only deletes a remote branch sends no commits to review. Judged on each PUSH segment's
-# own words, and exempt only when every push in the command deletes: a delete flag anywhere else
-# (another push, an `rm -d`) says nothing about the push beside it (L673, lessons review of #1002).
 raw="$(ps_parse_payload "$payload" raw)" || raw=""
 raw="${raw%%$'\x1f'*}"
-only_deletes=0
-while IFS= read -r seg; do
-  mt_split_assignments "$seg"
-  [ -n "$MT_REST" ] && ps_is_git_push "$MT_REST" || continue
-  case " $MT_REST " in
-    *" --delete "*|*" -d "*) [ "$only_deletes" -eq 0 ] && only_deletes=1 ;;
-    *) only_deletes=2; break ;;
-  esac
-done <<SEGEOF
-$(mt_raw_segments "$raw")
-SEGEOF
-[ "$only_deletes" -eq 1 ] && exit 0
 
-# The head a chained commit makes does not exist yet, so no review can have read it, and judging the
-# OLD head would wave the new commit through unread.
-if ps_is_git_commit "$command"; then
-  refuse "Refusing to push: this command commits and pushes in one go, so the head it would push does not exist yet and the lessons review cannot read it. Run the commit first, on its own, then the push."
-fi
-
-# A directory the command names but that cannot be used is refused by ps_repo_dir itself (exit 2,
-# its reason on stderr). No repository at all: the push itself will fail, so nothing to judge.
-repo_dir="$(ps_repo_dir "$command" "$cwd")"; rd=$?
-[ "$rd" -eq 2 ] && exit 2
-[ "$rd" -eq 0 ] && [ -n "$repo_dir" ] || exit 0
-top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
-head="$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null)"
-[ -n "$head" ] || exit 0
-
-# The default branch is not a branch push.
-ps_on_default_branch "$top" && exit 0
-branch="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
+# Whether this push is held, read from the one predicate ai-review-on-push.sh also reads to stand
+# down where this gate reviews (lib/merge-target.sh, mt_push_gate_scope; claude-config#1007, L261).
+mt_push_gate_scope "$command" "$raw" "$cwd"
+case $? in
+  0) ;;
+  3)
+    echo "pr-review-push-gate: SKIP_PR_REVIEW=1 was set, so this push was NOT held for the lessons review. Tell Dan why it was skipped; never skip it silently."
+    exit 0 ;;
+  4)
+    refuse "Refusing to push: this command commits and pushes in one go, so the head it would push does not exist yet and the lessons review cannot read it. Run the commit first, on its own, then the push." ;;
+  5) exit 2 ;;
+  *) exit 0 ;;
+esac
+top="$MT_PUSH_GATE_TOP"
+head="$MT_PUSH_GATE_HEAD"
+branch="$MT_PUSH_GATE_BRANCH"
 
 [ -f "$HOOK_DIR/lib/pr-review.sh" ] \
   || refuse "Refusing to push: the lessons review could not run, because $HOOK_DIR/lib/pr-review.sh is missing. $OVERRIDE_HOW"

@@ -12,7 +12,10 @@
 # (L467: a presence check is blind to a second call).
 #
 # Every push here is a real `git push` into a bare repository in the scratch directory, so the
-# upstream reflog the hook reads is the one git actually writes.
+# upstream reflog the hook reads is the one git actually writes. And every push in sections 1 to 9
+# is of the DEFAULT branch, main, because that is where this review still runs: a push of any other
+# branch is held by pr-review-push-gate.sh for the lessons review of the whole branch, and this
+# review stands down there (claude-config#1007, exercised on its own in section 10).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -109,7 +112,6 @@ G remote add origin "$ORIGIN"
 G push -q -u origin main 2>/dev/null
 
 # The planted sibling omission: createEvent gets the typed error, deleteEvent does not.
-G checkout -q -b fix/typed-error
 python3 - "$REPO/src/calendar.ts" <<'EOF'
 import sys
 p = sys.argv[1]
@@ -119,7 +121,7 @@ open(p, "w").write(s)
 EOF
 G add src/calendar.ts
 G commit -q -m "typed error on create"
-G push -q -u origin fix/typed-error 2>/dev/null
+G push -q origin main 2>/dev/null
 SHA_FIX="$(G rev-parse HEAD)"
 
 ms(){ python3 -c 'import time; print(int(time.time() * 1000))'; }
@@ -154,17 +156,22 @@ wait_for_final(){ # wait_for_final <sha> <seconds>  -> 0 when the finished file 
 # ===========================================================================
 # 1. A successful push starts exactly one detached review and returns at once.
 # ===========================================================================
-FAKE_CLAUDE_SLEEP=2 fire_push "git push -u origin fix/typed-error" 0
+# The review sleeps REVIEW_SLEEP seconds and the hook must return well inside that, which is what
+# proves it does not wait for the review. 5 rather than 2 since claude-config#1007 gave the hook
+# the push gate's own scope check to run first: at a load average near 400 (measured 2026-10-09,
+# many agents at once) that check alone took 0.6 to 1 s, and the 2 s margin was missed by 39 ms.
+REVIEW_SLEEP=5
+FAKE_CLAUDE_SLEEP=$REVIEW_SLEEP fire_push "git push origin main" 0
 check_eq "the push hook exits 0" 0 "$RC"
 check "and says the review started" "started in the background" "$OUT"
 check "naming the model it used" "with sonnet" "$OUT"
-[ "$ELAPSED" -lt 2000 ] && ok || bad "the hook returned in ${ELAPSED} ms, which is not within 2 seconds of a push that takes a 2 second review"
+[ "$ELAPSED" -lt $((REVIEW_SLEEP * 1000)) ] && ok || bad "the hook returned in ${ELAPSED} ms, which is not within $REVIEW_SLEEP seconds of a push that takes a $REVIEW_SLEEP second review"
 
 pending_now=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_FIX".txt.pending )
 [ -f "${pending_now[0]:-}" ] && ok || bad "a .pending file exists while the review runs"
 pending_body="$(cat "${pending_now[0]:-/dev/null}" 2>/dev/null)"
 check "and it carries the start time" "started=" "$pending_body"
-check "and the branch" "branch=fix/typed-error" "$pending_body"
+check "and the branch" "branch=main" "$pending_body"
 
 wait_for_final "$SHA_FIX" 20 && ok || bad "the finished file appears within 20 seconds"
 final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_FIX".txt )
@@ -242,7 +249,7 @@ check "so the unchanged sibling is in front of the reviewer" "export async funct
 check "and the start line says what was sent" "diff plus the full text of 1 of 1 changed files" "$OUT"
 
 # The same sha pushed again (a retry) is not reviewed twice.
-fire_push "git push origin fix/typed-error" 0
+fire_push "git push origin main" 0
 check "a second push of the same sha is skipped out loud" "already been reviewed" "$OUT"
 check_eq "and starts nothing" 1 "$(calls)"
 
@@ -258,19 +265,18 @@ fire_push "echo git push" 0
 check_eq "a command that merely mentions a push says nothing" "" "$OUT"
 
 # A refused push sent nothing.
-G checkout -q -b fix/refused
 printf 'export const x = 1;\n' > "$REPO/src/x.ts"
 G add src/x.ts; G commit -q -m x
-fire_push "git push -u origin fix/refused" 1
+fire_push "git push origin main" 1
 check "a push that failed is skipped out loud" "did not succeed (exit 1)" "$OUT"
 check_eq "and starts nothing" 1 "$(calls)"
 
 # A payload whose tool_response cannot say goes ahead (a review of a push that did happen is worth
-# more than silence over one that might not have). This branch IS pushed, for real, first. It also
+# more than silence over one that might not have). This commit IS pushed, for real, first. It also
 # drives the diff-alone switch, so the full file section is proved to be off when asked.
-G push -q -u origin fix/refused 2>/dev/null
+G push -q origin main 2>/dev/null
 SHA_REFUSED="$(G rev-parse HEAD)"
-AI_REVIEW_FULL_FILES=0 fire_push "git push -u origin fix/refused" none
+AI_REVIEW_FULL_FILES=0 fire_push "git push origin main" none
 check "a payload that cannot say whether the push succeeded goes ahead" "started in the background" "$OUT"
 check "and with AI_REVIEW_FULL_FILES=0 the start line says the diff went alone" "diff alone" "$OUT"
 wait_for_final "$SHA_REFUSED" 20 && ok || bad "and that review finishes"
@@ -281,41 +287,13 @@ check "while the diff itself was" "+export const x = 1;" "$(cat "$FAKE_LOG/stdin
 # ===========================================================================
 # 3. Skips, each out loud.
 # ===========================================================================
-G checkout -q main
-G checkout -q -b docs/only
-printf '\nmore\n' >> "$REPO/README.md"
-G add README.md; G commit -q -m docs
-G push -q -u origin docs/only 2>/dev/null
-SHA_DOCS="$(G rev-parse HEAD)"
-fire_push "git push -u origin docs/only" 0
-check "an empty code diff is skipped and says so" "changed no code files" "$OUT"
-check_eq "and exits 0" 0 "$RC"
-check_eq "and starts nothing" 2 "$(calls)"
-[ -e "$AI_REVIEW_STATE_DIR"/*-"$SHA_DOCS".txt.pending ] && bad "and leaves no pending file" || ok
-
-# Over the size cap, at the DEFAULT cap, so the number in the header is the one exercised.
-G checkout -q main
-G checkout -q -b feat/huge
-python3 -c '
-import sys
-with open(sys.argv[1], "w") as f:
-    for i in range(12000):
-        f.write(f"export const generatedValue{i} = {i};\n")
-' "$REPO/src/huge.ts"
-G add src/huge.ts; G commit -q -m huge
-G push -q -u origin feat/huge 2>/dev/null
-fire_push "git push -u origin feat/huge" 0
-check "a diff over the cap is skipped and says the size and the cap" "over the 300 KB cap" "$OUT"
-check_eq "and starts nothing" 2 "$(calls)"
-
 # No claude on PATH. The tools the hook needs are linked into a bare directory so nothing else on
 # this machine's PATH can answer for `claude`.
 NOBIN="$WORKDIR/nobin"; mkdir -p "$NOBIN"
 for t in bash git python3 jq shasum cut sed awk basename dirname cat tr wc date nohup env mkdir rm touch mv find head grep; do
   p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && [ "$p" != "$FAKEBIN/$t" ] && ln -s "$p" "$NOBIN/$t" 2>/dev/null
 done
-G checkout -q fix/typed-error
-OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env PATH="$NOBIN" bash "$PUSH_HOOK" 2>&1)"; RC=$?
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | env PATH="$NOBIN" bash "$PUSH_HOOK" 2>&1)"; RC=$?
 check "with no claude on PATH the skip says so" "no 'claude' command is on PATH" "$OUT"
 check_eq "and exits 0" 0 "$RC"
 check_eq "and starts nothing" 2 "$(calls)"
@@ -330,33 +308,55 @@ check_eq "and none of those started anything" 2 "$(calls)"
 
 # The host gate (Dan, 2026-09-18: the review should run on the work computer, not the personal
 # one). A host the list does not name is skipped out loud and starts nothing.
-OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | AI_REVIEW_HOST="other-mac" bash "$PUSH_HOOK" 2>&1)"; RC=$?
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | AI_REVIEW_HOST="other-mac" bash "$PUSH_HOOK" 2>&1)"; RC=$?
 check "a computer the list does not name is skipped and says so" "skipped: this computer (other-mac) is not one AI_REVIEW_HOSTS names" "$OUT"
 check_eq "and exits 0" 0 "$RC"
 # With no list set, the default names the work Mac only. Each allowed case below reaches the
 # already-reviewed skip, which sits after the host gate, so passing the gate is proved without
 # starting a review.
-OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Daniels-MacBook-Pro-2" bash "$PUSH_HOOK" 2>&1)"
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Daniels-MacBook-Pro-2" bash "$PUSH_HOOK" 2>&1)"
 check "by default the personal Mac is skipped" "is not one AI_REVIEW_HOSTS names" "$OUT"
-OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Dans-MacBook-Pro" bash "$PUSH_HOOK" 2>&1)"
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Dans-MacBook-Pro" bash "$PUSH_HOOK" 2>&1)"
 check "by default the work Mac passes the gate" "already been reviewed" "$OUT"
-OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Dans-MacBook-Pro.local" bash "$PUSH_HOOK" 2>&1)"
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Dans-MacBook-Pro.local" bash "$PUSH_HOOK" 2>&1)"
 check "a trailing .local on the hostname is ignored" "already been reviewed" "$OUT"
-OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | AI_REVIEW_HOSTS="*" AI_REVIEW_HOST="other-mac" bash "$PUSH_HOOK" 2>&1)"
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | AI_REVIEW_HOSTS="*" AI_REVIEW_HOST="other-mac" bash "$PUSH_HOOK" 2>&1)"
 check "a list of * runs on every computer" "already been reviewed" "$OUT"
 check_eq "and none of the host cases started anything" 2 "$(calls)"
+
+# These two come after the host checks, which stand on a head already reviewed.
+printf '\nmore\n' >> "$REPO/README.md"
+G add README.md; G commit -q -m docs
+G push -q origin main 2>/dev/null
+SHA_DOCS="$(G rev-parse HEAD)"
+fire_push "git push origin main" 0
+check "an empty code diff is skipped and says so" "changed no code files" "$OUT"
+check_eq "and exits 0" 0 "$RC"
+check_eq "and starts nothing" 2 "$(calls)"
+[ -e "$AI_REVIEW_STATE_DIR"/*-"$SHA_DOCS".txt.pending ] && bad "and leaves no pending file" || ok
+
+# Over the size cap, at the DEFAULT cap, so the number in the header is the one exercised.
+python3 -c '
+import sys
+with open(sys.argv[1], "w") as f:
+    for i in range(12000):
+        f.write(f"export const generatedValue{i} = {i};\n")
+' "$REPO/src/huge.ts"
+G add src/huge.ts; G commit -q -m huge
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+check "a diff over the cap is skipped and says the size and the cap" "over the 300 KB cap" "$OUT"
+check_eq "and starts nothing" 2 "$(calls)"
 
 # ===========================================================================
 # 4. The deadline: a review that does not return is recorded as unfinished, and the fake is killed.
 # ===========================================================================
-G checkout -q main
-G checkout -q -b fix/slow
 printf 'export const slow = true;\n' > "$REPO/src/slow.ts"
 G add src/slow.ts; G commit -q -m slow
-G push -q -u origin fix/slow 2>/dev/null
+G push -q origin main 2>/dev/null
 SHA_SLOW="$(G rev-parse HEAD)"
 : > "$FAKE_LOG/calls"
-AI_REVIEW_DEADLINE_SECONDS=1 FAKE_CLAUDE_SLEEP=30 fire_push "git push -u origin fix/slow" 0
+AI_REVIEW_DEADLINE_SECONDS=1 FAKE_CLAUDE_SLEEP=30 fire_push "git push origin main" 0
 check "the slow review still starts" "started in the background" "$OUT"
 t0="$(ms)"
 wait_for_final "$SHA_SLOW" 15 && ok || bad "a review past its deadline still produces a finished file"
@@ -385,7 +385,7 @@ check_eq "and exits 0" 0 "$RC"
 
 nudge n1
 check_eq "the nudge exits 0" 0 "$RC"
-check "a finished review is shown, headed with the repository" "AI review of repo, branch fix/typed-error at ${SHA_FIX:0:7}" "$OUT"
+check "a finished review is shown, headed with the repository" "AI review of repo, branch main at ${SHA_FIX:0:7}" "$OUT"
 check "with how long it took" "ran " "$OUT"
 check "and the review text" "deleteEvent still throws the raw error" "$OUT"
 check "and the review that timed out is reported as unfinished, once" "did not finish inside its deadline" "$OUT"
@@ -517,6 +517,91 @@ fire_push "git push" 0 "$R3"
 check "a three commit push is reviewed from the upstream's previous tip" "($R3_BEFORE..$R3_HEAD," "$OUT"
 
 # ===========================================================================
+# 10. Where the push gate's lessons review reads the branch, no second review starts
+# (claude-config#1007, L301). pr-review-push-gate.sh holds every push of a branch other than the
+# default one for the whole branch review, every file type, on both Macs, so this review of the
+# pushed code files would be a second model run over a subset of the same diff. It runs only where
+# the gate does not hold the push: the default branch, and a push carrying the gate's override.
+# Both halves in ONE repository, with the same fake claude, so the skip cannot pass merely because
+# nothing in this fixture could have started a review (L159). Counted as a difference, because the
+# sections above leave the call count wherever they left it.
+# ===========================================================================
+GR_ORIGIN="$WORKDIR/gated.git"; git init -q --bare "$GR_ORIGIN"
+GR="$WORKDIR/gated"; git init -q "$GR"
+GG(){ git -C "$GR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+GG symbolic-ref HEAD refs/heads/main
+mkdir -p "$GR/src"; printf 'export const g = 0;\n' > "$GR/src/g.ts"
+GG add src/g.ts; GG commit -q -m seed
+GG remote add origin "$GR_ORIGIN"; GG push -q -u origin main 2>/dev/null
+# Section 7's review runs detached and is not waited for there, so its call to the fake can land
+# AFTER this baseline is read, and did on CI (4 calls counted where 3 were made here). Waited for
+# first, so the difference below counts this section's pushes and nothing else (L134).
+wait_for_final "$(G3 rev-parse HEAD)" 20 && ok || bad "section 7's review finishes before this section counts calls"
+before_gated="$(calls)"
+
+# A branch push: the gate reads it, so nothing starts here, and the skip says so out loud.
+GG checkout -q -b feat/covered
+printf 'export const covered = 1;\n' > "$GR/src/covered.ts"
+GG add src/covered.ts; GG commit -q -m covered
+GG push -q -u origin feat/covered 2>/dev/null
+SHA_COVERED="$(GG rev-parse HEAD)"
+fire_push "git push -u origin feat/covered" 0 "$GR"
+check_eq "a branch push the gate reviews exits 0" 0 "$RC"
+check "and says the push gate's review reads the branch instead" "skipped: pr-review-push-gate.sh holds this push for the lessons review of the whole branch" "$OUT"
+check_not "and starts nothing" "started in the background" "$OUT"
+[ -e "$AI_REVIEW_STATE_DIR"/*-"$SHA_COVERED".txt.pending ] && bad "a branch push the gate reviews writes no pending marker" || ok
+
+# The same branch pushed with the gate's override was NOT held for the gate's review, so this one
+# still runs: the positive control on a branch, in the same repository.
+printf 'export const overridden = 1;\n' > "$GR/src/overridden.ts"
+GG add src/overridden.ts; GG commit -q -m overridden
+GG push -q 2>/dev/null
+SHA_OVERRIDDEN="$(GG rev-parse HEAD)"
+fire_push "SKIP_PR_REVIEW=1 git push" 0 "$GR"
+check "a branch push carrying SKIP_PR_REVIEW=1 is reviewed here, since the gate did not hold it" "started in the background" "$OUT"
+wait_for_final "$SHA_OVERRIDDEN" 20 && ok || bad "and that review finishes"
+
+# A push of the default branch: the gate does not run there, so this review does.
+GG checkout -q main
+printf 'export const onmain = 1;\n' > "$GR/src/onmain.ts"
+GG add src/onmain.ts; GG commit -q -m onmain
+GG push -q 2>/dev/null
+SHA_ONMAIN="$(GG rev-parse HEAD)"
+fire_push "git push" 0 "$GR"
+check "a push of the default branch is reviewed here" "started in the background" "$OUT"
+wait_for_final "$SHA_ONMAIN" 20 && ok || bad "and that review finishes"
+
+# A push that only deletes a remote branch, made while standing on the default branch, sends no
+# commits, so there is nothing for any review to read. The head it stands on is a new commit nobody
+# has reviewed, so the skip cannot be the already reviewed one (L159); the positive control is the
+# same head then pushed for real, which is reviewed.
+printf 'export const afterdelete = 1;\n' > "$GR/src/afterdelete.ts"
+GG add src/afterdelete.ts; GG commit -q -m afterdelete
+GG push -q 2>/dev/null
+GG push -q origin --delete feat/covered 2>/dev/null
+SHA_AFTERDELETE="$(GG rev-parse HEAD)"
+fire_push "git push origin --delete feat/covered" 0 "$GR"
+check "a push that only deletes a branch is skipped, saying it sent no commits" "skipped: the push only deletes, so it sends no commits" "$OUT"
+check_not "and starts nothing" "started in the background" "$OUT"
+[ -e "$AI_REVIEW_STATE_DIR"/*-"$SHA_AFTERDELETE".txt.pending ] && bad "a delete only push writes no pending marker" || ok
+fire_push "git push" 0 "$GR"
+check "the control: the same head pushed for real is reviewed" "started in the background" "$OUT"
+wait_for_final "$SHA_AFTERDELETE" 20 && ok || bad "and that review finishes"
+
+check_eq "the fake claude was reached by the three pushes that sent commits the gate does not hold, and by nothing else" 3 "$(( $(calls) - before_gated ))"
+covered_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_COVERED".txt )
+[ -e "${covered_final[0]}" ] && bad "and the covered push has no review file of its own" || ok
+
+# One predicate, not two (L261): both hooks ask mt_push_gate_scope, and neither judges the default
+# branch, a delete or the override for itself, so they cannot drift apart about which pushes the
+# gate holds. Read from code lines only, because a comment naming a function is not a call (L135).
+for hook in ai-review-on-push.sh pr-review-push-gate.sh; do
+  hook_code="$(grep -v '^[[:space:]]*#' "$DIR/$hook")"
+  case "$hook_code" in *'mt_push_gate_scope "'*) ok ;; *) bad "$hook asks mt_push_gate_scope which pushes the gate holds" ;; esac
+  case "$hook_code" in *ps_on_default_branch*) bad "$hook judges the default branch itself rather than through mt_push_gate_scope" ;; *) ok ;; esac
+done
+
+# ===========================================================================
 # 6. The reader the background reviewer runs under.
 # ===========================================================================
 # LAST in the suite on purpose: the control below starts a real review, and several cases above
@@ -532,13 +617,11 @@ ln -s "$FAKEBIN/claude" "$NOPY/claude" 2>/dev/null
 if npp_reaches_python3 "$NOPY"; then
   bad "the bare directory really reaches no python3: it found one, so nothing below measures its absence"
 else ok; fi
-G checkout -q main
-G checkout -q -b fix/nopy
 printf 'export const nopy = 1;\n' > "$REPO/src/nopy.ts"
 G add src/nopy.ts; G commit -q -m nopy
-G push -q -u origin fix/nopy 2>/dev/null
+G push -q origin main 2>/dev/null
 before_nopy="$(calls)"
-OUT="$(payload "git push -u origin fix/nopy" 0 "$REPO" s1 | env PATH="$NOPY" "$NOPY/bash" "$PUSH_HOOK" 2>&1)"; RC=$?
+OUT="$(payload "git push origin main" 0 "$REPO" s1 | env PATH="$NOPY" "$NOPY/bash" "$PUSH_HOOK" 2>&1)"; RC=$?
 check "with no python3 the skip names the reader that is missing" "python3" "$OUT"
 check_not "and never claims a review started" "started in the background" "$OUT"
 check_eq "and exits 0, because this hook never blocks a push" 0 "$RC"
@@ -546,7 +629,7 @@ check_eq "and starts nothing" "$before_nopy" "$(calls)"
 # The control: the same push with python3 present really does start one, so the case above is the
 # interpreter's absence and not a branch that skips everything (L159).
 SHA_NOPY="$(G rev-parse HEAD)"
-fire_push "git push -u origin fix/nopy" 0
+fire_push "git push origin main" 0
 check "the control still starts a review for the same push with python3 present" "started in the background" "$OUT"
 # Waited for, so the review this suite started is finished before the scratch directory it writes
 # into is removed. A detached child still writing while its parent's trap deletes the tree leaves
@@ -557,12 +640,12 @@ wait_for_final "$SHA_NOPY" 20 && ok || bad "and that control review finishes"
 # 8. A review that could not find the lessons says so in its own answer (claude-config#539).
 # Running on without them silently would read as a review that applied them and found nothing.
 # ===========================================================================
-G checkout -q main; G checkout -q -b fix/no-lessons
 printf 'export const n = 1;\n' > "$REPO/src/nolessons.ts"
 G add src/nolessons.ts; G commit -q -m nolessons
+G push -q origin main 2>/dev/null
 SHA_NOLESSONS="$(G rev-parse HEAD)"
 mkdir -p "$WORKDIR/no-lessons-here"
-AI_REVIEW_LESSONS_DIR="$WORKDIR/no-lessons-here" fire_push "git push -u origin fix/no-lessons" 0
+AI_REVIEW_LESSONS_DIR="$WORKDIR/no-lessons-here" fire_push "git push origin main" 0
 wait_for_final "$SHA_NOLESSONS" 20 && ok || bad "the review with no lessons still finishes"
 nolessons_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_NOLESSONS".txt )
 nolessons_body="$(cat "${nolessons_final[0]:-/dev/null}" 2>/dev/null)"
@@ -578,16 +661,16 @@ check "while still carrying the review itself" "deleteEvent still throws" "$nole
 # code files only, and its prompt called that diff everything the push added, so a filtered out
 # file read as an unchanged one.
 # ===========================================================================
-G checkout -q main; G checkout -q -b fix/workflow-wiring
 mkdir -p "$REPO/.github/workflows"
 printf 'export const wired = true;\n' > "$REPO/src/wiring.ts"
 printf 'on: push\njobs: {}\n' > "$REPO/.github/workflows/deploy.yml"
 G add src/wiring.ts .github/workflows/deploy.yml; G commit -q -m wiring
+G push -q origin main 2>/dev/null
 SHA_WIRE="$(G rev-parse HEAD)"
 : > "$FAKE_LOG/stdin"
 FAKE_CLAUDE_OUT='src/wiring.ts:1: The tests expect deploy.yml to call the hash script, but the diff contains no change to `.github/workflows/deploy.yml` to add this wiring. Should be: update .github/workflows/deploy.yml in this push. [severity: critical]
 src/wiring.ts:1: wired is exported but never read. Should be: read it or remove it. [severity: minor]' \
-  fire_push "git push -u origin fix/workflow-wiring" 0
+  fire_push "git push origin main" 0
 wait_for_final "$SHA_WIRE" 20 && ok || bad "the workflow review finishes"
 wire_stdin="$(cat "$FAKE_LOG/stdin")"
 check "the reviewer is given the complete list of changed files" "===== FILES THIS PUSH CHANGED" "$wire_stdin"

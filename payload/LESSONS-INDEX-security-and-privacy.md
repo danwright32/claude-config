@@ -39,3 +39,4 @@ which is NOT loaded into the session.
 - L741. A shape-matching scrub cannot see percent-encoded data, so strip query strings and fragments from URLs before logging or alerting them.
 - L752. Take personal data or a secret in the request body, never the address: platform request logs record full addresses before your code runs.
 - L757. Escape person-edited text for its target format (Slack, HTML, email) at the one shared send point, never per call site.
+- L758. Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
