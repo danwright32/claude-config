@@ -179,19 +179,21 @@ case "${1:-}" in
     # "data" object as a row to append, and refuses a body without one instead.
     # --preview finds and checks the row the same way, writes nothing, and prints what each named
     # cell holds now, so the old and new values can be shown for approval before the real update.
-    USAGE="usage: tracker.sh update [--preview] '<link>' '<project name>' '<json object of header:value>'"
+    # An optional fourth argument is what the preview read (its "before"): the update then writes
+    # only while every one of those cells still holds it.
+    USAGE="usage: tracker.sh update [--preview] '<link>' '<project name>' '<json object of header:value>' ['<json of what the preview read>']"
     shift
     MODE=update
     if [ "${1-}" = "--preview" ]; then MODE=preview; shift; fi
-    BODY="$(python3 - "$USAGE" "${1-}" "${2-}" "${3-}" "$(( $# + 1 ))" "$MODE" <<'PY'
+    BODY="$(python3 - "$USAGE" "${1-}" "${2-}" "${3-}" "$#" "$MODE" "${4-}" <<'PY'
 import json, sys
 usage, link, name, cells, argc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
-preview = sys.argv[6] == "preview"
+preview, expect = sys.argv[6] == "preview", sys.argv[7]
 def refuse(why):
     sys.stderr.write("tracker.sh: %s. %s\n" % (why, usage))
     sys.exit(1)
-if argc != 4:
-    refuse("update takes exactly three arguments")
+if argc not in (3, 4):
+    refuse("update takes three arguments, or four with what the preview read")
 if not link.strip():
     refuse("the link is empty")
 if not name.strip():
@@ -203,6 +205,14 @@ except ValueError:
 if not isinstance(parsed, dict) or not parsed:
     refuse("the cells must be a JSON object naming at least one column")
 body = {"action": "update", "link": link, "projectName": name, "cells": parsed}
+if argc == 4:
+    try:
+        expected = json.loads(expect)
+    except ValueError:
+        refuse("what the preview read is not JSON")
+    if not isinstance(expected, dict):
+        refuse("what the preview read must be a JSON object, the preview's before")
+    body["expect"] = expected
 if preview:
     body["preview"] = True
 print(json.dumps(body))

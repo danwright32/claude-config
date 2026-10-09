@@ -16,6 +16,8 @@
  *           Returns { ok, action: "update", rowNumber, before: { Header: old }, row, headers }.
  *           With preview: true it checks the same way, writes nothing, and answers
  *           { ok, action: "update", preview: true, rowNumber, before, row, headers }.
+ *           With expect: { Header: value } (the preview's before) it writes only while each of
+ *           those cells still holds that value, so an edit since the preview is never lost.
  * The body field is "key", not "token": the first version of this script read "token", so a
  * caller written for one version is refused by the other rather than half understood. For the
  * same reason an update carries its cells as "cells", never "data": a script deployed before
@@ -159,9 +161,29 @@ function update_(sheet, body) {
   if (body.preview !== undefined && typeof body.preview !== 'boolean') {
     return { ok: false, error: 'preview must be true or false' };
   }
+  // expect: what each named cell held when the caller read it (the preview's `before`). The write
+  // goes ahead only while every one still holds it, so an edit made after the old values were
+  // shown and approved is never overwritten unseen.
+  const expect = new Map();
+  if (body.expect !== undefined) {
+    if (!body.expect || typeof body.expect !== 'object' || Array.isArray(body.expect)) {
+      return { ok: false, error: 'expect must be an object of Header: the value read before (the preview\'s before)' };
+    }
+    const ek = Object.keys(body.expect);
+    for (let i = 0; i < ek.length; i++) {
+      if (!named.has(norm_(ek[i]))) {
+        return { ok: false, error: 'expect names "' + ek[i] + '", which cells does not change' };
+      }
+      const v = body.expect[ek[i]];
+      if (!(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) {
+        return { ok: false, error: 'the expected value for "' + ek[i] + '" must be text, a number, or true or false' };
+      }
+      expect.set(norm_(ek[i]), String(v));
+    }
+  }
   // A preview finds and checks the row exactly as the update would, writes nothing, and answers
   // with the named cells' current values, so they can be shown for approval first.
-  if (body.preview === true) return findAndUpdate_(sheet, link, name, cells, keys, true);
+  if (body.preview === true) return findAndUpdate_(sheet, link, name, cells, keys, expect, true);
 
   // One update at a time, so two runs cannot interleave their checks and writes. A person
   // editing the sheet takes no lock, which is what the re-check below is for.
@@ -170,7 +192,7 @@ function update_(sheet, body) {
     return { ok: false, error: 'busy: another request is writing the sheet; nothing was changed, try again' };
   }
   try {
-    return findAndUpdate_(sheet, link, name, cells, keys, false);
+    return findAndUpdate_(sheet, link, name, cells, keys, expect, false);
   } finally {
     lock.releaseLock();
   }
@@ -179,7 +201,7 @@ function update_(sheet, body) {
 // Reads cells as the sheet SHOWS them (getDisplayValues), never getValues: a date cell's value
 // is a Date, which reaches the caller as a timestamp nobody typed and would not match the Link
 // or Project Name a person sees.
-function findAndUpdate_(sheet, link, name, cells, keys, preview) {
+function findAndUpdate_(sheet, link, name, cells, keys, expect, preview) {
   const heads = headers_(sheet);
   const col = new Map(); // normalized header -> 1 based column, or 0 when two columns share it
   heads.forEach(function (h, i) {
@@ -240,6 +262,13 @@ function findAndUpdate_(sheet, link, name, cells, keys, preview) {
   const formulas = target.getFormulas()[0];
   const before = {};
   targets.forEach(function (t) { before[t.header] = formulas[t.col - 1] || current[t.col - 1]; });
+  for (let i = 0; i < targets.length; i++) {
+    const want = expect.get(norm_(targets[i].header));
+    const has = String(before[targets[i].header]);
+    if (want !== undefined && want !== has) {
+      return { ok: false, error: 'the cell "' + targets[i].header + '" (row ' + rowNumber + ') now holds "' + has + '", not "' + want + '" as read before; nothing was changed. Preview again and confirm the new values' };
+    }
+  }
   if (preview) {
     return { ok: true, action: 'update', preview: true, rowNumber: rowNumber, before: before, row: current, headers: heads };
   }

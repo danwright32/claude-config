@@ -80,7 +80,8 @@ check_eq "config.example.json carries url and token" "token,url" "$example_keys"
 # --- SKILL.md's worked examples obey SKILL.md's own rules ---------------------
 # An example that breaks a rule teaches the inverse with the rule's authority (L562). The rule:
 # Skills Used never lists Claude Code. Every `tracker.sh append '<json>'` example is parsed.
-example_verdict="$(python3 - "$DIR/SKILL.md" <<'PY'
+examples_verdict(){ # $1 = a SKILL.md
+  python3 - "$1" <<'PY'
 import json, re, sys
 found = 0
 for m in re.finditer(r"tracker\.sh append '(\{.*?\})'", open(sys.argv[1]).read()):
@@ -92,23 +93,46 @@ for m in re.finditer(r"tracker\.sh append '(\{.*?\})'", open(sys.argv[1]).read()
     if "claude code" in str(row.get("Skills Used", "")).lower():
         print("an example lists Claude Code under Skills Used")
 print("examples=%d" % found)
-updates = 0
-for m in re.finditer(r"tracker\.sh update '([^']+)' '([^']+)' '(\{.*?\})'", open(sys.argv[1]).read()):
+# The update examples are judged inside "Updating a row in place" itself, never over the whole
+# file, where the redeploy check's own example would answer for them (L135). Each line is one
+# call: update, optionally --preview, then link, name, cells and an optional expect object.
+text = open(sys.argv[1]).read()
+section = next((b for b in re.split(r"(?m)^## ", text)[1:] if b.startswith("Updating a row in place")), "")
+kinds = []
+for line in section.splitlines():
+    m = re.match(r"\s*bash tracker\.sh update (--preview )?'([^']+)' '([^']+)' '(\{.*?\})'( '(\{.*?\})')?\s*$", line)
+    if not m:
+        if "tracker.sh update" in line and line.lstrip().startswith("bash "):
+            print("an update example that is not a well formed call: %s" % line.strip()[:80])
+        continue
     try:
-        row = json.loads(m.group(3))
+        row = json.loads(m.group(4))
+        if m.group(6):
+            json.loads(m.group(6))
     except Exception:
         print("unparseable example"); continue
-    updates += 1
+    kinds.append("preview" if m.group(1) else ("expect" if m.group(6) else "plain"))
     if "claude code" in str(row.get("Skills Used", "")).lower():
         print("an example lists Claude Code under Skills Used")
-print("update-examples=%d" % updates)
+print("update-examples=%s" % ",".join(kinds))
 PY
-)"
+}
+example_verdict="$(examples_verdict "$DIR/SKILL.md")"
 check "SKILL.md carries a worked append example to judge" "examples=1" "$example_verdict"
-check "SKILL.md carries a worked update example to judge" "update-examples=" "$example_verdict"
-check_not "and at least one" "update-examples=0" "$example_verdict"
+check "SKILL.md's update section shows a preview, then the update bound to what the preview read" "update-examples=preview,expect" "$example_verdict"
 check_not "and no worked example lists Claude Code under Skills Used, which the rule forbids" "Claude Code" "$example_verdict"
 check_not "and every worked example is valid JSON" "unparseable" "$example_verdict"
+check_not "and every update example is a well formed call" "not a well formed call" "$example_verdict"
+# The controls (L1): the same check catches a broken JSON and a Claude Code entry planted in the
+# update section's own examples, which the redeploy example elsewhere cannot answer for.
+python3 -c 'import sys
+t=open(sys.argv[1]).read(); h=t.index("## Updating a row in place"); s=t[h:]
+s=s.replace("{\"Outcome/Results\"", "{Outcome/Results\"", 1)
+i=s.rindex("\"My Actions\":\"Built login, session"); s=s[:i]+"\"Skills Used\":\"Claude Code\","+s[i:]
+print(t[:h]+s, end="")' "$DIR/SKILL.md" > "$TMP/bad-update-examples.md"
+bad_verdict="$(examples_verdict "$TMP/bad-update-examples.md")"
+check "the example check catches a broken update example JSON in that section" "unparseable" "$bad_verdict"
+check "and a Claude Code entry in an update example" "Claude Code" "$bad_verdict"
 
 # --- every step that sends somebody into the sheet names it and links it ------
 # Drive holds two sheets called "Dan Work Project Tracker", and on 2026-10-08 a token rotation
@@ -285,6 +309,11 @@ if [ "$RC" -eq 1 ]; then ok; else bad "an update answered as a preview exits 1 (
 check "and says nothing was written" "only a preview" "$OUT"
 check_not "and a real update never asks for a preview" '"preview"' "$(grep '^STDIN:' "$CURL_LOG")"
 
+# An optional fourth argument is what the preview read; it goes as "expect".
+FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}' '{"My Actions":"old"}'
+check_eq "update with what the preview read succeeds" 0 "$RC"
+check "and sends it as expect" '"expect": {"My Actions": "old"}' "$(grep '^STDIN:' "$CURL_LOG")"
+
 refuses_update_call(){ # refuses_update_call <description> <args to update...>
   local what="$1"; shift
   run update "$@"
@@ -299,6 +328,8 @@ refuses_update_call "cells that are a list, not an object" "https://github.com/e
 refuses_update_call "no cells in the object" "https://github.com/example/alpha" "Alpha" '{}'
 refuses_update_call "an empty Link" "" "Alpha" '{"a":1}'
 refuses_update_call "an empty Project Name" "https://github.com/example/alpha" "" '{"a":1}'
+refuses_update_call "an expect that is not a JSON object" "https://github.com/example/alpha" "Alpha" '{"a":1}' '[1]'
+refuses_update_call "an argument too many" "https://github.com/example/alpha" "Alpha" '{"a":1}' '{"a":0}' 'extra'
 
 # --- the web app's own refusal is a failure, never a printed success (claude-config#677) ---
 # The Apps Script answers HTTP 200 for its refusals too, so curl --fail passes them: the answer
@@ -663,6 +694,16 @@ pad=lambda r,n: r+[""]*(n-len(r))
 w=max(len(r) for r in f)
 print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s" % d["diffs"])' "$1" "$SHEET" 2>&1; }
 
+  # Every refusal: named, and the sheet untouched, not one cell written. Defined before any
+  # case uses it: a call to a function not yet defined prints "command not found" and counts
+  # nothing, so its cases would pass by never running.
+  refuses_update(){ # refuses_update <description> <expected words in the error> <harness output>
+    check "update, $1: refused" '"ok":false' "$(jget "$3" 'd["response"]')"
+    check "update, $1: says why" "$2" "$(jget "$3" 'd["response"].get("error")')"
+    check_eq "update, $1: writes no cell" '[]' "$(jget "$3" 'd["writes"]')"
+    check_eq "update, $1: appends no row" '0' "$(jget "$3" 'd["appended"]')"
+  }
+
   # Append a row, then update it by its Link: exactly the named cells change.
   APPEND_E="$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"data":{"Project Name":"Epsilon","Date Started":"2026-05-01","Date Completed":"","Problem/Goal":"Goal E","My Actions":"Did E","Outcome/Results":"Out E","When to Check Results":"2026-12-15","Skills Used":"Bash","Link":"https://github.com/example/epsilon","Notes":"keep me"}}))' "$REAL")"
   UPDATE_E="$(upd "$REAL" "https://github.com/example/epsilon" "Epsilon" '{"My Actions":"Did E and more","outcome/results":"Shipped"}')"
@@ -711,17 +752,23 @@ print("yes" if [pad(r,w) for r in d["rows"]]==[pad(r,w) for r in f] else "no: %s
     "$(gs "$REAL" "$(prev "$REAL" "$ALPHA" "Alpha" '{"Not A Column":"y"}')" POST "$SHEET")"
   refuses_update_preview "a wrong key" "bad token" "$(gs "$REAL" "$(prev "nope" "$ALPHA" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
 
+  # expect: what the preview showed. The update writes only while every named cell still holds
+  # it, so a cell edited after the preview was approved is never overwritten unseen.
+  withexp(){ python3 -c 'import json,sys; b=json.loads(sys.argv[1]); b["expect"]=json.loads(sys.argv[2]); print(json.dumps(b))' "$1" "$2"; }
+  r="$(gs "$REAL" "$(withexp "$(upd "$REAL" "https://github.com/example/zeta" "Zeta" '{"When to Check Results":"2027-01-01","Skills Used":"Go"}')" \
+    '{"When to Check Results":"2026-11-01","skills used":"=CONCAT(\"Type\",\"Script\")"}')" POST "$TMP/sheet-typed.json")"
+  check_eq "update with expect matching what the preview read: writes both cells" '[[6,7,"2027-01-01"],[6,8,"Go"]]' "$(jget "$r" 'd["writes"]')"
+  refuses_update "a named cell edited since the preview" 'now holds \"Did A\", not \"Did A earlier\"' \
+    "$(gs "$REAL" "$(withexp "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x","Outcome/Results":"y"}')" '{"My Actions":"Did A earlier","Outcome/Results":"Out A"}')" POST "$SHEET")"
+  refuses_update "expect naming a cell the update does not change" "Notes" \
+    "$(gs "$REAL" "$(withexp "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x"}')" '{"Notes":"note a"}')" POST "$SHEET")"
+  refuses_update "expect that is not an object" "expect" \
+    "$(gs "$REAL" "$(withexp "$(upd "$REAL" "$ALPHA" "Alpha" '{"My Actions":"x"}')" '["Did A"]')" POST "$SHEET")"
+
   # An existing row, found among others, carrying a column after Link.
   r="$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/beta" "Beta" '{"Notes":"note b2"}')" POST "$SHEET")"
   check_eq "update: an existing row's cell after Link changes, and only it" '[[3,10,"note b","note b2"]]' "$(jget "$r" 'd["diffs"][0]')"
 
-  # Every refusal: named, and the sheet untouched, not one cell written.
-  refuses_update(){ # refuses_update <description> <expected words in the error> <harness output>
-    check "update, $1: refused" '"ok":false' "$(jget "$3" 'd["response"]')"
-    check "update, $1: says why" "$2" "$(jget "$3" 'd["response"].get("error")')"
-    check_eq "update, $1: writes no cell" '[]' "$(jget "$3" 'd["writes"]')"
-    check_eq "update, $1: appends no row" '0' "$(jget "$3" 'd["appended"]')"
-  }
   refuses_update "a Link no row holds" "no row" "$(gs "$REAL" "$(upd "$REAL" "https://github.com/example/nope" "Alpha" '{"My Actions":"x"}')" POST "$SHEET")"
   # The message names what the row really holds, never "the sheet changed", which would send
   # somebody to re-read a sheet that did not move (L11).

@@ -172,14 +172,17 @@ Always get approval first, as for an append:
    where `before` holds what each named cell holds now.
 2. Show the user the old value (from `before`) and the new value of every cell, and get
    approval or edits.
-3. Run it without `--preview`. The answer, `{"ok":true,"action":"update","rowNumber":N,
-   "before":{...},"row":[...]}`, again carries in `before` what each changed cell held just
-   before the write: a formula as its formula and anything else as the sheet showed it, which is
-   exactly what an undo writes back with another update.
+3. Run it without `--preview`, adding the preview's `before` as a fourth argument. The update
+   then writes only while every one of those cells still holds what the user approved over; if
+   someone edited one since, it refuses (`now holds ...`) and nothing changes: preview again.
+   The answer, `{"ok":true,"action":"update","rowNumber":N,"before":{...},"row":[...]}`, again
+   carries in `before` what each changed cell held just before the write: a formula as its
+   formula and anything else as the sheet showed it, which is exactly what an undo writes back
+   with another update.
 
 ```
 bash tracker.sh update --preview 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
-bash tracker.sh update 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
+bash tracker.sh update 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}' '{"Outcome/Results":"Flow works, tests pending","My Actions":"Built login and session handling"}'
 ```
 
 Needs the one time redeploy in "Turning on update" above.
