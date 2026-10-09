@@ -1863,6 +1863,66 @@ and the band question is removed rather than kept beside it (L29). Three defects
   are refused, never asked, and the main session is told what it would have saved (above).
 - The band look (mod-kit's `$.modkit.question`) had no other caller, so it was removed too (#796).
 
+## Design round guard (#978), built 2026-10-08
+
+Dan, 2026-10-08: "can we add a standing rule across all sessions that if claude is building
+something that changes how the UI looks that it asks me if I want /design-rounds first? basically
+claude should never design something without my input. If we can make this something that can't be
+ignored rather than just a memory, that would be great". The default, the scope of a skip and what
+settled means were settled with him in a picker interview the same day, and the six point plan on
+the issue approved; what follows is that plan as built, with the readings taken where it is silent.
+
+- **Its surfaces are ones already settled.** The refusal is mod-kit's grey blocked card, as every
+  guard's is; both questions are Claude Code's own dialog, as every question is since #744, worded
+  and answered by the guard as ask before saving's is (#777). No surface of its own was drawn.
+- **Two ways on, and only Dan's choice opens either.** The refusal names the file and both:
+  start /design-rounds, whose closing picker "Is this design settled?" (`metadata.source`
+  `design-settled`) records Settled; or ask "Skip design rounds for this issue?" (`metadata.source`
+  `design-round-guard:<the refused call's id>`), whose Skip them records a skip. The guard sets each
+  question's text (the plan's words, then the files and the issue it is about), its header (`Design
+  round`) and its answers (Skip them, Run /design-rounds; Settled, Not yet), and reads the choice
+  from the dialog's result. An answer the call carries is refused, as are a subagent's question, a
+  question about no refused call waiting, and any write to the guard's record in the plugin store,
+  by the edit tools or the shell (named, or only mentioned by a program that writes). His own typed
+  words and a dialog that closed while he was away record nothing.
+- **Per project, per issue.** Kept in `$.store` (this Mac, every session), keyed by the project's
+  main working tree, so every worktree shares it, then by each issue the branch names, else the
+  branch. Where a checkout stands is read by mod-kit's new `$.modkit.branch`, the one reader of a
+  checkout's main working tree, branch, default branch and issues, so the guard keeps no copy of its
+  own; its issue rule is the one winding down has used since #702. Scope modes and the collision
+  guard read it too since #980, which deleted their own readings. A new issue
+  starts held. Reading where the plan is silent, the stricter way: on the default branch a record
+  holds for that session only, since every later issue may be built there and a lasting skip would
+  cover them all; and a skip is never single use, since the plan has it cover the rest of the issue.
+- **What counts.** The plan's list read literally, except tests. Built, a test file in `.tsx` counted
+  too; Dan, on seeing the guard working on 2026-10-08, answered "On, but let tests through", so a test
+  file never counts: a `.test.` or `.spec.` part in its name, a `__tests__`, `tests` or `test` folder
+  above it, and for Swift a folder ending `Tests` or a name ending `Tests.swift`. The folders are read
+  on the path inside its checkout only, so a project checked out under a folder named tests is not
+  let through whole, and a name merely holding "test" (`latest.tsx`, `contest.css`) still counts.
+  Another logic only file in one of the listed shapes still counts, which the plan accepts: Dan
+  answers Skip them for that issue. `.htm` is read as
+  `.html`. A `.swift` file counts when its text, as written or on disk, imports SwiftUI or declares a
+  view, and when that text cannot be had. A removal or emptying of a look changing file counts; a
+  stamp, mode change or folder does not, nor does removing a whole folder by its name (`rm -r
+  components`), which would need the folder walked and is left as a gap. A file in no git checkout is
+  in no project and passes, which is what lets a design round build its switcher in the scratchpad.
+- **Which tools.** Every tool whose input carries a file path (a key ending path or paths) is judged
+  as writing it, except those known only to read it (Read, Grep, Glob, LS, NotebookRead, LSP,
+  Artifact, ArtifactData), so MultiEdit, NotebookEdit and a writing tool added later are held by
+  default; the shell is read by mod-kit's write reader. Built, only Write, Edit and Bash were judged,
+  which the lessons review found let the rest through.
+- **Where it decides.** A subagent's call is judged at `tool.call`, the one place its loop is known,
+  refused alike, and told to stop and report the line the main session asks with; that refused call
+  is kept waiting too, so the main session can ask Dan about it, and is then told to have the agent
+  make the change again. The main session's call is judged at `tool.check`, and only after the
+  settings hooks beneath have decided, so a call one of them refuses is refused in its words and
+  never turned into a question for Dan (#707, #875).
+- **Fails closed, saying which.** A branch git cannot read, a detached head, a checkout the disk
+  cannot answer for, a shell write whose target cannot be followed, a record that cannot be read, or
+  a hook that throws: each refuses with its own sentence. An answer that cannot be recorded is said
+  in the dialog's result, and the edit stays held.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
