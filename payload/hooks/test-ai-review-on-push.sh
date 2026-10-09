@@ -194,6 +194,20 @@ EOF
 args_blob="$(tr '\036' '\n' < "$FAKE_LOG/args")"
 check "the framework line names Next.js, read from package.json" "Next.js/React application" "$args_blob"
 check "the model flag is passed" "--model" "$args_blob"
+# No MCP servers (claude-config#956). The reviewer reads a diff and the lessons and calls no tool a
+# server offers, yet a launch without the flag loads every server Dan has connected: 12 in the
+# real run's init event on 2026-10-08, with --strict-mcp-config and no --mcp-config it was 0. The
+# flag only empties the list while nothing is named, so the check is both halves, read from the
+# arguments the stand in actually received.
+python3 - "$FAKE_LOG/args" <<'EOF' && ok || bad "the reviewer starts with no MCP servers: --strict-mcp-config exactly once and no --mcp-config"
+import sys
+args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+strict = args.count("--strict-mcp-config")
+named = [a for a in args if a == "--mcp-config" or a.startswith("--mcp-config=")]
+if strict != 1 or named:
+    print(f"  --strict-mcp-config appeared {strict} times; --mcp-config arguments: {named}")
+    sys.exit(1)
+EOF
 check "the prompt asks about a sibling not changed the same way" "sibling of a changed function that was not changed the same way" "$args_blob"
 check "and about a class fix that missed a site" "class fix that missed one of its sites" "$args_blob"
 check "and keeps the no issues line" "No issues found." "$args_blob"
