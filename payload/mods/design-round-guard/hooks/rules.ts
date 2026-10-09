@@ -153,9 +153,11 @@ export const editedText = (before: string, tool: string, input: Record<string, u
 /** The screen files whose edits are judged by their text (dataOnlyChange): React's .tsx and .jsx. */
 export const judgedByText = (path: string): boolean => /\.(tsx|jsx)$/i.test(path)
 
-// A prop whose name can carry a look or what is shown, read anywhere in the name, so a near miss
-// holds rather than passes. A hold costs Dan one answer; a pass is a look he never saw.
-const LOOK_PROP = /class|style|css|^sx$|^tw$|colou?r|variant|size|theme|tone|intent|appearance|kind|layout|mode|compact|dense|emphasis|open|show|hide|hidden|visible|disabled|checked|selected|active|expand|collapse|loading|width|height|icon|image|img|src|alt|title|label|text|value|placeholder|children|content|heading|caption|message|align|justify|gap|pad|margin|radius|round|shadow|font|weight|border|^bg|background|fill|stroke|opacity|position|order|span|grid|flex|display|render|^as$|tag|component|^id$|^(is|has|should|with|can)[A-Z]/
+// A prop whose name can carry a look or what is shown, read anywhere in the name and in any case
+// (`containerClassName`, `maxWidth`, `defaultOpen`), so a near miss holds rather than passes. A hold
+// costs Dan one answer; a pass is a look he never saw. Plus a boolean's prefix, read by its case.
+const LOOK_WORD = /class|style|css|^sx$|^tw$|colou?r|variant|size|theme|tone|intent|appearance|kind|layout|mode|compact|dense|emphasis|open|show|hide|hidden|visible|disabled|checked|selected|active|expand|collapse|loading|width|height|icon|image|img|src|alt|title|label|text|value|placeholder|children|content|heading|caption|message|align|justify|gap|pad|margin|radius|round|shadow|font|weight|border|^bg|background|fill|stroke|opacity|position|order|span|grid|flex|display|render|^as$|tag|component|^id$/i
+const LOOK_PROP = { test: (name: string) => LOOK_WORD.test(name) || /^(is|has|should|with|can)[A-Z]/.test(name) }
 // An expression that only carries data along: names, property access, calls, ?? || && ! and ?:, with
 // no literal but the empty string, so nothing in it can be text shown on screen or a class.
 const PLUMBING = /^[\w$.?!|&(),:\s[\]]+$/

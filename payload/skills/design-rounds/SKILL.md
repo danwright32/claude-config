@@ -199,19 +199,21 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 ```json
 {
   "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
-  "metadata": { "source": "design-settled", "call": "<the id the refusal named>" }
+  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>" }
 }
 ```
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
-- It records the settlement for the project and branch of the refused edit `"call"` names:
-  the issue that edit's branch names, or the branch when it names none. Never the folder
-  this session runs in, which can be another project altogether (claude-config#1010: a
-  Settled for a trypennie edit landed on a Slate issue). Left out, it is the refused edits
-  waiting in this session, when they all wait on the same answer. When no refused edit is
-  waiting, name the project instead, with
-  `"path": "<a folder or file in the project's checkout>"`, an absolute path.
+- `"path"`, an absolute path, names the project the design is for, and the settlement is
+  recorded for the issue its checkout's branch names (or the branch, when it names none).
+  Never the folder this session runs in, which can be another project altogether
+  (claude-config#1010: a Settled for a trypennie edit landed on a Slate issue).
+- When the guard refused an edit and this round is for it, give
+  `"call": "<the id the refusal named>"` instead of `"path"`: the settlement is then for
+  that edit's project and branch, and you are told to send it again. With neither, it is
+  for the refused edits waiting in this session when they all wait on the same answer, and
+  refused when none is waiting.
 - When the branch names no issue, say on the default branch, add the number of the issue
   this design is for, in that project, to the metadata as a number,
   `"issue": <the issue number>`, and Dan reads that issue in the question.

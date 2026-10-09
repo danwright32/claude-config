@@ -76,8 +76,11 @@ grep -q -E '"issue": [0-9]' "$SKILL" && bad "SKILL.md shows a literal issue numb
 # #1010: Settled was recorded for the session's folder (Slate) while the refused edit was on another
 # project. The worked call names the refused call, and the skill says how to name a project when no
 # call waits, never leaving it to the session's folder.
-grep -q '"call": "<the id the refusal named>"' <<< "$(block_of "$SKILL")" && ok || bad "SKILL.md's closing call does not name the refused call in its metadata"
-grep -q '"path": "<a folder or file in the project' "$SKILL" && ok || bad "SKILL.md does not show naming the project by a path when no refused call waits"
+# The worked call names the project by a path, which holds whether or not a refused edit waits (a
+# "call" there would be copied into rounds with no refusal, and refused: lessons review of #1010).
+grep -q '"path": "<a folder or file in the project' <<< "$(block_of "$SKILL")" && ok || bad "SKILL.md's closing call does not name the project by a path in its metadata"
+grep -q '"call": "<the id the refusal named>"' "$SKILL" && ok || bad "SKILL.md does not show naming the refused call when one waits"
+grep -q '"call"' <<< "$(block_of "$SKILL")" && bad "SKILL.md's worked closing call carries a \"call\", which a round with no refused edit would copy" || ok
 
 # #1010: a round with nothing to render (a data only prop change) had no exit but a switcher. The
 # skill gives one, by the guard's own third answer, read from rules.ts (L638).

@@ -201,6 +201,9 @@ test('a changed className, style, look naming prop, literal, JSX structure or vi
     ["from '@/components/BookingCalendar'", "from '@/components/BookingCalendarV2'"],
   ] as const)
     expect([from, to, dataOnlyChange(PAGE, swap(from, to))]).toEqual([from, to, false])
+  // A look naming word anywhere in a camelCase prop name, whatever its case (lessons review of #1010).
+  for (const name of ['containerClassName', 'wrapperStyle', 'buttonVariant', 'modalTitle', 'iconColor', 'maxWidth', 'defaultOpen', 'isCompact'])
+    expect([name, dataOnlyChange(PAGE, swap('xbc={xbc}', `${name}={a}`)),dataOnlyChange(swap('xbc={xbc}', `${name}={a}`), swap('xbc={xbc}', `${name}={b}`))]).toEqual([name, false, false])
   // A prop on a plain HTML element can be read by CSS, so only a component's props are judged.
   const html = '<a className="link" href={url}>Go</a>\n'
   expect(dataOnlyChange(html, html.replace('href={url}', 'href={next}'))).toBe(false)
