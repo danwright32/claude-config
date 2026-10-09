@@ -652,14 +652,17 @@ already exists), so those rows are counted with no lookup. For older rows, which
 a commit comes from one batched GraphQL query per repository per 50 commits, held
 to `PR_REVIEW_REPORT_CALL_BUDGET` (100 by default); whatever the budget does not reach is reported as
 UNMEASURED with its count. Before the first call it reads the allowance left and refuses to start,
-exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (500). It never fetches
+exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (1000, kept wide because one reading of the allowance is approximate: GitHub answered two different GraphQL windows for one token within a second, #1014). It never fetches
 into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
 the checkout's objects read only. `--no-github` asks GitHub nothing.
 
 ### What a push actually waits on
 
-Seventeen PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
-which the settings SET and are not measurements of anything. A declared timeout is evidence of what
+Eighteen PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+which the settings SET and are not measurements of anything. The eighteenth,
+`check-gh-watch-interval.sh` (#1014), sees every Bash call and answers one that never mentions a
+watch before loading anything: 0.009 seconds on a push payload, measured on this Mac on
+2026-10-09, so the table below still stands. A declared timeout is evidence of what
 somebody feared, not of what a gate costs, so they were timed:
 
 ```bash

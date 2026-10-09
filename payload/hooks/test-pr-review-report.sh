@@ -217,13 +217,14 @@ check "a budget cut window has no verdict" "UNMEASURED (#562)" "$out"
 check_not "and never a gate reading" "GATE" "$out"
 
 # 9. Too little rate limit headroom refuses to start, naming why; enough runs (the same fixture).
-out="$(RL_REMAINING=599 run)"; rc=$?
+out="$(RL_REMAINING=1099 run)"; rc=$?
 check "low headroom refuses" "refusing to start" "$out"
-check "naming what is left and what it would need" "599 of 5000" "$out"
-check "and the budget plus margin" "budget of 100 plus a margin of 500" "$out"
+check "naming what is left and what it would need" "1099 of 5000" "$out"
+# The margin is wide on purpose: one reading of the allowance is approximate (claude-config#1014).
+check "and the budget plus margin" "budget of 100 plus a margin of 1000" "$out"
 check_eq "a refusal exits as a temporary failure" 75 "$rc"
 check_eq "and makes no lookup" 0 "$(lookups)"
-out="$(RL_REMAINING=600 run)"; rc=$?
+out="$(RL_REMAINING=1100 run)"; rc=$?
 check_eq "exactly the budget plus margin is enough" 0 "$rc"
 check "and the report runs" "pull requests opened: 5" "$out"
 

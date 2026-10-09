@@ -42,7 +42,7 @@
 #   - Before the first lookup it reads the GraphQL allowance left, from GraphQL's own rateLimit
 #     (one more call, at most one point; the REST rate_limit endpoint reports a different bucket, see
 #     below), and refuses to start, exit 75, naming what is left and when it resets, when that is
-#     under the budget plus PR_REVIEW_REPORT_RATE_MARGIN (default 500). An allowance it cannot read
+#     under the budget plus PR_REVIEW_REPORT_RATE_MARGIN (default 1000, wide on purpose: see the read below). An allowance it cannot read
 #     refuses too: it does not spend against an allowance it cannot see. So the most a run can ask
 #     of GitHub is the budget plus that one read, and a batch of 50 measured at 1 point (2026-10-09).
 #   - It never fetches into anybody's checkout. Commits are read from the checkout's object store
@@ -78,7 +78,7 @@ done
 case "$days" in ''|*[!0-9]*) echo "pr-review-report: --days takes a whole number of days." >&2; exit 64 ;; esac
 
 budget="${PR_REVIEW_REPORT_CALL_BUDGET:-100}"
-margin="${PR_REVIEW_REPORT_RATE_MARGIN:-500}"
+margin="${PR_REVIEW_REPORT_RATE_MARGIN:-1000}"
 batch="${PR_REVIEW_REPORT_BATCH:-50}"
 for pair in "PR_REVIEW_REPORT_CALL_BUDGET=$budget" "PR_REVIEW_REPORT_RATE_MARGIN=$margin" "PR_REVIEW_REPORT_BATCH=$batch"; do
   case "${pair#*=}" in ''|*[!0-9]*) echo "pr-review-report: ${pair%%=*} takes a whole number, not '${pair#*=}'." >&2; exit 64 ;; esac
@@ -163,6 +163,12 @@ if [ "$github" = 1 ] && [ "$needed" -gt 0 ]; then
   # at 11:50 AM ET, while GraphQL's own rateLimit reported 502 left, resetting at 11:36 AM ET, so a
   # check reading REST would have started against a nearly spent allowance (L82). This read costs
   # at most one point.
+  #
+  # Even GraphQL's own figure is approximate, so it is one reading, not a guarantee: on 2026-10-09
+  # two requests one second apart with the same token were answered from two different windows
+  # (105 used resetting at 1:51 PM ET, then 83 used resetting at 2:37 PM ET, seen with
+  # GH_DEBUG=api; claude-config#1014). The next lookup may be charged to a window this read did not
+  # see, so the margin above the budget is kept generous (1000 by default) rather than tight.
   rl="$(gh api graphql -f query='query { rateLimit { limit remaining resetAt } }' \
     --jq '.data.rateLimit | "\(.remaining) \(.limit) \(.resetAt | fromdateiso8601)"' 2>&1)"; rl_rc=$?
   case "$rl_rc:$rl" in

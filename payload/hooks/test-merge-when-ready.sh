@@ -299,7 +299,7 @@ check_eq "#851 the real gate lets a green, up to date, pinned merge through the 
 # =================================================================================================
 # 7. Its default pace (claude-config#1014). Every look reads the pull request through GitHub's
 #    GraphQL allowance, which every session on the Mac shares, so with no MWR_POLL_SECONDS of its own
-#    it looks once a minute, never every 30 seconds.
+#    it looks once a minute, never every 30 seconds (both are paces the helper sets, not a measurement).
 # =================================================================================================
 fresh "$OLD" 0 "$PENDING"
 printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
