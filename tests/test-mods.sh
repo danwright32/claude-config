@@ -935,6 +935,21 @@ out="$(bash "$SHARED" "$M9E" 2>&1)"; code=$?
 case "$out" in *'known exception'*) check "and is never named as a known exception" "$out" ;; *) check "and is never named as a known exception" ok ;; esac
 printf '%s\n' "$out" | grep 'scope-modes keeps its own remote-reader at /hooks/ghargs.ts:1' | grep -q 'modkit.ghRepo(' \
   && check "named by its own file and line, and pointed at modkit.ghRepo" ok || check "named by its own file and line, and pointed at modkit.ghRepo" "$out"
+# #961: reading a github.com link's repository by hand, as is it live and scope-modes did four ways
+# (no end, an end, a case, a search through gh's output). Each fails the run, pointed at
+# $.modkit.linkRepo; a mod asking the kit, or taking api.github.com off an endpoint, passes.
+M9L="$TMPROOT/m9l"
+mkmodsrc "$M9L" clean-asks-link 'const repo = await $.modkit.linkRepo({ link: url }); const ep = e.replace(/^https:\/\/api\.github\.com\//, "")'
+mkmodsrc "$M9L" link-open 'const repoOfUrl = url => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/.exec(url ?? "")?.[1]'
+mkmodsrc "$M9L" link-anchored 'const repoOfLink = url => /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+$/i.exec(url ?? "")?.[1]'
+mkmodsrc "$M9L" link-class 'const LINK = /^(?:https?:\/\/)?(?:www\.)?github\.com\/[^/]+\/[^/]+/i'
+out="$(bash "$SHARED" "$M9L" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a hand rolled reading of a github.com link fails the run" ok || check "a hand rolled reading of a github.com link fails the run" "exit=$code out=$out"
+for m in link-open link-anchored link-class; do
+  printf '%s\n' "$out" | grep "$m keeps its own link-reader" | grep -q 'modkit.linkRepo(' && check "and names $m, pointing it at modkit.linkRepo" ok \
+    || check "and names $m, pointing it at modkit.linkRepo" "$out"
+done
+case "$out" in *clean-asks-link*) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" "$out" ;; *) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" ok ;; esac
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.
