@@ -87,6 +87,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/pr-review-push-gate.sh",
+            "timeout": 150,
+            "statusMessage": "Waiting for the lessons review of the branch before pushing"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-changelog-tag.sh",
             "if": "Bash(gh pr merge*)",
             "timeout": 30,
