@@ -18,7 +18,8 @@ import {
   isOwnRecord,
   isSwiftUI,
   listed,
-  isTestPath,
+  lookKindIn,
+  relTo,
   shapeKind,
   mentionedLookFiles,
   mentionsStore,
@@ -41,7 +42,7 @@ import {
 // that would be great". Settled with him in a picker interview the same day: every edit that changes
 // how a screen looks waits for a settled design round on its issue, unless he has said to skip them.
 //
-// - What counts (rules.ts lookKind): style files, screen and component files, SwiftUI views, in every
+// - What counts (rules.ts lookKindIn): style files, screen and component files, SwiftUI views, in every
 //   project, written by the shell (mod-kit's one write reader) or by any tool carrying a file path,
 //   a tool known only to read it excepted (rules.ts READS_ONLY). A test file passes. A file in no git
 //   checkout is in no project (a design round's own switcher in the scratchpad) and passes.
@@ -147,7 +148,6 @@ const placeOf = async ($: EngineInterface, tree: string): Promise<Place | { why:
   return { main, repo, branch: b.branch, isDefault: b.isDefault, issues: b.issues }
 }
 
-const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
 const recordOf = (v: unknown): DesignRoundRecord | undefined => {
   const r = v as Partial<DesignRoundRecord> | undefined
@@ -196,7 +196,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
     if (tree === null) continue
     // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
     // inside its project, so a folder named tests above the checkout lets nothing through.
-    if (isTestPath(relTo(t.path, tree))) continue
+    if (lookKindIn(t.path, tree) === null) continue
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)
@@ -284,6 +284,9 @@ export const register: Register = on => {
     const id = String(raw.tool_use_id ?? '')
     const v = await judge($, e.tool, argsOf(raw))
     if (!('pass' in v)) return { deny: await refuse($, v, { id, tool: e.tool, agent: true }) }
+    // An empty id names no one call, so it is never marked: any other call carrying it would skip its
+    // judgement (lessons review of #991). Such a call is judged again beneath, the same way.
+    if (!id) return next(e)
     fromAgent.add(id)
     try {
       return await next(e)

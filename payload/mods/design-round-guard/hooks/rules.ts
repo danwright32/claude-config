@@ -42,8 +42,15 @@ export const isTestPath = (path: string): boolean => {
   return false
 }
 
-/** What kind of look changing file a path is, or null for one that is not (a test file included); a Swift file still needs its text read (isSwiftUI). */
-export const lookKind = (path: string): LookKind | null => (isTestPath(path) ? null : shapeKind(path))
+/** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */
+export const relTo = (path: string, root: string): string => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
+
+/**
+ * What kind of look changing file a path in the checkout at `root` is, or null for one that is not,
+ * a test file included, its test markers read inside the checkout only (lessons review of #991). The
+ * guard's own decision; a Swift file still needs its text read (isSwiftUI).
+ */
+export const lookKindIn = (path: string, root: string): LookKind | null => (isTestPath(relTo(path, root)) ? null : shapeKind(path))
 
 /**
  * The kind of look changing file a path's shape is, before asking whether it is a test: the guard

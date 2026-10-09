@@ -85,7 +85,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
-  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
   const dialog: Dialog = {}
@@ -168,6 +168,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       const q = a.questions[0]?.question ?? ''
       const result = { questions: a.questions, answers: dialog.answer === undefined ? {} : { [q]: dialog.answer }, ...(dialog.afk ? { afkTimeoutMs: 60_000 } : {}) }
       return { result, text: `User has answered: ${dialog.answer ?? ''}` } as never
+    }
+    // A call the test holds open mid run, so another can arrive while it is still under way.
+    if (ctl.hold && String(input.file_path ?? '').includes('HOLD')) {
+      ctl.reached?.()
+      await ctl.hold
     }
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
@@ -267,6 +272,24 @@ test('every tool that carries a file path is judged: MultiEdit, NotebookEdit and
   expect(refusalOf(await call($, { tool: 'Read', file_path: '/w/slate/app/page.tsx' }))).toBe('')
   expect(refusalOf(await call($, { tool: 'Artifact', file_path: '/w/slate/index.html' }))).toBe('')
   expect(w.ran.map(x => x.tool)).toEqual(['NotebookEdit', 'Read', 'Artifact'])
+})
+
+// Lessons review of #991: a subagent's call carrying an empty id was marked as judged under the empty id,
+// so a main session call arriving with an empty id while it ran skipped the judgement.
+test("a subagent's call with an empty id marks nothing, so a call arriving with an empty id meanwhile is still judged", withKit, async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  let release = () => {}
+  w.ctl.hold = new Promise<void>(r => (release = r))
+  const reached = new Promise<void>(r => (w.ctl.reached = r))
+  // The engine gives a call it is handed with no id one of its own, so an empty id is the shape that reaches the hook.
+  const running = $.tool.call({ tool_use_id: '', tool: 'Write', file_path: '/w/slate/lib/HOLD.ts', content: 'x', agentId: 'agent-a1' } as never)
+  // The held call has passed the guard and reached the tool before the next one arrives.
+  await reached
+  const meanwhile = (await $.tool.call({ tool_use_id: '', ...PAGE } as never)) as Result
+  release()
+  await running
+  expect(refusalOf(meanwhile)).toContain('app/page.tsx')
+  expect(w.ran.map(x => x.input.file_path)).toEqual(['/w/slate/lib/HOLD.ts'])
 })
 
 test('a look changing Write is refused, naming the file and both ways on, with the grey card for Dan', withKit, async ($, on) => {

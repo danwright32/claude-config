@@ -11,7 +11,7 @@ import {
   isOwnRecord,
   READS_ONLY,
   isSwiftUI,
-  lookKind,
+  lookKindIn,
   mentionedLookFiles,
   pathsOf,
   refusal,
@@ -30,14 +30,14 @@ import {
 const DASHES = new RegExp(`[${String.fromCharCode(0x2014)}${String.fromCharCode(0x2013)}]`)
 
 test('style, screen and component files, the Tailwind config and design tokens change the look; logic and docs do not', () => {
-  for (const p of ['/r/app/globals.css', '/r/a.scss', '/r/a.sass', '/r/a.less', '/r/a.styl', '/r/a.pcss']) expect(lookKind(p)).toBe('style')
-  for (const p of ['/r/app/page.tsx', '/r/Button.jsx', '/r/App.vue', '/r/Card.svelte', '/r/index.html', '/r/old.htm', '/r/payload/mods/x/hooks/register.tsx']) expect(lookKind(p)).toBe('screen')
-  for (const p of ['/r/tailwind.config.js', '/r/tailwind.config.ts', '/r/tailwind.config.mjs', '/r/tailwind.config.cjs']) expect(lookKind(p)).toBe('tailwind')
-  for (const p of ['/r/design-tokens.json', '/r/src/tokens.css', '/r/tokens.json', '/r/theme/colors.tokens.json', '/r/design_tokens.ts']) expect(lookKind(p)).toBe('tokens')
-  expect(lookKind('/r/Views/Main.swift')).toBe('swift')
+  for (const p of ['/r/app/globals.css', '/r/a.scss', '/r/a.sass', '/r/a.less', '/r/a.styl', '/r/a.pcss']) expect(lookKindIn(p, '/r')).toBe('style')
+  for (const p of ['/r/app/page.tsx', '/r/Button.jsx', '/r/App.vue', '/r/Card.svelte', '/r/index.html', '/r/old.htm', '/r/payload/mods/x/hooks/register.tsx']) expect(lookKindIn(p, '/r')).toBe('screen')
+  for (const p of ['/r/tailwind.config.js', '/r/tailwind.config.ts', '/r/tailwind.config.mjs', '/r/tailwind.config.cjs']) expect(lookKindIn(p, '/r')).toBe('tailwind')
+  for (const p of ['/r/design-tokens.json', '/r/src/tokens.css', '/r/tokens.json', '/r/theme/colors.tokens.json', '/r/design_tokens.ts']) expect(lookKindIn(p, '/r')).toBe('tokens')
+  expect(lookKindIn('/r/Views/Main.swift', '/r')).toBe('swift')
   // What passes untouched: logic, tests in plain TypeScript, docs, config, shell.
   for (const p of ['/r/app/route.ts', '/r/lib/date.js', '/r/README.md', '/r/package.json', '/r/hooks/rules.test.ts', '/r/run.sh', '/r/auth/token.ts', '/r/styles.py', '/r/htmlparse.ts'])
-    expect(lookKind(p)).toBe(null)
+    expect(lookKindIn(p, '/r')).toBe(null)
 })
 
 // Dan, 2026-10-08, on seeing the guard: "On, but let tests through". A test of a screen does not
@@ -55,7 +55,7 @@ test('a test file is not look changing, by its .test. or .spec. part, a test fol
     '/r/Sources/App/RowTests.swift',
     '/r/Tests/Helpers.swift',
   ])
-    expect(lookKind(p)).toBe(null)
+    expect(lookKindIn(p, '/r')).toBe(null)
   // A name merely holding "test" elsewhere is no test file, and neither is a folder whose name only contains it.
   for (const [p, kind] of [
     ['/r/app/latest.tsx', 'screen'],
@@ -64,9 +64,9 @@ test('a test file is not look changing, by its .test. or .spec. part, a test fol
     ['/r/testimonials/Quote.tsx', 'screen'],
     ['/r/Views/TestimonialView.swift', 'swift'],
   ] as const)
-    expect(lookKind(p)).toBe(kind)
+    expect(lookKindIn(p, '/r')).toBe(kind)
   // A folder ending Tests marks a Swift test target only: a web file there is still a screen.
-  expect(lookKind('/r/AppTests/page.tsx')).toBe('screen')
+  expect(lookKindIn('/r/AppTests/page.tsx', '/r')).toBe('screen')
 })
 
 test("a tool's file paths are read from every key ending path or paths, and its carried text from its edits", () => {
