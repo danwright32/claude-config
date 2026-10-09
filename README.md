@@ -442,7 +442,7 @@ does not catch.
 | `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
 | `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
 | `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. The record follows every total that passes, so it never drifts behind main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
-| `ai-review-on-push.sh` | Nothing. It is advisory: after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
+| `ai-review-on-push.sh` | Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
 
 What each one measured, and what it does not catch, is in the hook's own header. Two worth knowing
 without opening them. The duplication guard does not catch a copied two line block under 160
@@ -457,6 +457,16 @@ deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonn
 2026-09-18. It runs only on the computers `AI_REVIEW_HOSTS` names, which by default is the work Mac
 (`Dans-MacBook-Pro`), because Dan wants it there and not on the personal Mac; every other computer
 says in one line that it skipped. Set `AI_REVIEW_HOSTS='*'` to run it everywhere.
+
+Since claude-config#1007 it also stands down on every push `pr-review-push-gate.sh` holds for the
+lessons review of the whole branch (below): that review reads merge base to head, every file type,
+with the same reviewer, so this one would be a second model run over a subset of the same diff.
+It still runs on a push of the default branch, which the gate does not hold, and on a push carrying
+the gate's override `SKIP_PR_REVIEW=1`, which the gate did not read. Both hooks ask one function,
+`mt_push_gate_scope` in `lib/merge-target.sh`, which pushes the gate holds, so they cannot come to
+disagree about it. The same answer says when a push sent no commits at all (one that only deletes
+remote branches), and the advisory review skips those too rather than reviewing whatever the head
+last pushed.
 
 ### The lessons review before a merge
 

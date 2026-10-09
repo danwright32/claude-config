@@ -1167,6 +1167,18 @@ function's twin had been left unchanged, correctly, because a diff never shows t
 sibling. The input is now the diff followed by the full text of each changed file while a 300 KB
 budget lasts, and the same fixture is then caught.
 
+Since claude-config#599 the push gate (`pr-review-push-gate.sh`) holds every push of a branch other
+than the default one for the lessons review of the whole branch: merge base to head, every file
+type, the same runner, on both Macs. The advisory review reads the pushed range's code files only,
+so on a branch push it was the same work done twice per event (L301), a second model run over a
+subset of a diff the gate's review had already read. It now stands down wherever the gate holds the
+push (claude-config#1007) and runs only where the gate does not: a push of the default branch, and
+a push carrying the gate's override. It was kept rather than deleted because the default branch is
+the one place the gate never reads. Which pushes the gate holds is one function,
+`mt_push_gate_scope` in `lib/merge-target.sh`, read by both hooks, because two copies of that
+answer would drift apart in silence (L261). The advisory hook asks it after the push, so it judges
+the branch the command left the checkout on.
+
 ### What the thresholds measured
 
 Each is in its hook header with the date; the two that decided a design are here because they cut
