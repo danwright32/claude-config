@@ -152,7 +152,12 @@ pending="$final.pending"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 push_acknowledged="$final.push-acknowledged"  # a push presented it; allows later pushes, never a merge
 leftout="$final.leftout"            # the files this review did not read, for its verdict (#583)
-parts="$AR_STATE_DIR/parts/$name"   # a review in groups: each group's input and answer (#601)
+# A review in groups (#601) keeps each group's input and answer in a folder of its own RUN, named by
+# the run= its pending marker records, so a restarted review never reads an answer an earlier run's
+# reviewer left or was still writing (lessons review of #601). parts is that folder once known.
+parts_root="$AR_STATE_DIR/parts"
+parts=""
+parts_for() { printf '%s/%s.%s' "$parts_root" "$name" "$1"; }   # $1 = a run
 repo_label="$(basename "$top")"
 # The label: the caller's (the pull request's head branch), else this checkout's branch only when the
 # checkout stands on the reviewed commit, else the commit itself (claude-config#852). Line breaks and
@@ -317,7 +322,7 @@ do_start() {
   rm -f "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" 2>/dev/null
   # The groups of a review in groups (#601) are removed once it is written; these are what is left
   # when its waiting process died and nothing wrote it up, swept on the reviews' own 14 days.
-  find "$AR_STATE_DIR/parts" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null || true
+  find "$parts_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null || true
   if [ -z "$full_sha" ]; then
     record could-not-run "The commit $sha is not in this checkout and could not be fetched from origin, so there is nothing to review."
     echo "The lessons review could not run: $sha is not in this checkout."; return 0
@@ -362,11 +367,13 @@ do_start() {
     # Still over: read in groups of files that each fit (#601), and refused as too large only when
     # no split fits. The list of what was left out stays beside either, which names it.
     rm -f "$diff_file"
-    local groups_n=0 groups_text="" groups_refusal=""
+    local groups_n=0 groups_text="" groups_refusal="" run_id
+    run_id="$(date +%s)-$$"
+    parts="$(parts_for "$run_id")"
     if plan_groups; then
       started="$(date +%s)"
-      printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\ngroups=%s\n' \
-        "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" "$groups_n" > "$pending" 2>/dev/null \
+      printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\ngroups=%s\nrun=%s\n' \
+        "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" "$groups_n" "$run_id" > "$pending" 2>/dev/null \
         || { rm -rf "$parts"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
       touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
       # Detached, as one reviewer is: the process that runs every group at once, waits for them,
@@ -524,7 +531,12 @@ NAMES
 # all of them, then writes the branch's review.
 do_groups() {
   [ -e "$pending" ] || return 0
-  local n k gbase model dl st
+  local n k gbase model dl st run
+  run="$(meta_of "$pending" run)"
+  [ -n "$run" ] || return 1
+  # This run's own folder, held for the whole wait: a restart meanwhile starts another run in
+  # another folder, and assemble_groups then refuses to write this run's answers up as that one's.
+  parts="$(parts_for "$run")"
   n="$(meta_of "$pending" groups)"; gbase="$(meta_of "$pending" base)"
   model="$(meta_of "$pending" model)"; dl="$(meta_of "$pending" deadline)"; st="$(meta_of "$pending" started)"
   case "$n" in ''|*[!0-9]*|0) return 1 ;; esac
@@ -545,7 +557,11 @@ do_groups() {
 # writing it (the waiting process and a check can both arrive).
 assemble_groups() {
   [ -e "$pending" ] && [ ! -e "$final" ] || return 1
-  local n k f gs gf t fin=0 status=ok failed="" total=0 cnt names
+  local n k f gs gf t fin=0 status=ok failed="" total=0 cnt names run
+  # Only the run the pending marker names now: a process left over from before a restart holds an
+  # older run's folder, and its answers are not this review's.
+  run="$(meta_of "$pending" run)"
+  [ -n "$run" ] && [ -n "$parts" ] && [ "$parts" = "$(parts_for "$run")" ] || return 1
   n="$(meta_of "$pending" groups)"
   case "$n" in ''|*[!0-9]*|0) return 1 ;; esac
   for k in $(seq 1 "$n"); do [ -e "$parts/$name-g$k.txt" ] || return 1; done
@@ -606,8 +622,11 @@ remedy() {
 do_check() {
   local now; now="$(date +%s)"
   # A review in groups whose groups have all answered is written here too, should the process
-  # waiting on them have died before it could (#601).
-  [ ! -e "$final" ] && [ -e "$pending" ] && [ -n "$(meta_of "$pending" groups)" ] && assemble_groups
+  # waiting on them have died before it could (#601). Its groups are in its own run's folder.
+  if [ ! -e "$final" ] && [ -e "$pending" ] && [ -n "$(meta_of "$pending" groups)" ]; then
+    parts="$(parts_for "$(meta_of "$pending" run)")"
+    assemble_groups
+  fi
   if [ ! -e "$final" ] && [ -e "$pending" ]; then
     local st dl gn gdone=0 gmissing="" k
     st="$(meta_of "$pending" started)"; dl="$(meta_of "$pending" deadline)"; gn="$(meta_of "$pending" groups)"
@@ -763,7 +782,7 @@ case "$verb" in
   # Every verdict names what the review did not read (#583); a review still running is said by
   # its start line, which named them already.
   check) do_check; rc=$?; [ "$rc" -eq 3 ] || ar_left_out_note "$leftout" "$(meta_of "$final" status)"; exit "$rc" ;;
-  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout"; rm -rf "$parts"; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout"; rm -rf "$parts_root/$name".*; do_start ;;
   _groups) do_groups ;;
 esac
 exit 0

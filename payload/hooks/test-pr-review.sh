@@ -976,7 +976,8 @@ G checkout -q feat/sync
 GCAP=6000
 GF1='G1.swift:3: the first group finding (L1). Should be: x. [severity: minor]'
 GF2='G4.swift:5: the second group finding (L2). Should be: y. [severity: minor]'
-grp_parts(){ printf '%s/parts/%s-pr-%s' "$AI_REVIEW_STATE_DIR" "$KEY" "$1"; }
+grp_parts(){ printf '%s/parts/%s-pr-%s.%s' "$AI_REVIEW_STATE_DIR" "$KEY" "$1" "${2:-t1}"; }
+grp_runs(){ ls -d "$AI_REVIEW_STATE_DIR/parts/$KEY-pr-$1".* 2>/dev/null | grep -c . || true; }
 out="$(PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_1_OUT="$GF1" FAKE_GROUP_2_OUT="$GF2" prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
 check "#601 a branch over the cap that splits is reviewed, not refused" "started" "$out"
 check "#601 in groups of files, said with how many" "in 2 groups" "$out"
@@ -998,7 +999,7 @@ check_not "#601 a group never carries another group's full text" "FULL FILE at $
 for g in 1 2; do
   [ "$(wc -c < "$FAKE_LOG/stdin.g$g")" -le "$GCAP" ] && ok || bad "#601 group $g fits under the cap ($(wc -c < "$FAKE_LOG/stdin.g$g") bytes)"
 done
-[ ! -e "$(grp_parts "$GRP_SHA")" ] && ok || bad "#601 the groups' own files are removed once the branch's review is written"
+check_eq "#601 the groups' own files are removed once the branch's review is written" "0" "$(grp_runs "$GRP_SHA")"
 check_eq "#601 the outcome ledger counts the branch once, not once per group" "1" "$(grep -c "$GRP_SHA" "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 check "#601 the lessons each group cited reach the citation ledger" "L2" "$(cat "$AI_REVIEW_STATE_DIR/citations.tsv" 2>/dev/null)"
 out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
@@ -1055,7 +1056,7 @@ check "#601 saying how many groups it would need" "2 groups" "$(cat "$(final_of 
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
 now="$(date +%s)"
-printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=600\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$now" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=600\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$now" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
 for g in 1 2; do
   printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=%s\nfinished=%s\nstatus=ok\nmodel=sonnet\ndeadline=600\nkind=pr\nbase=%s\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" "$now" "$now" "$GRP_BASE" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
 done
@@ -1064,7 +1065,7 @@ check_eq "#601 every group finished: the check writes the branch's review and al
 check_eq "#601 as ok" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
-printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
 printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g1.txt"
 out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
 check_eq "#601 a group that never finished leaves the branch unreviewed" "1" "$rc"
@@ -1072,11 +1073,29 @@ check "#601 as abandoned" "never finished" "$out"
 check "#601 naming the group" "group 2" "$(cat "$(final_of "$GRP_SHA")")"
 check "#601 and the refusal itself names it" "no answer from group 2" "$out"
 [ ! -e "$GP" ] && ok || bad "#601 an abandoned grouped review's files are removed"
+# Each run keeps its groups in a folder of its own, named in its pending marker, so answers an
+# earlier run's reviewers left, or were still writing when the review was restarted, are never read
+# as this run's (lessons review of #601).
+reset_state
+OLD="$(grp_parts "$GRP_SHA" old)"; mkdir -p "$OLD"
+for g in 1 2; do
+  printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=1\n\nG1.swift:1: a stale finding (L1). Should be: x.\n' "$GRP_SHA" > "$OLD/$KEY-pr-$GRP_SHA-g$g.txt"
+done
+NEW="$(grp_parts "$GRP_SHA" t1)"; mkdir -p "$NEW"
+printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$NEW/$KEY-pr-$GRP_SHA-g1.txt"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=600\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$(date +%s)" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
+check_eq "#601 an earlier run's answers do not count for this run" "3" "$rc"
+check "#601 which has 1 of its 2 groups back" "1 of 2 groups returned" "$out"
+PR_REVIEW_MAX_BYTES=$GCAP FAKE_CLAUDE_OUT='No issues found.' prr restart --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE" >/dev/null
+check_eq "#601 a restart removes every earlier run's groups" "0" "$(ls -d "$OLD" "$NEW" 2>/dev/null | grep -c . || true)"
+wait_final "$GRP_SHA" || bad "#601 the restarted review finished"
+check_eq "#601 and the restarted review is its own" "0" "$(meta "$(final_of "$GRP_SHA")" findings)"
 # A writer killed after taking the write lock leaves it behind; once the deadline has passed with
 # every group answered, the review is still written, never called abandoned (review of #601).
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP/.writing"
-printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
 for g in 1 2; do
   printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
 done
@@ -1088,7 +1107,7 @@ check_eq "#601 as ok, not abandoned" "ok" "$(meta "$(final_of "$GRP_SHA")" statu
 # a group that never answered, so its pending marker never outlives it (reviews of #601).
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
-printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
 for g in 1 2; do
   printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g$g.txt"
 done
@@ -1097,7 +1116,7 @@ check_eq "#601 the nudge has a review in groups whose groups all answered writte
 [ ! -e "$(final_of "$GRP_SHA").pending" ] && ok || bad "#601 and its pending marker is gone"
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
-printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
+printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
 printf 'repo=repo\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=0\n\nNo issues found.\n' "$GRP_SHA" > "$GP/$KEY-pr-$GRP_SHA-g1.txt"
 printf '{"session_id":"gn2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 check_eq "#601 one whose group never answered is recorded abandoned" "abandoned" "$(meta "$(final_of "$GRP_SHA")" status)"
