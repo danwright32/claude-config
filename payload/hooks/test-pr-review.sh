@@ -830,8 +830,11 @@ printf 'smalldata 1\n' > "$REPO/scripts/fixtures/small.json"
 printf 'echo fixture helper code\n' > "$REPO/scripts/fixtures/helper.sh"
 seq 1 600 | sed 's/^/genwritten /' > "$REPO/gen.txt"
 printf 'func codeChange() {}\n' > "$REPO/Code.swift"
+# Enough smaller fixtures that naming every file left out would make the verdict as long as the list.
+mkdir -p "$REPO/scripts/fixtures/many"
+for n in 01 02 03 04 05 06 07 08 09 10 11 12; do seq 1 300 | sed "s/^/md$n /" > "$REPO/scripts/fixtures/many/f$n.json"; done
 G add payload/mods/demo/tests/mod-kit/hooks/reader.ts payload/mods/other/tests/mod-kit/hooks/drift.ts \
-  scripts/fixtures/big.json scripts/fixtures/small.json scripts/fixtures/helper.sh gen.txt Code.swift
+  scripts/fixtures/big.json scripts/fixtures/small.json scripts/fixtures/helper.sh gen.txt Code.swift scripts/fixtures/many
 G commit -q -m "data change"
 DATA_SHA="$(G rev-parse HEAD)"
 G checkout -q feat/sync
@@ -848,6 +851,7 @@ check_not "#583 and nothing is said to be left out" "left out of this review" "$
 # Over the cap, the code fits once the proven data and copies are left out.
 reset_state
 out="$(PR_REVIEW_MAX_BYTES=$DCAP FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"
+start_out="$out"
 check "#583 a branch over the cap only because of data and copies is reviewed" "started" "$out"
 check_not "#583 and is not refused as too large" "too large" "$out"
 wait_final "$DATA_SHA" || bad "#583 the branch with data left out was reviewed: $out"
@@ -872,6 +876,19 @@ check_eq "#583 the clean review of the rest allows the merge" "0" "$rc"
 check "#583 and the verdict names every file left out, so none is silently unreviewed" "scripts/fixtures/big.json" "$out"
 check "#583 the copy too" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$out"
 check "#583 and the generated file" "gen.txt" "$out"
+# Named largest first and capped, with a count and where the whole list is, so a branch with hundreds
+# of fixtures cannot push the verdict past the hook output cap and cut it silently (lessons review of
+# #1003, L351).
+note="$(printf '%s\n' "$out" | grep 'Not read by this review')"
+check "#583 the verdict says how many more were left out and where they are all listed" "more, all listed in $(final_of "$DATA_SHA").leftout" "$note"
+named="$(printf '%s\n' "$note" | grep -o 'many/f[0-9]*\.json' | sort -u | wc -l | tr -d '[:space:]')"
+[ "$named" -lt 12 ] && ok || bad "#583 the verdict does not name every one of the 12 small fixtures ($named named)"
+check "#583 the largest are the ones named" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$note"
+[ "${#note}" -lt 2500 ] && ok || bad "#583 the left out note stays short (${#note} chars)"
+check "#583 the start line is capped the same way" "more, all listed in" "$start_out"
+# The nudge shows a finished review too, so it names what that review did not read (#1003).
+nout="$(printf '{"session_id":"lo1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "#583 the nudge's report of the review names the files it left out" "scripts/fixtures/big.json" "$nout"
 # A review with findings names them as well, in the refusal that carries the findings.
 reset_state
 PR_REVIEW_MAX_BYTES=$DCAP prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE" >/dev/null
@@ -885,6 +902,8 @@ out="$(PR_REVIEW_MAX_BYTES=300 prr start --dir "$REPO" --sha "$DATA_SHA" --base-
 out="$(PR_REVIEW_MAX_BYTES=300 prr check --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"; rc=$?
 check_eq "#583 code over the cap with the data left out is still refused" "1" "$rc"
 check "#583 as too large" "too large" "$out"
+check "#583 saying how large the rest still was" "proven to need no reading still leaves" "$out"
+check "#583 and naming, uncut, what it would have left out" "scripts/fixtures/big.json (fixture data" "$(printf '%s\n' "$out" | grep 'Not read by this review')"
 check_eq "#583 and no reviewer ran" "0" "$(calls)"
 # The proof is the content: a copy is identical only to the file at the same path in mod-kit.
 cand="$(cd "$REPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DATA_BASE' '$DATA_SHA'")"

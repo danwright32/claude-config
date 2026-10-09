@@ -227,6 +227,8 @@ for base in $todo; do
       *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
     esac
+    # What a review over the size cap left out, so no report of it reads as covering them (#583).
+    ar_left_out_note "$f.leftout"
     mark_shown "$base"
     continue
   fi

@@ -229,6 +229,35 @@ ar__marked_generated() {   # $1 = ar__check_attr output
 #               tools/check-mod-shared-parts.sh holds identical), proven here by comparing the two
 #               blobs, never by trusting that check
 # Anything not proven is not printed, and so is read: an unproven file is never left out (L93).
+# A size as the review's messages give it, "812 bytes" or "145.3 KB": one awk function, so the file
+# list, the start line, the verdict and the nudge cannot spell one size two ways.
+AR_AWK_SIZE='function size(b) { return b >= 1024 ? sprintf("%d.%d KB", int(b / 1024), int((b % 1024) * 10 / 1024)) : sprintf("%d bytes", b) }'
+ar_size_text() {   # $1 = bytes
+  case "$1" in ''|*[!0-9]*) printf 'an unknown size'; return ;; esac
+  awk -v b="$1" "$AR_AWK_SIZE"' BEGIN { printf "%s", size(b) }'
+}
+
+# The one sentence naming what a pull request review left out (claude-config#583), from the
+# "<bytes><TAB><path><TAB><kind><TAB><why>" rows lib/pr-review.sh writes beside the review as
+# <review>.leftout. Largest first and at most ten by name, then how many more and the file holding
+# them all: a branch with hundreds of fixtures must not push a refusal past the 10,000 character
+# hook output cap, which cuts it silently so the first names read as the whole list (L351). Prints
+# nothing when nothing was left out. Every surface that reports a review prints it (the gate's
+# verdicts, the start line, the nudge), so none reports a review without saying what it did not read.
+ar_left_out_note() {   # $1 = the .leftout file
+  [ -s "$1" ] || return 0
+  LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null | LC_ALL=C awk -F '\t' -v file="$1" -v max=10 "$AR_AWK_SIZE"'
+    NF >= 4 && $2 != "" {
+      n++; total += $1
+      if (n <= max) list = list (list == "" ? "" : "; ") $2 " (" $4 ", " size($1) ")"
+    }
+    END {
+      if (!n) exit
+      more = (n > max) ? sprintf("; and %d more, all listed in %s", n - max, file) : ""
+      printf "Not read by this review: %d file(s), %s in all, left out because the branch was over the size cap and each is proven to need no reading: %s%s.\n", n, size(total), list, more
+    }'
+}
+
 AR_FIXTURE_DATA_RE='(^|/)(fixtures|__fixtures__)/(.*/)?[^/]+\.(json|jsonl|ndjson|csv|tsv|xml|txt)$'
 AR_MODKIT_COPY_RE='^(.*/)?mods/([^/]+)/tests/mod-kit/(.+)$'
 ar_left_out_candidates() {   # $1 = base, $2 = head
