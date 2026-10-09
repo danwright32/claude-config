@@ -66,10 +66,19 @@ tracker skill's `config.local.json` with its Apps Script write token (#675). A s
 its own copy, made by hand.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
-`skills/synced/`, where the Claude app downloads each account's built in skills. Both lists live
-in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS` and `PLATFORM_SKILL_DIRS`), which
-`claude-sync` and `hooks/check-home-paths.sh` both read, so the check never judges a skill the
-sync does not send. Edit that file to change them.
+`skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
+folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
+lists live in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS`, `PLATFORM_SKILL_DIRS` and
+`SKILL_TRASH_DIRS`), which `claude-sync` and `hooks/check-home-paths.sh` both read, so the check
+never judges a skill the sync does not send. A send never carries them and a pull never deletes a
+Mac's own copy. Edit that file to change them.
+
+A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
+version the repo deleted, or an earlier version nothing on this Mac has written since the deletion
+reached it. The send names it, does not publish it, and removes the leftover here, saying which
+commit holds it (#331, #1009). A copy holding changes the repo never had, or an earlier version
+written back after the deletion arrived, is this Mac's own decision, so it publishes, and the send
+says it is putting back a deleted file and why.
 
 ## Use
 

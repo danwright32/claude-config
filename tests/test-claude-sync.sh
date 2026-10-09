@@ -3080,6 +3080,134 @@ check "#331 status names exactly the two folders that claim the same job, and no
 check "#331 and says why two of them is a problem rather than just listing them" \
   "grep -q 'competing for one job and the choice between them is arbitrary' <<< \"\$out_dup\""
 
+section "== a send does not restore an OLDER copy of a file the shared repo deleted (#1009) =="
+# On 2026-10-09 the work MacBook's send (bab3a15a) added payload/mods/scope-modes/hooks/ghargs.ts
+# back, after #995 had deleted it. The copy it sent was not the version #995 deleted but the one
+# three edits before it (the payload's copy before a85d3cb2), so the #331 guard above, which
+# recognised a leftover only when it was byte for byte the version DELETED, read it as a deliberate
+# new file and published it. main then failed tests/test-mods.sh. Built against the STATE the
+# commit shows, the way #331 is: the repo has deleted the file, this Mac's applied marker is past
+# the deletion, and the copy here is one the repo held earlier and this Mac never changed.
+RDB="$WORK/olddel-bare.git"; git init -q --bare -b main "$RDB"
+RDA="$WORK/olddel-repoA"; git clone -q "$RDB" "$RDA" 2>/dev/null
+RDR="$WORK/olddel-repoB"; git clone -q "$RDB" "$RDR" 2>/dev/null
+RDHA="$WORK/olddel-homeA"; RDHB="$WORK/olddel-homeB"
+RDMOD="mods/scope-modes"; RDREL="$RDMOD/hooks/ghargs.ts"
+mkdir -p "$RDHA/$RDMOD/.claude-plugin" "$RDHA/$RDMOD/hooks" "$RDHB"
+echo '{"hooks":{}}' > "$RDHA/settings.json"; echo '{"hooks":{}}' > "$RDHB/settings.json"
+printf '{ "name": "scope-modes", "version": "0.1.0", "description": "a test mod" }\n' > "$RDHA/$RDMOD/.claude-plugin/plugin.json"
+printf 'export const register = () => {}\n' > "$RDHA/$RDMOD/hooks/register.ts"
+printf 'export const ghargs = "version one"\n' > "$RDHA/$RDREL"
+# No claude command to ask about the mods: the load check says it could not check, at once, rather
+# than asking the real one (and none of what it says is asserted on here).
+RDENV=(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_CLAUDE_BIN="$WORK/olddel-no-claude")
+env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" sync >/dev/null 2>&1
+check "#1009 the other Mac received version one before anything changed" \
+  "grep -q 'version one' '$RDHB/$RDREL'"
+# The commit holding the copy this Mac is about to send back, read before anything else moves.
+rd_v1="$(git -C "$RDR" log --format=%H -1 -- "payload/$RDREL" 2>/dev/null)"
+# A edits it, then deletes it, and publishes both. The version the repo deleted is version two.
+printf 'export const ghargs = "version two"\n' > "$RDHA/$RDREL"
+env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+rm -f "$RDHA/$RDREL"
+env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+check "#1009 the deletion really did reach the shared repo" \
+  "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/register.ts' 2>/dev/null && ! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+# B receives both, so its applied marker is past the deletion, and then the version it held before
+# them is back in its home, unchanged: the pair the incident commit shows.
+env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull >/dev/null 2>&1
+check "#1009 the pull applied the deletion on the other Mac" "[ ! -e '$RDHB/$RDREL' ]"
+printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
+# Untouched since B last received it, which was before the deletion reached B's clone. Aged rather
+# than waited for, so both ends of the comparison are pinned (L130, L290): a day ago is before the
+# pull above whatever the clock says.
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDREL"
+# And something of B's own in the same send, which must still go out (L159).
+printf 'export const own = "only on B"\n' > "$RDHB/$RDMOD/hooks/b-own.ts"
+out_olddel="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 older copy send: $out_olddel"
+check "#1009 an older copy of a deleted file is not published back to the shared repo" \
+  "! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+check "#1009 while this Mac's own new file in the same send still goes out" \
+  "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/b-own.ts' 2>/dev/null"
+check "#1009 and the send names the file it did not publish, on the line saying so" \
+  "line_has \"\$out_olddel\" 'NOT publishing' 'mods/scope-modes/hooks/ghargs\.ts' 'deleted from the shared config'"
+check "#1009 and names the commit that copy is in, so it can be recovered" \
+  "[ -n '$rd_v1' ] && line_has \"\$out_olddel\" 'mods/scope-modes/hooks/ghargs\.ts' '${rd_v1:0:8}'"
+check "#1009 the local copy goes too, as #331 decided for a copy that carries nothing of this Mac's" \
+  "[ ! -e '$RDHB/$RDREL' ]"
+
+# The same earlier version WRITTEN BACK after the deletion reached this Mac is a decision, not a
+# leftover (putting an older version back on purpose), so the content alone does not decide it: it
+# publishes, and says why. Made here on B, then removed again from the shared repo by hand, so the
+# case after it starts from the same deleted state.
+printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
+out_olddel1b="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 earlier version written back: $out_olddel1b"
+check "#1009 an earlier version written back after the deletion arrived is published" \
+  "git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+check "#1009 and the send says it is putting back a deleted file, and why" \
+  "line_has \"\$out_olddel1b\" 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted it' 'written here after that deletion reached this Mac'"
+rm -f "$RDHB/$RDREL"
+env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send >/dev/null 2>&1
+check "#1009 (the shared repo is back to the deleted state for the next case)" \
+  "! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+
+# THE OTHER CASE: this Mac changed the file after it last received it. That is work that exists
+# nowhere else, and a deletion is not a permanent ban on a name (L116, L362), so it is published,
+# but never in silence: the send says it is putting back a file the shared repo deleted, so a
+# re-add like bab3a15a is read where it happens rather than found by a red main.
+printf 'export const ghargs = "version one"\n// changed on B after it last received\n' > "$RDHB/$RDREL"
+out_olddel2="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 edited copy send: $out_olddel2"
+rd_main_copy="$(git -C "$RDB" show "main:payload/$RDREL" 2>/dev/null || true)"
+check "#1009 a copy this Mac changed after its last receive is published" \
+  "case \"\$rd_main_copy\" in *'changed on B after it last received'*) true ;; *) false ;; esac"
+check "#1009 and the send says it is putting back a file the shared repo deleted" \
+  "line_has \"\$out_olddel2\" 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted it' 'changes the shared config never had'"
+
+section "== a skills .trash folder is never sent, and a pull leaves each Mac's own alone (#1009) =="
+# Claude Code moves a skill it removes or replaces into skills/.trash/<stamp>/<skill>/ on the Mac it
+# runs on. On 2026-10-09 the work MacBook's send (989614f4) carried one of those to main, holding
+# copies of four plugin skills. It is per Mac working state, so it is left out like the plugin
+# skills are, by the send AND by the apply: the apply mirrors with --delete, and an exclusion on the
+# sending side alone would have each pull delete the receiving Mac's own .trash.
+TRB="$WORK/trash-bare.git"; git init -q --bare -b main "$TRB"
+TRA="$WORK/trash-repoA"; git clone -q "$TRB" "$TRA" 2>/dev/null
+TRR="$WORK/trash-repoB"; git clone -q "$TRB" "$TRR" 2>/dev/null
+TRHA="$WORK/trash-homeA"; TRHB="$WORK/trash-homeB"
+mkdir -p "$TRHA" "$TRHB"; echo '{"hooks":{}}' > "$TRHA/settings.json"; echo '{"hooks":{}}' > "$TRHB/settings.json"
+mkskill "$TRHA/skills/real-skill/SKILL.md" 'a skill that travels'
+mkskill "$TRHA/skills/.trash/1791476936467-87889-68vS0Y/built-in-browser/SKILL.md" 'a plugin skill Claude Code set aside'
+# At any depth: a .trash inside a skill is the same thing in a different place.
+mkdir -p "$TRHA/skills/real-skill/.trash"; echo 'an older file set aside' > "$TRHA/skills/real-skill/.trash/old.md"
+out_trash="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 CLAUDE_HOME="$TRHA" SYNC_REPO="$TRA" SYNC_HOSTNAME=trashMacA bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 trash send: $out_trash"
+check "#1009 the skill beside the .trash folder is sent" \
+  "git -C '$TRB' cat-file -e 'main:payload/skills/real-skill/SKILL.md' 2>/dev/null"
+# Read whole, then matched: a grep -q that stops early can kill the listing under pipefail, and a
+# negated check would then pass on the failure (L183).
+trash_tree="$(git -C "$TRB" ls-tree -r --name-only main -- payload/skills 2>/dev/null || true)"
+check "#1009 a .trash folder at the top of skills/ is not sent" \
+  "[ -n \"\$trash_tree\" ] && ! grep -q '^payload/skills/\.trash/' <<< \"\$trash_tree\""
+check "#1009 nor one inside a skill" \
+  "[ -n \"\$trash_tree\" ] && ! grep -q '/\.trash/' <<< \"\$trash_tree\""
+# The receiving side. A payload that already holds a .trash folder (main does today, until this
+# change removes it) is not written onto the other Mac, and that Mac's own .trash is not deleted.
+mkdir -p "$TRA/payload/skills/.trash/stray/old-skill"
+mkskill "$TRA/payload/skills/.trash/stray/old-skill/SKILL.md" 'a set aside copy already on main'
+git -C "$TRA" add payload/skills/.trash >/dev/null 2>&1
+git -C "$TRA" -c user.name=t -c user.email=t@t commit -q -m 'a .trash folder reaches main' >/dev/null 2>&1
+git -C "$TRA" push -q origin main >/dev/null 2>&1
+mkskill "$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md" 'this Mac set this aside itself'
+out_trash2="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 CLAUDE_HOME="$TRHB" SYNC_REPO="$TRR" SYNC_HOSTNAME=trashMacB bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#1009 trash pull: $out_trash2"
+check "#1009 the pull brings the real skill" "[ -f '$TRHB/skills/real-skill/SKILL.md' ]"
+check "#1009 but not a .trash folder the payload holds" "[ ! -e '$TRHB/skills/.trash/stray' ]"
+check "#1009 and leaves this Mac's own .trash folder where it is" \
+  "[ -f '$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md' ]"
+
 section "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
 WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
 WR11="$WORK/w11repo"; git clone -q "$WB11" "$WR11"
