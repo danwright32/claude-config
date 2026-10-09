@@ -3231,6 +3231,27 @@ dbg "#1022 version lookup over a long history: rc=$cvh_rc out=$cvh_out"
 check "#1022 the version lookup survives a history past the pipe buffer under pipefail, with the right commit" \
   "[ \"\${#cvh_hist}\" -gt 200000 ] && [ \"\$cvh_rc\" -eq 0 ] && [ \"\$cvh_out\" = '$cv_c2' ]"
 
+# SAID ONCE PER COPY (third review of #1022). A copy the guard lets through is published by the same
+# send, so normally it is never seen again; but a later step of the send can still hold it back (a
+# hook whose suite fails), and then the next save meets it untracked again. The watcher sends on
+# every save, so the "publishing" line has to be said once per path and content, as the refusal
+# beside it already is. Driven by calling the guard twice over the same staged copy, the state a
+# held back send leaves.
+RGR="$WORK/once-repo"; git init -q -b main "$RGR"; RGH="$WORK/once-home"; mkdir -p "$RGR/payload/hooks" "$RGH/hooks"
+printf 'old\n' > "$RGR/payload/hooks/x.sh"; git -C "$RGR" add payload; git -C "$RGR" -c user.name=t -c user.email=t@t commit -q -m add
+git -C "$RGR" rm -q payload/hooks/x.sh; git -C "$RGR" -c user.name=t -c user.email=t@t commit -q -m gone
+printf 'old\nchanged here\n' > "$RGH/hooks/x.sh"; mkdir -p "$RGR/payload/hooks"; cp "$RGH/hooks/x.sh" "$RGR/payload/hooks/x.sh"
+RG_FN="$WORK/once-fn.sh"
+{ printf 'have_git(){ return 0; }\nsync_log_line(){ :; }\nnote_held_back(){ :; }\n'
+  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
+rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" bash -c 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' _ "$RG_FN" 2>&1; }
+rg_out1="$(rg_run)"; rg_out2="$(rg_run)"
+dbg "#1022 once: first [$rg_out1] second [$rg_out2]"
+check "#1022 the first send says it is putting back the deleted file" \
+  "line_has \"\$rg_out1\" 'publishing hooks/x\.sh' 'shared config deleted it'"
+check "#1022 and the same copy met again does not say it a second time" \
+  "[ -f '$RGR/payload/hooks/x.sh' ] && ! line_has \"\$rg_out2\" 'publishing hooks/x\.sh' 'shared config deleted it'"
+
 section "== a skills .trash folder is never sent, and a pull leaves each Mac's own alone (#1009) =="
 # Claude Code moves a skill it removes or replaces into skills/.trash/<stamp>/<skill>/ on the Mac it
 # runs on. On 2026-10-09 the work MacBook's send (989614f4) carried one of those to main, holding
