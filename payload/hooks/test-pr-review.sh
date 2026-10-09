@@ -265,22 +265,40 @@ check_eq "naming the pull request that already exists" "https://github.com/test-
 # test reached before, so a broken fallback would record no row, or a row with no URL, and say
 # nothing (L535). Each case runs with jq and then without it, on a URL of its own so the row read
 # back can only be the one that run wrote, and both must record exactly the URL gh printed.
+#
+# The jq arm is only a comparison if jq really read the payload. On a machine with no jq both arms
+# would run the fallback and agree with each other, proving nothing while counting as passes, so
+# the jq arm runs through a shim that logs each call before handing it to the real jq, and must be
+# seen to have called it. With no jq at all the arm is reported UNMEASURED and counts as nothing
+# (L411).
 NOJQ="$(path_without nojq jq)"
 # Asked of a fresh shell, the way the hook will ask, so this shell's command hash cannot answer.
 check_eq "the jq free PATH really has no jq" "" "$(PATH="$NOJQ" bash -c 'command -v jq')"
 PATH="$NOJQ" bash -c 'command -v python3' >/dev/null && ok || bad "the jq free PATH keeps python3, which the fallback reads with"
+REAL_JQ="$(command -v jq 2>/dev/null)"
+JQSPY="$WORKDIR/jqspy"; JQ_RAN="$WORKDIR/jq-ran"
+if [ -n "$REAL_JQ" ]; then
+  mkdir -p "$JQSPY"
+  printf '#!/usr/bin/env bash\nprintf "ran\\n" >> "%s"\nexec "%s" "$@"\n' "$JQ_RAN" "$REAL_JQ" > "$JQSPY/jq"
+  chmod +x "$JQSPY/jq"
+fi
 nojq_case(){ # nojq_case <label> <url> <exit code, or ""> <stdout> <stderr>
-  local label="$1" url="$2" arm rows with_jq=""; shift 2
-  for arm in jq nojq; do
+  local label="$1" url="$2" rows
+  shift 2
+  if [ -n "$REAL_JQ" ]; then
+    : > "$JQ_RAN"
     rows="$(opened_rows)"
-    if [ "$arm" = jq ]; then create_payload "gh pr create --fill" "$@" | bash "$CREATE_HOOK" >/dev/null 2>&1
-    else create_payload "gh pr create --fill" "$@" | PATH="$NOJQ" bash "$CREATE_HOOK" >/dev/null 2>&1
-    fi
-    check_eq "$label, $arm: one opening recorded" "$((rows + 1))" "$(opened_rows)"
-    [ "$arm" = jq ] && with_jq="$(opened_url)"
-  done
-  check_eq "$label: with jq the URL column is the one gh printed" "$url" "$with_jq"
-  check_eq "$label: without jq the URL column is the same" "$with_jq" "$(opened_url)"
+    create_payload "gh pr create --fill" "$@" | PATH="$JQSPY:$PATH" bash "$CREATE_HOOK" >/dev/null 2>&1
+    [ -s "$JQ_RAN" ] && ok || bad "$label, jq: the hook really read the payload with jq"
+    check_eq "$label, jq: one opening recorded" "$((rows + 1))" "$(opened_rows)"
+    check_eq "$label: with jq the URL column is the one gh printed" "$url" "$(opened_url)"
+  else
+    echo "  UNMEASURED: $label: no jq on this machine, so only the fallback ran and there was nothing to compare it with"
+  fi
+  rows="$(opened_rows)"
+  create_payload "gh pr create --fill" "$@" | PATH="$NOJQ" bash "$CREATE_HOOK" >/dev/null 2>&1
+  check_eq "$label, no jq: one opening recorded" "$((rows + 1))" "$(opened_rows)"
+  check_eq "$label: without jq the URL column is the same one" "$url" "$(opened_url)"
 }
 nojq_case "a successful creation" "https://github.com/test-owner/repo/pull/43" 0 $'https://github.com/test-owner/repo/pull/43\n' ""
 nojq_case "the already exists refusal" "https://github.com/test-owner/repo/pull/44" "" "" $'a pull request for branch "feature" into branch "main" already exists:\nhttps://github.com/test-owner/repo/pull/44\n'
