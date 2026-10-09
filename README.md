@@ -562,8 +562,10 @@ file a finding named), and this Mac's half of the gate, read per pull request (o
 reviewed when any of its openings had a finished review of that head), UNMEASURED under 5 pull
 requests.
 
-It is careful with the GitHub allowance every session on the Mac shares (claude-config#1006). Which
-pull request holds a commit comes from one batched GraphQL query per repository per 50 commits, held
+It is careful with the GitHub allowance every session on the Mac shares (claude-config#1006). Each
+opening records the pull request URL `gh pr create` printed (also when it refused because one
+already exists), so those rows are counted with no lookup. For older rows, which pull request holds
+a commit comes from one batched GraphQL query per repository per 50 commits, held
 to `PR_REVIEW_REPORT_CALL_BUDGET` (100 by default); whatever the budget does not reach is reported as
 UNMEASURED with its count. Before the first call it reads the allowance left and refuses to start,
 exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (500). It never fetches

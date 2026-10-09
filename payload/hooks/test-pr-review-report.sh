@@ -121,7 +121,9 @@ review(){ # review <sha> <status> <findings> <body>: a finished review file, rec
     "$1" "$((now - 200))" "$now" "$2" "$3" "$4" > "$f"
   bash -c '. "$1/lib/ai-review-common.sh"; ar_pr_ledger "$2" "$3"' _ "$DIR" "$f" "$REPO"
 }
-opened(){ bash -c '. "$1/lib/ai-review-common.sh"; ar_pr_opened repo "$2" "$3"' _ "$DIR" "${2:-$REPO}" "$1"; }
+opened(){ # opened <sha> [folder] [pull request url]: recorded by the real writer
+  bash -c '. "$1/lib/ai-review-common.sh"; ar_pr_opened repo "$2" "$3" "$4"' _ "$DIR" "${2:-$REPO}" "$1" "${3:-}"
+}
 
 run(){ : > "$GH_LOG"; bash "$REPORT" "$@" 2>&1; }
 calls(){ awk -v p="$1" 'index($0, p) == 1 { n++ } END { print n + 0 }' "$GH_LOG"; }
@@ -240,9 +242,38 @@ check "and leaves the window unmeasured" "UNMEASURED (#562)" "$out"
 # 12. --no-github asks GitHub nothing and still prints what the ledgers alone can say.
 out="$(run --no-github)"
 check_eq "no gh call at all" "" "$(cat "$GH_LOG")"
-check "pull requests cannot be counted without GitHub" "pull requests opened: UNMEASURED" "$out"
+check "rows without their pull request cannot be counted without GitHub" "pull requests opened: at least 0, UNMEASURED beyond that" "$out"
+check "and says which switch left them unlooked up" "not looked up, --no-github" "$out"
 check "the opening share is still printed" "openings with a finished review of that head:" "$out"
 check "and there is no verdict" "UNMEASURED (#562)" "$out"
+
+# 13. Openings recorded WITH their pull request URL (the hook writes it since #1006) need no lookup,
+# not even a folder that still exists; older rows without it keep the batched lookup, and both kinds
+# land on the same pull request whatever the case of the owner and name.
+export AI_REVIEW_STATE_DIR="$WORKDIR/state-url"; mkdir -p "$AI_REVIEW_STATE_DIR"
+U1="https://github.com/test-owner/repo/pull/1"
+opened "$S1" "$REPO" "$U1"
+opened "$S1" "$REPO" "$U1"
+opened "$S2" "$REPO" "https://github.com/Test-Owner/Repo/pull/1"
+opened "$S3" "$WORKDIR/nowhere/y" "https://github.com/test-owner/repo/pull/2"
+review "$S1" ok 0 "No issues found."
+out="$(run)"
+check "rows carrying their pull request are counted by it" "pull requests opened: 2 (from 4 gh pr create openings" "$out"
+check_not "a gone folder does not matter when the row names its pull request" "folder or GitHub remote gone" "$out"
+check_eq "and GitHub is asked nothing" "" "$(cat "$GH_LOG")"
+check "the per pull request share reads from them" "pull requests with a finished review of a head they were opened at: 1 of 2 (50%)" "$out"
+out="$(run --no-github)"
+check "--no-github still counts rows that name their pull request" "pull requests opened: 2 (from 4 gh pr create openings" "$out"
+check_not "and, with nothing left unlooked up, is not partial" "UNMEASURED beyond that" "$out"
+opened "$S5"
+opened "$S2"
+out="$(run)"
+check "an older row without its pull request is still looked up and counted" "pull requests opened: 3 (from 6 gh pr create openings" "$out"
+check_eq "in one batched lookup" 1 "$(lookups)"
+check "which asks about the older rows' commits" "$S5" "$(cat "$GH_LOG")"
+check_not "and not about the rows that already name their pull request" "c$S1:" "$(cat "$GH_LOG")"
+check_not "nor the one in a gone folder" "c$S3:" "$(cat "$GH_LOG")"
+export AI_REVIEW_STATE_DIR="$WORKDIR/state"
 
 echo
 echo "passed: $pass, failed: $fail"

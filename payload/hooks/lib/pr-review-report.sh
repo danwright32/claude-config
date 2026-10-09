@@ -50,7 +50,11 @@
 #     fetched into a scratch bare repository that borrows the checkout's objects read only (git
 #     alternates), once per checkout, and the scratch is deleted when the report ends. A git fetch
 #     is not an API call and does not spend the allowance.
-#   - --no-github asks GitHub nothing and prints what the ledgers alone can say.
+#   - Since #1006 the hook records the pull request URL gh printed with each opening, so those rows
+#     are counted by pull request with no lookup and no folder at all; only older rows, written
+#     without it, are looked up. Keys compare owner/name case blind, so the two kinds meet.
+#   - --no-github asks GitHub nothing: rows naming their pull request are still counted, and the
+#     rest are UNMEASURED, said as such.
 #
 # A recorded folder that no longer exists (a removed worktree) is placed by the nearest existing
 # folder above it that is inside a checkout, which for a worktree under <repo>/.claude/worktrees is
@@ -98,10 +102,17 @@ trap 'rm -rf "$work"' EXIT
 awk -F '\t' -v s="$since" 'NF && $1 >= s' "$AR_PR_OPENED" > "$work/opened" 2>/dev/null
 awk -F '\t' -v s="$since" 'NF && $1 >= s' "$AR_PR_LEDGER" > "$work/reviews" 2>/dev/null
 
-# The items GitHub is asked about: every opening, and every finished review with findings that name
-# a file (one naming none is counted as unmeasured below, and needs no lookup). kind, timestamp,
-# folder, sha, files (comma joined, reviews only).
-awk -F '\t' 'FNR == NR { printf "o\t%s\t%s\t%s\t\n", $1, $4, $5; next }
+# The items: every opening, and every finished review with findings that name a file (one naming
+# none is counted as unmeasured below, and needs no lookup). kind, timestamp, folder, sha, files
+# (comma joined, reviews only), and for an opening whose row carries the pull request URL (written
+# since #1006), its owner/name and number, which it is placed by with no lookup at all.
+awk -F '\t' 'FNR == NR {
+    slug = ""; num = ""
+    if (match($6, /github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[0-9]+/)) {
+      split(substr($6, RSTART, RLENGTH), p, "/"); slug = p[2] "/" p[3]; num = p[5]
+    }
+    printf "o\t%s\t%s\t%s\t\t%s\t%s\n", $1, $4, $5, slug, num; next
+  }
   $7 == "ok" && $8 ~ /^[0-9]+$/ && $8 > 0 && $10 != "" { printf "r\t%s\t%s\t%s\t%s\n", $1, $4, $5, $10 }' \
   "$work/opened" "$work/reviews" > "$work/items"
 
@@ -124,7 +135,7 @@ resolve_dir() {
   printf '%s\t%s\t%s\t%s\n' "$1" "$slug" "$common" "$url"
 }
 : > "$work/dirs"
-awk -F '\t' '$3 != "" { print $3 }' "$work/items" | sort -u > "$work/dirlist"
+awk -F '\t' '$3 != "" && $7 == "" { print $3 }' "$work/items" | sort -u > "$work/dirlist"
 while IFS= read -r d; do
   resolve_dir "$d" >> "$work/dirs" || printf '%s\t\t\t\n' "$d" >> "$work/dirs"
 done < "$work/dirlist"
@@ -132,7 +143,7 @@ done < "$work/dirlist"
 # The distinct commits to look up, by repository: only items whose folder was placed and whose sha
 # is a full commit id, since GitHub refuses a whole query over one malformed id.
 awk -F '\t' 'FNR == NR { slug[$1] = $2; next }
-  ($3 in slug) && slug[$3] != "" && $4 ~ /^[0-9a-f]{40}$/ { print slug[$3] "\t" $4 }' \
+  $7 == "" && ($3 in slug) && slug[$3] != "" && $4 ~ /^[0-9a-f]{40}$/ { print slug[$3] "\t" $4 }' \
   "$work/dirs" "$work/items" | sort -u > "$work/wanted"
 awk -F '\t' -v b="$batch" '
   $1 != cur { if (cur != "") print cur "\t" list; cur = $1; list = ""; n = 0 }
@@ -201,7 +212,8 @@ awk -F '\t' -v off="$([ "$github" = 1 ] && echo 0 || echo 1)" '
   FILENAME == ARGV[5] { skipped[$1 "\t" $2] = 1; next }
   {
     s = slug[$3]; k = s "\t" $4; st = ""; n = ""; h = ""
-    if (s == "") st = "gone"
+    if ($7 != "") { st = "pr"; s = $6; n = $7 }
+    else if (s == "") st = "gone"
     else if ($4 !~ /^[0-9a-f]{40}$/) st = "nocommit"
     else if (k in failed) st = "failed"
     else if (k in skipped) st = (off ? "off" : "budget")
@@ -235,25 +247,24 @@ awk -F '\t' 'FNR == NR { if ($7 == "ok" || $7 == "empty-diff") done[$4 "\t" $5] 
 paste "$work/covered" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/openings"
 read -r n_open hit_open n_pr hit_pr <<< "$(awk -F '\t' '
   { o++; if ($1) oh++ }
-  $7 == "pr" { k = $8 "#" $9; if (!(k in seen)) { seen[k] = 1; p++ } if ($1 && !(k in hit)) { hit[k] = 1; ph++ } }
+  # Keyed case blind: a recorded URL and a checkout remote can spell the same owner/name differently.
+  $7 == "pr" { k = tolower($8) "#" $9; if (!(k in seen)) { seen[k] = 1; p++ } if ($1 && !(k in hit)) { hit[k] = 1; ph++ } }
   END { print o + 0, oh + 0, p + 0, ph + 0 }' "$work/openings")"
 awk -F '\t' '$7 != "pr" { print $7 }' "$work/openings" > "$work/untied"
 n_untied="$(awk 'END { print NR + 0 }' "$work/untied")"
-n_partial="$(awk '$1 == "budget" || $1 == "failed" { n++ } END { print n + 0 }' "$work/untied")"
+# Partial: openings that were never looked up (past the budget, or --no-github) or whose lookup
+# failed. Rows that name their pull request need no lookup, so --no-github counts those in full.
+awk '$1 == "budget" || $1 == "failed" || $1 == "off"' "$work/untied" > "$work/partial"
+n_partial="$(awk 'END { print NR + 0 }' "$work/partial")"
 
-if [ "$github" != 1 ]; then
-  echo "  pull requests opened: UNMEASURED, --no-github asks GitHub nothing ($n_open gh pr create openings recorded; a pull request can be opened more than once)"
+s_open="s"; [ "$n_open" -eq 1 ] && s_open=""
+# With any partial opening the count is a floor, and says so rather than read as the whole window (L90).
+if [ "$n_partial" -gt 0 ]; then
+  echo "  pull requests opened: at least $n_pr, UNMEASURED beyond that (from $n_open gh pr create opening$s_open; a pull request opened more than once counts once)"
 else
-  s_open="s"; [ "$n_open" -eq 1 ] && s_open=""
-  # Past the budget, or after a failed lookup, the count is a floor, and says so rather than read
-  # as the whole window (L90).
-  if [ "$n_partial" -gt 0 ]; then
-    echo "  pull requests opened: at least $n_pr, UNMEASURED beyond that (from $n_open gh pr create opening$s_open; a pull request opened more than once counts once)"
-  else
-    echo "  pull requests opened: $n_pr (from $n_open gh pr create opening$s_open; a pull request opened more than once counts once)"
-  fi
-  [ "$n_untied" -gt 0 ] && echo "  openings not tied to a pull request: $n_untied ($(reasons "$work/untied"))"
+  echo "  pull requests opened: $n_pr (from $n_open gh pr create opening$s_open; a pull request opened more than once counts once)"
 fi
+[ "$n_untied" -gt 0 ] && echo "  openings not tied to a pull request: $n_untied ($(reasons "$work/untied"))"
 
 # Outcomes, each named. Finished means the branch was read: ok, or an empty diff with nothing to read.
 awk -F '\t' 'NF {
@@ -270,9 +281,9 @@ awk -F '\t' 'NF {
 
 pct=0; [ "$n_pr" -gt 0 ] && pct=$(( hit_pr * 100 / n_pr ))
 pct_open=0; [ "$n_open" -gt 0 ] && pct_open=$(( hit_open * 100 / n_open ))
-if [ "$github" = 1 ] && [ "$n_partial" -gt 0 ]; then
+if [ "$n_partial" -gt 0 ]; then
   echo "  pull requests with a finished review of a head they were opened at: $hit_pr of the $n_pr found ($pct%), the rest UNMEASURED"
-elif [ "$github" = 1 ]; then
+else
   echo "  pull requests with a finished review of a head they were opened at: $hit_pr of $n_pr ($pct%)"
 fi
 echo "  openings with a finished review of that head: $hit_open of $n_open ($pct_open%)"
@@ -346,13 +357,11 @@ s_fetch="es"; [ "$fetches" -eq 1 ] && s_fetch=""
 reads="no allowance read"; [ "$needed" -gt 0 ] && reads="1 allowance read"
 [ "$github" = 1 ] && echo "  asked of GitHub: $reads and $calls lookup call$s_calls (budget $budget); $fetches scratch fetch$s_fetch, none into a checkout"
 
-if [ "$github" != 1 ]; then
-  echo "UNMEASURED (#562): --no-github asked GitHub nothing, so pull requests on $host were not counted and the gate, which is read per pull request, has no reading. Run it without --no-github to measure it."
-elif [ "$n_partial" -gt 0 ]; then
-  awk '$1 == "budget" || $1 == "failed"' "$work/untied" > "$work/partial"
+if [ "$n_partial" -gt 0 ]; then
   why="$(reasons "$work/partial")"
   remedy="run it again"
   case "$why" in *"call budget"*) remedy="raise PR_REVIEW_REPORT_CALL_BUDGET (now $budget) or shorten --days" ;; esac
+  [ "$github" != 1 ] && remedy="run it without --no-github"
   echo "UNMEASURED (#562): $n_partial of $n_open openings on $host were not looked up or their lookup failed ($why), so the share per pull request covers only part of the window. To measure it, $remedy."
 elif [ "$n_pr" -lt 5 ]; then
   echo "UNMEASURED (#562): only $n_pr pull request(s) opened on $host in the window, too few to say whether nearly every one is reviewed. Keep recording."
