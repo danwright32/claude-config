@@ -182,6 +182,9 @@ const recordOf = (v: unknown): DesignRoundRecord | undefined => {
 // Dan's Not a look change for this very call (#1010). A store that cannot be read here is read again
 // by the judgement that follows, which refuses saying so.
 const passKey = (key: string) => `pass:${key}`
+// The key a call is known by: its tool and input, in the folder it runs in, in this session.
+const keyOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string> =>
+  callKey(tool, input, { cwd: await $.session.cwd(), session: await $.session.id() })
 const passed = async ($: EngineInterface, key: string): Promise<boolean> => {
   try {
     return ((await $.store.get(passKey(key))) as Partial<DesignRoundPass> | undefined)?.kind === 'not-look'
@@ -224,7 +227,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
   if (own) return { forged: own.path ?? own.word }
   if (storeMentioned) return { forged: 'the plugin store, which this command names' }
   // This very call, which Dan answered changes nothing on screen (#1010).
-  if (await passed($, callKey(tool, input))) return { pass: true }
+  if (await passed($, await keyOf($, tool, input))) return { pass: true }
 
   // The look changing files, each with the checkout it is in; a file in none is in no project.
   const byTree = new Map<string, string[]>()
@@ -421,7 +424,7 @@ export const register: Register = on => {
     const input = argsOf(raw)
     const v = await judge($, e.tool, input)
     // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
-    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, key: callKey(e.tool, input) }) : previewed(v) }
+    if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, key: await keyOf($, e.tool, input) }) : previewed(v) }
     // An empty id names no one call, so it is never marked: any other call carrying it would skip its
     // judgement (lessons review of #991). Such a call is judged again beneath, the same way.
     if (!id) return next(e)
@@ -446,7 +449,7 @@ export const register: Register = on => {
     // A check asked with no call id ($.tool.check) runs nothing: it is answered as the call would be,
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
     if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
-    return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, key: callKey(e.tool, input) }) }
+    return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, key: await keyOf($, e.tool, input) }) }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(message(next.error)) }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its

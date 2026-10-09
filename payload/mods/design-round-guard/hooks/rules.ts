@@ -196,12 +196,15 @@ export const dataOnlyChange = (before: string, after: string): boolean => {
 
 /**
  * What a refused call is known by, so the same call sent again is recognised when Dan has answered
- * Not a look change for it: the tool and every key of its input, in a fixed order, hashed (cyrb53).
+ * Not a look change for it: the tool and every key of its input, in a fixed order, with the folder it
+ * runs in and the session, hashed (cyrb53). The folder because a shell command's relative path names
+ * another file elsewhere; the session so his word about one edit does not stand for ever (lessons
+ * review of #1010).
  */
-export const callKey = (tool: string, input: Record<string, unknown>): string => {
+export const callKey = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
   const canon = (v: unknown): unknown =>
     Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canon((v as Record<string, unknown>)[k])])) : v
-  const text = JSON.stringify([tool, canon(input)])
+  const text = JSON.stringify([tool, canon(input), at.cwd, at.session])
   let h1 = 0xdeadbeef
   let h2 = 0x41c6ce57
   for (let i = 0; i < text.length; i++) {

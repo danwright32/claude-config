@@ -92,11 +92,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const cards: Record<string, unknown>[] = []
   const gitRuns: string[] = []
   const reads: string[] = []
-  const at = { cwd: init.cwd ?? '/w/slate' }
+  const at = { cwd: init.cwd ?? '/w/slate', session: 's1' }
   mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: at.cwd }) as never)
-  on('session.id', () => ({ value: 's1' }) as never)
+  on('session.id', () => ({ value: at.session }) as never)
   on('agent.list', () => ({ value: (init.agents ?? []).map(id => ({ id, description: 'a task', agentType: 'general-purpose' })) }) as never)
   // git, as mod-kit's branch reader asks it in a checkout.
   const git: Run = async argv => {
@@ -685,6 +685,26 @@ test("#1010: Dan's Not a look change lets that one refused edit through unchange
   expect(refusalOf(await call($, agents))).toBe('')
   expect(w.ran.length).toBe(3)
   expect(w.store['record:/w/slate|issue:978']).toBeUndefined()
+})
+
+// Lessons review of #1010: his word was kept under the call's tool and input alone, for ever, so the
+// same shell command with a relative path, sent from another checkout or in a later session, would
+// have gone through on an answer he gave about a different file.
+test("#1010: Dan's Not a look change holds only in the session and the folder the call ran in", withKit, async ($, on) => {
+  const w = world($, on)
+  w.files['/w/other/app/page.tsx'] = 'x'
+  const sh = { tool: 'Bash', command: "sed -i '' 's/a/b/' app/page.tsx" }
+  w.at.cwd = '/w/slate'
+  await askSkip($, w, refusalOf(await call($, sh)), NOT_LOOK)
+  expect(refusalOf(await call($, sh))).toBe('')
+  // The same words from another checkout write another file: asked about afresh.
+  w.at.cwd = '/w/other'
+  expect(refusalOf(await call($, sh))).toContain('issue #55 in other')
+  // And the same call in a later session is asked about again.
+  w.at.cwd = '/w/slate'
+  w.at.session = 's2'
+  expect(refusalOf(await call($, sh))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
 })
 
 // claude-config#1010: Dan's Settled was recorded for Slate issue #2210, the session's folder, while

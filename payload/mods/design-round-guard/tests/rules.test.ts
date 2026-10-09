@@ -222,12 +222,16 @@ test('the text a call leaves in a file: an Edit, a MultiEdit, a Write, and nothi
   expect(editedText(before, 'FutureWrite', { text: 'x' })).toBe(undefined)
 })
 
-test("a refused call's key is the same for the same call however its keys are ordered, and differs for any other", () => {
-  const a = callKey('Edit', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'b' })
-  expect(callKey('Edit', { new_string: 'b', old_string: 'a', file_path: '/r/page.tsx' })).toBe(a)
-  expect(callKey('Edit', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'c' })).not.toBe(a)
-  expect(callKey('Write', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'b' })).not.toBe(a)
-  expect(callKey('Bash', { command: 'echo x > a.css' })).not.toBe(callKey('Bash', { command: 'echo y > a.css' }))
+test("a refused call's key is the same for the same call however its keys are ordered, and differs for any other, elsewhere or later", () => {
+  const at = { cwd: '/r', session: 's1' }
+  const a = callKey('Edit', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'b' }, at)
+  expect(callKey('Edit', { new_string: 'b', old_string: 'a', file_path: '/r/page.tsx' }, at)).toBe(a)
+  expect(callKey('Edit', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'c' }, at)).not.toBe(a)
+  expect(callKey('Write', { file_path: '/r/page.tsx', old_string: 'a', new_string: 'b' }, at)).not.toBe(a)
+  expect(callKey('Bash', { command: 'echo x > a.css' }, at)).not.toBe(callKey('Bash', { command: 'echo y > a.css' }, at))
+  // The same words in another folder, or another session, are another call (lessons review of #1010).
+  expect(callKey('Bash', { command: 'echo x > a.css' }, at)).not.toBe(callKey('Bash', { command: 'echo x > a.css' }, { ...at, cwd: '/q' }))
+  expect(callKey('Bash', { command: 'echo x > a.css' }, at)).not.toBe(callKey('Bash', { command: 'echo x > a.css' }, { ...at, session: 's2' }))
 })
 
 test("the third answer to the skip question says it covers this one edit, in plain words", () => {
