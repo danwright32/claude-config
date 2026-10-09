@@ -3167,6 +3167,34 @@ check "#1009 a copy this Mac changed after its last receive is published" \
 check "#1009 and the send says it is putting back a file the shared repo deleted" \
   "line_has \"\$out_olddel2\" 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted it' 'changes the shared config never had'"
 
+# THE COMMIT THE MESSAGE NAMES must hold that copy (review of #1022). A version git only ever saw as
+# the OLD side of a change (its writing commit outside what the walk reaches) is named through the
+# commit that replaced it, and the message prints eight characters of whatever it was handed, so
+# "<replacing commit>^" lost its ^ and named the commit that had REPLACED the copy. Real histories
+# reach that branch only past a graft or a shallow boundary, so the walk's output is stood in for
+# here by a history in which the writing commit is missing, and the answer is judged the way a
+# person recovering the file would use it: the eight characters the message prints, read with git.
+CVR="$WORK/holding-repo"; git init -q -b main "$CVR"
+mkdir -p "$CVR/payload"
+printf 'version one\n' > "$CVR/payload/x.ts"
+git -C "$CVR" add payload/x.ts; git -C "$CVR" -c user.name=t -c user.email=t@t commit -q -m one
+printf 'version two\n' > "$CVR/payload/x.ts"
+git -C "$CVR" -c user.name=t -c user.email=t@t commit -q -am two
+git -C "$CVR" rm -q payload/x.ts; git -C "$CVR" -c user.name=t -c user.email=t@t commit -q -m gone
+cv_c1="$(git -C "$CVR" rev-parse HEAD~2)"; cv_c2="$(git -C "$CVR" rev-parse HEAD~1)"; cv_c3="$(git -C "$CVR" rev-parse HEAD)"
+cv_v1="$(git -C "$CVR" rev-parse "$cv_c1:payload/x.ts")"; cv_v2="$(git -C "$CVR" rev-parse "$cv_c2:payload/x.ts")"
+CV_FN="$WORK/holding-fn.sh"
+sed -n '/^commit_holding_version(){/,/^}/p' "$SCRIPT" > "$CV_FN"
+cv_named_real="$(SYNC_REPO="$CVR" bash -c '. "$1"; commit_holding_version payload/x.ts "$2"' _ "$CV_FN" "$cv_v1" 2>/dev/null)"
+cv_named_old="$(SYNC_REPO="$CVR" CV_HIST="$(printf 'commit %s\n:100644 000000 %s 0000000000000000000000000000000000000000 D\tpayload/x.ts\ncommit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c3" "$cv_v2" "$cv_c2" "$cv_v1" "$cv_v2")" \
+  bash -c 'git(){ case " $* " in *" log --root "*) printf "%s\n" "$CV_HIST" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CV_FN" "$cv_v1" 2>/dev/null)"
+dbg "#1022 named from the real walk: $cv_named_real, from the old side only: $cv_named_old"
+check "#1022 the helper is in the tool to be judged" "[ -s '$CV_FN' ]"
+check "#1022 a version the walk saw written is named by the commit that wrote it" \
+  "[ \"\$(git -C '$CVR' show \"\${cv_named_real:0:8}:payload/x.ts\" 2>/dev/null)\" = 'version one' ]"
+check "#1022 a version seen only as the old side is named by a commit that HOLDS it, as printed" \
+  "[ -n \"\$cv_named_old\" ] && [ \"\$(git -C '$CVR' show \"\${cv_named_old:0:8}:payload/x.ts\" 2>/dev/null)\" = 'version one' ]"
+
 section "== a skills .trash folder is never sent, and a pull leaves each Mac's own alone (#1009) =="
 # Claude Code moves a skill it removes or replaces into skills/.trash/<stamp>/<skill>/ on the Mac it
 # runs on. On 2026-10-09 the work MacBook's send (989614f4) carried one of those to main, holding
