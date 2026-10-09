@@ -83,7 +83,7 @@ too_fast() {   # $1 = one segment
   done
   local said="every ${interval:-$default} seconds"
   [ -z "$interval" ] && said="every $default seconds, its default"
-  echo "BLOCKED: this gh $kind asks GitHub $said. Each ask spends from the GitHub API allowance (the GraphQL allowance for gh pr checks), 5,000 points an hour that every session, agent and hook on this Mac shares, and when it runs out every gh pr command stalls (claude-config#1014). A check run takes minutes, so ask once a minute. Run instead:" >&2
+  echo "BLOCKED: this gh $kind asks GitHub $said. Each ask spends from the GitHub API allowance (for a pull request's checks, the GraphQL allowance), 5,000 points an hour that every session, agent and hook on this Mac shares, and when it runs out every gh pr command stalls (claude-config#1014). A check run takes minutes, so ask once a minute. Run instead:" >&2
   echo "  ${fixed[*]} --interval $MIN_INTERVAL" >&2
   return 0
 }
