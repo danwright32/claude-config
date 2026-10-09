@@ -104,7 +104,7 @@ export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(
 /** The look changing files a command's text names, for a write its words do not name (an inline script, a patch). */
 export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
-  for (const m of text.matchAll(/[\w./~@+-]+\.[A-Za-z]+\b/g)) {
+  for (const m of text.matchAll(/[\w./~@+*-]+\.[A-Za-z]+\b/g)) {
     const word = m[0].replace(/^[.]+(?=[^./])/, '')
     if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
   }

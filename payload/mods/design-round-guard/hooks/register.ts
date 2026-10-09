@@ -178,7 +178,17 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
   let why = ''
   for (const t of targets) {
     const kind = shapeKind(t.path ?? t.word)
-    if (kind === null) continue
+    if (kind === null) {
+      // A destination the reader could not follow, spelled with no look changing name, may still be
+      // one when the command names a look changing file anywhere: held, as ask before saving holds
+      // lasting memory (lessons review of #991). A command naming none runs.
+      const named = !t.path && tool === 'Bash' ? mentionedLookFiles(String(input.command ?? '')) : []
+      if (named.length) {
+        unsureFiles.push(t.word)
+        why ||= `where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`
+      }
+      continue
+    }
     if (!t.path) {
       unsureFiles.push(t.word)
       why ||= `where the command writes ${t.word} could not be followed`

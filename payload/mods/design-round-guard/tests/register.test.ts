@@ -488,6 +488,19 @@ test('nothing Claude writes itself records a no or a settlement', withKit, async
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
 })
 
+// Lessons review of #991: a write to a destination the reader could not follow, spelled with no look
+// changing name (`> "$OUT"`), passed unchecked. When the command names a look changing file anywhere,
+// such a write may be it, so it is held, as ask before saving holds lasting memory; a command naming
+// none still runs, so an ordinary write to a temporary file is not refused.
+test('a write the reader cannot follow is held when the command names a look changing file, and runs when it names none', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, { tool: 'Bash', command: `OUT=$(ls /w/slate/app/*.tsx | head -1); echo x > "$OUT"` }))
+  expect(why).toContain('could not tell which issue or branch')
+  expect(why).toContain('/w/slate/app/*.tsx')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `T=$(mktemp); echo x > "$T"` }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
 test('shell writes to a look changing file are caught: redirects, sed in place, copies, removals and inline scripts', withKit, async ($, on) => {
   const w = world($, on)
   for (const command of [
