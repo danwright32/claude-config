@@ -502,6 +502,16 @@ hooks off and with Claude Code's built in `ReportFindings` tool disallowed, beca
 reported through that tool leaves no finding line to read and came back `unparsed` in 6 of about 10
 rounds on one pull request (#804).
 
+A branch over the cap first leaves out the files proven to need no reading (claude-config#583): a
+file `.gitattributes` marks generated at both the base and the head (so a branch cannot excuse its
+own file by adding the mark), a data file (json, csv, xml, txt and the like) under a `fixtures`
+folder, and a file under `mods/<mod>/tests/mod-kit/` whose content is byte for byte that of the
+same path in `mods/mod-kit/`, compared blob to blob. Any that still fit are put back, smallest
+first. The review goes ahead when the rest fits and is refused as too large when it does not. Every
+file left out is named, with why and its size, in the start line, the reviewer's own file list, and
+every verdict the gate prints, so none is unread without saying so. A branch under the cap leaves
+out nothing.
+
 Measured 2026-09-24: across the last 150 squash merges of claude-config, Overture, Ovation and
 PostRoll, 11 of 600 branches were over the 300 KB cap it shares with the push review. Two real
 reviews took 195 and 231 seconds against a 600 second deadline. Each review with findings adds a
