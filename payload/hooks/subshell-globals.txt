@@ -23,10 +23,6 @@
 #
 # Every entry carries the reason it was accepted (L233).
 
-# tzinfo, inside a python program this function pipes into python3. It is python's variable, not
-# the shell's, and the scanner skips heredoc bodies but not this shape.
-payload/hooks/lib/issue-spool.sh: 1
-
 # _sk and _src_*: private working variables in two readers that both answer on stdout. Missing a
 # `local`, so they leak outward; nothing reads them and no answer is lost.
 payload/hooks/run-all-tests.sh: 2
