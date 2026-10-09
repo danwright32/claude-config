@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { inScratch, noBuildRefusal, type Cmd } from '../hooks/nobuild.ts'
-import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { inScratch, noBuildRefusal } from '../hooks/nobuild.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { readCommands } from './read.ts'
 
 // Commands as mod-kit hands them over, read by mod-kit's own reader: a byte for byte copy under
 // tests/mod-kit, which tools/check-mod-shared-parts.sh holds to mod-kit's own (a test cannot import
@@ -26,13 +26,7 @@ const line = (items: (string[] | '|')[]) => {
   })
   return out
 }
-const run = (command: string) => {
-  const commands: Cmd[] = pipeline(command).map(c => {
-    const g = git(c.words)
-    return g ? { ...c, git: { sub: g.sub, args: g.args } } : c
-  })
-  return noBuildRefusal({ tool: 'Bash', input: { command }, commands, writes: commandWrites(command, CWD, HOME) })
-}
+const run = (command: string) => noBuildRefusal({ tool: 'Bash', input: { command }, commands: readCommands(command), writes: commandWrites(command, CWD, HOME) })
 const bash = (...items: (string[] | '|')[]) => run(line(items))
 const tool = (name: string, input: Record<string, unknown>) => noBuildRefusal({ tool: name, input, commands: [], writes: { files: [], changes: [], unnamed: [] } })
 const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/0a1b/scratchpad'
@@ -101,6 +95,21 @@ describe('refused in no build', () => {
     expect(what(bash(['gh', 'pr', 'merge', '3', '--squash']))).toBe('run gh pr merge')
     expect(what(bash(['gh', 'api', '-X', 'PUT', 'repos/o/r/pulls/3/merge']))).toBe('call the GitHub API to change repos/o/r/pulls/3/merge')
     expect(what(bash(['gh', 'issue', 'develop', '616']))).toBe('run gh issue develop')
+  })
+  // #961: gh's subcommand and action are read past its global flags, by mod-kit's gh reader, so a
+  // flag before them hides nothing (before, `-R` was read as the subcommand and went ahead).
+  test('a gh global flag before the subcommand is refused exactly as without it (#961)', () => {
+    for (const [flag, value] of [['-R', 'o/x'], ['--repo', 'o/x']] as const) {
+      expect(what(bash(['gh', flag, value, 'pr', 'merge', '5']))).toBe(what(bash(['gh', 'pr', 'merge', '5'])))
+      expect(what(bash(['gh', flag, value, 'pr', 'create', '--fill']))).toBe('run gh pr create')
+      expect(what(bash(['gh', flag, value, 'api', '-X', 'POST', 'repos/o/x/pulls', '-f', 'title=x']))).toBe(what(bash(['gh', 'api', '-X', 'POST', 'repos/o/x/pulls', '-f', 'title=x'])))
+      expect(what(bash(['gh', flag, value, 'issue', 'develop', '616']))).toBe('run gh issue develop')
+      // What no build allows is allowed the same way.
+      expect(bash(['gh', flag, value, 'pr', 'view', '5'])).toBeUndefined()
+      expect(bash(['gh', flag, value, 'issue', 'create', '--title', 'x'])).toBeUndefined()
+    }
+    expect(what(bash(['gh', '-Ro/x', 'pr', 'merge', '5']))).toBe('run gh pr merge')
+    expect(what(bash(['gh', '--repo=o/x', 'pr', 'merge', '5']))).toBe('run gh pr merge')
   })
   test('deploys', () => {
     expect(what(bash(['npx', 'wrangler', 'deploy']))).toBe('deploy with wrangler')
@@ -230,6 +239,12 @@ describe('still refused, beside what the audit opened up (#702)', () => {
     expect(what(bash(['gh', 'api', 'graphql', '-f', 'query=mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }']))).toBe('call the GitHub API to run mergePullRequest')
     expect(what(bash(['gh', 'api', 'graphql', '-f', 'query=mutation { createIssue(input: {}) { clientMutationId } closePullRequest(input: {}) { clientMutationId } }']))).toBe('call the GitHub API to run closePullRequest')
     expect(what(bash(['gh', 'api', 'graphql', '-F', 'query=@mutation.graphql']))).toBe('call the GitHub API with a query that could not be read')
+  })
+  test('a gh call the mod was given no gh reading for, or whose flags cannot be placed, cannot be judged (#961)', () => {
+    const command = `gh api graphql -f 'query={ viewer { login } }'`
+    const unread = readCommands(command).map(({ gh: _gh, ...c }) => c)
+    expect(what(noBuildRefusal({ tool: 'Bash', input: { command }, commands: unread, writes: commandWrites(command, CWD, HOME) }))).toBe('run gh in a way that could not be read')
+    expect(what(bash(['gh', '--frob', 'x', 'pr', 'view', '5']))).toBe('run gh in a way that could not be read')
   })
   test('SQL that writes, around a string or a comment', () => {
     expect(what(bash(['psql', '$DB', '-c', "UPDATE jobs SET status = 'select'"]))).toBe('change data with SQL')

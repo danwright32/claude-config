@@ -1,6 +1,5 @@
-import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { flagOf, ghApi, ghArgs, graphqlQuery, hasFlag, normRepo, type GhArgs } from './ghargs.ts'
-import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, operations, type Cmd } from './nobuild.ts'
+import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, operations, type Cmd } from './nobuild.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
 // by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
@@ -33,7 +32,11 @@ export type Look = {
   isPrimary: (dir: string) => Promise<boolean | null>
 }
 
-/** One call as the mod reads it. `raw` is the Bash command as written; `ghRepo` the session's GH_REPO. */
+/**
+ * One call as the mod reads it. `raw` is the Bash command as written; `ghRepo` the session's GH_REPO
+ * as gh reads it (mod-kit's $.modkit.ghRepo, #961): absent when it is not set, null when it is set
+ * but names no repository that can be read, which refuses every write that names none itself.
+ */
 export type OvernightCall = {
   tool: string
   input: Record<string, unknown>
@@ -42,7 +45,7 @@ export type OvernightCall = {
   writes: ModKitWrites
   cwd: string
   home: string
-  ghRepo?: string
+  ghRepo?: string | null
 }
 
 /** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
@@ -52,8 +55,6 @@ const base = (p: string) => (p.replace(/\/+$/, '').split('/').pop() ?? '').toLow
 const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 const isLessons = (p: string | undefined) => p !== undefined && base(p) === 'lessons.md'
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
-
-export { normRepo }
 
 /** Reads one remote's address as its GitHub owner/name, or null: mod-kit's one reader, $.modkit.repo (#951). */
 export type GithubOf = (remote: string) => Promise<string | null>
@@ -155,7 +156,8 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
 
 // ---- gh ----
 
-// Every gh call is read by ghargs.ts, the one reading of gh's arguments here.
+// Every gh call is read by mod-kit's one reading of gh's arguments ($.modkit.gh, #961), once per
+// command, as the command's `gh`.
 // Overnight, gh is judged by two short lists, never a list of what it must not do, which would
 // always be missing the next one (#834 reviews): what only reads, which goes ahead wherever it
 // points, and the few writes overnight work needs, which go only to the checkout's own repository.
@@ -184,15 +186,16 @@ const LABELS_ON_PR: Record<string, string[]> = {
   edit: ['--add-label', '--remove-label', '--milestone', '-m', '--remove-milestone'],
   create: ['--label', '-l', '--milestone', '-m'],
 }
-const COMMENT_ENDPOINT = /^repos\/([^/]+)\/([^/]+)\/(?:issues|pulls)\/\d+\/comments$/
-const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/
+const COMMENT_ENDPOINT = /^repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/\d+\/comments$/
 const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 
 // What gh is asked to do: refused outright, a write to judge by the repository it reaches, or a
-// read (undefined). REST and GraphQL reach the same decision through the same outcomes.
+// read (undefined). REST and GraphQL reach the same decision through the same outcomes. `a` is
+// mod-kit's reading of the command (#961), asked once per command; with none, nothing it does or
+// where it goes can be said.
 type GhVerdict = { refuse: string } | { write: string | null | undefined } | undefined
-const ghVerdict = (words: readonly string[]): GhVerdict => {
-  const a = ghArgs(words)
+const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
+  if (!a) return { write: null }
   const { sub, act } = a
   // An unknown flag before the subcommand, or between it and its action: what the call does cannot
   // be read, so it reaches a repository that cannot be resolved.
@@ -215,15 +218,15 @@ const ghVerdict = (words: readonly string[]): GhVerdict => {
   return { write: a.named }
 }
 
-const apiVerdict = (a: GhArgs): GhVerdict => {
+const apiVerdict = (a: ModKitGh): GhVerdict => {
   // Another GitHub host is another place entirely, never this checkout's repository.
   const host = flagOf(a, '--hostname')
   if (host !== undefined && (typeof host !== 'string' || host.toLowerCase() !== 'github.com')) return { write: null }
-  const { method, endpoint, fields } = ghApi(a)
+  if (!a.api) return { write: null }
+  const { method, endpoint, fields, query } = a.api
   const ep = (endpoint ?? '').replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '').replace(/[?#].*$/, '')
   if (ep === 'graphql') {
     // A GraphQL document is always a POST: read it, and refuse one that cannot be read.
-    const query = graphqlQuery(a)
     if (query === null) return { refuse: 'call the GitHub API with a GraphQL document that could not be read' }
     for (const op of operations(query)) {
       if (op.kind !== 'mutation') continue
@@ -234,9 +237,11 @@ const apiVerdict = (a: GhArgs): GhVerdict => {
     return undefined
   }
   if (method === 'GET') return undefined
-  // The one API write overnight work needs: a comment on an issue or a PR of this repository.
-  const c = COMMENT_ENDPOINT.exec(ep)
-  if (c && method === 'POST') return { write: PLACEHOLDER.test(c[1] as string) || PLACEHOLDER.test(c[2] as string) ? undefined : normRepo(`${c[1]}/${c[2]}`) }
+  // The one API write overnight work needs: a comment on an issue or a PR of this repository, which
+  // is the one its endpoint names as gh reaches it (mod-kit's reading: gh's placeholders for the
+  // current repository name none, so the checkout decides; a spelling gh does not send to repos/,
+  // or one placeholder beside a name, cannot be read).
+  if (COMMENT_ENDPOINT.test(ep) && method === 'POST') return { write: a.api.repo }
   if (/(?:^|\/)(?:issues|labels|milestones)(?:\/|$)/.test(ep)) return { refuse: 'change issues, labels or milestones through the GitHub API' }
   if (/\/git\/refs\/heads\//.test(ep)) {
     if (method === 'DELETE') return { refuse: 'delete a branch' }
@@ -272,7 +277,7 @@ const writeRefusal = async (target: string | null | undefined, dir: string | nul
   if (wrapped(call)) return UNRESOLVED
   if (target === null) return UNRESOLVED
   const here = dir === null ? null : await look.repoOf(dir)
-  const to = target === undefined ? (call.ghRepo ? normRepo(call.ghRepo) : here) : target
+  const to = target === undefined ? (call.ghRepo !== undefined ? call.ghRepo : here) : target
   if (!to || !here) return UNRESOLVED
   return to === here ? undefined : `write to ${to} from a checkout of ${here}`
 }
@@ -364,7 +369,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       continue
     }
     if (cmd === 'gh') {
-      const v = ghVerdict(words)
+      const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
       if (v && 'write' in v) {
         const why = await writeRefusal(v.write, dir, call, look)

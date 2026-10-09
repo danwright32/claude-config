@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { keptOpen, leftOpenFor, newWork, outstanding, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { ghArgs } from './mod-kit/hooks/gh.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
-const bash = (...lines: string[][]) => newWork({ tool: 'Bash', input: {}, commands: lines.map(words => ({ words, git: gitOf(words) })), issues: [616] })
+// Each command with its gh reading, by mod-kit's own reader (its byte for byte copy), as the mod reads it (#961).
+const bash = (...lines: string[][]) => newWork({ tool: 'Bash', input: {}, commands: lines.map(words => ({ words, git: gitOf(words), gh: ghArgs(words) })), issues: [616] })
 const tool = (name: string, input: Record<string, unknown>, issues = [616]) => newWork({ tool: name, input, commands: [], issues })
 
 describe('newWork: starting new work is denied while winding down', () => {
@@ -17,6 +19,12 @@ describe('newWork: starting new work is denied while winding down', () => {
     expect(bash(['git', 'branch', 'issue-700'])?.what).toBe('start a new branch')
     expect(bash(['git', 'worktree', 'add', '-b', 'x', '../x'])?.what).toBe('start a new branch')
     expect(bash(['gh', 'issue', 'develop', '700'])?.what).toBe('start a new branch')
+    // #961: read past gh's global flags by mod-kit's gh reader, so a flag first hides nothing.
+    expect(bash(['gh', '-R', 'o/x', 'issue', 'develop', '700'])?.what).toBe('start a new branch')
+    expect(bash(['gh', '--repo=o/x', 'issue', 'develop', '700'])?.what).toBe('start a new branch')
+    expect(bash(['gh', '-R', 'o/x', 'issue', 'view', '700'])).toBeUndefined()
+    // A flag before the subcommand gh's reader cannot place could hide one, so it is refused.
+    expect(bash(['gh', '--frob', 'x', 'issue', 'develop', '700'])?.what).toBe('run a gh command whose flags cannot be read')
     expect(tool('EnterWorktree', {})?.what).toBe('start a new branch')
   })
   test('agent dispatch for another issue, but not for this one', () => {

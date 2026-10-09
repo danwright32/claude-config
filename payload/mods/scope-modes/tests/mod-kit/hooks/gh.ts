@@ -1,10 +1,13 @@
-// The one reading of a gh command's arguments in this mod (#834): every overnight gh decision, and
-// no build's reading of gh api, go through it, so a spelling read one way here cannot be read
-// another way there. gh parses its flags as pflag does, so this does too: `--flag=value` and
-// `--flag value`, a short flag's value attached (`-XDELETE`, `-Rowner/x`, `-fkey=val`) or apart,
-// and short flags that take no value clustered (`-sd`). Whether a short flag takes a value
-// depends on the command (`-m` is a milestone to `gh pr create` and a merge to `gh pr merge`), so
-// the value flags are known per subcommand and action.
+import { ghRepo, linkRepo } from './repo.ts'
+
+// The one reading of a gh command's arguments (#834, moved here from scope-modes in #961): every
+// overnight gh decision, the merge judge and no build's reading of gh api go through it, so a
+// spelling read one way here cannot be read another way there. gh parses its flags as pflag does,
+// so this does too: `--flag=value` and `--flag value`, a short flag's value attached (`-XDELETE`,
+// `-Rowner/x`, `-fkey=val`) or apart, and short flags that take no value clustered (`-sd`). Whether
+// a short flag takes a value depends on the command (`-m` is a milestone to `gh pr create` and a
+// merge to `gh pr merge`), so the value flags are known per subcommand and action. Every repository
+// it names is read by repo.ts's ghRepo, the one reading of a repository as gh spells one.
 
 export type GhArgs = {
   /** The subcommand (`pr`, `issue`, `api`) and its action (`merge`, `comment`); empty when absent. */
@@ -20,10 +23,24 @@ export type GhArgs = {
    * Undefined when it names none, so gh takes GH_REPO or the checkout's; null when it names one
    * that cannot be read.
    */
-  named: string | null | undefined
+  named?: string | null
   /** A flag before the subcommand that is not one of gh's known global flags: nothing it does can be said. */
   unreadable: boolean
+  /** For `gh api`, what it sends and where. */
+  api?: GhApi
 }
+
+/**
+ * A `gh api` call's method and endpoint as gh reads them: GET unless -X says otherwise or a field
+ * or input is sent, which makes it a POST. `fields` are the values its -f and -F fields send
+ * (`force=true`); `input` whether --input sends a body this reader cannot see. `repo` the
+ * repository its endpoint names (`repos/<owner>/<name>/...`), as owner/name in lower case:
+ * undefined for an endpoint outside repos/ or gh's own placeholders for the current repository
+ * ({owner}/{repo}), so the checkout decides; null for one that cannot be read. `query` the GraphQL
+ * document its query field sends, null when it cannot be read: none given, a body from --input, or
+ * `-F query=@file`, which gh reads from that file.
+ */
+export type GhApi = { method: string; endpoint: string | undefined; fields: string[]; input: boolean; repo?: string | null; query: string | null }
 
 // gh's global flags that take no value, allowed before the subcommand.
 const GLOBAL_BOOLEANS = new Set(['--help', '-h', '--version'])
@@ -47,32 +64,9 @@ const shortValuesFor = (sub: string, act: string): string => {
   return s[act] ?? s['*'] ?? (SHORT_VALUES['*'] as Record<string, string>)['*'] as string
 }
 
-/**
- * A GitHub repository as a gh command spells it (-R, a link, a `gh repo` positional, an endpoint's
- * owner/name) as owner/name in lower case; null when it is none. Here owner/name alone IS a
- * repository, where to git it is a local path, so a git remote is never read with this: remotes are
- * read by mod-kit's $.modkit.repo (#951). An address spelled here is still parsed by hand, a known
- * exception in tools/check-mod-shared-parts.sh until #961 moves the gh reader into mod-kit.
- */
-export const normRepo = (s: string): string | null => {
-  let t = s.trim().replace(/\.git$/, '').replace(/\/+$/, '')
-  // A host only where the spelling says so (a scheme, a user@, or github.com itself), so an owner
-  // with a dot in it (my.org/x) is an owner, never a host.
-  const host = /^(?:[a-z+]+:\/\/(?:[^@/]+@)?|[^@/:]+@)([^/:]+)[:/](.*)$/i.exec(t) ?? /^((?:www\.)?github\.com)\/(.*)$/i.exec(t)
-  if (host) {
-    if ((host[1] as string).toLowerCase().replace(/^www\./, '') !== 'github.com') return null
-    t = host[2] as string
-  }
-  const parts = t.split('/').filter(Boolean)
-  if (parts.length !== 2 || parts.some(p => !/^[\w.-]+$/.test(p))) return null
-  return parts.join('/').toLowerCase()
-}
-
-// A github.com link to a repository, or anything under it (an issue, a PR, a file).
-const LINK = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)(?:[/?#].*)?$/i
-
-/** A gh command's words, `gh` first, read as gh reads them. */
-export const ghArgs = (words: readonly string[]): GhArgs => {
+/** A gh command's words, `gh` first (by name or path), read as gh reads them; undefined when the words are no gh command. */
+export const ghArgs = (words: readonly string[]): GhArgs | undefined => {
+  if ((words[0] ?? '').split('/').pop() !== 'gh') return undefined
   const flags: GhArgs['flags'] = []
   const plain: string[] = []
   // Global flags may come before the subcommand (`gh -R other/x pr close 5`): the known ones are
@@ -139,19 +133,23 @@ export const ghArgs = (words: readonly string[]): GhArgs => {
     }
     plain.push(w)
   }
-  return { sub, act, flags, positionals: plain, named: unreadable ? null : namedRepo(sub, flags, plain), unreadable }
+  const out: GhArgs = { sub, act, flags, positionals: plain, unreadable }
+  const named = unreadable ? null : namedRepo(sub, flags, plain)
+  if (named !== undefined) out.named = named
+  if (sub === 'api') out.api = apiOf(out)
+  return out
 }
 
 const namedRepo = (sub: string, flags: GhArgs['flags'], positionals: string[]): string | null | undefined => {
   const r = flags.filter(f => f.name === '-R' || f.name === '--repo').pop()
-  if (r) return typeof r.value === 'string' ? normRepo(r.value) : null
+  if (r) return typeof r.value === 'string' ? ghRepo(r.value) : null
   for (const p of positionals) {
-    const m = LINK.exec(p)
-    if (m) return normRepo(`${m[1]}/${m[2]}`)
+    const linked = linkRepo(p)
+    if (linked !== null) return ghRepo(linked)
   }
   if (sub === 'repo') {
     const p = positionals[0]
-    if (p !== undefined) return normRepo(p)
+    if (p !== undefined) return ghRepo(p)
   }
   return undefined
 }
@@ -163,29 +161,49 @@ export const flagOf = (a: GhArgs, ...names: string[]): string | true | undefined
 export const hasFlag = (a: GhArgs, ...names: string[]): boolean => a.flags.some(f => names.includes(f.name))
 
 const FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field']
-/**
- * A `gh api` call's method and endpoint as gh reads them: GET unless -X says otherwise or a field
- * or input is sent, which makes it a POST. `fields` are the values its -f and -F fields send
- * (`force=true`); `input` whether --input sends a body this reader cannot see.
- */
-export const ghApi = (a: GhArgs): { method: string; endpoint: string | undefined; fields: string[]; input: boolean } => {
-  const fields = a.flags.filter(f => FIELD_FLAGS.includes(f.name)).map(f => (typeof f.value === 'string' ? f.value : ''))
-  const input = hasFlag(a, '--input')
-  const m = flagOf(a, '-X', '--method')
-  const method = typeof m === 'string' ? m.toUpperCase() : fields.length || input ? 'POST' : 'GET'
-  return { method, endpoint: a.positionals[0], fields, input }
+const API = 'https://api.github.com/'
+const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/
+
+// The repository an endpoint names as gh reaches it: an endpoint starting https:// is an address
+// as it stands, any other has one leading slash trimmed and goes after api.github.com. So
+// `repos/o/r`, `/repos/o/r` and `https://api.github.com/repos/o/r` reach o/r; any other spelling
+// that comes to repos/ once its slashes and host are taken off (`//repos/o/r`) is one gh does not
+// send there, so it cannot be read (null), never none.
+const endpointRepo = (endpoint: string | undefined): string | null | undefined => {
+  const e = endpoint ?? ''
+  const path = e.startsWith(API) ? e.slice(API.length) : e.startsWith('https://') ? null : e.replace(/^\//, '')
+  if (path !== null && path.startsWith('repos/')) {
+    const m = /^repos\/([^/?#]+)\/([^/?#]+)/.exec(path)
+    if (!m) return null
+    const [owner, name] = [m[1] as string, m[2] as string]
+    // gh fills both placeholders from the checkout's repository, which decides; one beside a real
+    // name is a repository that cannot be told from here.
+    if (PLACEHOLDER.test(owner) && PLACEHOLDER.test(name)) return undefined
+    if (PLACEHOLDER.test(owner) || PLACEHOLDER.test(name)) return null
+    return ghRepo(`${owner}/${name}`)
+  }
+  const loose = e.replace(/^\/+/, '').replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '')
+  return loose.startsWith('repos/') ? null : undefined
 }
 
-/**
- * The GraphQL document a `gh api graphql` call sends, read from its `query=` field in any spelling
- * gh reads; null when it cannot be read: none given, a body from --input, or `-F query=@file`,
- * which gh reads from that file. The one reading for no build and the overnight rules.
- */
-export const graphqlQuery = (a: GhArgs): string | null => {
+// The GraphQL document a call sends, read from its `query=` field in any spelling gh reads.
+const queryOf = (a: GhArgs): string | null => {
   if (hasFlag(a, '--input')) return null
   const q = a.flags.filter(f => FIELD_FLAGS.includes(f.name) && typeof f.value === 'string' && f.value.startsWith('query=')).pop()
   if (!q) return null
   const query = (q.value as string).slice('query='.length)
   // -F and --field read a value starting with @ from that file; -f takes it as written.
   return (q.name === '-F' || q.name === '--field') && query.startsWith('@') ? null : query
+}
+
+const apiOf = (a: GhArgs): GhApi => {
+  const fields = a.flags.filter(f => FIELD_FLAGS.includes(f.name)).map(f => (typeof f.value === 'string' ? f.value : ''))
+  const input = hasFlag(a, '--input')
+  const m = flagOf(a, '-X', '--method')
+  const method = typeof m === 'string' ? m.toUpperCase() : fields.length || input ? 'POST' : 'GET'
+  const endpoint = a.positionals[0]
+  const out: GhApi = { method, endpoint, fields, input, query: queryOf(a) }
+  const repo = endpointRepo(endpoint)
+  if (repo !== undefined) out.repo = repo
+  return out
 }
