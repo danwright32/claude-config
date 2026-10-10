@@ -31,6 +31,13 @@
 
 set -uo pipefail
 
+# The label list reader and the create live in one place, shared with create-milestone.sh.
+# shellcheck source=labels-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/labels-lib.sh" || {
+  echo "Cannot ensure the priority labels: labels-lib.sh is missing beside this script." >&2
+  exit 6
+}
+
 repo="${1:-}"
 if [[ -z "$repo" || "$repo" != */* || "$repo" == --* ]]; then
   echo "Usage: ensure-priority-labels.sh <owner/name>" >&2
@@ -55,61 +62,20 @@ LEVELS=(
 # --- read the existing labels ---------------------------------------------
 # Reading this list is what decides which labels are missing. If the read fails,
 # creating anyway would fire five doomed calls and then report success, so this
-# fails loud instead. stdout and stderr are kept apart so a gh warning cannot land
-# in the middle of the JSON and read as an empty repo.
+# fails loud instead.
 gh_err="$(mktemp)"
 trap 'rm -f "$gh_err"' EXIT
-raw="$(gh label list --repo "$repo" --limit 500 --json name 2>"$gh_err")"
-if [[ $? -ne 0 ]]; then
+if ! existing="$(lb_read "$repo" "$gh_err")"; then
   echo "Could not read the label list for $repo: $(tr '\n' ' ' <"$gh_err")" >&2
   exit 6
 fi
-
-existing="$(printf '%s' "$raw" | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("PARSE-ERROR")
-    sys.exit(0)
-if not isinstance(data, list):
-    print("PARSE-ERROR")
-    sys.exit(0)
-# Lowercased: GitHub treats label names case insensitively for uniqueness, so
-# creating priority-p2 next to an existing PRIORITY-P2 fails.
-for item in data:
-    name = (item or {}).get("name") if isinstance(item, dict) else None
-    if name:
-        print(name.lower())
-')"
-
-if [[ "$existing" == "PARSE-ERROR" ]]; then
-  echo "Could not read the label list for $repo (unexpected response)." >&2
-  exit 6
-fi
-
-has_label() { # has_label <lowercased name>
-  # `case` over the list rather than `printf ... | grep -qxF` (claude-config#162). `grep -q` leaves
-  # on its first match, its producer is killed by SIGPIPE, and under `pipefail` the pipeline's
-  # status becomes that death, so a label that IS present reads as missing and this tries to create
-  # it again. Whether it bites depends on how long the label list is and where in it the match
-  # falls, which is a size threshold nobody watches: a repo with many labels is the one that breaks
-  # (L183). The newlines on both sides are what makes this a whole-line match, exactly as -x was,
-  # and the name is quoted inside the pattern so a label carrying a glob character stays literal.
-  case "
-$existing
-" in *"
-$1
-"*) return 0 ;; esac
-  return 1
-}
 
 # --- create whatever is missing -------------------------------------------
 failed=0
 for spec in "${LEVELS[@]}"; do
   IFS='|' read -r name color desc <<<"$spec"
 
-  if has_label "$name"; then
+  if lb_has "$existing" "$name"; then
     echo "PRIORITY-LABEL-EXISTS $name"
     continue
   fi
@@ -119,18 +85,13 @@ for spec in "${LEVELS[@]}"; do
     continue
   fi
 
-  if gh label create "$name" --repo "$repo" --color "$color" --description "$desc" >/dev/null 2>"$gh_err"; then
-    echo "PRIORITY-LABEL-CREATED $name"
-    continue
-  fi
-
-  # A 422 here means the label already exists: another run of this script, or a
-  # person in the GitHub UI, got there between the list read and this create. That
-  # is the idempotent outcome, not a failure, so it must not fail the run.
-  if grep -qiE 'already exists|422' "$gh_err"; then
-    echo "PRIORITY-LABEL-EXISTS $name"
-    continue
-  fi
+  # A label that already exists by the time of the create (status 3) is the idempotent outcome,
+  # not a failure, so it must not fail the run.
+  lb_create "$repo" "$name" "$color" "$desc" "$gh_err"
+  case $? in
+    0) echo "PRIORITY-LABEL-CREATED $name"; continue ;;
+    3) echo "PRIORITY-LABEL-EXISTS $name"; continue ;;
+  esac
 
   echo "LABEL-FAILED $name: $(tr '\n' ' ' <"$gh_err")" >&2
   failed=$((failed + 1))
