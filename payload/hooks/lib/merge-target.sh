@@ -30,6 +30,9 @@
 #   mt_pr_view       the pull request's fields, from whichever logged-in
 #                      account can actually see the repo, proved to be about
 #                      the repo the remote names
+#   mt_gh_transient  whether a failed gh read is worth asking again: the
+#                      transport or GitHub's own server failed, rather than
+#                      GitHub answering no
 #   mt_remote_path   whether a repository on GitHub holds a path, for a merge
 #                      naming a repository that is not the checkout it runs in
 #   mt_pinned_tool_remote
@@ -921,6 +924,32 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
   [ "$notfound" = 1 ] && [ -z "$other" ] && [ -z "$wrong" ] && nf=true
   jq -nc --arg wrong "$wrong" --argjson nf "$nf" --arg error "$other" \
     '{found: false, wrongRepo: $wrong, notFound: $nf, error: $error}'
+  return 1
+}
+
+# Is this failed gh read worth asking again? Returns 0 when its error text names a
+# transport fault (a timeout, a reset or refused connection, a lookup that failed,
+# a connection cut short) or GitHub's own server failing (HTTP 5xx, GraphQL's
+# "Something went wrong"), and 1 for everything else (claude-config#1061).
+#
+# It reads gh's error text because that is all gh gives: `gh api` and `gh pr view`
+# exit 1 for a 404 and for a dropped connection alike, and a transport fault has
+# no HTTP status at all. So this is the ONE place that reading happens (L35), and
+# it is an allow list: an answer GitHub actually gave (a 404, a 401, a pull
+# request that is not mergeable) and any error it does not recognise, an empty one
+# included, are believed the first time. Asking again cannot turn a refusal into a
+# yes, and retrying the unknown would hide a new fault behind a minute of waiting.
+mt_gh_transient() {  # $1 = the error text gh printed
+  local t
+  t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  [ -n "$t" ] || return 1
+  case "$t" in
+    *"tls handshake timeout"*|*"i/o timeout"*|*"timed out"*|*"timeout awaiting"*|*"context deadline exceeded"*) return 0 ;;
+    *"connection reset"*|*"connection refused"*|*"broken pipe"*|*"network is unreachable"*|*"no such host"*) return 0 ;;
+    *"temporary failure in name resolution"*|*'": eof'*|*"unexpected eof"*) return 0 ;;
+    *"something went wrong while executing your query"*) return 0 ;;
+  esac
+  [[ "$t" =~ http\ 5[0-9][0-9] ]] && return 0
   return 1
 }
 
