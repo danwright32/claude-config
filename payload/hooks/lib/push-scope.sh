@@ -348,6 +348,21 @@ ps_is_gh_pr_create() {   # $1 = command
 }
 
 ps__segment_is_pr_create() {   # $1 = one segment
+  local -a w
+  IFS=$'\x1f' read -r -a w <<< "$(ps__segment_command_words "$1")"
+  [ "${#w[@]}" -gt 0 ] || return 1
+  [ "${w[0]##*/}" = "gh" ] || return 1
+  [ "${w[1]:-}" = "pr" ] || return 1
+  case "${w[2]:-}" in create|create\)*|create\}*) return 0 ;; esac
+  return 1
+}
+
+# One segment's words from the command it runs onward, joined by 0x1f: past leading environment
+# assignments (one whose value is a command substitution holding spaces included), an opening ( or
+# {, and `rtk` in front, which runs the same command. Fails when the segment runs no command. The
+# one reading of command position for the gh questions here (ps_is_gh_pr_create, and
+# check-gh-watch-interval.sh since claude-config#1014), so both see a command the same way.
+ps__segment_command_words() {   # $1 = one segment
   local -a tok
   # The same shell reading as ps__segment_is_push (#589): a quoted assignment holding a space,
   # GH_TOKEN="a b" gh pr create, split on whitespace left `b"` as the command.
@@ -374,11 +389,9 @@ ps__segment_is_pr_create() {   # $1 = one segment
   done
   [ "$i" -lt "$n" ] || return 1
   t="${tok[$i]##*/}"
-  if [ "$t" = "rtk" ]; then i=$((i+1)); [ "$i" -lt "$n" ] || return 1; t="${tok[$i]##*/}"; fi
-  [ "$t" = "gh" ] || return 1
-  [ "${tok[$((i+1))]:-}" = "pr" ] || return 1
-  case "${tok[$((i+2))]:-}" in create|create\)*|create\}*) return 0 ;; esac
-  return 1
+  if [ "$t" = "rtk" ]; then i=$((i+1)); [ "$i" -lt "$n" ] || return 1; fi
+  local IFS=$'\x1f'
+  printf '%s' "${tok[*]:$i}"
 }
 
 # Which repository is this push about? The hook payload's cwd is the SESSION's

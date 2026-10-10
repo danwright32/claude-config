@@ -590,6 +590,49 @@ else pass; fi
 
 rm -rf "$root"
 
+echo "merge-target: mt_pr_view asks for the other accounts only when the active one cannot answer (claude-config#1014)"
+# `gh auth status` checks every logged in account's token with a request each (3 on the personal
+# MacBook, measured 2026-10-09), and merge-when-ready.sh reads the pull request every minute, so
+# listing the accounts before the active one has even been tried spent them on every look.
+ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
+cat > "$ghstub/gh" <<'EOS'
+#!/usr/bin/env bash
+printf '%s|%s\n' "${GH_TOKEN:-active}" "$*" >> "$MT_GH_LOG"
+case "$*" in
+  "auth status"*) printf 'Logged in to github.com account other1 (keyring)\n' ;;
+  "auth token -u other1") printf 'tok-other1\n' ;;
+  "pr view"*)
+    if [ -z "${GH_TOKEN:-}" ] && [ -e "$MT_GH_ACTIVE_FAILS" ]; then echo "GraphQL: Could not resolve to a Repository with the name 'acme/widget'. (repository)" >&2; exit 1; fi
+    printf '{"number":7,"state":"OPEN","url":"https://github.com/acme/widget/pull/7"}\n' ;;
+  *) exit 3 ;;
+esac
+EOS
+chmod +x "$ghstub/gh"
+export MT_GH_LOG="$ghstub/log" MT_GH_ACTIVE_FAILS="$ghstub/active-fails"
+: > "$MT_GH_LOG"
+got="$(PATH="$ghstub:$PATH" mt_pr_view 7 "number,state,url" acme/widget acme/widget)"
+eq "$(printf '%s' "$got" | jq -r '.found')" "true" "the active account's answer is used"
+eq "$(grep -c 'pr view' "$MT_GH_LOG")" "1" "the stub gh was asked for the pull request once"
+eq "$(grep -c 'auth status' "$MT_GH_LOG")" "0" "and the other accounts are never listed when the active one answers"
+: > "$MT_GH_LOG"; : > "$MT_GH_ACTIVE_FAILS"
+got="$(PATH="$ghstub:$PATH" mt_pr_view 7 "number,state,url" acme/widget acme/widget)"
+eq "$(printf '%s' "$got" | jq -r '.found, .account' | tr '\n' ' ')" "true other1 " "when the active account cannot see it, another account's answer is used"
+eq "$(grep -c 'auth status' "$MT_GH_LOG")" "1" "and the accounts are listed once, after the active one failed"
+eq "$(grep -c '^tok-other1|pr view' "$MT_GH_LOG")" "1" "and the pull request is asked again with that account's token"
+# Under set -u, as merge-when-ready.sh runs it, with no other account to try: a clean "not found",
+# never a shell error about an empty list (L486).
+cat > "$ghstub/gh-none" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+  "auth status"*) exit 1 ;;
+  *) echo "GraphQL: Could not resolve to a Repository with the name 'acme/widget'. (repository)" >&2; exit 1 ;;
+esac
+EOS
+mkdir -p "$ghstub/none"; mv "$ghstub/gh-none" "$ghstub/none/gh"; chmod +x "$ghstub/none/gh"
+got="$(set -u; PATH="$ghstub/none:$PATH" mt_pr_view 7 "number,state,url" acme/widget acme/widget 2>&1)"
+eq "$(printf '%s' "$got" | jq -r '.found, .notFound' 2>/dev/null | tr '\n' ' ')" "false true " "under set -u with no other account, it answers not found rather than failing"
+rm -rf "$ghstub"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

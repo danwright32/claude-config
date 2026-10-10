@@ -45,7 +45,13 @@
 #   PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ...
 # and the key reaches both the review checker and the merge command the review gate judges.
 #
-# Environment (each also a test seam): MWR_POLL_SECONDS (30), MWR_DEADLINE_SECONDS (3600),
+# HOW OFTEN IT LOOKS. Each look reads the pull request through GitHub's GraphQL allowance, 5,000
+# points an hour that every session on the Mac shares, so it looks once a minute: about 60 points an
+# hour while it waits, where every 30 seconds was 120 (claude-config#1014, measured 2026-10-09: one
+# waiter was a third of this Mac's GraphQL spend at that moment). A check run takes minutes, so a
+# merge lands at most a minute after it could have.
+#
+# Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_DEADLINE_SECONDS (3600),
 # MWR_MAX_POLLS (derived from the two, bounding the loop by count as well as by clock, L704),
 # MWR_MAX_UPDATES (3), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
@@ -60,7 +66,7 @@ REVIEW_GATE="${MWR_REVIEW_GATE:-$MWR_HOOKS/pr-review-gate.sh}"
 REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
-POLL="$(num_or "${MWR_POLL_SECONDS:-}" 30)"; [ "$POLL" -ge 1 ] || POLL=1
+POLL="$(num_or "${MWR_POLL_SECONDS:-}" 60)"; [ "$POLL" -ge 1 ] || POLL=1
 DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 3600)"
 MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $((DEADLINE / POLL + 10)))"
 MAX_UPDATES="$(num_or "${MWR_MAX_UPDATES:-}" 3)"

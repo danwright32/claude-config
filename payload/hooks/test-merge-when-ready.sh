@@ -296,6 +296,18 @@ check_eq "#851 the real gate lets a green, up to date, pinned merge through the 
 # The gate's behind refusal naming this helper is asserted on the real refusal, in
 # test-block-red-merge.sh, rather than by reading its source here (L135).
 
+# =================================================================================================
+# 7. Its default pace (claude-config#1014). Every look reads the pull request through GitHub's
+#    GraphQL allowance, which every session on the Mac shares, so with no MWR_POLL_SECONDS of its own
+#    it looks once a minute, never every 30 seconds (both are paces the helper sets, not a measurement).
+# =================================================================================================
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(env -u MWR_POLL_SECONDS bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
+check_eq "#1014 with no poll setting it still waits and merges" "0" "$rc"
+check_eq "#1014 the wait between looks defaults to 60 seconds" "60" "$(cat "$ST/sleeps" 2>/dev/null)"
+check_eq "#1014 one pull request read per look, plus the read back after the merge" "3" "$(count gh-calls 'pr view 7')"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
