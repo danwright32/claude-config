@@ -27,13 +27,20 @@
 # restricted to any vocabulary: any label counts, as long as it is not just a priority
 # level. Apply as many as genuinely apply.
 #
+# A category label the repo does not have yet is created once the milestone's own
+# refusals have been checked and before the milestone is touched (grey, with a
+# description naming the plan that first used it), because gh refuses an issue carrying
+# an unknown label. A missing label that is not a short kebab case name, or one that
+# cannot be created, files nothing at all (exit 9), and a refused milestone creates no
+# label.
+#
 # This script is the ONE issue-filing path the PreToolUse gates cannot see (they read
 # the Bash command, and here the create runs inside a script), so both rules are
 # enforced here instead.
 #
 # Set DRY_RUN=1 to print what would happen without writing to GitHub.
-# Prints: MILESTONE <url> (or MILESTONE-EXISTS ...), then ISSUE <url> per issue,
-# or WOULD-CREATE-* lines in dry run.
+# Prints: CATEGORY-LABEL-CREATED <name> per label it had to make, MILESTONE <url> (or
+# MILESTONE-EXISTS ...), then ISSUE <url> per issue, or WOULD-CREATE-* lines in dry run.
 #
 # Callers reach this only after the user has previewed and approved the plan, so it
 # passes --create-approved. It still aborts without filing anything when the helper
@@ -43,6 +50,11 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENSURE="${ENSURE_MILESTONE_SH:-$HERE/ensure-milestone.sh}"
+# shellcheck source=labels-lib.sh
+. "$HERE/labels-lib.sh" || {
+  echo "labels-lib.sh is missing beside create-milestone.sh, so the plan's labels cannot be checked. Nothing was filed." >&2
+  exit 1
+}
 
 repo="${1:-}"
 plan="${2:-}"
@@ -136,7 +148,61 @@ if [[ -n "$missing_priority" || -n "$missing_category" ]]; then
   exit 9
 fi
 
-# --- resolve the milestone through the shared helper ----------------------
+# --- make sure every category label the plan uses exists (claude-config#1034) ---
+# gh fails the WHOLE issue create on an unknown label, so the first run of a plan whose
+# phases used a label new to the repo filed none of those phases and had to be re-run
+# once the label was made by hand. Every label is collected across the whole plan and
+# the repo's list is read once. The missing ones are made only after the milestone's
+# own refusals have been checked, and before the milestone is touched, so a refused
+# plan creates nothing at all. Re-running is safe: a label already there is left alone.
+plan_labels=""
+missing_labels=""
+seen_labels=""  # the same names lowercased, which is how GitHub tells two labels apart
+i=0
+while [[ "$i" -lt "$n_issues" ]]; do
+  # A phase with no title is never filed below, so its labels are not made either.
+  if [[ -n "$(jq -r ".issues[$i].title // empty" "$plan")" ]]; then
+    while IFS= read -r l; do
+      [[ -z "$l" ]] && continue
+      [[ "$l" =~ ^priority-[pP][0-4]$ ]] && continue  # ensure-priority-labels.sh owns these
+      lb_has "$seen_labels" "$l" && continue
+      seen_labels="$seen_labels"$'\n'"$(printf '%s' "$l" | tr '[:upper:]' '[:lower:]')"
+      plan_labels="${plan_labels:+$plan_labels$'\n'}$l"
+    done <<<"$(labels_for "$i")"
+  fi
+  i=$((i + 1))
+done
+
+if [[ -n "$plan_labels" ]]; then
+  label_err="$(mktemp)"
+  if ! existing_labels="$(lb_read "$repo" "$label_err")"; then
+    echo "Could not read the label list for $repo: $(tr '\n' ' ' <"$label_err")" >&2
+    echo "ABORTED: no issues were filed, and the milestone was not touched, because which of the plan's labels are missing could not be told." >&2
+    rm -f "$label_err"
+    exit 9
+  fi
+  missing_labels=""
+  badly_named=""
+  while IFS= read -r l; do
+    lb_has "$existing_labels" "$l" && continue
+    missing_labels="${missing_labels:+$missing_labels$'\n'}$l"
+    # A NEW label is a short kebab case name (NAMING.md), at most GitHub's 50 characters.
+    if [[ ! "$l" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ || "${#l}" -gt 50 ]]; then
+      badly_named="$badly_named  \"$l\""$'\n'
+    fi
+  done <<<"$plan_labels"
+  if [[ -n "$badly_named" ]]; then
+    echo "LABEL-NOT-KEBAB these labels are not in $repo yet, and a new label must be a short kebab case name (lowercase words joined by single hyphens, at most 50 characters):" >&2
+    printf '%s' "$badly_named" >&2
+    echo "Rename them in the plan, or use a label the repo already has (\`gh label list --limit 100\`)." >&2
+    echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
+    rm -f "$label_err"
+    exit 9
+  fi
+  rm -f "$label_err"
+fi
+
+# --- the milestone's own refusals, before anything is written ---------------
 # The plan's own issue count is passed through, so the "2 or more issues" threshold
 # is enforced on this path too rather than only on the ad hoc filing paths. A plan
 # with a single phase is a label with extra steps just as much as a single ad hoc
@@ -144,6 +210,48 @@ fi
 ensure_args=("$repo" "$title" --create-approved --for-issues "$n_issues" --description "$description")
 [[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")
 
+# The labels below must not be made for a plan the milestone step then refuses (a
+# closed or near duplicate milestone, a title not shaped like a feature, a single
+# issue), or a refused plan would leave labels behind. So the helper first classifies
+# the title without writing anything, and every one of its refusals stops the plan
+# here. Only a change on GitHub between this read and the real resolution below, a
+# milestone created or closed in those seconds, can still refuse after the labels exist.
+if [[ -z "$dry" && -n "$missing_labels" ]]; then
+  pre_out="$(DRY_RUN=1 bash "$ENSURE" "${ensure_args[@]}" 2>&1)"
+  pre_rc=$?
+  if [[ "$pre_rc" -ne 0 ]]; then
+    printf '%s\n' "$pre_out"
+    echo "ABORTED: no issues were filed, and nothing was created, because the milestone could not be resolved."
+    exit "$pre_rc"
+  fi
+fi
+
+# --- create the labels the repo is missing ----------------------------------
+if [[ -n "$missing_labels" ]]; then
+  label_err="$(mktemp)"
+  label_failed=0
+  while IFS= read -r l; do
+    [[ -z "$l" ]] && continue
+    if [[ -n "$dry" ]]; then
+      echo "WOULD-CREATE-LABEL $l"
+      continue
+    fi
+    lb_create "$repo" "$l" "ededed" "Category first used by the plan for ${title:0:60}" "$label_err"
+    case $? in
+      0) echo "CATEGORY-LABEL-CREATED $l" ;;
+      3) echo "CATEGORY-LABEL-EXISTS $l" ;;
+      *) echo "LABEL-FAILED $l: $(tr '\n' ' ' <"$label_err")" >&2
+         label_failed=$((label_failed + 1)) ;;
+    esac
+  done <<<"$missing_labels"
+  rm -f "$label_err"
+  if [[ "$label_failed" -gt 0 ]]; then
+    echo "ABORTED: no issues were filed, and the milestone was not touched, because $label_failed label(s) the plan uses could not be created and gh would refuse every issue carrying one. Re-running is safe: labels already made are left alone." >&2
+    exit 9
+  fi
+fi
+
+# --- resolve the milestone through the shared helper ----------------------
 ms_out="$(bash "$ENSURE" "${ensure_args[@]}" 2>&1)"
 ms_rc=$?
 

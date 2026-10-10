@@ -26,6 +26,9 @@ credentials are stored locally and the skill works from any project on any machi
 /tracker --headers                        # just print the sheet's column names
 ```
 
+Rows can also be changed in place by their Link (`tracker.sh update`, see "Updating a row in
+place"), once the deployed script has update ("Turning on update").
+
 ## First run / setup (`--setup`)
 
 If `config.local.json` is missing, the skill is not configured. The token that guards writes
@@ -54,6 +57,29 @@ placeholder.
 
 > If the user later changes the script, they must **Deploy, Manage deployments, Edit,
 > New version** for changes to take effect. The `/exec` URL stays the same.
+
+## Turning on update (one time, after claude-config#1031)
+
+`tracker.sh update` needs the deployed script to be the current `apps-script.gs`, which has the
+`update` action. A deployment made before #1031 does not, and refuses every update with
+`nothing to append` (it changes nothing; `tracker.sh` then says the script predates update).
+Do this once, on one Mac; the `/exec` URL and the token stay the same:
+
+1. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
+   name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
+   Then **Extensions, Apps Script**.
+2. Select all the code there and paste the entire contents of the current `apps-script.gs`
+   over it.
+3. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
+   command in setup step 2. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING`
+   with the `token` value from that file, keeping the single quotes around it, and save.
+4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
+5. Check it, without changing anything, by asking to update a Link no row has:
+   `bash tracker.sh update 'https://example.invalid/check-update' 'Check' '{"My Actions":"x"}'`
+   The answer `no row has the Link https://example.invalid/check-update; nothing was changed`
+   means update is live. `the deployed web app predates update` means step 4 did not deploy a
+   new version. `bad token` or `token not set` means the TOKEN line does not hold the token from
+   `config.local.json`: set it as in step 3 and deploy a new version again.
 
 ## Rotating the token
 
@@ -101,6 +127,10 @@ across by hand (AirDrop), never through the repository.
      column with today. Because this sheet has both *Date Started* and *Date Completed*,
      always set both explicitly (computed start date; `""` for completed-if-unfinished) so
      neither gets a wrong "today".
+   - **Send every date as `{"date":"yyyy-mm-dd"}`** (as in the example below). That is written
+     as a real date, like the dates already in the sheet, so date columns sort together. Every
+     other text value is stored as literal text, exactly as sent: a value starting `=`, `+`,
+     `-` or `@` never becomes a formula, and a date sent as plain `"2026-05-20"` would stay text.
    - If a column that clearly needs a value (e.g. Project Name, Problem/Goal) can't be
      inferred, ask the user one short question rather than guessing.
    - **Skills Used, never "Claude Code".** This column is for resume-grade skills: the actual
@@ -119,10 +149,61 @@ across by hand (AirDrop), never through the repository.
    *Project Name, Date Started, Date Completed, Problem/Goal, My Actions, Outcome/Results,
    When to Check Results, Skills Used, Link*, but always re-read via `headers` in case they change.
    ```
-   bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":"2026-05-20","Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"TypeScript, Next.js, Supabase/Postgres, session auth"}'
+   bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":{"date":"2026-05-20"},"Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"TypeScript, Next.js, Supabase/Postgres, session auth"}'
    ```
 6. **Confirm**: the script returns `{"ok":true,"rowNumber":N,"row":[...]}`. Tell the user the
    row was added and summarize what went in. If `ok` is false, surface the `error`.
+
+## Updating a row in place
+
+`tracker.sh update '<link>' '<project name>' '<json of header:value>'` changes only the named
+cells of the one row whose Link is `<link>`. Every other cell in that row (When to Check
+Results, any column added later) is never written. Pass the Link and Project Name exactly as
+the sheet shows them; the web app refuses, changing nothing, when:
+
+- no row, or more than one row, has that Link;
+- the row with that Link has a different Project Name;
+- the sheet changed between finding the row and writing it (a sort, an inserted row or column,
+  an edit to that row's Link or Project Name): read the sheet again and retry;
+- a header in the JSON is not a column of the sheet, or is named twice;
+- another request is writing the sheet at that moment (`busy`): try again.
+
+Always get approval first, as for an append:
+
+1. Run the same command with `--preview` (shown below). It finds and checks the row exactly as
+   the update will, writes nothing, and answers
+   `{"ok":true,"action":"update","preview":true,"rowNumber":N,"before":{...},"row":[...]}`,
+   where `before` holds what each named cell holds now.
+2. Show the user the old value (from `before`) and the new value of every cell, and get
+   approval or edits.
+3. Run it without `--preview`, adding the preview's `before` as a fourth argument. The update
+   then writes only while every one of those cells still holds what the user approved over; if
+   someone edited one since, it refuses (`now holds ...`) and nothing changes: preview again.
+   The answer, `{"ok":true,"action":"update","rowNumber":N,"before":{...},"restore":{...},
+   "row":[...]}`, carries in `before` what each changed cell held just before the write, and in
+   `restore` the exact values that put each one back.
+
+Values are written as for an append: a date as `{"date":"yyyy-mm-dd"}` becomes a real date,
+every other text value is literal text (a value starting `=`, `+`, `-` or `@` stays that text
+and never becomes a formula), and a JSON number or true or false is written as itself.
+
+If writing one cell fails partway (a protected cell, a quota), the cells already written are put
+back and the answer says which cell failed; only if putting them back fails too does it list
+them, to undo with restore.
+
+To undo, run `update --restore` with the answer's `restore` as the cells and, as the fourth
+argument, the values the update wrote (what the cells hold now). In `restore` a formula comes as
+`{"formula":"=..."}` and a date as `{"date":"2026-11-01"}`; restore is the only write that
+accepts a formula, and puts it back live. Text stays literal even then. It refuses unless every
+cell still holds what the fourth argument says.
+
+```
+bash tracker.sh update --preview 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
+bash tracker.sh update 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}' '{"Outcome/Results":"Flow works, tests pending","My Actions":"Built login and session handling"}'
+bash tracker.sh update --restore 'https://github.com/example-owner/bidspoke' 'Bidspoke' '{"Outcome/Results":"Flow works, tests pending","My Actions":"Built login and session handling"}' '{"Outcome/Results":"Auth flow shipped, tests passing","My Actions":"Built login, session handling and its tests"}'
+```
+
+Needs the one time redeploy in "Turning on update" above.
 
 ## Notes
 
