@@ -78,12 +78,23 @@ allowed "an interval it cannot read is left to run" 'gh pr checks 12 --watch --i
 allowed "an ordinary command" "ls -la"
 allowed "a git command that mentions watch" "git log --grep watch"
 
-# Built is not wired (L3): the hook is registered to see every Bash call before it runs.
+# Built is not wired (L3): the hook is registered to see every Bash call before it runs. In the
+# repository the hooks block is payload/settings.hooks.json; installed under ~/.claude it is
+# settings.json, the file Claude Code reads. Naming only the repository's spelling passed in CI and
+# failed in the hook suite every pull runs, on 2026-10-10, the first pull after #1049.
+SETTINGS=""
+for _gw_candidate in "$DIR/../settings.hooks.json" "$DIR/../settings.json"; do
+  if [ -f "$_gw_candidate" ]; then SETTINGS="$_gw_candidate"; break; fi
+done
+# Neither being there is not a pass: a check with no file to read answers like one that found the
+# hook unwired, and says nothing about why (L98).
+check_eq "#1014 a settings file holding the hooks block is beside the hooks" "yes" \
+  "$([ -n "$SETTINGS" ] && echo yes || echo "neither settings.hooks.json nor settings.json beside $DIR")"
 wired="$(python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(sum(1 for m in d["hooks"].get("PreToolUse", []) if m.get("matcher") == "Bash"
-          for h in m["hooks"] if h.get("command", "").endswith("/hooks/check-gh-watch-interval.sh")))' "$DIR/../settings.hooks.json")"
+          for h in m["hooks"] if h.get("command", "").endswith("/hooks/check-gh-watch-interval.sh")))' "${SETTINGS:-/dev/null}")"
 check_eq "#1014 registered once as a PreToolUse hook on Bash" "1" "$wired"
 
 # 3. With no python3 the command cannot be read, and it stands down saying so, never silently.
