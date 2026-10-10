@@ -359,6 +359,183 @@ out="$(env -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_SESSION_ID PATH="$TMP
 n_marked="$(grep -c 'Claude-Session:' "$TMP/calls.log")"
 check_eq "and outside a session no line is invented" "0" "$n_marked"
 
+# --- a category label new to the repo is created before anything is filed (claude-config#1034) ---
+# gh refuses an issue carrying a label the repo does not have ("could not add label: X not found"),
+# which is how milestone #21's first run lost the phases labelled `tracker` and `tests`. This fake gh
+# holds the repo's labels in a file: `label list` reads it, `label create` adds to it, and
+# `issue create` refuses an unknown label exactly as GitHub does, so a plan whose labels were never
+# made fails here the way it failed for real.
+cat >"$TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_CALLS"
+if [ "${1:-}" = "label" ] && [ "${2:-}" = "list" ]; then
+  if [ -n "${GH_LABEL_LIST_FAIL:-}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi
+  python3 -c 'import json, sys; print(json.dumps([{"name": l.rstrip("\n")} for l in open(sys.argv[1]) if l.strip()]))' "$GH_LABELS"
+  exit 0
+fi
+if [ "${1:-}" = "label" ] && [ "${2:-}" = "create" ]; then
+  case "${3:-}" in priority-*) printf '%s\n' "$3" >>"$GH_LABELS"; exit 0 ;; esac
+  if [ -n "${GH_LABEL_CREATE_FAIL:-}" ]; then echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; fi
+  # A 422 that is NOT the label existing: GitHub rejects the request and makes no label.
+  if [ -n "${GH_LABEL_CREATE_INVALID:-}" ]; then echo "HTTP 422: Validation Failed (description is too long (maximum is 100 characters))" >&2; exit 1; fi
+  printf '%s\n' "$3" >>"$GH_LABELS"
+  # Somebody else made it between the read and this create: GitHub answers 422.
+  if [ -n "${GH_LABEL_CREATE_RACE:-}" ]; then echo "HTTP 422: Validation Failed (already_exists)" >&2; exit 1; fi
+  exit 0
+fi
+if [ "${1:-}" = "issue" ] && [ "${2:-}" = "create" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--label" ] && ! grep -qixF -- "$a" "$GH_LABELS"; then
+      echo "could not add label: '$a' not found" >&2
+      exit 1
+    fi
+    prev="$a"
+  done
+  echo "https://github.com/acme/widgets/issues/77"
+  exit 0
+fi
+for a in "$@"; do
+  if [ "$a" = "-f" ]; then cat "$GH_CREATED"; exit 0; fi
+done
+cat "$GH_FIXTURE"
+exit 0
+STUB
+chmod +x "$TMP/bin/gh"
+export GH_LABELS="$TMP/labels.txt"
+labels_are() { printf '%s\n' "$@" >"$GH_LABELS"; }  # labels_are <name>... : the repo's labels
+label_creates() { grep -c "^label create $1 " "$TMP/calls.log" 2>/dev/null; }
+first_line() { grep -n -m 1 -- "$1" "$TMP/calls.log" 2>/dev/null | cut -d: -f1; }
+milestone_writes() { grep -c -- 'api repos/acme/widgets/milestones -f' "$TMP/calls.log" 2>/dev/null; }
+
+# Two phases share `tracker`, one also uses `tests`, and `enhancement` and a label with spaces are
+# already in the repo, so only the two new ones may be made, each once.
+cat >"$TMP/plan-newlabels.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "priority": "p2",
+  "issues": [
+    { "title": "Phase 1", "body": "b", "labels": ["tracker", "enhancement"] },
+    { "title": "Phase 2", "body": "b", "labels": ["tracker", "tests"] },
+    { "title": "Phase 3", "body": "b", "labels": ["good first issue"] }
+  ]
+}
+JSON
+labels_are enhancement "good first issue"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+calls="$(cat "$TMP/calls.log")"
+check "the fake gh was asked for the repo's labels" "label list --repo acme/widgets" "$calls"
+check_eq "a plan using new labels exits 0" "0" "$rc"
+check_eq "every phase is filed" "3" "$(issues_filed)"
+check "the new label tracker is named as created" "CATEGORY-LABEL-CREATED tracker" "$out"
+check "the new label tests is named as created" "CATEGORY-LABEL-CREATED tests" "$out"
+check_eq "tracker is created once, though two phases use it" "1" "$(label_creates tracker)"
+check "a created label carries a colour and a description naming the plan" "label create tracker --repo acme/widgets --color ededed --description Category first used by the plan for Onboarding revamp" "$calls"
+check_eq "a label the repo already has is not created" "0" "$(label_creates enhancement)"
+check_eq "nor is an existing label whose name has spaces" "0" "$(grep -c '^label create good' "$TMP/calls.log")"
+check_eq "a priority level is made once, by ensure-priority-labels.sh, never again by this step" "1" "$(label_creates priority-p2)"
+lc="$(first_line '^label create tracker ')"; mw="$(first_line 'api repos/acme/widgets/milestones -f')"; ic="$(first_line '^issue create')"
+[[ -n "$lc" && -n "$mw" && "$lc" -lt "$mw" ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: the labels are made before the milestone is touched (label at $lc, milestone at $mw)"; }
+[[ -n "$lc" && -n "$ic" && "$lc" -lt "$ic" ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: the labels are made before the first issue is filed (label at $lc, issue at $ic)"; }
+
+# Re-running the same plan: the labels are there now, so nothing is created a second time.
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a re-run exits 0" "0" "$rc"
+check_eq "a re-run creates no category label" "0" "$(grep -cE '^label create (tracker|tests) ' "$TMP/calls.log")"
+check_eq "and files every phase" "3" "$(issues_filed)"
+
+# The dry run previews the labels it would make and makes none.
+labels_are enhancement "good first issue"
+out="$(DRY_RUN=1 run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a dry run exits 0" "0" "$rc"
+check "a dry run names the label it would create" "WOULD-CREATE-LABEL tracker" "$out"
+check_eq "a dry run creates no label" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+
+# Another writer made the label between the read and the create: that is the label existing.
+labels_are enhancement "good first issue"
+out="$(GH_LABEL_CREATE_RACE=1 run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a create that lost the race still exits 0" "0" "$rc"
+check "the race is reported as the label existing" "CATEGORY-LABEL-EXISTS tracker" "$out"
+check_eq "and every phase is filed" "3" "$(issues_filed)"
+
+# A label that cannot be created files NOTHING, and the milestone is not touched.
+labels_are enhancement "good first issue"
+out="$(GH_LABEL_CREATE_FAIL=1 run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a label that cannot be created exits 9" "9" "$rc"
+check "the failed label is named with gh's reason" "LABEL-FAILED tracker: HTTP 403" "$out"
+check "the refusal says nothing was filed" "no issues were filed, and the milestone was not touched" "$out"
+check_eq "the refusal files nothing" "0" "$(issues_filed)"
+check_eq "and creates no milestone" "0" "$(milestone_writes)"
+
+# A 422 for any other reason is a failure, never read as the label existing: GitHub made no label,
+# so carrying on would only file every phase into gh's refusal.
+labels_are enhancement "good first issue"
+out="$(GH_LABEL_CREATE_INVALID=1 run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a 422 that is not the label existing exits 9" "9" "$rc"
+check "it is named as a failure with gh's reason" "LABEL-FAILED tracker: HTTP 422: Validation Failed (description is too long" "$out"
+check_eq "it is never reported as the label existing" "" "$(printf '%s\n' "$out" | grep 'CATEGORY-LABEL-EXISTS')"
+check_eq "and nothing is filed" "0" "$(issues_filed)"
+
+# An unreadable label list refuses too, rather than creating blind or filing into gh's refusal.
+out="$(GH_LABEL_LIST_FAIL=1 run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "an unreadable label list exits 9" "9" "$rc"
+check "the read failure explains itself" "Could not read the label list for acme/widgets: HTTP 502" "$out"
+check_eq "the read failure creates no label" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+check_eq "and files nothing" "0" "$(issues_filed)"
+
+# A plan the MILESTONE step refuses creates nothing either: a refused plan must not leave the labels
+# it would have used behind. One case per refusal that can come from the milestone list or the title.
+labels_are enhancement "good first issue"
+out="$(run "$TMP/near.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a near duplicate milestone with new labels still exits 4" "4" "$rc"
+check_eq "the near duplicate refusal leaves no label behind" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+check_eq "and files nothing" "0" "$(issues_filed)"
+# Each case starts from a repo missing both labels, so "nothing created" is never just "nothing
+# left to create" from the case before (L159).
+labels_are enhancement "good first issue"
+out="$(run "$TMP/closed.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a closed milestone with new labels still exits 3" "3" "$rc"
+check_eq "the closed milestone refusal leaves no label behind" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+cat >"$TMP/plan-sentence.json" <<'JSON'
+{
+  "title": "Fix the onboarding, then ship it.",
+  "priority": "p2",
+  "issues": [
+    { "title": "Phase 1", "body": "b", "labels": ["tracker"] },
+    { "title": "Phase 2", "body": "b", "labels": ["tests"] }
+  ]
+}
+JSON
+labels_are enhancement
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-sentence.json")"; rc=$?
+check_eq "a title not shaped like a feature with new labels still exits 8" "8" "$rc"
+check_eq "the title shape refusal leaves no label behind" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+check "and says nothing was created" "nothing was created" "$out"
+# The check that runs first writes nothing, so the plan that passes it gets exactly one milestone.
+labels_are enhancement "good first issue"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-newlabels.json")"; rc=$?
+check_eq "a plan that passes the milestone check exits 0" "0" "$rc"
+check_eq "and creates its milestone exactly once" "1" "$(milestone_writes)"
+
+# A NEW label must be a short kebab case name (NAMING.md); one that is not is refused, not made.
+cat >"$TMP/plan-badlabel.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "priority": "p2",
+  "issues": [
+    { "title": "Phase 1", "body": "b", "labels": ["Needs Review"] },
+    { "title": "Phase 2", "body": "b", "labels": ["tracker"] }
+  ]
+}
+JSON
+labels_are enhancement
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-badlabel.json")"; rc=$?
+check_eq "a new label that is not kebab case exits 9" "9" "$rc"
+check "the refusal names the label" "\"Needs Review\"" "$out"
+check "and the rule" "LABEL-NOT-KEBAB" "$out"
+check_eq "no label is created, not even the well named one" "0" "$(grep -c '^label create' "$TMP/calls.log")"
+check_eq "and nothing is filed" "0" "$(issues_filed)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
