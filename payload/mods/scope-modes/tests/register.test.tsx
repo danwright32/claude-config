@@ -755,8 +755,9 @@ test("each mode's note on every prompt carries the same definition its acknowled
   expect(noBuild).toContain(MODE_DEF['NO BUILD'].willNot)
   await command($ as never, 'winddown')
   const wind = ctxOf(await say($ as never, 'carry on'))
-  expect(wind).toContain(MODE_DEF['WINDING DOWN'].willNot)
   expect(wind).toContain(MODE_DEF['WINDING DOWN'].will)
+  // Starting nothing new at all, not only the starts its guard refuses (lessons review of #1055).
+  expect(wind).toContain(`Do not start anything new: winding down refuses to ${MODE_DEF['WINDING DOWN'].refuses}.`)
   await command($ as never, 'build')
   await command($ as never, 'away')
   const away = ctxOf(await say($ as never, 'carry on'))

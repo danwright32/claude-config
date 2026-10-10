@@ -17,6 +17,8 @@ export type ModeDef = {
   will: string
   /** What Claude does not do now, which the mode refuses or holds. */
   willNot: string
+  /** What the mode's own guard refuses outright, where that is narrower than `willNot`. */
+  refuses?: string
   /** How the mode ends, when it says more than a switch back. */
   ends?: string
 }
@@ -33,8 +35,9 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
   },
   'WINDING DOWN': {
     name: 'Winding down',
-    will: `finish every PR this session opened, each ${FINISHED}, asking with a picker when a decision is needed`,
-    willNot: orList(Object.values(NEW_WORK)),
+    will: `finish this issue and every PR this session opened, each ${FINISHED}, asking with a picker when a decision is needed`,
+    willNot: 'start anything new',
+    refuses: orList(Object.values(NEW_WORK)),
     ends: 'It ends by itself once every merge is live, and /build ends it sooner.',
   },
   away: {
@@ -52,7 +55,7 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
 /** What the mode does, in two or three sentences: what Claude will do, will not do, and how it ends. */
 export const modeDoes = (mode: Mode): string => {
   const d = MODE_DEF[mode]
-  return `I will ${d.will}. I will not ${d.willNot}.${d.ends ? ` ${d.ends}` : ''}`
+  return `I will ${d.will}. I will not ${d.willNot}${d.refuses ? `: I refuse to ${d.refuses}` : ''}.${d.ends ? ` ${d.ends}` : ''}`
 }
 
 /** The words Claude is told to open its reply with, around the acknowledgement itself. */

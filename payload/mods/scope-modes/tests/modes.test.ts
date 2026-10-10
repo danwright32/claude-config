@@ -18,7 +18,7 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
       const said = ackOn(mode)
       expect(said.startsWith(`${ACK_LEAD} "${d.name} is on. `)).toBe(true)
       expect(said).toContain(`I will ${d.will}.`)
-      expect(said).toContain(`I will not ${d.willNot}.`)
+      expect(said).toContain(`I will not ${d.willNot}${d.refuses ? `: I refuse to ${d.refuses}` : ''}.`)
       expect(said).toContain(modeDoes(mode))
       // Two or three sentences after the name, never a paragraph.
       expect(modeDoes(mode).split(/(?<=\.)\s+/).length).toBeLessThanOrEqual(3)
@@ -45,7 +45,9 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
 
   test('winding down says what its own guard refuses, in the words the refusal uses, and what finishing means', () => {
     const d = MODE_DEF['WINDING DOWN']
-    for (const words of Object.values(NEW_WORK)) expect(d.willNot).toContain(words)
+    // It starts nothing new, and says which starts its guard refuses outright.
+    expect(d.willNot).toBe('start anything new')
+    for (const words of Object.values(NEW_WORK)) expect(d.refuses).toContain(words)
     expect(d.will).toContain(FINISHED)
     const call = (tool: string, input: Record<string, unknown>) => newWork({ tool, input, commands: [], issues: [616] })?.what
     expect(call('Skill', { skill: 'next-issue' })).toBe(NEW_WORK.nextIssue)

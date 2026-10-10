@@ -2163,7 +2163,7 @@ const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right the
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
   'NO BUILD': `No build is on: ${MODE_DEF['NO BUILD'].will}. Do not ${MODE_DEF['NO BUILD'].willNot}.`,
   'WINDING DOWN':
-    `Winding down is on: ${MODE_DEF['WINDING DOWN'].will}. Do not ${MODE_DEF['WINDING DOWN'].willNot}. ${FINALIZE_ALL} ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
+    `Winding down is on: ${MODE_DEF['WINDING DOWN'].will}. Do not ${MODE_DEF['WINDING DOWN'].willNot}: winding down refuses to ${MODE_DEF['WINDING DOWN'].refuses}. ${FINALIZE_ALL} ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
 }
 const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (the Artifact tool). Do not ${MODE_DEF.away.willNot}.`
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
