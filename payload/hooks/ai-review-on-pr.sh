@@ -36,10 +36,12 @@ cwd="${parsed#*$'\x1f'}"
 # the time the push gate (pr-review-push-gate.sh) asks for it, instead of starting when the push does
 # and holding the push for its whole run. A commit is seldom pushed straight away here: the suites
 # run between the two.
+# action: the predicate ps_repo_dir reads the cd in force for, so the repository is the one this
+# mode's own command runs in (claude-config#1017).
 mode=""
-if ps_is_gh_pr_create "$cmd"; then mode=create
-elif ps_is_git_push "$cmd"; then mode=push
-elif ps_is_git_commit "$cmd"; then mode=commit
+if ps_is_gh_pr_create "$cmd"; then mode=create; action=ps_is_gh_pr_create
+elif ps_is_git_push "$cmd"; then mode=push; action=ps_is_git_push
+elif ps_is_git_commit "$cmd"; then mode=commit; action=ps_is_git_commit
 else exit 0
 fi
 
@@ -62,7 +64,7 @@ fi
 if [ "$mode" = commit ]; then
   # Quiet unless it starts something: most commands that commit are not worth a line, and a commit
   # this cannot place leaves the push gate to start the review, so nothing goes unreviewed.
-  repo_dir="$(ps_repo_dir "$cmd" "$cwd" 2>/dev/null)" || exit 0
+  repo_dir="$(ps_repo_dir "$cmd" "$cwd" "$action" 2>/dev/null)" || exit 0
   [ -n "$repo_dir" ] || exit 0
   top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
   head="$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null)"
@@ -75,7 +77,7 @@ if [ "$mode" = commit ]; then
   say "$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"
 fi
 
-repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || say "could not tell which repository this pull request is in, so no lessons review was started; the merge gate will start one."
+repo_dir="$(ps_repo_dir "$cmd" "$cwd" "$action")" || say "could not tell which repository this pull request is in, so no lessons review was started; the merge gate will start one."
 [ -n "$repo_dir" ] || exit 0
 
 if [ "$mode" = push ]; then

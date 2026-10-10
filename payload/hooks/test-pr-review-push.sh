@@ -335,6 +335,61 @@ G checkout -q feat/sync
 out="$(fire_commit "echo 'git commit -m x'" 0)"
 check_eq "a command that only mentions a commit starts no review" "0" "$(calls)"
 
+# ===========================================================================================
+# 6. The gate judges the repository the push runs in, read from the LAST cd before it on any line,
+#    and never fires on a push that is only text (claude-config#1017). On 2026-10-09 a push from one
+#    worktree, its cd on a line after a heredoc, was refused twice with another repository's
+#    findings, and a read only command naming the push verb inside quoted test strings was refused
+#    too. OTHER is a checkout standing on the default branch, which the gate does not hold, so a
+#    push judged in the wrong one of the two repositories shows as the wrong exit code.
+# ===========================================================================================
+OTHER="$WORKDIR/other"
+git clone -q "$ORIGIN" "$OTHER" 2>/dev/null
+fire_push_in(){ pre_payload "$1" "$2" | bash "$PUSH_GATE" 2>&1; }
+
+reset_state
+out="$(FAKE_SLEEP_WAITS=1 fire_push_in "$OTHER" $'cat > /dev/null <<\'EOF\'\nit\'s a note\nEOF\ncd '"$REPO"' && git push -u origin feat/sync')"; rc=$?
+check_eq "a push whose cd follows a heredoc is judged in the cd's repository, not the session's" "2" "$rc"
+check "and meets that branch's findings" "deleteEvent still swallows" "$out"
+check_eq "one review, of that branch" "1" "$(calls)"
+
+reset_state
+out="$(fire_push_in "$REPO" $'cd '"$REPO"$' && git status\ncd '"$OTHER"' && git push origin main')"; rc=$?
+check_eq "of two cds before a push, the last one names the repository judged" "0" "$rc"
+check_eq "so the default branch push it really is starts no review" "0" "$(calls)"
+
+reset_state
+out="$(fire_push_in "$REPO" $'# don\'t push from here\nbash t.sh \'cd /x && git push origin main\' "git push -u origin feat"')"; rc=$?
+check_eq "a read only command naming the push verb only in a comment and quoted strings is not held" "0" "$rc"
+check_eq "and the gate says nothing" "" "$out"
+check_eq "and starts no review" "0" "$(calls)"
+
+out="$(fire_push_in "$REPO" $'git commit -m "$(cat <<\'EOF\'\nfix: the gate read "cd /x; git push origin " as a push\nEOF\n)"')"; rc=$?
+check_eq "a commit whose message quotes a push is not refused as a commit and a push" "0" "$rc"
+check_eq "and the gate says nothing about it" "" "$out"
+
+# A push after a reserved word was seen by no push gate; it is held now (#1017).
+reset_state
+out="$(FAKE_SLEEP_WAITS=1 fire_push_in "$OTHER" "cd $REPO; if true; then git push -u origin feat/sync; fi")"; rc=$?
+check_eq "a push right after an if's then is held" "2" "$rc"
+check "and meets the branch's findings" "deleteEvent still swallows" "$out"
+out="$(fire_push_in "$OTHER" "for r in a; do git -C $REPO push origin feat/sync; done")"; rc=$?
+check_eq "a git -C push inside a loop is held in the -C repository" "2" "$rc"
+
+# Nothing the gate held before is let through: the plain shapes, from a session in another checkout.
+for c in "cd $REPO && git push" "(cd $REPO && git push origin feat/sync)" "git -C $REPO push" \
+         $'git status\ncd '"$REPO"$'\ngit push'; do
+  out="$(fire_push_in "$OTHER" "$c")"; rc=$?
+  check_eq "still held: $c" "2" "$rc"
+done
+
+# The commit time start asks where the COMMIT runs, not where a push later in the command does.
+reset_state
+out="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]},"tool_response":{"exit_code":0}}))' \
+  "$OTHER" $'cd '"$REPO"$' && git commit -m two\ncd '"$OTHER"$'\ngit status' | bash "$COMMIT_HOOK" 2>&1)"
+check "a commit's review starts in the repository the commit's cd names, from a session elsewhere" "started" "$out"
+wait_final "$HEAD_SHA" && ok || bad "the commit's review of its own branch finished"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -379,6 +379,14 @@ eq "$(mt_repo_dir "(cd $root/plain && $MERGE 7)" "$root/parent")" "$root/plain" 
 eq "$(cd / && mt_repo_dir "cd ../plain && $MERGE 7" "$root/deep")" "$root/deep/../plain" "a relative cd resolves against the session cwd"
 # Words inside a quoted string are not a cd.
 eq "$(mt_repo_dir "echo \"cd $root/plain\" && $MERGE 7" "$root/deep/a/b")" "$root/deep" "a quoted cd is not a cd"
+# The cd that decides is the last one before the MERGE, on any line, in the merge's own shell
+# (claude-config#1017): a merge hook reads the command as typed, newlines and all, and the reader
+# saw a cd on the first line only.
+eq "$(mt_repo_dir $'echo checking\ncd '"$root/plain"$'\n'"$MERGE 7" "$root/deep/a/b")" "$root/plain" "a cd on a later line decides"
+eq "$(mt_repo_dir $'cat > /dev/null <<\'EOF\'\nit\'s a note\nEOF\ncd '"$root/plain && $MERGE 7" "$root/deep/a/b")" "$root/plain" "a cd after a heredoc with an apostrophe decides"
+eq "$(mt_repo_dir "cd $root/deep && git status; cd $root/plain && $MERGE 7" "$root/parent")" "$root/plain" "of two cds the last before the merge decides"
+eq "$(mt_repo_dir "cd $root/plain && $MERGE 7 && cd $root/deep" "$root/parent")" "$root/plain" "a cd after the merge does not decide"
+eq "$(mt_repo_dir "(cd $root/deep && git status); $MERGE 7" "$root/plain")" "$root/plain" "a cd in a subshell closed before the merge does not decide"
 
 echo "merge-target: the repository a merge names with --repo (#463)"
 
@@ -460,6 +468,15 @@ if nopy mt_reader_missing >/dev/null 2>&1; then pass; else
 if mt_reader_missing; then
   fail "python3 is on PATH in this suite and the library still reports its reader as missing"
 else pass; fi
+# The cd in force for the merge is read by lib/shell-words.py (#1017). With python3 present but that
+# file gone, ps_cd_target answers nothing and mt_repo_dir would judge the merge in the session
+# directory, so the reader counts as missing then too (lessons review of #1056, L490).
+if ( PS_SHELL_WORDS="$nopy_root/no-such-shell-words.py"; mt_reader_missing ); then pass; else
+  fail "with lib/shell-words.py missing the library does not report its reader as missing"; fi
+case "$( PS_SHELL_WORDS="$nopy_root/no-such-shell-words.py"; mt_reader_absent_why )" in
+  *shell-words.py*) pass ;;
+  *) fail "the sentence about an absent shell-words.py does not name it" ;;
+esac
 
 # The sentence every gate says it with, one vocabulary rather than one wording per gate (L613).
 # It has to NAME the interpreter, or it is the message this issue exists to replace.

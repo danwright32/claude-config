@@ -82,8 +82,21 @@ else
   fi
 fi
 
-repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
-[ -n "$repo" ] || exit 0
+# The repository the ADD runs in: the cd in force for it, not for a push later in the command.
+# Exit 2 is ps_repo_dir saying the command names a directory it could not judge (missing, not a
+# repository, or nothing here to read the command with). That is not "no repository": this gate
+# has no other behind it, so it refuses with that sentence rather than letting the add through
+# (lessons review of #1017, L42, L490). Exit 1, no repository at all, still stands down.
+# One call, its answer and its exit status read from one capture: on exit 0 the text is the
+# directory, on exit 2 the sentence saying why it was not judged. No temporary file, because this
+# gate also has to refuse on a machine whose PATH holds almost nothing.
+repo_out="$(ps_repo_dir "$cmd" "$cwd" ps_is_git_add 2>&1; printf '\035%s' "$?")"
+repo_rc="${repo_out##*$'\035'}"; repo="${repo_out%$'\035'*}"
+if [ "$repo_rc" = 2 ]; then
+  printf 'claude-sync: REFUSED a git add.\n\n%s\n\nStage the paths you changed by name with git -C <repository> add <path>. If this refusal is wrong, say so and add SKIP_ADD_SCOPE_CHECK=1 to that one command.\n' "$repo" >&2
+  exit 2
+fi
+[ "$repo_rc" = 0 ] && [ -n "$repo" ] || exit 0
 
 # Everything the add would sweep up. --porcelain gives "XY path"; a rename gives "old -> new" and
 # both halves are checked, because staging a rename touches both.

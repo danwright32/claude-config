@@ -7,8 +7,8 @@
 #   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
 #   ps_repo_dir: which repository the push is about
-#   ps_cd_target: the directory a `cd` in command position moves to, which the
-#                      merge gates read too (lib/merge-target.sh, claude-config#463)
+#   ps_cd_target: the directory the cds before an action moved its shell to, which the
+#                      merge gates read too (lib/merge-target.sh, claude-config#463, #1017)
 #   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
 #                      runs BEFORE the command, so a `git add … && git commit … &&
 #                      git push` has nothing in history yet and the pending work
@@ -145,6 +145,10 @@ ps_is_git_push() { ps__runs_git_sub "$1" push; }
 # push, so a commit message or a heredoc that only mentions one is not a commit (L673).
 ps_is_git_commit() { ps__runs_git_sub "$1" commit; }
 
+# Is this command a `git add`, in COMMAND POSITION? The action check-add-scope.sh asks ps_repo_dir
+# about, so the cd it reads is the one in force for the add (claude-config#1017).
+ps_is_git_add() { ps__runs_git_sub "$1" add; }
+
 ps__runs_git_sub() {   # $1 = command, $2 = the git subcommand
   local cmd="$1" sub="$2" seg segs
   # Most commands never mention it, and this runs before every Bash call, so they leave here
@@ -168,77 +172,31 @@ ps__runs_git_sub() {   # $1 = command, $2 = the git subcommand
 }
 
 # The command's segments, each ended by a record separator (0x1e, because a NUL cannot survive the
-# command substitution that captures them), split on && || ; | and newlines only where they are
-# outside quotes and outside a heredoc body. A heredoc body runs from the line after its `<<WORD`
-# to a line that is exactly WORD (after tabs, for `<<-`); a hook sees the command SEGMENTED, where
-# every newline became "; ", so "; " counts as a line break when looking for that closing line. A
-# heredoc whose closing line is never found is not skipped at all, so nothing after it is hidden,
-# and a quote that is never closed fails the whole split, so the caller falls back to the crude one.
+# command substitution that captures them): every simple command the shell would run, read by
+# ps__shell_commands below, so outside quotes, heredoc bodies and comments, with a command
+# substitution's commands read as commands of their own (claude-config#532, #1017). Fails, so the
+# caller falls back to the crude split, when there is no reader or the reading could not be trusted
+# (a quote never closed), because missing a real push ships unjudged work (L42).
 ps__shell_segments() {   # $1 = command
+  local recs rec out=""
+  recs="$(ps__shell_commands "$1")" || return 1
+  while IFS= read -r -d $'\x1e' rec; do
+    out+="${rec#*$'\x1f'}"$'\x1e'
+  done <<< "$recs"
+  printf '%s' "$out"
+}
+
+# Every simple command in the command and the directory it runs in, as "<dir>" 0x1f "<command>"
+# 0x1e records, from lib/shell-words.py's commands reader: the ONE reading of a command behind both
+# what it runs and where (claude-config#1017). <dir> is where the cds before that command, in its own
+# shell, moved it, empty when none did. Exit 3 means the reading could not be trusted and the records
+# come from the crude cut at every separator; exit 1, that nothing could read it at all. The command
+# goes in on stdin, never the environment, which a heredoc commit message can outgrow.
+PS_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+ps__shell_commands() {   # $1 = command
   command -v python3 >/dev/null 2>&1 || return 1
-  PS_CMD="$1" python3 -c '
-import os, re, sys
-s = os.environ.get("PS_CMD", "")
-n = len(s)
-out, cur, pending = [], [], []
-i, quote = 0, None
-
-def cut():
-    out.append("".join(cur)); cur.clear()
-
-def line_break_at(j):
-    """Length of a line break at j (a newline, or the "; " a newline was flattened to), else 0."""
-    if s.startswith("\n", j): return 1
-    if s.startswith("; ", j): return 2
-    return 0
-
-while i < n:
-    c = s[i]
-    if quote == "\x27":
-        cur.append(c); i += 1
-        if c == "\x27": quote = None
-        continue
-    if quote == "\"":
-        if c == "\\" and i + 1 < n:
-            cur.append(s[i:i + 2]); i += 2; continue
-        cur.append(c); i += 1
-        if c == "\"": quote = None
-        continue
-    if c == "\\" and i + 1 < n:
-        cur.append(s[i:i + 2]); i += 2; continue
-    if c in "\x27\"":
-        quote = c; cur.append(c); i += 1; continue
-    if s.startswith("<<", i) and not s.startswith("<<<", i):
-        m = re.match(r"<<(-?)[ \t]*(?:\x27([^\x27]*)\x27|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))", s[i:])
-        if m:
-            word = m.group(2) if m.group(2) is not None else m.group(3) if m.group(3) is not None else m.group(4)
-            pending.append((word, m.group(1) == "-"))
-            cur.append(m.group(0)); i += len(m.group(0)); continue
-    lb = line_break_at(i)
-    if lb and pending:
-        # The body starts on the next line. Find the closing line of each pending heredoc in turn.
-        j = i
-        for word, strip_tabs in pending:
-            tabs = "\t*" if strip_tabs else ""
-            m = re.compile(r"(?:\n|; )" + tabs + re.escape(word) + r"(?=\n|;|$)").search(s, j)
-            if not m:
-                j = None; break
-            j = m.end()
-        pending.clear()
-        if j is not None:
-            cut(); i = j; continue
-    if s.startswith("&&", i) or s.startswith("||", i):
-        cut(); i += 2; continue
-    if c in ";|\n":
-        cut(); i += 1; continue
-    cur.append(c); i += 1
-if quote is not None:
-    # A quote never closed means this reading of the command is not trustworthy, and the shell would
-    # not run it as written either. Say so, and let the caller use the split that fires the gate.
-    sys.exit(3)
-cut()
-sys.stdout.write("".join(seg + "\x1e" for seg in out))
-' 2>/dev/null
+  [ -f "$PS_SHELL_WORDS" ] || return 1
+  printf '%s' "$1" | python3 "$PS_SHELL_WORDS" commands 2>/dev/null
 }
 
 # One segment's words as the shell reads them, quotes removed and a quoted word holding a space
@@ -246,12 +204,14 @@ sys.stdout.write("".join(seg + "\x1e" for seg in out))
 # for the segment questions below, so a fix to how a segment is read reaches every one of them.
 # A segment python cannot read (an unbalanced quote, no python3) falls back to whitespace words,
 # the direction that still lets a push be seen and the gates fire.
+#
+# Leading reserved words (then, do, else, elif, if, while, until, {, !, time) are looked past, so the
+# first word is the command's own (#1017): read by lib/shell-words.py's words mode from the RESERVED
+# list its commands reader already uses, so one list says which word is the command.
 ps__seg_words() {   # $1 = one segment
   local words
-  if words="$(PS_SEG="$1" python3 -c '
-import os, shlex, sys
-sys.stdout.write("\x1f".join(shlex.split(os.environ["PS_SEG"], posix=True)))
-' 2>/dev/null)" && [ -n "$words" ]; then
+  if [ -f "$PS_SHELL_WORDS" ] \
+    && words="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" words 2>/dev/null)" && [ -n "$words" ]; then
     printf '%s' "$words"
   else
     printf '%s\n' "$1" | awk '{ $1 = $1; gsub(/ /, "\037"); printf "%s", $0 }'
@@ -411,12 +371,41 @@ ps__segment_command_words() {   # $1 = one segment
 # named and could not be read" need different answers, and only the first is the session's
 # (L11, L75). A relative path is relative to the session directory, as the shell running the
 # command would read it.
+#
+# $3 is the action the repository is wanted for (claude-config#1017): a predicate taking one
+# command, ps_is_git_push by default, since almost every caller guards a push, and the caller's own
+# question otherwise (a commit, an add, a pull request creation). Both the -C and the cd are read for
+# THAT command alone: its own `git -C`, then the cd in force for it. The -C used to be the push's or
+# else the FIRST git -C anywhere in the command, asked before any cd, so an unrelated
+# `git -C <other> status` earlier in the command decided where a later push was judged (lessons
+# review of #1017). With no command satisfying the predicate, nothing in the command is read as the
+# action's directory, and the session directory answers.
+#
+# With nothing to read the command (lib/shell-words.py missing, or no python3), a command that names
+# a directory with a cd or a -C is REFUSED by name with exit 2 (lessons review of #1017, L490): the
+# reader that cannot run reads no cd, and no cd is exactly what judged a push in the session's
+# repository. A command naming neither is the session's either way.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" cand="" named=""
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text="" rc names=0
+  rec="$(ps__action_record "$cmd" "$pred")"; rc=$?
+  grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd" && names=1
+  if [ "$rc" -eq 0 ]; then
+    dir="${rec%%$'\x1f'*}"; text="${rec#*$'\x1f'}"
+  elif [ "$rc" -eq 2 ] && [ "$names" -eq 1 ]; then
+    echo "push-scope: this command names a directory with a cd or a git -C, and nothing here could read which one is in force: $PS_SHELL_WORDS is missing or python3 is not on PATH. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017, L490). Reinstall the hooks (claude-sync pull) or install python3." >&2
+    return 2
+  elif [ "$names" -eq 1 ]; then
+    # Read, but none of its commands is the action asked about ($pred), so which cd is in force for
+    # it cannot be said: refused, never handed the session directory (lessons review of #1017).
+    echo "push-scope: this command names a directory with a cd or a git -C, but none of its commands is the one asked about ($pred), so which directory it runs in could not be told. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017)." >&2
+    return 2
+  fi
 
-  # `git -C <path> … push`, the path read as the shell reads it (claude-config#589).
-  cand="$(ps_git_c_target "$cmd")"
+  # `git -C <path> … push`, the path read as the shell reads it (claude-config#589). A relative -C
+  # is taken from the cd in force, which is where git starts from.
+  [ -n "$text" ] && cand="$(ps_git_c_target "$text")"
   if [ -n "$cand" ]; then
+    case "$cand" in /*|"~"*) ;; *) [ -n "$dir" ] && cand="${dir%/}/$cand" ;; esac
     named="$(ps__named_path "$cand" "$cwd")"
     if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
     ps__refuse_named "git -C $cand" "$named" "$cwd"; return 2
@@ -426,12 +415,11 @@ ps_repo_dir() {
   # substitution: `(cd <path> && git push)`. The cd used to be found by a pattern wanting
   # whitespace or a separator before it, so the subshell form fell through to the SESSION's
   # directory and a gate judged, and refused, a repository the command never touched
-  # (claude-config#439, L11).
-  cand="$(ps_cd_target "$cmd")"
-  if [ -n "$cand" ]; then
-    named="$(ps__named_path "$cand" "$cwd")"
+  # (claude-config#439, L11). The LAST cd before the action, on any line (claude-config#1017).
+  if [ -n "$dir" ]; then
+    named="$(ps__named_path "$dir" "$cwd")"
     if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
-    ps__refuse_named "cd $cand" "$named" "$cwd"; return 2
+    ps__refuse_named "cd $dir" "$named" "$cwd"; return 2
   fi
 
   if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
@@ -461,109 +449,60 @@ ps__is_worktree() {
   git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
-# The argument of the first `cd` in COMMAND position: the start of the command, or straight after
-# a separator, an opening parenthesis (a subshell or `$(`), or an opening brace. Read with a shell
-# tokenizer rather than a pattern, because a pattern cannot tell `(cd x && git push)` from the same
-# words inside a quoted string, and the tokenizer can: `echo "(cd x)"` is one argument to echo, not
-# a cd. It also reads a quoted path with a space in it whole.
+# The directory the shell is in when it runs the action asked about: where the cds BEFORE that
+# action, in the action's own shell, moved it (claude-config#1017). $2 names the action, a predicate
+# that takes one command (ps_is_git_push by default, ps_is_git_commit, mt_runs_merge), and the first
+# command in the command that satisfies it is the one asked about. Prints nothing when no cd moved
+# that shell, or nothing satisfies the predicate.
 #
-# Tokens are taken one at a time and the walk stops at the first one it cannot read, rather than
-# tokenizing the whole command up front. A heredoc commit message with an apostrophe in its body is
-# the commonest push there is, and its unbalanced quote fails a whole command read, while the cd it
-# needs sits before the heredoc and has already been read by then.
-ps_cd_target() {   # $1 = command; prints the path, or nothing
-  PS_CMD="$1" python3 -c '
-import os, shlex
-lex = shlex.shlex(os.environ.get("PS_CMD", ""), posix=True, punctuation_chars=True)
-lex.whitespace_split = True
-OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
-at_start, want_arg = True, False
-while True:
-    try:
-        tok = lex.get_token()
-    except ValueError:
-        break
-    if tok is None or tok == lex.eof:
-        break
-    if want_arg:
-        if tok not in OPENERS and tok not in (")", "}"):
-            # A leading ~ or ~user is expanded as the shell would (claude-config#532): unexpanded,
-            # it is never a directory, and the caller used to fall back to the SESSION repository.
-            # Only the tilde: a variable is not something a hook should evaluate.
-            print(os.path.expanduser(tok) if tok.startswith("~") else tok, end="")
-        break
-    if at_start and tok == "cd":
-        want_arg = True
-        continue
-    at_start = tok in OPENERS
-' 2>/dev/null
+# Read by ps__shell_commands, the same reading that decides what the command runs, so the two cannot
+# disagree. The last cd before the action wins, on any line; a cd inside a subshell or a command
+# substitution counts only for commands inside it; a cd written in a heredoc body, a comment or a
+# quoted string is not one; a relative cd is taken from the cd before it, or left relative, for the
+# caller to take from the session directory. A leading ~ or ~user is expanded as the shell would
+# (claude-config#532); a variable is printed as written, so the caller refuses it rather than judging
+# somewhere else. This used to take the FIRST cd its tokenizer met and stop at the first word it could
+# not read, so a push whose cd followed a heredoc holding an apostrophe was judged in the SESSION's
+# repository, and on 2026-10-09 the push gate refused a push from one worktree with another
+# repository's findings.
+#
+# When the reading cannot be trusted (a quote never closed) the crude cut's records are used, the
+# same reading ps_is_git_push falls back to, so the action it saw is the one found here.
+ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_git_push)
+  local rec
+  rec="$(ps__action_record "$1" "${2:-}")" || return 0
+  printf '%s' "${rec%%$'\x1f'*}"
 }
 
-# The directory a `git -C <path>` in COMMAND position names (claude-config#589): the push's own -C
-# when the push carries one, otherwise the first git command's, which is what the pattern this
-# replaced answered. Read with the same shell tokenizer as ps_cd_target, because the pattern took
-# everything up to the first space, so `git -C "/a b/wt" push` became `"/a`, which resolved to
-# nothing, and every global push gate stood down on a push it should have judged. It also only
-# saw a -C straight after `git`, so `git -c k=v -C <wt> push` judged the SESSION repository. Several
-# -C options compose the way git composes them: each relative one is taken from the one before.
-# Only a leading tilde is expanded; a variable is printed as written, so the caller refuses it.
-ps_git_c_target() {   # $1 = command; prints the path, or nothing
-  PS_CMD="$1" python3 -c '
-import os, re, shlex
-lex = shlex.shlex(os.environ.get("PS_CMD", ""), posix=True, punctuation_chars=True)
-lex.whitespace_split = True
-OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
-ENDERS = OPENERS | {")", "}"}
-ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-VALUED = {"-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
-toks = []
-while True:
-    try:
-        t = lex.get_token()
-    except ValueError:
-        break
-    if t is None or t == lex.eof:
-        break
-    toks.append(t)
-def expand(p):
-    return os.path.expanduser(p) if p.startswith("~") else p
-first, i, n, at_start = "", 0, len(toks), True
-while i < n:
-    t = toks[i]
-    if at_start and ASSIGN.match(t):
-        i += 1
-        continue
-    if not at_start:
-        at_start = t in OPENERS
-        i += 1
-        continue
-    j = i
-    if toks[j].split("/")[-1] == "rtk":
-        j += 1
-    if j >= n or toks[j].split("/")[-1] != "git":
-        at_start = t in OPENERS
-        i += 1
-        continue
-    j += 1
-    where = ""
-    while j < n and toks[j].startswith("-") and toks[j] not in ENDERS:
-        if toks[j] == "-C" and j + 1 < n and toks[j + 1] not in ENDERS:
-            p = expand(toks[j + 1])
-            where = p if (not where or p.startswith("/")) else os.path.join(where, p)
-            j += 2
-        elif toks[j] in VALUED:
-            j += 2
-        else:
-            j += 1
-    if where:
-        if j < n and toks[j] in ("push", "push)", "push}"):
-            print(where, end="")
-            raise SystemExit(0)
-        first = first or where
-    at_start = False
-    i = j
-print(first, end="")
-' 2>/dev/null
+# The action's own record from ps__shell_commands, "<dir>" 0x1f "<command>": the first command that
+# satisfies $2 (ps_is_git_push by default). Exit 1 when no command does, 2 when nothing could read
+# the command at all, which the caller has to say rather than read as "no directory named" (L490).
+ps__action_record() {   # $1 = command  $2 = the action's predicate
+  local pred="${2:-ps_is_git_push}" recs rec rc
+  recs="$(ps__shell_commands "$1")"; rc=$?
+  [ "$rc" -eq 1 ] && return 2
+  [ -n "$recs" ] || return 1
+  while IFS= read -r -d $'\x1e' rec; do
+    "$pred" "${rec#*$'\x1f'}" || continue
+    printf '%s' "$rec"
+    return 0
+  done <<< "$recs"
+  return 1
+}
+
+# The directory ONE command's `git -C <path>` options name (claude-config#589), read by
+# lib/shell-words.py's gitdir mode. Since #1017 ps_repo_dir asks it of the action's own command
+# only: it used to walk the whole command with a tokenizer of its own, answer with the push's -C or
+# else the FIRST git -C anywhere, and stop at the first word it could not read, so an unrelated
+# `git -C <other> status` decided where a later push was judged and a -C push after a heredoc
+# holding an apostrophe was not found at all. It reads the words the way the push recogniser does
+# (past leading reserved words and assignments, so `do git -C <wt> push` names <wt>), keeps a quoted
+# path with a space whole, and composes several -C the way git does. Only a leading tilde is
+# expanded; a variable is printed as written, so the caller refuses it.
+ps_git_c_target() {   # $1 = one command; prints the path, or nothing
+  command -v python3 >/dev/null 2>&1 || return 0
+  [ -f "$PS_SHELL_WORDS" ] || return 0
+  printf '%s' "$1" | python3 "$PS_SHELL_WORDS" gitdir 2>/dev/null
 }
 
 # The command is handed to grep as a here-string in the three questions below, never piped from
@@ -611,10 +550,24 @@ ps__commit_stages_all() {
 ps__read_adds() {   # $1 = command  $2 = scope | takes
   # The command goes in on stdin, never in the environment: a heredoc commit message can pass the
   # platform's limit on argument and environment size, and python then never starts at all.
-  printf '%s' "$1" | PS_MODE="${2:-scope}" python3 -c '
-import os, re, shlex, sys
+  #
+  # The reserved words that lead a command (then, do, else, ...) are looked past, read from
+  # lib/shell-words.py's RESERVED, the list the push recogniser uses, so `if x; then git add -A; fi`
+  # is an add here as it is to ps_is_git_add (lessons review of #1017). With that file missing the
+  # list is empty, which only reads fewer adds, the reading every release before #1017 had.
+  # -B: loading shell-words.py as a module would otherwise leave a bytecode cache in the hooks' lib/.
+  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
+import importlib.util, os, re, shlex, sys
 cmd = sys.stdin.read()
 mode = os.environ.get("PS_MODE", "scope")
+RESERVED = set()
+try:
+    spec = importlib.util.spec_from_file_location("shell_words", os.environ["PS_SHELL_WORDS"])
+    shell_words = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shell_words)
+    RESERVED = shell_words.RESERVED
+except Exception:
+    pass
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
 ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -628,7 +581,7 @@ for seg in re.split(r"&&|\|\||;|\||\n", cmd):
     i = 0
     while i < len(toks):
         t = toks[i].lstrip("({")
-        if t == "" or ASSIGN.match(t):
+        if t == "" or ASSIGN.match(t) or t in RESERVED:
             i += 1
             continue
         toks[i] = t
