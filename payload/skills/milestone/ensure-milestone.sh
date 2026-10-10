@@ -19,12 +19,14 @@
 #   --due <iso8601>          milestone due date (only used when creating)
 #
 # Env:
-#   DRY_RUN=1                read and classify, but write nothing
+#   DRY_RUN=1                read and classify, but write nothing: no create and
+#                            no reopen. Its only gh calls are the read below.
 #
 # Output (first token is the verdict, so callers can branch on it):
 #   MILESTONE-EXISTS  <number> <title> <url>     reused an open milestone
 #   MILESTONE-CREATED <number> <title> <url>     created it
 #   WOULD-CREATE-MILESTONE repo=<r> title=<t>    dry run
+#   WOULD-REOPEN-MILESTONE <number> <title> <url>  dry run, the catch-all is closed
 #   CLOSED-MATCH / NEAR-DUPLICATE / NO-MATCH     needs a human decision
 #
 # Exit codes:
@@ -260,6 +262,17 @@ case "$kind" in
     # (L362): every other closed title still stops and asks, because closing one of
     # those was somebody's decision about a feature.
     if is_catch_all "$title"; then
+      # A DRY RUN SAYS IT WOULD, AND DOES NOT (claude-config#1058). DRY_RUN is "read and
+      # classify, but write nothing", and create-milestone.sh runs it to vet a plan before
+      # anything is made, so the reopen sits behind it exactly as the create below does
+      # (L206). It exits 0 as the real run would, and still names the title, because that
+      # is what the real run would hand the caller to file against.
+      if [[ -n "${DRY_RUN:-}" ]]; then
+        echo "WOULD-REOPEN-MILESTONE $f2 $f3 $f4"
+        echo "CATCH-ALL-CLOSED #$f2 \"$f3\" in $repo is closed. A real run would reopen it, which needs no approval; this dry run left it closed."
+        echo "MILESTONE-TITLE $f3"
+        exit 0
+      fi
       reopened="$(gh api -X PATCH "repos/$repo/milestones/$f2" -f state=open 2>"$gh_err")"
       if [[ $? -ne 0 ]]; then
         echo "Failed to reopen the catch-all milestone \"$f3\" (#$f2) in $repo: $(tr '\n' ' ' <"$gh_err")" >&2
