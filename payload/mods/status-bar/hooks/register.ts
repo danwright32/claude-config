@@ -45,10 +45,11 @@ let interactive = false
 // One reading at a time: a slow gh must not let the next tick start a second one beside it.
 let reading = false
 let pr: PrReading | null = null
-// When GitHub last ANSWERED about the PR (#1014). An ask that fails sets nothing, so an idle ask that
-// fails is asked again on every tick until one answers. A turn end's forced ask that fails is not
-// retried early: the next ask comes once PR_IDLE_MS has passed since the last ANSWER, and until then
-// the band keeps that answer marked stale with its age (L682), never blank.
+// When GitHub last ANSWERED about the PR (#1014). An ask that fails sets nothing, so after a failed
+// ask (idle or a turn end's forced one) the next comes at the first tick at least PR_IDLE_MS after
+// the last ANSWER: the very next tick when that much has already passed, and otherwise once it
+// has, or on every tick while that answer had checks running (prDue). Until then the band keeps
+// that answer marked stale with its age (L682), never blank.
 let prAskedAt: number | undefined
 let unpushed: UnpushedReading | null = null
 let unpushedNoted = false
