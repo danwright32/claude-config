@@ -617,6 +617,36 @@ if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
   fail "a machine with no dev update tooling was refused over a rule that does not apply there (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 rm -rf "$dir"
 
+echo "changelog record: every merge in a command is judged, not only the first (#1062)"
+
+# The gate read the FIRST merge's record. So a tagged pull request merged first, then an untagged
+# one from another checkout of a gated repository, went through on the first one's record and the
+# second change was lost from the next manager update. gh answers by number here, so only the
+# second is untagged.
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+dir2=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+printf '%s' "${UNTAGGED/pull\/7/pull/8}" > "$dir/pr8.json"
+cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view 8"*) cat "$(dirname "$FAKE_PR_JSON")/pr8.json" ;;
+  *"pr view"*) cat "$FAKE_PR_JSON" ;;
+esac
+SH
+chmod +x "$dir/bin/gh"
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then fail "control: the tagged merge alone was refused: $out"; else pass; fi
+out=$(run_hook "$dir" "$MERGE 7 --squash; cd $dir2/repo && $MERGE 8 --squash")
+if denied "$out"; then pass; else
+  fail "a second merge, of an untagged pull request in another checkout, went through on the first one's record: $out"
+fi
+if says "$out" "more than one pull request"; then pass; else
+  fail "the refusal does not say the command merges more than one pull request: $out"
+fi
+rm -rf "$dir" "$dir2"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

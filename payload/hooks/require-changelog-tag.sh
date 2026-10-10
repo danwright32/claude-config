@@ -152,6 +152,14 @@ if mt_is_pr_merge "$command" && mt_reader_missing; then
   deny "Cannot tell whether this repo needs a changelog record: $(mt_reader_absent_why) Reading another pull request's record while merging this one would lose this change from the next manager update. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
+# ONE pull request per command (claude-config#1062): the record read below is the first merge's, so
+# a second merge in the same command went through on it and its own change was lost from the next
+# manager update. Asked after the stand downs above, because on a machine with no dev update tooling
+# this rule does not apply at all.
+if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
+  deny "Cannot judge this merge's changelog record: $span_why Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
 # WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull
 # request link first, then the directory the merge runs in (claude-config#463, #470).
 #

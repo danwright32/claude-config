@@ -388,6 +388,34 @@ eq "$(mt_repo_dir "cd $root/deep && git status; cd $root/plain && $MERGE 7" "$ro
 eq "$(mt_repo_dir "cd $root/plain && $MERGE 7 && cd $root/deep" "$root/parent")" "$root/plain" "a cd after the merge does not decide"
 eq "$(mt_repo_dir "(cd $root/deep && git status); $MERGE 7" "$root/plain")" "$root/plain" "a cd in a subshell closed before the merge does not decide"
 
+echo "merge-target: a command merging more than one pull request (#1062)"
+
+# Every merge gate judges one pull request per command, the first, so the second merge in
+# `cd A && gh pr merge 1; cd B && gh pr merge 2` landed unjudged. mt_merge_span_why says when a
+# command's merges are aimed at more than one target, in the sentence every gate refuses with.
+span() {  # $1 = command, $2 = session cwd, $3 = what
+  local why
+  if why="$(mt_merge_span_why "$1" "$2")" && [[ "$why" == *"more than one pull request"* ]]; then pass
+  else fail "$3 (said [$why])"; fi
+}
+nospan() {  # $1 = command, $2 = session cwd, $3 = what
+  local why
+  if why="$(mt_merge_span_why "$1" "$2")"; then fail "$3 (said [$why])"
+  else pass; fi
+}
+span "cd $root/plain && $MERGE 7; cd $root/deep && $MERGE 8" "$root/parent" "two merges in two repositories"
+span "cd $root/plain && $MERGE 7 && (cd $root/deep && $MERGE 7)" "$root/parent" "the same number in two repositories is two pull requests"
+span "$MERGE 7 --repo acme/one; $MERGE 7 --repo acme/two" "$root/plain" "two repositories named with --repo"
+span "$MERGE 7 --squash; $MERGE 8 --squash" "$root/plain" "two pull requests in one repository"
+span "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && $MERGE 8" "$root/parent" "a repo's own merge tool beside a direct merge elsewhere"
+why="$(mt_merge_span_why "cd $root/plain && $MERGE 7; cd $root/deep && $MERGE 8" "$root/parent")"
+if [[ "$why" == *"#7 in $root/plain"* && "$why" == *"#8 in $root/deep"* ]]; then pass
+else fail "the sentence names each pull request and where (said [$why])"; fi
+nospan "cd $root/plain && $MERGE 7" "$root/parent" "control: one merge is one target"
+nospan "$MERGE 7 --squash || $MERGE 7 --squash --admin" "$root/plain" "control: the same pull request twice is one target"
+nospan "cd $root/plain && $MERGE 7; cd $root/plain && $MERGE 7 --admin" "$root/parent" "control: the same pull request from the same directory twice is one target"
+nospan "echo \"cd $root/deep && $MERGE 8\"; $MERGE 7" "$root/plain" "control: a merge quoted in an echo is not a second merge"
+
 echo "merge-target: the repository a merge names with --repo (#463)"
 
 # gh takes the repository from --repo or -R before anything about the directory, so a gate that

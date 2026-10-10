@@ -64,17 +64,26 @@ fi
 if [ "$mode" = commit ]; then
   # Quiet unless it starts something: most commands that commit are not worth a line, and a commit
   # this cannot place leaves the push gate to start the review, so nothing goes unreviewed.
-  repo_dir="$(ps_repo_dir "$cmd" "$cwd" "$action" 2>/dev/null)" || exit 0
-  [ -n "$repo_dir" ] || exit 0
-  top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
-  head="$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null)"
-  [ -n "$head" ] || exit 0
-  # The default branch is not reviewed as a branch, by the push gate either.
-  ps_on_default_branch "$top" && exit 0
-  branch="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
-  args=(start --gate push --dir "$top" --sha "$head")
-  [ -n "$branch" ] && args+=(--branch "$branch")
-  say "$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"
+  #
+  # EVERY repository the command commits in, not only the first (claude-config#1062): starting a
+  # review is something this can do for each, so a second commit in another repository is not left
+  # for the push gate to start from cold.
+  repo_dirs="$(ps_repo_dirs "$cmd" "$cwd" "$action" 2>/dev/null)" || exit 0
+  said=""
+  while IFS= read -r repo_dir; do
+    [ -n "$repo_dir" ] || continue
+    top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || continue
+    head="$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null)"
+    [ -n "$head" ] || continue
+    # The default branch is not reviewed as a branch, by the push gate either.
+    ps_on_default_branch "$top" && continue
+    branch="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
+    args=(start --gate push --dir "$top" --sha "$head")
+    [ -n "$branch" ] && args+=(--branch "$branch")
+    said+="${said:+ }$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1 </dev/null)"
+  done <<< "$repo_dirs"
+  [ -n "$said" ] && say "$said"
+  exit 0
 fi
 
 repo_dir="$(ps_repo_dir "$cmd" "$cwd" "$action")" || say "could not tell which repository this pull request is in, so no lessons review was started; the merge gate will start one."

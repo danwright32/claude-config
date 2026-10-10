@@ -572,6 +572,14 @@ with no review gets one started by the gate. A repo whose own script merges insi
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
 allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
 
+Every gate judges ONE repository, and every merge gate ONE pull request, per command, so a command
+doing the same thing twice in different places is refused rather than judged by its first
+occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one
+repository, `check-add-scope.sh` one adding in more than one, and `block-red-merge.sh`,
+`pr-review-gate.sh` and `require-changelog-tag.sh` one merging more than one pull request. The
+remedy each gives is to run them as separate commands. `ai-review-on-pr.sh`, which only starts
+reviews, starts one in every repository a command commits in.
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).

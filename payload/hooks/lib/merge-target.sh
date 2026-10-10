@@ -19,6 +19,9 @@
 #                      for, in one vocabulary rather than one per gate
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
+#   mt_merge_span_why
+#                    whether the command merges more than one pull request, which
+#                      every merge gate refuses because it judges one (#1062)
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
 #                      that answer a non-merge caller needs too
 #   mt_checkout_candidates
@@ -516,12 +519,23 @@ MTEOF
 #
 # This answers WHERE the merge runs. WHICH repository it is about can still be
 # named with --repo, which gh honours first: that is mt_repo_flag's question.
+#
+# The FIRST merge's directory. A command with merges aimed at more than one target is refused by
+# every merge gate before it asks this (mt_merge_span_why below, claude-config#1062), so the first is
+# the only one.
 mt_repo_dir() {  # $1 = command, $2 = session cwd
-  local command="$1" d="$2" from_cd=""
+  local command="$1" d="$2"
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
 
   # The cd in force for the MERGE itself, the last before it in its own shell (claude-config#1017).
-  from_cd="$(ps_cd_target "$command" mt_runs_merge)"
+  mt__merge_dir "$(ps_cd_target "$command" mt_runs_merge)" "$d"
+}
+
+# Where one merge runs, from the cd in force for it as ps_cd_target reads it: that directory when it
+# is one, else the checkout the session directory belongs to. A relative cd is taken from the session
+# directory, where the command runs.
+mt__merge_dir() {  # $1 = the cd in force for the merge, or empty  $2 = session cwd (a directory)
+  local from_cd="$1" d="$2"
   case "$from_cd" in
     "~") from_cd="$HOME" ;;
     "~/"*) from_cd="$HOME/${from_cd#"~/"}" ;;
@@ -529,8 +543,50 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
     *) from_cd="$d/$from_cd" ;;
   esac
   if [ -n "$from_cd" ] && [ -d "$from_cd" ]; then printf '%s' "$from_cd"; return; fi
-
   mt_checkout_dir "$d"
+}
+
+# Does this command merge MORE THAN ONE target? Prints the sentence a gate refuses with and returns 0
+# when it does; prints nothing and returns 1 when every merge in it is aimed at the same one
+# (claude-config#1062).
+#
+# Every merge gate judges ONE pull request per command: mt_repo_dir answers for the first merge's
+# directory and mt_pr_number and mt_repo_flag for the first `gh pr merge`, so in
+# `cd A && gh pr merge 1; cd B && gh pr merge 2` the second pull request merged with no gate having
+# read its checks, its lessons review or its changelog record. A gate genuinely acts on one pull
+# request (it asks GitHub about it and pins the merge to its head), so it refuses rather than judge
+# each in turn, and says how to run them so each is judged.
+#
+# A target is the repository the merge is about (its --repo, -R or link, else the work tree of the
+# directory it runs in) together with the pull request it names, read from that merge's own command
+# by the same readers the gates use. Two merges of one pull request are one target; anything else,
+# a different repository or a different pull request, is a second. Any route counts (mt_runs_merge),
+# so a repo's own merge tool beside a direct merge is seen too.
+mt_merge_span_why() {  # $1 = command, $2 = session cwd
+  local cmd="$1" d="${2:-}" recs rec where flag pr top key seen=$'\n' list="" n=0
+  local -a hits=()
+  [ -n "$d" ] && [ -d "$d" ] || d=$PWD
+  recs="$(ps__action_records "$cmd" mt_runs_merge)" || return 1
+  while IFS= read -r -d $'\x1e' rec; do hits+=("$rec"); done <<< "$recs"
+  # One merge is one target, answered without starting a reader per merge.
+  [ "${#hits[@]}" -gt 1 ] || return 1
+  for rec in "${hits[@]}"; do
+    where="$(mt__merge_dir "${rec%%$'\x1f'*}" "$d")"
+    flag="$(mt_repo_flag "${rec#*$'\x1f'}" </dev/null)"
+    pr="$(mt_pr_number "${rec#*$'\x1f'}" </dev/null)"
+    if [ -n "$flag" ]; then key="$flag"
+    else
+      top="$(git -C "$where" rev-parse --show-toplevel 2>/dev/null)" || top=""
+      key="${top:-$where}"
+    fi
+    key="$key"$'\t'"$pr"
+    case "$seen" in *$'\n'"$key"$'\n'*) continue ;; esac
+    seen+="$key"$'\n'; n=$((n + 1))
+    list+="${list:+, }$(mt_pr_label "$pr") in ${key%%$'\t'*}"
+  done
+  [ "$n" -gt 1 ] || return 1
+  printf 'this command merges more than one pull request (%s), and a merge gate judges one pull request per command, so the merges after the first would land with no gate having read their checks, their lessons review or their changelog record (claude-config#1062). Run each merge as a command of its own.' "$list"
+  return 0
 }
 
 # What mt__merge_selector reads: the `gh pr merge` segment itself, its leading assignments

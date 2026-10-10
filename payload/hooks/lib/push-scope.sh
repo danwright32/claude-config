@@ -6,7 +6,10 @@
 # itself, so they exist once rather than once per hook:
 #   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
-#   ps_repo_dir: which repository the push is about
+#   ps_repo_dir: which repository the push is about, refusing a command whose pushes run in
+#                      more than one (claude-config#1062)
+#   ps_repo_dirs: every distinct repository the command's pushes run in, for a caller that
+#                      can act on each
 #   ps_cd_target: the directory the cds before an action moved its shell to, which the
 #                      merge gates read too (lib/merge-target.sh, claude-config#463, #1017)
 #   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
@@ -385,21 +388,79 @@ ps__segment_command_words() {   # $1 = one segment
 # a directory with a cd or a -C is REFUSED by name with exit 2 (lessons review of #1017, L490): the
 # reader that cannot run reads no cd, and no cd is exactly what judged a push in the session's
 # repository. A command naming neither is the session's either way.
+#
+# EVERY command satisfying $3 is read, not only the first (claude-config#1062). Each gate judges one
+# repository per command, so `cd A && git push; cd B && git push` used to be judged in A alone and the
+# push to B went out unjudged by every gate. Now each action's directory is resolved, and when they
+# land in more than one repository (told apart by work tree top level, so a second push from a
+# subdirectory of the same one is still that one) this REFUSES with exit 2 and names them: the answer
+# every gate already treats as "nothing here was judged", and push-scope-notice.sh refuses a push on
+# it, once, for every push gate. Any one action whose named directory cannot be used refuses the same
+# way, where before only the first action's directory was ever looked at. A caller that can act on
+# each repository in turn reads ps_repo_dirs below instead.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" cand="" named="" rec dir="" text="" rc names=0
-  rec="$(ps__action_record "$cmd" "$pred")"; rc=$?
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" dirs rc
+  dirs="$(ps_repo_dirs "$cmd" "$cwd" "$pred")"; rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  case "$dirs" in
+    *$'\n'*)
+      echo "push-scope: this command runs $(ps__action_name "$pred") in more than one repository ($(printf '%s' "$dirs" | tr '\n' ',' | sed 's/,/, /g')), and every gate judges one repository per command, so judging only the first would let the rest through unjudged. Nothing was judged rather than judging one of them (claude-config#1062). Run each repository's $(ps__action_name "$pred") as a command of its own." >&2
+      return 2 ;;
+  esac
+  printf '%s' "$dirs"
+}
+
+# Every DISTINCT repository the command's actions ($3, ps_is_git_push by default) run in, one per
+# line, in the order the command reaches them, each the directory ps_repo_dir would answer for that
+# action alone (claude-config#1062). Exit 2, with the reason on stderr, when any one of them names a
+# directory that cannot be used or nothing here can read the command; exit 1 when no action has a
+# repository at all. Two actions in one work tree are one line, the first's directory.
+ps_repo_dirs() {
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" recs rec rc names=0 d drc
+  local -a found=()
+  recs="$(ps__action_records "$cmd" "$pred")"; rc=$?
   grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd" && names=1
-  if [ "$rc" -eq 0 ]; then
-    dir="${rec%%$'\x1f'*}"; text="${rec#*$'\x1f'}"
-  elif [ "$rc" -eq 2 ] && [ "$names" -eq 1 ]; then
+  if [ "$rc" -eq 2 ] && [ "$names" -eq 1 ]; then
     echo "push-scope: this command names a directory with a cd or a git -C, and nothing here could read which one is in force: $PS_SHELL_WORDS is missing or python3 is not on PATH. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017, L490). Reinstall the hooks (claude-sync pull) or install python3." >&2
     return 2
-  elif [ "$names" -eq 1 ]; then
+  elif [ "$rc" -ne 0 ] && [ "$names" -eq 1 ]; then
     # Read, but none of its commands is the action asked about ($pred), so which cd is in force for
     # it cannot be said: refused, never handed the session directory (lessons review of #1017).
     echo "push-scope: this command names a directory with a cd or a git -C, but none of its commands is the one asked about ($pred), so which directory it runs in could not be told. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017)." >&2
     return 2
   fi
+  if [ "$rc" -ne 0 ]; then
+    if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s\n' "$cwd"; return 0; fi
+    return 1
+  fi
+  while IFS= read -r -d $'\x1e' rec; do
+    d="$(ps__record_dir "$rec" "$cwd")"; drc=$?
+    # 2: this action names a directory that cannot be used, said on stderr already. 1: it names none
+    # and the session directory is no repository, so git refuses that one itself.
+    [ "$drc" -eq 2 ] && return 2
+    [ "$drc" -eq 0 ] && [ -n "$d" ] && found+=("$d")
+  done <<< "$recs"
+  [ "${#found[@]}" -gt 0 ] || return 1
+  # Told apart by work tree top level, asked only when there is more than one to tell apart, so the
+  # commonest command, one push, costs nothing more than it did.
+  if [ "${#found[@]}" -eq 1 ]; then printf '%s\n' "${found[0]}"; return 0; fi
+  local seen=$'\n' top
+  for d in "${found[@]}"; do
+    top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || top=""
+    [ -n "$top" ] || top="$d"
+    case "$seen" in *$'\n'"$top"$'\n'*) continue ;; esac
+    seen+="$top"$'\n'
+    printf '%s\n' "$d"
+  done
+  return 0
+}
+
+# One action's directory, from its own record "<dir>" 0x1f "<command>": its own `git -C` first, then
+# the cd in force for it, then the session directory. Exit 2 with the reason on stderr when a named
+# directory cannot be used; exit 1 when nothing names one and the session directory is no repository.
+ps__record_dir() {   # $1 = one record  $2 = session directory
+  local rec="$1" cwd="${2:-}" dir text cand="" named=""
+  dir="${rec%%$'\x1f'*}"; text="${rec#*$'\x1f'}"
 
   # `git -C <path> … push`, the path read as the shell reads it (claude-config#589). A relative -C
   # is taken from the cd in force, which is where git starts from.
@@ -424,6 +485,18 @@ ps_repo_dir() {
 
   if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
   return 1
+}
+
+# What an action predicate is called in a sentence a person reads.
+ps__action_name() {   # $1 = the predicate
+  case "$1" in
+    ps_is_git_push) printf 'a git push' ;;
+    ps_is_git_commit) printf 'a git commit' ;;
+    ps_is_git_add) printf 'a git add' ;;
+    ps_is_gh_pr_create) printf 'a gh pr create' ;;
+    mt_runs_merge|mt_is_pr_merge) printf 'a merge' ;;
+    *) printf 'the action %s' "$1" ;;
+  esac
 }
 
 # A path as the command's own shell would read it: a leading ~ or ~user expanded, and a relative
@@ -474,20 +547,53 @@ ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_gi
   printf '%s' "${rec%%$'\x1f'*}"
 }
 
-# The action's own record from ps__shell_commands, "<dir>" 0x1f "<command>": the first command that
-# satisfies $2 (ps_is_git_push by default). Exit 1 when no command does, 2 when nothing could read
-# the command at all, which the caller has to say rather than read as "no directory named" (L490).
-ps__action_record() {   # $1 = command  $2 = the action's predicate
-  local pred="${2:-ps_is_git_push}" recs rec rc
+# EVERY command that satisfies $2 (ps_is_git_push by default), each as its record from
+# ps__shell_commands, "<dir>" 0x1f "<command>" 0x1e, in the order the command runs them
+# (claude-config#1062). Exit 1 when no command does, 2 when nothing could read the command at all,
+# which the caller has to say rather than read as "no directory named" (L490).
+#
+# A command whose substitution holds the action, `out=$(cd A && git push)`, is listed by the reader
+# beside the action inside it, and the predicate, reading the substitution afresh, says yes to both.
+# The outer one is not a second action: it is the same push, and its directory is the outer shell's,
+# which is not where the push runs. So a matched record holding a substitution ($( or a backquote)
+# whose text contains another matched record's command is dropped. Only a substitution can contain
+# one, so `git push; git push origin main`, where one text holds the other, keeps both.
+ps__action_records() {   # $1 = command  $2 = the action's predicate
+  local pred="${2:-ps_is_git_push}" recs rec rc out="" i j inner keep
+  local -a hits=() texts=()
   recs="$(ps__shell_commands "$1")"; rc=$?
   [ "$rc" -eq 1 ] && return 2
   [ -n "$recs" ] || return 1
   while IFS= read -r -d $'\x1e' rec; do
     "$pred" "${rec#*$'\x1f'}" || continue
-    printf '%s' "$rec"
-    return 0
+    hits+=("$rec"); texts+=("${rec#*$'\x1f'}")
   done <<< "$recs"
-  return 1
+  [ "${#hits[@]}" -gt 0 ] || return 1
+  for ((i = 0; i < ${#hits[@]}; i++)); do
+    keep=1
+    case "${texts[$i]}" in
+      *'$('*|*'`'*)
+        for ((j = 0; j < ${#hits[@]}; j++)); do
+          [ "$j" -ne "$i" ] || continue
+          inner="${texts[$j]#"${texts[$j]%%[![:space:]]*}"}"; inner="${inner%"${inner##*[![:space:]]}"}"
+          [ -n "$inner" ] || continue
+          case "${texts[$i]}" in *"$inner"*) keep=0; break ;; esac
+        done ;;
+    esac
+    [ "$keep" -eq 1 ] && out+="${hits[$i]}"$'\x1e'
+  done
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# The FIRST such record, without its 0x1e, for ps_cd_target. Only mt_repo_dir reads that, and every
+# merge gate refuses a command whose merges have more than one target before asking it
+# (mt_merge_span_why in lib/merge-target.sh, claude-config#1062), so the first is the only one.
+ps__action_record() {   # $1 = command  $2 = the action's predicate
+  local recs rc
+  recs="$(ps__action_records "$1" "${2:-}")"; rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "${recs%%$'\x1e'*}"
 }
 
 # The directory ONE command's `git -C <path>` options name (claude-config#589), read by
