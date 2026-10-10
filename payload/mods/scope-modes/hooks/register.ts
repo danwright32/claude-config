@@ -1681,8 +1681,37 @@ const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
   // the same from any worktree of the project. Not $.session.repo().root, which is the main working
   // tree even from a linked worktree (measured on Claude Code 2.1.295), whose changes are another
   // session's.
-  if ('unreadable' in b) return b.unreadable === DETACHED ? { root: b.root, branch: '', isDefault: true, issues: [], pr: null } : { unreadable: b.unreadable }
-  return { root: b.root, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null }
+  if ('unreadable' in b && b.unreadable !== DETACHED) return { unreadable: b.unreadable }
+  const kept = await keptPlace($)
+  if ('unreadable' in b) return { root: b.root, branch: '', isDefault: true, issues: [], pr: null, ...kept }
+  return { root: b.root, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null, ...kept }
+}
+
+// The main working tree, as $.session.repo() names it even from a linked worktree, or undefined
+// when it names none or cannot be read.
+const mainTree = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    return (await $.session.repo())?.root ?? undefined
+  } catch {
+    return undefined
+  }
+}
+// Where the finish check reads once the session's own folder is gone (#1059): the main working tree
+// and the repository's name, kept with the target when winding down turns on, since a session whose
+// folder was removed may no longer be able to say either.
+const keptPlace = async ($: EngineInterface): Promise<{ main?: string; repo?: string }> => {
+  const main = await mainTree($)
+  const repo = await sessionSlug($)
+  return { ...(main ? { main } : {}), ...(repo ? { repo } : {}) }
+}
+// Whether a folder is there. A look that throws counts it there, so the read goes ahead as it did
+// before #1059 and a failure is said by the read itself.
+const isThere = async ($: EngineInterface, path: string): Promise<boolean> => {
+  try {
+    return await $.fs.exists(path)
+  } catch {
+    return true
+  }
 }
 
 type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences?: { number?: number }[] }
@@ -1725,19 +1754,39 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // repository than the session's (`elsewhere`) has its branch on GitHub checked there, while its
 // local branch and worktree live in a checkout this session cannot see, so they are said to be
 // unreadable rather than read as gone from this one (lessons review of #714).
+//
+// The session's folder can be gone: winding down's own cleanup removes a worktree (#1059). A process
+// started in a folder that is not there fails naming the command (posix_spawn 'gh'), never the
+// folder, so a finished session was refused for ever, told gh could not start. Gone, the folder is
+// wind down's own end state: GitHub is read by the repository's name from a folder that is there,
+// the branch and worktree lists from the main working tree, and the uncommitted work went with it.
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, elsewhere = false): Promise<{ reading: Reading; found?: Found }> => {
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: false }
-  const where = repo ? ['--repo', repo] : []
+  const gone = !(await isThere($, t.root))
+  // Gone, the main working tree, where one is there, holds the branch and worktree lists.
+  let main: string | undefined
+  if (gone) for (const m of [t.main, await mainTree($)]) if (!main && m && m !== t.root && (await isThere($, m))) main = m
+  const slug = repo ?? (gone ? (t.repo ?? (await sessionSlug($))) : undefined)
+  const goneSaid = `the session's directory ${t.root} no longer exists`
+  // Where a process starts: the session's folder while it is there; gone, a folder that is.
+  const cwd = gone ? (main ?? (await $.env.get('HOME')) ?? undefined) : t.root
+  const where = slug ? ['--repo', slug] : []
   let prUrl: string | undefined
   let found: Found | undefined
-  const gh = async (args: string[]) => {
-    const out = await $.process.run(['gh', ...args], { timeoutMs: RUN_MS, cwd: t.root }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
-    return out
+  // A start that fails in a folder gone since it was looked for is said as that folder (#1059).
+  const startFailed = async (err: unknown) => {
+    const missing = cwd && !(await isThere($, cwd)) ? (cwd === t.root ? goneSaid : `the folder ${cwd} no longer exists`) : undefined
+    return { exitCode: -1, stdout: '', stderr: missing ?? msg(err), isStdoutTruncated: false, isStderrTruncated: false }
   }
+  const gh = async (args: string[]) => $.process.run(['gh', ...args], { timeoutMs: RUN_MS, ...(cwd ? { cwd } : {}) }).catch(startFailed)
+  // git reads the session's folder while it is there, and the main working tree once it is gone.
+  const git = async (args: string[]) =>
+    gone ? $.process.run(['git', ...(main ? ['-C', main] : []), ...args], { timeoutMs: RUN_MS, ...(cwd ? { cwd } : {}) }).catch(startFailed) : run($, ['git', '-C', t.root, ...args])
+  if (gone && !slug && (t.branch || t.pr)) return { reading: { ...r, pr: { unreadable: `${goneSaid}, and no repository is named to read its PR in` } } }
   if (t.branch || t.pr) {
     const res = t.pr
       ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
-      : await gh(['pr', 'list', '--head', t.branch, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
+      : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
     if (res.exitCode !== 0) return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
     let pr: PrJson | undefined
     try {
@@ -1771,18 +1820,27 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
       return { reading: { ...r, branchHere: none, branchOnGitHub: none, worktreeOnBranch: none }, found }
     }
     // ls-remote --exit-code answers 2 when no such branch, and anything else nonzero is a failed read.
-    const remote = await run($, ['git', '-C', t.root, 'ls-remote', '--exit-code', '--heads', elsewhere && repo ? `https://github.com/${repo}.git` : 'origin', r.branch])
+    // Gone with no checkout left to name origin, GitHub is asked by the repository's name.
+    const url = (elsewhere || (gone && !main)) && slug ? `https://github.com/${slug}.git` : 'origin'
+    const remote = await git(['ls-remote', '--exit-code', '--heads', url, r.branch])
     r.branchOnGitHub = remote.exitCode === 0 ? true : remote.exitCode === 2 ? false : { unreadable: remote.stderr.trim() || 'could not reach origin' }
     if (elsewhere) {
       const unseen = { unreadable: `PR #${r.pr.number} is in ${repo ?? 'another repository'}, whose checkout this session cannot see` }
       return { reading: { ...r, branchHere: unseen, worktreeOnBranch: unseen }, found }
     }
-    const here = await run($, ['git', '-C', t.root, 'branch', '--list', r.branch])
+    if (gone && !main) {
+      // The main working tree kept when winding down turned on is gone too: no checkout of the
+      // project is left to hold the branch or a worktree on it. With none kept, nothing says so.
+      const lists: boolean | { unreadable: string } = t.main ? false : { unreadable: `${goneSaid}, and no other checkout of its repository is known to read it in` }
+      return { reading: { ...r, branchHere: lists, worktreeOnBranch: lists }, found }
+    }
+    const here = await git(['branch', '--list', r.branch])
     r.branchHere = here.exitCode === 0 ? here.stdout.trim() !== '' : { unreadable: here.stderr.trim() }
-    const wt = await run($, ['git', '-C', t.root, 'worktree', 'list', '--porcelain'])
+    const wt = await git(['worktree', 'list', '--porcelain'])
     r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${r.branch}`) : { unreadable: wt.stderr.trim() }
   }
-  if (t.isDefault && r.pr === null) {
+  // Gone, the folder took its uncommitted work with it: nothing is left there to commit.
+  if (t.isDefault && r.pr === null && !gone) {
     const st = await run($, ['git', '-C', t.root, 'status', '--porcelain'])
     r.dirty = st.exitCode === 0 ? st.stdout.trim() !== '' : { unreadable: st.stderr.trim() }
   }
@@ -1881,7 +1939,7 @@ const check = ($: EngineInterface): Promise<Checked | null> => {
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo, elsewhere)
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, o.repo, elsewhere)
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
