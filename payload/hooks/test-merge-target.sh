@@ -650,6 +650,34 @@ got="$(set -u; PATH="$ghstub/none:$PATH" mt_pr_view 7 "number,state,url" acme/wi
 eq "$(printf '%s' "$got" | jq -r '.found, .notFound' 2>/dev/null | tr '\n' ' ')" "false true " "under set -u with no other account, it answers not found rather than failing"
 rm -rf "$ghstub"
 
+echo "merge-target: mt_gh_transient tells a GitHub that did not answer from one that refused (claude-config#1061)"
+
+# Worth asking again: the transport failed, or GitHub's own server did. The first two are the
+# errors measured on 2026-10-09 reading the compare, word for word as gh printed them.
+for e in \
+  'Get "https://api.github.com/repos/a/b/compare/main...x": net/http: TLS handshake timeout' \
+  'Get "https://api.github.com/repos/a/b/compare/main...x": read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer' \
+  'Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host' \
+  'read tcp 10.0.0.2:51234->140.82.112.6:443: i/o timeout' \
+  'Post "https://api.github.com/graphql": EOF' \
+  'HTTP 502: Bad Gateway (https://api.github.com/graphql)' \
+  'gh: Server Error (HTTP 500)' \
+  'HTTP 503: Service Unavailable' \
+  'GraphQL: Something went wrong while executing your query. Please include `ABCD:1234` when reporting this issue.'; do
+  if mt_gh_transient "$e"; then pass; else fail "a transport or server failure was not worth asking again: $e"; fi
+done
+# Believed the first time: GitHub answered, and the answer was no. Unknown is never retried (L35).
+for e in \
+  'gh: Not Found (HTTP 404)' \
+  'GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)' \
+  'HTTP 401: Bad credentials (https://api.github.com/graphql)' \
+  'GraphQL: Pull request is not mergeable (mergePullRequest)' \
+  'gh: Validation Failed (HTTP 422)' \
+  'gh printed nothing' \
+  ''; do
+  if mt_gh_transient "$e"; then fail "an answer GitHub gave was treated as worth asking again: [$e]"; else pass; fi
+done
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

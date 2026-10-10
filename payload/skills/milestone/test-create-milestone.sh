@@ -349,6 +349,34 @@ check "milestone previewed even with no issues" "WOULD-CREATE-MILESTONE repo=acm
 n0="$(printf '%s\n' "$out_noissues" | grep -c '^WOULD-CREATE-ISSUE')"
 check_eq "no issue lines when issues empty" "0" "$n0"
 
+# --- a dry run against a CLOSED catch-all previews, and reopens nothing (claude-config#1058) ---
+# The helper's dry run now says it WOULD reopen the pen instead of reopening it, so this
+# script has to read that answer as a milestone to preview against, or a dry run of a
+# plan aimed at the pen would abort where the real run succeeds.
+cat >"$TMP/closedpen.json" <<'JSON'
+[ { "number": 5, "title": "Ungrouped", "state": "closed", "html_url": "https://github.com/acme/widgets/milestone/5" } ]
+JSON
+cat >"$TMP/plan-pen.json" <<'JSON'
+{
+  "title": "Ungrouped",
+  "issues": [
+    { "title": "Chore 1", "body": "b", "priority": "p3", "labels": ["enhancement"] },
+    { "title": "Chore 2", "body": "b", "priority": "p3", "labels": ["enhancement"] }
+  ]
+}
+JSON
+out="$(DRY_RUN=1 run "$TMP/closedpen.json" "acme/widgets" "$TMP/plan-pen.json")"; rc=$?
+check_eq "a dry run aimed at a closed pen exits 0" "0" "$rc"
+check "it previews the reopen" "WOULD-REOPEN-MILESTONE 5 Ungrouped" "$out"
+check "and previews each issue against the pen" "WOULD-CREATE-ISSUE repo=acme/widgets milestone=Ungrouped" "$out"
+# The reads are `gh label list` and a plain `gh api`. Anything else counts as a write: a
+# method, a field, or any other subcommand.
+n_writes="$(awk '
+  $1 == "label" && $2 == "list" { next }
+  $1 != "api" || / (-X|--method|-f|-F|--field|--raw-field|--input)( |=|$)/
+' "$TMP/calls.log" | grep -c .)"
+check_eq "and writes nothing at all" "0" "$n_writes"
+
 # --- the filed issues name the session that filed them (claude-config#536) ---
 # This script calls gh itself, so the issue gate never sees its creates and cannot ask for the line.
 out="$(CLAUDE_CODE_BRIDGE_SESSION_ID=session_01XyZ run "$TMP/none.json" "acme/widgets" "$TMP/plan.json")"
