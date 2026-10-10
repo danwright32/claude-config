@@ -6,3 +6,4 @@ taken_utc	host	arm	section_seconds	budget_seconds	wall_seconds	ambient_mean_pct	
 2026-09-21T03:22:36Z	Daniels-MacBook-Pro-2	quiet	866	2520	232	410	824	254	4	15.9	156	xctest(98%) swift-frontend(96%) corespotlightd(93%) 
 2026-09-21T03:26:28Z	Daniels-MacBook-Pro-2	quiet	860	2520	232	366	511	254	4	11.03	112	corespotlightd(109%) Python(100%) xctest(99%) 
 2026-09-21T03:30:19Z	Daniels-MacBook-Pro-2	quiet	846	2520	231	202	503	254	4	10.04	-52	mds_stores(144%) bztransmit(96%) xcresulttool(62%) 
+2026-10-01T06:05:10Z	Daniels-MacBook-Pro-2	quiet	911	2520	253	78	167	7	4	9.86	71	bztransmit(92%) cfprefsd(11%) _1306__11.3_claude(11%) 

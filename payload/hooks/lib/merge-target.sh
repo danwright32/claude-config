@@ -874,9 +874,23 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
   args+=(--json "$fields")
   errf=$(mktemp "${TMPDIR:-/tmp}/mt-pr-view.XXXXXX" 2>/dev/null) || errf=""
 
-  # The empty first entry is the ACTIVE account, asked with no token of our own.
-  for account in "" $(gh auth status 2>/dev/null \
-      | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
+  # The empty first entry is the ACTIVE account, asked with no token of our own. The other
+  # accounts are listed only once it has failed (claude-config#1014): `gh auth status` checks every
+  # logged in account's token with a request of its own, and merge-when-ready.sh reads the pull
+  # request every minute, so listing them up front spent those requests on every look for nothing.
+  # The second entry stands for that list, read when the loop reaches it, which only a failed
+  # answer from the active account lets it do (a usable one returns from inside the loop).
+  # Walked by index and only ever appended to, never sliced, so no expansion of an empty array is
+  # reached under set -u on macOS bash 3.2 (L486).
+  local -a queue=("" "@others")
+  local qi=0
+  while [ "$qi" -lt "${#queue[@]}" ]; do
+    account="${queue[$qi]}"; qi=$((qi + 1))
+    if [ "$account" = "@others" ]; then
+      # shellcheck disable=SC2207
+      queue+=($(gh auth status 2>/dev/null | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u))
+      continue
+    fi
     if [ -z "$account" ]; then
       answer=$(gh "${args[@]}" 2>"${errf:-/dev/null}")
     else

@@ -10,7 +10,7 @@ Dan does not write code and should never have to pump the loop by typing "what's
 ## 1. Settle the current work
 
 If there is an open PR for the work just finished:
-1. Check CI yourself: `gh pr checks <pr> --watch` (run in the background if slow; report elapsed progress, never a silent wait).
+1. Check CI yourself: `gh pr checks <pr> --watch --interval 60` (run in the background if slow; report elapsed progress, never a silent wait).
 2. When green, merge it yourself, PINNED to the commit whose checks you just read:
    `gh pr merge <pr> --squash --delete-branch --match-head-commit $(gh pr view <pr> --json headRefOid --jq .headRefOid)`
    (match the repo's usual merge style if different). The pin is what stops a push that lands

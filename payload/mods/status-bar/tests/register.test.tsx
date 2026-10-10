@@ -249,12 +249,72 @@ test('a branch with no PR, or one whose checks pass, shows no PR item', withKit,
   const { w, clock } = world(on, { gh: { exitCode: 0, stdout: PR_FAILING, stderr: '' } })
   await start($, clock)
   w.gh = { exitCode: 1, stdout: '', stderr: 'no pull requests found for branch "x"' }
-  await clock.advance(MIN)
+  // Checks that have finished are asked about again after the idle wait, not the next minute (#1014).
+  await clock.advance(10 * MIN)
   const ui = await $.ui.mount(band)
   expect(await shown(ui as never)).toBe('engine band')
   w.gh = { exitCode: 0, stdout: JSON.stringify({ number: 1, state: 'OPEN', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }), stderr: '' }
-  await clock.advance(MIN)
+  await clock.advance(10 * MIN)
   expect(await shown(ui as never)).toBe('engine band')
+  await ui.unmount()
+})
+
+// How often GitHub is asked about the branch's PR (#1014). Every ask spends from the GraphQL
+// allowance every session on the Mac shares, and an open session asked once a minute whether or not
+// anything could have changed: an idle session sitting on main spent 60 points an hour saying nothing.
+const ghAsks = (runs: string[][]) => runs.filter(r => r[0] === 'gh').length
+
+test('with no PR on the branch, GitHub is asked again after ten minutes, not every minute (#1014)', withKit, async ($, on) => {
+  const { clock, runs } = world(on)
+  await start($, clock)
+  expect(ghAsks(runs)).toBe(1)
+  await clock.advance(9 * MIN)
+  expect(ghAsks(runs)).toBe(1)
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(2)
+})
+
+test('a PR whose checks are running is still read every minute, so the band follows them (#1014)', withKit, async ($, on) => {
+  const { w, clock, runs } = world(on, { gh: { exitCode: 0, stdout: PR_RUNNING, stderr: '' } })
+  await start($, clock)
+  await clock.advance(3 * MIN)
+  expect(ghAsks(runs)).toBe(4)
+  // Once they finish, the next ask waits the idle ten minutes.
+  w.gh = { exitCode: 0, stdout: PR_FAILING, stderr: '' }
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(5)
+  await clock.advance(9 * MIN)
+  expect(ghAsks(runs)).toBe(5)
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(6)
+})
+
+test('an ask GitHub does not answer is tried again the next minute, not after the idle wait (#1014)', withKit, async ($, on) => {
+  const { w, clock, runs } = world(on, { gh: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' } })
+  await start($, clock)
+  expect(ghAsks(runs)).toBe(1)
+  w.gh = { exitCode: 0, stdout: PR_FAILING, stderr: '' }
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(2)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('PR #636 checks failing')
+  await ui.unmount()
+  // Answered, it waits the idle ten minutes again.
+  await clock.advance(9 * MIN)
+  expect(ghAsks(runs)).toBe(2)
+})
+
+test("a turn's end asks about the PR at once, whatever the wait, since the turn may have pushed or opened one (#1014)", withKit, async ($, on) => {
+  const { w, clock, runs } = world(on)
+  await start($, clock)
+  await clock.advance(2 * MIN)
+  expect(ghAsks(runs)).toBe(1)
+  w.gh = { exitCode: 0, stdout: PR_FAILING, stderr: '' }
+  await turn($)
+  await clock.settle()
+  expect(ghAsks(runs)).toBe(2)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('PR #636 checks failing')
   await ui.unmount()
 })
 
