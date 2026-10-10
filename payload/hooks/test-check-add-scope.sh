@@ -220,6 +220,28 @@ MSG"
 refused "an unscoped add before a heredoc with an apostrophe is still refused"
 run "(cd $REPO && git add .)"
 refused "an unscoped add inside a subshell is refused"
+# The repository is the one the ADD's cd names, from a session standing outside it, on any line
+# and whatever cd follows (claude-config#1017). ps_repo_dir reads the cd in force for the action it
+# is asked about, and an add is not a push, so a hook asking about a push here would find no cd.
+run "if true; then git add -A; fi"
+refused "an unscoped add right after then is refused (lessons review of #1017)"
+run "for f in x; do git add .; done"
+refused "and so is one right after do"
+# A copy of the hook whose lib/ holds push-scope.sh but not the shell-words.py it reads commands
+# with: an add whose cd nothing can read is refused by name, never let through as "no repository"
+# (lessons review of #1017, L490).
+mkdir -p "$FIX/noreader/lib"
+cp "$HOOK" "$FIX/noreader/check-add-scope.sh"
+cp "$DIR/lib/push-scope.sh" "$FIX/noreader/lib/push-scope.sh"
+HOOK_SAVED="$HOOK"; HOOK="$FIX/noreader/check-add-scope.sh"
+run "cd $REPO && git add -A"
+HOOK="$HOOK_SAVED"
+refused "an unscoped add whose cd cannot be read is refused rather than allowed"
+says "and the refusal names the missing reader" "shell-words.py"
+REPO_SAVED="$REPO"; REPO="$FIX"
+run $'echo starting\ncd '"$REPO_SAVED"$' && git add -A\ncd '"$FIX"
+REPO="$REPO_SAVED"
+refused "an unscoped add whose cd is on a later line is refused from a session outside the repo"
 run "git add :/"
 refused "and so is :/, which is the whole tree from anywhere"
 

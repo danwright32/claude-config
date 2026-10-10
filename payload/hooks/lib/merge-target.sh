@@ -504,9 +504,10 @@ MTEOF
 # all. That produced a false block on a green pull request the first time this
 # ran.
 #
-# Order: a `cd` in command position wins, because that is where the merge itself
-# will run: at the head, after an assignment, or inside a subshell, as
-# ps_cd_target reads it. This used to honour only a LEADING cd, so
+# Order: the cd in force for the merge wins, because that is where the merge itself
+# will run: the last cd before it in its own shell, on any line, after an
+# assignment or inside a subshell, as ps_cd_target reads it (claude-config#1017).
+# This used to honour only a LEADING cd, so
 # `H=$(...) ; cd <repo> && <merge>` was judged in the session's folder
 # (claude-config#463). A relative cd is relative to the session cwd, where the
 # command runs, not to wherever the hook process stands. A cd to a directory that
@@ -519,7 +520,8 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
   local command="$1" d="$2" from_cd=""
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
 
-  from_cd="$(ps_cd_target "$command")"
+  # The cd in force for the MERGE itself, the last before it in its own shell (claude-config#1017).
+  from_cd="$(ps_cd_target "$command" mt_runs_merge)"
   case "$from_cd" in
     "~") from_cd="$HOME" ;;
     "~/"*) from_cd="$HOME/${from_cd#"~/"}" ;;
@@ -576,8 +578,8 @@ MTSEOF
 #
 # Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is
 # about that view. Read with a shell tokenizer, in command position only, so a merge quoted
-# inside an echo names nothing, and the walk stops at the first token it cannot read, as
-# ps_cd_target's does. Heredoc bodies are removed first, so prose about merging names nothing
+# inside an echo names nothing, and the walk stops at the first token it cannot read. Heredoc
+# bodies are removed first, so prose about merging names nothing
 # and a real merge written after a heredoc is still read (L673).
 #
 # The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
@@ -694,12 +696,22 @@ mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
 # three other gates, and the day there were two wordings of it was the day one of them drifted
 # (claude-config#480, L613).
 mt_reader_missing() {  # true when the reader mt__merge_selector needs is not installed
-  ps_reader_missing python3
+  ps_reader_missing python3 && return 0
+  # The cd in force for the merge is read by lib/shell-words.py (#1017). Without it ps_cd_target
+  # answers nothing, and mt_repo_dir would judge the merge in the session directory instead
+  # (lessons review of #1056, L490), so a missing file is a missing reader too.
+  [ ! -f "$PS_SHELL_WORDS" ]
 }
 
 # The sentence every gate says it with, in the gates' shared vocabulary rather than one wording
 # per gate (L613). Each gate adds what its own refusal is about.
 mt_reader_absent_why() {
+  if [ ! -f "$PS_SHELL_WORDS" ] && ! ps_reader_missing python3; then
+    ps_reader_absent_why "$PS_SHELL_WORDS is missing" \
+      'lib/push-scope.sh reads which directory a cd puts the merge in with it, and without that reading this gate would judge the merge in the session directory instead of the repository it runs in.' \
+      'the hooks again with claude-sync pull, which restores lib/shell-words.py,'
+    return
+  fi
   ps_reader_absent_why 'python3 is not on PATH' \
     'lib/merge-target.sh reads the merge'\''s own arguments with it: which pull request this command names, and which repository it names with --repo, -R or a pull request link, and without that reading this gate would answer about whatever pull request gh resolves from the current branch instead.' \
     'python3'
