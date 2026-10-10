@@ -47,15 +47,26 @@ cat > "$BIN/gh" <<'EOS'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$ST/gh-calls"
 rd(){ cat "$ST/$1" 2>/dev/null; }
+# A read can be made to fail (claude-config#1061): <read>-fails holds one error per line, each spent
+# by one call, and <read>-down holds an error every call prints, GitHub staying unreachable.
+pop(){ local f="$ST/$1" l; [ -s "$f" ] || return 1; l="$(head -1 "$f")"; tail -n +2 "$f" > "$f.tmp"; mv "$f.tmp" "$f"; printf '%s' "$l"; }
+fail_read(){
+  local e
+  if e="$(pop "$1-fails")"; then printf '%s\n' "$e" >&2; exit 1; fi
+  [ -s "$ST/$1-down" ] && { cat "$ST/$1-down" >&2; exit 1; }
+  return 0
+}
 case "$*" in
   "auth status"*) exit 0 ;;
   "pr view"*)
+    if [ -e "$ST/merged" ]; then fail_read readback; else fail_read view; fi
     state=OPEN; [ -e "$ST/merged" ] && state=MERGED
     ms=CLEAN; [ "$(rd behind)" != 0 ] && ms=BEHIND
     jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" \
       '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7"}'
     ;;
   "api repos/acme/widget/compare/"*)
+    fail_read compare
     b="$(rd behind)"; st=ahead; [ "$b" != 0 ] && st=diverged
     printf '{"status":"%s","ahead_by":1,"behind_by":%s}\n' "$st" "$b"
     ;;
@@ -87,6 +98,7 @@ EOS
 chmod +x "$BIN/fake-sleep"
 export MWR_SLEEP="$BIN/fake-sleep"
 export MWR_POLL_SECONDS=30
+export MWR_READ_RETRY_SECONDS=7
 export MWR_NO_CHECKS_GRACE_SECONDS=0
 
 # --- stub gates and review checker: log the payload or arguments, answer from files ---------------
@@ -135,7 +147,7 @@ fresh(){ # fresh <head> <behind> <rollup>
   : > "$ST/next-heads"; : > "$ST/on-sleep"
 }
 run(){ (cd "$REPO" && bash "$HELPER" "$@" 2>&1); }
-count(){ [ -f "$ST/$1" ] && grep -c -- "$2" "$ST/$1" || true; }
+count(){ if [ -f "$ST/$1" ]; then grep -c -- "$2" "$ST/$1"; else echo 0; fi; }
 
 # =================================================================================================
 # 1. Refuses what it was not built to carry, before it touches anything (no weakening, L448).
@@ -307,6 +319,80 @@ out="$(env -u MWR_POLL_SECONDS bash -c "cd '$REPO' && bash '$HELPER' 7 --squash"
 check_eq "#1014 with no poll setting it still waits and merges" "0" "$rc"
 check_eq "#1014 the wait between looks defaults to 60 seconds" "60" "$(cat "$ST/sleeps" 2>/dev/null)"
 check_eq "#1014 one pull request read per look, plus the read back after the merge" "3" "$(count gh-calls 'pr view 7')"
+
+# =================================================================================================
+# 8. A read GitHub fails to answer is tried again before the wait is thrown away (claude-config#1061).
+#    On 2026-10-09 two queued merges each waited 7 to 16 minutes for CI and then stopped on ONE
+#    "TLS handshake timeout" or "connection reset by peer" reading the compare. Stopping when it
+#    cannot confirm the head contains main's tip stays: only a transport fault or a GitHub server
+#    error is tried again, a few times over about a minute, and a real answer (a 404, a pull request
+#    that is not there) is believed the first time. The retry waits go through the injected sleep,
+#    at MWR_READ_RETRY_SECONDS (7 here, so they are told apart from the 30 second looks).
+# =================================================================================================
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer' > "$ST/compare-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a compare that fails once and then answers still merges" "0" "$rc"
+check "#1061 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1061 the compare was asked twice" "2" "$(count gh-calls 'compare/')"
+check_eq "#1061 after one retry wait" "1" "$(count sleeps '^7$')"
+check "#1061 the retry is said, with GitHub's own error" "connection reset by peer" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": net/http: TLS handshake timeout' > "$ST/compare-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a compare that keeps failing still stops" "1" "$rc"
+check "#1061 naming the last error" "TLS handshake timeout" "$out"
+check "#1061 and saying it could not confirm the head contains main's tip" "could not read whether #7 contains the tip of main" "$out"
+check_eq "#1061 nothing was merged on an unconfirmed read" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1061 the compare was tried four times" "4" "$(count gh-calls 'compare/')"
+check_eq "#1061 with three retry waits between" "3" "$(count sleeps '^7$')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'gh: Not Found (HTTP 404)' > "$ST/compare-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a compare GitHub refuses (404) stops at once" "1" "$rc"
+check_eq "#1061 asked once, a real answer is not asked again" "1" "$(count gh-calls 'compare/')"
+check_eq "#1061 with no retry wait" "0" "$(count sleeps '^7$')"
+check_eq "#1061 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a pull request read that fails once with a server error still merges" "0" "$rc"
+check_eq "#1061 after one retry wait for it" "1" "$(count sleeps '^7$')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a pull request read that keeps failing stops" "1" "$rc"
+check "#1061 naming GitHub's last error" "TLS handshake timeout" "$out"
+check_eq "#1061 nothing merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1061 three retry waits" "3" "$(count sleeps '^7$')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)' > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a pull request GitHub says is not there stops at once" "1" "$rc"
+check_eq "#1061 with no retry wait" "0" "$(count sleeps '^7$')"
+check_eq "#1061 asked once" "1" "$(count gh-calls 'pr view 7')"
+
+# The read back after the merge: a transient failure there is tried again, so the merge is reported
+# as merged rather than as a head that moved.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'read tcp 10.0.0.2:51234->140.82.112.6:443: i/o timeout' > "$ST/readback-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1061 a read back that fails once still reports the merge" "0" "$rc"
+check "#1061 as merged" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_not "#1061 never as a head that moved" "head moved" "$out"
+check_eq "#1061 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+
+# Its default retry pace: about a minute in all, through the injected sleep.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": net/http: TLS handshake timeout' > "$ST/compare-down"
+out="$(env -u MWR_READ_RETRY_SECONDS bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
+check_eq "#1061 with no retry setting it still stops when GitHub stays unreachable" "1" "$rc"
+check_eq "#1061 the default retry waits are 20 seconds each, a minute in all" "20 20 20" "$(tr '\n' ' ' < "$ST/sleeps" | sed 's/ $//')"
 
 echo
 echo "passed: $pass, failed: $fail"

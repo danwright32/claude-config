@@ -612,6 +612,10 @@ then hands the exact pinned merge command to `block-red-merge.sh` and `pr-review
 only when both allow it, so it decides nothing either gate would refuse. It carries only the merge
 method and `--delete-branch`, and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its hour runs out.
+A GitHub read that fails in transit or on GitHub's server (a timeout, a reset connection, an HTTP
+5xx) is asked again, four times over about a minute, before it stops naming the last error; an
+answer GitHub actually gave, such as a 404, is believed the first time, and nothing merges on a
+read it could not confirm (claude-config#1061).
 
 Every outcome is named and none reads as clean by accident: finished with findings, finished clean,
 still running (with elapsed time), did not finish, failed, came back empty, answered in some other
