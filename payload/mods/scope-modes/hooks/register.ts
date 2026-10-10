@@ -2468,7 +2468,9 @@ export const register: Register = on => {
       if (answer === 'Yes') {
         await setScope($, null)
         await $.ui.toast('No build is off.')
-        return { result: 'Dan said yes: no build is off.', text: 'Dan said yes: no build is off.' }
+        // His yes is a switch like any other, acknowledged with what no build no longer stops (#1055).
+        const text = `Dan said yes: no build is off. ${ackOff('NO BUILD')}`
+        return { result: text, text }
       }
       const text = `Dan said no: no build stays on.${answer !== 'No' ? ` He wrote: ${answer}` : ''}`
       return { result: text, text }

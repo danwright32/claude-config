@@ -890,6 +890,9 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   w.o.ask = 'Yes'
   const yes = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts', tool_use_id: 't2' } as never)
   expect(yes).toMatch(/Dan said yes: no build is off/)
+  // His yes is a switch like any other, so Claude says what no build no longer stops (#1055).
+  expect(yes).toContain(ackOff('NO BUILD'))
+  expect(no).not.toContain('acknowledgement')
   expect(lastModes(w)).toEqual([])
 })
 

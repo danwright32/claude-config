@@ -682,7 +682,7 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
 - The words: `/nobuild` answers "No build is on.", `/winddown` "Winding down is on.", `/build` "No
   build is off." (or "Winding down is off.", or "No scope mode was on."); `/away` and `/home` answer
   "Away is on in this session and 2 others." and name any session that could not be told.
-- Every switch, by a command or by Dan's words, tells Claude to open its reply with one short
+- Every switch, by a command, by Dan's words or by his yes to "Switch to build?", tells Claude to open its reply with one short
   acknowledgement (#1055, Dan 2026-10-09: "have claude ack me when I enter winddown or build or
   anything similar stating what the mode does"): the mode's name, the mode it replaced when another
   was on, and in two or three sentences what Claude will and will not do now and how it ends; turning
