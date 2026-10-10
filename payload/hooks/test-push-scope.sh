@@ -569,6 +569,19 @@ spans "out=\$(cd $T && git push 2>&1); cd $O && git push" \
   "#1062 a push inside a substitution and a push in another repository are refused"
 want_repo "out=\$(cd $T && git push 2>&1); echo \"\$out\"; x=\$(git -C $T push)" "$T" \
   "#1062 control: an assignment holding a push is not a second push in the session repository"
+# A push whose ARGUMENT is a substitution is still a push, wherever its text turns up again: only a
+# command that is no longer the action once its substitutions are taken out is a container (lessons
+# review of #1062, which found the first rule dropping this push because its text held "git push").
+spans "cd $T && git push origin \"\$(git branch --show-current)\"; cd $O && git push" \
+  "#1062 a push with a substitution argument is still judged beside a push elsewhere"
+spans "cd $O && git push origin \`git branch --show-current\`; cd $T && git push" \
+  "#1062 and so is one with a backquoted argument"
+spans $'cd '"$T"$' && git commit -m "$(cat <<\'EOF\'\nit\'s a message\nEOF\n)"\ncd '"$O"' && git commit -m y' \
+  "#1062 a commit whose message is a heredoc substitution is still judged beside a commit elsewhere" ps_is_git_commit
+want_repo "cd $T && git push origin \"\$(git branch --show-current)\"" "$T" \
+  "#1062 control: one push with a substitution argument resolves to its repository"
+want_repo "cd $T && git push \"\$(echo origin)\" \"\$(cd $O && git rev-parse --abbrev-ref HEAD)\"" "$T" \
+  "#1062 control: a cd inside the argument's substitution does not move the push"
 spans "git -C $T push; git -C $O push" \
   "#1062 two pushes naming two repositories with git -C are refused"
 spans "git -C $T push; git push" \

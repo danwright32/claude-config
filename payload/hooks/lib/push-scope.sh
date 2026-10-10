@@ -556,32 +556,28 @@ ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_gi
 # beside the action inside it, and the predicate, reading the substitution afresh, says yes to both.
 # The outer one is not a second action: it is the same push, and its directory is the outer shell's,
 # which is not where the push runs. So a matched record holding a substitution ($( or a backquote)
-# whose text contains another matched record's command is dropped. Only a substitution can contain
-# one, so `git push; git push origin main`, where one text holds the other, keeps both.
+# is asked again with its substitutions emptied (lib/shell-words.py bare), and dropped only when it
+# is then no longer the action: the action ran inside the substitution, and the reader lists that
+# command as a record of its own. `git push origin "$(git branch)"` is still a push emptied, so it
+# stays (lessons review of #1062). A bare reading that cannot run keeps the record, the direction
+# that leaves an action judged.
 ps__action_records() {   # $1 = command  $2 = the action's predicate
-  local pred="${2:-ps_is_git_push}" recs rec rc out="" i j inner keep
-  local -a hits=() texts=()
+  local pred="${2:-ps_is_git_push}" recs rec rc out="" text b
   recs="$(ps__shell_commands "$1")"; rc=$?
   [ "$rc" -eq 1 ] && return 2
   [ -n "$recs" ] || return 1
   while IFS= read -r -d $'\x1e' rec; do
-    "$pred" "${rec#*$'\x1f'}" || continue
-    hits+=("$rec"); texts+=("${rec#*$'\x1f'}")
-  done <<< "$recs"
-  [ "${#hits[@]}" -gt 0 ] || return 1
-  for ((i = 0; i < ${#hits[@]}; i++)); do
-    keep=1
-    case "${texts[$i]}" in
+    text="${rec#*$'\x1f'}"
+    "$pred" "$text" </dev/null || continue
+    case "$text" in
       *'$('*|*'`'*)
-        for ((j = 0; j < ${#hits[@]}; j++)); do
-          [ "$j" -ne "$i" ] || continue
-          inner="${texts[$j]#"${texts[$j]%%[![:space:]]*}"}"; inner="${inner%"${inner##*[![:space:]]}"}"
-          [ -n "$inner" ] || continue
-          case "${texts[$i]}" in *"$inner"*) keep=0; break ;; esac
-        done ;;
+        if b="$(printf '%s' "$text" | python3 "$PS_SHELL_WORDS" bare 2>/dev/null)" \
+          && ! "$pred" "$b" </dev/null; then
+          continue
+        fi ;;
     esac
-    [ "$keep" -eq 1 ] && out+="${hits[$i]}"$'\x1e'
-  done
+    out+="$rec"$'\x1e'
+  done <<< "$recs"
   [ -n "$out" ] || return 1
   printf '%s' "$out"
 }
