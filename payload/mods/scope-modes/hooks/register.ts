@@ -54,6 +54,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
+import { ackOff, ackOn, MODE_DEF } from './modes.ts'
 import { choiceFor, isLeftClosed, newWork, outstanding, settledByDan, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
@@ -2004,7 +2005,8 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   return `Dan did not choose to leave ${pr} ${asIs.as}, so winding down still waits on it. He wrote: ${answer}`
 }
 
-const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
+// Answers the scope mode that was on, which the acknowledgement of the switch names (#1055).
+const setScope = async ($: EngineInterface, scope: ScopeModesScope | null): Promise<ScopeModesScope | null> => {
   const was = await scopeOf($)
   await $.state.set(scopeRef, scope)
   // Turning winding down on again keeps what it found, its PR included (#702): reading the target
@@ -2013,6 +2015,7 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
   if (scope !== 'WINDING DOWN') await $.state.set(targetRef, null)
   else if (was !== 'WINDING DOWN') await $.state.set(targetRef, await readTarget($))
   await showModes($)
+  return was
 }
 
 // The PR a `gh pr create` opened, from the link gh prints, noted for winding down whatever mode is
@@ -2155,20 +2158,21 @@ const FINALIZE_ALL =
   "Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed (its work merged in another PR, say)."
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
+// Each mode's note opens with its one definition (hooks/modes.ts), the same words the
+// acknowledgement of turning it on says to Dan (#1055).
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
-  'NO BUILD': 'No build is on: read, research, run tests and checks, write scratchpad notes and do GitHub issue, milestone and label work. No edits outside the scratchpad, commits, branches, PRs, deploys or data changes.',
+  'NO BUILD': `No build is on: ${MODE_DEF['NO BUILD'].will}. Do not ${MODE_DEF['NO BUILD'].willNot}.`,
   'WINDING DOWN':
-    `Winding down is on. ${FINALIZE_ALL} Finish this issue and every other PR this session opened (merged, deploy live, worktree and branch cleaned, issues closed) and start nothing new. ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
+    `Winding down is on: ${MODE_DEF['WINDING DOWN'].will}. Do not ${MODE_DEF['WINDING DOWN'].willNot}. ${FINALIZE_ALL} ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
 }
-const AWAY_NOTE =
-  'Dan is away from the Mac. Deliver results as a private claude.ai page he can read on his phone (the Artifact tool). Open nothing on the Mac and take no focus: anything that needs him at the Mac is held for when he is back.'
+const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (the Artifact tool). Do not ${MODE_DEF.away.willNot}.`
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
 const sleepPromptNote = (r: SleepRecord, self: string) =>
   `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} Dan is asleep, so deliver as when he is away: ${AWAY_NOTE}`
 // What phase 3 (#834) does for a worker, and only that (L703).
 const WORKER_NOTE =
   "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
-const HOME_NOTE = 'Dan is back at the Mac: deliver results as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview).'
+const HOME_NOTE = `Dan is back at the Mac: ${MODE_DEF.home.will}.`
 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
@@ -2289,19 +2293,20 @@ export const register: Register = on => {
   })
 
   // The commands, which say which mode turned on, and confirm the off.
+  // Each switch tells Claude to open its reply with what the mode now does (#1055).
   on('command.run', { command: 'nobuild' }, async $ => {
-    await setScope($, 'NO BUILD')
-    return { text: 'No build is on.', context: [`Dan turned on no build. ${SCOPE_NOTE['NO BUILD']}`] }
+    const was = await setScope($, 'NO BUILD')
+    return { text: 'No build is on.', context: [`Dan turned on no build. ${ackOn('NO BUILD', { replaced: was })}`, SCOPE_NOTE['NO BUILD']] }
   })
   on('command.run', { command: 'winddown' }, async $ => {
-    await setScope($, 'WINDING DOWN')
-    return { text: 'Winding down is on.', context: [`Dan turned on winding down. ${SCOPE_NOTE['WINDING DOWN']}`] }
+    const was = await setScope($, 'WINDING DOWN')
+    return { text: 'Winding down is on.', context: [`Dan turned on winding down. ${ackOn('WINDING DOWN', { replaced: was })}`, SCOPE_NOTE['WINDING DOWN']] }
   })
   on('command.run', { command: 'build' }, async $ => {
     const scope = await scopeOf($)
     if (!scope) return { text: 'No scope mode was on.' }
     await setScope($, null)
-    return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual.`] }
+    return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
   })
   on('command.run', { command: 'sleep' }, async $ => ({ text: await startSleep($) }))
   on('command.run', { command: 'wake' }, async ($, e) => {
@@ -2315,11 +2320,13 @@ export const register: Register = on => {
   })
   on('command.run', { command: 'away' }, async $ => {
     await setPlace($, 'away')
-    return { text: placeSentence('away', await tellOthers($, 'away')) }
+    const said = placeSentence('away', await tellOthers($, 'away'))
+    return { text: said, context: [ackOn('away', { first: said })] }
   })
   on('command.run', { command: 'home' }, async $ => {
     await setPlace($, 'home')
-    return { text: placeSentence('home', await tellOthers($, 'home')) }
+    const said = placeSentence('home', await tellOthers($, 'home'))
+    return { text: said, context: [ackOn('home', { first: said })] }
   })
 
   // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
@@ -2338,20 +2345,21 @@ export const register: Register = on => {
     if (isDans(e.origin)) {
       const triggers = triggersIn(e.text) as Trigger[]
       for (const t of triggers) {
+        // Each switch opens Claude's reply with what the mode now does (#1055).
         if (t.kind === 'scope') {
-          await setScope($, t.scope)
-          notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message. Say so in one line first.`)
+          const was = await setScope($, t.scope)
+          notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message. ${ackOn(t.scope, { replaced: was })}`)
         } else if (t.kind === 'build') {
           const was = await scopeOf($)
           if (was) {
             await setScope($, null)
-            notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message. Say so in one line first.`)
+            notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message. ${ackOff(was)}`)
           }
         } else if (t.kind === 'off') {
           // Off by name turns off only the mode it names.
           if ((await scopeOf($)) === t.scope) {
             await setScope($, null)
-            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. Say so in one line first.`)
+            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. ${ackOff(t.scope)}`)
           }
         } else if (t.kind === 'wake') {
           const woke = await wake($, e.origin.kind === 'bridge')
@@ -2366,7 +2374,7 @@ export const register: Register = on => {
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
-          notes.push(`Dan's message switched every session to ${t.place}. Say so in one line first: "${placeSentence(t.place, told)}"`)
+          notes.push(`Dan's message switched every session to ${t.place}. ${ackOn(t.place, { first: placeSentence(t.place, told) })}`)
         }
       }
       // Every note so far is a switch the message made; the still on note below switches nothing.
