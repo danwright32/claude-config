@@ -2027,7 +2027,7 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 #     readings, the lower of the middle two, which is the figure the check below computes), 34% of
 #     the budget, at an ambient CPU of 78% to 410% and a load average of 10 to 16.
 #
-# So the suite's own share is 860s and the margin at the worst of those seven readings is 1381s. The
+# So the suite's own share is 860s and the margin at the worst of those eight readings is 1381s. The
 # 1847s does not reproduce: the busiest reading taken here, at a load average of 98, reached 1139s.
 # Load is the larger share, as #517 suspected, and it shows in the SPREAD more than in the median,
 # 65s across the quiet arm against 241s across the busy one. So the lever #492 named, sharing
