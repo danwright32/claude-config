@@ -9,7 +9,7 @@ import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
-import { ackOff, ackOn, MODE_DEF } from '../hooks/modes.ts'
+import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -744,6 +744,14 @@ test("every mode switch by Dan's words tells Claude to open with what the mode n
   expect(ctxOf(await say($ as never, 'stop winding down mode'))).toContain(ackOff('WINDING DOWN'))
   expect(ctxOf(await say($ as never, "I'm stepping away"))).toContain(ackOn('away', { first: 'Away is on in this session.' }))
   expect(ctxOf(await say($ as never, "I'm back at my computer"))).toContain(ackOn('home', { first: 'Home is on in this session.' }))
+})
+
+test('a message that switches two modes gets one acknowledgement saying both, never two competing openings (#1055 review)', withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  const said = ctxOf(await say($ as never, "no coding yet. I'm stepping away"))
+  expect(said.split('Open your reply').length - 1).toBe(1)
+  expect(said).toContain(acknowledge([ackOnSaid('NO BUILD'), ackOnSaid('away', { first: 'Away is on in this session.' })]))
 })
 
 test("each mode's note on every prompt carries the same definition its acknowledgement says (#1055)", withDeps, async ($, on) => {

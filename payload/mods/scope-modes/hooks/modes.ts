@@ -60,20 +60,34 @@ export const modeDoes = (mode: Mode): string => {
 
 /** The words Claude is told to open its reply with, around the acknowledgement itself. */
 export const ACK_LEAD = 'Open your reply with one short acknowledgement of the switch, in these words:'
-const ackOf = (said: string) => `${ACK_LEAD} "${said}"`
+const ACK_LEAD_MANY = 'Open your reply with one short acknowledgement of these switches, in these words:'
 
 /**
- * The acknowledgement when a mode turns on: its name, what it now does, and the mode it replaced,
- * when one was on. `first` is the opening sentence where it says more than the name (away and home
- * say how many sessions were told).
+ * The one instruction to open the reply with, for every switch one message or command made: one
+ * opening, never several competing ones (lessons review of #1055). Empty when nothing switched.
  */
-export const ackOn = (mode: Mode, opts: { replaced?: Mode | null; first?: string } = {}): string => {
-  const replaced = opts.replaced && opts.replaced !== mode ? ` It replaces ${MODE_DEF[opts.replaced].name.toLowerCase()}.` : ''
-  return ackOf(`${opts.first ?? `${MODE_DEF[mode].name} is on.`}${replaced} ${modeDoes(mode)}`)
+export const acknowledge = (said: readonly string[]): string => {
+  if (!said.length) return ''
+  return `${said.length === 1 ? ACK_LEAD : ACK_LEAD_MANY} "${said.join(' ')}"`
 }
 
-/** The acknowledgement when a scope mode turns off: what it no longer does. */
-export const ackOff = (mode: ScopeModesScope): string => {
-  const d = MODE_DEF[mode]
-  return ackOf(`${d.name} is off. I build as usual again, and ${d.name.toLowerCase()} no longer stops me: I may ${d.willNot} once more.`)
+/**
+ * What is said when a mode turns on: its name, what it now does, and the mode it replaced, when
+ * one was on. `first` is the opening sentence where it says more than the name (away and home say
+ * how many sessions were told).
+ */
+export const ackOnSaid = (mode: Mode, opts: { replaced?: Mode | null; first?: string } = {}): string => {
+  const replaced = opts.replaced && opts.replaced !== mode ? ` It replaces ${MODE_DEF[opts.replaced].name.toLowerCase()}.` : ''
+  return `${opts.first ?? `${MODE_DEF[mode].name} is on.`}${replaced} ${modeDoes(mode)}`
 }
+
+/** What is said when a scope mode turns off: what it no longer stops. */
+export const ackOffSaid = (mode: ScopeModesScope): string => {
+  const d = MODE_DEF[mode]
+  return `${d.name} is off. I build as usual again, and ${d.name.toLowerCase()} no longer stops me: I may ${d.willNot} once more.`
+}
+
+/** The instruction for one switch on. */
+export const ackOn = (mode: Mode, opts: { replaced?: Mode | null; first?: string } = {}): string => acknowledge([ackOnSaid(mode, opts)])
+/** The instruction for one scope mode off. */
+export const ackOff = (mode: ScopeModesScope): string => acknowledge([ackOffSaid(mode)])

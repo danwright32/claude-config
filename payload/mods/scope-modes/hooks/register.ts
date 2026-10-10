@@ -54,7 +54,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
-import { ackOff, ackOn, MODE_DEF } from './modes.ts'
+import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import { choiceFor, isLeftClosed, newWork, outstanding, settledByDan, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
@@ -2344,22 +2344,27 @@ export const register: Register = on => {
     const notes: string[] = []
     if (isDans(e.origin)) {
       const triggers = triggersIn(e.text) as Trigger[]
+      // What each switch says it now does (#1055), opened with once for them all, so a message that
+      // switches two modes never gives Claude two competing openings.
+      const acks: string[] = []
       for (const t of triggers) {
-        // Each switch opens Claude's reply with what the mode now does (#1055).
         if (t.kind === 'scope') {
           const was = await setScope($, t.scope)
-          notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message. ${ackOn(t.scope, { replaced: was })}`)
+          notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message.`)
+          acks.push(ackOnSaid(t.scope, { replaced: was }))
         } else if (t.kind === 'build') {
           const was = await scopeOf($)
           if (was) {
             await setScope($, null)
-            notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message. ${ackOff(was)}`)
+            notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message.`)
+            acks.push(ackOffSaid(was))
           }
         } else if (t.kind === 'off') {
           // Off by name turns off only the mode it names.
           if ((await scopeOf($)) === t.scope) {
             await setScope($, null)
-            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. ${ackOff(t.scope)}`)
+            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message.`)
+            acks.push(ackOffSaid(t.scope))
           }
         } else if (t.kind === 'wake') {
           const woke = await wake($, e.origin.kind === 'bridge')
@@ -2374,11 +2379,13 @@ export const register: Register = on => {
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
-          notes.push(`Dan's message switched every session to ${t.place}. ${ackOn(t.place, { first: placeSentence(t.place, told) })}`)
+          notes.push(`Dan's message switched every session to ${t.place}.`)
+          acks.push(ackOnSaid(t.place, { first: placeSentence(t.place, told) }))
         }
       }
       // Every note so far is a switch the message made; the still on note below switches nothing.
       const switched = notes.length
+      if (acks.length) notes.push(acknowledge(acks))
       // A message asking to end the mode still on, in words that did not switch it, is said rather than
       // left for Claude to read as switched: the hook would go on enforcing a mode Claude thinks is off.
       const stillOn = await scopeOf($)

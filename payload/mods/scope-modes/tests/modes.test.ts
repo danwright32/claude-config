@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { ACK_LEAD, ackOff, ackOn, MODE_DEF, modeDoes, type Mode } from '../hooks/modes.ts'
+import { ACK_LEAD, acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF, modeDoes, type Mode } from '../hooks/modes.ts'
 import { FINISHED, NEW_WORK, newWork } from '../hooks/winddown.ts'
 
 const MODES = Object.keys(MODE_DEF) as Mode[]
@@ -35,6 +35,15 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
   test('a place opens with what was switched, then what it does', () => {
     const first = 'Away is on in this session and 2 others.'
     expect(ackOn('away', { first })).toBe(`${ACK_LEAD} "${first} ${modeDoes('away')}"`)
+  })
+
+  test('several switches at once are one acknowledgement saying each, so the reply opens one way', () => {
+    const both = acknowledge([ackOnSaid('NO BUILD'), ackOffSaid('WINDING DOWN')])
+    expect(both.split('Open your reply').length - 1).toBe(1)
+    expect(both).toContain(ackOnSaid('NO BUILD'))
+    expect(both).toContain(ackOffSaid('WINDING DOWN'))
+    expect(acknowledge([ackOnSaid('away')])).toBe(ackOn('away'))
+    expect(acknowledge([])).toBe('')
   })
 
   test('turning a scope mode off says what it no longer stops', () => {
