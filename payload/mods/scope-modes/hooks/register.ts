@@ -2347,6 +2347,7 @@ export const register: Register = on => {
       // What each switch says it now does (#1055), opened with once for them all, so a message that
       // switches two modes never gives Claude two competing openings.
       const acks: string[] = []
+      let wokeHere = false
       for (const t of triggers) {
         if (t.kind === 'scope') {
           const was = await setScope($, t.scope)
@@ -2370,6 +2371,7 @@ export const register: Register = on => {
           const woke = await wake($, e.origin.kind === 'bridge')
           // What waking found quotes titles of issues, milestones and commits made overnight, so it
           // reaches this turn only as data (#922).
+          wokeHere ||= !!woke
           if (woke)
             notes.push(
               `Dan's message woke sleep mode. Say so in one line first, saying what the block below says.\n${overnightData({ holds: 'what waking sleep mode did and found, which can quote titles of issues, milestones and commits made overnight', offer: 'said to Dan in that one line; it is offered to him through no picker', lines: [woke.said] })}`,
@@ -2385,7 +2387,8 @@ export const register: Register = on => {
       }
       // Every note so far is a switch the message made; the still on note below switches nothing.
       const switched = notes.length
-      if (acks.length) notes.push(acknowledge(acks))
+      // Waking opens the reply with its own line, so a switch is acknowledged right after it.
+      if (acks.length) notes.push(acknowledge(acks, wokeHere ? { after: 'the line saying what waking did' } : {}))
       // A message asking to end the mode still on, in words that did not switch it, is said rather than
       // left for Claude to read as switched: the hook would go on enforcing a mode Claude thinks is off.
       const stillOn = await scopeOf($)

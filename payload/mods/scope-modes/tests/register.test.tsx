@@ -2129,6 +2129,17 @@ test('a message from Dan in the evening while asleep does not ask whether he is 
   expect((await say($ as never, 'still going?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
 })
 
+// Lessons review of #1055: waking has its own line to open the reply with, so a switch the same
+// message makes is acknowledged right after it, never as a second opening.
+test('a message that wakes sleep mode and switches a mode opens with the waking line, the switch acknowledged right after it (#1055)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  const ctx = (await say($ as never, "I'm up. no coding yet")).context?.join('\n') ?? ''
+  expect(ctx).toMatch(/Dan's message woke sleep mode\. Say so in one line first/)
+  expect(ctx).not.toContain('Open your reply')
+  expect(ctx).toContain(acknowledge([ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' }))
+})
+
 test("Dan's own \"I'm up\" wakes it; the same words from another session do not", withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)

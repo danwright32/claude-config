@@ -66,9 +66,12 @@ const ACK_LEAD_MANY = 'Open your reply with one short acknowledgement of these s
  * The one instruction to open the reply with, for every switch one message or command made: one
  * opening, never several competing ones (lessons review of #1055). Empty when nothing switched.
  */
-export const acknowledge = (said: readonly string[]): string => {
+export const acknowledge = (said: readonly string[], opts: { after?: string } = {}): string => {
   if (!said.length) return ''
-  return `${said.length === 1 ? ACK_LEAD : ACK_LEAD_MANY} "${said.join(' ')}"`
+  const what = `one short acknowledgement of ${said.length === 1 ? 'the switch' : 'these switches'}, in these words:`
+  // Where another line already opens the reply (waking, #837), it follows that line instead.
+  const lead = opts.after ? `Right after ${opts.after}, add ${what}` : said.length === 1 ? ACK_LEAD : ACK_LEAD_MANY
+  return `${lead} "${said.join(' ')}"`
 }
 
 /**

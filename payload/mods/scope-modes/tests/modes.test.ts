@@ -44,6 +44,10 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
     expect(both).toContain(ackOffSaid('WINDING DOWN'))
     expect(acknowledge([ackOnSaid('away')])).toBe(ackOn('away'))
     expect(acknowledge([])).toBe('')
+    // Where another line already opens the reply, the acknowledgement follows it rather than opening.
+    const after = acknowledge([ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' })
+    expect(after).not.toContain('Open your reply')
+    expect(after).toBe(`Right after the line saying what waking did, add one short acknowledgement of the switch, in these words: "${ackOnSaid('NO BUILD')}"`)
   })
 
   test('turning a scope mode off says what it no longer stops', () => {
