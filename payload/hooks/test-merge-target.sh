@@ -650,7 +650,6 @@ got="$(set -u; PATH="$ghstub/none:$PATH" mt_pr_view 7 "number,state,url" acme/wi
 eq "$(printf '%s' "$got" | jq -r '.found, .notFound' 2>/dev/null | tr '\n' ' ')" "false true " "under set -u with no other account, it answers not found rather than failing"
 rm -rf "$ghstub"
 
-echo "  $passed passed, $failed failed"
 echo "merge-target: mt_gh_transient tells a GitHub that did not answer from one that refused (claude-config#1061)"
 
 # Worth asking again: the transport failed, or GitHub's own server did. The first two are the
@@ -679,5 +678,6 @@ for e in \
   if mt_gh_transient "$e"; then fail "an answer GitHub gave was treated as worth asking again: [$e]"; else pass; fi
 done
 
+echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
