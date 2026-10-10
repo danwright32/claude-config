@@ -696,12 +696,22 @@ mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
 # three other gates, and the day there were two wordings of it was the day one of them drifted
 # (claude-config#480, L613).
 mt_reader_missing() {  # true when the reader mt__merge_selector needs is not installed
-  ps_reader_missing python3
+  ps_reader_missing python3 && return 0
+  # The cd in force for the merge is read by lib/shell-words.py (#1017). Without it ps_cd_target
+  # answers nothing, and mt_repo_dir would judge the merge in the session directory instead
+  # (lessons review of #1056, L490), so a missing file is a missing reader too.
+  [ ! -f "$PS_SHELL_WORDS" ]
 }
 
 # The sentence every gate says it with, in the gates' shared vocabulary rather than one wording
 # per gate (L613). Each gate adds what its own refusal is about.
 mt_reader_absent_why() {
+  if [ ! -f "$PS_SHELL_WORDS" ] && ! ps_reader_missing python3; then
+    ps_reader_absent_why "$PS_SHELL_WORDS is missing" \
+      'lib/push-scope.sh reads which directory a cd puts the merge in with it, and without that reading this gate would judge the merge in the session directory instead of the repository it runs in.' \
+      'the hooks again with claude-sync pull, which restores lib/shell-words.py,'
+    return
+  fi
   ps_reader_absent_why 'python3 is not on PATH' \
     'lib/merge-target.sh reads the merge'\''s own arguments with it: which pull request this command names, and which repository it names with --repo, -R or a pull request link, and without that reading this gate would answer about whatever pull request gh resolves from the current branch instead.' \
     'python3'
