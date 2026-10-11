@@ -37,7 +37,8 @@
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
 #      come back carrying their key), GitHub refused the update (a conflict), the pull request is
-#      closed or unreadable, or main moved more times than MWR_MAX_UPDATES allows
+#      closed, a read GitHub refused or still did not answer after being asked again, or main
+#      moved more times than MWR_MAX_UPDATES allows
 #   3  still waiting when the deadline or the poll count ran out; running it again resumes
 #   64 refused its arguments, or was run outside a checkout
 #
@@ -55,7 +56,9 @@
 # MWR_MAX_POLLS (derived from the two, bounding the loop by count as well as by clock, L704),
 # MWR_MAX_UPDATES (3), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
-# MWR_HEARTBEAT_SECONDS (300), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_REVIEW_LIB.
+# MWR_HEARTBEAT_SECONDS (300), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
+# is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
+# with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_REVIEW_LIB.
 
 set -uo pipefail
 
@@ -149,13 +152,65 @@ ask_gate(){   # $1 = gate script, $2 = command text
   return 0
 }
 
+# THE READS ARE ASKED AGAIN when GitHub did not answer (claude-config#1061). On 2026-10-09 two
+# queued merges each waited 7 to 16 minutes for CI, then stopped on one "TLS handshake timeout" or
+# "connection reset by peer" reading the compare, and the wait was thrown away. So each read below
+# is a reader that sets its globals and returns 0 (answered), 1 (GitHub answered no, or failed in a
+# way nobody recognised) or 2 (the transport or GitHub's server failed, mt_gh_transient), and
+# with_retries asks again only on 2, READ_TRIES times in all with READ_WAIT between, through the
+# same injected sleep (L524). A read still failing after that stops exactly as before, naming the
+# last error: nothing merges on an unconfirmed read. A write (update-branch, the merge) is never
+# asked again here: its failure can be a refusal, and it is judged by reading the state it left.
+READ_TRIES="$(num_or "${MWR_READ_TRIES:-}" 4)"; [ "$READ_TRIES" -ge 1 ] || READ_TRIES=1
+READ_WAIT="$(num_or "${MWR_READ_RETRY_SECONDS:-}" 20)"
+read_err=""
+with_retries(){   # $1 = what is being read, for the line it says; $2 = the reader
+  local try=1 rc
+  while :; do
+    "$2"; rc=$?
+    [ "$rc" -eq 2 ] || return "$rc"
+    [ "$try" -lt "$READ_TRIES" ] || return 2
+    say "GitHub did not answer reading $1 (try $try of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
+    "$SLEEP" "$READ_WAIT"
+    try=$((try + 1))
+  done
+}
+tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
+read_pr(){   # sets view_env
+  view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
+  [ "$(printf '%s' "$view_env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
+  read_err="$(printf '%s' "$view_env" | jq -r '.error // ""' 2>/dev/null)"
+  if [ "$(printf '%s' "$view_env" | jq -r '(.notFound // false) or ((.wrongRepo // "") != "")' 2>/dev/null)" != "true" ] && mt_gh_transient "$read_err"; then
+    return 2
+  fi
+  read_err="${read_err:-no answer}"
+  return 1
+}
+read_compare(){   # sets compare, crc, behind
+  compare="$(gh_as api "repos/$slug/compare/$base...$head?per_page=1" 2>&1)"; crc=$?
+  behind="$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)"
+  case "$behind" in ''|*[!0-9]*) ;; *) return 0 ;; esac
+  read_err="${compare:0:300}, exit $crc"
+  [ "$crc" -ne 0 ] && mt_gh_transient "$compare" && return 2
+  return 1
+}
+read_back(){   # sets after
+  local env
+  env="$(mt_pr_view "$pr" "state,headRefOid" "$slug" "$slug")"
+  after="$(printf '%s' "$env" | jq -c '.view // {}' 2>/dev/null)"
+  [ "$(printf '%s' "$env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
+  read_err="$(printf '%s' "$env" | jq -r '.error // ""' 2>/dev/null)"
+  mt_gh_transient "$read_err" && return 2
+  return 1
+}
+
 polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
-  view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
-  if [ "$(printf '%s' "$view_env" | jq -r '.found // false' 2>/dev/null)" != "true" ]; then
-    stop 1 "Stopped: could not read pull request #$pr in $slug from GitHub ($(printf '%s' "$view_env" | jq -r '.error // "no answer"' 2>/dev/null)). Nothing was merged."
+  with_retries "pull request #$pr" read_pr; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    stop 1 "Stopped: could not read pull request #$pr in $slug from GitHub ($read_err$(tried "$rrc")). Nothing was merged."
   fi
   account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
   view="$(printf '%s' "$view_env" | jq -c '.view')"
@@ -172,9 +227,8 @@ while :; do
   if [ "$head" != "$head_seen" ]; then head_seen="$head"; head_since="$(now)"; fi
 
   # Behind its base: update, and go round for the new head.
-  compare="$(gh_as api "repos/$slug/compare/$base...$head?per_page=1" 2>&1)"; crc=$?
-  behind="$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)"
-  case "$behind" in ''|*[!0-9]*) stop 1 "Stopped: could not read whether #$pr contains the tip of $base (${compare:0:300}, exit $crc). Nothing was merged." ;; esac
+  with_retries "whether #$pr contains the tip of $base" read_compare; rrc=$?
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read whether #$pr contains the tip of $base ($read_err$(tried "$rrc")). Nothing was merged."
   if [ "$behind" -gt 0 ] || [ "$(printf '%s' "$view" | jq -r '.mergeStateStatus // ""')" = "BEHIND" ]; then
     if [ "$updates" -ge "$MAX_UPDATES" ]; then
       stop 1 "Stopped: $base moved again; this run has updated it $updates time(s), its limit (MWR_MAX_UPDATES). Nothing was merged. Run it again when merges into $base have quietened."
@@ -235,7 +289,13 @@ while :; do
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
   # Judged by the state it leaves, never by what gh printed: --delete-branch from a worktree can fail
   # after the merge has landed.
-  after="$(mt_pr_view "$pr" "state,headRefOid" "$slug" "$slug" | jq -c '.view // {}' 2>/dev/null)"
+  with_retries "#$pr back after the merge" read_back; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    # Unreadable is not "the head moved": say what is known and look again, where the read at the
+    # top of the loop either finds it merged or stops naming GitHub's error.
+    say "Could not read #$pr back after the merge command (gh exited $merge_rc: ${merge_out:0:200}; read: ${read_err:-no answer}$(tried "$rrc")); looking again."
+    continue
+  fi
   if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then
     note=""; [ "$merge_rc" -ne 0 ] && note=" (gh exited $merge_rc after merging: ${merge_out:0:200})"
     stop 0 "Merged #$pr in $slug at ${head:0:7}$note."

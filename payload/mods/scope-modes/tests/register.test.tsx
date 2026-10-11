@@ -276,6 +276,14 @@ type Opts = {
   openFails?: { helper?: string; open?: string }
   /** `sleep-queue.sh release` refusing, with what it printed (#922: its answer can quote a worker's why). */
   releaseFails?: string
+  /**
+   * Folders removed from the disk (#1059): a process started in one fails to start, naming the
+   * command as the real spawn does, and git -C one cannot change to it. Every other checkout
+   * folder (/repo and the session's own) is there.
+   */
+  gone?: string[]
+  /** A folder that is still there when looked for, and removed the moment a process is started in it (#1059). */
+  vanishOnSpawn?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -339,10 +347,22 @@ const world = (on: On, o: Opts = {}) => {
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
   })
-  on('fs.exists', ($, e) => ({ value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  // A checkout folder (/repo, the session's own) is there unless a test removed it (#1059).
+  const isGone = (dir: string) => (o.gone ?? []).includes(dir)
+  const isCheckout = (dir: string) => dir === '/repo' || dir === (o.cwd ?? '/repo')
+  on('fs.exists', ($, e) => ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
   on('process.run', function answer($, e) {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
+    // A process started in a folder that is not there fails to start, and the error names the
+    // command, not the folder (measured in #1059: spawn('gh', ..., { cwd: '/nonexistent' })).
+    const at = e.init?.cwd
+    if (at !== undefined && o.vanishOnSpawn === at) {
+      o.gone = [...(o.gone ?? []), at]
+      o.vanishOnSpawn = undefined
+    }
+    if (at !== undefined && isGone(at)) throw new Error(`ENOENT: no such file or directory, posix_spawn '${cmd}'`)
+    if (cmd === 'git' && a[0] === '-C' && isGone(a[1] as string)) return fail(128, `fatal: cannot change to '${a[1]}': No such file or directory`)
     const ops = a.filter(x => !x.startsWith('-'))
     if (cmd === 'mv' || cmd === 'ln' || cmd === 'rm') w.fileOps.push(argv)
     if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
@@ -1087,6 +1107,76 @@ test('winding down from a detached head in a linked worktree reads that worktree
   await start($ as never, clock)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
+})
+
+// Winding down's own cleanup removes the session's worktree (#1059). The finish check ran gh with
+// that folder as its working directory, and a process started in a folder that is not there fails
+// naming the command (posix_spawn 'gh'), so a finished session was refused the turn end for ever,
+// told gh could not start. A removed folder is wind down's own end state: GitHub is read by the
+// repository's name from a folder that is there, and the branch and worktree lists from the main
+// checkout.
+const WT = '/repo/.claude/worktrees/wt'
+
+test("a merged, live PR whose worktree wind down removed lets the turn end, read by the repository's name (#1059)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchHere = false
+  w.o.branchOnGitHub = false
+  w.o.gone = [WT]
+  const before = w.runs.length
+  const r = await stop($ as never)
+  expect(r.block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+  // Every GitHub read after the folder went names the repository, since no folder names it now.
+  const gh = w.runs.slice(before).filter(x => x[0] === 'gh')
+  expect(gh.length).toBeGreaterThan(0)
+  for (const x of gh) expect(x.slice(x.indexOf('--repo'), x.indexOf('--repo') + 2)).toEqual(['--repo', 'o/r'])
+})
+
+test('a removed worktree whose branch is still in the main checkout is read there and said, never as an unreadable PR (#1059)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchOnGitHub = false
+  w.o.gone = [WT]
+  const before = w.runs.length
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: the branch scope-modes-616 still exists here\./)
+  expect(block).not.toMatch(/could not be read|posix_spawn/)
+  const lists = w.runs.slice(before).filter(x => x[0] === 'git' && (x.includes('--list') || x.includes('worktree')))
+  expect(lists.length).toBe(2)
+  for (const x of lists) expect(x.slice(0, 3)).toEqual(['git', '-C', '/repo'])
+})
+
+test("a removed worktree whose repository nothing names is said as the missing folder, never as gh failing to start (#1059)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN'), remote: null })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.gone = [WT]
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(`the session's directory ${WT} no longer exists`)
+  expect(block).not.toMatch(/posix_spawn|failed to start/)
+})
+
+test("a worktree removed between looking for it and starting gh in it is said as the missing folder, and the next check reads past it (#1059)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchHere = false
+  w.o.branchOnGitHub = false
+  w.o.vanishOnSpawn = WT
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(`the PR could not be read (the session's directory ${WT} no longer exists)`)
+  expect(block).not.toMatch(/posix_spawn/)
+  expect((await stop($ as never)).block).toBeUndefined()
 })
 
 test('winding down in no repository has nothing to finish (#980)', withDeps, async ($, on) => {
