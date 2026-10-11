@@ -682,6 +682,15 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
 - The words: `/nobuild` answers "No build is on.", `/winddown` "Winding down is on.", `/build` "No
   build is off." (or "Winding down is off.", or "No scope mode was on."); `/away` and `/home` answer
   "Away is on in this session and 2 others." and name any session that could not be told.
+- Every switch, by a command, by Dan's words or by his yes to "Switch to build?", tells Claude to open its reply with one short
+  acknowledgement (#1055, Dan 2026-10-09: "have claude ack me when I enter winddown or build or
+  anything similar stating what the mode does"): the mode's name, the mode it replaced when another
+  was on, and in two or three sentences what Claude will and will not do now and how it ends; turning
+  a scope mode off says what it no longer stops. The words come from one definition per mode in
+  `hooks/modes.ts`, which each mode's note on every prompt is built from too. Winding down will not
+  start anything new, and names what its guard refuses outright in the very words the refusal uses
+  (`NEW_WORK` in `hooks/winddown.ts`).
+  Sleep and wake keep their own messages: `/sleep` prints what it started and `/wake` what waking did.
 - A no build refusal is the grey blocked card titled "Blocked by No build", with "Claude asks you:
   Switch to build?" as its safe way; a winding down refusal is titled "Winding down"; a held action
   "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls

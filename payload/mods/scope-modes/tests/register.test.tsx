@@ -9,6 +9,7 @@ import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
+import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -695,12 +696,12 @@ const lastModes = (w: { modes: string[][] }) => w.modes[w.modes.length - 1]
 
 // ---- Scope modes (#616) ----
 
-test('a phrase from Dan turns no build on: the mode leads the band, and Claude is told to say so', withDeps, async ($, on) => {
+test('a phrase from Dan turns no build on: the mode leads the band, and Claude is told to say what it does (#1055)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   const r = await say($ as never, 'no coding yet, just research how the sync works')
   expect(lastModes(w)).toEqual(['NO BUILD'])
-  expect(r.context?.join('\n')).toMatch(/No build just turned on.*Say so in one line/s)
+  expect(r.context?.join('\n')).toContain(ackOn('NO BUILD'))
 })
 
 test('the same phrase from another session, a plugin or a notification changes nothing', withDeps, async ($, on) => {
@@ -729,8 +730,69 @@ test('"go ahead and build" from Dan turns no build off, and Claude confirms it',
   await command($ as never, 'nobuild')
   const r = await say($ as never, 'ok, go ahead and build')
   expect(lastModes(w)).toEqual([])
-  expect(r.context?.join('\n')).toMatch(/No build just turned off.*Say so in one line/s)
+  expect(r.context?.join('\n')).toContain(ackOff('NO BUILD'))
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
+})
+
+// #1055: on 2026-10-09 Dan typed /winddown and had to ask what it does. Every switch now opens
+// Claude's reply with the mode's name, what it will and will not do, and the mode it replaced, in
+// words built from the mode's one definition (hooks/modes.ts), which its per prompt note uses too.
+const ctxOf = (r: { context?: string[] }) => r.context?.join('\n') ?? ''
+
+test('every mode switch by command tells Claude to open with what the mode now does, naming the mode it replaced (#1055)', withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  expect(ctxOf(await command($ as never, 'nobuild'))).toContain(ackOn('NO BUILD'))
+  expect(ctxOf(await command($ as never, 'winddown'))).toContain(ackOn('WINDING DOWN', { replaced: 'NO BUILD' }))
+  // On again, it replaces nothing, and still says what it does.
+  const again = ctxOf(await command($ as never, 'winddown'))
+  expect(again).toContain(ackOn('WINDING DOWN'))
+  expect(again).not.toContain('It replaces')
+  expect(ctxOf(await command($ as never, 'nobuild'))).toContain(ackOn('NO BUILD', { replaced: 'WINDING DOWN' }))
+  expect(ctxOf(await command($ as never, 'build'))).toContain(ackOff('NO BUILD'))
+  // Nothing was on, so nothing switched and nothing is acknowledged.
+  expect(ctxOf(await command($ as never, 'build'))).not.toContain('acknowledgement')
+  expect(ctxOf(await command($ as never, 'away'))).toContain(ackOn('away', { first: 'Away is on in this session.' }))
+  expect(ctxOf(await command($ as never, 'home'))).toContain(ackOn('home', { first: 'Home is on in this session.' }))
+})
+
+test("every mode switch by Dan's words tells Claude to open with what the mode now does (#1055)", withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  expect(ctxOf(await say($ as never, 'no coding yet'))).toContain(ackOn('NO BUILD'))
+  expect(ctxOf(await say($ as never, "let's wind down"))).toContain(ackOn('WINDING DOWN', { replaced: 'NO BUILD' }))
+  expect(ctxOf(await say($ as never, 'stop winding down mode'))).toContain(ackOff('WINDING DOWN'))
+  expect(ctxOf(await say($ as never, "I'm stepping away"))).toContain(ackOn('away', { first: 'Away is on in this session.' }))
+  expect(ctxOf(await say($ as never, "I'm back at my computer"))).toContain(ackOn('home', { first: 'Home is on in this session.' }))
+})
+
+test('a message that switches two modes gets one acknowledgement saying both, never two competing openings (#1055 review)', withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  const said = ctxOf(await say($ as never, "no coding yet. I'm stepping away"))
+  expect(said.split('Open your reply').length - 1).toBe(1)
+  expect(said).toContain(acknowledge([ackOnSaid('NO BUILD'), ackOnSaid('away', { first: 'Away is on in this session.' })]))
+})
+
+test("each mode's note on every prompt carries the same definition its acknowledgement says (#1055)", withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const noBuild = ctxOf(await say($ as never, 'carry on'))
+  expect(noBuild).toContain(MODE_DEF['NO BUILD'].will)
+  expect(noBuild).toContain(MODE_DEF['NO BUILD'].willNot)
+  await command($ as never, 'winddown')
+  const wind = ctxOf(await say($ as never, 'carry on'))
+  expect(wind).toContain(MODE_DEF['WINDING DOWN'].will)
+  // Starting nothing new at all, not only the starts its guard refuses (lessons review of #1055).
+  expect(wind).toContain(`Do not start anything new: winding down refuses to ${MODE_DEF['WINDING DOWN'].refuses}.`)
+  await command($ as never, 'build')
+  await command($ as never, 'away')
+  const away = ctxOf(await say($ as never, 'carry on'))
+  expect(away).toContain(MODE_DEF.away.will)
+  expect(away).toContain(MODE_DEF.away.willNot)
+  await command($ as never, 'home')
+  expect(ctxOf(await say($ as never, 'carry on'))).toContain(MODE_DEF.home.will)
 })
 
 // A message Dan types while a turn runs reaches prompt.submit at Enter carrying that turn's id
@@ -745,7 +807,7 @@ test('"stop winding down mode" sent mid turn turns winding down off, and the tur
   expect((await stop($ as never)).block).toMatch(/Winding down is not finished/)
   const r = await sayMidTurn($ as never, 'stop winding down mode. run load 1')
   expect(lastModes(w)).toEqual([])
-  expect(r.context?.join('\n')).toMatch(/Winding down just turned off.*Say so in one line/s)
+  expect(r.context?.join('\n')).toContain(ackOff('WINDING DOWN'))
   expect((await stop($ as never)).block).toBeUndefined()
   expect(w.logs.filter(l => l.includes('sent mid turn'))).toEqual(['scope-modes: a message from Dan sent mid turn reached the mod: switched 1, still on note not added'])
 })
@@ -756,7 +818,7 @@ test('turning one mode off by name leaves the other mode alone (#805)', withDeps
   await command($ as never, 'nobuild')
   const r = await say($ as never, 'stop winding down mode')
   expect(lastModes(w)).toEqual(['NO BUILD'])
-  expect(r.context?.join('\n') ?? '').not.toMatch(/just turned off/)
+  expect(r.context?.join('\n') ?? '').not.toMatch(/is off\./)
 })
 
 test('a message naming the mode that is on, in words that do not switch it, gets a note that it is still on and how to turn it off (#805)', withDeps, async ($, on) => {
@@ -857,6 +919,9 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   w.o.ask = 'Yes'
   const yes = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts', tool_use_id: 't2' } as never)
   expect(yes).toMatch(/Dan said yes: no build is off/)
+  // His yes is a switch like any other, so Claude says what no build no longer stops (#1055).
+  expect(yes).toContain(ackOff('NO BUILD'))
+  expect(no).not.toContain('acknowledgement')
   expect(lastModes(w)).toEqual([])
 })
 
@@ -2152,6 +2217,17 @@ test('a message from Dan in the evening while asleep does not ask whether he is 
   // 7:00 PM ET on Thu Jan 1 is 00:00 UTC on Jan 2: past the window.
   await clock.set(Date.UTC(1970, 0, 2, 0, 0))
   expect((await say($ as never, 'still going?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+// Lessons review of #1055: waking has its own line to open the reply with, so a switch the same
+// message makes is acknowledged right after it, never as a second opening.
+test('a message that wakes sleep mode and switches a mode opens with the waking line, the switch acknowledged right after it (#1055)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  const ctx = (await say($ as never, "I'm up. no coding yet")).context?.join('\n') ?? ''
+  expect(ctx).toMatch(/Dan's message woke sleep mode\. Say so in one line first/)
+  expect(ctx).not.toContain('Open your reply')
+  expect(ctx).toContain(acknowledge([ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' }))
 })
 
 test("Dan's own \"I'm up\" wakes it; the same words from another session do not", withDeps, async ($, on) => {
