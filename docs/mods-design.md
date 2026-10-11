@@ -789,6 +789,15 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   finish; outside a repository too. A check that cannot read GitHub never counts as finished. It is
   checked at each turn end and each minute, and the toast reads "Wind down finished: safe to close
   this session."
+- The session's own folder going is wind down's own end state (#1059): cleaning up removes the
+  session's worktree, and a process started in a folder that is not there fails naming the command
+  (`posix_spawn 'gh'`), never the folder, so a finished session was refused the turn end for ever,
+  told gh could not start. The main working tree and the repository's owner/name are kept with the
+  target when winding down turns on. Once the folder is gone, GitHub is read with `--repo` from a
+  folder that is there, and the branch and worktree lists from the main working tree; with the main
+  working tree gone too, no checkout is left to hold the branch or a worktree; uncommitted work went
+  with the folder. With no repository to name, or a start that fails because its folder went, the
+  refusal says "the session's directory <path> no longer exists".
 - What winding down finishes, as the milestone audit (#702) left it. Turning it on again (the
   phrase or `/winddown`) keeps the target it has, PR included, rather than reading it afresh. While
   the session sits on its default branch with no PR, each check reads the branch again and follows
