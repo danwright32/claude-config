@@ -647,6 +647,29 @@ if says "$out" "more than one pull request"; then pass; else
 fi
 rm -rf "$dir" "$dir2"
 
+# But only where this gate has a rule (merge time lessons review of #1072). Two merges in
+# repositories the registry does not gate carry no changelog record to lose, so refusing them with a
+# sentence about changelog records claimed a rule that does not apply there (L11).
+dir=$(make_repo acme/ungated-one "$TAGGED" "$REGISTRY")
+dir2=$(make_repo acme/ungated-two "$TAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash; cd $dir2/repo && $MERGE 8 --squash")
+if [ -z "$out" ]; then pass; else
+  fail "two merges in repositories the registry does not gate were refused over a rule that does not apply there: $out"
+fi
+rm -rf "$dir2"
+# ...while a second merge into a GATED repository, after a first into an ungated one, is still
+# refused: the scope that matters is every target's, not the first one's.
+dir2=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash; cd $dir2/repo && $MERGE 8 --squash")
+if denied "$out" && says "$out" "more than one pull request"; then pass; else
+  fail "a second merge into a gated repository, after one into an ungated repository, was not refused: $out"
+fi
+out=$(run_hook "$dir" "$MERGE 7 --squash; $MERGE 8 --repo acme/widget --squash")
+if denied "$out"; then pass; else
+  fail "a second merge naming a gated repository with --repo was not refused: $out"
+fi
+rm -rf "$dir" "$dir2"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

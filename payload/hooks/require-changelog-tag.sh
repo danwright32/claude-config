@@ -152,12 +152,41 @@ if mt_is_pr_merge "$command" && mt_reader_missing; then
   deny "Cannot tell whether this repo needs a changelog record: $(mt_reader_absent_why) Reading another pull request's record while merging this one would lose this change from the next manager update. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
+# What the registry says about one repository, as lib/changelog-entry.js's repoScope answers it: JSON,
+# or nothing when the reading itself failed. The one question asked of the registry, whether for the
+# merge below or for each target of a command merging several.
+scope_for() {  # $1 = owner/name
+  HOOK_DIR="$HOOK_DIR" REGISTRY_PATH="$REGISTRY" SLUG="$1" node -e '
+    const fs = require("fs");
+    const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
+    let registry = null;
+    try { registry = JSON.parse(fs.readFileSync(process.env.REGISTRY_PATH, "utf8")); }
+    catch (e) { registry = null; }
+    process.stdout.write(JSON.stringify(entry.repoScope(registry, process.env.SLUG)));
+  ' 2>/dev/null
+}
+
 # ONE pull request per command (claude-config#1062): the record read below is the first merge's, so
 # a second merge in the same command went through on it and its own change was lost from the next
 # manager update. Asked after the stand downs above, because on a machine with no dev update tooling
 # this rule does not apply at all.
+#
+# And refused only where the rule applies (merge time lessons review of #1072): when EVERY target is a
+# repository the registry plainly does not gate, there is no record to lose, and a refusal about
+# changelog records would claim a rule that is not there (L11). Any target the registry gates, or
+# about which it cannot give a plain "not listed" (unreadable, listed with no date or a bad one), is
+# a target this gate would refuse or judge alone, so the command is refused.
 if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
-  deny "Cannot judge this merge's changelog record: $span_why Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  gated=""
+  while IFS=$'\t' read -r t_slug t_where _; do
+    [ -n "$t_slug$t_where" ] || continue
+    t_scope="$(scope_for "$t_slug")"
+    if [ -z "$t_scope" ] || [ "$(printf '%s' "$t_scope" | jq -r '(.inScope // false) or (.unreadable // false) or (.missingFrom // false) or (.badDate // false)')" != "false" ]; then
+      gated="${t_slug:-$t_where}"; break
+    fi
+  done <<< "$(mt_merge_targets "$command" "$cwd")"
+  [ -n "$gated" ] || exit 0
+  deny "Cannot judge this merge's changelog record: $span_why ($gated is a repository the changelog registry gates.) Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
 # WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull
@@ -178,14 +207,7 @@ slug="${repo_flag:-$local_slug}"
 # and cannot be read is NOT an opt out: it means the gate cannot tell, and
 # treating "cannot tell" as "not in scope" is how a gate goes quiet at exactly
 # the moment it stopped working (L214, L98).
-scope=$(HOOK_DIR="$HOOK_DIR" REGISTRY_PATH="$REGISTRY" SLUG="$slug" node -e '
-  const fs = require("fs");
-  const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
-  let registry = null;
-  try { registry = JSON.parse(fs.readFileSync(process.env.REGISTRY_PATH, "utf8")); }
-  catch (e) { registry = null; }
-  process.stdout.write(JSON.stringify(entry.repoScope(registry, process.env.SLUG)));
-' 2>/dev/null)
+scope=$(scope_for "$slug")
 
 [ -n "$scope" ] || deny "Cannot tell whether this repo needs a changelog record: reading $REGISTRY through lib/changelog-entry.js produced nothing at all. That is the gate failing, not the repo opting out, so it refuses rather than merging blind. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 

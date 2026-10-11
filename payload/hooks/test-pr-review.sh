@@ -774,6 +774,24 @@ out="$(fire_create "git push" 0)"
 check_eq "a push to a branch with no PR starts nothing" "0" "$(calls)"
 check_eq "and says nothing, since most pushes have no PR yet" "" "$out"
 
+# A push or a creation acting in more than one repository (claude-config#1062). ps_repo_dir refuses
+# such a command now, and this hook answered that refusal with "could not tell which repository",
+# hiding the real reason (merge time lessons review of #1072, L11). It starts the review in each
+# repository instead, as it does for commits. OTHER_1062 has no commit, so it has nothing to review.
+OTHER_1062="$WORKDIR/other-1062"; git init -q "$OTHER_1062"
+reset_state
+printf '{"number":7,"state":"OPEN","headRefOid":"%s","baseRefName":"main"}\n' "$PUSHED_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_create "cd $OTHER_1062 && git push; cd $REPO && git push" 0)"
+check "a push in two repositories starts the review where a pull request is open" "started" "$out"
+check_not "and never says it could not tell which repository" "could not tell" "$out"
+wait_final "$PUSHED_SHA" && ok || bad "the second repository's pushed head was reviewed"
+reset_state
+out="$(fire_create "cd $OTHER_1062 && gh pr create --fill; cd $REPO && gh pr create --fill" 0)"
+check "a creation in two repositories starts the review of the one with a branch" "started" "$out"
+check_not "and never says it could not tell which repository" "could not tell" "$out"
+wait_final "$PUSHED_SHA" && ok || bad "the second repository's branch was reviewed"
+rm -f "$FAKE_LOG/pr-view.json"
+
 # ===========================================================================================
 # 9. Generated files are diffed with no context and their full text is left out (claude-config#591).
 #    On overture PR #4401 (measured 2026-09-30) the generated project.pbxproj, 30 added lines, was 145 KB of a 373 KB

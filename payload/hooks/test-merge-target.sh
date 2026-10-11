@@ -411,6 +411,10 @@ span "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && $MERGE
 why="$(mt_merge_span_why "cd $root/plain && $MERGE 7; cd $root/deep && $MERGE 8" "$root/parent")"
 if [[ "$why" == *"#7 in $root/plain"* && "$why" == *"#8 in $root/deep"* ]]; then pass
 else fail "the sentence names each pull request and where (said [$why])"; fi
+eq "$(mt_merge_targets "$MERGE 7 --repo acme/one; $MERGE 8 --repo acme/two; $MERGE 7 --repo acme/one --admin" "$root/plain")" \
+  "acme/one"$'\t'"acme/one"$'\t'"7"$'\n'"acme/two"$'\t'"acme/two"$'\t'"8" \
+  "mt_merge_targets names each distinct target's repository once, for a gate that applies to some"
+eq "$(mt_merge_targets "$MERGE 7" "$root/plain")" "" "mt_merge_targets of one merge is nothing to compare"
 nospan "cd $root/plain && $MERGE 7" "$root/parent" "control: one merge is one target"
 nospan "$MERGE 7 --squash || $MERGE 7 --squash --admin" "$root/plain" "control: the same pull request twice is one target"
 nospan "cd $root/plain && $MERGE 7; cd $root/plain && $MERGE 7 --admin" "$root/parent" "control: the same pull request from the same directory twice is one target"

@@ -86,20 +86,39 @@ if [ "$mode" = commit ]; then
   exit 0
 fi
 
-repo_dir="$(ps_repo_dir "$cmd" "$cwd" "$action")" || say "could not tell which repository this pull request is in, so no lessons review was started; the merge gate will start one."
-[ -n "$repo_dir" ] || exit 0
+# EVERY repository this mode's command acts in, as commit mode reads them (claude-config#1062, merge
+# time lessons review of #1072): ps_repo_dir refuses a command acting in more than one, and answering
+# that refusal with "could not tell which repository" hid the real reason (L11). Starting a review is
+# something this can do for each. One capture: on exit 0 it holds the directories, on exit 2 the
+# sentence saying why none could be told, which the line below then carries.
+repos_out="$(ps_repo_dirs "$cmd" "$cwd" "$action" 2>&1; printf '\035%s' "$?")"
+repos_rc="${repos_out##*$'\035'}"; repo_dirs="${repos_out%$'\035'*}"
+if [ "$repos_rc" != 0 ]; then
+  why=""
+  [ "$repos_rc" = 2 ] && [ -n "$repo_dirs" ] && why=" (${repo_dirs%$'\n'})"
+  say "could not tell which repository this pull request is in$why, so no lessons review was started; the merge gate will start one."
+fi
+[ -n "$repo_dirs" ] || exit 0
 
 if [ "$mode" = push ]; then
   # Only a branch whose pull request is OPEN. Most pushes have no pull request yet, so a push with
   # none, or one gh cannot answer about, says nothing: the merge gate starts the review of whatever
   # head it is asked to merge, so nothing can merge unreviewed through this staying quiet.
-  top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
-  view="$(cd "$top" && gh pr view --json state,baseRefName 2>/dev/null)" || exit 0
-  case "$view" in *'"state":"OPEN"'*|*'"state": "OPEN"'*) ;; *) exit 0 ;; esac
-  base="$(printf '%s' "$view" | sed -n 's/.*"baseRefName": *"\([^"]*\)".*/\1/p')"
-  args=(start --dir "$top" --sha "$(git -C "$top" rev-parse HEAD 2>/dev/null)")
-  [ -n "$base" ] && args+=(--base-ref "origin/$base")
-  say "$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"
+  said=""
+  while IFS= read -r repo_dir; do
+    [ -n "$repo_dir" ] || continue
+    top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || continue
+    head="$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null)"
+    [ -n "$head" ] || continue
+    view="$(cd "$top" && gh pr view --json state,baseRefName 2>/dev/null </dev/null)" || continue
+    case "$view" in *'"state":"OPEN"'*|*'"state": "OPEN"'*) ;; *) continue ;; esac
+    base="$(printf '%s' "$view" | sed -n 's/.*"baseRefName": *"\([^"]*\)".*/\1/p')"
+    args=(start --dir "$top" --sha "$head")
+    [ -n "$base" ] && args+=(--base-ref "origin/$base")
+    said+="${said:+ }$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1 </dev/null)"
+  done <<< "$repo_dirs"
+  [ -n "$said" ] && say "$said"
+  exit 0
 fi
 
 base=""
@@ -111,8 +130,18 @@ for ((i = 0; i < ${#words[@]}; i++)); do
   esac
 done
 base="${base//[\"\']/}"
-top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo_dir")"
-ar_pr_opened "$(basename "$top")" "$top" "$(git -C "$top" rev-parse HEAD 2>/dev/null)" "$(ar_payload_pr_url "$payload")"
-args=(start --dir "$repo_dir")
-[ -n "$base" ] && args+=(--base-ref "origin/$base")
-say "$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"
+# The URL gh printed belongs to ONE creation. With creations in several repositories the output
+# cannot say which is which, so none is recorded rather than the wrong one on each.
+url="$(ar_payload_pr_url "$payload")"
+case "$repo_dirs" in *$'\n'?*) url="" ;; esac
+said=""
+while IFS= read -r repo_dir; do
+  [ -n "$repo_dir" ] || continue
+  top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo_dir")"
+  ar_pr_opened "$(basename "$top")" "$top" "$(git -C "$top" rev-parse HEAD 2>/dev/null)" "$url"
+  args=(start --dir "$repo_dir")
+  [ -n "$base" ] && args+=(--base-ref "origin/$base")
+  said+="${said:+ }$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1 </dev/null)"
+done <<< "$repo_dirs"
+[ -n "$said" ] && say "$said"
+exit 0

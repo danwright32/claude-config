@@ -578,7 +578,9 @@ occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushin
 repository, `check-add-scope.sh` one adding in more than one, and `block-red-merge.sh`,
 `pr-review-gate.sh` and `require-changelog-tag.sh` one merging more than one pull request. The
 remedy each gives is to run them as separate commands. `ai-review-on-pr.sh`, which only starts
-reviews, starts one in every repository a command commits in.
+reviews, starts one in every repository a command commits, pushes or opens a pull request in. The
+changelog gate refuses a command merging several pull requests only when one of them is in a
+repository its registry gates.
 
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every

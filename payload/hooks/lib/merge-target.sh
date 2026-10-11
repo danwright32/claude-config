@@ -566,29 +566,48 @@ mt__merge_dir() {  # $1 = the cd in force for the merge, or empty  $2 = session 
 # a different repository or a different pull request, is a second. Any route counts (mt_runs_merge),
 # so a repo's own merge tool beside a direct merge is seen too.
 mt_merge_span_why() {  # $1 = command, $2 = session cwd
-  local cmd="$1" d="${2:-}" recs rec where flag pr top key seen=$'\n' list="" n=0
+  local targets line key pr list="" n=0
+  targets="$(mt_merge_targets "$1" "${2:-}")" || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key="${line#*$'\t'}"; pr="${key#*$'\t'}"; key="${key%%$'\t'*}"
+    n=$((n + 1))
+    list+="${list:+, }$(mt_pr_label "$pr") in $key"
+  done <<< "$targets"
+  [ "$n" -gt 1 ] || return 1
+  printf 'this command merges more than one pull request (%s), and a merge gate judges one pull request per command, so the merges after the first would land with no gate having read their checks, their lessons review or their changelog record (claude-config#1062). Run each merge as a command of its own.' "$list"
+  return 0
+}
+
+# The DISTINCT targets of every merge in the command, one per line as
+# "<owner/name>" TAB "<where>" TAB "<pr>": the repository as GitHub names it (the merge's --repo, -R
+# or link, else the origin of the work tree it runs in, empty when it has none), what identifies the
+# target in a sentence (that name when the merge gives one, else the work tree), and the pull
+# request number (empty for the current branch's). Exit 1, printing nothing, when the command runs
+# fewer than two merges: one merge is one target, answered without starting a reader per merge
+# (claude-config#1062). A gate whose rule applies only to some repositories (require-changelog-tag.sh)
+# reads the first field of each to ask whether any target is one it gates.
+mt_merge_targets() {  # $1 = command, $2 = session cwd
+  local cmd="$1" d="${2:-}" recs rec where flag pr top key slug seen=$'\n'
   local -a hits=()
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
   recs="$(ps__action_records "$cmd" mt_runs_merge)" || return 1
   while IFS= read -r -d $'\x1e' rec; do hits+=("$rec"); done <<< "$recs"
-  # One merge is one target, answered without starting a reader per merge.
   [ "${#hits[@]}" -gt 1 ] || return 1
   for rec in "${hits[@]}"; do
     where="$(mt__merge_dir "${rec%%$'\x1f'*}" "$d")"
     flag="$(mt_repo_flag "${rec#*$'\x1f'}" </dev/null)"
     pr="$(mt_pr_number "${rec#*$'\x1f'}" </dev/null)"
-    if [ -n "$flag" ]; then key="$flag"
+    if [ -n "$flag" ]; then key="$flag"; slug="$flag"
     else
       top="$(git -C "$where" rev-parse --show-toplevel 2>/dev/null)" || top=""
       key="${top:-$where}"
+      slug="$(cd "$where" 2>/dev/null && mt_remote_slug)"
     fi
-    key="$key"$'\t'"$pr"
-    case "$seen" in *$'\n'"$key"$'\n'*) continue ;; esac
-    seen+="$key"$'\n'; n=$((n + 1))
-    list+="${list:+, }$(mt_pr_label "$pr") in ${key%%$'\t'*}"
+    case "$seen" in *$'\n'"$key"$'\t'"$pr"$'\n'*) continue ;; esac
+    seen+="$key"$'\t'"$pr"$'\n'
+    printf '%s\t%s\t%s\n' "$slug" "$key" "$pr"
   done
-  [ "$n" -gt 1 ] || return 1
-  printf 'this command merges more than one pull request (%s), and a merge gate judges one pull request per command, so the merges after the first would land with no gate having read their checks, their lessons review or their changelog record (claude-config#1062). Run each merge as a command of its own.' "$list"
   return 0
 }
 
