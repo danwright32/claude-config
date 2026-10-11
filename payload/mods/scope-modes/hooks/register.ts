@@ -54,6 +54,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
+import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import { choiceFor, isLeftClosed, newWork, outstanding, settledByDan, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
@@ -1681,8 +1682,37 @@ const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
   // the same from any worktree of the project. Not $.session.repo().root, which is the main working
   // tree even from a linked worktree (measured on Claude Code 2.1.295), whose changes are another
   // session's.
-  if ('unreadable' in b) return b.unreadable === DETACHED ? { root: b.root, branch: '', isDefault: true, issues: [], pr: null } : { unreadable: b.unreadable }
-  return { root: b.root, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null }
+  if ('unreadable' in b && b.unreadable !== DETACHED) return { unreadable: b.unreadable }
+  const kept = await keptPlace($)
+  if ('unreadable' in b) return { root: b.root, branch: '', isDefault: true, issues: [], pr: null, ...kept }
+  return { root: b.root, branch: b.branch, isDefault: b.isDefault, issues: b.issues, pr: null, ...kept }
+}
+
+// The main working tree, as $.session.repo() names it even from a linked worktree, or undefined
+// when it names none or cannot be read.
+const mainTree = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    return (await $.session.repo())?.root ?? undefined
+  } catch {
+    return undefined
+  }
+}
+// Where the finish check reads once the session's own folder is gone (#1059): the main working tree
+// and the repository's name, kept with the target when winding down turns on, since a session whose
+// folder was removed may no longer be able to say either.
+const keptPlace = async ($: EngineInterface): Promise<{ main?: string; repo?: string }> => {
+  const main = await mainTree($)
+  const repo = await sessionSlug($)
+  return { ...(main ? { main } : {}), ...(repo ? { repo } : {}) }
+}
+// Whether a folder is there. A look that throws counts it there, so the read goes ahead as it did
+// before #1059 and a failure is said by the read itself.
+const isThere = async ($: EngineInterface, path: string): Promise<boolean> => {
+  try {
+    return await $.fs.exists(path)
+  } catch {
+    return true
+  }
 }
 
 type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences?: { number?: number }[] }
@@ -1725,19 +1755,39 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // repository than the session's (`elsewhere`) has its branch on GitHub checked there, while its
 // local branch and worktree live in a checkout this session cannot see, so they are said to be
 // unreadable rather than read as gone from this one (lessons review of #714).
+//
+// The session's folder can be gone: winding down's own cleanup removes a worktree (#1059). A process
+// started in a folder that is not there fails naming the command (posix_spawn 'gh'), never the
+// folder, so a finished session was refused for ever, told gh could not start. Gone, the folder is
+// wind down's own end state: GitHub is read by the repository's name from a folder that is there,
+// the branch and worktree lists from the main working tree, and the uncommitted work went with it.
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, elsewhere = false): Promise<{ reading: Reading; found?: Found }> => {
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: false }
-  const where = repo ? ['--repo', repo] : []
+  const gone = !(await isThere($, t.root))
+  // Gone, the main working tree, where one is there, holds the branch and worktree lists.
+  let main: string | undefined
+  if (gone) for (const m of [t.main, await mainTree($)]) if (!main && m && m !== t.root && (await isThere($, m))) main = m
+  const slug = repo ?? (gone ? (t.repo ?? (await sessionSlug($))) : undefined)
+  const goneSaid = `the session's directory ${t.root} no longer exists`
+  // Where a process starts: the session's folder while it is there; gone, a folder that is.
+  const cwd = gone ? (main ?? (await $.env.get('HOME')) ?? undefined) : t.root
+  const where = slug ? ['--repo', slug] : []
   let prUrl: string | undefined
   let found: Found | undefined
-  const gh = async (args: string[]) => {
-    const out = await $.process.run(['gh', ...args], { timeoutMs: RUN_MS, cwd: t.root }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
-    return out
+  // A start that fails in a folder gone since it was looked for is said as that folder (#1059).
+  const startFailed = async (err: unknown) => {
+    const missing = cwd && !(await isThere($, cwd)) ? (cwd === t.root ? goneSaid : `the folder ${cwd} no longer exists`) : undefined
+    return { exitCode: -1, stdout: '', stderr: missing ?? msg(err), isStdoutTruncated: false, isStderrTruncated: false }
   }
+  const gh = async (args: string[]) => $.process.run(['gh', ...args], { timeoutMs: RUN_MS, ...(cwd ? { cwd } : {}) }).catch(startFailed)
+  // git reads the session's folder while it is there, and the main working tree once it is gone.
+  const git = async (args: string[]) =>
+    gone ? $.process.run(['git', ...(main ? ['-C', main] : []), ...args], { timeoutMs: RUN_MS, ...(cwd ? { cwd } : {}) }).catch(startFailed) : run($, ['git', '-C', t.root, ...args])
+  if (gone && !slug && (t.branch || t.pr)) return { reading: { ...r, pr: { unreadable: `${goneSaid}, and no repository is named to read its PR in` } } }
   if (t.branch || t.pr) {
     const res = t.pr
       ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
-      : await gh(['pr', 'list', '--head', t.branch, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
+      : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
     if (res.exitCode !== 0) return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
     let pr: PrJson | undefined
     try {
@@ -1771,18 +1821,27 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
       return { reading: { ...r, branchHere: none, branchOnGitHub: none, worktreeOnBranch: none }, found }
     }
     // ls-remote --exit-code answers 2 when no such branch, and anything else nonzero is a failed read.
-    const remote = await run($, ['git', '-C', t.root, 'ls-remote', '--exit-code', '--heads', elsewhere && repo ? `https://github.com/${repo}.git` : 'origin', r.branch])
+    // Gone with no checkout left to name origin, GitHub is asked by the repository's name.
+    const url = (elsewhere || (gone && !main)) && slug ? `https://github.com/${slug}.git` : 'origin'
+    const remote = await git(['ls-remote', '--exit-code', '--heads', url, r.branch])
     r.branchOnGitHub = remote.exitCode === 0 ? true : remote.exitCode === 2 ? false : { unreadable: remote.stderr.trim() || 'could not reach origin' }
     if (elsewhere) {
       const unseen = { unreadable: `PR #${r.pr.number} is in ${repo ?? 'another repository'}, whose checkout this session cannot see` }
       return { reading: { ...r, branchHere: unseen, worktreeOnBranch: unseen }, found }
     }
-    const here = await run($, ['git', '-C', t.root, 'branch', '--list', r.branch])
+    if (gone && !main) {
+      // The main working tree kept when winding down turned on is gone too: no checkout of the
+      // project is left to hold the branch or a worktree on it. With none kept, nothing says so.
+      const lists: boolean | { unreadable: string } = t.main ? false : { unreadable: `${goneSaid}, and no other checkout of its repository is known to read it in` }
+      return { reading: { ...r, branchHere: lists, worktreeOnBranch: lists }, found }
+    }
+    const here = await git(['branch', '--list', r.branch])
     r.branchHere = here.exitCode === 0 ? here.stdout.trim() !== '' : { unreadable: here.stderr.trim() }
-    const wt = await run($, ['git', '-C', t.root, 'worktree', 'list', '--porcelain'])
+    const wt = await git(['worktree', 'list', '--porcelain'])
     r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${r.branch}`) : { unreadable: wt.stderr.trim() }
   }
-  if (t.isDefault && r.pr === null) {
+  // Gone, the folder took its uncommitted work with it: nothing is left there to commit.
+  if (t.isDefault && r.pr === null && !gone) {
     const st = await run($, ['git', '-C', t.root, 'status', '--porcelain'])
     r.dirty = st.exitCode === 0 ? st.stdout.trim() !== '' : { unreadable: st.stderr.trim() }
   }
@@ -1881,7 +1940,7 @@ const check = ($: EngineInterface): Promise<Checked | null> => {
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number }, o.repo, elsewhere)
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, o.repo, elsewhere)
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
@@ -2004,7 +2063,8 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   return `Dan did not choose to leave ${pr} ${asIs.as}, so winding down still waits on it. He wrote: ${answer}`
 }
 
-const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
+// Answers the scope mode that was on, which the acknowledgement of the switch names (#1055).
+const setScope = async ($: EngineInterface, scope: ScopeModesScope | null): Promise<ScopeModesScope | null> => {
   const was = await scopeOf($)
   await $.state.set(scopeRef, scope)
   // Turning winding down on again keeps what it found, its PR included (#702): reading the target
@@ -2013,6 +2073,7 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
   if (scope !== 'WINDING DOWN') await $.state.set(targetRef, null)
   else if (was !== 'WINDING DOWN') await $.state.set(targetRef, await readTarget($))
   await showModes($)
+  return was
 }
 
 // The PR a `gh pr create` opened, from the link gh prints, noted for winding down whatever mode is
@@ -2155,20 +2216,21 @@ const FINALIZE_ALL =
   "Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed (its work merged in another PR, say)."
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
+// Each mode's note opens with its one definition (hooks/modes.ts), the same words the
+// acknowledgement of turning it on says to Dan (#1055).
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
-  'NO BUILD': 'No build is on: read, research, run tests and checks, write scratchpad notes and do GitHub issue, milestone and label work. No edits outside the scratchpad, commits, branches, PRs, deploys or data changes.',
+  'NO BUILD': `No build is on: ${MODE_DEF['NO BUILD'].will}. Do not ${MODE_DEF['NO BUILD'].willNot}.`,
   'WINDING DOWN':
-    `Winding down is on. ${FINALIZE_ALL} Finish this issue and every other PR this session opened (merged, deploy live, worktree and branch cleaned, issues closed) and start nothing new. ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
+    `Winding down is on: ${MODE_DEF['WINDING DOWN'].will}. Do not ${MODE_DEF['WINDING DOWN'].willNot}: winding down refuses to ${MODE_DEF['WINDING DOWN'].refuses}. ${FINALIZE_ALL} ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
 }
-const AWAY_NOTE =
-  'Dan is away from the Mac. Deliver results as a private claude.ai page he can read on his phone (the Artifact tool). Open nothing on the Mac and take no focus: anything that needs him at the Mac is held for when he is back.'
+const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (the Artifact tool). Do not ${MODE_DEF.away.willNot}.`
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
 const sleepPromptNote = (r: SleepRecord, self: string) =>
   `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} Dan is asleep, so deliver as when he is away: ${AWAY_NOTE}`
 // What phase 3 (#834) does for a worker, and only that (L703).
 const WORKER_NOTE =
   "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
-const HOME_NOTE = 'Dan is back at the Mac: deliver results as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview).'
+const HOME_NOTE = `Dan is back at the Mac: ${MODE_DEF.home.will}.`
 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
@@ -2289,19 +2351,20 @@ export const register: Register = on => {
   })
 
   // The commands, which say which mode turned on, and confirm the off.
+  // Each switch tells Claude to open its reply with what the mode now does (#1055).
   on('command.run', { command: 'nobuild' }, async $ => {
-    await setScope($, 'NO BUILD')
-    return { text: 'No build is on.', context: [`Dan turned on no build. ${SCOPE_NOTE['NO BUILD']}`] }
+    const was = await setScope($, 'NO BUILD')
+    return { text: 'No build is on.', context: [`Dan turned on no build. ${ackOn('NO BUILD', { replaced: was })}`, SCOPE_NOTE['NO BUILD']] }
   })
   on('command.run', { command: 'winddown' }, async $ => {
-    await setScope($, 'WINDING DOWN')
-    return { text: 'Winding down is on.', context: [`Dan turned on winding down. ${SCOPE_NOTE['WINDING DOWN']}`] }
+    const was = await setScope($, 'WINDING DOWN')
+    return { text: 'Winding down is on.', context: [`Dan turned on winding down. ${ackOn('WINDING DOWN', { replaced: was })}`, SCOPE_NOTE['WINDING DOWN']] }
   })
   on('command.run', { command: 'build' }, async $ => {
     const scope = await scopeOf($)
     if (!scope) return { text: 'No scope mode was on.' }
     await setScope($, null)
-    return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual.`] }
+    return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
   })
   on('command.run', { command: 'sleep' }, async $ => ({ text: await startSleep($) }))
   on('command.run', { command: 'wake' }, async ($, e) => {
@@ -2315,11 +2378,13 @@ export const register: Register = on => {
   })
   on('command.run', { command: 'away' }, async $ => {
     await setPlace($, 'away')
-    return { text: placeSentence('away', await tellOthers($, 'away')) }
+    const said = placeSentence('away', await tellOthers($, 'away'))
+    return { text: said, context: [ackOn('away', { first: said })] }
   })
   on('command.run', { command: 'home' }, async $ => {
     await setPlace($, 'home')
-    return { text: placeSentence('home', await tellOthers($, 'home')) }
+    const said = placeSentence('home', await tellOthers($, 'home'))
+    return { text: said, context: [ackOn('home', { first: said })] }
   })
 
   // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
@@ -2337,26 +2402,34 @@ export const register: Register = on => {
     const notes: string[] = []
     if (isDans(e.origin)) {
       const triggers = triggersIn(e.text) as Trigger[]
+      // What each switch says it now does (#1055), opened with once for them all, so a message that
+      // switches two modes never gives Claude two competing openings.
+      const acks: string[] = []
+      let wokeHere = false
       for (const t of triggers) {
         if (t.kind === 'scope') {
-          await setScope($, t.scope)
-          notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message. Say so in one line first.`)
+          const was = await setScope($, t.scope)
+          notes.push(`${SCOPE_NAME[t.scope]} just turned on from Dan's message.`)
+          acks.push(ackOnSaid(t.scope, { replaced: was }))
         } else if (t.kind === 'build') {
           const was = await scopeOf($)
           if (was) {
             await setScope($, null)
-            notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message. Say so in one line first.`)
+            notes.push(`${SCOPE_NAME[was]} just turned off from Dan's message.`)
+            acks.push(ackOffSaid(was))
           }
         } else if (t.kind === 'off') {
           // Off by name turns off only the mode it names.
           if ((await scopeOf($)) === t.scope) {
             await setScope($, null)
-            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message. Say so in one line first.`)
+            notes.push(`${SCOPE_NAME[t.scope]} just turned off from Dan's message.`)
+            acks.push(ackOffSaid(t.scope))
           }
         } else if (t.kind === 'wake') {
           const woke = await wake($, e.origin.kind === 'bridge')
           // What waking found quotes titles of issues, milestones and commits made overnight, so it
           // reaches this turn only as data (#922).
+          wokeHere ||= !!woke
           if (woke)
             notes.push(
               `Dan's message woke sleep mode. Say so in one line first, saying what the block below says.\n${overnightData({ holds: 'what waking sleep mode did and found, which can quote titles of issues, milestones and commits made overnight', offer: 'said to Dan in that one line; it is offered to him through no picker', lines: [woke.said] })}`,
@@ -2366,11 +2439,14 @@ export const register: Register = on => {
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
-          notes.push(`Dan's message switched every session to ${t.place}. Say so in one line first: "${placeSentence(t.place, told)}"`)
+          notes.push(`Dan's message switched every session to ${t.place}.`)
+          acks.push(ackOnSaid(t.place, { first: placeSentence(t.place, told) }))
         }
       }
       // Every note so far is a switch the message made; the still on note below switches nothing.
       const switched = notes.length
+      // Waking opens the reply with its own line, so a switch is acknowledged right after it.
+      if (acks.length) notes.push(acknowledge(acks, wokeHere ? { after: 'the line saying what waking did' } : {}))
       // A message asking to end the mode still on, in words that did not switch it, is said rather than
       // left for Claude to read as switched: the hook would go on enforcing a mode Claude thinks is off.
       const stillOn = await scopeOf($)
@@ -2460,7 +2536,9 @@ export const register: Register = on => {
       if (answer === 'Yes') {
         await setScope($, null)
         await $.ui.toast('No build is off.')
-        return { result: 'Dan said yes: no build is off.', text: 'Dan said yes: no build is off.' }
+        // His yes is a switch like any other, acknowledged with what no build no longer stops (#1055).
+        const text = `Dan said yes: no build is off. ${ackOff('NO BUILD')}`
+        return { result: text, text }
       }
       const text = `Dan said no: no build stays on.${answer !== 'No' ? ` He wrote: ${answer}` : ''}`
       return { result: text, text }
