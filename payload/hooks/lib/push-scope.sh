@@ -399,12 +399,15 @@ ps__segment_command_words() {   # $1 = one segment
 # way, where before only the first action's directory was ever looked at. A caller that can act on
 # each repository in turn reads ps_repo_dirs below instead.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" dirs rc
+  local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" dirs rc what
   dirs="$(ps_repo_dirs "$cmd" "$cwd" "$pred")"; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   case "$dirs" in
     *$'\n'*)
-      echo "push-scope: this command runs $(ps__action_name "$pred") in more than one repository ($(printf '%s' "$dirs" | tr '\n' ',' | sed 's/,/, /g')), and every gate judges one repository per command, so judging only the first would let the rest through unjudged. Nothing was judged rather than judging one of them (claude-config#1062). Run each repository's $(ps__action_name "$pred") as a command of its own." >&2
+      # Joined the way push-scope-notice.sh joins its list: empty lines dropped, no trailing
+      # separator whatever the input ends with (merge time lessons review of #1072).
+      what="$(ps__action_name "$pred")"
+      echo "push-scope: this command runs $what in more than one repository ($(printf '%s\n' "$dirs" | awk 'NF' | paste -sd ',' - | sed 's/,/, /g')), and every gate judges one repository per command, so judging only the first would let the rest through unjudged. Nothing was judged rather than judging one of them (claude-config#1062). Run each repository's ${what#a } as a command of its own." >&2
       return 2 ;;
   esac
   printf '%s' "$dirs"
@@ -495,7 +498,7 @@ ps__action_name() {   # $1 = the predicate
     ps_is_git_add) printf 'a git add' ;;
     ps_is_gh_pr_create) printf 'a gh pr create' ;;
     mt_runs_merge|mt_is_pr_merge) printf 'a merge' ;;
-    *) printf 'the action %s' "$1" ;;
+    *) printf 'a command satisfying %s' "$1" ;;
   esac
 }
 

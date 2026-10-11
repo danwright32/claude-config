@@ -561,6 +561,12 @@ spans() { # spans <command> <description> [predicate]
     && grep -qF "$T" "$RD/span.err"; then check "$2" ok
   else check "$2" "rc=$rc resolved to [$got], said [$(cat "$RD/span.err")]"; fi
 }
+# The exact sentence, so the list of repositories is seen whole: it was joined with a trailing
+# separator, "(A, B, )" (merge time lessons review of #1072).
+ps_repo_dir "cd $T && git push; cd $O && git push" "$S" >/dev/null 2>"$RD/span.err"
+want_sentence="push-scope: this command runs a git push in more than one repository ($T, $O), and every gate judges one repository per command, so judging only the first would let the rest through unjudged. Nothing was judged rather than judging one of them (claude-config#1062). Run each repository's git push as a command of its own."
+[ "$(cat "$RD/span.err")" = "$want_sentence" ] && check "#1062 the refusal is exactly this sentence, its list with no trailing separator" ok \
+  || check "#1062 the refusal is exactly this sentence, its list with no trailing separator" "said [$(cat "$RD/span.err")]"
 spans "cd $T && git push; cd $O && git push" \
   "#1062 two pushes into two repositories in one command are refused, not judged by the first"
 spans "cd $T && git push && (cd $O && git push origin main)" \

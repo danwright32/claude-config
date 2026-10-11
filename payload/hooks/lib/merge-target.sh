@@ -610,7 +610,8 @@ MTEOF
 # Two merges are one target when they name the same repository as GitHub names it and the same pull
 # request, however the command spelled the repository: `--repo acme/widget` and a checkout whose
 # origin is acme/widget are one (lessons review of #1072). The work tree stands in only where there
-# is no name at all.
+# is no name at all. A merge naming no readable number is never one with another: two such merges,
+# even `gh pr merge --squash || gh pr merge --admin` on one branch, count as two and are refused.
 mt_merge_targets() {  # $1 = command, $2 = session cwd
   local cmd="$1" d="${2:-}" recs rec rc where flag pr top key slug seen=$'\n'
   local -a hits=()
@@ -631,8 +632,13 @@ mt_merge_targets() {  # $1 = command, $2 = session cwd
       slug="$(cd "$where" 2>/dev/null && mt_remote_slug)"
     fi
     slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')"
-    case "$seen" in *$'\n'"${slug:-$key}"$'\t'"$pr"$'\n'*) continue ;; esac
-    seen+="${slug:-$key}"$'\t'"$pr"$'\n'
+    # A merge whose number cannot be read is its own target, never folded into another merge of the
+    # same repository: nothing shows the two are the same pull request (merge time lessons review of
+    # #1072). Only a readable number repeated is one target.
+    if [ -n "$pr" ]; then
+      case "$seen" in *$'\n'"${slug:-$key}"$'\t'"$pr"$'\n'*) continue ;; esac
+      seen+="${slug:-$key}"$'\t'"$pr"$'\n'
+    fi
     printf '%s\t%s\t%s\n' "$slug" "$key" "$pr"
   done
   return 0

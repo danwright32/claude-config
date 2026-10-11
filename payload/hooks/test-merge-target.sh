@@ -435,6 +435,17 @@ else fail "with no reader, two wrapper merges are refused by name, not read as o
 lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
   "cd $root/plain && ./scripts/merge-when-green.sh 7" "$root/parent")"; rc=$?
 if [ "$rc" -ne 0 ]; then pass; else fail "control: with no reader, one wrapper merge is not refused (said [$lone_why])"; fi
+# A merge whose pull request number cannot be read is its own target, never folded into another merge
+# of the same repository (merge time lessons review of #1072): two wrapper merges naming no number,
+# or none readable, are two merges nobody can show are the same.
+span "./scripts/merge-when-green.sh 7; ./scripts/merge-when-green.sh 8" "$root/plain" \
+  "two merges through a repo's merge tool in one repository, numbers 7 and 8"
+span "./scripts/merge-when-green.sh; ./scripts/merge-when-green.sh --timeout 900" "$root/plain" \
+  "two merges through a repo's merge tool naming no number are two targets"
+span "$MERGE --squash; ./scripts/merge-when-green.sh" "$root/plain" \
+  "a direct merge and a merge tool, neither naming a number, are two targets"
+nospan "./scripts/merge-when-green.sh 7 || ./scripts/merge-when-green.sh 7" "$root/plain" \
+  "control: the merge tool repeated for the same readable number is one target"
 nospan "cd $root/plain && $MERGE 7" "$root/parent" "control: one merge is one target"
 nospan "$MERGE 7 --squash || $MERGE 7 --squash --admin" "$root/plain" "control: the same pull request twice is one target"
 nospan "cd $root/plain && $MERGE 7; cd $root/plain && $MERGE 7 --admin" "$root/parent" "control: the same pull request from the same directory twice is one target"
