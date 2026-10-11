@@ -178,6 +178,10 @@ scope_for() {  # $1 = owner/name
 # a target this gate would refuse or judge alone, so the command is refused.
 if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
   gated=""
+  # No targets to read while the command still spans (nothing could read it) is "cannot tell", and
+  # cannot tell is never "nothing gated" (L490).
+  t_all="$(mt_merge_targets "$command" "$cwd")"
+  [ -n "$t_all" ] || gated="a repository nothing here could read"
   # Split by parameter expansion, never `IFS=$'\t' read`: a tab is whitespace to read, so an empty
   # first field (a checkout with no GitHub remote) collapsed and the path landed in t_slug.
   while IFS= read -r t_line; do
@@ -187,9 +191,9 @@ if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
     if [ -z "$t_scope" ] || [ "$(printf '%s' "$t_scope" | jq -r '(.inScope // false) or (.unreadable // false) or (.missingFrom // false) or (.badDate // false)')" != "false" ]; then
       gated="${t_slug:-$t_where}"; break
     fi
-  done <<< "$(mt_merge_targets "$command" "$cwd")"
+  done <<< "$t_all"
   [ -n "$gated" ] || exit 0
-  deny "Cannot judge this merge's changelog record: $span_why ($gated is a repository the changelog registry gates.) Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  deny "Cannot judge this merge's changelog record: $span_why (One of them, $gated, may be gated by the changelog registry.) Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
 # WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull

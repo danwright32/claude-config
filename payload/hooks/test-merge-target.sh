@@ -415,6 +415,26 @@ eq "$(mt_merge_targets "$MERGE 7 --repo acme/one; $MERGE 8 --repo acme/two; $MER
   "acme/one"$'\t'"acme/one"$'\t'"7"$'\n'"acme/two"$'\t'"acme/two"$'\t'"8" \
   "mt_merge_targets names each distinct target's repository once, for a gate that applies to some"
 eq "$(mt_merge_targets "$MERGE 7" "$root/plain")" "" "mt_merge_targets of one merge is nothing to compare"
+# One pull request named two ways, by --repo and by the checkout it runs in, is ONE target: told
+# apart by the repository GitHub names, not by how the command spelled it (lessons review of #1072).
+gitrepo="$root/widget-checkout"
+git init -q "$gitrepo" && git -C "$gitrepo" remote add origin https://github.com/acme/widget.git
+nospan "$MERGE 7 --repo acme/widget; cd $gitrepo && $MERGE 7" "$root/plain" \
+  "control: one pull request named by --repo and by a checkout of its repository is one target"
+span "$MERGE 7 --repo acme/widget; cd $gitrepo && $MERGE 8" "$root/plain" \
+  "and a different number in that checkout is a second pull request"
+# With nothing to read the command (no lib/shell-words.py beside the library), the targets cannot be
+# told, so a command whose plain cut shows two merges is refused by name rather than read as one
+# merge (lessons review of #1072, L490): the wrapper route has no other reader check in front of it.
+LONE_MT="$root/lone-mt"; mkdir -p "$LONE_MT"
+cp "$HOOK_DIR/lib/merge-target.sh" "$HOOK_DIR/lib/push-scope.sh" "$LONE_MT/"
+lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
+  "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && ./scripts/merge-when-green.sh 8" "$root/parent")"; rc=$?
+if [ "$rc" -eq 0 ] && [[ "$lone_why" == *"shell-words.py"* ]]; then pass
+else fail "with no reader, two wrapper merges are refused by name, not read as one (rc=$rc said [$lone_why])"; fi
+lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
+  "cd $root/plain && ./scripts/merge-when-green.sh 7" "$root/parent")"; rc=$?
+if [ "$rc" -ne 0 ]; then pass; else fail "control: with no reader, one wrapper merge is not refused (said [$lone_why])"; fi
 nospan "cd $root/plain && $MERGE 7" "$root/parent" "control: one merge is one target"
 nospan "$MERGE 7 --squash || $MERGE 7 --squash --admin" "$root/plain" "control: the same pull request twice is one target"
 nospan "cd $root/plain && $MERGE 7; cd $root/plain && $MERGE 7 --admin" "$root/parent" "control: the same pull request from the same directory twice is one target"

@@ -670,6 +670,20 @@ if denied "$out"; then pass; else
 fi
 rm -rf "$dir" "$dir2"
 
+# With no python3 nothing can read which pull request each merge is aimed at, and the reader check
+# above covers only the direct form. Two merges through a repo's own merge tool, in a gated
+# repository, were read as one merge and judged by the first (lessons review of #1072, L490).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+nopy="$(bin_without "$dir" python3)"
+run_hook_on "$dir" "$nopy" "./scripts/merge-when-green.sh 7; ./scripts/merge-when-green.sh 8"
+if denied "$NOREAD_OUT" && says "$NOREAD_OUT" "more than one merge"; then pass; else
+  fail "with no python3, two merges through a merge tool were not refused by name (rc=$NOREAD_RC): $NOREAD_OUT"
+fi
+run_hook_on "$dir" "$nopy" "./scripts/merge-when-green.sh 7"
+if says "$NOREAD_OUT" "more than one merge"; then
+  fail "control: with no python3, one merge through a merge tool was refused as several: $NOREAD_OUT"; else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
