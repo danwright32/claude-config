@@ -19,6 +19,9 @@
 #                      for, in one vocabulary rather than one per gate
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
+#   mt_merge_span_why
+#                    whether the command merges more than one pull request, which
+#                      every merge gate refuses because it judges one (#1062)
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
 #                      that answer a non-merge caller needs too
 #   mt_checkout_candidates
@@ -519,12 +522,23 @@ MTEOF
 #
 # This answers WHERE the merge runs. WHICH repository it is about can still be
 # named with --repo, which gh honours first: that is mt_repo_flag's question.
+#
+# The FIRST merge's directory. A command with merges aimed at more than one target is refused by
+# every merge gate before it asks this (mt_merge_span_why below, claude-config#1062), so the first is
+# the only one.
 mt_repo_dir() {  # $1 = command, $2 = session cwd
-  local command="$1" d="$2" from_cd=""
+  local command="$1" d="$2"
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
 
   # The cd in force for the MERGE itself, the last before it in its own shell (claude-config#1017).
-  from_cd="$(ps_cd_target "$command" mt_runs_merge)"
+  mt__merge_dir "$(ps_cd_target "$command" mt_runs_merge)" "$d"
+}
+
+# Where one merge runs, from the cd in force for it as ps_cd_target reads it: that directory when it
+# is one, else the checkout the session directory belongs to. A relative cd is taken from the session
+# directory, where the command runs.
+mt__merge_dir() {  # $1 = the cd in force for the merge, or empty  $2 = session cwd (a directory)
+  local from_cd="$1" d="$2"
   case "$from_cd" in
     "~") from_cd="$HOME" ;;
     "~/"*) from_cd="$HOME/${from_cd#"~/"}" ;;
@@ -532,8 +546,102 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
     *) from_cd="$d/$from_cd" ;;
   esac
   if [ -n "$from_cd" ] && [ -d "$from_cd" ]; then printf '%s' "$from_cd"; return; fi
-
   mt_checkout_dir "$d"
+}
+
+# Does this command merge MORE THAN ONE target? Prints the sentence a gate refuses with and returns 0
+# when it does; prints nothing and returns 1 when every merge in it is aimed at the same one
+# (claude-config#1062).
+#
+# Every merge gate judges ONE pull request per command: mt_repo_dir answers for the first merge's
+# directory and mt_pr_number and mt_repo_flag for the first `gh pr merge`, so in
+# `cd A && gh pr merge 1; cd B && gh pr merge 2` the second pull request merged with no gate having
+# read its checks, its lessons review or its changelog record. A gate genuinely acts on one pull
+# request (it asks GitHub about it and pins the merge to its head), so it refuses rather than judge
+# each in turn, and says how to run them so each is judged.
+#
+# A target is the repository the merge is about (its --repo, -R or link, else the work tree of the
+# directory it runs in) together with the pull request it names, read from that merge's own command
+# by the same readers the gates use. Two merges of one pull request are one target; anything else,
+# a different repository or a different pull request, is a second. Any route counts (mt_runs_merge),
+# so a repo's own merge tool beside a direct merge is seen too.
+mt_merge_span_why() {  # $1 = command, $2 = session cwd
+  local targets line key pr list="" n=0 seg
+  targets="$(mt_merge_targets "$1" "${2:-}")"
+  case $? in
+    0) ;;
+    2)
+      # Nothing can read which pull request each merge is aimed at (lessons review of #1072, L490).
+      # Read as one merge, a command running two would be judged by its first; so the plain cut,
+      # which needs no reader and can only over cut, is asked how many merges there are, and two or
+      # more are refused by name. One is the single merge every gate already handles.
+      while IFS= read -r seg; do
+        mt_split_assignments "$seg"
+        [ -n "$MT_REST" ] && mt_runs_merge "$MT_REST" </dev/null && n=$((n + 1))
+      done <<MTEOF
+$(mt_raw_segments "$1")
+MTEOF
+      [ "$n" -gt 1 ] || return 1
+      printf 'this command runs more than one merge, and a merge gate judges one pull request per command, but nothing here can read which pull request each is aimed at: %s Run each merge as a command of its own.' "$(mt_reader_absent_why)"
+      return 0 ;;
+    *) return 1 ;;
+  esac
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key="${line#*$'\t'}"; pr="${key#*$'\t'}"; key="${key%%$'\t'*}"
+    n=$((n + 1))
+    list+="${list:+, }$(mt_pr_label "$pr") in $key"
+  done <<< "$targets"
+  [ "$n" -gt 1 ] || return 1
+  printf 'this command merges more than one pull request (%s), and a merge gate judges one pull request per command, so the merges after the first would land with no gate having read their checks, their lessons review or their changelog record (claude-config#1062). Run each merge as a command of its own.' "$list"
+  return 0
+}
+
+# The DISTINCT targets of every merge in the command, one per line as
+# "<owner/name>" TAB "<where>" TAB "<pr>": the repository as GitHub names it (the merge's --repo, -R
+# or link, else the origin of the work tree it runs in, empty when it has none), what identifies the
+# target in a sentence (that name when the merge gives one, else the work tree), and the pull
+# request number (empty for the current branch's). Exit 1, printing nothing, when the command runs
+# fewer than two merges: one merge is one target, answered without starting a reader per merge
+# (claude-config#1062). Exit 2, printing nothing, when nothing can read the command at all, which a
+# caller must not read as "one merge" (L490). A gate whose rule applies only to some repositories
+# (require-changelog-tag.sh) reads the first field of each to ask whether any target is one it gates.
+#
+# Two merges are one target when they name the same repository as GitHub names it and the same pull
+# request, however the command spelled the repository: `--repo acme/widget` and a checkout whose
+# origin is acme/widget are one (lessons review of #1072). The work tree stands in only where there
+# is no name at all. A merge naming no readable number is never one with another: two such merges,
+# even `gh pr merge --squash || gh pr merge --admin` on one branch, count as two and are refused.
+mt_merge_targets() {  # $1 = command, $2 = session cwd
+  local cmd="$1" d="${2:-}" recs rec rc where flag pr top key slug seen=$'\n'
+  local -a hits=()
+  [ -n "$d" ] && [ -d "$d" ] || d=$PWD
+  recs="$(ps__action_records "$cmd" mt_runs_merge)"; rc=$?
+  [ "$rc" -eq 2 ] && return 2
+  [ "$rc" -eq 0 ] || return 1
+  while IFS= read -r -d $'\x1e' rec; do hits+=("$rec"); done <<< "$recs"
+  [ "${#hits[@]}" -gt 1 ] || return 1
+  for rec in "${hits[@]}"; do
+    where="$(mt__merge_dir "${rec%%$'\x1f'*}" "$d")"
+    flag="$(mt_repo_flag "${rec#*$'\x1f'}" </dev/null)"
+    pr="$(mt_pr_number "${rec#*$'\x1f'}" </dev/null)"
+    if [ -n "$flag" ]; then key="$flag"; slug="$flag"
+    else
+      top="$(git -C "$where" rev-parse --show-toplevel 2>/dev/null)" || top=""
+      key="${top:-$where}"
+      slug="$(cd "$where" 2>/dev/null && mt_remote_slug)"
+    fi
+    slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')"
+    # A merge whose number cannot be read is its own target, never folded into another merge of the
+    # same repository: nothing shows the two are the same pull request (merge time lessons review of
+    # #1072). Only a readable number repeated is one target.
+    if [ -n "$pr" ]; then
+      case "$seen" in *$'\n'"${slug:-$key}"$'\t'"$pr"$'\n'*) continue ;; esac
+      seen+="${slug:-$key}"$'\t'"$pr"$'\n'
+    fi
+    printf '%s\t%s\t%s\n' "$slug" "$key" "$pr"
+  done
+  return 0
 }
 
 # What mt__merge_selector reads: the `gh pr merge` segment itself, its leading assignments

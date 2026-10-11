@@ -546,6 +546,86 @@ want_repo "git -C $RD -C target push" "$T" \
 want_repo_both $'cd '"$T"$'\nif true; then\n  git push\nfi' "$T" \
   "#1017 the cd before an if governs the push inside it"
 
+# ---------------------------------------------------------------------------
+# EVERY action in a command is judged, not only the first (claude-config#1062). ps__action_record
+# returned the first command performing the action, so in `cd A && git push; cd B && git push` the
+# second push, in another repository, was judged by no gate at all. Every gate judges one repository
+# per command, so ps_repo_dir now refuses a command whose actions run in more than one, by name and
+# with exit 2, the answer every gate already treats as "nothing judged here", and ps_repo_dirs lists
+# each distinct one for a caller that can act on several.
+# ---------------------------------------------------------------------------
+spans() { # spans <command> <description> [predicate]
+  local got rc
+  got="$(ps_repo_dir "$1" "$S" ${3:+"$3"} 2>"$RD/span.err")"; rc=$?
+  if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -q 'more than one repository' "$RD/span.err" \
+    && grep -qF "$T" "$RD/span.err"; then check "$2" ok
+  else check "$2" "rc=$rc resolved to [$got], said [$(cat "$RD/span.err")]"; fi
+}
+# The exact sentence, so the list of repositories is seen whole: it was joined with a trailing
+# separator, "(A, B, )" (merge time lessons review of #1072).
+ps_repo_dir "cd $T && git push; cd $O && git push" "$S" >/dev/null 2>"$RD/span.err"
+want_sentence="push-scope: this command runs a git push in more than one repository ($T, $O), and every gate judges one repository per command, so judging only the first would let the rest through unjudged. Nothing was judged rather than judging one of them (claude-config#1062). Run each repository's git push as a command of its own."
+[ "$(cat "$RD/span.err")" = "$want_sentence" ] && check "#1062 the refusal is exactly this sentence, its list with no trailing separator" ok \
+  || check "#1062 the refusal is exactly this sentence, its list with no trailing separator" "said [$(cat "$RD/span.err")]"
+spans "cd $T && git push; cd $O && git push" \
+  "#1062 two pushes into two repositories in one command are refused, not judged by the first"
+spans "cd $T && git push && (cd $O && git push origin main)" \
+  "#1062 a second push in a subshell in another repository is refused too"
+spans "out=\$(cd $T && git push 2>&1); cd $O && git push" \
+  "#1062 a push inside a substitution and a push in another repository are refused"
+want_repo "out=\$(cd $T && git push 2>&1); echo \"\$out\"; x=\$(git -C $T push)" "$T" \
+  "#1062 control: an assignment holding a push is not a second push in the session repository"
+# A push whose ARGUMENT is a substitution is still a push, wherever its text turns up again: only a
+# command that is no longer the action once its substitutions are taken out is a container (lessons
+# review of #1062, which found the first rule dropping this push because its text held "git push").
+spans "cd $T && git push origin \"\$(git branch --show-current)\"; cd $O && git push" \
+  "#1062 a push with a substitution argument is still judged beside a push elsewhere"
+spans "cd $O && git push origin \`git branch --show-current\`; cd $T && git push" \
+  "#1062 and so is one with a backquoted argument"
+spans $'cd '"$T"$' && git commit -m "$(cat <<\'EOF\'\nit\'s a message\nEOF\n)"\ncd '"$O"' && git commit -m y' \
+  "#1062 a commit whose message is a heredoc substitution is still judged beside a commit elsewhere" ps_is_git_commit
+want_repo "cd $T && git push origin \"\$(git branch --show-current)\"" "$T" \
+  "#1062 control: one push with a substitution argument resolves to its repository"
+want_repo "cd $T && git push \"\$(echo origin)\" \"\$(cd $O && git rev-parse --abbrev-ref HEAD)\"" "$T" \
+  "#1062 control: a cd inside the argument's substitution does not move the push"
+spans "git -C $T push; git -C $O push" \
+  "#1062 two pushes naming two repositories with git -C are refused"
+spans "git -C $T push; git push" \
+  "#1062 a push in a named repository and one in the session repository are refused"
+spans "cd $T && git commit -m x; cd $O && git commit -m y" \
+  "#1062 two commits in two repositories are refused when the commit is asked about" ps_is_git_commit
+spans "cd $T && git add -A; cd $O && git add -A" \
+  "#1062 two adds in two repositories are refused when the add is asked about" ps_is_git_add
+spans "cd $T && gh pr create --fill; cd $O && gh pr create --fill" \
+  "#1062 two pull request creations in two repositories are refused" ps_is_gh_pr_create
+# A second push whose directory cannot be resolved is refused too: before, the first answered.
+got="$(ps_repo_dir "cd $T && git push; cd $RD/no-such-dir && git push" "$S" 2>"$RD/span.err")"; rc=$?
+if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -qF "$RD/no-such-dir" "$RD/span.err"; then
+  check "#1062 a second push naming a directory that cannot be resolved is refused, not passed over" ok
+else check "#1062 a second push naming a directory that cannot be resolved is refused, not passed over" "rc=$rc got [$got] said [$(cat "$RD/span.err")]"; fi
+# Several actions in ONE repository are still that repository: the refusal is about repositories,
+# not about how many times the action appears.
+want_repo "cd $T && git push; cd $T && git push origin HEAD:other" "$T" \
+  "#1062 control: two pushes in the same repository resolve to it"
+mkdir -p "$T/sub"
+want_repo "cd $T && git push; cd $T/sub && git push" "$T" \
+  "#1062 control: a second push from a subdirectory of the same repository resolves to the first"
+want_repo "git push -d origin old; git push origin feat" "$S" \
+  "#1062 control: two pushes in the session repository resolve to it"
+got="$(ps_repo_dir "cd $T && git add a; cd $O && git push" "$S" ps_is_git_add 2>/dev/null)"
+[ "$got" = "$T" ] && check "#1062 control: one add and a push elsewhere still answer for the add" ok \
+  || check "#1062 control: one add and a push elsewhere still answer for the add" "got [$got]"
+# The list, for a caller that can act on every repository: each distinct one, in command order.
+got="$(ps_repo_dirs "cd $T && git push; cd $O && git push; cd $T && git push" "$S")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = "$T"$'\n'"$O" ] && check "#1062 ps_repo_dirs lists each distinct repository once, in order" ok \
+  || check "#1062 ps_repo_dirs lists each distinct repository once, in order" "rc=$rc got [$got]"
+got="$(ps_repo_dirs "cd $T && git push" "$S")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = "$T" ] && check "#1062 ps_repo_dirs of one push is that repository" ok \
+  || check "#1062 ps_repo_dirs of one push is that repository" "rc=$rc got [$got]"
+got="$(ps_repo_dirs "cd $T && git push; cd $RD/no-such-dir && git push" "$S" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 2 ] && [ -z "$got" ] && check "#1062 ps_repo_dirs refuses when any one directory cannot be resolved" ok \
+  || check "#1062 ps_repo_dirs refuses when any one directory cannot be resolved" "rc=$rc got [$got]"
+
 # With lib/shell-words.py missing, a command that names a directory is REFUSED by name, never judged
 # in the session directory (lessons review of #1017, L490): a reader that cannot run reads no cd,
 # and no cd is exactly what sends a push to the wrong repository. A command naming no directory is

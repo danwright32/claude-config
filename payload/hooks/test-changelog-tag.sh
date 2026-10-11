@@ -617,6 +617,73 @@ if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
   fail "a machine with no dev update tooling was refused over a rule that does not apply there (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 rm -rf "$dir"
 
+echo "changelog record: every merge in a command is judged, not only the first (#1062)"
+
+# The gate read the FIRST merge's record. So a tagged pull request merged first, then an untagged
+# one from another checkout of a gated repository, went through on the first one's record and the
+# second change was lost from the next manager update. gh answers by number here, so only the
+# second is untagged.
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+dir2=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+printf '%s' "${UNTAGGED/pull\/7/pull/8}" > "$dir/pr8.json"
+cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view 8"*) cat "$(dirname "$FAKE_PR_JSON")/pr8.json" ;;
+  *"pr view"*) cat "$FAKE_PR_JSON" ;;
+esac
+SH
+chmod +x "$dir/bin/gh"
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then fail "control: the tagged merge alone was refused: $out"; else pass; fi
+out=$(run_hook "$dir" "$MERGE 7 --squash; cd $dir2/repo && $MERGE 8 --squash")
+if denied "$out"; then pass; else
+  fail "a second merge, of an untagged pull request in another checkout, went through on the first one's record: $out"
+fi
+if says "$out" "more than one pull request"; then pass; else
+  fail "the refusal does not say the command merges more than one pull request: $out"
+fi
+rm -rf "$dir" "$dir2"
+
+# But only where this gate has a rule (merge time lessons review of #1072). Two merges in
+# repositories the registry does not gate carry no changelog record to lose, so refusing them with a
+# sentence about changelog records claimed a rule that does not apply there (L11).
+dir=$(make_repo acme/ungated-one "$TAGGED" "$REGISTRY")
+dir2=$(make_repo acme/ungated-two "$TAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash; cd $dir2/repo && $MERGE 8 --squash")
+if [ -z "$out" ]; then pass; else
+  fail "two merges in repositories the registry does not gate were refused over a rule that does not apply there: $out"
+fi
+rm -rf "$dir2"
+# ...while a second merge into a GATED repository, after a first into an ungated one, is still
+# refused: the scope that matters is every target's, not the first one's.
+dir2=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash; cd $dir2/repo && $MERGE 8 --squash")
+if denied "$out" && says "$out" "more than one pull request"; then pass; else
+  fail "a second merge into a gated repository, after one into an ungated repository, was not refused: $out"
+fi
+out=$(run_hook "$dir" "$MERGE 7 --squash; $MERGE 8 --repo acme/widget --squash")
+if denied "$out"; then pass; else
+  fail "a second merge naming a gated repository with --repo was not refused: $out"
+fi
+rm -rf "$dir" "$dir2"
+
+# With no python3 nothing can read which pull request each merge is aimed at, and the reader check
+# above covers only the direct form. Two merges through a repo's own merge tool, in a gated
+# repository, were read as one merge and judged by the first (lessons review of #1072, L490).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+nopy="$(bin_without "$dir" python3)"
+run_hook_on "$dir" "$nopy" "./scripts/merge-when-green.sh 7; ./scripts/merge-when-green.sh 8"
+if denied "$NOREAD_OUT" && says "$NOREAD_OUT" "more than one merge"; then pass; else
+  fail "with no python3, two merges through a merge tool were not refused by name (rc=$NOREAD_RC): $NOREAD_OUT"
+fi
+run_hook_on "$dir" "$nopy" "./scripts/merge-when-green.sh 7"
+if says "$NOREAD_OUT" "more than one merge"; then
+  fail "control: with no python3, one merge through a merge tool was refused as several: $NOREAD_OUT"; else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
