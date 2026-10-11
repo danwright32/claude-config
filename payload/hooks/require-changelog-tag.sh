@@ -178,8 +178,11 @@ scope_for() {  # $1 = owner/name
 # a target this gate would refuse or judge alone, so the command is refused.
 if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
   gated=""
-  while IFS=$'\t' read -r t_slug t_where _; do
-    [ -n "$t_slug$t_where" ] || continue
+  # Split by parameter expansion, never `IFS=$'\t' read`: a tab is whitespace to read, so an empty
+  # first field (a checkout with no GitHub remote) collapsed and the path landed in t_slug.
+  while IFS= read -r t_line; do
+    [ -n "$t_line" ] || continue
+    t_slug="${t_line%%$'\t'*}"; t_where="${t_line#*$'\t'}"; t_where="${t_where%%$'\t'*}"
     t_scope="$(scope_for "$t_slug")"
     if [ -z "$t_scope" ] || [ "$(printf '%s' "$t_scope" | jq -r '(.inScope // false) or (.unreadable // false) or (.missingFrom // false) or (.badDate // false)')" != "false" ]; then
       gated="${t_slug:-$t_where}"; break
