@@ -5,7 +5,8 @@
 #
 # Nothing here may reach the real ~/Downloads: every record names a report under this suite's own
 # folder (the record's `report` is the seam, as /sleep writes it from HOME), HOME is pointed there
-# too, and the real Downloads is listed before and after to prove it (L2, L322). pmset and gh are
+# too, and the real Downloads is searched at the end for any file newer than the suite's start that
+# carries the stamp every record here writes into its report, to prove it (L2, L322, L375). pmset and gh are
 # stand-ins on PATH that log every call, so a stand-in that was never reached is seen (L143).
 set -uo pipefail
 
@@ -32,8 +33,16 @@ if ! . "$LIB"; then
   exit 1
 fi
 
-# The real Downloads, as it stands before anything runs: no sleep report may appear in it.
-real_downloads_before="$(ls "$HOME/Downloads" 2>/dev/null | grep -c -E '^(sleep-report-|Sleep report )' || true)"
+# The real Downloads, which nothing here may write into. It has other writers: Dan, and his own
+# sleep mode, which renders the night's real report there on every note, so it is busiest while
+# overnight sessions run this suite. Counting it before and after blamed this suite for theirs (a
+# real report deleted mid run read as "expected 1, got 0", #1054, L375). So this suite's writes are
+# identified positively instead: every record it makes carries STAMP, which the report prints in its
+# header, and only a file there that is newer than the moment this suite began AND carries STAMP is
+# one this suite put there.
+REAL_DOWNLOADS="$HOME/Downloads"
+STAMP="sleep-report-suite-$(basename "$WORK")"
+: > "$WORK/began"
 
 # Stand-ins on PATH. Each logs its argv; what it answers is set by files in $WORK/fake.
 FAKE="$WORK/fake"; BIN="$WORK/bin"; mkdir -p "$FAKE" "$BIN"
@@ -66,8 +75,9 @@ SLEEPDIR="$WORK/hm/.claude/state/sleep"
 DL="$WORK/hm/Downloads"
 mkdir -p "$SLEEPDIR/ended"
 record(){   # $1 = generation, $2 = workers as a JSON list, $3 = where (current or an ended file)
-  printf '{"v":1,"generation":"%s","since":%s,"until":%s,"night":"2026-10-07","bootTime":1759800000,"report":"%s/Sleep report %s.md","startedBy":{"sessionId":"aaaa1111","cwd":"/r/repo"},"workers":%s,"placeBefore":"home"}' \
-    "$1" "$SINCE" "$((SINCE + 86400000))" "$DL" "$1" "$2" > "$3"
+  # The folder carries STAMP, so every report rendered from this record names this run.
+  printf '{"v":1,"generation":"%s","since":%s,"until":%s,"night":"2026-10-07","bootTime":1759800000,"report":"%s/Sleep report %s.md","startedBy":{"sessionId":"aaaa1111","cwd":"/r/repo/%s"},"workers":%s,"placeBefore":"home"}' \
+    "$1" "$SINCE" "$((SINCE + 86400000))" "$DL" "$1" "$STAMP" "$2" > "$3"
 }
 report_of(){ cat "$DL/Sleep report $1.md" 2>/dev/null; }
 notes_of(){ cat "$SLEEPDIR/notes/$1.jsonl" 2>/dev/null; }
@@ -409,8 +419,11 @@ has "a read it could not make is under Needs a look too" "Not checked overnight:
 lacks "neither is left for Other notes" "## Other notes" "$r"
 
 # ---- where the writes landed ----
-real_downloads_after="$(ls "$HOME/Downloads" 2>/dev/null | grep -c -E '^(sleep-report-|Sleep report )' || true)"
-check_eq "the real Downloads gained no sleep report" "$real_downloads_before" "$real_downloads_after"
+# The stamp is proved present in what this suite wrote before its absence from the real Downloads is
+# read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
+check_eq "every report this suite wrote carries its stamp" 8 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
+check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
 check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
