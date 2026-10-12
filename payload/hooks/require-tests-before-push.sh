@@ -54,6 +54,10 @@ fail_open() {
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || fail_open "shared push-scope library missing"
+# is_test / is_source: the file classifier, shared with simplify-before-push.sh so the two gates
+# cannot drift over what counts as source (L263). It moved to the lib verbatim from here.
+# shellcheck source=lib/source-class.sh
+. "$HOOK_DIR/lib/source-class.sh" 2>/dev/null || fail_open "shared source-class library missing"
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -176,90 +180,9 @@ fi
 
 # ---------------------------------------------------------------------------
 # 4. Classify: did the push change source? did it touch any test?
+# is_test / is_source now live in lib/source-class.sh, sourced above, so this gate and
+# simplify-before-push.sh share one classifier (L263). test-source-class.sh owns their cases.
 # ---------------------------------------------------------------------------
-is_test() {
-  local f="$1"
-  printf '%s' "$f" | grep -Eiq '(^|/)(tests?|spec|__tests__|__mocks__)/' && return 0
-  # Xcode test target folders (claude-config#930). Xcode names a test target's folder after the
-  # target, `<Name>Tests` (OvertureTests, OvertureHostedTests, OvertureUITests), and a shared
-  # helpers target is commonly `TestSupport`. A suite file in one whose own name does not end in
-  # Tests read as SOURCE, so an Overture push that only added cases to
-  # mac/OvertureTests/EngineDivergenceGate.swift was refused as untested and overridden.
-  #
-  # Deliberately CASE SENSITIVE and on a DIRECTORY segment that ENDS in the word, unlike the line
-  # above: matched case blind, every folder whose name ends in the letters "tests" (contests/)
-  # would count as a test directory, and a source file there could ride through the gate.
-  printf '%s' "$f" | grep -Eq '(^|/)[^/]*(Tests|TestSupport)/'         && return 0
-  printf '%s' "$f" | grep -Eiq '\.(test|spec)\.[a-z0-9]+$'            && return 0
-  # `test-foo.ts` / `test_foo.js` runnable test scripts (common in a scripts/
-  # dir), but NOT test-only helpers like test-utils / test-setup / test-mocks.
-  if printf '%s' "$f" | grep -Eiq '(^|/)test[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs)$' \
-     && ! printf '%s' "$f" | grep -Eiq '(^|/)test[-_](utils?|helpers?|setup|fixtures?|mocks?|data|config)\.'; then
-    return 0
-  fi
-  printf '%s' "$f" | grep -Eiq '(^|/)test_[^/]+\.py$'                 && return 0
-  printf '%s' "$f" | grep -Eiq '_test\.(py|go|rb|dart|exs?)$'         && return 0
-  # Deno names its tests `foo_test.ts`, which is the convention Supabase edge
-  # function tests follow. Without this they read as untested source code.
-  printf '%s' "$f" | grep -Eiq '_test\.(ts|tsx|js|jsx|mjs|cjs)$'       && return 0
-  printf '%s' "$f" | grep -Eiq '_spec\.rb$'                           && return 0
-  # `<rule>.cases.js` beside `<rule>.js` (ovation#130). Ovation's design rules ship as executable
-  # functions with their cases in a sibling file, run by the ordinary suite. The classifier saw the
-  # rule as source and the cases as nothing, so a push adding two cases, one of which failed on the
-  # code as it stood, was blocked as untested and overridden. Those cases change every time a rule
-  # does, and an override that becomes routine stops being a decision, which is how a gate is worn
-  # down to nothing (L36).
-  #
-  # Matched by CONVENTION, not by that project's directory, for the reason every other branch here
-  # is: a rule written as one repository's path is absent the moment the next project adopts the
-  # convention, and it reads as coverage while covering nothing (L362).
-  printf '%s' "$f" | grep -Eiq '\.cases\.(ts|tsx|js|jsx|mjs|cjs)$'      && return 0
-  # Test or Tests as a WORD before the extension: capitalised (FooTests.swift, FooTest.kt), or lower
-  # case after a separator or as the whole name (foo_test.scala, test.swift). Deliberately CASE
-  # SENSITIVE: matched case blind it took the last letters of ordinary names, so Latest.swift and
-  # Contests.swift counted as tests and could satisfy the zero test floor for a source change.
-  printf '%s' "$f" | grep -Eq '(Tests?|(^|[/_-])tests?)\.(java|kt|cs|swift|scala)$' && return 0
-  printf '%s' "$f" | grep -Eiq '(^|/)conftest\.py$'                   && return 0
-  # Shell suites (claude-config#95). A whole language of tests was invisible here, and the config
-  # repo's suite is entirely shell: a push carrying a one line Python change and the assertion
-  # covering it, in the same commit, was blocked as untested and the change was dropped rather
-  # than overridden. A gate that refuses correct work teaches the override habit, and once that is
-  # habit it stops blocking the pushes it should.
-  #
-  # Same helper exclusion as the JavaScript branch above, for the same reason: a file of shared
-  # fixtures is not a test of anything, and counting one would let a real change ride in beside it.
-  #
-  # Deliberately NOT paired with adding .sh to is_source. That would start gating every shell edit
-  # in every project at once, which is a separate decision with a much wider blast radius, and one
-  # nobody has asked for. The consequence of leaving it is stated rather than hidden: a change to a
-  # shell script still needs no test of its own here.
-  if printf '%s' "$f" | grep -Eiq '(^|/)(test[-_][^/]+|[^/]+[-_]test)\.(sh|bash|zsh)$' \
-     && ! printf '%s' "$f" | grep -Eiq '(^|/)test[-_](utils?|helpers?|setup|fixtures?|mocks?|data|config)\.'; then
-    return 0
-  fi
-  return 1
-}
-
-is_source() {
-  local f="$1"
-  printf '%s' "$f" | grep -Eiq '\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|kts|swift|scala|c|cc|cpp|h|hpp|cs|php|ex|exs|dart|m|mm)$' || return 1
-  printf '%s' "$f" | grep -Eiq '(^|/)(node_modules|vendor|dist|build|out|coverage|\.next|__generated__|generated|migrations?)/' && return 1
-  printf '%s' "$f" | grep -Eiq '\.d\.ts$' && return 1
-  printf '%s' "$f" | grep -Eiq '(^|/)[^/]*\.(config|setup|conf)\.[a-z0-9]+$' && return 1
-  # One-off analysis scripts (scripts/check-*.js etc.) are throwaway
-  # investigation tools, not shipped behavior -> exempt from the gate.
-  printf '%s' "$f" | grep -Eiq '(^|/)scripts/check[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
-  # Production smoke scripts (scripts/smoke-*.ts) are hand-run verification tools
-  # that hit the live system, so they cannot carry their own CI unit test ->
-  # exempt them too, else every new smoke script needs a SKIP_TEST_CHECK
-  # override (Slate #529, hit adding scripts/smoke-523-stickiness.ts in PR #528).
-  printf '%s' "$f" | grep -Eiq '(^|/)scripts/smoke[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
-  # Hand-run diagnostics (scripts/diag-*.mjs, e.g. the live Google/SF credential
-  # probes) are the same class as check-*/smoke-*: not shipped behavior and not
-  # CI-testable -> exempt from the gate.
-  printf '%s' "$f" | grep -Eiq '(^|/)scripts/diag[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
-  return 0
-}
 
 # Comment style for a source file, by extension. Hash-comment languages use
 # '#'; everything else in is_source() is a slash/star family (//, /*, *).
