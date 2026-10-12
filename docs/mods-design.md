@@ -997,8 +997,11 @@ changing it:
   entries, each written whole beside it and hard linked into place; `ln` fails when the number
   exists, so of any number of claimers at once exactly one makes the next entry (tested with two
   and with eight; the suite runs the eight against a copy of the library with the link swapped for
-  a copy, and there every one of the eight owns the issue, each race held at the barrier above so
-  every claimer judges the issue free before any writes). Nothing is deleted: the newest
+  a plain overwrite, bash's own `>|`, and there every one of the eight owns the issue, each race
+  held at the barrier above so every claimer judges the issue free before any writes). The
+  overwrite is not `cp`, because a `cp` can create a destination it found absent exclusively (GNU's
+  does), which is a race of its own and left the control one owner short on CI (#1054). Nothing is
+  deleted: the newest
   entry is the state (`claim`, or `free`, `done`, `parked`, `failed` written by the holder, or
   `unstarted`, written only by `next` when the worktree could not be made just now) and
   the ones before it are the history the attempts count is read from (L27). An entry with no start

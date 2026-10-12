@@ -327,15 +327,27 @@ for r in 51 52 53 54 55; do
   check_has "and #$r's entry names that racer" "\"session\": \"q$winner\"" "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/$r/1" 2>/dev/null)"
 done
 
-# The control: the same library with the link swapped for a copy must let several claimers own one
-# issue, or the race above proves nothing about the link (L1). Held at the barrier, every claimer
-# has judged the issue free before any writes, and a copy refuses nobody, so all eight own it.
+# The control: the same library with the link swapped for a write that never refuses must let
+# several claimers own one issue, or the race above proves nothing about the link (L1). Held at the
+# barrier, every claimer has judged the issue free before any writes, so all eight own it.
+#
+# The swap is not cp (#1054). A cp may create a destination it finds absent EXCLUSIVELY (GNU's does,
+# O_EXCL after its own look), which is a link of its own: of eight released together, one could look,
+# find the name free, and be refused by another's create, so CI saw 7 owners with all 8 met at the
+# barrier. A Mac's cp never opens that way, which is why it passed on every Mac. The overwrite below
+# is bash's own `>|`, which opens O_CREAT|O_TRUNC on every platform and so cannot refuse, and any
+# refusal it did make is recorded and named, so a short count says why instead of only how many.
 CTRL="$WORK/control"; mkdir -p "$CTRL"
+CTRL_REFUSALS="$WORK/control-refusals"
 cp "$DIR/lib/sleep.sh" "$DIR/lib/sleep-queue.py" "$CTRL/"
-awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(cp "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
-check_eq "the control swapped the link for a copy" 1 "$(grep -c 'if err="$(cp "$tmp"' "$CTRL/sleep-queue.sh" | tr -d ' ')"
+awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(_ctrl_overwrite "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
+cat >> "$CTRL/sleep-queue.sh" <<'EOF'
+_ctrl_overwrite(){ local e; e="$( { cat "$1" >| "$2"; } 2>&1 )" && return 0; printf '%s\n' "${e:-the overwrite failed and said nothing}" >> "$CTRL_REFUSALS"; return 1; }
+EOF
+check_eq "the control swapped the link for an overwrite" 1 "$(grep -c 'if err="$(_ctrl_overwrite "$tmp"' "$CTRL/sleep-queue.sh" | tr -d ' ')"
 owners="$( . "$CTRL/sleep-queue.sh" && race 41 8 )"
 check_eq "without the link, every one of eight claimers at once owns it" 8 "$owners"
+check_eq "the control's overwrite refused none of them" "" "$(cat "$CTRL_REFUSALS" 2>/dev/null)"
 check_eq "the control's claimers all met at the barrier too" "8 in-time" "$(met 41)"
 
 # The barrier is a test's alone: it acts only on a folder holding a parties file, which only a test
