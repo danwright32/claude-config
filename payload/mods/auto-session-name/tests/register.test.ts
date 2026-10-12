@@ -172,6 +172,25 @@ test('a session with nothing asked at ten minutes is named after its first excha
   expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
 })
 
+// An opening that is only an image reaches the mod as its placeholder alone, '[Image #1]' (the shape
+// measured from real transcripts, #1067; see tests/name.test.ts). The session waits for words, and
+// is named from the reply, never from the placeholder.
+test('a session opened with only an image waits for words, then is named from the reply', async ($, on) => {
+  const w = world(on, { messages: [{ role: 'user', text: '[Image #1]', toolUses: [] }], replies: ['Invoice table overflow fix'] })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  // Only the image so far: nothing to name from, and no failure.
+  expect(w.prompts.length).toBe(0)
+  expect(w.logs).toEqual([])
+  w.messages.push({ role: 'assistant', text: 'The screenshot shows the invoice table overflowing its card.', toolUses: [] })
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toContain('The screenshot shows the invoice table overflowing its card.')
+  expect(w.prompts[0]).not.toContain('[Image #1]')
+  expect(w.renames.map(r => r.args)).toEqual(['Invoice table overflow fix'])
+})
+
 test('a first exchange before ten minutes does not name it early', async ($, on) => {
   const w = world(on)
   await start($)

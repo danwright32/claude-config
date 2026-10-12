@@ -59,6 +59,13 @@ if ps_has_override "$command" SKIP_PR_REVIEW; then
   exit 0
 fi
 
+# ONE pull request per command (claude-config#1062): the head, the review and the read key below are
+# all the first merge's, so a second merge in the same command went through on the first one's
+# reading. Refused, with how to run them so each is held.
+if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
+  refuse "Refusing to merge: $span_why"
+fi
+
 repo_dir="$(mt_repo_dir "$command" "$cwd" 2>/dev/null)"
 [ -n "$repo_dir" ] || repo_dir="$cwd"
 cd "$repo_dir" 2>/dev/null || refuse "Refusing to merge: could not enter $repo_dir to find the lessons review for this merge. Override, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>."

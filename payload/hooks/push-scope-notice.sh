@@ -17,6 +17,11 @@
 #
 # The remedy is in the refusal: spell the path so it resolves, or cd into the repository first.
 # Nothing is wrong with the push itself, only with how it names where it runs.
+#
+# Since claude-config#1062 it refuses a second shape the gates stand down on: one command pushing
+# from more than one repository. Every gate judges one repository per command and judged the first
+# push's, so the rest went out unjudged. That refusal has its own sentence and remedy (run each
+# repository's push on its own), because a resolved path is not the problem there (L11).
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,9 +34,22 @@ cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$cmd" || exit 0
 
-err="$(ps_repo_dir "$cmd" "$cwd" 2>&1 >/dev/null)"; rc=$?
-# rc 2 is the refusal this exists to act on. rc 1 (no repository named and none at the session
-# directory) is a push git itself will refuse, and a 0 is a push the gates do judge.
+# Asked through ps_repo_dirs, the list ps_repo_dir is built on, so the two causes of a gate standing
+# down get their own sentence and their own remedy (L11, L111): a directory that could not be
+# resolved (exit 2), or pushes into MORE THAN ONE repository (claude-config#1062), each of which
+# resolved, where every gate judges one repository per command and would judge only the first.
+# One capture: on exit 0 it holds the directories and nothing else, on exit 2 the sentence saying why.
+out="$(ps_repo_dirs "$cmd" "$cwd" 2>&1; printf '\035%s' "$?")"
+rc="${out##*$'\035'}"; out="${out%$'\035'*}"
+dirs="$out"; err="$out"
+# rc 1 (no repository named and none at the session directory) is a push git itself will refuse, and
+# a single repository is a push the gates do judge.
+if [ "$rc" -eq 0 ]; then
+  case "$dirs" in *$'\n'?*) ;; *) exit 0 ;; esac
+  printf 'PUSH REFUSED: this command pushes from more than one repository (%s), and every push gate (tests, style, scanners, docs and the rest) judges one repository per command, so the pushes after the first would go out with no gate having looked at them (claude-config#1062). Run each repository'"'"'s push as a command of its own.\n' \
+    "$(printf '%s' "$dirs" | awk 'NF' | paste -sd ',' - | sed 's/,/, /g')" >&2
+  exit 2
+fi
 [ "$rc" -eq 2 ] || exit 0
 
 printf 'PUSH REFUSED: no push gate could judge this push (tests, style, scanners, docs and the rest would all stand down), because it names a directory they could not resolve, and they do not fall back to %s in its place (claude-config#532, #589). %s Push again with the path spelled so it resolves (spell it absolutely, with no variable, or cd into the repository first).\n' \

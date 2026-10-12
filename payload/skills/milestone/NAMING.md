@@ -115,7 +115,8 @@ feature. And because it never completes, closing it is easy to do by accident: a
 tidying a backlog and closing every milestone with no open issues will close this one
 too, and the next standalone issue then has nowhere to go. So a CLOSED catch-all is
 reopened without approval, on the same grounds its creation is exempt, and the reopen
-is announced rather than done in silence. Every other closed title still stops and
+is announced rather than done in silence. A dry run (`DRY_RUN=1`) only says it would
+reopen it and leaves it closed, since a dry run writes nothing. Every other closed title still stops and
 asks, because closing one of those was a decision about a feature.
 
 ### Who creates a milestone

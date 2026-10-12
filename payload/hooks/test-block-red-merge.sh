@@ -1309,6 +1309,38 @@ rm -rf "$dir"
 unset FIXTURE GH_CALL_LOG
 GH_COMPARE_LOG=""
 
+echo "block-red-merge: every merge in a command is judged, not only the first (#1062)"
+
+# The gate judged the FIRST merge in a command: its directory, its number, its checks. So a pinned
+# merge of a green pull request followed by a merge of a RED one in another checkout was allowed,
+# and the red one landed with nobody having read its checks. gh answers by number here, so only
+# the second merge is red.
+dir=$(make_repo without-tool "$GREEN")
+dir2=$(make_repo without-tool "$GREEN")
+cat > "$dir/bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"/compare/"*) printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}' ;;
+  *"pr view 8"*) printf '%s\n' '$RED' ;;
+  *"pr view"*) printf '%s\n' '$GREEN' ;;
+esac
+EOF
+chmod +x "$dir/bin/gh"
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if denied "$out"; then fail "control: the first merge alone, green and pinned, was refused: $out"; else pass; fi
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA; cd $dir2/repo && gh pr merge 8 --squash --match-head-commit $HEAD_SHA")
+if denied "$out"; then pass; else
+  fail "a second merge, of a red pull request in another checkout, was let through on the first one's green: $out"
+fi
+if says "$out" "more than one pull request"; then pass; else
+  fail "the refusal does not say the command merges more than one pull request: $out"
+fi
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA && gh pr merge 8 --squash --match-head-commit $HEAD_SHA")
+if denied "$out"; then pass; else
+  fail "a second merge of another pull request in the same checkout was let through: $out"
+fi
+rm -rf "$dir" "$dir2"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

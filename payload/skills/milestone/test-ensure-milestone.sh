@@ -454,6 +454,46 @@ out="$(GH_FIXTURE="$TMP/closedcatchall.json" GH_CREATED="$TMP/stillclosed.json" 
 check_eq "a reopen that did not take is a failure" "6" "$rc"
 check_not "and it is not reported as a reopen" "CATCH-ALL-REOPENED" "$out"
 
+# --- 11g. a DRY RUN against a closed catch-all changes nothing (claude-config#1058) ---
+# DRY_RUN=1 is documented as "read and classify, but write nothing", and
+# create-milestone.sh runs it first to vet a plan before making any label (#1043).
+# The reopen above was not behind it, so a dry run reopened the pen on GitHub (L206).
+#
+# Judged by EVERY call the fake gh saw rather than by created_count, which only spots
+# a `-f` and so would miss a write spelled any other way. A call is a read only when
+# it is `gh api` with no method and no field: anything else is counted as a write.
+write_calls() {
+  awk '
+    $1 != "api" { print; next }
+    / (-X|--method|-f|-F|--field|--raw-field|--input)( |=|$)/ { print }
+  ' "$TMP/calls.log" 2>/dev/null
+}
+out="$(DRY_RUN=1 GH_FIXTURE="$TMP/closedcatchall.json" GH_CREATED="$TMP/reopened.json" ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "a dry run on a closed catch-all exits as the real run would" "0" "$rc"
+check_eq "and makes no write call of any kind" "" "$(write_calls)"
+# An empty write log means something only if the run reached GitHub at all (L98).
+check "the dry run did read the milestone list" "milestones?state=all" "$(cat "$TMP/calls.log")"
+check "it says it would reopen the pen that exists" "WOULD-REOPEN-MILESTONE 12 Ungrouped" "$out"
+check "the caller still gets the title it would file against" "MILESTONE-TITLE Ungrouped" "$out"
+check_not "it does not claim to have reopened anything" "CATCH-ALL-REOPENED" "$out"
+check_not "nor that the pen is already open" "MILESTONE-EXISTS" "$out"
+
+# The same detector sees the real run's reopen, so its silence above is a measurement
+# rather than a blind spot (L1).
+out="$(GH_FIXTURE="$TMP/closedcatchall.json" GH_CREATED="$TMP/reopened.json" ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "the real run still reopens" "0" "$rc"
+check "and the detector sees its one write, the reopen" "-X PATCH repos/acme/widgets/milestones/12 -f state=open" "$(write_calls)"
+check_eq "and it is the only write" "1" "$(write_calls | grep -c .)"
+check "and reports the state it read back" "CATCH-ALL-REOPENED" "$out"
+
+# The other write in the script, the create, is behind DRY_RUN too, by the same measure.
+out="$(DRY_RUN=1 ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "a dry run with no catch-all at all exits 0" "0" "$rc"
+check "and says it would create the pen" "WOULD-CREATE-MILESTONE repo=acme/widgets title=Ungrouped" "$out"
+check_eq "and makes no write call of any kind" "" "$(write_calls)"
+out="$(DRY_RUN=1 ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"
+check_eq "an approved create in dry run makes no write call of any kind" "" "$(write_calls)"
+
 # THE EXEMPTION IS NO BROADER THAN ITS REASON. An ordinary closed title is somebody
 # else's decision to close and still stops to ask.
 out="$(ensure acme/widgets "Legacy cleanup")"; rc=$?

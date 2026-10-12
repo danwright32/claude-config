@@ -390,6 +390,45 @@ out="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sy
 check "a commit's review starts in the repository the commit's cd names, from a session elsewhere" "started" "$out"
 wait_final "$HEAD_SHA" && ok || bad "the commit's review of its own branch finished"
 
+# ===========================================================================================
+# 7. EVERY push in a command is judged, not only the first (claude-config#1062). The gate judged the
+#    first push's repository, so with OTHER's default branch push first (which the gate does not
+#    hold) the push of REPO's branch, whose review has unread findings, went out unjudged. A command
+#    pushing from more than one repository is refused now, naming them.
+# ===========================================================================================
+reset_state
+out="$(fire_push_in "$OTHER" "cd $OTHER && git push origin main; cd $REPO && git push -u origin feat/sync")"; rc=$?
+check_eq "a second push, into a repository with unread findings, is no longer passed over" "2" "$rc"
+check "and the refusal says the command pushes from more than one repository" "more than one repository" "$out"
+check "naming the second" "$REPO" "$out"
+out="$(fire_push_in "$OTHER" "git push origin main && git -C $REPO push origin feat/sync")"; rc=$?
+check_eq "the same with the second push named by git -C" "2" "$rc"
+out="$(fire_push_in "$OTHER" "cd $OTHER && git push origin main; cd $OTHER && git push origin main:other")"; rc=$?
+check_eq "control: two pushes from one repository on its default branch are still not held" "0" "$rc"
+
+# The commit time start acts on EVERY repository a command commits in, since starting a review is
+# something it can do for each: OTHER's commit first used to be the only one looked at, and OTHER
+# stands on its default branch, so REPO's commit started nothing.
+reset_state
+out="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]},"tool_response":{"exit_code":0}}))' \
+  "$OTHER" "cd $OTHER && git commit -m a; cd $REPO && git commit -m two" | bash "$COMMIT_HOOK" 2>&1)"
+check "commits in two repositories start the review in the second too" "started" "$out"
+wait_final "$HEAD_SHA" && ok || bad "the second repository's review finished"
+check_eq "one review, of the branch that is not a default branch" "1" "$(calls)"
+
+# The merge gate judged the FIRST merge in a command, and read the key from the first merge carrying
+# one, so a merge presenting the key followed by a merge of another pull request went through on the
+# first one's reading (claude-config#1062). It refuses a command merging more than one now.
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_merge "gh pr merge 7 --squash")"; rc=$?
+check_eq "the commit's findings hold the merge" "2" "$rc"
+mk="$(key_in "$out")"
+out="$(fire_merge "PR_REVIEW_READ=$mk gh pr merge 7 --squash")"; rc=$?
+check_eq "control: one merge presenting its key goes through" "0" "$rc"
+out="$(fire_merge "PR_REVIEW_READ=$mk gh pr merge 7 --squash && gh pr merge 8 --squash")"; rc=$?
+check_eq "a second merge, of another pull request, no longer goes through on the first one's key" "2" "$rc"
+check "and the refusal says the command merges more than one pull request" "more than one pull request" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

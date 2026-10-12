@@ -67,6 +67,28 @@ out="$(run "git -C \"$W/with space\" push")"; rc=$?
 [ "$rc" -eq 0 ] && check "a quoted -C path with a space is resolved, not refused" ok || check "a quoted -C path with a space is resolved, not refused" "exit $rc: $(cat "$W/err")"
 silent "and says nothing" "$out"
 
+echo "push scope notice: pushes into more than one repository in one command (claude-config#1062)"
+
+# Every push gate judges one repository per command, and used to judge the FIRST push's, so the
+# second push in `cd A && git push; cd B && git push` went out with no gate having looked at it. The
+# library now refuses such a command, and this hook turns that into a refusal of the push, with a
+# remedy that fits: run each push on its own. "Spell the path so it resolves" would send somebody
+# to fix a path that was never the problem (L11, L111).
+git init -q "$W/other" 2>/dev/null
+out="$(run "cd $W/target && git push; cd $W/other && git push")"; rc=$?
+err="$(cat "$W/err")"
+[ "$rc" -eq 2 ] && check "two pushes into two repositories in one command are refused" ok \
+  || check "two pushes into two repositories in one command are refused" "exit $rc, said [$err]"
+says "and names the first repository" "$err" "$W/target"
+says "and names the second" "$err" "$W/other"
+says "and says why: the gates judge one repository per command" "$err" "more than one repository"
+says "and how to push so every push is judged" "$err" "a command of its own"
+case "$err" in *"spell it absolutely"*) check "and does not tell somebody to fix a path that resolved" "it did" ;;
+  *) check "and does not tell somebody to fix a path that resolved" ok ;; esac
+out="$(run "git push; cd $W/other && git push")"; rc=$?
+[ "$rc" -eq 2 ] && check "a push from the session repository and one from another are refused" ok \
+  || check "a push from the session repository and one from another are refused" "exit $rc"
+
 echo "push scope notice: silent where there is nothing to announce"
 
 # Since #589 the hook refuses with exit 2 and speaks on STDERR, so "silent" means all three: exit 0,
@@ -79,6 +101,7 @@ allowed() { # allowed <description> <command>
 }
 allowed "a push the gates can resolve is let through, saying nothing" "cd $W/target && git push"
 allowed "a plain push from the session repository is let through, saying nothing" "git push"
+allowed "two pushes into the same repository are let through, saying nothing" "cd $W/target && git push; cd $W/target && git push origin HEAD:x"
 allowed "a command that is not a push is let through, saying nothing" "cd $W/no-such-dir && git status"
 allowed "a push quoted inside an argument is let through, saying nothing" "gh issue create --body \"cd $W/no-such-dir && git push\""
 

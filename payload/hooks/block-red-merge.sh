@@ -120,6 +120,14 @@ ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
 # different fault and sends somebody to name a repository that was never the problem (L11).
 mt_reader_missing && deny "Refusing to merge: $(mt_reader_absent_why) Verifying one pull request's checks and merging another is the mistake this gate exists to stop."
 
+# ONE pull request per command (claude-config#1062). Everything below reads the first merge's number,
+# repository and directory, so a second merge in the same command, of another pull request or in
+# another checkout, landed with nobody having read its checks. This gate asks GitHub about one pull
+# request and pins the merge to its head, so it refuses rather than judging each in turn.
+if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
+  deny "Refusing to merge: $span_why"
+fi
+
 # The PR number if the command names one; otherwise gh resolves it from the
 # current branch, which is also what the merge itself would do.
 pr=$(mt_pr_number "$command")

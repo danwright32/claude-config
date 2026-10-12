@@ -134,18 +134,27 @@ export function settledByDan(r: Reading): boolean {
 const ISSUE_REF = /(?:#|\bissue\s+)(\d+)\b/gi
 
 /**
+ * What winding down refuses as new work, in the words its refusal says it with. The acknowledgement
+ * of turning it on (#1055) lists these same words, so it says what this guard refuses.
+ */
+export const NEW_WORK = { nextIssue: 'start the next issue', branch: 'start a new branch', agent: 'dispatch an agent for another issue' } as const
+const agentFor = (n: number) => NEW_WORK.agent.replace('another issue', `issue #${n}`)
+/** What finishing one PR means, as winding down's note and its acknowledgement (#1055) both say it. */
+export const FINISHED = 'merged, its deploy live, its worktree and branch cleaned and its issues closed'
+
+/**
  * Why winding down refuses this call as new work, or undefined. Only the starts of new work are
  * refused; everything this issue's merge, deploy and cleanup need goes through.
  */
 export const newWork = (call: { tool: string; input: Record<string, unknown>; commands: Cmd[]; issues: readonly number[] }): Refusal | undefined => {
   const { tool, input } = call
-  if (tool === 'Skill' && String(input.skill ?? '').replace(/^.*:/, '') === 'next-issue') return { what: 'start the next issue' }
-  if (tool === 'EnterWorktree') return { what: 'start a new branch' }
+  if (tool === 'Skill' && String(input.skill ?? '').replace(/^.*:/, '') === 'next-issue') return { what: NEW_WORK.nextIssue }
+  if (tool === 'EnterWorktree') return { what: NEW_WORK.branch }
   if (tool === 'Agent' || tool === 'Task') {
     const prompt = String(input.prompt ?? '')
     for (const m of prompt.matchAll(ISSUE_REF)) {
       const n = Number(m[1])
-      if (!call.issues.includes(n)) return { what: `dispatch an agent for issue #${n}` }
+      if (!call.issues.includes(n)) return { what: agentFor(n) }
     }
     return undefined
   }
@@ -153,12 +162,12 @@ export const newWork = (call: { tool: string; input: Record<string, unknown>; co
   for (const c of call.commands) {
     const g = c.git
     const args = g?.args ?? []
-    if (g?.sub === 'checkout' && args.some(a => a === '-b' || a === '-B' || a === '--orphan')) return { what: 'start a new branch' }
-    if (g?.sub === 'switch' && args.some(a => a === '-c' || a === '-C' || a === '--create' || a === '--force-create' || a === '--orphan')) return { what: 'start a new branch' }
-    if (g?.sub === 'worktree' && args[0] === 'add') return { what: 'start a new branch' }
-    if (g?.sub === 'branch' && args.length > 0 && !args[0]?.startsWith('-')) return { what: 'start a new branch' }
+    if (g?.sub === 'checkout' && args.some(a => a === '-b' || a === '-B' || a === '--orphan')) return { what: NEW_WORK.branch }
+    if (g?.sub === 'switch' && args.some(a => a === '-c' || a === '-C' || a === '--create' || a === '--force-create' || a === '--orphan')) return { what: NEW_WORK.branch }
+    if (g?.sub === 'worktree' && args[0] === 'add') return { what: NEW_WORK.branch }
+    if (g?.sub === 'branch' && args.length > 0 && !args[0]?.startsWith('-')) return { what: NEW_WORK.branch }
     // gh read by mod-kit's one reader (#961), past its global flags (`gh -R o/x issue develop 7`).
-    if (c.gh?.sub === 'issue' && c.gh.act === 'develop') return { what: 'start a new branch' }
+    if (c.gh?.sub === 'issue' && c.gh.act === 'develop') return { what: NEW_WORK.branch }
     // A flag before the subcommand the reader cannot place could hide `issue develop`, so it is refused.
     if (c.gh?.unreadable) return { what: 'run a gh command whose flags cannot be read' }
   }

@@ -22,6 +22,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/simplify-before-push.sh",
+            "timeout": 120,
+            "statusMessage": "Checking pushed source for code that should be simplified"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-style-guide.sh",
             "timeout": 30,
             "statusMessage": "Checking pushed changes for style-guide violations"
@@ -74,11 +80,6 @@
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/check-gh-watch-interval.sh",
-            "timeout": 10
-          },
-          {
-            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/block-red-merge.sh",
             "if": "Bash(gh pr merge*)",
             "timeout": 30,
@@ -128,6 +129,11 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-add-scope.sh"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-gh-watch-interval.sh",
+            "timeout": 10
           }
         ]
       },

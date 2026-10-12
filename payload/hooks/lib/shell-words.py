@@ -25,6 +25,9 @@ hook that slow is killed and the command goes unscreened.
   shell-words.py gitdir     stdin: one command
       the directory its `git -C` options name, several composed as git composes them, or nothing
       when it is not git or names no -C; see git_dir().
+  shell-words.py bare       stdin: one command
+      the command with the contents of every $( ) and backquote substitution taken out, so a caller
+      can ask what it runs itself rather than inside them (claude-config#1062); see bare().
 
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
@@ -497,6 +500,83 @@ def git_dir(text):
     return where
 
 
+def bare(s):
+    """One command with the contents of every $( ) and backquote substitution taken out.
+
+    What the command runs ITSELF, as against what it runs inside its substitutions (#1062).
+    commands() lists `out=$(cd A && git push)` beside the push inside it, and a push recogniser
+    that reads substitutions afresh says yes to both; the outer one is a container, and judging it
+    puts the push in the outer shell's directory. `git push origin "$(git branch)"` is still a push
+    with its substitution emptied, and stays one. Quotes and parentheses are read as segments()
+    reads them, quotes opening afresh inside a substitution. A substitution left open at the end
+    cannot be read, so the command is returned whole, which keeps it counted (L42).
+    """
+    out, stack, i, n = [], [], 0, len(s)
+
+    def inside():
+        return any(k in ("$(", "`") for k in stack)
+
+    while i < n:
+        c = s[i]
+        nx = s[i + 1] if i + 1 < n else ""
+        top = stack[-1] if stack else ""
+        if top == "'":
+            if c == "'":
+                stack.pop()
+            if not inside():
+                out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if not inside():
+                out.append(c + nx)
+            i += 2
+            continue
+        if c == "$" and nx == "(":
+            if not inside():
+                out.append("$(")
+            stack.append("$(")
+            i += 2
+            continue
+        if c == "`":
+            if top == "`":
+                stack.pop()
+                if not inside():
+                    out.append(c)
+            else:
+                if not inside():
+                    out.append(c)
+                stack.append("`")
+            i += 1
+            continue
+        if c == ")" and top == "$(":
+            stack.pop()
+            if not inside():
+                out.append(c)
+            i += 1
+            continue
+        if c == '"':
+            if top == '"':
+                stack.pop()
+            else:
+                stack.append(c)
+        elif c == "'":
+            if top != '"':
+                stack.append(c)
+        elif c == "(":
+            if inside() and top != '"':
+                stack.append(c)
+        elif c == ")":
+            if top == "(":
+                stack.pop()
+        if not inside():
+            out.append(c)
+        i += 1
+    if stack:
+        return s
+    return "".join(out)
+
+
 def crude_commands(s):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
 
@@ -522,6 +602,8 @@ def main(argv):
         sys.stdout.write("\x1f".join(command_words(data)))
     elif mode == "gitdir":
         sys.stdout.write(git_dir(data))
+    elif mode == "bare":
+        sys.stdout.write(bare(data))
     elif mode == "commands":
         # Exit 3 says only the crude reading was possible; its records are printed all the same.
         try:
@@ -536,7 +618,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py segments|split|commands|words|gitdir < text\n")
+        sys.stderr.write("usage: shell-words.py segments|split|commands|words|gitdir|bare < text\n")
         return 64
     return 0
 

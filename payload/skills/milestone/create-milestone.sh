@@ -266,10 +266,12 @@ fi
 # matches a milestone by name, not by number (gh 2.88: "Add the issue to a
 # milestone by name"). The helper reports the resolved title, which can differ in
 # case or punctuation from the title this plan asked for.
-verdict="$(printf '%s\n' "$ms_out" | grep -E '^(MILESTONE-EXISTS|MILESTONE-CREATED|WOULD-CREATE-MILESTONE)' | awk 'NR <= 1')"
+verdict="$(printf '%s\n' "$ms_out" | grep -E '^(MILESTONE-EXISTS|MILESTONE-CREATED|WOULD-CREATE-MILESTONE|WOULD-REOPEN-MILESTONE)' | awk 'NR <= 1')"
 resolved="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | awk 'NR <= 1')"
 case "$verdict" in
-  MILESTONE-EXISTS*|MILESTONE-CREATED*)
+  # WOULD-REOPEN is the dry run's answer for a closed catch-all (claude-config#1058): the
+  # milestone exists with a real title, it is only left closed, so preview against it.
+  MILESTONE-EXISTS*|MILESTONE-CREATED*|WOULD-REOPEN-MILESTONE*)
     ms_ref="$resolved"
     ;;
   WOULD-CREATE-MILESTONE*)

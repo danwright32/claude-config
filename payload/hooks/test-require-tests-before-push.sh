@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Tests for the file classifier (is_test / is_source) inside
-# require-tests-before-push.sh. We source ONLY those two function definitions
-# out of the hook so we exercise the real code without running the whole hook.
+# Tests for require-tests-before-push.sh: the docs-only classifier (docs_style_for / diff_docs_only)
+# sourced out of the hook, and the whole gate driven end to end as a subprocess. The is_test /
+# is_source file classifier moved to lib/source-class.sh (shared with simplify-before-push.sh); its
+# cases live in test-source-class.sh and this suite no longer asserts on it directly (the end to end
+# runs exercise it through the real hook, which sources the lib itself).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -15,135 +17,20 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/require-tests-before-push.sh"
 
-# Pull the pure functions out of the hook and define them here.
-eval "$(sed -n '/^is_test() {/,/^}/p' "$HOOK")"
-eval "$(sed -n '/^is_source() {/,/^}/p' "$HOOK")"
+# docs_style_for / diff_docs_only are this gate's own, so they are pulled out of the hook. is_test /
+# is_source are not used here: they moved to lib/source-class.sh and test-source-class.sh covers them.
 eval "$(sed -n '/^docs_style_for() {/,/^}/p' "$HOOK")"
 eval "$(sed -n '/^diff_docs_only() {/,/^}/p' "$HOOK")"
 
 pass=0
 fail=0
-want_test()    { if is_test "$1";    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected TEST: $1"; fi; }
-want_nottest() { if is_test "$1";    then fail=$((fail+1)); echo "FAIL: expected NOT-test: $1"; else pass=$((pass+1)); fi; }
-want_source()    { if is_source "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected SOURCE: $1"; fi; }
-want_notsource() { if is_source "$1"; then fail=$((fail+1)); echo "FAIL: expected NOT-source: $1"; else pass=$((pass+1)); fi; }
 want_docsonly()    { if printf '%s' "$2" | diff_docs_only "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected DOCS-ONLY ($1): [$2]"; fi; }
 want_notdocsonly() { if printf '%s' "$2" | diff_docs_only "$1"; then fail=$((fail+1)); echo "FAIL: expected NOT-docs-only ($1): [$2]"; else pass=$((pass+1)); fi; }
 want_style()       { local got; got="$(docs_style_for "$1")"; if [ "$got" = "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: style $1 expected $2 got $got"; fi; }
 
-# --- the reported gap: scripts/test-*.ts convention ---
-want_test "scripts/test-cron-routes.ts"
-want_test "scripts/test-sync.js"
-want_test "scripts/test_legacy_thing.ts"   # underscore variant too
-
-# --- #95: shell suites are tests too ---
-# This repo's entire suite is shell, and the classifier could not see any of it: a push carrying a
-# one line Python change and the assertion covering it, in the same commit, was blocked as
-# untested. A gate that refuses correct work is not merely annoying, it teaches the override
-# habit, and once that is a habit it stops blocking the pushes it should (L36).
-want_test "hooks/test-subagent-issue-harvest.sh"
-want_test "test_deploy.sh"
-want_test "scripts/deploy_test.sh"
-
-# ...and the helper exclusion the JavaScript branch already has must apply here too, or the same
-# over-match arrives one language later: a file of shared fixtures is not a test of anything.
-want_nottest "hooks/test-utils.sh"
-want_nottest "hooks/test-helpers.sh"
-want_nottest "scripts/test-fixtures.sh"
-want_nottest "hooks/testimonials.sh"
-
-# --- ovation#130: a `.cases.js` file is the executable form of a rule ---
-# Ovation's design rules live as `docs/design/rules/<rule>.js` with their cases beside them as
-# `<rule>.cases.js`, run by the ordinary suite. The classifier saw the rule as source and the cases
-# as nothing, so a push adding two cases (one of which failed on the code as it was) was blocked as
-# untested and overridden. 137 cases will change every time a rule does, and an override that
-# becomes routine stops being a decision, which is how a gate is worn down to nothing (L36).
-#
-# Matched by CONVENTION rather than by that one repository's path, for the same reason every other
-# branch here is: a rule written as one project's directory is absent the moment the next project
-# adopts the convention, and it would read as coverage while covering nothing (L362).
-want_test "docs/design/rules/time-field.cases.js"
-want_test "docs/design/rules/typing.cases.js"
-want_test "src/pricing.cases.ts"
-want_test "lib/duration.cases.mjs"
-
-# The rule itself is still SOURCE and still not a test, which is the whole point: changing a rule
-# with no case is what the gate must go on blocking. Nothing asserts that the CASES file is not
-# source, because the classifier loop asks is_test first and skips a match, so is_source is never
-# consulted for it, exactly as it is never consulted for `Foo.test.ts`.
-want_source "docs/design/rules/time-field.js"
-want_nottest "docs/design/rules/time-field.js"
-
-# --- claude-config#930: a file inside an Xcode test target folder is a test ---
-# Xcode names a test target's folder after the target, `<Name>Tests`, and a shared helpers target
-# is commonly `TestSupport`. The classifier knew only a bare `tests/` segment or a `Tests.swift`
-# suffix, so a suite file in `mac/OvertureTests/` whose own name did not end in Tests read as
-# SOURCE: on 2026-10-08 an Overture push adding two cases to EngineDivergenceGate.swift, and
-# nothing else, was refused as untested source and needed an override Dan had to approve.
-want_test "mac/OvertureTests/EngineDivergenceGate.swift"
-want_test "mac/OvertureHostedTests/Support/HostedHarness.swift"
-want_test "mac/TestSupport/FixtureLoader.swift"
-want_test "OvertureUITests/LaunchFlow.swift"
-
-# ...and nothing wider. The match is on a DIRECTORY segment ending in exactly `Tests` or
-# `TestSupport`, case sensitive, so a source file whose own name merely contains Tests, a folder
-# that only begins with it, and an ordinary word ending in "tests" all stay source and keep needing
-# a test of their own.
-want_source  "mac/Overture/TestsPanel.swift"
-want_nottest "mac/Overture/TestsPanel.swift"
-want_source  "mac/Overture/UnitTestsRunner.swift"
-want_nottest "mac/Overture/UnitTestsRunner.swift"
-want_source  "mac/OvertureTestsKit/Runner.swift"
-want_nottest "mac/OvertureTestsKit/Runner.swift"
-want_source  "web/contests/entry.ts"
-want_nottest "web/contests/entry.ts"
-want_source  "mac/TestSupportive/Thing.swift"
-want_nottest "mac/TestSupportive/Thing.swift"
-
-# --- the Test or Tests filename suffix is a WORD, not four letters ---
-# The suffix rule for JVM, .NET and Swift test files was matched case blind, so any source file whose
-# name merely ended in the letters "test" or "tests" counted as a test: Latest.swift and
-# Contests.swift each satisfied the zero test floor for an unrelated source change riding beside
-# them. It now needs Test or Tests as a word: capitalised (FooTests, FooTest), or lower case after a
-# separator (foo_test), or the whole name.
-want_test "mac/OvertureTests/FooTests.swift"
-want_test "src/main/FooTest.kt"
-want_test "app/src/test/WidgetTest.java"
-want_test "Tests/BarTests.cs"
-want_test "lib/parser_test.scala"
-want_test "pkg/Tests.swift"
-want_source  "src/Latest.swift"
-want_nottest "src/Latest.swift"
-want_source  "src/Contests.swift"
-want_nottest "src/Contests.swift"
-want_source  "lib/Manifest.kt"
-want_nottest "lib/Manifest.kt"
-
-# --- existing conventions must still register (regression) ---
-want_test "src/components/Foo.test.ts"
-want_test "src/components/Foo.spec.tsx"
-want_test "tests/foo.ts"
-want_test "test_foo.py"
-want_test "foo_test.go"
-
-# --- must NOT over-match real source or test-only helpers ---
-want_nottest "src/app/api/cron/route.ts"   # the source file from the report
-want_nottest "scripts/deploy.ts"
-want_nottest "scripts/test-utils.ts"        # helper, not a runnable test
-want_nottest "src/test-helpers.ts"
-want_nottest "scripts/testimonials.ts"      # 'test' substring, not a test file
-
-# --- one-off analysis scripts in scripts/ are exempt from the gate ---
-want_notsource "scripts/check-menjivar.js"
-want_notsource "scripts/check-menjivar-beyond.js"
-want_notsource "scripts/check_enrollment_gaps.py"
-want_notsource "apps/worker/scripts/check-export-state.ts"
-
-# --- but the exemption must not leak beyond scripts/check-* ---
-want_source "src/app/api/check-email/route.ts"   # real route, not a script
-want_source "scripts/checkout.ts"                # 'check' substring only
-want_source "scripts/deploy.ts"
-want_source "lib/check-utils.ts"                 # not under scripts/
+# The is_test / is_source classification cases moved to test-source-class.sh when the classifier
+# moved to lib/source-class.sh. The end-to-end cases below still drive the real hook, which sources
+# the same lib, so a classification regression that mattered to THIS gate still shows here.
 
 # --- #733: docs-only (comment/blank) diffs need no test ---
 want_docsonly slash "$(printf 'diff --git a/lib/foo.js b/lib/foo.js\n--- a/lib/foo.js\n+++ b/lib/foo.js\n@@ -1,2 +1,3 @@\n const x = 1;\n+// explain the thing\n const y = 2;\n')"

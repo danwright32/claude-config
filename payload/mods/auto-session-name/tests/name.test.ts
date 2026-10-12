@@ -79,6 +79,56 @@ test('an exchange needs a request from the person and a reply', async () => {
   expect(hasExchange([{ role: 'user', text: 'hello', toolUses: [] }, { role: 'assistant', text: 'hi', toolUses: [] }])).toBe(true)
 })
 
+// An image sent with no words, as $.session.messages() gives it (#1067). Measured on 2026-10-10
+// from this Mac's transcripts: Claude Code stores a pasted image as a user message whose content
+// is a text block holding only its placeholder, then the image block, as
+// [{ type: 'text', text: '[Image #1]' }, { type: 'image', source: { type: 'base64', media_type:
+// 'image/png', data } }], and several images share one text block, '[Image #1] [Image #2]'. The
+// placeholder is Claude Code's own (its prompt input writes `[Image #${id}]`); the engine's reader
+// (2.1.296) joins a user message's text blocks into `text` and drops its image blocks, so the
+// placeholder is all the mod sees. Of 138 user messages carrying an image, 45 had no words beside
+// the placeholder.
+const imageOnly = (text = '[Image #1]') => ({ role: 'user' as const, text, toolUses: [] })
+
+test('an opening that is only an image is not a request, so nothing names it yet', async () => {
+  expect(hasExchange([imageOnly()])).toBe(false)
+  expect(hasExchange([imageOnly('[Image #1] [Image #2]')])).toBe(false)
+  // A reply that has only used tools so far has no words to name from either: wait for it.
+  expect(hasExchange([imageOnly(), { role: 'assistant', text: '', toolUses: [] }])).toBe(false)
+})
+
+test('after an image only opening, the reply that describes it is enough to name from', async () => {
+  const messages = [imageOnly(), { role: 'assistant' as const, text: 'The screenshot shows the invoice table overflowing its card.', toolUses: [] }]
+  expect(hasExchange(messages)).toBe(true)
+  const p = namePrompt(messages)
+  expect(p).toContain('The screenshot shows the invoice table overflowing its card.')
+  // The placeholder is never handed over as the opening request, nor anywhere else.
+  expect(p).not.toContain('[Image #1]')
+  expect(p).not.toContain('Opening request:')
+})
+
+test("after an image only opening, the person's next words are the opening request", async () => {
+  const p = namePrompt([
+    imageOnly('[Image #1] [Image #2]'),
+    { role: 'assistant', text: 'What would you like me to do with these?', toolUses: [] },
+    { role: 'user', text: 'Fix the overflow in the invoice table', toolUses: [] },
+    { role: 'assistant', text: 'Looking at the table styles.', toolUses: [] },
+  ])
+  expect(p).toContain('Opening request:\nFix the overflow in the invoice table')
+  expect(p).not.toContain('[Image #')
+})
+
+test('an opening with an image and words is named from the words', async () => {
+  const messages = [
+    { role: 'user' as const, text: '[Image #1] Why is this button misaligned on the settings page', toolUses: [] },
+    { role: 'assistant' as const, text: 'Checking the settings layout.', toolUses: [] },
+  ]
+  expect(hasExchange(messages)).toBe(true)
+  const p = namePrompt(messages)
+  expect(p).toContain('Opening request:\nWhy is this button misaligned on the settings page')
+  expect(p).not.toContain('[Image #1]')
+})
+
 test('the rename command answer is read by the shapes the built-in /rename prints', async () => {
   // Copied from the 2.1.289 build's /rename (its success and refusal messages).
   expect(renameOutcome('Session renamed to: Fix the invoice table')).toBe('set')

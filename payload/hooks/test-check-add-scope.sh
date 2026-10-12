@@ -244,6 +244,16 @@ REPO="$REPO_SAVED"
 refused "an unscoped add whose cd is on a later line is refused from a session outside the repo"
 run "git add :/"
 refused "and so is :/, which is the whole tree from anywhere"
+# EVERY add is judged, not only the first (claude-config#1062). The gate judged the repository of the
+# first add in the command, so a scoped add in a clean checkout followed by an unscoped add here,
+# where another session's change sits, was judged in the clean one and allowed.
+CLEAN="$FIX/clean"
+git init -q -b main "$CLEAN"
+run "cd $CLEAN && git add nothing.txt; cd $REPO && git add -A"
+refused "an unscoped add in a second repository is no longer judged in the first"
+says "and the refusal says the adds run in more than one repository" "more than one repository"
+run "cd $REPO && git add mine.txt; cd $REPO && git add -A"
+refused "control: two adds in this one repository are still judged here"
 
 # The scoped form is the whole point: it must go through even with a foreign change present.
 run "git add mine.txt"

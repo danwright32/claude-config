@@ -388,6 +388,69 @@ eq "$(mt_repo_dir "cd $root/deep && git status; cd $root/plain && $MERGE 7" "$ro
 eq "$(mt_repo_dir "cd $root/plain && $MERGE 7 && cd $root/deep" "$root/parent")" "$root/plain" "a cd after the merge does not decide"
 eq "$(mt_repo_dir "(cd $root/deep && git status); $MERGE 7" "$root/plain")" "$root/plain" "a cd in a subshell closed before the merge does not decide"
 
+echo "merge-target: a command merging more than one pull request (#1062)"
+
+# Every merge gate judges one pull request per command, the first, so the second merge in
+# `cd A && gh pr merge 1; cd B && gh pr merge 2` landed unjudged. mt_merge_span_why says when a
+# command's merges are aimed at more than one target, in the sentence every gate refuses with.
+span() {  # $1 = command, $2 = session cwd, $3 = what
+  local why
+  if why="$(mt_merge_span_why "$1" "$2")" && [[ "$why" == *"more than one pull request"* ]]; then pass
+  else fail "$3 (said [$why])"; fi
+}
+nospan() {  # $1 = command, $2 = session cwd, $3 = what
+  local why
+  if why="$(mt_merge_span_why "$1" "$2")"; then fail "$3 (said [$why])"
+  else pass; fi
+}
+span "cd $root/plain && $MERGE 7; cd $root/deep && $MERGE 8" "$root/parent" "two merges in two repositories"
+span "cd $root/plain && $MERGE 7 && (cd $root/deep && $MERGE 7)" "$root/parent" "the same number in two repositories is two pull requests"
+span "$MERGE 7 --repo acme/one; $MERGE 7 --repo acme/two" "$root/plain" "two repositories named with --repo"
+span "$MERGE 7 --squash; $MERGE 8 --squash" "$root/plain" "two pull requests in one repository"
+span "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && $MERGE 8" "$root/parent" "a repo's own merge tool beside a direct merge elsewhere"
+why="$(mt_merge_span_why "cd $root/plain && $MERGE 7; cd $root/deep && $MERGE 8" "$root/parent")"
+if [[ "$why" == *"#7 in $root/plain"* && "$why" == *"#8 in $root/deep"* ]]; then pass
+else fail "the sentence names each pull request and where (said [$why])"; fi
+eq "$(mt_merge_targets "$MERGE 7 --repo acme/one; $MERGE 8 --repo acme/two; $MERGE 7 --repo acme/one --admin" "$root/plain")" \
+  "acme/one"$'\t'"acme/one"$'\t'"7"$'\n'"acme/two"$'\t'"acme/two"$'\t'"8" \
+  "mt_merge_targets names each distinct target's repository once, for a gate that applies to some"
+eq "$(mt_merge_targets "$MERGE 7" "$root/plain")" "" "mt_merge_targets of one merge is nothing to compare"
+# One pull request named two ways, by --repo and by the checkout it runs in, is ONE target: told
+# apart by the repository GitHub names, not by how the command spelled it (lessons review of #1072).
+gitrepo="$root/widget-checkout"
+git init -q "$gitrepo" && git -C "$gitrepo" remote add origin https://github.com/acme/widget.git
+nospan "$MERGE 7 --repo acme/widget; cd $gitrepo && $MERGE 7" "$root/plain" \
+  "control: one pull request named by --repo and by a checkout of its repository is one target"
+span "$MERGE 7 --repo acme/widget; cd $gitrepo && $MERGE 8" "$root/plain" \
+  "and a different number in that checkout is a second pull request"
+# With nothing to read the command (no lib/shell-words.py beside the library), the targets cannot be
+# told, so a command whose plain cut shows two merges is refused by name rather than read as one
+# merge (lessons review of #1072, L490): the wrapper route has no other reader check in front of it.
+LONE_MT="$root/lone-mt"; mkdir -p "$LONE_MT"
+cp "$HOOK_DIR/lib/merge-target.sh" "$HOOK_DIR/lib/push-scope.sh" "$LONE_MT/"
+lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
+  "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && ./scripts/merge-when-green.sh 8" "$root/parent")"; rc=$?
+if [ "$rc" -eq 0 ] && [[ "$lone_why" == *"shell-words.py"* ]]; then pass
+else fail "with no reader, two wrapper merges are refused by name, not read as one (rc=$rc said [$lone_why])"; fi
+lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
+  "cd $root/plain && ./scripts/merge-when-green.sh 7" "$root/parent")"; rc=$?
+if [ "$rc" -ne 0 ]; then pass; else fail "control: with no reader, one wrapper merge is not refused (said [$lone_why])"; fi
+# A merge whose pull request number cannot be read is its own target, never folded into another merge
+# of the same repository (merge time lessons review of #1072): two wrapper merges naming no number,
+# or none readable, are two merges nobody can show are the same.
+span "./scripts/merge-when-green.sh 7; ./scripts/merge-when-green.sh 8" "$root/plain" \
+  "two merges through a repo's merge tool in one repository, numbers 7 and 8"
+span "./scripts/merge-when-green.sh; ./scripts/merge-when-green.sh --timeout 900" "$root/plain" \
+  "two merges through a repo's merge tool naming no number are two targets"
+span "$MERGE --squash; ./scripts/merge-when-green.sh" "$root/plain" \
+  "a direct merge and a merge tool, neither naming a number, are two targets"
+nospan "./scripts/merge-when-green.sh 7 || ./scripts/merge-when-green.sh 7" "$root/plain" \
+  "control: the merge tool repeated for the same readable number is one target"
+nospan "cd $root/plain && $MERGE 7" "$root/parent" "control: one merge is one target"
+nospan "$MERGE 7 --squash || $MERGE 7 --squash --admin" "$root/plain" "control: the same pull request twice is one target"
+nospan "cd $root/plain && $MERGE 7; cd $root/plain && $MERGE 7 --admin" "$root/parent" "control: the same pull request from the same directory twice is one target"
+nospan "echo \"cd $root/deep && $MERGE 8\"; $MERGE 7" "$root/plain" "control: a merge quoted in an echo is not a second merge"
+
 echo "merge-target: the repository a merge names with --repo (#463)"
 
 # gh takes the repository from --repo or -R before anything about the directory, so a gate that
@@ -649,6 +712,34 @@ mkdir -p "$ghstub/none"; mv "$ghstub/gh-none" "$ghstub/none/gh"; chmod +x "$ghst
 got="$(set -u; PATH="$ghstub/none:$PATH" mt_pr_view 7 "number,state,url" acme/widget acme/widget 2>&1)"
 eq "$(printf '%s' "$got" | jq -r '.found, .notFound' 2>/dev/null | tr '\n' ' ')" "false true " "under set -u with no other account, it answers not found rather than failing"
 rm -rf "$ghstub"
+
+echo "merge-target: mt_gh_transient tells a GitHub that did not answer from one that refused (claude-config#1061)"
+
+# Worth asking again: the transport failed, or GitHub's own server did. The first two are the
+# errors measured on 2026-10-09 reading the compare, word for word as gh printed them.
+for e in \
+  'Get "https://api.github.com/repos/a/b/compare/main...x": net/http: TLS handshake timeout' \
+  'Get "https://api.github.com/repos/a/b/compare/main...x": read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer' \
+  'Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host' \
+  'read tcp 10.0.0.2:51234->140.82.112.6:443: i/o timeout' \
+  'Post "https://api.github.com/graphql": EOF' \
+  'HTTP 502: Bad Gateway (https://api.github.com/graphql)' \
+  'gh: Server Error (HTTP 500)' \
+  'HTTP 503: Service Unavailable' \
+  'GraphQL: Something went wrong while executing your query. Please include `ABCD:1234` when reporting this issue.'; do
+  if mt_gh_transient "$e"; then pass; else fail "a transport or server failure was not worth asking again: $e"; fi
+done
+# Believed the first time: GitHub answered, and the answer was no. Unknown is never retried (L35).
+for e in \
+  'gh: Not Found (HTTP 404)' \
+  'GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)' \
+  'HTTP 401: Bad credentials (https://api.github.com/graphql)' \
+  'GraphQL: Pull request is not mergeable (mergePullRequest)' \
+  'gh: Validation Failed (HTTP 422)' \
+  'gh printed nothing' \
+  ''; do
+  if mt_gh_transient "$e"; then fail "an answer GitHub gave was treated as worth asking again: [$e]"; else pass; fi
+done
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

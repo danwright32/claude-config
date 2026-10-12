@@ -9,6 +9,7 @@ import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
+import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -275,6 +276,14 @@ type Opts = {
   openFails?: { helper?: string; open?: string }
   /** `sleep-queue.sh release` refusing, with what it printed (#922: its answer can quote a worker's why). */
   releaseFails?: string
+  /**
+   * Folders removed from the disk (#1059): a process started in one fails to start, naming the
+   * command as the real spawn does, and git -C one cannot change to it. Every other checkout
+   * folder (/repo and the session's own) is there.
+   */
+  gone?: string[]
+  /** A folder that is still there when looked for, and removed the moment a process is started in it (#1059). */
+  vanishOnSpawn?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -338,10 +347,22 @@ const world = (on: On, o: Opts = {}) => {
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
   })
-  on('fs.exists', ($, e) => ({ value: e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  // A checkout folder (/repo, the session's own) is there unless a test removed it (#1059).
+  const isGone = (dir: string) => (o.gone ?? []).includes(dir)
+  const isCheckout = (dir: string) => dir === '/repo' || dir === (o.cwd ?? '/repo')
+  on('fs.exists', ($, e) => ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
   on('process.run', function answer($, e) {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
+    // A process started in a folder that is not there fails to start, and the error names the
+    // command, not the folder (measured in #1059: spawn('gh', ..., { cwd: '/nonexistent' })).
+    const at = e.init?.cwd
+    if (at !== undefined && o.vanishOnSpawn === at) {
+      o.gone = [...(o.gone ?? []), at]
+      o.vanishOnSpawn = undefined
+    }
+    if (at !== undefined && isGone(at)) throw new Error(`ENOENT: no such file or directory, posix_spawn '${cmd}'`)
+    if (cmd === 'git' && a[0] === '-C' && isGone(a[1] as string)) return fail(128, `fatal: cannot change to '${a[1]}': No such file or directory`)
     const ops = a.filter(x => !x.startsWith('-'))
     if (cmd === 'mv' || cmd === 'ln' || cmd === 'rm') w.fileOps.push(argv)
     if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
@@ -675,12 +696,12 @@ const lastModes = (w: { modes: string[][] }) => w.modes[w.modes.length - 1]
 
 // ---- Scope modes (#616) ----
 
-test('a phrase from Dan turns no build on: the mode leads the band, and Claude is told to say so', withDeps, async ($, on) => {
+test('a phrase from Dan turns no build on: the mode leads the band, and Claude is told to say what it does (#1055)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   const r = await say($ as never, 'no coding yet, just research how the sync works')
   expect(lastModes(w)).toEqual(['NO BUILD'])
-  expect(r.context?.join('\n')).toMatch(/No build just turned on.*Say so in one line/s)
+  expect(r.context?.join('\n')).toContain(ackOn('NO BUILD'))
 })
 
 test('the same phrase from another session, a plugin or a notification changes nothing', withDeps, async ($, on) => {
@@ -709,8 +730,69 @@ test('"go ahead and build" from Dan turns no build off, and Claude confirms it',
   await command($ as never, 'nobuild')
   const r = await say($ as never, 'ok, go ahead and build')
   expect(lastModes(w)).toEqual([])
-  expect(r.context?.join('\n')).toMatch(/No build just turned off.*Say so in one line/s)
+  expect(r.context?.join('\n')).toContain(ackOff('NO BUILD'))
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
+})
+
+// #1055: on 2026-10-09 Dan typed /winddown and had to ask what it does. Every switch now opens
+// Claude's reply with the mode's name, what it will and will not do, and the mode it replaced, in
+// words built from the mode's one definition (hooks/modes.ts), which its per prompt note uses too.
+const ctxOf = (r: { context?: string[] }) => r.context?.join('\n') ?? ''
+
+test('every mode switch by command tells Claude to open with what the mode now does, naming the mode it replaced (#1055)', withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  expect(ctxOf(await command($ as never, 'nobuild'))).toContain(ackOn('NO BUILD'))
+  expect(ctxOf(await command($ as never, 'winddown'))).toContain(ackOn('WINDING DOWN', { replaced: 'NO BUILD' }))
+  // On again, it replaces nothing, and still says what it does.
+  const again = ctxOf(await command($ as never, 'winddown'))
+  expect(again).toContain(ackOn('WINDING DOWN'))
+  expect(again).not.toContain('It replaces')
+  expect(ctxOf(await command($ as never, 'nobuild'))).toContain(ackOn('NO BUILD', { replaced: 'WINDING DOWN' }))
+  expect(ctxOf(await command($ as never, 'build'))).toContain(ackOff('NO BUILD'))
+  // Nothing was on, so nothing switched and nothing is acknowledged.
+  expect(ctxOf(await command($ as never, 'build'))).not.toContain('acknowledgement')
+  expect(ctxOf(await command($ as never, 'away'))).toContain(ackOn('away', { first: 'Away is on in this session.' }))
+  expect(ctxOf(await command($ as never, 'home'))).toContain(ackOn('home', { first: 'Home is on in this session.' }))
+})
+
+test("every mode switch by Dan's words tells Claude to open with what the mode now does (#1055)", withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  expect(ctxOf(await say($ as never, 'no coding yet'))).toContain(ackOn('NO BUILD'))
+  expect(ctxOf(await say($ as never, "let's wind down"))).toContain(ackOn('WINDING DOWN', { replaced: 'NO BUILD' }))
+  expect(ctxOf(await say($ as never, 'stop winding down mode'))).toContain(ackOff('WINDING DOWN'))
+  expect(ctxOf(await say($ as never, "I'm stepping away"))).toContain(ackOn('away', { first: 'Away is on in this session.' }))
+  expect(ctxOf(await say($ as never, "I'm back at my computer"))).toContain(ackOn('home', { first: 'Home is on in this session.' }))
+})
+
+test('a message that switches two modes gets one acknowledgement saying both, never two competing openings (#1055 review)', withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  const said = ctxOf(await say($ as never, "no coding yet. I'm stepping away"))
+  expect(said.split('Open your reply').length - 1).toBe(1)
+  expect(said).toContain(acknowledge([ackOnSaid('NO BUILD'), ackOnSaid('away', { first: 'Away is on in this session.' })]))
+})
+
+test("each mode's note on every prompt carries the same definition its acknowledgement says (#1055)", withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const noBuild = ctxOf(await say($ as never, 'carry on'))
+  expect(noBuild).toContain(MODE_DEF['NO BUILD'].will)
+  expect(noBuild).toContain(MODE_DEF['NO BUILD'].willNot)
+  await command($ as never, 'winddown')
+  const wind = ctxOf(await say($ as never, 'carry on'))
+  expect(wind).toContain(MODE_DEF['WINDING DOWN'].will)
+  // Starting nothing new at all, not only the starts its guard refuses (lessons review of #1055).
+  expect(wind).toContain(`Do not start anything new: winding down refuses to ${MODE_DEF['WINDING DOWN'].refuses}.`)
+  await command($ as never, 'build')
+  await command($ as never, 'away')
+  const away = ctxOf(await say($ as never, 'carry on'))
+  expect(away).toContain(MODE_DEF.away.will)
+  expect(away).toContain(MODE_DEF.away.willNot)
+  await command($ as never, 'home')
+  expect(ctxOf(await say($ as never, 'carry on'))).toContain(MODE_DEF.home.will)
 })
 
 // A message Dan types while a turn runs reaches prompt.submit at Enter carrying that turn's id
@@ -725,7 +807,7 @@ test('"stop winding down mode" sent mid turn turns winding down off, and the tur
   expect((await stop($ as never)).block).toMatch(/Winding down is not finished/)
   const r = await sayMidTurn($ as never, 'stop winding down mode. run load 1')
   expect(lastModes(w)).toEqual([])
-  expect(r.context?.join('\n')).toMatch(/Winding down just turned off.*Say so in one line/s)
+  expect(r.context?.join('\n')).toContain(ackOff('WINDING DOWN'))
   expect((await stop($ as never)).block).toBeUndefined()
   expect(w.logs.filter(l => l.includes('sent mid turn'))).toEqual(['scope-modes: a message from Dan sent mid turn reached the mod: switched 1, still on note not added'])
 })
@@ -736,7 +818,7 @@ test('turning one mode off by name leaves the other mode alone (#805)', withDeps
   await command($ as never, 'nobuild')
   const r = await say($ as never, 'stop winding down mode')
   expect(lastModes(w)).toEqual(['NO BUILD'])
-  expect(r.context?.join('\n') ?? '').not.toMatch(/just turned off/)
+  expect(r.context?.join('\n') ?? '').not.toMatch(/is off\./)
 })
 
 test('a message naming the mode that is on, in words that do not switch it, gets a note that it is still on and how to turn it off (#805)', withDeps, async ($, on) => {
@@ -837,6 +919,9 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   w.o.ask = 'Yes'
   const yes = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts', tool_use_id: 't2' } as never)
   expect(yes).toMatch(/Dan said yes: no build is off/)
+  // His yes is a switch like any other, so Claude says what no build no longer stops (#1055).
+  expect(yes).toContain(ackOff('NO BUILD'))
+  expect(no).not.toContain('acknowledgement')
   expect(lastModes(w)).toEqual([])
 })
 
@@ -1022,6 +1107,76 @@ test('winding down from a detached head in a linked worktree reads that worktree
   await start($ as never, clock)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
+})
+
+// Winding down's own cleanup removes the session's worktree (#1059). The finish check ran gh with
+// that folder as its working directory, and a process started in a folder that is not there fails
+// naming the command (posix_spawn 'gh'), so a finished session was refused the turn end for ever,
+// told gh could not start. A removed folder is wind down's own end state: GitHub is read by the
+// repository's name from a folder that is there, and the branch and worktree lists from the main
+// checkout.
+const WT = '/repo/.claude/worktrees/wt'
+
+test("a merged, live PR whose worktree wind down removed lets the turn end, read by the repository's name (#1059)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchHere = false
+  w.o.branchOnGitHub = false
+  w.o.gone = [WT]
+  const before = w.runs.length
+  const r = await stop($ as never)
+  expect(r.block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+  // Every GitHub read after the folder went names the repository, since no folder names it now.
+  const gh = w.runs.slice(before).filter(x => x[0] === 'gh')
+  expect(gh.length).toBeGreaterThan(0)
+  for (const x of gh) expect(x.slice(x.indexOf('--repo'), x.indexOf('--repo') + 2)).toEqual(['--repo', 'o/r'])
+})
+
+test('a removed worktree whose branch is still in the main checkout is read there and said, never as an unreadable PR (#1059)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchOnGitHub = false
+  w.o.gone = [WT]
+  const before = w.runs.length
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: the branch scope-modes-616 still exists here\./)
+  expect(block).not.toMatch(/could not be read|posix_spawn/)
+  const lists = w.runs.slice(before).filter(x => x[0] === 'git' && (x.includes('--list') || x.includes('worktree')))
+  expect(lists.length).toBe(2)
+  for (const x of lists) expect(x.slice(0, 3)).toEqual(['git', '-C', '/repo'])
+})
+
+test("a removed worktree whose repository nothing names is said as the missing folder, never as gh failing to start (#1059)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN'), remote: null })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.gone = [WT]
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(`the session's directory ${WT} no longer exists`)
+  expect(block).not.toMatch(/posix_spawn|failed to start/)
+})
+
+test("a worktree removed between looking for it and starting gh in it is said as the missing folder, and the next check reads past it (#1059)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.o.gh = merged()
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.branchHere = false
+  w.o.branchOnGitHub = false
+  w.o.vanishOnSpawn = WT
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(`the PR could not be read (the session's directory ${WT} no longer exists)`)
+  expect(block).not.toMatch(/posix_spawn/)
+  expect((await stop($ as never)).block).toBeUndefined()
 })
 
 test('winding down in no repository has nothing to finish (#980)', withDeps, async ($, on) => {
@@ -2062,6 +2217,17 @@ test('a message from Dan in the evening while asleep does not ask whether he is 
   // 7:00 PM ET on Thu Jan 1 is 00:00 UTC on Jan 2: past the window.
   await clock.set(Date.UTC(1970, 0, 2, 0, 0))
   expect((await say($ as never, 'still going?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+// Lessons review of #1055: waking has its own line to open the reply with, so a switch the same
+// message makes is acknowledged right after it, never as a second opening.
+test('a message that wakes sleep mode and switches a mode opens with the waking line, the switch acknowledged right after it (#1055)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  const ctx = (await say($ as never, "I'm up. no coding yet")).context?.join('\n') ?? ''
+  expect(ctx).toMatch(/Dan's message woke sleep mode\. Say so in one line first/)
+  expect(ctx).not.toContain('Open your reply')
+  expect(ctx).toContain(acknowledge([ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' }))
 })
 
 test("Dan's own \"I'm up\" wakes it; the same words from another session do not", withDeps, async ($, on) => {

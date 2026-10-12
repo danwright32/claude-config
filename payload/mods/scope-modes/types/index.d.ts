@@ -6,9 +6,12 @@ export type ScopeModesPlace = 'home' | 'away'
 export type ScopeModesHeld = { id: string; label: string; prompt: string }
 /**
  * What winding down is finishing, read when it turned on: the branch the session is on, the issue
- * numbers its name carries, and once found, its PR and the issues that PR closes.
+ * numbers its name carries, and once found, its PR and the issues that PR closes. `main` is the
+ * project's main working tree and `repo` the owner/name of its origin, as the session's repository
+ * gave them when winding down turned on: where the check reads once the session's own folder (a
+ * worktree winding down removes when it cleans up) is gone (#1059). Absent when they could not be read.
  */
-export type ScopeModesTarget = { root: string; branch: string; isDefault: boolean; issues: number[]; pr: number | null; closes?: number[] }
+export type ScopeModesTarget = { root: string; branch: string; isDefault: boolean; issues: number[]; pr: number | null; closes?: number[]; main?: string; repo?: string }
 /** A PR this session opened (a `gh pr create` by the session or any of its agents), in the repository its link names. */
 export type ScopeModesOpened = { repo: string; number: number; closes?: number[] }
 /**
