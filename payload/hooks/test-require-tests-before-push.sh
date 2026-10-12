@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests for require-tests-before-push.sh: the docs-only classifier (docs_style_for / diff_docs_only)
 # sourced out of the hook, and the whole gate driven end to end as a subprocess. The is_test /
-# is_source file classifier moved to lib/source-class.sh (shared with simplify-before-push.sh) and is
-# tested by test-source-class.sh; this suite sources that lib for the end to end runs and no longer
-# asserts on the classifier directly.
+# is_source file classifier moved to lib/source-class.sh (shared with simplify-before-push.sh); its
+# cases live in test-source-class.sh and this suite no longer asserts on it directly (the end to end
+# runs exercise it through the real hook, which sources the lib itself).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -17,19 +17,13 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/require-tests-before-push.sh"
 
-# is_test / is_source moved to lib/source-class.sh (shared with simplify-before-push.sh), so source
-# them from there; test-source-class.sh owns their unit cases. The two below are still this gate's
-# own, so they are still pulled out of the hook.
-. "$DIR/lib/source-class.sh"
+# docs_style_for / diff_docs_only are this gate's own, so they are pulled out of the hook. is_test /
+# is_source are not used here: they moved to lib/source-class.sh and test-source-class.sh covers them.
 eval "$(sed -n '/^docs_style_for() {/,/^}/p' "$HOOK")"
 eval "$(sed -n '/^diff_docs_only() {/,/^}/p' "$HOOK")"
 
 pass=0
 fail=0
-want_test()    { if is_test "$1";    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected TEST: $1"; fi; }
-want_nottest() { if is_test "$1";    then fail=$((fail+1)); echo "FAIL: expected NOT-test: $1"; else pass=$((pass+1)); fi; }
-want_source()    { if is_source "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected SOURCE: $1"; fi; }
-want_notsource() { if is_source "$1"; then fail=$((fail+1)); echo "FAIL: expected NOT-source: $1"; else pass=$((pass+1)); fi; }
 want_docsonly()    { if printf '%s' "$2" | diff_docs_only "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected DOCS-ONLY ($1): [$2]"; fi; }
 want_notdocsonly() { if printf '%s' "$2" | diff_docs_only "$1"; then fail=$((fail+1)); echo "FAIL: expected NOT-docs-only ($1): [$2]"; else pass=$((pass+1)); fi; }
 want_style()       { local got; got="$(docs_style_for "$1")"; if [ "$got" = "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: style $1 expected $2 got $got"; fi; }
