@@ -5,7 +5,8 @@
 #
 # Nothing here may reach the real ~/Downloads: every record names a report under this suite's own
 # folder (the record's `report` is the seam, as /sleep writes it from HOME), HOME is pointed there
-# too, and the real Downloads is listed before and after to prove it (L2, L322). pmset and gh are
+# too, and the real Downloads is searched at the end for any file newer than the suite's start that
+# carries the stamp every record here writes into its report, to prove it (L2, L322, L375). pmset and gh are
 # stand-ins on PATH that log every call, so a stand-in that was never reached is seen (L143).
 set -uo pipefail
 

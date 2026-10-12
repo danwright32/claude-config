@@ -950,8 +950,8 @@ atomicity has to be real on disk, which a suite can only prove with real process
 named by `SLEEP_QUEUE_SOURCE` (asserted to have been called), and a `gh` first on PATH fails if
 anything calls it. Its claim races hold every claimer at a barrier between judging the issue free
 and writing its entry (`SLEEP_CLAIM_BARRIER`, #944), so the clash happens on every run rather than
-when the scheduler happens to overlap them: the real link then always makes one owner and the copy
-control always eight. The seam acts only on a folder holding a `parties` file, which only a test
+when the scheduler happens to overlap them: the real link then always makes one owner and the
+overwrite control always eight. The seam acts only on a folder holding a `parties` file, which only a test
 writes, and has a deadline, so a night never waits on it. What the build decided, each open to Dan
 changing it:
 
