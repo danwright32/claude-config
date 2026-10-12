@@ -148,6 +148,22 @@ STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT="$BLOCK_OUT" run_hook "$W" "git pu
 want_code 0 "test-only change is not judged"
 if [ -e "$JUDGE_IN" ]; then fail=$((fail+1)); echo "FAIL: test-only push called the judge"; else pass=$((pass+1)); fi
 
+# An un-added untracked source file is NOT pulled into the judged diff when the command commits a
+# different, named file. The judged files come from ps_pending_files (add-scoped) and the untracked
+# collection is restricted to that pathspec, so a file the `git add` did not name cannot block the
+# push. Without that scoping an unrelated file in the tree gets judged (the test gate's add_in_chain
+# guard, review of this branch).
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib \
+    && printf 'def foo_area(w, h):\n    return w * h\n' > lib/foo.py \
+    && printf 'import unused_bar_module\n\ndef bar():\n    return 1\n' > lib/bar.py ) >/dev/null 2>&1
+rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT="$PASS_OUT" \
+  run_hook "$W" "git add lib/foo.py && git commit -m addfoo && git push"
+want_code 0 "a named-add commit push is judged"
+if grep -q 'foo_area' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the committed file never reached the judge"; fi
+if grep -q 'unused_bar_module' "$JUDGE_IN" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: an un-added untracked file was judged and could block the push"; else pass=$((pass+1)); fi
+
 # --- the judge actually receives the changed source, and is told to leave duplication alone -------
 # A gate may claim only what its check measured (L11): prove the diff reaches the judge, and prove
 # the instruction that keeps this gate off the duplication gate's turf is really sent.
