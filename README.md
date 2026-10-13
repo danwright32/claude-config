@@ -761,8 +761,8 @@ about 12 on 12 cores):
 
 | How the gates are run | Before git runs | Where it goes |
 | --- | --- | --- |
-| Together, as Claude Code runs them | 24.2, 24.8 and 25.2 seconds | `scanners-before-push.sh` 23.7 to 24.6; every other gate finishes inside it, 0.7 seconds or less each |
-| One after another, as this tool used to | 30.4, 30.5 and 31.0 seconds | the same gates summed, which no push waits through |
+| Together, as Claude Code runs them | 24.2, 24.8 and 25.2 seconds | `scanners-before-push.sh` 23.7 to 24.6; every other gate finishes inside it, 0.7 seconds or less each (2026-10-13) |
+| One after another, as this tool used to | 30.4, 30.5 and 31.0 seconds | the same gates summed, which no push waits through (2026-10-13) |
 
 So a push waits about as long as the whole-tree scanner gate takes, and every other gate costs it
 nothing while that one runs, which is where any speed work belongs (L299). The earlier readings
@@ -771,8 +771,8 @@ other gates' times:
 
 | What the push carries | Gates summed, 2026-09-21 | Where it goes |
 | --- | --- | --- |
-| A commit touching no test section | 20.1 seconds | `scanners-before-push.sh` 15.3, every other gate 0.3 each |
-| A commit touching a test section | 26.0 seconds | `scanners-before-push.sh` 18.3, `linux-sections-before-push.sh` 1.5, the rest 0.3 each |
+| A commit touching no test section | 20.1 seconds | `scanners-before-push.sh` 15.3, every other gate 0.3 each (2026-09-21) |
+| A commit touching a test section | 26.0 seconds | `scanners-before-push.sh` 18.3, `linux-sections-before-push.sh` 1.5, the rest 0.3 each (2026-09-21) |
 
 Two things the timing showed that no timeout could:
 
