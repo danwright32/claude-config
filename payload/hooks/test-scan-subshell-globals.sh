@@ -110,6 +110,59 @@ EOF
 run
 check "a variable declared local is not a global" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
 
+# A declaration ENDS where its command does (claude-config#1045). The names used to be read by
+# splitting the whole line on spaces, so `local a b skip; shift` declared `skip;` and `shift`, and
+# the later `skip=...` was reported as a global. It flagged path_without in test-pr-review.sh on
+# PR #1039, whose fix moved `shift` onto its own line: working around the scan, not fixing it. Each
+# way a command can end is here, and so are values holding the same characters inside quotes or a
+# command substitution, which do NOT end it, so a fix that cut at the first `;` anywhere loses the
+# names after it and fails here too.
+cat > "$FIX/a.sh" <<'EOF'
+semi(){
+  local a b skip; shift
+  skip="$1"
+  printf '%s' "$skip"
+}
+both(){
+  local first && shift
+  first="$1"
+  printf '%s' "$first"
+}
+either(){
+  local second || return 1
+  second="$1"
+  printf '%s' "$second"
+}
+piped(){
+  local third | cat
+  third="$1"
+  printf '%s' "$third"
+}
+valued(){
+  local msg="one; two && three" out="$(date; date)" count=0 tail
+  tail="$msg"; count=1
+  printf '%s%s%s' "$tail" "$count" "$out"
+}
+x="$(semi 1 2)"; y="$(both 1)"; z="$(either 1)"; w="$(piped 1)"; v="$(valued)"
+EOF
+run
+check "#1045 a declaration ends at ; && || and |, and a value holding them does not end it" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# And what FOLLOWS the end is a command of its own, so an assignment there is judged as one: in
+# `local a; leak=1` the name leak is a global, and must not be counted as declared because it
+# shares a line with a declaration.
+cat > "$FIX/a.sh" <<'EOF'
+ANSWER=""
+after(){
+  local a; ANSWER="leaked"
+  printf '%s' "$a"
+}
+x="$(after)"
+EOF
+run
+check "#1045 an assignment after a declaration's end is still judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: it was taken as declared")"
+says "#1045 and the finding names it" "$OUT" "ANSWER"
+
 # A heredoc body is another language's code, not this shell's.
 cat > "$FIX/a.sh" <<'OUTER'
 convert(){
