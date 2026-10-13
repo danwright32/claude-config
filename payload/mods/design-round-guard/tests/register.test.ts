@@ -1343,8 +1343,8 @@ test('#1165: a program that writes a screen file is still held, and so is one wh
   for (const page of ['invoice-list.html', 'invoice.html', 'clients.html']) expect(asked).toContain(`docs/design/${page}`)
   // The page the held program's data quotes, written by a name on one line, through a variable.
   expect(await held("python3 - <<'EOF'\np = 'app/page.tsx'\nopen(p, 'w').write('''x\n''')\nEOF")).toContain(SKIP_QUESTION)
-  // A name a block spanning lines ends with, its closing quote right after it, may be one it opens.
-  expect(await held(`python3 - <<'EOF'\np = """the page\napp/page.tsx"""\nopen(p.split()[-1], 'w').write('x')\nEOF`)).toContain(SKIP_QUESTION)
+  // The last word of a block spanning lines may be one it opens, a .strip() making it the whole.
+  expect(await held(`python3 - <<'EOF'\np = """\napp/page.tsx\n""".strip()\nopen(p, 'w').write('x')\nEOF`)).toContain(SKIP_QUESTION)
   // Where data cannot be told from code, the whole text is the guess, so the same block is held: a
   // program that runs a process (which may run what a string holds), one that builds code at run time,
   // one whose text the shell may have changed (an unquoted heredoc holding a $), and any other language.
