@@ -54,7 +54,30 @@ export type StepsCard = {
   isCarried?: boolean
 }
 
+/** A step another mod hands the card (#1107): the steps tool's own fields, a link or a location required. */
+export type ManualStepsAdded = { title: string; url?: string; location?: string; clicks?: string | string[]; value?: string }
+
+/**
+ * This mod's noun, for other mods (#1107). Each method is answered by this mod's own hook on its
+ * event, which has the whole engine, so it reaches mod-kit to draw the card wherever the folders sort.
+ */
+export type ManualSteps = {
+  /**
+   * Adds one step to this project's card: at the end of the card pinned now, under its heading, or a
+   * card of its own under `heading` when none is. A step already on the card unfinished, by its title,
+   * is not added again. Shown as a new card is, never held while Dan is away: the caller decides when
+   * to add. `isShown` false says why: nobody at the prompt, the card carried from an earlier session
+   * and held, or the card could not be drawn. A step with no link or location throws, naming it.
+   */
+  add: (input: { heading: string; step: ManualStepsAdded }) => Promise<{ isShown: boolean; reason?: string }>
+  /** Finishes the unfinished step titled `title` as checked, whichever step is open; false when there is none. */
+  finish: (input: { title: string }) => Promise<{ isFinished: boolean }>
+}
+
 declare module 'claude-code' {
+  interface EngineInterface {
+    manualSteps: ManualSteps
+  }
   interface PluginState {
     /**
      * The card the pane and band draw from, where it is shown (the band, or the pane by its id),

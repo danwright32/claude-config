@@ -1371,6 +1371,21 @@ morning offers what the night proposed, filing nothing he has not picked.
 - A message from Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain
   line, whether he is up (`isDaytimeEt`, tested at both edges in each season and on both change
   days), counted as asked only once that prompt went in.
+- The morning reminder (#1107; Dan, 2026-10-12 and 13: "Basically I want a way to remember in the
+  morning to review the issues"; design rounds skipped on his word, 2026-10-13). A /sleep that began
+  a night, in a session with somebody at its prompt, pins one step on the manual steps card through
+  `$.manualSteps.add`: "When you are up: review the night's proposed issues (<night>)", at the end of
+  any card already pinned, or a card of its own headed "The morning after sleep mode". It is shown
+  at once, though Dan cannot do it until morning, because he asked for it to pop up then. The night
+  is first noted as waiting on its review in `~/.claude/state/sleep/morning-review.json` (the latest
+  14 nights), so the step never stands where nothing could take it off. It comes off by the review
+  having happened, never by time: at wake, by the session that woke, when the night proposed nothing
+  and every note was read (said in the wake reply, a phone wake included); otherwise once the morning
+  turn (the first main turn after waking) ends answered with at least one picker answered and none
+  dismissed, failed or closed by itself (a picker another guard refused counts neither way). A
+  phone wake whose pickers were never answered leaves it. The night is then noted reviewed, and
+  every session's minute check takes the step off its own card, so a card in another session, or one
+  carried into the next session, follows. Dan's Done on the step still works as on any other.
 
 ### Sleep mode phase 10: the night run by the real engine (#838), built
 
@@ -1533,6 +1548,15 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   scope modes mod not loaded it is home; one that cannot answer is named in a dim line and the
   card is shown, since a card shown while away costs less than steps nobody sees.
 - The pane title is "Manual steps" (open: its words).
+- **A step another mod hands the card** (#1107). `$.manualSteps.add({ heading, step })` adds one
+  step, read as the steps tool reads a step (a step with no link or location is refused, naming
+  it), at the end of the card pinned now under its heading, or as a card of its own; a step already
+  on the card unfinished, by its title, is not added twice. It is shown as a new card is and never
+  held while Dan is away, since the caller decides when to add; on a card carried from an earlier
+  session it is kept and stays held with the rest. `$.manualSteps.finish({ title })` finishes that
+  step as checked, whichever step is open. Both are answered by this mod's own hooks on the noun's
+  events, which have the whole engine and so reach mod-kit wherever the folders sort; the noun's own
+  methods throw only when those hooks failed. Sleep mode's morning reminder is the one caller.
 - **A step left in prose** (#863). On 2026-10-06 a session ended a turn with "The one thing still
   waiting on you is the migration command from my earlier message"; the command had only ever been
   prose in an earlier reply, and Dan never saw it. So at the turn's end (`classic.Stop`) the mod

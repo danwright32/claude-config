@@ -143,6 +143,31 @@ const isItLive: { name: string; register: Register } = {
 }
 const withDeps = { plugins: [deps, isItLive] }
 const withoutIsItLive = { plugins: [deps] }
+// The manual steps mod's noun (#1107), standing in as its own plugin: each call is logged (STEPS add,
+// STEPS finish) and answered as shown and finished; left out, it stands for the mod not being loaded.
+// The manual steps mod's own tests prove the real card.
+const stepsNoun: { name: string; register: Register } = {
+  name: 'manual-steps',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        manualSteps: {
+          add: async (x: unknown) => {
+            built.ui.log('STEPS add ' + JSON.stringify(x))
+            return { isShown: true }
+          },
+          finish: async (x: unknown) => {
+            built.ui.log('STEPS finish ' + JSON.stringify(x))
+            return { isFinished: true }
+          },
+        },
+      }
+    })
+  },
+}
+const withSteps = { plugins: [deps, isItLive, stepsNoun] }
 
 const MIN = 60_000
 const T0 = 1_000_000
@@ -612,6 +637,7 @@ const world = (on: On, o: Opts = {}) => {
     return { text: e.text, context: e.context } as never
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
   on('classic.Stop', () => ({}) as never)
   on('classic.PermissionRequest', () => (o.beneathDecision ? { decision: o.beneathDecision } : {}) as never)
@@ -1907,7 +1933,8 @@ const SLEEP = '/Users/x/.claude/state/sleep'
 const CURRENT = `${SLEEP}/current.json`
 // The writes of the record itself, leaving out the caffeinate hold's process number (#844) and the
 // night's unanswered list (#836).
-const recordWrites = (w: { fsWrites: string[] }) => w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/'))
+const recordWrites = (w: { fsWrites: string[] }) =>
+  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('morning-review.json'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
@@ -1920,7 +1947,7 @@ const interactive = (sessionId: string): Session => ({ sessionId, extra: { 'scop
 const LISTS_PATH = '/Users/x/.claude/mods/sleep-repos.json'
 const listsFile = (mergeOnly: { repo: string; mergeDeploys?: boolean }[], mayDeploy: string[] = []) => JSON.stringify({ v: 1, mergeOnly, mayDeploy }, null, 2) + '\n'
 
-test('/sleep writes the record whole, enrols the interactive sessions, and the band shows ASLEEP', withDeps, async ($, on) => {
+test('/sleep writes the record whole, enrols the interactive sessions, and the band shows ASLEEP', withSteps, async ($, on) => {
   const { w, clock } = world(on, {
     open: [interactive('s2'), { sessionId: 's3', extra: { 'scope-modes': { isInteractive: false } } }, { sessionId: 's4' }],
     files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]) },
@@ -1945,8 +1972,9 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   // Written beside it and linked into place, never written straight over it; the temp file is gone.
   expect(recordWrites(w).length).toBe(1)
   expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
-  // The record, and the night's list of issues whose before bed question went unanswered (#836): none tonight.
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/unanswered/${T0}-s1`].sort())
+  // The record, the night's list of issues whose before bed question went unanswered (#836): none
+  // tonight, and the night waiting on its morning review (#1107), whose reminder the card says, not this text.
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`].sort())
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.")
@@ -1989,7 +2017,8 @@ test('/sleep says when the report could not be started, and sleep still holds (#
   const { w, clock } = world(on, { reportFails: { start: 'the report could not be written to /Users/x/Downloads/Sleep report 1969-12-31.md (Permission denied)' } })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(r.text).toMatch(/ The night's report could not be started: the report could not be written to \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md \(Permission denied\)\.$/)
+  // Followed only by what became of the morning reminder (#1107).
+  expect(r.text).toMatch(/ The night's report could not be started: the report could not be written to \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md \(Permission denied\)\. The reminder to review/)
   expect(lastModes(w)).toEqual(['ASLEEP'])
 })
 
@@ -2025,8 +2054,9 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   // The other finds the first one's record, or its preparing marker while it is still settling the night.
   expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
-  // The record, and the one night's unanswered list beside it (#836).
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/unanswered/${T0}-s1`])
+  // The record, the one night's unanswered list beside it (#836), and the one night waiting on its morning review (#1107).
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`])
+  expect(JSON.parse(w.files[`${SLEEP}/morning-review.json`] as string)).toEqual([{ generation: `${T0}-s1`, night: '1969-12-31' }])
   // Each attempt writes its own marker, so one attempt's cleanup never removes the other's.
   expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
 })
@@ -3293,7 +3323,7 @@ test('wake never stops another caffeinate that took the hold\'s process number (
 test('/sleep says when the Mac could not be held awake, and sleep still starts (#844)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { caffeinateFails: true })
   await start($ as never, clock)
-  expect((await command($ as never, 'sleep')).text).toMatch(/ The Mac may sleep tonight: caffeinate could not be started \(sh: caffeinate: not found\)\.$/)
+  expect((await command($ as never, 'sleep')).text).toMatch(/ The Mac may sleep tonight: caffeinate could not be started \(sh: caffeinate: not found\)\. The reminder to review/)
   expect(w.files[CURRENT]).toBeDefined()
 })
 
@@ -3983,4 +4013,132 @@ test('"I\'m up" acknowledges waking right after the line saying what waking did 
   await start($ as never, clock)
   const ctx = (await say($ as never, "I'm up")).context ?? []
   expect(ctx).toContain(acknowledge([ackOnSaid('wake')], { after: 'the line saying what waking did' }))
+})
+
+// ---- The morning reminder to review the night's proposals (#1107) ----
+// Dan, 2026-10-12 and 13: "Basically I want a way to remember in the morning to review the issues."
+// /sleep pins one step on the manual steps card; it comes off once the morning review happened (the
+// wake pickers answered, or nothing was proposed), never by time and never by a wake that offered
+// him nothing to answer.
+const REVIEWS = `${SLEEP}/morning-review.json`
+const NIGHT_STEP = {
+  title: "When you are up: review the night's proposed issues (1969-12-31)",
+  location: "This Mac, in the session where you say I'm up or type /wake",
+  clicks: ["Say I'm up, or type /wake", "Answer the pickers for the night's proposed issues and lessons"],
+}
+const stepsCalls = (w: { logs: string[] }) => w.logs.filter(l => l.startsWith('STEPS ')).map(l => l.slice('STEPS '.length))
+const pendingG0 = JSON.stringify([{ generation: 'g0', night: '1969-12-31' }])
+const reviewsOf = (w: { files: Record<string, string> }) => JSON.parse(w.files[REVIEWS] ?? 'null') as unknown
+type Turns = { turn: { start: (e: never) => Promise<unknown>; complete: (e: never) => Promise<unknown> } }
+const turnStart = ($: unknown, turnId: string, text = 'go') => ($ as Turns).turn.start({ text, turnId } as never)
+const turnEnd = ($: unknown, turnId: string, reason = 'answer') => ($ as Turns).turn.complete({ answer: 'Done.', durationMs: 1, isAborted: false, turnId, reason } as never)
+const picker = (question: string, id: string) => ({ tool: 'AskUserQuestion', questions: [{ question, header: 'Issues', options: [{ label: '1.1 Date parse', description: 'x' }], multiSelect: true }], tool_use_id: id }) as never
+
+test('/sleep pins the reminder on the manual steps card and notes the night as waiting on its review (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  // The card says it, so the reply does not again (L605).
+  expect(r.text).toMatch(/^Sleep mode is on until .* The night's report is at [^.]+\.md\.$/)
+  expect(stepsCalls(w)).toEqual([`add ${JSON.stringify({ heading: 'The morning after sleep mode', step: NIGHT_STEP })}`])
+  expect(reviewsOf(w)).toEqual([{ generation: `${T0}-s1`, night: '1969-12-31' }])
+})
+
+test('a /sleep that changes nothing pins nothing, and the mod not loaded is said rather than read as pinned (#1107)', { plugins: [deps, isItLive] }, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toContain(" The reminder to review the night's proposed issues could not be pinned: the manual steps mod is not loaded.")
+  expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on/)
+  expect(stepsCalls(w)).toEqual([])
+})
+
+test("a phone wake whose morning turn answered no picker leaves the reminder on the card (#1107)", withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED, [REVIEWS]: pendingG0 } })
+  await start($ as never, clock)
+  await command($ as never, 'wake', 'bridge')
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  await turnStart($, 'm1', morningOf(w)[0])
+  await turnEnd($, 'm1')
+  await clock.advance(2 * MIN)
+  expect(stepsCalls(w)).toEqual([])
+  expect(reviewsOf(w)).toEqual([{ generation: 'g0', night: '1969-12-31' }])
+})
+
+test('the morning turn ending with its pickers answered takes the reminder off, here and for every session (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED, [REVIEWS]: pendingG0 }, ask: '1.1 Date parse' })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  await turnStart($, 'm1', morningOf(w)[0])
+  expect(await call($ as never, picker('Which of the night\'s proposed issues should be filed?', 'q1'))).toBe('answered 1.1 Date parse')
+  // Nothing comes off before the turn has ended: Dan may still be answering the next picker.
+  expect(stepsCalls(w)).toEqual([])
+  await turnEnd($, 'm1')
+  expect(stepsCalls(w)).toEqual([`finish ${JSON.stringify({ title: NIGHT_STEP.title })}`])
+  expect(reviewsOf(w)).toEqual([{ generation: 'g0', night: '1969-12-31', done: { at: T0, how: 'pickers-answered' } }])
+  expect(w.toasts).toContain("The night's proposals were reviewed, so the reminder to review them came off the manual steps card.")
+  // Taken off once: the minute's check does not ask again.
+  await clock.advance(2 * MIN)
+  expect(stepsCalls(w).length).toBe(1)
+})
+
+test('"I\'m up" makes its own turn the morning one, and a picker dismissed in it keeps the reminder (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED, [REVIEWS]: pendingG0 },
+    issueAnswers: { 'File which issues?': '1.1 Date parse', 'Add this lesson?': '__dismissed' },
+  })
+  await start($ as never, clock)
+  await say($ as never, "I'm up")
+  await turnStart($, 'm1', "I'm up")
+  await call($ as never, picker('File which issues?', 'q1'))
+  await call($ as never, picker('Add this lesson?', 'q2')).catch(() => 'dismissed')
+  await turnEnd($, 'm1')
+  expect(stepsCalls(w)).toEqual([])
+  expect(reviewsOf(w)).toEqual([{ generation: 'g0', night: '1969-12-31' }])
+})
+
+test('a morning turn that was interrupted reviewed nothing, whatever it answered (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED, [REVIEWS]: pendingG0 } })
+  await start($ as never, clock)
+  await say($ as never, "I'm up")
+  await turnStart($, 'm1', "I'm up")
+  await call($ as never, picker('File which issues?', 'q1'))
+  await turnEnd($, 'm1', 'interrupted')
+  expect(stepsCalls(w)).toEqual([])
+})
+
+test('a night with nothing proposed takes the reminder off at wake, saying so, even woken from the phone (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [REVIEWS]: pendingG0 } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake', 'bridge')
+  expect(r.text).toMatch(/ Nothing was proposed overnight, so the reminder to review it came off the manual steps card\.$/)
+  expect(stepsCalls(w)).toEqual([`finish ${JSON.stringify({ title: NIGHT_STEP.title })}`])
+  expect(reviewsOf(w)).toEqual([{ generation: 'g0', night: '1969-12-31', done: { at: T0, how: 'nothing-proposed' } }])
+})
+
+test('a night that pinned no reminder says nothing of one at wake (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).not.toContain('reminder')
+  expect(stepsCalls(w)).toEqual([])
+})
+
+test('a session whose card holds the step takes it off once the night reads reviewed, once (#1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [REVIEWS]: JSON.stringify([{ generation: 'g0', night: '1969-12-31', done: { at: 1, how: 'pickers-answered' } }, { generation: 'g1', night: '1970-01-01' }]) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w)).toEqual([`finish ${JSON.stringify({ title: NIGHT_STEP.title })}`])
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w).length).toBe(1)
+})
+
+test('a record of the nights that cannot be read is said in the debug log and taken as no night reviewed (L215, #1107)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [REVIEWS]: '{' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w)).toEqual([])
+  expect(w.logs.some(l => l.includes('the record of the morning reviews could not be read (it is not JSON)'))).toBe(true)
 })

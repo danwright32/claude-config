@@ -1,5 +1,5 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
-import type { StepsCard, StepsPaneId } from '../types/index.d.ts'
+import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
@@ -360,7 +360,61 @@ let interactive = false
 const proseStep = (phrase: string) =>
   `Your reply leaves Dan a step in prose ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
 
+// A step another mod hands the card (#1107), answered by the hooks on the noun's events below, which
+// have the whole engine; the noun's own methods answer only when those hooks failed, and say so.
+const NOUN_UNANSWERED = "the manual steps mod's own hook did not answer"
+const CARRIED_HELD = 'the steps carried from an earlier session are held until Claude checks them again'
+
+const addStep: Hook<'manualSteps.add'> = async ($, e) => {
+  // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
+  if (!interactive) return { value: { isShown: false, reason: 'this session has nobody at its prompt' } }
+  // Read as the steps tool reads a step, so a step with no place is refused by the same words.
+  const made = cardFrom({ heading: e.heading, steps: [{ ...e.step, checked: 'not-done' }] })
+  // Refused to the caller: a hook that throws is skipped, and the caller would hear only that it did not answer.
+  if ('refusal' in made) return { deny: made.refusal }
+  const added = made.card.steps[0] as StepsCard['steps'][number]
+  const how = await change($, card => {
+    if (!card || nextStep(card) === undefined) return { card: made.card, out: 'shown' as const }
+    if (card.steps.some(s => !s.finished && s.title === added.title)) return { card, out: card.isCarried ? ('held' as const) : ('shown' as const) }
+    return { card: { ...card, steps: [...card.steps, added] }, out: card.isCarried ? ('held' as const) : ('shown' as const) }
+  })
+  if (how === 'held') return { value: { isShown: false, reason: CARRIED_HELD } }
+  const card = (await $.state.get(cardRef)).value ?? null
+  if (!card) return { value: { isShown: false, reason: 'the card was taken away as it was added' } }
+  // Where a card already shows it is drawn again; else it is placed as a new card is.
+  const place = (await $.state.get(placeRef)).value ?? null
+  const failed = place === null ? await placeNew($, card) : isPane(place) ? await publishPane($, place, card) : await publishBand($, card)
+  return { value: failed ? { isShown: false, reason: `the card could not be shown (${failed})` } : { isShown: true } }
+}
+
+const finishStep: Hook<'manualSteps.finish'> = async ($, e) => {
+  const at = await now($)
+  const isFinished = await change($, card => {
+    const i = card ? card.steps.findIndex(s => !s.finished && s.title === e.title) : -1
+    if (!card || i < 0) return { card, out: false }
+    const next = { ...card, steps: card.steps.map((s, k) => (k === i ? { ...s, isSent: false, finished: 'checked' as const, finishedAt: at } : s)) }
+    return { card: nextStep(next) === undefined ? null : next, out: true }
+  })
+  if (isFinished) await refresh($)
+  return { value: { isFinished } }
+}
+
 export const register: Register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const manualSteps: ManualSteps = {
+      add: async () => {
+        throw new Error(NOUN_UNANSWERED)
+      },
+      finish: async () => {
+        throw new Error(NOUN_UNANSWERED)
+      },
+    }
+    return { ...built, manualSteps }
+  })
+  on('manualSteps.add', addStep)
+  on('manualSteps.finish', finishStep)
+
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive === true
     // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
