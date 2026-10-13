@@ -24,7 +24,8 @@
 # platform's own default, 60 seconds, which is written down here as the assumption it is.
 #
 # It runs the REAL gates against a REAL repository, so it costs what a push costs, model call and
-# containers included, and anything a gate writes (a record, a state file) is written.
+# containers included, and anything a gate writes (a record, a state file) is written, except the
+# push gate ledger, pointed at a throwaway below.
 set -uo pipefail
 
 DEFAULT_TIMEOUT=60
@@ -101,6 +102,9 @@ sys.stdout.write(json.dumps({"tool_name": "Bash", "tool_input": {"command": os.e
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/time-push-gates.XXXXXXXX")" || exit 1
 trap 'rm -rf "$work"' EXIT
+# Except the push gate ledger (claude-config#1075): a timing run is not a push, and counting it
+# there would put pushes nobody made into the record the gates' accuracy is judged from.
+export PUSH_GATE_LEDGER_DIR="${PUSH_GATE_LEDGER_DIR:-$work/push-gates}"
 
 printf 'seconds  exit  declared  gate\n'
 rows=""

@@ -112,6 +112,11 @@ TMPROOT="$(mktemp -d)"
 cleanup() { rm -rf "$STUB_DIR" "$TMPROOT"; }
 trap cleanup EXIT
 
+# The gate records every push it reaches (claude-config#1075). Pointed at a throwaway ledger so a
+# test push is never counted among real ones; LEDGER is what the record cases below read.
+export PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger"
+LEDGER="$PUSH_GATE_LEDGER_DIR/push-gates.tsv"
+
 # A scratch repo WITH a bare remote and a tracking branch. Without the upstream
 # the hook has no merge base and silently allows everything (trap 1 above).
 mk_repo() {
@@ -140,7 +145,7 @@ run_hook() {
   local cwd="$1" cmd="$2" usepath="${3:-$PATH_STUB}" payload errf
   errf="$(mktemp)"
   payload="$(HK_CMD="$cmd" HK_CWD="$cwd" python3 -c 'import json,os,sys
-sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"],"tool_use_id":os.environ.get("HK_ID","toolu_test")}))')"
   printf '%s' "$payload" | env PATH="$usepath" bash "$HOOK" 2>"$errf"
   CODE=$?
   ERR="$(cat "$errf")"
@@ -469,6 +474,71 @@ for judge_path in "$PATH_STUB" "$TIMEOUT_STUB_DIR:$PATH_STUB"; do
     fail=$((fail + 1)); echo "FAIL: the judge $how is not launched with --setting-sources local (flags: $(grep -- '^--' "$ARGS_FILE" 2>/dev/null | tr '\n' ' ' || echo 'judge never ran'))"
   fi
 done
+
+# --- a test written in the same command reaches the judge (claude-config#1076) ----------------------
+# `git add lib/x.js tests/x.test.js && git commit && git push` with both files new: before the
+# command runs they are untracked, so no diff shows them. The gate meant to append their text and
+# read a variable it never set, so the judge was told a test existed and shown none of it, and judged
+# coverage from a file name.
+PASS_JSON='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}'
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib tests \
+    && printf 'export const wind = () => 1;\n' > lib/wind.js \
+    && printf 'test("wind_marker_case", () => {});\n' > tests/wind.test.js \
+    && printf 'export const stray_untracked = 2;\n' > lib/stray.js ) >/dev/null 2>&1
+JUDGE_IN="$TMPROOT/judge-new-files"; rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT="$PASS_JSON" \
+  run_hook "$W" "git add lib/wind.js tests/wind.test.js && git commit -m wind && git push"
+want_code 0 "a chain adding a new source and its new test is judged"
+if grep -q 'wind_marker_case' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the new test file in the commit never reached the judge"; fi
+if grep -q 'export const wind' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the new source file in the commit never reached the judge"; fi
+if grep -q 'stray_untracked' "$JUDGE_IN" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: an untracked file the commit does not take was shown to the judge"; else pass=$((pass+1)); fi
+
+# --- a push run from a SUBDIRECTORY is judged on the whole push (claude-config#1076) ----------------
+W="$(mk_repo)"; seed_source_and_test "$W"; mkdir -p "$W/docs"
+JUDGE_IN="$TMPROOT/judge-subdir"; rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the add change\"]}"}' \
+  run_hook "$W/docs" "git push"
+want_code 2 "a push from a subdirectory is still judged"
+if grep -q 'return a + b' "$JUDGE_IN" 2>/dev/null && grep -q 'toBe(3)' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a push from a subdirectory did not show the judge the source and test outside it"; fi
+
+# --- a judge that never answers in time is named as such --------------------------------------------
+TO_DIR="$TMPROOT/timeout-124"; mkdir -p "$TO_DIR"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 124\n' > "$TO_DIR/timeout"; chmod +x "$TO_DIR/timeout"
+W="$(mk_repo)"; seed_source_and_test "$W"
+run_hook "$W" "git push" "$TO_DIR:$PATH_STUB"
+want_code 1 "judge timed out"
+want_stderr "timed out after 90s" "judge timed out"
+
+# --- the record of what the gate did (claude-config#1075, #1077) ------------------------------------
+# Recorded like the simplify gate's, into the same ledger, so how often both judges are called on
+# one push can be counted rather than guessed.
+row_of() { awk -F '\t' -v id="$1" '$7 == id' "$LEDGER" 2>/dev/null | tail -1; }
+col() { printf '%s' "$1" | awk -F '\t' -v n="$2" '{ print $n }'; }
+want_row() {   # <call id> <outcome> <label> [detail pattern]
+  local r; r="$(row_of "$1")"
+  if [ "$(col "$r" 3)" = tests ] && [ "$(col "$r" 4)" = "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $3: expected a tests row with outcome $2, got [$r]"; fi
+  if [ -n "${4:-}" ]; then
+    if grep -Eq "$4" <<< "$(col "$r" 14)"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $3: the row's detail did not match /$4/: [$(col "$r" 14)]"; fi
+  fi
+}
+W="$(mk_repo)"; seed_source_only "$W"
+HK_ID=t-untested run_hook "$W" "git push"
+want_row t-untested untested "a push with source and no test is recorded"
+HK_ID=t-override run_hook "$W" "SKIP_TEST_CHECK=1 git push"
+want_row t-override override "an override is recorded"
+W="$(mk_repo)"; seed_source_and_test "$W"
+HK_ID=t-block STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the add change\"]}"}' run_hook "$W" "git push"
+want_row t-block block "a judged block is recorded with what it named" 'the add change'
+if [ "$(col "$(row_of t-block)" 8)" = sonnet ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the block row does not name the model: [$(row_of t-block)]"; fi
+HK_ID=t-pass STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_row t-pass pass "a judged pass is recorded"
+HK_ID=t-open STUB_CLAUDE_OUT='{"is_error":true,"result":"boom"}' run_hook "$W" "git push"
+want_row t-open failopen "a fail open is recorded with its reason" 'error envelope'
+W="$(mk_repo)"
+( cd "$W" && printf 'nothing but words\n' > notes.md && git add notes.md && git commit -qm docs ) >/dev/null 2>&1
+HK_ID=t-nosource run_hook "$W" "git push"
+want_row t-nosource nosource "a push with no source is recorded"
 
 echo
 echo "passed: $pass, failed: $fail"

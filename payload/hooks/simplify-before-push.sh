@@ -28,17 +28,31 @@
 # Fails OPEN, never quietly: any parse / git / judge error allows the push AND says why via
 # fail_open(), because blocking on infrastructure trouble is worse than allowing, but a push that was
 # never judged must not look identical to one the gate approved (L98, L42).
+#
+# Every push it reaches is recorded, override included (claude-config#1075), so whether the cheap
+# judge cries wolf is read from what it did rather than guessed: lib/push-gate-report.py.
 
 JUDGE_MODEL="haiku"    # the simplification judgment is coarse (block only on blatant issues), so the
-                       # cheap model carries it. Bump to sonnet here if it starts crying wolf.
+                       # cheap model carries it. Bump to sonnet here if it starts crying wolf: the
+                       # record is what says whether it has (claude-config#1075).
 JUDGE_TIMEOUT=90       # seconds for the model call
 DIFF_BUDGET=60000      # max bytes of source diff sent to the model
 
 # Allow the push, but surface WHY the gate did not run. Exit 1 (non-blocking error): the push still
 # runs, and the first stderr line surfaces in the transcript. Exit 0 would discard stderr, so a
 # notice there would vanish and this would be theatre (the require-tests-before-push.sh precedent).
-fail_open() {
+# Recorded first once the command is known to be a push, so a gate that could not decide is counted.
+fail_open() {   # $1 = why  $2 = judged, when a judge was called
+  if [ "${PC_PUSH:-0}" = 1 ]; then pc_record failopen "$1" "${2:-}" || :; fi
   echo "SIMPLIFY GATE DID NOT RUN ($1). Push allowed unjudged." >&2
+  exit 1
+}
+
+# A silent allow, recorded. A record that could not be written is said in one line (exit 1, the push
+# still runs), never swallowed and never turned into a refusal.
+allow() {   # $1 = outcome  $2 = detail  $3 = judged
+  pc_record "$1" "${2:-}" "${3:-}" && exit 0
+  echo "SIMPLIFY GATE allowed this push ($1), but its record could not be written to $(pc_ledger_path)." >&2
   exit 1
 }
 
@@ -47,6 +61,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || fail_open "shared push-scope library missing"
 # shellcheck source=lib/source-class.sh
 . "$HOOK_DIR/lib/source-class.sh" 2>/dev/null || fail_open "shared source-class library missing"
+# What the push carries, the judge call and the record, shared with the test gate (#1076).
+# shellcheck source=lib/push-changes.sh
+. "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null || fail_open "shared push-changes library missing"
+PC_GATE=simplify
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -56,114 +74,52 @@ parsed="$(ps_parse_payload "$payload" segmented)" || fail_open "hook payload did
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || fail_open "hook payload carried no command"
+PC_CALL_ID="$(pc_call_id "$payload")"
 
 # ---------------------------------------------------------------------------
-# 2. Act only on a `git push`; honor the override.
+# 2. Act only on a `git push`, in the repository it runs in; honor the override.
 # ---------------------------------------------------------------------------
 ps_is_git_push "$cmd" || exit 0
-ps_has_override "$cmd" SKIP_SIMPLIFY_CHECK && exit 0
-
-# ---------------------------------------------------------------------------
-# 3. Resolve repo + the commits being pushed. Shared contract with the test gate.
-# ---------------------------------------------------------------------------
+# Only a push is recorded: a payload that did not parse, or any other command, is not one.
+PC_PUSH=1
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
 
-upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-base="$(ps_base_ref)"
-
-commit_in_chain=0
-ps_commit_in_chain "$cmd" && commit_in_chain=1
-
-# Where the committed range starts (claude-config#441, #456), from the shared contract. The same
-# no-upstream-base-is-HEAD guard the test gate carries (#736): a local base that IS the current
-# commit is not a measurement of what this push adds, so read no committed range and let an empty
-# file list below decide the gate is looking at nothing rather than guessing.
-mb=""
-base_is_head=0
-if [ -z "$upstream" ] && [ -n "$base" ]; then
-  case "$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)" in
-    refs/remotes/*) : ;;
-    *) [ "$(git rev-parse --verify --quiet "$base" 2>/dev/null)" = "$(git rev-parse --verify --quiet HEAD 2>/dev/null)" ] && base_is_head=1 ;;
-  esac
-fi
-[ "$base_is_head" -eq 1 ] || mb="$(ps_pending_base "$base")"
-
-committed=""
-[ -n "$mb" ] && committed="$(git diff --name-only --diff-filter=ACMR "$mb" HEAD 2>/dev/null)"
-
-# The PENDING files when this command commits before it pushes (claude-config#457): the index plus
-# what the shared reader says the commit takes beyond it, counting only files that exist (a test or
-# source left on disk, untracked and unnamed, never reaches the commit).
-pending=""
-if [ "$commit_in_chain" -eq 1 ]; then
-  pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
-  top="$(git rev-parse --show-toplevel 2>/dev/null)"
-  while IFS= read -r f; do
-    [ -n "$f" ] && [ -e "$top/$f" ] || continue
-    pending="$pending
-$f"
-  done < <(ps_pending_files "$cmd" | tail -n +2)
-fi
-
-files="$(printf '%s\n%s\n' "$committed" "$pending" | sed '/^$/d' | sort -u)"
-
-# An empty file list: with an upstream it means the push genuinely adds nothing (stay quiet). Without
-# one, the base may have fallen back to HEAD and the gate is blind to real commits (#736) -> say so.
-if [ -z "$files" ]; then
-  [ -z "$upstream" ] && fail_open "no upstream branch: cannot tell what this push adds"
-  exit 0
-fi
+# ---------------------------------------------------------------------------
+# 3. The files the push carries, from the shared contract (lib/push-changes.sh). Nothing, with an
+#    upstream, means the push adds nothing: stay quiet. Without one the gate may be blind (#736).
+# ---------------------------------------------------------------------------
+pc_resolve "$cmd"
+resolved=$?
+# An override is recorded with the tree it lets through, read after the resolve because a command
+# that commits first delivers a tree no commit holds yet, so it can be matched to a block of it.
+ps_has_override "$cmd" SKIP_SIMPLIFY_CHECK && allow override
+case $resolved in
+  1) allow empty ;;
+  2) fail_open "no upstream branch: cannot tell what this push adds" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 4. The SOURCE files in the push: is_source and NOT is_test (lib/source-class.sh, shared with the
 #    test gate). Tests, generated code, config and docs are not judged for simplification here.
 # ---------------------------------------------------------------------------
-source_paths=""
+SRC_PATHSPEC=()
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   is_test "$f" && continue
-  is_source "$f" && source_paths="${source_paths}${f}"$'\n'
+  is_source "$f" && SRC_PATHSPEC+=("$f")
 done <<EOF
-$files
+$PC_FILES
 EOF
 
 # No source touched -> nothing to judge. Silent: a correct verdict, not a fail-open.
-[ -n "$source_paths" ] || exit 0
+[ "${#SRC_PATHSPEC[@]}" -gt 0 ] || allow nosource
 
 # ---------------------------------------------------------------------------
 # 5. Build the source diff and ask the model whether it carries a material simplification.
 # ---------------------------------------------------------------------------
-command -v claude >/dev/null 2>&1 || fail_open "judge unavailable: no claude CLI on PATH"
-TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
-
-SRC_PATHSPEC=()
-while IFS= read -r sp; do [ -n "$sp" ] && SRC_PATHSPEC+=("$sp"); done <<EOF
-$source_paths
-EOF
-
-EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
-  ':(exclude)*.min.js' ':(exclude)*.min.css' ':(exclude)*.svg'
-  ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.gif')
-
-diff_committed=""
-[ -n "$mb" ] && diff_committed="$(git diff "$mb" HEAD -- "${SRC_PATHSPEC[@]}" "${EXCLUDES[@]}" 2>/dev/null)"
-
-diff_working=""
-untracked_blob=""
-if [ "$commit_in_chain" -eq 1 ]; then
-  diff_working="$(git diff HEAD -- "${SRC_PATHSPEC[@]}" "${EXCLUDES[@]}" 2>/dev/null)"
-  while IFS= read -r u; do
-    [ -z "$u" ] && continue
-    [ -f "$u" ] || continue
-    untracked_blob="${untracked_blob}
---- NEW FILE: ${u} ---
-$(head -c 8000 "$u" 2>/dev/null)"
-  done < <(git ls-files --others --exclude-standard -- "${SRC_PATHSPEC[@]}" 2>/dev/null)
-fi
-
-diff_all="$(printf '%s\n%s\n%s\n' "$diff_committed" "$diff_working" "$untracked_blob")"
+diff_all="$(pc_diff "${SRC_PATHSPEC[@]}")"
 diff_len=${#diff_all}
 diff="$(printf '%s' "$diff_all" | head -c "$DIFF_BUDGET")"
 if [ "$diff_len" -gt "$DIFF_BUDGET" ]; then
@@ -172,9 +128,9 @@ else
   trunc_note=""
 fi
 # Nothing judgeable after excludes (e.g. the only source change was a deleted file): allow, silent.
-[ -n "$(printf '%s' "$diff" | tr -d '[:space:]')" ] || exit 0
+[ -n "$(printf '%s' "$diff" | tr -d '[:space:]')" ] || allow empty
 
-msgs="$(git log --no-merges --format='- %s' "${mb:-HEAD}"..HEAD 2>/dev/null | head -c 4000)"
+msgs="$(pc_messages)"
 
 RUBRIC="$(cat <<'EOF'
 You are a strict, conservative simplification gate for a git push. You are given the commit messages
@@ -206,43 +162,15 @@ EOF
 
 judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\n%s\nSOURCE DIFF:\n%s\n' "$msgs" "$trunc_note" "$diff")"
 
-# Run the judge isolated: an empty working dir + --setting-sources local so it does NOT inherit the
-# user's hooks, CLAUDE.md memory, skills, or MCP servers (measured in claude-config#540 to keep the
-# global config and lessons index out of its context). Keychain auth still works.
-JTMP="$(mktemp -d)"
-if [ -n "$TIMEOUT_BIN" ]; then
-  # claude-mds-ok: --setting-sources local keeps the global config out, measured in #540.
-  envelope="$(printf '%s' "$judge_input" | ( cd "$JTMP" && "$TIMEOUT_BIN" "$JUDGE_TIMEOUT" \
-    claude -p --model "$JUDGE_MODEL" --output-format json \
-      --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"
-else
-  # claude-mds-ok: --setting-sources local keeps the global config out, measured in #540.
-  envelope="$(printf '%s' "$judge_input" | ( cd "$JTMP" && \
-    claude -p --model "$JUDGE_MODEL" --output-format json \
-      --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"
-fi
-judge_status=$?
-rm -rf "$JTMP"
-if [ -z "$envelope" ]; then
-  if [ "$judge_status" -eq 124 ]; then
-    fail_open "judge timed out after ${JUDGE_TIMEOUT}s"
-  fi
-  fail_open "judge unreachable: returned nothing (exit $judge_status)"
-fi
+# One isolated model call, shared with the test gate (lib/push-changes.sh). It names a judge that was
+# missing, timed out, returned nothing, an error envelope or no JSON object, and this gate fails open
+# on each, saying which.
+pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "$PC_JUDGE_ERR" judged
 
-verdict="$(printf '%s' "$envelope" | python3 -c '
-import sys, json, re
+verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
+import sys, json
 try:
-    env = json.load(sys.stdin)
-    if env.get("is_error"):
-        print("ERR_ENVELOPE"); sys.exit(0)
-    txt = (env.get("result") or "").strip()
-    txt = re.sub(r"^```[a-zA-Z]*", "", txt).strip()
-    txt = re.sub(r"```$", "", txt).strip()
-    m = re.search(r"\{.*\}", txt, re.S)
-    if not m:
-        print("ERR_VERDICT"); sys.exit(0)
-    obj = json.loads(m.group(0))
+    obj = json.load(sys.stdin)
     findings = obj.get("findings") or []
     if obj.get("verdict") == "block" and findings:
         print("BLOCK")
@@ -272,19 +200,19 @@ case "$verdict" in
       echo "BEFORE overriding you MUST explain to the user, in plain non-technical language, WHAT"
       echo "was flagged and WHY shipping it as-is is the right call, so they can judge. Never"
       echo "override silently."
+      pc_record block "$(printf '%s\n' "$verdict" | sed '1d; s/^  - //' | paste -sd '|' -)" judged \
+        || echo "(This block could not be written to the gate's record, $(pc_ledger_path).)"
     } >&2
     exit 2
     ;;
   PASS)
-    exit 0
-    ;;
-  ERR_ENVELOPE)
-    fail_open "judge returned an error envelope"
+    allow pass "" judged
     ;;
   ERR_VERDICT|"")
-    fail_open "judge verdict was not readable JSON"
+    # The judge answered a JSON object this gate could not read, or this parser itself threw.
+    fail_open "judge verdict was not readable JSON" judged
     ;;
   *)
-    fail_open "judge returned an unrecognized verdict"
+    fail_open "judge returned an unrecognized verdict" judged
     ;;
 esac

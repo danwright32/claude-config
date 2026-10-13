@@ -25,6 +25,9 @@
 # AND says why, via fail_open() below. Blocking on infrastructure trouble is
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
+#
+# Every push it reaches is recorded, override included, in the ledger the simplify gate writes too
+# (claude-config#1075, #1077): lib/push-gate-report.py reads it.
 
 JUDGE_MODEL="sonnet"
 JUDGE_TIMEOUT=90       # seconds for the model call
@@ -41,10 +44,27 @@ DIFF_BUDGET=60000      # max bytes of diff sent to the model
 # Reserve this for paths where the gate wanted to decide and could not. The
 # ordinary silent allows (not a push, SKIP_TEST_CHECK, no source touched,
 # docs-only) are correct verdicts, not failures: making them talk would train
-# everyone to tune the notice out.
-fail_open() {
+# everyone to tune the notice out. Recorded first once the command is known to be a push.
+fail_open() {   # $1 = why  $2 = judged, when a judge was called
+  if [ "${PC_PUSH:-0}" = 1 ]; then pc_record failopen "$1" "${2:-}" || :; fi
   echo "TEST GATE DID NOT RUN ($1). Push allowed ungated." >&2
   exit 1
+}
+
+# A silent allow, recorded. A record that could not be written is said in one line (exit 1, the push
+# still runs), never swallowed and never turned into a refusal.
+allow() {   # $1 = outcome  $2 = detail  $3 = judged
+  pc_record "$1" "${2:-}" "${3:-}" && exit 0
+  echo "TEST GATE allowed this push ($1), but its record could not be written to $(pc_ledger_path)." >&2
+  exit 1
+}
+
+# A refusal, recorded, its message on stdin. A record that could not be written is added to the
+# message rather than lost.
+refuse() {   # $1 = outcome  $2 = detail  $3 = judged
+  cat >&2
+  pc_record "$1" "${2:-}" "${3:-}" || echo "(This refusal could not be written to the gate's record, $(pc_ledger_path).)" >&2
+  exit 2
 }
 
 # Push detection, the inline-override check and the chain/base questions are
@@ -58,6 +78,11 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # cannot drift over what counts as source (L263). It moved to the lib verbatim from here.
 # shellcheck source=lib/source-class.sh
 . "$HOOK_DIR/lib/source-class.sh" 2>/dev/null || fail_open "shared source-class library missing"
+# What the push carries, the judge call and the record, shared with simplify-before-push.sh
+# (claude-config#1076): the two gates each kept a copy, and the copies had drifted.
+# shellcheck source=lib/push-changes.sh
+. "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null || fail_open "shared push-changes library missing"
+PC_GATE=tests
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -72,19 +97,15 @@ cwd="${parsed#*$'\x1f'}"
 # one. A payload that parsed as JSON but carried no command means the gate saw
 # nothing to inspect, which is not the same as approving the push.
 [ -n "$cmd" ] || fail_open "hook payload carried no command"
+PC_CALL_ID="$(pc_call_id "$payload")"
 
 # ---------------------------------------------------------------------------
-# 2. Act only on a `git push`; honor the override.
+# 2. Act only on a `git push`, in the repository it runs in; honor the override.
 # ---------------------------------------------------------------------------
 ps_is_git_push "$cmd" || exit 0
+# Only a push is recorded: a payload that did not parse, or any other command, is not one.
+PC_PUSH=1
 
-if ps_has_override "$cmd" SKIP_TEST_CHECK; then
-  exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Resolve repo + the commits being pushed.
-# ---------------------------------------------------------------------------
 # The repo is resolved from the COMMAND first and the payload cwd second. The
 # cwd is the SESSION's directory, so a session rooted outside the project reaches
 # it as `cd <repo> && git push`, and reading the cwd alone let every one of those
@@ -93,90 +114,42 @@ repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
 
-# `upstream` is kept separately from `base`: step 3's blindness check below turns
-# on whether a real upstream existed, which the resolved base alone cannot say.
-upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-base="$(ps_base_ref)"
-
-# Does this command commit (and maybe stage) before it pushes? PreToolUse runs
-# BEFORE the command, so for `git add ... && git commit ... && git push` the
-# pending commit is not in history yet. Fold in staged / unstaged / untracked
-# changes so a test added in the same breath is counted.
-commit_in_chain=0
-ps_commit_in_chain "$cmd" && commit_in_chain=1
-
-# Where the committed range starts, from the shared contract in lib/push-scope.sh, which also
-# judges a rebased branch from where it now leaves main (claude-config#456, #457). This gate kept
-# its own merge base code, which missed that correction.
-#
-# ps_pending_base for a plain push too, deliberately: against a REMOTE base a merge base at HEAD
-# means the push carries no commit, and that empty range is this gate's answer whether or not the
-# command commits first. The plain push helper would re-read the last commit already on the remote
-# and bill the judge for it. Against a LOCAL base it gives the plain push answer.
-#
-# Except the case #736 records: no upstream, and the base fell back to a local branch that IS the
-# current commit. The last commit is then not a measurement of what this push adds, so no committed
-# range is read, and an empty file list below says the gate is blind rather than judging a guess.
-mb=""
-base_is_head=0
-if [ -z "$upstream" ] && [ -n "$base" ]; then
-  case "$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)" in
-    refs/remotes/*) : ;;
-    *) [ "$(git rev-parse --verify --quiet "$base" 2>/dev/null)" = "$(git rev-parse --verify --quiet HEAD 2>/dev/null)" ] && base_is_head=1 ;;
-  esac
-fi
-[ "$base_is_head" -eq 1 ] || mb="$(ps_pending_base "$base")"
-
-committed=""
-[ -n "$mb" ] && committed="$(git diff --name-only --diff-filter=ACMR "$mb" HEAD 2>/dev/null)"
-
-# The PENDING files, when this command commits before it pushes: the index, plus what the shared
-# reader says the commit takes beyond it (claude-config#457). Only what the commit will carry: a
-# test left on disk, untracked or tracked but not named, never reaches the commit, so counting it
-# let a change ship with its test left behind. This gate had its own sed parser for the add, which
-# also counted every unstaged tracked change for any add at all.
-pending=""
-pending_widened=0
-if [ "$commit_in_chain" -eq 1 ]; then
-  pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
-  pending_list="$(ps_pending_files "$cmd")"
-  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
-  top="$(git rev-parse --show-toplevel 2>/dev/null)"
-  while IFS= read -r f; do
-    # A deletion takes nothing a test could be counted from; ACMR above drops them the same way.
-    [ -n "$f" ] && [ -e "$top/$f" ] || continue
-    pending="$pending
-$f"
-  done < <(printf '%s\n' "$pending_list" | tail -n +2)
-fi
-# When the add could not be read, every change in the working tree was counted, and a refusal has
-# to say its file list came from that wider reading rather than from what the commit will carry.
-widened_note() {
-  [ "$pending_widened" -eq 1 ] || return 0
-  echo "Note: the git add in this command could not be read, so every change in the"
-  echo "working tree was counted as part of the commit it is about to make."
-  echo ""
-}
-
-files="$(printf '%s\n%s\n' "$committed" "$pending" | sed '/^$/d' | sort -u)"
+# ---------------------------------------------------------------------------
+# 3. The files the push carries: the committed range plus, when the command commits before it
+# pushes, what that commit will take (lib/push-changes.sh, from lib/push-scope.sh's contract).
+# ---------------------------------------------------------------------------
 # An empty file list has two very different causes, and only one is benign.
 #
 # With an upstream, empty means the gate compared against the real remote tip
 # and this push genuinely adds nothing. Correct verdict, stay quiet.
 #
-# Without one, `base` fell back through origin/HEAD, origin/main, origin/master,
+# Without one, the base fell back through origin/HEAD, origin/main, origin/master,
 # main, master. On an unpushed branch that can land on the CURRENT branch, so
 # merge-base is HEAD, the diff is empty, and the hook sees nothing to gate while
 # real commits are about to ship. That is the trap that fake-greened the #733
 # scratch scripts. "I saw nothing" is not "there is nothing to see". (#736)
 #
-# Note this deliberately sits AFTER $pending is folded in: a no-upstream
+# The pending files are folded in before that decision: a no-upstream
 # `add && commit && push` chain still has visible staged work, so the gate is
 # not blind there and must judge it rather than cry blindness.
-if [ -z "$files" ]; then
-  [ -z "$upstream" ] && fail_open "no upstream branch: cannot tell what this push adds"
-  exit 0
-fi
+pc_resolve "$cmd"
+resolved=$?
+# An override is recorded with the tree it lets through, read after the resolve because a command
+# that commits first delivers a tree no commit holds yet, so it can be matched to a refusal of it.
+ps_has_override "$cmd" SKIP_TEST_CHECK && allow override
+case $resolved in
+  1) allow empty ;;
+  2) fail_open "no upstream branch: cannot tell what this push adds" ;;
+esac
+
+# When the add could not be read, every change in the working tree was counted, and a refusal has
+# to say its file list came from that wider reading rather than from what the commit will carry.
+widened_note() {
+  [ "$PC_WIDENED" -eq 1 ] || return 0
+  echo "Note: the git add in this command could not be read, so every change in the"
+  echo "working tree was counted as part of the commit it is about to make."
+  echo ""
+}
 
 # ---------------------------------------------------------------------------
 # 4. Classify: did the push change source? did it touch any test?
@@ -240,15 +213,15 @@ test_changed=0
 source_list=""
 source_paths=""
 test_list=""
-test_paths=""
+TEST_PATHSPEC=()
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   # A test file counts the same whether it is brand-new or an existing file with
-  # added/changed cases ($files comes from --diff-filter=ACMR, so M is included).
+  # added/changed cases (PC_FILES holds added, copied, modified and renamed files, so M is included).
   if is_test "$f"; then
     test_changed=1
     test_list="${test_list}  - ${f}"$'\n'
-    test_paths="${test_paths}${f}"$'\n'
+    TEST_PATHSPEC+=("$f")
     continue
   fi
   if is_source "$f"; then
@@ -257,11 +230,11 @@ while IFS= read -r f; do
     source_paths="${source_paths}${f}"$'\n'
   fi
 done <<EOF
-$files
+$PC_FILES
 EOF
 
 # No source touched -> nothing to gate.
-[ "$source_changed" -eq 1 ] || exit 0
+[ "$source_changed" -eq 1 ] || allow nosource
 
 # Source touched but not a single test in the push -> block without a model.
 if [ "$test_changed" -eq 0 ]; then
@@ -274,103 +247,48 @@ if [ "$test_changed" -eq 0 ]; then
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
-    d="$( { [ -n "$mb" ] && git diff "$mb" HEAD -- "$f" 2>/dev/null; \
-            [ "$commit_in_chain" -eq 1 ] && git diff HEAD -- "$f" 2>/dev/null; } )"
-    if [ -z "$d" ] && [ -f "$f" ]; then
-      d="$(git diff --no-index -- /dev/null "$f" 2>/dev/null)"
-    fi
-    if ! printf '%s\n' "$d" | diff_docs_only "$style"; then
+    if ! pc_diff "$f" | diff_docs_only "$style"; then
       docs_only=0; break
     fi
   done <<DOCS_ONLY_EOF
 $source_paths
 DOCS_ONLY_EOF
-  [ "$examined" -ge 1 ] && [ "$docs_only" -eq 1 ] && exit 0
+  [ "$examined" -ge 1 ] && [ "$docs_only" -eq 1 ] && allow docsonly
 
-  {
-    echo "PUSH BLOCKED: this push changes source code but adds or modifies no tests."
-    echo ""
-    echo "Source files in this push:"
-    printf '%s' "$source_list"
-    echo ""
-    echo "Add a test for each distinct change, then push again."
-    widened_note
-    echo "OVERRIDE: if a test genuinely does not apply (docs / config / copy only,"
-    echo "or a refactor already covered by existing tests), or the gate missed a"
-    echo "test that IS in this push (false positive), re-run with:"
-    echo "    SKIP_TEST_CHECK=1 <your original git push command>"
-    echo "BEFORE overriding you MUST explain to the user, in plain non-technical"
-    echo "language, WHY skipping is legitimate here -- what changed, and why no"
-    echo "test is needed or where the existing test already covers it -- so they"
-    echo "can judge whether it makes sense. Never override silently."
-  } >&2
-  exit 2
+  refuse untested "$(printf '%s' "$source_list" | sed 's/^  - //' | paste -sd ',' -)" <<REFUSAL
+PUSH BLOCKED: this push changes source code but adds or modifies no tests.
+
+Source files in this push:
+${source_list}
+Add a test for each distinct change, then push again.
+$(widened_note)
+OVERRIDE: if a test genuinely does not apply (docs / config / copy only,
+or a refactor already covered by existing tests), or the gate missed a
+test that IS in this push (false positive), re-run with:
+    SKIP_TEST_CHECK=1 <your original git push command>
+BEFORE overriding you MUST explain to the user, in plain non-technical
+language, WHY skipping is legitimate here -- what changed, and why no
+test is needed or where the existing test already covers it -- so they
+can judge whether it makes sense. Never override silently.
+REFUSAL
 fi
 
 # ---------------------------------------------------------------------------
 # 5. Tests are present. Ask the model whether every distinct change is covered.
 # ---------------------------------------------------------------------------
-command -v claude >/dev/null 2>&1 || fail_open "judge unavailable: no claude CLI on PATH"
-# GNU `timeout` is absent on stock macOS (it ships as `gtimeout` via coreutils).
-TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
-
-msgs="$(git log --no-merges --format='- %s' "${mb:-HEAD}"..HEAD 2>/dev/null | head -c 4000)"
-
-EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
-  ':(exclude)*.min.js' ':(exclude)*.min.css' ':(exclude)*.svg'
-  ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.gif')
-
-diff_committed=""
-[ -n "$mb" ] && diff_committed="$(git diff "$mb" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-
-diff_working=""
-untracked_blob=""
-if [ "$commit_in_chain" -eq 1 ]; then
-  diff_working="$(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-  if [ "$add_in_chain" -eq 1 ]; then
-    while IFS= read -r u; do
-      [ -z "$u" ] && continue
-      [ -f "$u" ] || continue
-      untracked_blob="${untracked_blob}
---- NEW FILE: ${u} ---
-$(head -c 8000 "$u" 2>/dev/null)"
-    done <<UNTRACKED
-$(git ls-files --others --exclude-standard 2>/dev/null)
-UNTRACKED
-  fi
-fi
+msgs="$(pc_messages)"
 
 # The judge once blocked pushes that DID edit an existing test, because the test
 # file's hunk fell past the 60 KB budget (git orders the diff by path) and the
 # model never saw it. Pull the test files' diffs out separately and place them
-# first, untruncated, so an edit to an existing test is always visible.
-TEST_PATHSPEC=()
-while IFS= read -r tp; do [ -n "$tp" ] && TEST_PATHSPEC+=("$tp"); done <<EOF
-$test_paths
-EOF
-
-diff_tests=""
-if [ "${#TEST_PATHSPEC[@]}" -gt 0 ]; then
-  [ -n "$mb" ] && diff_tests="$(git diff "$mb" HEAD -- "${TEST_PATHSPEC[@]}" "${EXCLUDES[@]}" 2>/dev/null)"
-  if [ "$commit_in_chain" -eq 1 ]; then
-    diff_tests="${diff_tests}
-$(git diff HEAD -- "${TEST_PATHSPEC[@]}" "${EXCLUDES[@]}" 2>/dev/null)"
-  fi
-fi
-
-diff_all="$(printf '%s\n%s\n%s\n' "$diff_committed" "$diff_working" "$untracked_blob")"
+# first, untruncated, so an edit to an existing test is always visible. A test
+# file new in this very command is in them too, as a diff against nothing (#1076).
+diff_tests="$(pc_diff "${TEST_PATHSPEC[@]}")"
 
 # Everything that is NOT a test file, so the budget is not spent showing the tests twice.
 TEST_EXCLUDES=()
-for tp in ${TEST_PATHSPEC[@]+"${TEST_PATHSPEC[@]}"}; do TEST_EXCLUDES+=(":(exclude)$tp"); done
-diff_code="$diff_all"
-if [ "${#TEST_EXCLUDES[@]}" -gt 0 ]; then
-  diff_code_committed=""
-  [ -n "$mb" ] && diff_code_committed="$(git diff "$mb" HEAD -- . "${EXCLUDES[@]}" "${TEST_EXCLUDES[@]}" 2>/dev/null)"
-  diff_code_working=""
-  [ "$commit_in_chain" -eq 1 ] && diff_code_working="$(git diff HEAD -- . "${EXCLUDES[@]}" "${TEST_EXCLUDES[@]}" 2>/dev/null)"
-  diff_code="$(printf '%s\n%s\n%s\n' "$diff_code_committed" "$diff_code_working" "$untracked_blob")"
-fi
+for tp in "${TEST_PATHSPEC[@]}"; do TEST_EXCLUDES+=(":(exclude)$tp"); done
+diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}")"
 
 # THE BUDGET, test changes first (claude-config#723). They are what this gate judges, so they get
 # what they need, and the rest of the diff gets what is left, down to half the budget: when both
@@ -412,7 +330,7 @@ else
   c_label="THE REST OF THE DIFF (everything that is not a test file, shown whole):"
 fi
 diff="$(printf '%s\n%s\n\n%s\n%s\n' "$t_label" "$test_diff" "$c_label" "$code_diff")"
-[ -n "$diff_all$test_diff" ] || exit 0
+[ -n "$diff_code$test_diff" ] || allow empty
 
 RUBRIC="$(cat <<'EOF'
 You are a strict test-coverage gate for a git push. You are given the commit
@@ -453,52 +371,16 @@ source_list_str="$source_list"; [ -n "$source_list_str" ] || source_list_str="  
 judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, new OR modified existing -- all count as tests:\n%s\nSOURCE FILES CHANGED IN THIS PUSH:\n%s\nDIFF:\n%s\n' \
   "$msgs" "$test_list_str" "$source_list_str" "$diff")"
 
-# Run the judge isolated: an empty working dir + only `local` setting sources so
-# it does NOT inherit the user's hooks, CLAUDE.md memory, skills, or MCP servers
-# (those otherwise hijack the result). Keychain auth still works (no --bare).
-#
-# Measured, not assumed (claude-config#540, Claude Code 2.1.281, 2026-09-23): the same call from an
-# empty directory took 14,802 input tokens with `--setting-sources local` and 56,808 without it, and
-# asked whether its context held the line "L1001." it answered ABSENT with the flag and quoted the
-# lesson without it. So the flag already keeps the global CLAUDE.md and the lessons index out, and
-# each launch below carries the marker the headless launch guard reads instead of a second switch.
-JTMP="$(mktemp -d)"
-if [ -n "$TIMEOUT_BIN" ]; then
-  # claude-mds-ok: --setting-sources local keeps the global config out, measured above (#540).
-  envelope="$(printf '%s' "$judge_input" | ( cd "$JTMP" && "$TIMEOUT_BIN" "$JUDGE_TIMEOUT" \
-    claude -p --model "$JUDGE_MODEL" --output-format json \
-      --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"
-else
-  # claude-mds-ok: --setting-sources local keeps the global config out, measured above (#540).
-  envelope="$(printf '%s' "$judge_input" | ( cd "$JTMP" && \
-    claude -p --model "$JUDGE_MODEL" --output-format json \
-      --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"
-fi
-judge_status=$?
-rm -rf "$JTMP"
-# `timeout` reports a killed command as 124, which is the difference between
-# "the judge is down" and "the judge was too slow". Name the one that happened:
-# they have different fixes.
-if [ -z "$envelope" ]; then
-  if [ "$judge_status" -eq 124 ]; then
-    fail_open "judge timed out after ${JUDGE_TIMEOUT}s"
-  fi
-  fail_open "judge unreachable: returned nothing (exit $judge_status)"
-fi
+# One isolated model call, shared with the simplify gate (lib/push-changes.sh, which carries the
+# measurement behind its flags). It names a judge that was missing, timed out (they have different
+# fixes from one that is down), returned nothing, an error envelope or no JSON object, and this gate
+# fails open on each, saying which.
+pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "$PC_JUDGE_ERR" judged
 
-verdict="$(printf '%s' "$envelope" | python3 -c '
-import sys, json, re
+verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
+import sys, json
 try:
-    env = json.load(sys.stdin)
-    if env.get("is_error"):
-        print("ERR_ENVELOPE"); sys.exit(0)
-    txt = (env.get("result") or "").strip()
-    txt = re.sub(r"^```[a-zA-Z]*", "", txt).strip()
-    txt = re.sub(r"```$", "", txt).strip()
-    m = re.search(r"\{.*\}", txt, re.S)
-    if not m:
-        print("ERR_VERDICT"); sys.exit(0)
-    obj = json.loads(m.group(0))
+    obj = json.load(sys.stdin)
     missing = obj.get("missing") or []
     if obj.get("verdict") == "block" and missing:
         print("BLOCK")
@@ -512,60 +394,56 @@ except Exception:
 
 case "$verdict" in
   BLOCK*)
+    missing_detail="$(printf '%s\n' "$verdict" | sed '1d; s/^  - //' | paste -sd '|' -)"
     # A "no test" verdict over test changes the reviewer could not see all of is not a finding
     # that tests are missing: a test past the cut reads to it exactly like no test (#723, L11). It
     # is refused as COULD NOT JUDGE, naming what was cut, rather than waved through: a gate that
     # could not read the push does not approve it (L42), and a smaller push is always judgeable.
     if [ -n "$tests_cut" ]; then
-      {
-        echo "PUSH BLOCKED: the test gate could not judge this push in full."
-        echo ""
-        echo "The reviewer said these changes have no test:"
-        printf '%s\n' "$verdict" | sed '1d'
-        echo ""
-        echo "but the push's test changes are $t_len bytes and it could read only the first $t_budget,"
-        echo "so these test files were cut partway or not shown to it at all:"
-        echo "    $tests_cut"
-        echo "A test in one of them reads to the reviewer exactly like no test, so this is not a"
-        echo "finding that tests are missing. Push fewer commits at a time (one commit, or split the"
-        echo "branch) so each push's tests fit, then push again."
-        widened_note
-        echo "OVERRIDE: if you have checked that each change named above IS tested, re-run with:"
-        echo "    SKIP_TEST_CHECK=1 <your original git push command>"
-        echo "BEFORE overriding you MUST explain to the user, in plain non-technical"
-        echo "language, WHY skipping is legitimate here so they can judge whether it"
-        echo "makes sense. Never override silently."
-      } >&2
-      exit 2
+      refuse cantjudge "$missing_detail" judged <<REFUSAL
+PUSH BLOCKED: the test gate could not judge this push in full.
+
+The reviewer said these changes have no test:
+$(printf '%s\n' "$verdict" | sed '1d')
+
+but the push's test changes are $t_len bytes and it could read only the first $t_budget,
+so these test files were cut partway or not shown to it at all:
+    $tests_cut
+A test in one of them reads to the reviewer exactly like no test, so this is not a
+finding that tests are missing. Push fewer commits at a time (one commit, or split the
+branch) so each push's tests fit, then push again.
+$(widened_note)
+OVERRIDE: if you have checked that each change named above IS tested, re-run with:
+    SKIP_TEST_CHECK=1 <your original git push command>
+BEFORE overriding you MUST explain to the user, in plain non-technical
+language, WHY skipping is legitimate here so they can judge whether it
+makes sense. Never override silently.
+REFUSAL
     fi
-    {
-      echo "PUSH BLOCKED: some changes in this push have no test covering them."
-      echo ""
-      echo "Distinct changes still needing a test:"
-      printf '%s\n' "$verdict" | sed '1d'
-      echo ""
-      echo "Add a test for each, then push again."
-      widened_note
-      echo "OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,"
-      echo "or an existing test already covers it), re-run with:"
-      echo "    SKIP_TEST_CHECK=1 <your original git push command>"
-      echo "BEFORE overriding you MUST explain to the user, in plain non-technical"
-      echo "language, WHY skipping is legitimate here so they can judge whether it"
-      echo "makes sense. Never override silently."
-    } >&2
-    exit 2
+    refuse block "$missing_detail" judged <<REFUSAL
+PUSH BLOCKED: some changes in this push have no test covering them.
+
+Distinct changes still needing a test:
+$(printf '%s\n' "$verdict" | sed '1d')
+
+Add a test for each, then push again.
+$(widened_note)
+OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,
+or an existing test already covers it), re-run with:
+    SKIP_TEST_CHECK=1 <your original git push command>
+BEFORE overriding you MUST explain to the user, in plain non-technical
+language, WHY skipping is legitimate here so they can judge whether it
+makes sense. Never override silently.
+REFUSAL
     ;;
   PASS)
-    exit 0
-    ;;
-  ERR_ENVELOPE)
-    fail_open "judge returned an error envelope"
+    allow pass "" judged
     ;;
   ERR_VERDICT|"")
-    # Includes the judge answering in prose, and this parser itself throwing.
-    fail_open "judge verdict was not readable JSON"
+    # The judge answered a JSON object this gate could not read, or this parser itself threw.
+    fail_open "judge verdict was not readable JSON" judged
     ;;
   *)
-    fail_open "judge returned an unrecognized verdict"
+    fail_open "judge returned an unrecognized verdict" judged
     ;;
 esac

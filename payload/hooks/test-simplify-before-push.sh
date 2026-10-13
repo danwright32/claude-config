@@ -41,6 +41,11 @@ TMPROOT="$(mktemp -d)"
 cleanup() { rm -rf "$STUB_DIR" "$TMPROOT"; }
 trap cleanup EXIT
 
+# The gate records every push it reaches (claude-config#1075). Pointed at a throwaway ledger so a
+# test push is never counted among real ones; LEDGER is what the record cases below read.
+export PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger"
+LEDGER="$PUSH_GATE_LEDGER_DIR/push-gates.tsv"
+
 # A scratch repo WITH a bare remote and a tracking branch. Without the upstream the hook has no
 # merge base and silently allows everything (the test gate's trap 1).
 mk_repo() {
@@ -68,7 +73,7 @@ run_hook() {   # <cwd> <command> [PATH]
   local cwd="$1" cmd="$2" usepath="${3:-$PATH_STUB}" payload errf
   errf="$(mktemp)"
   payload="$(HK_CMD="$cmd" HK_CWD="$cwd" python3 -c 'import json,os,sys
-sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"],"tool_use_id":os.environ.get("HK_ID","toolu_test")}))')"
   printf '%s' "$payload" | env PATH="$usepath" bash "$HOOK" 2>"$errf"
   CODE=$?
   ERR="$(cat "$errf")"
@@ -217,6 +222,102 @@ want_stderr "judge" "judge verdict unparseable"
 NOTREPO="$(mktemp -d)"
 run_hook "$NOTREPO" "git push"
 want_code 0 "a push with no resolvable repo stays out of the way"
+
+# --- a judge that never answers in time is named as such (fail open, exit 1) ------------------------
+# A stub timeout that reports what GNU timeout reports for a killed command, 124, with nothing
+# printed: no real wait, the condition is set rather than slept for (L290).
+TO_DIR="$TMPROOT/timeout-124"; mkdir -p "$TO_DIR"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 124\n' > "$TO_DIR/timeout"; chmod +x "$TO_DIR/timeout"
+W="$(mk_repo)"; seed_source "$W"
+run_hook "$W" "git push" "$TO_DIR:$PATH_STUB"
+want_code 1 "judge timed out"
+want_stderr "timed out after 90s" "judge timed out"
+
+# --- a push run from a SUBDIRECTORY is judged on the whole push (claude-config#1076) ----------------
+# The diff was asked for with paths relative to the root while git read them from the subdirectory,
+# so a change outside it reached the judge as nothing, and the gate allowed the push unjudged and
+# silent, exactly like one it had approved.
+W="$(mk_repo)"; seed_source "$W"; mkdir -p "$W/docs"
+rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT="$BLOCK_OUT" run_hook "$W/docs" "git push"
+want_code 2 "a push from a subdirectory is still judged"
+if grep -q 'def area' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a push from a subdirectory sent the judge nothing of the change outside it"; fi
+
+# --- the record of what the gate did (claude-config#1075) ------------------------------------------
+# One row per push the gate reaches, read back by lib/push-gate-report.py. Column 3 is the gate,
+# 4 the outcome, 6 the commit, 7 the tool call, 8 the model, 14 the detail.
+row_of() { awk -F '\t' -v id="$1" '$7 == id' "$LEDGER" 2>/dev/null | tail -1; }
+col() { printf '%s' "$1" | awk -F '\t' -v n="$2" '{ print $n }'; }
+want_row() {   # <call id> <outcome> <label> [detail pattern]
+  local r; r="$(row_of "$1")"
+  if [ "$(col "$r" 3)" = simplify ] && [ "$(col "$r" 4)" = "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $3: expected a simplify row with outcome $2, got [$r]"; fi
+  if [ -n "${4:-}" ]; then
+    if grep -Eq "$4" <<< "$(col "$r" 14)"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $3: the row's detail did not match /$4/: [$(col "$r" 14)]"; fi
+  fi
+}
+
+W="$(mk_repo)"; seed_source "$W"
+HK_ID=rec-block STUB_CLAUDE_OUT="$BLOCK_OUT" run_hook "$W" "git push"
+want_row rec-block block "a block is recorded with what it flagged" 'unused.*unused import sys'
+head_blocked="$(git -C "$W" rev-parse HEAD)"
+if [ "$(col "$(row_of rec-block)" 6)" = "$head_blocked" ] && [ "$(col "$(row_of rec-block)" 8)" = haiku ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the block row does not name the commit and the model: [$(row_of rec-block)]"; fi
+HK_ID=rec-override run_hook "$W" "SKIP_SIMPLIFY_CHECK=1 git push"
+want_code 0 "an override still allows"
+want_silent "an override still allows, silently"
+want_row rec-override override "an override is recorded"
+if [ "$(col "$(row_of rec-override)" 6)" = "$head_blocked" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the override row does not name the commit it let through, so it cannot be matched to the block: [$(row_of rec-override)]"; fi
+
+# A block of an add, commit and push chain is matched to the override of the SAME content even when
+# the commit was then made on its own, because both carry the tree the push delivers (column 15),
+# never the commit the chain stood on before its own commit ran (merge review of #1109).
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'import sys\n\ndef chain_area(w, h):\n    return w * h\n' > lib/chain.py ) >/dev/null 2>&1
+HK_ID=rec-chain-block STUB_CLAUDE_OUT="$BLOCK_OUT" run_hook "$W" "git add lib/chain.py && git commit -m chain && git push"
+want_row rec-chain-block block "a block of a commit chain is recorded"
+# Working out that tree must never stage anything in the real index.
+if [ "$(git -C "$W" status --porcelain -- lib/chain.py)" = "?? lib/chain.py" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: recording the tree changed the real index: [$(git -C "$W" status --porcelain)]"; fi
+( cd "$W" && git add lib/chain.py && git commit -qm chain ) >/dev/null 2>&1
+HK_ID=rec-chain-override run_hook "$W" "SKIP_SIMPLIFY_CHECK=1 git push"
+want_row rec-chain-override override "the override after the commit is recorded"
+tree_blocked="$(col "$(row_of rec-chain-block)" 15)"; tree_overridden="$(col "$(row_of rec-chain-override)" 15)"
+if [ -n "$tree_blocked" ] && [ "$tree_blocked" = "$tree_overridden" ] && [ "$tree_overridden" = "$(git -C "$W" rev-parse 'HEAD^{tree}')" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the chain's block and the later override of the same content carry different trees: [$tree_blocked] [$tree_overridden]"; fi
+# And the commit the chain stood on is not what it delivers, so it is not the key.
+if [ "$(col "$(row_of rec-chain-block)" 6)" != "$(git -C "$W" rev-parse HEAD)" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the fixture did not make the commit separately, so it proves nothing"; fi
+
+W="$(mk_repo)"; seed_source "$W"
+HK_ID=rec-pass STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"findings\":[]}","duration_ms":4200,"total_cost_usd":0.0123}' run_hook "$W" "git push"
+want_row rec-pass pass "a pass is recorded"
+if [ "$(col "$(row_of rec-pass)" 10)" = 4200 ] && [ "$(col "$(row_of rec-pass)" 11)" = 0.0123 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the pass row does not carry the judge's own time and cost: [$(row_of rec-pass)]"; fi
+
+W="$(mk_repo)"; seed_source "$W"
+HK_ID=rec-open STUB_CLAUDE_OUT='{"result":"sure, looks fine"}' run_hook "$W" "git push"
+want_row rec-open failopen "a fail open is recorded with its reason" 'not readable JSON'
+
+W="$(mk_repo)"
+( cd "$W" && printf 'words only\n' > notes.md && git add notes.md && git commit -qm docs ) >/dev/null 2>&1
+HK_ID=rec-nosource run_hook "$W" "git push"
+want_row rec-nosource nosource "a push with no source is recorded"
+
+HK_ID=rec-notpush run_hook "$W" "git status"
+if [ -z "$(row_of rec-notpush)" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a command that is not a push was recorded"; fi
+
+# A payload that does not parse is not known to be a push, so it fails open without a row.
+rows_before="$(wc -l < "$LEDGER" 2>/dev/null || echo 0)"
+printf 'this is not json' | env PATH="$PATH_STUB" bash "$HOOK" 2>/dev/null
+if [ "$(wc -l < "$LEDGER" 2>/dev/null || echo 0)" = "$rows_before" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a payload that did not parse was recorded as a push"; fi
+
+# No CLI: the push is recorded as a fail open, and with no model, since no judge was ever called.
+W="$(mk_repo)"; seed_source "$W"
+HK_ID=rec-nocli run_hook "$W" "git push" "$PATH_NOCLAUDE"
+want_row rec-nocli failopen "a missing judge is recorded" 'no claude CLI'
+if [ -z "$(col "$(row_of rec-nocli)" 8)" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a judge that never ran is recorded with a model, so it counts as a call: [$(row_of rec-nocli)]"; fi
+
+# A record that cannot be written is said, never swallowed, and never turns a pass into a block.
+W="$(mk_repo)"; seed_source "$W"
+printf 'not a directory\n' > "$TMPROOT/ledger-file"
+PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT="$PASS_OUT" run_hook "$W" "git push"
+want_code 1 "an unwritable record does not block the push"
+want_stderr "allowed this push \(pass\), but its record could not be written" "an unwritable record is said"
 
 echo
 echo "passed: $pass, failed: $fail"
