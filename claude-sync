@@ -4662,8 +4662,14 @@ $pf"*) continue ;; esac
   refuse_resurrected_deletions
 }
 
-# Block obvious credentials from being published. Uses gitleaks if installed,
-# else a conservative set of distinctive token shapes (low false-positive).
+# Block obvious credentials from being published, with this one set of rules and no external
+# scanner: distinctive token shapes (low false positive), and a key named like a credential
+# (secret, token, api key, password) given 24 or more identifier characters. The key is matched in
+# ANY letter case, so API_TOKEN=... is refused like api_token=... (claude-config#1128); the one
+# exception is passwd, matched in lower case only until Dan decides about the sudoers NOPASSWD
+# line the bug-bash suite expects, which a capital PASSWD would refuse.
+# The send scans the payload, the only thing it commits. tests/test-payload-secret-scan.sh runs
+# this same function over every file a push publishes, before every push and in CI.
 # Override with SYNC_SKIP_SECRET_SCAN=1 if it ever flags a legitimate string.
 scan_secrets(){
   # Every way this ends WITHOUT refusing clears the record of its last refusal (claude-config#947):
@@ -4676,7 +4682,9 @@ scan_secrets(){
   local allow="$SYNC_REPO/.secret-allowlist"
   local q="[\"']?" pat apat
   pat='BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|sk_live_[A-Za-z0-9]{20,}'
-  apat="(secret|token|api[_-]?key|password|passwd)${q}[[:space:]]*[:=][[:space:]]*${q}[A-Za-z0-9_+/-]{24,}"
+  # Each key spelled out in either case, rather than grep -i, which would fold the token shapes
+  # above as well. One pattern, so each file is still read once (L297).
+  apat="([Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|passwd)${q}[[:space:]]*[:=][[:space:]]*${q}[A-Za-z0-9_+/-]{24,}"
   local line file match fp findings=""
   # each grep -o hit is "path:matchedtext"; accept it if its fingerprint is allowlisted
   while IFS= read -r line; do
