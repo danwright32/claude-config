@@ -55,8 +55,13 @@ uncovered_now() { # uncovered_now <hooks dir>  -> one basename per line, sorted
   # "found no mention" and reports every hook as uncovered. It did exactly that here, against a
   # fixture whose whole point was one covered file (L184: judge by what the command measured, not
   # by a non-zero exit that could be either answer).
+  # Only the suites installed BESIDE the hooks. This read the repo's tests/ too, which a checkout
+  # has and ~/.claude/hooks does not, so CI passed a hook the installed run then failed (#1083
+  # follow up). Measured when that was removed: the shared load average reader in lib/ was the
+  # only hook it changed. Named here by description, never by file name, because a name in this
+  # file would count as covering it.
   local suites=()
-  for f in "$d"/test-*.sh "$d"/../../tests/test-*.sh; do
+  for f in "$d"/test-*.sh; do
     [ -f "$f" ] && suites+=("$f")
   done
   # No suites at all is not "everything is uncovered", it is a derivation that read nothing, and
@@ -145,6 +150,24 @@ uncovered_now "$NOSUITES" >/dev/null 2>&1
 [ "$?" -eq 3 ] \
   && check "a directory with no suites at all is refused, not reported as all-uncovered" ok \
   || check "a directory with no suites at all is refused, not reported as all-uncovered" "it answered instead of refusing"
+
+# A hook named only by a suite OUTSIDE the hooks directory (claude-config#1083 follow up). The scan
+# also read the repo's tests/ beside payload/hooks, which exists in a checkout and not under
+# ~/.claude/hooks, so the shared load average reader in lib/ passed here and in CI (a suite in
+# tests/ names it) and
+# failed the installed copy's run after the next pull. The installed copy is the one every pull
+# judges, so a checkout must answer the same way: only suites that are installed beside the hooks
+# count.
+OUTSIDE="$TMPROOT/repo/payload/hooks"; mkdir -p "$OUTSIDE/lib" "$TMPROOT/repo/tests"
+printf '#!/usr/bin/env bash\n' > "$OUTSIDE/lib/elsewhere.sh"
+printf '#!/usr/bin/env bash\n' > "$OUTSIDE/test-nothing-here.sh"
+printf '#!/usr/bin/env bash\n. lib/elsewhere.sh\n' > "$TMPROOT/repo/tests/test-elsewhere.sh"
+case "
+$(uncovered_now "$OUTSIDE")" in
+  *"
+elsewhere.sh"*) check "a hook named only by a suite that is not installed beside it counts as uncovered" ok ;;
+  *) check "a hook named only by a suite that is not installed beside it counts as uncovered" "the repo's tests/ answered for it, which the installed copy cannot see" ;;
+esac
 
 printf 'naked-lib.py\nnaked.sh\nspool.sh\nsomething-that-left.sh\n' > "$TMPROOT/stale-baseline.txt"
 stale="$(comm -13 <(uncovered_now "$FIX") <(read_baseline "$TMPROOT/stale-baseline.txt"))"
