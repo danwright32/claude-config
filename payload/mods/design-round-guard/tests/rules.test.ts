@@ -438,4 +438,11 @@ test('changedRuns: each run of changed lines as its own step, the last step endi
   const from = big.join('')
   const to = big.map((l, i) => (i % 2 ? l.toUpperCase() : l)).join('')
   expect(changedRuns(from, to)).toEqual([[from, to]])
+  // So is one of more runs than it judges one by one, each costing a read of the whole text
+  // (lessons review): a hold costs Dan one answer.
+  const lines = Array.from({ length: 200 }, (_, i) => `row ${i}\n`)
+  const many = lines.map((l, i) => (i % 4 ? l : l.toUpperCase())).join('')
+  expect(changedRuns(lines.join(''), many)).toEqual([[lines.join(''), many]])
+  const few = lines.map((l, i) => (i % 20 ? l : l.toUpperCase())).join('')
+  expect(changedRuns(lines.join(''), few).length).toBe(10)
 })

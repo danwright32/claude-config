@@ -262,6 +262,8 @@ const passed = async ($: EngineInterface, c: Called): Promise<boolean> => {
 const putBack = async ($: EngineInterface, path: string, tree: string, from: string): Promise<{ text: string } | { why: string }> => {
   const spec = `${from}:${relTo(path, tree)}`
   const said = `git cat-file blob ${spec}`
+  // git would read a source spelled like an option as one (lessons review).
+  if (from.startsWith('-')) return { why: `the command names its source as an option (${from}), which is never handed to git` }
   try {
     const r = await $.process.run(['git', '-C', tree, 'cat-file', 'blob', spec], { timeoutMs: 5000 })
     if (r.exitCode !== 0) return { why: `${said} exited ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'with no message'}` }

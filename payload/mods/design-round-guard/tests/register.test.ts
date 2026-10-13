@@ -1356,6 +1356,12 @@ test('#1158: a restore git cannot read is held as a look change, and the refusal
   expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toContain(`git cat-file blob HEAD:${MOD_REL} could not be run`)
   w.ctl.gitBlob = 'truncated'
   expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toContain('gave more than could be read whole')
+  // A source spelled like an option is never handed to git, which would read it as one (lessons review).
+  w.ctl.gitBlob = undefined
+  const blobReads = () => w.gitRuns.filter(r => r.includes('cat-file')).length
+  const reads = blobReads()
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git restore --source=--textconv ${MOD_REL}` }))).toContain('names its source as an option')
+  expect(blobReads()).toBe(reads)
   expect(w.ran).toEqual([])
 })
 

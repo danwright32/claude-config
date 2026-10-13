@@ -361,12 +361,16 @@ export const editedText = (before: string, tool: string, input: Record<string, u
 
 // The most pairs of lines changedRuns compares; past it a change is one run, judged whole.
 const RUNS_MAX_CELLS = 4_000_000
+// The most runs judged one by one, each a read of the whole text (a mod hook's a JSX parse); past it
+// a change is one run, judged whole, since a hold costs Dan one answer (lessons review of #1158).
+// Undoing a session's own edits is a handful of runs, never dozens.
+const RUNS_MAX = 24
 
 /**
  * The texts a change from `before` to `after` passes through when it is made one run of changed lines
  * at a time, each as [before, after] (#1158): the shape a git checkout or restore has when it puts back
  * several edits at once, each of which was an edit of its own. A line diff (longest common subsequence)
- * between the lines both texts do not share at their start and end; past RUNS_MAX_CELLS, the whole
+ * between the lines both texts do not share at their start and end; past RUNS_MAX_CELLS or RUNS_MAX, the whole
  * change is one run. No runs for equal texts.
  */
 export const changedRuns = (before: string, after: string): [string, string][] => {
@@ -404,6 +408,7 @@ export const changedRuns = (before: string, after: string): [string, string][] =
       i++
     }
   }
+  if (runs.length > RUNS_MAX) return [[before, after]]
   // Made from the last run back, so each earlier run's place in the text is unmoved.
   const steps: [string, string][] = []
   const text = [...a]
