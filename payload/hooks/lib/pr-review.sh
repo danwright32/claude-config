@@ -47,7 +47,8 @@
 #                                       on every attempt until a merge presents the key as
 #                                       PR_REVIEW_READ=<key> (claude-config#788). Printing them is
 #                                       not reading them: a refusal can be hidden behind another
-#                                       hook's, and the nudge reaches whichever session prompts next.
+#                                       hook's. This refusal is the only place the findings and
+#                                       their key are shown (the nudge stopped, #1090).
 #   ok, N findings, read / 0            allowed (<review>.acknowledged).
 #   empty-diff                          allowed: the head adds nothing to the base.
 #   running                             refused, with elapsed time against the deadline.
@@ -251,8 +252,8 @@ ROWS
 # byte copy of a mod-kit file. Every other file is read, so the code is never what gives way. The
 # candidates are put back smallest first while they still fit, so a file is left out only when it
 # must be. Rewrites $diff_file; sets left_excl (an exclude pathspec for each file left out); writes
-# the files left out to $leftout, which the start line, every verdict on this head and the nudge
-# then name through ar_left_out_note (L98: nothing silently unreviewed). Returns 1, changing
+# the files left out to $leftout, which the start line and every verdict on this head then name
+# through ar_left_out_note (L98: nothing silently unreviewed). Returns 1, changing
 # nothing, when no file is proven. Called from do_start, whose variables it reads and sets.
 leave_out_proven() {
   local cands p kind why b rows="" kept="" gen_in="" budget built
@@ -714,7 +715,7 @@ do_check() {
         return 0
       fi
       # READ means a merge presented the key that only the findings' own messages carry (#788),
-      # never that this gate or the nudge PRINTED them: a refusal can be printed and not shown.
+      # never that this gate PRINTED them: a refusal can be printed and not shown.
       # The acknowledgement names the review it read by its finish time, so a review file written
       # again for this head, by any route, is unread until its own findings are acknowledged.
       local fin

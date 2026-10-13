@@ -496,6 +496,90 @@ many_launches="$(launches)"
 check_eq "300 more review files start no more processes (was $base_launches with none)" "$base_launches" "$many_launches"
 rm -f "$AI_REVIEW_STATE_DIR"/999-*.txt
 
+# 6c. The same count where the per file work really was: unshown reviews of the session's OWN
+# repository (claude-config#1090). 6b's files belong to another repository, which the name filter
+# drops before any work, so it never saw that a fresh session walked every review of its own
+# repository from the last 14 days (1,200 for claude-config on 2026-10-12), running read_meta, the
+# capped body and the left out note for each before the output budget decided to hold it: 9.7 to
+# 10 s against the hook's 5 s timeout, on the first prompt of every new session. Both kinds:
+#   - a whole branch lessons review (kind=pr, named <key>-pr-<sha>.txt) is not the nudge's to show
+#     any more (Dan, 2026-10-12). The merge gate shows its findings and issues their read key, so
+#     300 of them must start exactly what none do, and print nothing.
+#   - a push review is shown while it fits the budget and held after, and a held one costs nothing
+#     until a prompt shows it, so 300 start exactly what 30 do (both well past the budget).
+# ===========================================================================
+count_launches(){ # count_launches <session> -> LAUNCHES (commands one full path nudge started), OUT
+  : > "$SHIM_LOG"
+  [ -f "$AI_REVIEW_STATE_DIR/shown/$1.list" ] && touch -t 202001010000 "$AI_REVIEW_STATE_DIR/shown/$1.list"
+  touch "$AI_REVIEW_STATE_DIR/.updated"
+  PATH="$SHIMBIN:$REAL_PATH" nudge "$1"
+  LAUNCHES="$(grep -c . "$SHIM_LOG")"
+}
+own_key="$stale_key"
+own_review(){ # own_review <kind: pr or push> <n> -> one finished review of this repository
+  local sha name l
+  sha="$(printf '%040d' "$2")"
+  name="$own_key-$sha.txt"; [ "$1" = pr ] && name="$own_key-pr-$sha.txt"
+  {
+    printf 'repo=repo\nbranch=feat/b%s\nsha=%s\nstarted=1\nfinished=2\nstatus=ok\n' "$2" "$sha"
+    [ "$1" = pr ] && printf 'kind=pr\nfindings=5\n'
+    printf '\n'
+    for l in 1 2 3 4 5; do printf 'src/calendar.ts:%s: own review %s finding %s, long enough to weigh on the output budget the way a real finding line does. Should be: fixed.\n' "$l" "$2" "$l"; done
+  } > "$AI_REVIEW_STATE_DIR/$name"
+  [ "$1" = pr ] && printf '100\tscripts/fixtures/x.json\tfixture\tfixture data\n' > "$AI_REVIEW_STATE_DIR/$name.leftout"
+  return 0
+}
+nudge n1   # settle
+count_launches n1; own_base="$LAUNCHES"
+i=0; while [ "$i" -lt 300 ]; do own_review pr "$i"; i=$((i + 1)); done
+count_launches n1
+check_eq "300 unshown whole branch reviews of this repository start no more processes (was $own_base with none)" "$own_base" "$LAUNCHES"
+check_eq "and none of them is shown, since the merge gate shows them with their read key" "" "$OUT"
+rm -f "$AI_REVIEW_STATE_DIR/$own_key"-pr-*
+
+i=0; while [ "$i" -lt 30 ]; do own_review push "$i"; i=$((i + 1)); done
+count_launches p30; push30="$LAUNCHES"
+check "30 unshown push reviews of this repository: the first is shown" "own review 0 finding 1" "$OUT"
+check "and those past the budget are held, saying so" "not shown" "$OUT"
+while [ "$i" -lt 300 ]; do own_review push "$i"; i=$((i + 1)); done
+count_launches p300
+check_eq "300 unshown push reviews of this repository start no more processes than 30 do ($push30)" "$push30" "$LAUNCHES"
+[ "${#OUT}" -lt 10000 ] && ok || bad "and the output stays under the 10,000 character hook cap (was ${#OUT})"
+first_shown="$OUT"
+# The held ones are shown on the next prompt, as the line above promises, and not again after.
+nudge p300
+check "a review held back is shown on the next prompt" "own review" "$OUT"
+check_not "and the next prompt does not repeat what the first showed" "$(printf '%s\n' "$first_shown" | grep -m1 -o 'own review [0-9]* finding 1')," "$OUT,"
+
+# 6d. A review is marked shown only once its text is out (claude-config#1090). When the platform
+# kills the hook at its timeout it throws the output away, so a review recorded as shown before
+# the hook finished was never seen and never shown again. Killed after printing, from inside the
+# housekeeping sweep the hook runs once it has printed: a find that kills the hook that started it.
+KILLBIN="$WORKDIR/killbin"; mkdir -p "$KILLBIN"
+printf '#!/bin/sh\nkill -9 "$PPID"\nexit 0\n' > "$KILLBIN/find"; chmod +x "$KILLBIN/find"
+PATH="$KILLBIN:$REAL_PATH" nudge killed
+check "the killed nudge had printed a review before it was stopped" "own review" "$OUT"
+[ "$RC" -ne 0 ] && ok || bad "and it really was killed (exit $RC), or the case proves nothing"
+killed_listed="$(cat "$AI_REVIEW_STATE_DIR/shown/killed.list" 2>/dev/null)"
+check_eq "a nudge killed after printing records nothing as shown" "" "$killed_listed"
+nudge killed
+check "so the next prompt shows those reviews again" "own review 0 finding 1" "$OUT"
+
+# 6e. Per session records are swept with the reviews (claude-config#1090): one shown/<session>.list
+# per session ever started, 2,380 on 2026-10-12 and 404 of them past 14 days. Another session's
+# old record goes; a recent one, and this session's own however old, stay.
+touch -t 202001010000 "$AI_REVIEW_STATE_DIR/shown/n1.list"
+printf 'x\n' > "$AI_REVIEW_STATE_DIR/shown/gone.list"; touch -t 202001010000 "$AI_REVIEW_STATE_DIR/shown/gone.list"
+: > "$AI_REVIEW_STATE_DIR/shown/gone.held"; touch -t 202001010000 "$AI_REVIEW_STATE_DIR/shown/gone.held"
+printf 'x\n' > "$AI_REVIEW_STATE_DIR/shown/recent.list"
+touch "$AI_REVIEW_STATE_DIR/.updated"
+nudge n1
+[ -e "$AI_REVIEW_STATE_DIR/shown/gone.list" ] && bad "a session record older than 14 days is swept" || ok
+[ -e "$AI_REVIEW_STATE_DIR/shown/gone.held" ] && bad "and so is its held marker" || ok
+[ -s "$AI_REVIEW_STATE_DIR/shown/recent.list" ] && ok || bad "a recent session record is kept"
+[ -s "$AI_REVIEW_STATE_DIR/shown/n1.list" ] && ok || bad "and this session's own record is kept, however old"
+rm -f "$AI_REVIEW_STATE_DIR/$own_key"-0000000000*.txt
+
 # ===========================================================================
 # 7. A push of THREE commits is reviewed from the upstream's previous tip, not one commit short
 # (claude-config#441). After a push the upstream is HEAD, so the plain push answer lands on HEAD~1;
