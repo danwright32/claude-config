@@ -157,7 +157,7 @@ for block in re.split(r"(?m)^## ", text)[1:]:
     sections[head.strip()] = body
 opens = re.compile(r"Extensions, Apps Script|\b[Oo]pen the sheet\b")
 judged = 0
-for want in ("First run / setup", "Rotating the token", "Turning on update"):
+for want in ("First run / setup", "Rotating the token", "Turning on update", "Turning on the sheet check"):
     body = next((b for h, b in sections.items() if h.startswith(want)), None)
     if body is None:
         print("%s: section missing" % want); continue
@@ -176,7 +176,7 @@ print("judged=%d" % judged)
 PY
 }
 gaps="$(sheet_step_gaps "$DIR/SKILL.md")"
-check_eq "every setup, rotation and update redeploy step that opens the sheet carries its name and link" "judged=3" "$gaps"
+check_eq "every setup, rotation, update and sheet check redeploy step that opens the sheet carries its name and link" "judged=4" "$gaps"
 # The update verb works only once the deployed script is the one that has it, so SKILL.md must
 # say how to deploy a new version: judged inside its own section, whitespace collapsed (L278).
 redeploy="$(python3 - "$DIR/SKILL.md" <<'PY'
@@ -210,9 +210,36 @@ check "the check names a rotation step whose link was removed" "Rotating the tok
 check_not "and only that step" "First run / setup step" "$(sheet_step_gaps "$TMP/no-link.md")"
 # A step that rewraps the name across a line break still names the sheet (L278), so it passes.
 python3 -c 'import sys; t=open(sys.argv[1]).read(); print(t.replace("**Dan Work Project Tracker**", "**Dan Work\n   Project Tracker**"), end="")' "$DIR/SKILL.md" > "$TMP/rewrapped.md"
-check_eq "and a step whose sheet name is rewrapped across lines still counts as naming it" "judged=3" "$(sheet_step_gaps "$TMP/rewrapped.md")"
+check_eq "and a step whose sheet name is rewrapped across lines still counts as naming it" "judged=4" "$(sheet_step_gaps "$TMP/rewrapped.md")"
 printf '## First run / setup\n\n1. Run something.\n\n## Rotating the token\n\n1. Run something.\n' > "$TMP/no-steps.md"
 check "and refuses steps that never open the sheet, rather than passing on zero" "no step sends the reader into the sheet" "$(sheet_step_gaps "$TMP/no-steps.md")"
+
+# A new deployment gets a new /exec link while config.local.json keeps the old one, which goes on
+# answering with the old code (claude-config#1080), so every redeploy step says to edit the
+# existing deployment, and setup says why never to make another.
+redeploys="$(python3 - "$DIR/SKILL.md" <<'PY2'
+import re, sys
+text = open(sys.argv[1]).read()
+sections = {}
+for block in re.split(r"(?m)^## ", text)[1:]:
+    head, _, body = block.partition("\n")
+    sections[head.strip()] = " ".join(body.split())
+def body(want):
+    return next((b for h, b in sections.items() if h.startswith(want)), None)
+setup = body("First run / setup")
+print("setup warns a new deployment changes the link: %s" % ("yes" if setup and "a new deployment gets a new /exec link" in setup.replace(chr(96), "").lower() else "no"))
+for want in ("Turning on the sheet check", "Turning on update", "Rotating the token"):
+    b = body(want)
+    if b is None:
+        print("%s: section missing" % want); continue
+    print("%s: edits the existing deployment: %s" % (want, "yes" if "the pencil (Edit)" in b and "New version" in b else "no"))
+check = body("Turning on the sheet check") or ""
+print("sheet check names its check: %s" % ("yes" if "tracker.sh headers" in check and "different sheet" in check else "no"))
+PY2
+)"
+check_not "every redeploy step edits the existing deployment, and setup warns a new one changes the /exec link" ": no" "$redeploys"
+check_not "and every such section exists" "section missing" "$redeploys"
+check "and the sheet check section was judged" "sheet check names its check: yes" "$redeploys"
 
 # --- config.local.json never travels ------------------------------------------
 # Git: the skill's own ignore file keeps it out of every commit.
@@ -229,18 +256,29 @@ check_eq "and does not leave out the files the skill ships" "no no no" "$(gitign
 # --- a sandbox copy of the skill, and a curl that reaches nothing -------------
 SK="$TMP/skill"
 mkdir -p "$SK" "$TMP/bin"
-cp "$DIR/tracker.sh" "$DIR/config.example.json" "$DIR/apps-script.gs" "$SK/"
+cp "$DIR/tracker.sh" "$DIR/tracker_lib.py" "$DIR/config.example.json" "$DIR/apps-script.gs" "$DIR/SKILL.md" "$SK/"
 CURL_LOG="$TMP/curl.log"
 cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
-# Records its arguments and whatever arrived on stdin, then answers like the web app.
-{ printf 'ARGS:'; printf ' %s' "$@"; printf '\n'; printf 'STDIN:'; cat; printf '\n'; } >> "$CURL_LOG"
-printf '%s' "$FAKE_ANSWER"
+# Records its arguments and whatever arrived on stdin, then answers like the web app: a headers
+# request (the sheet check every command starts with) gets FAKE_HEADERS_ANSWER, anything else
+# FAKE_ANSWER.
+body="$(cat)"
+{ printf 'ARGS:'; printf ' %s' "$@"; printf '\n'; printf 'STDIN:%s\n' "$body"; } >> "$CURL_LOG"
+case "$body" in
+  *'"action": "headers"'*) printf '%s' "$FAKE_HEADERS_ANSWER" ;;
+  *) printf '%s' "$FAKE_ANSWER" ;;
+esac
 exit "${FAKE_CURL_RC:-0}"
 STUB
 chmod +x "$TMP/bin/curl"
 export CURL_LOG
-export FAKE_ANSWER='{"ok":true}'
+# The id of the sheet SKILL.md names, taken from the link written in this file above, never read
+# back out of SKILL.md (L70).
+SHEET_ID="${SHEET_URL#*/spreadsheets/d/}"; SHEET_ID="${SHEET_ID%%/*}"
+OTHER_SHEET_ID="1Other-Sheet-Attached-To-The-Old-Script"
+export FAKE_HEADERS_ANSWER="{\"ok\":true,\"headers\":[\"Project Name\",\"Link\"],\"spreadsheetId\":\"$SHEET_ID\"}"
+export FAKE_ANSWER="{\"ok\":true,\"spreadsheetId\":\"$SHEET_ID\"}"
 
 GOOD_URL="https://script.google.com/macros/s/FAKEDEPLOYMENT/exec"
 GOOD_TOKEN="test_token_0123456789_abcdef_not_real"
@@ -253,6 +291,8 @@ run(){ # run <args...>; sets OUT and RC
   RC=$?
 }
 curl_calls(){ grep -c '^ARGS:' "$CURL_LOG" 2>/dev/null || true; }
+# The body of the last request: a write is the request after the sheet check.
+last_body(){ grep '^STDIN:' "$CURL_LOG" | tail -n 1; }
 EX_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$DIR/config.example.json")"
 EX_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$DIR/config.example.json")"
 GS_TOKEN="$(sed -n "s/^const TOKEN = '\\(.*\\)';.*/\\1/p" "$DIR/apps-script.gs")"
@@ -271,9 +311,10 @@ check_not "and never puts the token on curl's command line or in the address" "$
 check_not "and the address carries no query string at all" "?" "$(grep '^ARGS:' "$CURL_LOG")"
 run append '{"Project Name":"x"}'
 check_eq "a configured skill's append succeeds" 0 "$RC"
-check_eq "and reaches curl exactly once" 1 "$(curl_calls)"
-check "and sends the key in the request body" "\"key\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "$CURL_LOG")"
-check "and the row with it" '"data": {"Project Name": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
+check_eq "and reaches curl twice: the sheet check, then the write" 2 "$(curl_calls)"
+check "and the first request is the sheet check" '"action": "headers"' "$(grep '^STDIN:' "$CURL_LOG" | head -n 1)"
+check "and sends the key in the request body" "\"key\": \"$GOOD_TOKEN\"" "$(last_body)"
+check "and the row with it" '"data": {"Project Name": "x"}' "$(last_body)"
 check_not "and never under the old field name the first script read" '"token"' "$(grep '^STDIN:' "$CURL_LOG")"
 check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
 
@@ -281,11 +322,13 @@ check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(gre
 FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
 check_eq "a configured skill's update succeeds" 0 "$RC"
 check "and prints the web app's answer" '"rowNumber":2' "$OUT"
-check_eq "and reaches curl exactly once" 1 "$(curl_calls)"
-update_body="$(sed -n 's/^STDIN://p' "$CURL_LOG" | python3 -c 'import json,sys; b=json.load(sys.stdin); k=b.pop("key",None); print(json.dumps(b, sort_keys=True)); print("key-sent" if k else "no-key")' 2>&1)"
-check_eq "and sends the action, Link, Project Name and cells, and the key, in the body" \
-  "$(printf '%s\n%s' '{"action": "update", "cells": {"My Actions": "x"}, "link": "https://github.com/example/alpha", "projectName": "Alpha"}' key-sent)" "$update_body"
-check "with the configured key" "\"key\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "$CURL_LOG")"
+check_eq "and reaches curl twice: the sheet check, then the write" 2 "$(curl_calls)"
+check "and the first request is the sheet check" '"action": "headers"' "$(grep '^STDIN:' "$CURL_LOG" | head -n 1)"
+update_body="$(sed -n 's/^STDIN://p' "$CURL_LOG" | tail -n 1 | python3 -c 'import json,sys; b=json.load(sys.stdin); k=b.pop("key",None); print(json.dumps(b, sort_keys=True)); print("key-sent" if k else "no-key")' 2>&1)"
+# Built by python: bash 3.2 splits escaped quotes inside a quoted command substitution.
+want_update_body="$(python3 -c 'import json,sys; print(json.dumps({"action": "update", "cells": {"My Actions": "x"}, "link": "https://github.com/example/alpha", "projectName": "Alpha", "sheetId": sys.argv[1]}, sort_keys=True)); print("key-sent")' "$SHEET_ID")"
+check_eq "and sends the action, Link, Project Name, cells and the sheet it means, and the key, in the body" "$want_update_body" "$update_body"
+check "with the configured key" "\"key\": \"$GOOD_TOKEN\"" "$(last_body)"
 check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
 # A script deployed before update reads any body with a "data" object as a row to APPEND, so
 # the cells travel as "cells": that script then refuses the body ("nothing to append", tested
@@ -305,8 +348,8 @@ check "and names the web app's own error" "is Beta, not Alpha" "$OUT"
 FAKE_ANSWER='{"ok":true,"action":"update","preview":true,"rowNumber":2,"before":{"My Actions":"old"}}' run update --preview "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
 check_eq "update --preview succeeds" 0 "$RC"
 check "and prints the current values" '"before":{"My Actions":"old"}' "$OUT"
-check "and the body asks for a preview" '"preview": true' "$(grep '^STDIN:' "$CURL_LOG")"
-check "with the same cells" '"cells": {"My Actions": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
+check "and the body asks for a preview" '"preview": true' "$(last_body)"
+check "with the same cells" '"cells": {"My Actions": "x"}' "$(last_body)"
 FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update --preview "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
 if [ "$RC" -eq 1 ]; then ok; else bad "a preview answered as a real update exits 1 (got $RC)"; fi
 check "and says the sheet may have been written" "not a preview" "$OUT"
@@ -318,8 +361,8 @@ check_not "and a real update never asks for a preview" '"preview"' "$(grep '^STD
 # --restore: the undo write, sent with restore true, and only with what the cells hold now.
 FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update --restore "https://github.com/example/alpha" "Alpha" '{"My Actions":"=SUM(1)"}' '{"My Actions":"x"}'
 check_eq "update --restore with what the cells hold now succeeds" 0 "$RC"
-check "and asks for a restore" '"restore": true' "$(grep '^STDIN:' "$CURL_LOG")"
-check "with the expect it needs" '"expect": {"My Actions": "x"}' "$(grep '^STDIN:' "$CURL_LOG")"
+check "and asks for a restore" '"restore": true' "$(last_body)"
+check "with the expect it needs" '"expect": {"My Actions": "x"}' "$(last_body)"
 run update --restore "https://github.com/example/alpha" "Alpha" '{"My Actions":"=SUM(1)"}'
 if [ "$RC" -ne 0 ]; then ok; else bad "update --restore without what the cells hold now exits non zero (got $RC)"; fi
 check_eq "and reaches nothing" 0 "$(curl_calls)"
@@ -330,7 +373,7 @@ check_not "and an ordinary update never asks for a restore" '"restore"' "$(grep 
 # An optional fourth argument is what the preview read; it goes as "expect".
 FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}' '{"My Actions":"old"}'
 check_eq "update with what the preview read succeeds" 0 "$RC"
-check "and sends it as expect" '"expect": {"My Actions": "old"}' "$(grep '^STDIN:' "$CURL_LOG")"
+check "and sends it as expect" '"expect": {"My Actions": "old"}' "$(last_body)"
 
 refuses_update_call(){ # refuses_update_call <description> <args to update...>
   local what="$1"; shift
@@ -352,7 +395,7 @@ refuses_update_call "an argument too many" "https://github.com/example/alpha" "A
 # --- the web app's own refusal is a failure, never a printed success (claude-config#677) ---
 # The Apps Script answers HTTP 200 for its refusals too, so curl --fail passes them: the answer
 # itself has to be read.
-FAKE_ANSWER='{"ok":false,"error":"bad token"}' run headers
+FAKE_HEADERS_ANSWER='{"ok":false,"error":"bad token"}' run headers
 if [ "$RC" -eq 1 ]; then ok; else bad "a refused headers call exits 1 (got $RC)"; fi
 check "and names the web app's own error" "bad token" "$OUT"
 FAKE_ANSWER='{"ok":false,"error":"bad json"}' run append '{"Project Name":"x"}'
@@ -361,10 +404,70 @@ check "and names the web app's own error" "bad json" "$OUT"
 FAKE_ANSWER='<html><body>Sign in to continue</body></html>' run append '{"Project Name":"x"}'
 if [ "$RC" -eq 1 ]; then ok; else bad "an answer that is not JSON (a sign in page) exits 1 (got $RC)"; fi
 check "and says it was not the JSON the web app sends" "not the JSON" "$OUT"
-FAKE_ANSWER='' FAKE_CURL_RC=22 run headers
+FAKE_HEADERS_ANSWER='' FAKE_CURL_RC=22 run headers
 if [ "$RC" -ne 0 ]; then ok; else bad "a request curl could not complete fails (got $RC)"; fi
 check "and says the web app could not be reached" "could not reach" "$OUT"
 check_not "no failure prints the configured token" "$GOOD_TOKEN" "$OUT"
+
+# --- the web app answers for the sheet SKILL.md names, or nothing is sent (claude-config#1080) ---
+# On 2026-10-12 config.local.json held a link deployed from an Apps Script attached to a DIFFERENT
+# sheet: the new script was pasted into the right sheet, and the link kept answering from the old
+# one. Every command now starts with the sheet check: a headers request whose answer must carry
+# the id of the sheet the script is attached to, equal to the id in SKILL.md's sheet link. A
+# write goes only after that check passes, so a script that cannot say which sheet it writes (one
+# older than the check, which is what the wrong sheet held) is refused before it can append.
+run headers
+check_eq "the sheet check: an answer naming the sheet SKILL.md names passes" 0 "$RC"
+check "and the request names that sheet too, so the script itself can refuse a mismatch" "\"sheetId\": \"$SHEET_ID\"" "$(last_body)"
+FAKE_HEADERS_ANSWER="{\"ok\":true,\"headers\":[\"Project Name\"],\"spreadsheetId\":\"$OTHER_SHEET_ID\"}" run headers
+if [ "$RC" -eq 1 ]; then ok; else bad "a web app attached to a different sheet is refused (got $RC)"; fi
+check "and says the link belongs to a different sheet" "different sheet" "$OUT"
+check "and names the sheet it is attached to" "$OTHER_SHEET_ID" "$OUT"
+check "and the sheet SKILL.md names" "$SHEET_ID" "$OUT"
+check "and says how to put the right link in config.local.json" "Manage deployments" "$OUT"
+check_not "and never prints the headers it was answered with" '"headers"' "$OUT"
+FAKE_HEADERS_ANSWER='{"ok":true,"headers":["Project Name"]}' run headers
+if [ "$RC" -eq 1 ]; then ok; else bad "a web app that does not say which sheet it is attached to is refused (got $RC)"; fi
+check "and says it did not say which sheet" "did not say which sheet" "$OUT"
+check "and points at the one time redeploy" "Turning on the sheet check" "$OUT"
+for cmd in "append|append|{\"Project Name\":\"x\"}" "update|update|https://github.com/example/alpha|Alpha|{\"My Actions\":\"x\"}" \
+           "update --preview|update|--preview|https://github.com/example/alpha|Alpha|{\"My Actions\":\"x\"}" \
+           "update --restore|update|--restore|https://github.com/example/alpha|Alpha|{\"My Actions\":\"x\"}|{\"My Actions\":\"y\"}"; do
+  what="${cmd%%|*}"; IFS='|' read -r -a argv <<< "${cmd#*|}"
+  for wrong in "attached to another sheet|{\"ok\":true,\"headers\":[\"Link\"],\"spreadsheetId\":\"$OTHER_SHEET_ID\"}" \
+               "silent about its sheet|{\"ok\":true,\"headers\":[\"Link\"]}"; do
+    FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2,"preview":true}' FAKE_HEADERS_ANSWER="${wrong#*|}" run "${argv[@]}"
+    if [ "$RC" -eq 1 ]; then ok; else bad "$what against a web app ${wrong%%|*}: refused (got $RC)"; fi
+    check_eq "$what against a web app ${wrong%%|*}: sends only the sheet check, never the write" 1 "$(curl_calls)"
+  done
+done
+# A write answer naming another sheet is refused too (it cannot happen after the check passed,
+# unless something between is wrong, and then nothing about the write can be trusted).
+FAKE_ANSWER="{\"ok\":true,\"rowNumber\":9,\"spreadsheetId\":\"$OTHER_SHEET_ID\"}" run append '{"Project Name":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "an append answered for another sheet is refused (got $RC)"; fi
+check "and says so" "different sheet" "$OUT"
+# The script's own refusal of a mismatch is shown as the plain sentence too.
+FAKE_ANSWER="{\"ok\":false,\"error\":\"wrong sheet: this web app is attached to the spreadsheet $OTHER_SHEET_ID, not $SHEET_ID; nothing was changed\",\"spreadsheetId\":\"$OTHER_SHEET_ID\"}" run append '{"Project Name":"x"}'
+if [ "$RC" -eq 1 ]; then ok; else bad "a write the script refused as the wrong sheet exits 1 (got $RC)"; fi
+check "and says the link belongs to a different sheet" "different sheet" "$OUT"
+
+# The expected id is the one in SKILL.md's sheet link, its single declared home: a SKILL.md
+# naming no sheet, or two different ones, is refused before anything is sent.
+cp "$SK/SKILL.md" "$TMP/SKILL.md.aside"
+python3 -c 'import sys; p=sys.argv[1]; t=open(p).read(); i=t.rindex(sys.argv[2]); open(p,"w").write(t[:i]+sys.argv[3]+t[i+len(sys.argv[2]):])' "$SK/SKILL.md" "$SHEET_ID" "$OTHER_SHEET_ID"
+run headers
+if [ "$RC" -ne 0 ]; then ok; else bad "a SKILL.md naming two different sheets is refused (got $RC)"; fi
+check "and says it names more than one sheet" "more than one sheet" "$OUT"
+check_eq "and reaches nothing" 0 "$(curl_calls)"
+python3 -c 'import sys,re; p=sys.argv[1]; t=open(p).read(); open(p,"w").write(re.sub(r"docs\.google\.com/spreadsheets/d/[A-Za-z0-9_-]+", "docs.example.invalid/sheet", t))' "$SK/SKILL.md"
+run headers
+if [ "$RC" -ne 0 ]; then ok; else bad "a SKILL.md naming no sheet is refused (got $RC)"; fi
+check "and says it names no sheet" "names no sheet" "$OUT"
+check_eq "and reaches nothing" 0 "$(curl_calls)"
+cp "$TMP/SKILL.md.aside" "$SK/SKILL.md"
+run sheet-id
+check_eq "tracker.sh sheet-id prints the id of the sheet SKILL.md names" "$SHEET_ID" "$OUT"
+check_eq "and reaches nothing" 0 "$(curl_calls)"
 
 # --- every refusal names its cause, and reaches nothing -----------------------
 refuses(){ # refuses <description> <expected words in the message> <args...>
@@ -460,7 +563,7 @@ check "a run stopped before the rename leaves config.local.json as it was" "$GOO
 leftovers="$(python3 - "$SK" "$DIR/.gitignore" <<'PY'
 import fnmatch, os, stat, sys
 sk, gitignore = sys.argv[1], sys.argv[2]
-shipped = {"tracker.sh", "config.example.json", "apps-script.gs", "config.local.json"}
+shipped = {"tracker.sh", "tracker_lib.py", "config.example.json", "apps-script.gs", "SKILL.md", "config.local.json"}
 patterns = [l.strip() for l in open(gitignore) if l.strip() and not l.startswith("#")]
 for name in sorted(os.listdir(sk)):
     if name in shipped:
@@ -579,7 +682,7 @@ const sheet = {
   appendRow: (r) => { appended.push(r); rows.push(r.map(stored)); },
 };
 const ctx = {
-  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getSheetByName: () => sheet }), flush: () => {} },
+  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getId: () => fx.spreadsheetId || 'HARNESS-SHEET-ID', getSheets: () => [sheet], getSheetByName: () => sheet }), flush: () => {} },
   LockService: { getScriptLock: () => ({
     tryLock: () => { if (lock.busy) return false; lock.taken++; return true; },
     waitLock: () => { if (lock.busy) throw new Error('Lock timeout'); lock.taken++; },
@@ -689,6 +792,29 @@ print(json.dumps(eval(sys.argv[2]), separators=(",",":")))' "$1" "$2" 2>&1; }
     check "web app with ${tok#*|} as TOKEN: refuses an append" '"ok":false' "$r"
     check "and appends nothing" '"appended":0' "$r"
   done
+
+  # --- the web app says which sheet it is attached to (claude-config#1080) ---
+  # Every answer to a caller holding the key names the bound spreadsheet's id, and a request
+  # naming a different sheet is refused before the sheet is read or written. A caller without the
+  # key learns nothing, the id included.
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"action\":\"headers\"}")"
+  check_eq "web app: the headers answer names the sheet it is attached to" '"HARNESS-SHEET-ID"' "$(jget "$r" 'd["response"].get("spreadsheetId")')"
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"data\":{\"Project Name\":\"x\"},\"sheetId\":\"HARNESS-SHEET-ID\"}")"
+  check_eq "web app: an append naming the sheet it is attached to lands, and its answer names the sheet" '[true,"HARNESS-SHEET-ID",1]' \
+    "$(jget "$r" '[d["response"].get("ok"), d["response"].get("spreadsheetId"), d["appended"]]')"
+  for body in "an append|{\"key\":\"$REAL\",\"data\":{\"Project Name\":\"x\"},\"sheetId\":\"SOME-OTHER-SHEET\"}" \
+              "the headers|{\"key\":\"$REAL\",\"action\":\"headers\",\"sheetId\":\"SOME-OTHER-SHEET\"}" \
+              "an update|{\"key\":\"$REAL\",\"action\":\"update\",\"link\":\"x\",\"projectName\":\"y\",\"cells\":{\"a\":1},\"sheetId\":\"SOME-OTHER-SHEET\"}"; do
+    r="$(gs "$REAL" "${body#*|}")"
+    check "web app: ${body%%|*} naming another sheet is refused as the wrong sheet" "wrong sheet" "$(jget "$r" 'd["response"].get("error")')"
+    check "and the refusal names both sheets" "SOME-OTHER-SHEET" "$(jget "$r" 'd["response"].get("error")')"
+    check_eq "and nothing in the sheet was read or appended" '[0,0]' "$(jget "$r" '[d["reads"], d["appended"]]')"
+  done
+  r="$(gs "$REAL" "{\"key\":\"$REAL\",\"action\":\"headers\",\"sheetId\":42}")"
+  check "web app: a sheetId that is not text is refused" "sheetId" "$(jget "$r" 'd["response"].get("error")')"
+  r="$(gs "$REAL" "{\"key\":\"nope\",\"action\":\"headers\",\"sheetId\":\"SOME-OTHER-SHEET\"}")"
+  check_eq "web app: a wrong key is refused as a bad token before the sheet is compared, and learns no id" '["bad token",null]' \
+    "$(jget "$r" '[d["response"].get("error"), d["response"].get("spreadsheetId")]')"
 
   # --- update: one row changed in place, found by its Link (claude-config#1031) ---
   # The sheet as Dan has it, plus a column nobody's code knows about (Notes), a row with an empty

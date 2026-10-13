@@ -53,12 +53,20 @@ chat. Walk the user through this once:
 
 Then verify with `bash tracker.sh headers`: it should print the sheet's column names. Until
 both values are filled in, `tracker.sh` refuses and names the one still missing or still a
-placeholder.
+placeholder. Every command also checks that the web app is attached to the sheet linked above,
+and refuses with `different sheet` when the link in `config.local.json` came from another sheet's
+script.
 
-> If the user later changes the script, they must **Deploy, Manage deployments, Edit,
-> New version** for changes to take effect. The `/exec` URL stays the same.
+> Never make a second deployment. A new deployment gets a new `/exec` link, while
+> `config.local.json` keeps the old one, and the old deployment goes on answering with the old
+> code, so the change seems to do nothing (on 2026-10-12 a link from another sheet's script
+> answered for weeks, claude-config#1080). To change the script, always edit the existing
+> deployment: **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**,
+> **Deploy**. The `/exec` link then stays the same.
 
 ## Turning on update (one time, after claude-config#1031)
+
+"Turning on the sheet check" below deploys the same current script, so once it is done, so is this.
 
 `tracker.sh update` needs the deployed script to be the current `apps-script.gs`, which has the
 `update` action. A deployment made before #1031 does not, and refuses every update with
@@ -80,6 +88,33 @@ Do this once, on one Mac; the `/exec` URL and the token stay the same:
    means update is live. `the deployed web app predates update` means step 4 did not deploy a
    new version. `bad token` or `token not set` means the TOKEN line does not hold the token from
    `config.local.json`: set it as in step 3 and deploy a new version again.
+
+## Turning on the sheet check (one time, after claude-config#1080)
+
+Every `tracker.sh` command first asks the web app which sheet its script is attached to, and
+refuses unless it is the sheet linked at the top of this file, so a link deployed from another
+sheet's script can never write there. A script deployed before claude-config#1080 cannot say
+which sheet it is attached to, so until it is redeployed every command refuses with
+`did not say which sheet it is attached to`. Do this once, on one Mac; the `/exec` link and the
+token stay the same:
+
+1. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
+   name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
+   Then **Extensions, Apps Script**.
+2. Select all the code there and paste the entire contents of the current `apps-script.gs`
+   over it.
+3. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
+   command in setup step 2. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING`
+   with the `token` value from that file, keeping the single quotes around it, and save.
+4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
+   Never **New deployment**: that makes a new `/exec` link, which `config.local.json` does not
+   hold, and leaves the old link answering with the old script.
+5. On each Mac, check it with `bash tracker.sh headers`. The column names mean that Mac's link
+   answers for this sheet. `different sheet` means that Mac's `config.local.json` holds a link
+   deployed from another sheet's script: in this sheet's **Deploy, Manage deployments**, copy
+   the active deployment's **Web app URL**, paste it over the `url` value in `config.local.json`
+   (opened as in step 3), save, and check again. `did not say which sheet` means step 4 did not
+   deploy a new version, or the link belongs to an older script in another sheet: check both.
 
 ## Rotating the token
 
