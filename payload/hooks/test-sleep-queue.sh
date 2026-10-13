@@ -587,6 +587,7 @@ wt41="$(sleep_worktree "$ROOT" 41 2>&1)"
 before="$(sleep_work "$ROOT" 41)"
 check_has "the claim's branch is read" "$(printf 'branch\t%s' "$(git -C "$ROOT" rev-parse refs/heads/sleep/41)")" "$before"
 check_has "and the commits made in the worktree, none yet" "$(printf 'worktree\t0')" "$before"
+check_eq "a caller under set -e gets that reading too, never stopped at a count of none" 0 "$(bash -c 'set -e; . "$1"; sleep_work "$2" 41 >/dev/null; echo $?' _ "$LIB" "$ROOT" 2>/dev/null)"
 # A subagent switches the reserved worktree to a branch of its own and commits there.
 git -C "$wt41" switch -q -c fix/41-by-a-subagent
 git -C "$wt41" -c user.email=sub@t -c user.name=sub commit -q --allow-empty -m "the subagent's work"

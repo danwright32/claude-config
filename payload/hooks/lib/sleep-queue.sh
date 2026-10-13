@@ -493,7 +493,9 @@ sleep_work() {
     # branch switch moves HEAD without a commit, so counting what HEAD points at would read a
     # switch as progress (lessons review of 162acef).
     head="$(git -C "$path" reflog show --format=%gs HEAD 2>/dev/null)" || { _sq_refuse "the commits made in $path could not be read"; return 3; }
-    head="$(printf '%s\n' "$head" | grep -c -E '^(commit|merge |cherry-pick|revert|rebase( \(.*\))? \(finish\)|pull)')"
+    # Counted by awk, which exits 0 at a count of none, where grep -c would exit 1 and stop a
+    # caller under set -e at the commonest case, a worktree nobody has committed in yet.
+    head="$(printf '%s\n' "$head" | awk '/^(commit|merge |cherry-pick|revert|rebase( \(.*\))? \(finish\)|pull)/ { n++ } END { print n + 0 }')"
   fi
   printf 'branch\t%s\nworktree\t%s\n' "$tip" "$head"
 }
