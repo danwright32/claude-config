@@ -169,6 +169,51 @@ raw="$(printf '%s' "$(input s1)" | HOME="$H" STATUSLINE_NOW="$NOW" LC_ALL=C LANG
 out="$(printf '%s' "$raw" | sed $'s/\033\\[[0-9;]*m//g')"
 case "$out" in *"| Café 家") check "a non ASCII nickname survives a C locale" ok ;; *) check "a non ASCII nickname survives a C locale" "$out" ;; esac
 rm -f "$NICK"
+
+# 5c. The plan (#1156): one email can hold a Team login and a personal one, so an account with no
+#     nickname shows its plan after the name and org. The names are the account room's table
+#     (payload/mods/account-room/hooks/plan.ts, Claude Code's own values measured 2026-10-13), and
+#     every entry there is run through the status line here, so the two copies cannot drift.
+PLAN_TS="$ROOT/payload/mods/account-room/hooks/plan.ts"
+ts_plans="$(sed -n -E "s/^  (claude_[a-z0-9_]+): '([^']+)',\$/\1 \2/p" "$PLAN_TS")"
+n_ts="$(printf '%s\n' "$ts_plans" | grep -c .)"
+[ "$n_ts" -ge 4 ] && check "the account room's plan table is read (4 or more entries)" ok \
+  || check "the account room's plan table is read (4 or more entries)" "read $n_ts from $PLAN_TS"
+while read -r type name; do
+  [ -n "$type" ] || continue
+  sfacts s12 '{"accountUuid":"acct-2","organizationUuid":"org-2","displayName":"Dan","emailAddress":"dan@example.com","organizationName":"Pennie","organizationType":"'"$type"'"}'
+  runit "$(input s12)"
+  case "$out" in *"| Dan, Pennie, $name plan") check "$type is named $name plan, as the account room names it" ok ;; *) check "$type is named $name plan, as the account room names it" "$out" ;; esac
+done <<EOF
+$ts_plans
+EOF
+# And the status line knows no plan the account room does not: the two tables hold the same keys.
+sl_keys="$(sed -n -E "s/^plans='(.*)'\$/\1/p" "$SCRIPT" | jq -r 'keys[]' 2>/dev/null | sort | tr '\n' ' ')"
+ts_keys="$(printf '%s\n' "$ts_plans" | cut -d' ' -f1 | grep . | sort | tr '\n' ' ')"
+[ -n "$sl_keys" ] && [ "$sl_keys" = "$ts_keys" ] && check "the status line's plan table holds the account room's keys exactly" ok \
+  || check "the status line's plan table holds the account room's keys exactly" "status line: [$sl_keys] account room: [$ts_keys]"
+sfacts s12 '{"accountUuid":"acct-2","organizationUuid":"org-2","displayName":"Dan","organizationName":"Pennie","organizationType":"claude_free"}'
+runit "$(input s12)"
+case "$out" in *"| Dan, Pennie, claude_free plan") check "a plan nobody has mapped is shown as it came, never hidden" ok ;; *) check "a plan nobody has mapped is shown as it came, never hidden" "$out" ;; esac
+sfacts s12 '{"accountUuid":"acct-2","organizationUuid":"org-2","displayName":"Dan","organizationName":"Pennie","organizationType":" claude_\u001b[31mx\u0007 "}'
+runit "$(input s12)"
+case "$raw" in *$'\033[31m'*) check "a plan cannot colour the line" "$(printf '%q' "$raw")" ;; *) check "a plan cannot colour the line" ok ;; esac
+case "$out" in *"| Dan, Pennie, claude_[31mx plan") check "an unmapped plan loses its control bytes and is trimmed, as the account room trims it" ok ;; *) check "an unmapped plan loses its control bytes and is trimmed, as the account room trims it" "$out" ;; esac
+for empty in '""' '"  "' 'null' '7'; do
+  sfacts s12 '{"accountUuid":"acct-2","organizationUuid":"org-2","displayName":"Dan","organizationName":"Pennie","organizationType":'"$empty"'}'
+  runit "$(input s12)"
+  case "$out" in *"| Dan, Pennie") check "an organizationType of $empty is no plan" ok ;; *) check "an organizationType of $empty is no plan" "$out" ;; esac
+done
+# A nickname still replaces the whole account, plan included (58f60981898d32e8 is acct-1 and org-1).
+sfacts s12 '{"accountUuid":"acct-1","organizationUuid":"org-1","displayName":"Dan","organizationName":"Pennie","organizationType":"claude_team"}'
+printf '{"v":1,"names":{"58f60981898d32e8":"Work"}}\n' > "$NICK"; runit "$(input s12)"
+case "$out" in *"| Opus 5.5 (high) | Work") check "a nickname replaces the name, org and plan" ok ;; *) check "a nickname replaces the name, org and plan" "$out" ;; esac
+rm -f "$NICK"
+# A facts file written before the session recorded an account reads the login file, plan and all.
+facts s13 null
+printf '{"oauthAccount":{"displayName":"Dan","emailAddress":"dan@example.com","organizationName":"Pennie","organizationType":"claude_max"}}\n' > "$H/.claude.json"
+runit "$(input s13)"
+case "$out" in *"| Dan, Pennie, Max plan") check "the login file read directly names the plan too" ok ;; *) check "the login file read directly names the plan too" "$out" ;; esac
 login Dan Personal
 
 # 6. Limits: a reset already past shows the share alone; no limits at all (an API key) shows none.

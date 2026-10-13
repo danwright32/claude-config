@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession, AccountRoomStop } from '../types/index.d.ts'
 import { answerOf, contentsPath, entriesOf, fileOf, isRepoName, notRepoName, putBody, shaAfterPut, unseenWhy } from './github.ts'
 import type { Answer, RepoFile } from './github.ts'
+import { planOf, planText } from './plan.ts'
 import { card, fromRateLimits, nameOf, triggered, verdict } from './room.ts'
 import type { Account, Offset, Reading, Unavailable, Unsaved, Verdict } from './room.ts'
 import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, nicknameRefusal, parseMacFile, parseNicknames, serialize, serializeNicknames, withAccount, withName, withSighting } from './store.ts'
@@ -613,6 +614,9 @@ const tick = async ($: EngineInterface) => {
   }
 }
 
+/** This session's own account as the nickname dialog names it, its plan included when the login gave one (#1156). */
+const own = (s: AccountRoomSession): Omit<AccountRoomAsking, 'current'> => ({ id: s.id, email: s.email, org: s.org, ...(s.plan ? { plan: s.plan } : {}) })
+
 /** Opens the nickname dialog for one account. */
 const ask = async ($: EngineInterface, a: AccountRoomAsking) => {
   await $.state.set(askingRef, a)
@@ -676,7 +680,7 @@ const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
     if (s.isInteractive) {
       const nick = await loadNicknames($, s.home)
       if (typeof nick === 'string') once($, 'nicknames', `Account room: the nicknames could not be read (${nicknamesPath(s.home)}): ${nick}`)
-      else if (!Object.prototype.hasOwnProperty.call(nick.names, s.id)) await ask($, { id: s.id, email: s.email, org: s.org, current: null })
+      else if (!Object.prototype.hasOwnProperty.call(nick.names, s.id)) await ask($, { ...own(s), current: null })
     }
   } catch (err) {
     // The write already started is still awaited and drawn, and a failure of its own is said beside
@@ -736,7 +740,7 @@ export const register: Register = (on, options) => {
       $.ui.log('account-room: no home folder, so no account is recorded', { to: 'debug' })
       return r
     }
-    let acct: { accountUuid?: unknown; organizationUuid?: unknown; emailAddress?: unknown; organizationName?: unknown } | undefined
+    let acct: { accountUuid?: unknown; organizationUuid?: unknown; emailAddress?: unknown; organizationName?: unknown; organizationType?: unknown } | undefined
     try {
       acct = (JSON.parse((await readText($, `${home}/.claude.json`)) ?? '{}') as { oauthAccount?: typeof acct }).oauthAccount
     } catch (err) {
@@ -751,10 +755,12 @@ export const register: Register = (on, options) => {
       x => (x.exitCode === 0 && x.stdout.trim() ? x.stdout.trim() : null),
       () => null,
     )
+    const plan = planOf(acct.organizationType)
     const s: AccountRoomSession = {
       id: await accountKey(acct.accountUuid, acct.organizationUuid),
       email: typeof acct.emailAddress === 'string' ? acct.emailAddress : '',
       org: typeof acct.organizationName === 'string' ? acct.organizationName : '',
+      ...(plan ? { plan } : {}),
       isInteractive: e.isInteractive,
       home,
       mac,
@@ -812,7 +818,9 @@ export const register: Register = (on, options) => {
     // where it can be, and Skip still answers (#758, typed strictly rather than cast).
     // Decided by the surface named, as Claude Code's own table is (its types: "all but mobile Input").
     const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : undefined
-    const who = a.org ? `${a.email}, ${a.org}` : a.email
+    // The plan (Team, Max, Pro) beside the email and org (#1156): one email can hold a Team login
+    // and a personal one, and without it the two read almost alike.
+    const who = [a.email, a.org, a.plan ? planText(a.plan) : ''].filter(Boolean).join(', ')
     // #939: Save and Skip are drawn only where a click reaches them; elsewhere (Apple Terminal, the
     // main screen) the keys line below is the way, and the pane holds the keyboard.
     const isClickable = await $.modkit.clickable(e)
@@ -859,7 +867,7 @@ export const register: Register = (on, options) => {
     const current = (id: string) => (Object.prototype.hasOwnProperty.call(nick.names, id) ? (nick.names[id]?.name ?? null) : null)
     const q = rest.join(' ').trim()
     if (!q) {
-      await ask($, { id: s.id, email: s.email, org: s.org, current: current(s.id) })
+      await ask($, { ...own(s), current: current(s.id) })
       return { text: '' }
     }
     const read = await loadReadings($)
@@ -875,7 +883,8 @@ export const register: Register = (on, options) => {
     if (hits.length === 0) return { text: `No account is called "${q}". Name one by its nickname or email.` }
     if (hits.length > 1) return { text: `More than one account is called "${q}". Name it by its email.` }
     const t = hits[0] as Account
-    await ask($, { id: t.id, email: t.email, org: t.org, current: current(t.id) })
+    // Only this session's own account has a plan known; another Mac's readings carry none (#1156).
+    await ask($, t.id === s.id ? { ...own(s), current: current(t.id) } : { id: t.id, email: t.email, org: t.org, current: current(t.id) })
     return { text: '' }
   })
 

@@ -136,7 +136,7 @@ const OTHER = `${GH}readings/Dans-MacBook-Pro.json`
 const NICKNAMES = `${HOME}/.claude/mods/account-room-nicknames.json`
 const PANE = 'account-room-nickname'
 
-const login = (account: string, email: string) => JSON.stringify({ oauthAccount: { accountUuid: account, organizationUuid: 'org-1', emailAddress: email, organizationName: 'Acme', displayName: 'Dan' } })
+const login = (account: string, email: string, organizationType?: unknown) => JSON.stringify({ oauthAccount: { accountUuid: account, organizationUuid: 'org-1', emailAddress: email, organizationName: 'Acme', displayName: 'Dan', ...(organizationType === undefined ? {} : { organizationType }) } })
 
 type Run = { exitCode: number; stdout: string; stderr: string }
 type World = {
@@ -973,6 +973,46 @@ test('the first session on an account the mod has not seen asks once for a nickn
   // Only the hashed key is written to the shared (public) payload, never the email.
   expect(w.files[NICKNAMES]).not.toContain('work@example.com')
   expect(closed).toEqual([PANE])
+  await ui.unmount()
+})
+
+test('the nickname question names the plan beside the email and org, so a Team and a personal login on one email read apart (#1156)', withKit, async ($, on) => {
+  const { clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com', 'claude_team') } })
+  await start($, clock)
+  const ui = await mountPane($)
+  expect((await ui.find({ type: 'Text', text: 'work@example.com, Acme, Team plan' }))?.props).toMatchObject({ dimColor: true })
+  await ui.unmount()
+})
+
+test('a plan nobody has mapped is shown as it came; a login with none shows no plan (#1156)', withKit, async ($, on) => {
+  const { clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com', 'claude_free') } })
+  await start($, clock)
+  const ui = await mountPane($)
+  expect(await shown(ui)).toContain('work@example.com, Acme, claude_free plan')
+  await ui.unmount()
+})
+
+test('a login record with no organizationType shows no plan, never an unknown one (#1156)', withKit, async ($, on) => {
+  const { clock } = world(on, { files: { [LOGIN]: login('acct-work', 'work@example.com') } })
+  await start($, clock)
+  const ui = await mountPane($)
+  expect(await shown(ui)).toContain('work@example.com, Acme')
+  expect(await shown(ui)).not.toContain('plan')
+  await ui.unmount()
+})
+
+test("/accounts rename names the plan for this session's account only: another Mac's account has none recorded (#1156)", withKit, async ($, on) => {
+  const { clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com', 'claude_max'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }), [OTHER]: await otherMac() } })
+  await start($, clock)
+  type Cmd = { command: { run: (e: never) => Promise<{ text?: string }> } }
+  await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename home' } as never)
+  let ui = await mountPane($)
+  expect(await shown(ui)).toContain('home@example.com, Acme, Max plan')
+  await ui.unmount()
+  await ($ as unknown as Cmd).command.run({ command: 'accounts', args: 'rename work' } as never)
+  ui = await mountPane($)
+  expect(await shown(ui)).toContain('work@example.com, Acme')
+  expect(await shown(ui)).not.toContain('plan')
   await ui.unmount()
 })
 
