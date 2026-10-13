@@ -53,10 +53,17 @@ def read_object(path, missing_ok=False):
 def write_local_json(path, data):
     """Writes data to path (a *.local.json file) whole, or not at all."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".writing.", suffix=".local.json")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.chmod(tmp, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            if os.environ.get("TRACKER_TEST_FAIL_WRITE") == "1":
+                raise OSError(28, "No space left on device (test seam)")
+            f.write("\n")
+        os.chmod(tmp, 0o600)
+    except OSError as e:
+        # The half written copy may hold the token: removed, never left beside the original.
+        os.unlink(tmp)
+        raise Refusal("could not write %s (%s), so it was left as it was" % (path, e.strerror or e))
     if os.environ.get("TRACKER_TEST_STOP_BEFORE_RENAME") == "1":
         os._exit(9)  # test seam: stands in for a run killed between the write and the rename
     os.replace(tmp, path)

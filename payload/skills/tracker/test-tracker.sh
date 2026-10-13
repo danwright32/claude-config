@@ -558,6 +558,15 @@ run new-token
 if [ "$RC" -ne 0 ]; then ok; else bad "new-token over an unreadable config refuses rather than overwriting it"; fi
 check_eq "and leaves that file as it was" "{ not json" "$(cat "$SK/config.local.json")"
 
+# --- a write that fails partway (a full disk) leaves nothing behind ----------------
+# The half written copy holds the token, so a write that raises before its rename removes it and
+# fails loud, leaving config.local.json as it was.
+write_local "$GOOD_URL" "$GOOD_TOKEN"
+TRACKER_TEST_FAIL_WRITE=1 run new-token
+if [ "$RC" -ne 0 ]; then ok; else bad "a new-token whose write fails reports failure (got $RC)"; fi
+check "and config.local.json is as it was" "$GOOD_TOKEN" "$(cat "$SK/config.local.json")"
+check_eq "and no half written copy is left in the skill folder" "" "$(cd "$SK" && ls -A | grep '^\.writing\.' || true)"
+
 # --- a run killed mid write leaves the token only where nothing syncs ---------
 # new-token writes a temporary copy and renames it over config.local.json. A run killed between
 # the two leaves that copy behind, holding the new token, so its name must be one the skill's

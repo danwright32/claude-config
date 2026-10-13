@@ -159,7 +159,7 @@ print(body)
 ' "$answer" "${2:-}" "$SHEET_ID"
 }
 
-# The sheet check every command starts with: a headers request whose answer must name the sheet
+# The sheet check every web app command starts with: a headers request whose answer must name the sheet
 # SKILL.md links to. A write goes only after it passes, so a script that cannot say which sheet it
 # writes is refused before it could append a row there.
 sheet_check(){ post '{"action":"headers"}' sheet > /dev/null; }

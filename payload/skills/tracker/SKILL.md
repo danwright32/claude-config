@@ -54,9 +54,9 @@ chat. Walk the user through this once:
 
 Then verify with `bash tracker.sh headers`: it should print the sheet's column names. Until
 both values are filled in, `tracker.sh` refuses and names the one still missing or still a
-placeholder. Every command also checks that the web app is attached to the sheet linked above,
-and refuses with `different sheet` when the link in `config.local.json` came from another sheet's
-script.
+placeholder. Every command that reaches the web app (`headers`, `append`, `update`) also checks
+that it is attached to the sheet linked above, and refuses with `different sheet` when the link
+in `config.local.json` came from another sheet's script.
 
 > Never make a second deployment. A new deployment gets a new `/exec` link, while
 > `config.local.json` keeps the old one, and the old deployment goes on answering with the old
@@ -92,10 +92,11 @@ Do this once, on one Mac; the `/exec` URL and the token stay the same:
 
 ## Turning on the sheet check (one time, after claude-config#1080)
 
-Every `tracker.sh` command first asks the web app which sheet its script is attached to, and
-refuses unless it is the sheet linked at the top of this file, so a link deployed from another
-sheet's script can never write there. A script deployed before claude-config#1080 cannot say
-which sheet it is attached to, so until it is redeployed every command refuses with
+Every `tracker.sh` command that reaches the web app (`headers`, `append`, `update`) first asks it
+which sheet its script is attached to, and refuses unless it is the sheet linked at the top of
+this file, so a link deployed from another sheet's script can never write there. A script
+deployed before claude-config#1080 cannot say which sheet it is attached to, so until it is
+redeployed each of those commands refuses with
 `did not say which sheet it is attached to`. Do this once, on one Mac; the `/exec` link and the
 token stay the same:
 
