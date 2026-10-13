@@ -6,7 +6,10 @@
 #
 # `producer | grep -q needle` under `set -o pipefail` can report a failure that never happened:
 # grep -q leaves on its FIRST match, the producer is killed by SIGPIPE, and the pipeline's status
-# becomes that death (L183). `head` is the same shape.
+# becomes that death (L183). `head` is the same shape, and so are an awk program that calls `exit`
+# outside its END blocks and a sed script holding `q` (claude-config#1042). Counting those found
+# ten sites on 2026-10-12, five in shipped code; all ten were converted to read to the end rather
+# than recorded here, so no count below grew.
 #
 # It only bites when the reader leaves while the writer still has data, so it depends on how big
 # the text is and where in it the match falls. That makes it a SIZE THRESHOLD nobody watches: two

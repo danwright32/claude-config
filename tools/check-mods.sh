@@ -387,7 +387,7 @@ for i in "${!mods[@]}"; do
       # Each error by its file and code, counted: "hooks/register.tsx TS2345<TAB>3".
       cur="$(printf '%s\n' "$errs" | sed -E "s#^($name/)?([^(]*)\(.*error (TS[0-9]+):.*#\\2 \\3#" | LC_ALL=C sort | uniq -c \
         | awk '{ c = $1; $1 = ""; sub(/^ /, ""); print $0 "\t" c }')"
-      over="$(awk -F'\t' 'NR == FNR { lim[$1] = $2; next } { r = ($1 in lim) ? lim[$1] : 0; if ($2 + 0 > r + 0) print $1 " (" $2 " found, " r " recorded)" }' \
+      over="$(awk -F'\t' 'FILENAME == ARGV[1] { lim[$1] = $2; next } { r = ($1 in lim) ? lim[$1] : 0; if ($2 + 0 > r + 0) print $1 " (" $2 " found, " r " recorded)" }' \
         <(printf '%s\n' "$rec") <(printf '%s\n' "$cur") | paste -sd';' -)"
       if [ -n "$over" ]; then
         echo "check-mods: $name has type errors not in the record in $KNOWN ($issue): $over"
@@ -395,7 +395,7 @@ for i in "${!mods[@]}"; do
         continue
       fi
       types_of[i]="types checked, $count known type errors ($issue)"
-      under="$(awk -F'\t' 'NR == FNR { now[$1] = $2; next } { if ($2 + 0 > (($1 in now) ? now[$1] : 0) + 0) n++ } END { print n + 0 }' \
+      under="$(awk -F'\t' 'FILENAME == ARGV[1] { now[$1] = $2; next } { if ($2 + 0 > (($1 in now) ? now[$1] : 0) + 0) n++ } END { print n + 0 }' \
         <(printf '%s\n' "$cur") <(printf '%s\n' "$rec"))"
       [ "$under" -gt 0 ] && types_of[i]="${types_of[i]}, fewer than recorded in $under place(s): lower the record"
       continue

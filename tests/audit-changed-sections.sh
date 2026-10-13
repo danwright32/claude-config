@@ -124,7 +124,7 @@ run_one(){   # $1 = section title -> that section's exit status
 # each case is worded for what it measured. A run that printed no such line, or whose counts are
 # both zero, is still a failure of the section, because nothing says otherwise.
 _sec_count(){   # $1 = SUITE-SECTIONS line  $2 = field -> its number, or nothing
-  printf '%s\n' "$1" | tr ' ' '\n' | awk -F= -v k="$2" '$1 == k { print $2; exit }'
+  printf '%s\n' "$1" | tr ' ' '\n' | awk -F= -v k="$2" '$1 == k && !got { print $2; got = 1 }'
 }
 _run_out="$(mktemp "${TMPDIR:-/tmp}/audit-changed-sections.XXXXXXXX")" || _run_out=""
 [ -n "$_run_out" ] && trap 'rm -f "$_run_out"' EXIT

@@ -747,7 +747,7 @@ SHNEEDS
   # The median of what was measured, or nothing at all when nothing was.
   _sh_median=0
   if [ "$_sh_measured" -gt 0 ]; then
-    _sh_median="$(printf '%s' "$_sh_all_secs" | sort -n | awk -v n="$_sh_measured" 'NR == int((n + 1) / 2) { print; exit }')"
+    _sh_median="$(printf '%s' "$_sh_all_secs" | sort -n | awk -v n="$_sh_measured" 'NR == int((n + 1) / 2) { print }')"
     case "$_sh_median" in ''|*[!0-9]*) _sh_median=0 ;; esac
   fi
   # Which rule this run is about to use, said before it deals, because a run that fell back to
@@ -3224,6 +3224,27 @@ check "#1009 and names the commit that copy is in, so it can be recovered" \
   "[ -n '$rd_v1' ] && line_has \"\$out_olddel\" 'mods/scope-modes/hooks/ghargs\.ts' '${rd_v1:0:8}'"
 check "#1009 the local copy goes too, as #331 decided for a copy that carries nothing of this Mac's" \
   "[ ! -e '$RDHB/$RDREL' ]"
+# EACH FILE NAMED WHOLE (claude-config#1028 group, after #1093). The send joined the files it held
+# back with spaces and walked them with an unquoted `for`, so a name holding a space was split: the
+# message named fragments, the held back list named files that do not exist, and the once per file
+# record was keyed on the fragments, so it could never match the apply's record for the same copy.
+rd_send_named=0
+case "$out_olddel" in *"NOT publishing $RDREL; $RDODD: "*|*"NOT publishing $RDODD; $RDREL: "*) rd_send_named=1 ;; esac
+check "#1009 the send names each file it held back whole, a space and a non ASCII letter and all" \
+  "[ '$rd_send_named' -eq 1 ]"
+# KEPT, it is recorded once per path and content under the whole name: the record the apply reads
+# for the same copy, so whichever meets it first speaks for both (#1013).
+printf 'export const odd = "named the way git quotes"\n' > "$RDHB/$RDODD"
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDODD"
+rm -f "$RDR/.resurrected-reported"
+out_rdkeep="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 kept leftover with an odd name: $out_rdkeep"
+rd_odd_stamp="$RDODD $(shasum "$RDHB/$RDODD" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+check "#1009 a kept leftover whose name holds a space is recorded under its whole name and content" \
+  "[ -f \"\$RDHB/\$RDODD\" ] && grep -qxF -- \"\$rd_odd_stamp\" '$RDR/.resurrected-reported'"
+check "#1009 and the send names it whole" \
+  "case \"\$out_rdkeep\" in *\"NOT publishing \$RDODD: \"*) true ;; *) false ;; esac"
+rm -f "$RDHB/$RDODD" "$RDR/.resurrected-reported"
 
 # The same earlier version WRITTEN BACK after the deletion reached this Mac is a decision, not a
 # leftover (putting an older version back on purpose), so the content alone does not decide it: it
@@ -3246,8 +3267,18 @@ check "#1009 (the shared repo is back to the deleted state for the next case)" \
 # but never in silence: the send says it is putting back a file the shared repo deleted, so a
 # re-add like bab3a15a is read where it happens rather than found by a red main.
 printf 'export const ghargs = "version one"\n// changed on B after it last received\n' > "$RDHB/$RDREL"
+# And the file whose name git quotes, changed the same way, so the two are put back in one send.
+printf 'export const odd = "changed on B after it last received"\n' > "$RDHB/$RDODD"
+rm -f "$RDR/.resurrected-reported"
 out_olddel2="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
 dbg "#1009 edited copy send: $out_olddel2"
+rd_put_named=0
+case "$out_olddel2" in *"publishing $RDREL; $RDODD although"*|*"publishing $RDODD; $RDREL although"*) rd_put_named=1 ;; esac
+check "#1009 a send putting back two deleted files names each whole, a space and all" \
+  "[ '$rd_put_named' -eq 1 ]"
+rd_odd_blob="$(git -C "$RDB" rev-parse "main:payload/$RDODD" 2>/dev/null || true)"
+check "#1009 and records the one whose name holds a space under its whole name and content" \
+  "[ -n \"\$rd_odd_blob\" ] && grep -qxF -- \"publishing \$RDODD \$rd_odd_blob\" '$RDR/.resurrected-reported'"
 rd_main_copy="$(git -C "$RDB" show "main:payload/$RDREL" 2>/dev/null || true)"
 check "#1009 a copy this Mac changed after its last receive is published" \
   "case \"\$rd_main_copy\" in *'changed on B after it last received'*) true ;; *) false ;; esac"
@@ -3330,7 +3361,7 @@ git -C "$RGR" rm -q payload/hooks/x.sh; git -C "$RGR" -c user.name=t -c user.ema
 printf 'old\nchanged here\n' > "$RGH/hooks/x.sh"; mkdir -p "$RGR/payload/hooks"; cp "$RGH/hooks/x.sh" "$RGR/payload/hooks/x.sh"
 RG_FN="$WORK/once-fn.sh"
 { printf 'have_git(){ return 0; }\nsync_log_line(){ :; }\nnote_held_back(){ :; }\n'
-  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^deleted_path_verdict(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
+  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^deleted_path_verdict(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p;/^semicolon_list(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
 rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" bash -c 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' _ "$RG_FN" 2>&1; }
 rg_out1="$(rg_run)"; rg_out2="$(rg_run)"
 dbg "#1022 once: first [$rg_out1] second [$rg_out2]"
@@ -9968,7 +9999,7 @@ _WF="$(dirname "$SCRIPT")/.github/workflows/tests.yml"
 
 # THE IMAGE IS DERIVED FROM THE WORKFLOW, never a second copy of that decision (L41). A workflow
 # moved to another operating system must not leave this claiming to reproduce CI.
-_lin_runner="$(sed 's/#.*//' "$_WF" | awk -F'runs-on:' '/runs-on:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')"
+_lin_runner="$(sed 's/#.*//' "$_WF" | awk -F'runs-on:' '/runs-on:/ && !got {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; got = 1}')"
 check "#337 the workflow still declares what it runs on ($_lin_runner)" "[ -n '$_lin_runner' ]"
 # Matched as a case ARM rather than as bare text, so a runner named only in a comment or in a
 # refusal message cannot answer for one the script actually handles (L103).
@@ -15480,7 +15511,7 @@ done
 # legitimately differs, which is what it did the first time it ran there (L376).
 _sr_budgets="$(_sr_field budget_seconds | grep . | sort -u | grep -c .)"
 check "#520 every recorded reading was judged against one budget" "[ \"\${_sr_budgets:-0}\" -eq 1 ]"
-_sr_bud="$(_sr_field budget_seconds | awk 'NF { print; exit }')"
+_sr_bud="$(_sr_field budget_seconds | awk 'NF && !got { print; got = 1 }')"
 
 # And the share of that budget the prose claims is recomputed from the readings, so the sentence
 # cannot say 38% of a budget the numbers beside it do not divide into that way.
@@ -16138,7 +16169,7 @@ check "#505 and the marked line says the same thing as the headline" \
 # BUILT IS NOT WIRED (L3). The function above is only worth having if a real run actually emits a
 # total for it to judge, so a filtered run is driven and its machine readable line read back.
 _wb_run="$(SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
-_wb_line="$(printf '%s\n' "$_wb_run" | awk '/^SUITE-WORK /{print; exit}')"
+_wb_line="$(printf '%s\n' "$_wb_run" | awk '/^SUITE-WORK / && !got {print; got = 1}')"
 check "#492 a real run emits a machine readable work total" "[ -n \"\$_wb_line\" ]"
 check "#492 and it carries both the seconds and the section count" \
   "line_has \"\$_wb_line\" 'seconds=[0-9]+' 'sections=[0-9]+'"
@@ -19537,6 +19568,22 @@ printf 'L1\nL77\n' > "$WORK/lcore-bad.txt"
 out_lcbad="$(CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-bad.txt" 2>&1)"; rc_lcbad=$?
 check "#564 core-set refuses a lesson that does not exist, naming it" "[ \$rc_lcbad -ne 0 ] && case \"\$out_lcbad\" in *L77*) true ;; *) false ;; esac"
 
+# AN EMPTY LIBRARY KNOWS NO LESSON (claude-config#1028). core-set checked that each listed number
+# is a real lesson by reading the rendered library as the FIRST of two files and telling the files
+# apart with NR == FNR, which stays true through the second file when the first is empty. So a
+# library that rendered nothing read every listed number as the library itself, found none of them
+# unknown, measured 0 chars, and wrote the list. A lessons file holding no entry is how a render
+# comes back empty. (The send's own check of the list never sees an empty render: the index is
+# refused before it is asked, so its copy of the same test was not reachable that way.)
+LCE="$WORK/lcore-empty"; mkdir -p "$LCE" "$WORK/lcore-empty-repo"
+echo '{"hooks":{}}' > "$LCE/settings.json"; printf '# rules\n' > "$LCE/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n' > "$LCE/LESSONS.md"
+printf 'L1\nL2\n' > "$WORK/lcore-empty-want.txt"
+out_lce="$(CLAUDE_HOME="$LCE" SYNC_REPO="$WORK/lcore-empty-repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-empty-want.txt" 2>&1)"; rc_lce=$?
+dbg "#1028 core-set against an empty library said ($rc_lce): $out_lce"
+check "#1028 core-set against a library with no lessons refuses every number, naming them" \
+  "[ \$rc_lce -ne 0 ] && case \"\$out_lce\" in *'not lessons'*'L1 L2'*) true ;; *) false ;; esac && [ ! -f '$LCE/LESSONS-CORE.txt' ]"
+
 # 8. TWO MACS. The list travels, a removal travels, and a Mac that never had a list does not delete
 #    the other Mac's (L625, L381).
 LCB="$WORK/lcore-bare.git"; git init -q --bare -b main "$LCB"
@@ -20323,7 +20370,7 @@ printf '%s\n' "$*" >> "$ME_LOG"
 m=""; prev=""
 for a in "$@"; do [ "$prev" = "--model" ] && m="$a"; prev="$a"; done
 [ -n "$m" ] || m=default
-full="$(printf '%s\n' "$ME_MAP" | tr ',' '\n' | awk -F= -v k="$m" '$1 == k { print $2; exit }')"
+full="$(printf '%s\n' "$ME_MAP" | tr ',' '\n' | awk -F= -v k="$m" '$1 == k && !got { print $2; got = 1 }')"
 [ -n "$full" ] || exit 0
 printf '{"type":"system","subtype":"init","model":"%s"}\n' "$full"
 printf '{"type":"result","subtype":"success","result":"Current model","total_cost_usd":0}\n'

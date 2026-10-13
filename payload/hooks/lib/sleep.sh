@@ -154,8 +154,17 @@ sleep_active() {
 # boot's start and its session may follow, as for sleep_state, for the tests.
 # The script beside this file when bash sourced it; under a shell with no BASH_SOURCE (zsh) this
 # file cannot know where it is, so the installed copy is used, never one in the caller's folder.
+# Found by parameter expansion, with only builtins after it (claude-config#1098): dirname is an
+# external command, and under a PATH without it `cd ""` stayed in the CALLER's folder, so the
+# report script there, or the installed one, ran in place of the copy beside this file.
 _SLEEP_LIB_DIR=""
-[ -n "${BASH_SOURCE[0]:-}" ] && _SLEEP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  case "${BASH_SOURCE[0]}" in
+    */*) _SLEEP_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ -n "$_SLEEP_LIB_DIR" ] || _SLEEP_LIB_DIR=/ ;;
+    *) _SLEEP_LIB_DIR=. ;;
+  esac
+  _SLEEP_LIB_DIR="$(cd "$_SLEEP_LIB_DIR" 2>/dev/null && pwd)"
+fi
 sleep_note() {
   local line="${1:-}" file="${2:-$HOME/.claude/state/sleep/current.json}" state script
   state="$(sleep_state "$file" "${3:-}" "${4:-}" "${5:-}")"

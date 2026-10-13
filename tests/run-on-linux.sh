@@ -36,7 +36,7 @@ WORKFLOW="$ROOT/.github/workflows/tests.yml"
 # The image is DERIVED from what the workflow declares it runs on, never written here as a second
 # copy of that decision (L41). A workflow moved to another operating system must not leave this
 # script quietly claiming to reproduce CI.
-runner="$(sed 's/#.*//' "$WORKFLOW" 2>/dev/null | awk -F'runs-on:' '/runs-on:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')"
+runner="$(sed 's/#.*//' "$WORKFLOW" 2>/dev/null | awk -F'runs-on:' '/runs-on:/ && !got {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; got = 1}')"
 case "$runner" in
   ubuntu-26.04)               IMAGE=ubuntu:26.04 ;;
   ubuntu-latest|ubuntu-24.04) IMAGE=ubuntu:24.04 ;;
