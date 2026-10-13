@@ -8,15 +8,16 @@ const MODES = Object.keys(MODE_DEF) as Mode[]
 // differences from what he assumed. Each switch now opens Claude's reply with what the mode does,
 // from the one definition the mode's own note is built from (L41).
 describe('the acknowledgement of a mode switch (#1055)', () => {
-  test('every mode scope-modes switches has a definition: the scope modes and both places', () => {
-    expect([...MODES].sort()).toEqual(['NO BUILD', 'WINDING DOWN', 'away', 'home'])
+  // #1086, Dan 2026-10-12: sleep and wake get the same acknowledgement as the other modes.
+  test('every mode scope-modes switches has a definition: the scope modes, both places, sleep and waking', () => {
+    expect([...MODES].sort()).toEqual(['NO BUILD', 'WINDING DOWN', 'away', 'home', 'sleep', 'wake'])
   })
 
   test("names the mode, then says what it will and will not do, in its definition's own words", () => {
     for (const mode of MODES) {
       const d = MODE_DEF[mode]
       const said = ackOn(mode)
-      expect(said.startsWith(`${ACK_LEAD} "${d.name} is on. `)).toBe(true)
+      expect(said.startsWith(`${ACK_LEAD} "${d.on ?? `${d.name} is on.`} `)).toBe(true)
       expect(said).toContain(`I will ${d.will}.`)
       expect(said).toContain(`I will not ${d.willNot}${d.refuses ? `: I refuse to ${d.refuses}` : ''}.`)
       expect(said).toContain(modeDoes(mode))
@@ -48,6 +49,16 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
     const after = acknowledge([ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' })
     expect(after).not.toContain('Open your reply')
     expect(after).toBe(`Right after the line saying what waking did, add one short acknowledgement of the switch, in these words: "${ackOnSaid('NO BUILD')}"`)
+  })
+
+  test('sleep says how it ends, and waking opens with sleep mode being off (#1086)', () => {
+    expect(ackOn('sleep')).toContain('Sleep mode is on. I will ')
+    expect(ackOn('sleep')).toContain('It ends by itself at noon ET, and /wake or "I\'m up" ends it sooner.')
+    expect(ackOn('wake')).toBe(`${ACK_LEAD} "Sleep mode is off. ${modeDoes('wake')}"`)
+    // Where waking's own line opens the reply, the acknowledgement follows it.
+    expect(acknowledge([ackOnSaid('wake')], { after: 'the line saying what waking did' })).toBe(
+      `Right after the line saying what waking did, add one short acknowledgement of the switch, in these words: "Sleep mode is off. ${modeDoes('wake')}"`,
+    )
   })
 
   test('turning a scope mode off says what it no longer stops', () => {

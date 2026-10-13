@@ -697,7 +697,14 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   `hooks/modes.ts`, which each mode's note on every prompt is built from too. Winding down will not
   start anything new, and names what its guard refuses outright in the very words the refusal uses
   (`NEW_WORK` in `hooks/winddown.ts`).
-  Sleep and wake keep their own messages: `/sleep` prints what it started and `/wake` what waking did.
+  Sleep and waking get the same acknowledgement (#1086, Dan 2026-10-12: "Sleep and wake get the same
+  mode switch acknowledgement as the other modes, defined in modes.ts and tested the same way"):
+  `/sleep` that starts it and a wake that ends it, by `/wake` or "I'm up", each say it, from the
+  `sleep` and `wake` definitions, waking opening with "Sleep mode is off." as home stands beside away.
+  Only a switch is acknowledged: a `/sleep` that changed nothing and a `/wake` with nothing to wake
+  say nothing more. `/sleep` still prints what it started and `/wake` what waking did; "I'm up" adds
+  the acknowledgement right after the line saying what waking did, with any other switch the same
+  message made, so the reply opens one way.
 - A no build refusal is the grey blocked card titled "Blocked by No build", with "Claude asks you:
   Switch to build?" as its safe way; a winding down refusal is titled "Winding down"; a held action
   "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls
@@ -852,6 +859,52 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   Claude asks itself through AskUserQuestion is never read as his choice, since which PR it was
   about and what the answer meant would be inferred. Nothing is asked about a PR that cannot be
   read or is not open, and while Dan is asleep the question is noted for his morning report.
+- Whose branch it is (#1074). On 2026-10-11 winding down refused every stop of a Slate session on a
+  branch whose PR had merged a month before, because the shared primary checkout sat on it, and
+  Dan's "leave it as is", given twice, had nowhere to be recorded. A branch is the session's own only
+  once the session or one of its agents created it (`git checkout -b`, `switch -c`, `branch`,
+  `worktree add -b`), committed to it, or pushed it (by name, or a push naming none), noted after
+  each Bash call whatever mode is on (`branches` in its state). A commit or a push naming no branch
+  is of the branch checked out where it ran, which is known only for the session's own call in its
+  own folder, or the absolute one `git -C` names: an agent's (in a folder of its own) and one after
+  a `cd` name none. Committing is counted too, beyond the issue's created or pushed, so commits the
+  session made and never pushed are never let go as nothing to finish. A branch the checkout merely
+  sat on is read as the default branch is: no PR is looked up for it, its branch and worktree are
+  not asked to go, its uncommitted work still counts, and the check follows the session onto a
+  branch it moves to. Dan's answer to the `leave_branch` tool ("Leave the branch X in owner/name as
+  it is (why)?", Leave it as it is or Clean it up) is recorded by repository and branch, one per
+  branch, and settles the branch here and a worktree on it, and the uncommitted files the question
+  named when the session's checkout is on it; a change to any other file asks again, as a push asks
+  again about a PR left open. The branch on GitHub is not covered, since it holds no checkout. The
+  turn end refusal and the finish toast list it as left as it is by his choice.
+- A branch for cleanup that finishing needs (#1051). On 2026-10-09 the claude-config checkout held
+  one line a monthly job had appended to a committed record; winding down counted it as unfinished
+  and refused the branch to commit it on, so it could finish only with Dan turning it off ("we
+  should probably have a bypass for situations like this"). Uncommitted work is now named by its
+  files, the refusal naming both ways out. The `open_cleanup_branch` tool asks Dan "Open the branch
+  X to commit <every file git status names> (why)?" with Open it or Do not, only while winding down
+  and only when something is uncommitted, and records only Open it, with the checkout and the files.
+  That branch may then start once, by `git switch -c` or `git checkout -b` (which carry the changes
+  onto it; `git branch` and a new worktree leave them behind, so stay refused), while nothing
+  beyond those files is uncommitted (and something is: a leftover answer covers nothing). His answer
+  is used up, and the start toasted, only once the checkout is on that branch after the call ran, so
+  a call refused beneath this mod or a switch that failed keeps it. Any other branch is refused as
+  before, and one he agreed to with other files changed since is refused naming them.
+- How often GitHub is asked (#1037). The minute's check read every PR the session opened, plus one
+  `gh issue view` per closing issue of each, every minute: about 2N GraphQL points a minute for N
+  PRs, from the 5,000 an hour every gh command on the Mac shares (#1014). Measured on 2026-10-12
+  with GraphQL's own `rateLimit { cost }`, each of those reads (the PR's fields, an issue's state)
+  costs 1 point and `gh` sends each as one request, so points equal gh calls. Now only what can
+  still change is asked: a turn end reads afresh; the minute's check asks again about a PR once a
+  wait has passed that starts at a minute and doubles to ten while its answer has not moved (and
+  starts again at a minute when it moves); a merged PR is read once; its closing issues are read
+  only once it has merged (an open or closed PR's issues decide nothing) and not again once closed;
+  the default branch, and a branch that is not the session's, are not looked up at all; a read that
+  failed keeps nothing, so the next minute asks again. A minute's check that finds nothing left
+  reads afresh before winding down ends, so a kept reading (a push since Dan chose to leave a PR
+  open, say) never finishes it. For three open PRs with two issues each that
+  is 4 reads per PR in the first ten minutes instead of 30 (`tests/register.test.tsx` counts them),
+  and nothing at all once each is merged with its issues closed.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app
   forward, cliclick and Peekaboo. Since the milestone audit (#702) also an AppleScript dialog
   (`display dialog`, `display alert`, `choose file` and the like; a notification banner takes no
