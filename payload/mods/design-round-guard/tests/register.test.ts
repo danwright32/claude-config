@@ -6,6 +6,7 @@ import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
 import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 
 // The design round guard (claude-config#978) in a session. Dan, 2026-10-08: "claude should never
 // design something without my input. If we can make this something that can't be ignored rather than
@@ -55,6 +56,14 @@ const modKit: { name: string; register: Register } = {
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+        // #1145: a typed answer, said with the copy. One typed as BREAKS stands for a mod-kit loaded
+        // before it had the member (a reload can leave one, standing rule 5).
+        typedAnswer: async (input: { guard: string; typed: string; still: string; again: string }) => {
+          if (input.typed === 'BREAKS') throw new TypeError('$.modkit.typedAnswer is not a function')
+          const said = (await ask('typedAnswer', input)) as { toast: string; text: string }
+          await built.ui.toast(said.toast)
+          return said.text
+        },
       }
       return { ...built, modkit }
     })
@@ -125,6 +134,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
     }
     if (cmd === '__modkit' && args[0] === 'pipeline') return ok(JSON.stringify(pipeline(JSON.parse(String(args[1])).command)))
+    // mod-kit's typed answer wording (#1145), read here with its copy.
+    if (cmd === '__modkit' && args[0] === 'typedAnswer') {
+      const input = JSON.parse(String(args[1])) as TypedAnswer
+      return ok(JSON.stringify({ toast: typedToast(input.guard), text: typedAnswerText(input) }))
+    }
     // mod-kit's branch reader, read here with its copy, over the checkouts the stand-in's walk finds.
     if (cmd === '__modkit' && args[0] === 'branch') {
       const { path } = JSON.parse(String(args[1])) as { path: string }
@@ -349,6 +363,12 @@ test('a look changing Write is refused, naming the file and both ways on, with t
   expect(w.cards.length).toBe(1)
   expect(JSON.stringify(w.cards[0])).toContain('Design round guard')
   expect(JSON.stringify(w.cards[0])).toContain('app/page.tsx')
+  // #1145: the card Dan sees leads in plain words, and names the file only after (Dan, 2026-10-13:
+  // "I don't know what the file name means").
+  const reason = String((w.cards[0] as { reason?: string }).reason)
+  expect(reason.startsWith('Claude wants to make an edit that may change how something looks on screen')).toBe(true)
+  expect(reason.indexOf('app/page.tsx')).toBeGreaterThan(reason.indexOf('issue #978 in slate'))
+  expect(String((w.cards[0] as { safeWay?: string }).safeWay)).toContain('in plain words')
 })
 
 test('blocked, then let through once Dan answers Settled to the design rounds closing question; Not yet leaves it blocked', withKit, async ($, on) => {
@@ -605,6 +625,10 @@ test('it fails closed, saying so, when the issue or branch cannot be told or the
   w.ctl.storeGetFails = true
   expect(refusalOf(await call($, PAGE))).toContain('could not be read')
   expect(w.ran).toEqual([])
+  // #1145: every card it drew led in plain words, the file after.
+  const reasons = w.cards.map(c => String((c as { reason?: string }).reason))
+  expect(reasons.length).toBe(4)
+  for (const r of reasons) expect({ r, plain: r.startsWith('Claude wants to make an edit that may change how something looks on screen') }).toEqual({ r, plain: true })
   // Dan's answer that cannot be recorded is said, and records nothing.
   w.ctl.storeGetFails = false
   w.ctl.storeSetFails = true
@@ -1173,6 +1197,13 @@ test('#1138: a typed answer is not recorded, Dan is told so, and Claude is told 
   expect(typedSettled).toContain(`ask him "${SETTLED_QUESTION}" again`)
   expect(w.toasts.length).toBe(2)
   expect(Object.keys(w.store)).toEqual([])
+  // A mod-kit that cannot say it (loaded before it had the member): Claude is still told, and told
+  // that Dan was not.
+  const unsaid = contextOf(await askSkip($, w, why, 'BREAKS'))
+  expect(unsaid).toContain('nothing is recorded')
+  expect(unsaid).toContain('could not tell him')
+  expect(unsaid).toContain('the same question again')
+  expect(w.toasts.length).toBe(2)
   // Asked again and answered by choosing, it is recorded.
   await askSkip($, w, why, SKIP_YES)
   expect(refusalOf(await call($, PAGE))).toBe('')

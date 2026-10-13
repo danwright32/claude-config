@@ -233,6 +233,14 @@ export type ModKit = {
    * no mod reads the origin's kind for this itself (tools/check-mod-shared-parts.sh).
    */
   isDans: (input: { origin: { readonly kind?: string } | undefined }) => Promise<boolean>
+  /**
+   * Dan typed an answer to a mod's question instead of choosing one (#1145): shows him a toast
+   * saying it was not recorded, and returns what Claude is told, his words quoted, `still` (what
+   * stays as it was, "nothing was saved") and `again` (how to ask once more, "ask him the same
+   * question again, with the same metadata"). The one wording every guard asking Dan uses, so none
+   * says it itself (tools/check-mod-shared-parts.sh). A part missing throws, naming it.
+   */
+  typedAnswer: (input: { guard: string; typed: string; still: string; again: string }) => Promise<string>
 }
 
 /** A repository as `$.modkit.repo` reads it: its GitHub owner/name and its name, each null when there is none. */
