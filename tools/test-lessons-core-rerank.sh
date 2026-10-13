@@ -326,6 +326,10 @@ out="$(rerank --host mac-a)"; rc=$?
 check_rc "the other Mac's untagged lesson is not measured yet" 2 "$rc"
 check "naming the lesson and whose it is" "UNMEASURED: L502 is mac-b's lesson" "$out"
 check "the page says so too" "mac-b" "$(cat "$OUT/rerank.html")"
+# Its remedy is about tags, never the recount remedy for missing counts (found by the PR lessons
+# review of this change: both kinds of UNMEASURED shared one remedy).
+check_not "and it is not told to recount citations" "record-lesson-counts" "$out"
+check "it is told how the tags arrive" "record-lesson-tags" "$out"
 out="$(rerank --host mac-b)"; rc=$?
 check_rc "this Mac's own untagged lesson refuses" 1 "$rc"
 check "naming it" "UNTAGGED L502" "$out"

@@ -269,19 +269,25 @@ def main(argv):
         for f in sorted(os.listdir(a.counts_dir)):
             if f.endswith(".tsv") and f[:-4] not in hosts:
                 notes.append(f"NOTE: counts from {f[:-4]} are left out: that Mac holds no lesson band, so it is not one of the Macs expected.")
+    # Each kind of UNMEASURED carries its own remedy: the recount one says nothing about tags (L111).
+    if unmeasured:
+        remedies.append("Counts reach this Mac when the Mac named above runs the re-rank job (it recounts weekly) and syncs. "
+                        "To recount by hand there: python3 tools/lesson-citations.py > c.tsv, then claude-sync record-lesson-counts c.tsv.")
     for owner, ns in sorted(waiting_tags.items()):
         ns = sorted(ns)
         named = ", ".join(f"L{n}" for n in ns)
         unmeasured.append(f"UNMEASURED: {named} {'is' if len(ns) == 1 else 'are'} {owner}'s "
                           f"lesson{'' if len(ns) == 1 else 's'} and not tagged yet. Each Mac tags its own new lessons, "
                           f"so the tags arrive when {owner}'s daily re-rank job has tagged them and synced.")
+    if waiting_tags:
+        remedies.append("Tags reach this Mac when the Mac named above runs the re-rank job (it tags its own new lessons "
+                        "daily, before re-ranking) and syncs. If that Mac's log (~/.claude-lessons-core-rerank.log) shows "
+                        "its tagging failing, tag there by hand: python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv "
+                        "> first.txt, then ./claude-sync record-lesson-tags first first.txt, and the same for the second pass.")
     windows = sorted({g["days"] for g in used})
     if len(windows) > 1:
         problems.append("WINDOWS DIFFER: " + ", ".join(f"{g['host']} counted {g['days']} days" for g in used)
                         + "; citations over different windows cannot be added into one rate.")
-    if unmeasured:
-        remedies.append("Counts reach this Mac when the Mac named above runs the re-rank job (it recounts weekly) and syncs. "
-                        "To recount by hand there: python3 tools/lesson-citations.py > c.tsv, then claude-sync record-lesson-counts c.tsv.")
     for n in notes:
         print(n)
     if problems or unmeasured:
