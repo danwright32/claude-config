@@ -4,6 +4,12 @@ export type AccountRoomSession = {
   id: string
   email: string
   org: string
+  /**
+   * The plan the login is on (Team, Max, Pro, or its organizationType as it came), from the login
+   * record at session start (#1156). Absent for a login with none, and in a session stored by a
+   * build before it.
+   */
+  plan?: string
   /** Whether the session has a screen: only then is the band drawn or a nickname asked. */
   isInteractive: boolean
   home: string
@@ -35,7 +41,7 @@ export type AccountRoomStop = 'no-route' | 'logout-failed' | 'check-not-run' | '
 export type AccountRoomPhase = { kind: 'idle' } | { kind: 'working'; step: 'logout' | 'login'; since: number } | { kind: 'failed'; cause?: AccountRoomStop }
 
 /** The nickname dialog's account, while it is open. */
-export type AccountRoomAsking = { id: string; email: string; org: string; current: string | null }
+export type AccountRoomAsking = { id: string; email: string; org: string; current: string | null; /** The plan (Team, Max, Pro), known only for this session's own account (#1156). */ plan?: string }
 
 declare module 'claude-code' {
   interface PluginState {
