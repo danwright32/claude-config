@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { branchesTouched, choiceFor, filesWritten, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
 // Each command with its gh reading, by mod-kit's own reader (its byte for byte copy), as the mod reads it (#961).
@@ -365,6 +366,10 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(stashTaken(['push', '-m', 'x'])).toBeUndefined()
     expect(stashTaken(['list'])).toBeUndefined()
     expect(stashTaken([])).toBeUndefined()
+  })
+  test("a git mv into an existing folder claims the moved file, never another session's file beside it (#1123 lessons review)", () => {
+    const writes = { ...none, byGit: commandWrites('git mv a.ts lib', '/repo', '/Users/x').byGit }
+    expect(whoseFiles(['lib/a.ts', 'lib/theirs.ts'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['lib/a.ts'], others: ['lib/theirs.ts'] })
   })
   test('the uncommitted files are split into the ones this session wrote and the rest', () => {
     const written = ['/repo/app.ts', '/repo/build/', '/elsewhere/x.ts']

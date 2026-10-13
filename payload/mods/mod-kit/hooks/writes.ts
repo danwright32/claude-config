@@ -727,8 +727,13 @@ const gitOwn = (sub: string, args: readonly string[]): [string, 'write' | 'remov
     const dest = ops[ops.length - 1] as string
     const sources = ops.slice(0, -1)
     const into = sources.length > 1 || dest.endsWith('/')
-    const dests: string[] = into ? sources.map(s => `${dest.replace(/\/+$/, '')}/${baseOf(s)}`) : [dest, `${dest}/${baseOf(sources[0] as string)}`]
-    return [...dests.map((d): [string, 'write', boolean] => [d, 'write', true]), ...sources.map((s): [string, 'remove', boolean] => [s, 'remove', true])]
+    // Onto one name that may be an existing folder, the name alone is given, never all under it,
+    // which may hold another session's files; the source's own name inside it is given whole, as a
+    // copy's is (#1123 lessons review, the reading #1108 settled for cp and mv).
+    const dests: [string, 'write', boolean][] = into
+      ? sources.map(s => [`${dest.replace(/\/+$/, '')}/${baseOf(s)}`, 'write', true])
+      : [[dest, 'write', false], [`${dest}/${baseOf(sources[0] as string)}`, 'write', true]]
+    return [...dests, ...sources.map((s): [string, 'remove', boolean] => [s, 'remove', true])]
   }
   if (sub === 'rm') {
     if (has('-n', '--dry-run')) return []

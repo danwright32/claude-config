@@ -254,8 +254,10 @@ describe('writes: downloads', () => {
 describe('writes: what git itself changes (#1123)', () => {
   const byGit = (command: string, cwd = CWD) => read(command, cwd).byGit ?? []
   test('git mv writes the destination and removes each source, everything under it included', () => {
+    // Onto one name that may be a folder: the name alone, never all under it, which may hold another
+    // session's files (#1123 lessons review), and the source's own name inside it whole.
     expect(byGit('git mv old.ts new.ts')).toEqual([
-      { word: 'new.ts', path: `${CWD}/new.ts`, does: 'write', tree: true },
+      { word: 'new.ts', path: `${CWD}/new.ts`, does: 'write' },
       { word: 'new.ts/old.ts', path: `${CWD}/new.ts/old.ts`, does: 'write', tree: true },
       { word: 'old.ts', path: `${CWD}/old.ts`, does: 'remove', tree: true },
     ])
