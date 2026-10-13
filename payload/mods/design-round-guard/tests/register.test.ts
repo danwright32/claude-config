@@ -836,7 +836,8 @@ test('#1010: a Next.js dynamic segment is followed as the folder it names, relat
 // own state folder in no project, was refused as "a pattern that may name a look changing file".
 test('#1015: a pattern in a written name is held where it may expand to a tokens or Tailwind config file', withKit, async ($, on) => {
   const w = world($, on)
-  for (const command of ['echo x > [t]ailwind.config.ts', 'echo x > app/[t]okens.json', "printf '{}' > design-[t]okens.json", 'rm -f tailwind.config.*']) {
+  // A folder held in a variable leaves only the folder unknown, never the name (lessons review of #1015).
+  for (const command of ['echo x > [t]ailwind.config.ts', 'echo x > app/[t]okens.json', "printf '{}' > design-[t]okens.json", 'rm -f tailwind.config.*', 'echo x > $D/app/page.ts[x]', 'echo x > "$D/[t]ailwind.config.ts"']) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect([command, why.includes('a pattern that may name a look changing file')]).toEqual([command, true])
   }

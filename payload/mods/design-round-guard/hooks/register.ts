@@ -263,7 +263,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // the checkout its folder is in, when that folder is spelled out from the top of the disk or home
     // (a cd before it cannot move it). A folder in no checkout is in no project, whatever the name.
     // A group (`x.(css|md)`) is read as a name by mod-kit, which follows its folder, a cd included.
-    if (tool === 'Bash' && (t.path ? isGroupPattern(t.word) : isPattern(t.word))) {
+    if (tool === 'Bash' && (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : patternFolder(t.word, at.home)
       let tree: string | null | undefined
       if (folder !== undefined) {

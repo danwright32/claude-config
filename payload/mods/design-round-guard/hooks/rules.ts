@@ -162,12 +162,16 @@ export const mentionedLookFiles = (text: string): string[] => {
 }
 
 /**
- * Whether a word the shell would expand as a pattern, as against one built from a variable or a
- * command's output: a `*`, `?`, bracket or brace, or a group, zsh's `(a|b)` or bash's extglob
- * `@(a|b)`. A folder in brackets alone (`(shop)`, `x(1)`) is a name.
+ * Whether a word's file name (its last part) is one the shell would expand as a pattern, as against
+ * one built from a variable or a command's output: a `*`, `?`, bracket or brace, or a group, zsh's
+ * `(a|b)` or bash's extglob `@(a|b)`. A name in brackets alone (`(shop)`, `x(1)`) is a name. Its
+ * folder may be anything, a variable included (`$D/[t]okens.json`): that only leaves the folder
+ * unknown (lessons review of #1015).
  */
-export const isPattern = (word: string): boolean =>
-  (/[*?[\]{}]/.test(word) || isGroupPattern(word)) && !/[$`]/.test(word.replace(/^\$(HOME\b|\{HOME\})/, ''))
+export const isPattern = (word: string): boolean => {
+  const base = word.split('/').pop() ?? ''
+  return (/[*?[\]{}]/.test(base) || isGroupPattern(base)) && !/[$`]/.test(base)
+}
 
 /**
  * Whether a word holds a pattern group, zsh's `(a|b)` or bash's extglob `@(a|b)`, which mod-kit's

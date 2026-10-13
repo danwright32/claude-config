@@ -109,9 +109,16 @@ const isImageOnly = (m: SessionMessage) => m.role === 'user' && m.text.trim().le
 // worded are the three turns.
 const IMAGE_TURNS = 3
 
-// A sentence that only says an image arrived ("I see you have shared an image."), however it is put:
-// a short one naming the arrival. A longer one saying what the image is of still describes it.
-const ARRIVED = /\b(shared|sent|attached|pasted|uploaded|received|see)\b/i
+// A sentence that only says an image arrived: a short one where the arriving comes BEFORE the image
+// itself ("I see you have shared an image.", "Thanks for sharing the screenshot!"), or that ends on
+// the image as the thing seen ("I can see the screenshot."). A word that can mean arriving, used
+// about what the image shows ("I see a broken chart in the header.", "The screenshot shows sent
+// emails."), is a description (lessons review of #1085). A longer sentence always describes.
+const IMAGE_NOUN = '(?:image|screenshot|screen ?shot|picture|photo|attachment|file)s?'
+const ARRIVED = new RegExp(
+  `\\b(?:shar|sen[dt]|attach|past|upload|receiv)\\w*\\b.*\\b${IMAGE_NOUN}\\b|\\bsee\\b.*\\b(?:an?|the|your|this|these|those|that|it|them)\\s+${IMAGE_NOUN}\\W*$`,
+  'i',
+)
 const ACK_WORDS = 8
 
 /**

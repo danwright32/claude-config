@@ -145,6 +145,12 @@ test('three image only turns with no reply describing any image still wait', asy
 test('a reply describes an image by a statement of its own, not by a question or a bare acknowledgement', async () => {
   expect(describesImage(DESCRIBES)).toBe(true)
   expect(describesImage("You've shared a screenshot of the Slate dashboard with a broken chart.")).toBe(true)
+  // A short description using a word that can also mean arriving still describes (lessons review of #1085).
+  expect(describesImage('I see a broken chart in the header.')).toBe(true)
+  expect(describesImage('The table shows sent emails per day.')).toBe(true)
+  expect(describesImage('The screenshot shows sent emails.')).toBe(true)
+  expect(describesImage('I can see the screenshot.')).toBe(false)
+  expect(describesImage('Thanks for sharing the screenshot!')).toBe(false)
   expect(describesImage(ASKS)).toBe(false)
   expect(describesImage('I see you have shared an image. What should I do with it?')).toBe(false)
   expect(describesImage('Got it. Thanks!')).toBe(false)
