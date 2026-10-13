@@ -27,6 +27,10 @@ check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 
 has(){ if [[ "$3" == *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (wanted '$2' in: ${3:0:1500})"; fi; }
 lacks(){ if [[ "$3" != *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (did not want '$2' in: ${3:0:1500})"; fi; }
 
+# The session this suite runs in must never stamp its own claude.ai link on the suite's notes (#1159):
+# a case that wants one sets it.
+unset CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_SESSION_ID
+
 if ! . "$LIB"; then
   echo "FAIL: $LIB could not be sourced"
   printf 'SUITE-RESULT passed=0 failed=1\n'
@@ -138,11 +142,22 @@ check_eq "notes append, never replace" 2 "$(notes_of g5 | wc -l | tr -d ' ')"
 check_eq "the writer stamps version, time and generation" "1|$NOW_ASLEEP|g5" \
   "$(notes_of g5 | tail -1 | python3 -c 'import json,sys; j=json.load(sys.stdin); print("%s|%s|%s" % (j["v"], j["at"], j["generation"]))')"
 
+# The writer stamps the claude.ai link of the session writing the note, so what that session's
+# subagents merge, whose bodies carry the same link, is credited to it at wake (#1159). Only an id of
+# a link's shape is stamped.
+link_of_last(){ notes_of g5 | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("link"))'; }
+CLAUDE_CODE_BRIDGE_SESSION_ID=session_01Writer note '{"kind":"finding","by":"aaaa1111","text":"stamped"}' >/dev/null 2>&1
+check_eq "the writing session's link is stamped on its note" "session_01Writer" "$(link_of_last)"
+CLAUDE_CODE_BRIDGE_SESSION_ID='session_01x; rm -rf /' note '{"kind":"finding","by":"aaaa1111","text":"odd id"}' >/dev/null 2>&1
+check_eq "an id not of a link's shape is never stamped" "None" "$(link_of_last)"
+note '{"kind":"finding","by":"aaaa1111","text":"no session"}' >/dev/null 2>&1
+check_eq "outside a session nothing is stamped" "None" "$(link_of_last)"
+
 # Twenty writers at once: every line lands whole (append mode, one write per note).
 for i in $(seq 1 20); do note "{\"kind\":\"finding\",\"by\":\"w$i\",\"text\":\"finding $i\"}" >/dev/null 2>&1 & done
 wait
-check_eq "twenty notes at once all land" 22 "$(notes_of g5 | wc -l | tr -d ' ')"
-check_eq "and every line is whole JSON" 22 "$(notes_of g5 | python3 -c 'import json,sys; print(sum(1 for l in sys.stdin if json.loads(l)))')"
+check_eq "twenty notes at once all land" 25 "$(notes_of g5 | wc -l | tr -d ' ')"
+check_eq "and every line is whole JSON" 25 "$(notes_of g5 | python3 -c 'import json,sys; print(sum(1 for l in sys.stdin if json.loads(l)))')"
 r="$(report_of g5)"
 missing=""; for i in $(seq 1 20); do [[ "$r" == *"finding $i"$'\n'* || "$r" == *"finding $i" ]] || missing="$missing $i"; done
 check_eq "the report after them carries every finding (#909)" "" "$missing"
@@ -297,7 +312,7 @@ lacks "and no longer says still asleep" "Still asleep" "$r"
 has "a merged PR a note named is done" "o/r PR #34 Split cache" "$r"
 has "a closed issue is done" "o/r issue #12 Cache per account" "$r"
 lacks "a PR merged before sleep is not done tonight" "PR #30" "$r"
-has "a PR merged with no note is flagged" "o/r PR #35 merged with no session noting it" "$r"
+has "a PR merged with no note is flagged" "o/r PR #35 merged with no session accounting for it" "$r"
 has "a note saying done that GitHub does not show is flagged" "o/r PR #36 was noted done, but GitHub does not show it merged since sleep began" "$r"
 has "only after reading that PR by its number" "[pr] [view] [36] [-R] [o/r]" "$(cat "$FAKE/calls")"
 has "a noted PR the search missed but its own read shows merged is done, not accused (L1014)" "o/r PR #38 Lagging search, merged 3:30 AM ET (found by its number" "$r"
@@ -401,6 +416,77 @@ has "a repo past the bound is said as not read, naming both reads (#926)" "PRs a
 check_eq "in one line per repository, never one per read (#926)" 1 "$(printf '%s\n' "$r" | grep -c 'could not be read from GitHub for o/r')"
 check_eq "and gh was not asked at all" "" "$(cat "$FAKE/calls")"
 
+# ---- what a session's subagents merged and closed is credited to it (#1159) ----
+# On 2026-10-12 the one overnight session's subagents merged 11 PRs and closed 21 issues, and every
+# one was listed as "with no session noting it". A merge is the session's when its branch is that
+# session's claim (sleep/N), when it closes an issue that session claimed, or when its body carries
+# the session link of a session that wrote a note tonight; an issue is when a PR so credited, or one
+# a note names, closed it. Only what no session can account for is listed.
+U1="aaaa1111-0000-4000-8000-000000000001"
+record g11 '["'"$U1"'"]' "$SLEEPDIR/ended/g11.json"
+{
+  echo '{"v":1,"kind":"start","at":'"$SINCE"',"by":"'"$U1"'","power":"on AC power","link":"session_01Night","generation":"g11"}'
+  echo '{"v":1,"kind":"claim","at":1791442800000,"by":"'"$U1"'","repo":"o/r","issue":50,"link":"session_01Night","generation":"g11"}'
+  echo '{"v":1,"kind":"claim","at":1791442900000,"by":"'"$U1"'","repo":"o/r","issue":51,"generation":"g11"}'
+  echo '{"v":1,"kind":"done","at":1791443000000,"by":"'"$U1"'","repo":"o/r","issue":51,"pr":66,"text":"noted by the session","generation":"g11"}'
+  echo '{"v":1,"kind":"done","at":1791443100000,"by":"'"$U1"'","repo":"o/r","issue":50,"text":"claimed and done","generation":"g11"}'
+  echo '{"v":1,"kind":"finding","at":1791443200000,"link":"session_01Lone","text":"a session that gave no by","generation":"g11"}'
+  echo '{"v":1,"kind":"stopped","at":1791457000000,"by":"'"$U1"'","text":"queue empty","generation":"g11"}'
+  echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"'"$U1"'","generation":"g11"}'
+} > "$SLEEPDIR/notes/g11.jsonl"
+# One merged PR as gh pr list gives it: number, title, minute past 3:00 AM ET, branch, body, the issues it closes.
+pr(){ printf '{"number":%s,"title":"%s","url":"u","mergedAt":"2026-10-08T07:%s:00Z","headRefName":"%s","body":"%s","closingIssuesReferences":%s}' "$@"; }
+ref(){ printf '{"number":%s,"repository":{"name":"%s","owner":{"login":"%s"}}}' "$1" "${2#*/}" "${2%%/*}"; }
+{
+  printf '['
+  pr 60 "By a subagent" 10 "fix/60-thing" 'Plain words.\n\nhttps://claude.ai/code/session_01Night\n' '[]'; printf ,
+  pr 61 "On the claim branch" 11 "sleep/50" 'No link here.' '[]'; printf ,
+  pr 62 "Local session line" 12 "fix/62" "Claude-Session: local $U1" '[]'; printf ,
+  pr 63 "Closes a claimed issue" 13 "fix/50-more" 'Closes #50' "[$(ref 50 o/r)]"; printf ,
+  pr 64 "Another session" 14 "fix/64" 'https://claude.ai/code/session_01Stranger' '[]'; printf ,
+  pr 65 "Nobody at all" 15 "fix/65" 'Nothing.' '[]'; printf ,
+  pr 66 "Noted" 16 "fix/66" 'Nothing.' '[]'; printf ,
+  pr 67 "Branch of no claim" 17 "sleep/99" 'Nothing.' '[]'; printf ,
+  pr 68 "From a session known by its link" 18 "fix/68" 'https://claude.ai/code/session_01Lone' '[]'
+  printf ']'
+} > "$FAKE/gh-pr-o_r"
+iss(){ printf '{"number":%s,"title":"%s","url":"u","closedAt":"2026-10-08T07:%s:00Z","stateReason":"COMPLETED","closedByPullRequestsReferences":%s}' "$@"; }
+{
+  printf '['
+  iss 50 "The claimed issue" 19 "[$(ref 63 o/r)]"; printf ,
+  iss 70 "Closed by the subagent PR" 20 "[$(ref 60 o/r)]"; printf ,
+  iss 71 "Closed by the unaccounted PR" 21 "[$(ref 65 o/r)]"; printf ,
+  iss 72 "Closed by hand" 22 '[]'; printf ,
+  iss 73 "Closed by a PR from before sleep" 23 "[$(ref 9 o/r)]"; printf ,
+  iss 74 "Closed by the noted PR" 24 "[$(ref 66 o/r)]"; printf ,
+  iss 75 "Closed from another repository" 25 "[$(ref 4 o/other)]"
+  printf ']'
+} > "$FAKE/gh-issue-o_r"
+: > "$FAKE/calls"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g11.json" --final >/dev/null 2>&1
+r="$(report_of g11)"
+look="$(printf '%s\n' "$r" | sed -n '/^## Needs a look/,/^## /p')"
+has "a subagent's PR is credited to the session by the link in its body" "o/r PR #60 By a subagent, merged 3:10 AM ET, under session aaaa1111 (the session link in its body)" "$r"
+has "a PR on a claim's branch is credited to the claiming session" "o/r PR #61 On the claim branch, merged 3:11 AM ET, under session aaaa1111 (its branch sleep/50, that session's claim)" "$r"
+has "a PR naming by its local id a session that wrote a note is credited to it" "o/r PR #62 Local session line, merged 3:12 AM ET, under session aaaa1111 (the session line in its body)" "$r"
+has "a PR closing an issue a session claimed is credited to it" "o/r PR #63 Closes a claimed issue, merged 3:13 AM ET, under session aaaa1111 (it closes o/r#50, which that session claimed)" "$r"
+has "a PR naming a session that wrote nothing tonight is still listed, saying which" "o/r PR #64 merged with no session accounting for it (its body names session_01Stranger, which wrote no note tonight)." "$look"
+has "a PR nothing ties to a session is listed" "o/r PR #65 merged with no session accounting for it." "$look"
+has "a claim branch of an issue nobody claimed credits nobody" "o/r PR #67 merged with no session accounting for it." "$look"
+has "a session known only by the link on its notes is named by that link" "o/r PR #68 From a session known by its link, merged 3:18 AM ET, under session_01Lone (the session link in its body)" "$r"
+has "a noted PR is done as before" "o/r PR #66 Noted, merged 3:16 AM ET" "$r"
+lacks "with no session named on it" "PR #66 Noted, merged 3:16 AM ET, under" "$r"
+has "an issue's done line says which PR closed it" "o/r issue #70 Closed by the subagent PR, closed 3:20 AM ET by PR #60" "$r"
+has "an issue the unaccounted PR closed is listed, by that PR" "o/r issue #71 closed with no session accounting for it (by PR #65)." "$look"
+has "an issue closed by hand is listed" "o/r issue #72 closed with no session accounting for it." "$look"
+has "an issue a PR from before sleep closed is listed" "o/r issue #73 closed with no session accounting for it (by PR #9)." "$look"
+has "an issue closed from another repository names it" "o/r issue #75 closed with no session accounting for it (by o/other PR #4)." "$look"
+check_eq "exactly what no session accounts for is listed, nothing else" "64 65 67 71 72 73 75" \
+  "$(printf '%s\n' "$look" | grep -E 'with no session' | sed -E 's/.* (PR|issue) #([0-9]+) (merged|closed) with no session.*/\2/' | tr '\n' ' ' | sed 's/ $//')"
+calls="$(cat "$FAKE/calls")"
+has "the merged PRs are asked for with their branch, body and the issues they close" "headRefName,body,closingIssuesReferences" "$calls"
+has "the closed issues are asked for with the PRs that closed them" "closedByPullRequestsReferences" "$calls"
+
 # ---- paid usage with nothing to read, and the healthy night ----
 record g7 '["aaaa1111"]' "$SLEEPDIR/ended/g7.json"
 {
@@ -433,11 +519,11 @@ lacks "neither is left for Other notes" "## Other notes" "$r"
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 8 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 9 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"

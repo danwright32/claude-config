@@ -1069,6 +1069,17 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   never wrote `stopped`, a worker that never wrote a note, and a `claim` with no `done`, `parked` or
   `failed` note are each flagged as ended unexpectedly. GitHub's reads are bounded at 15 s each and
   60 s together (wake waits on them, so a GitHub outage costs Dan a minute at most); a repo not read is said, with what its sessions noted shown as unchecked.
+- A merge or close no note names is credited to the session that accounts for it (#1159), since a
+  subagent writes no note: on 2026-10-12 every one of 11 PRs and 21 issues the overnight session's
+  subagents merged and closed was listed as "with no session noting it". A merged PR is a session's
+  when its branch is that session's claim (`sleep/N`, its reserved worktree's branch), when it
+  closes an issue that session claimed, or when its body carries the session link of a session
+  that wrote a note tonight (the writer stamps each note with its writer's claude.ai link, from
+  `CLAUDE_CODE_BRIDGE_SESSION_ID`, as `link`, and the harness ends every PR body with the same
+  link, a subagent's included; a `Claude-Session: local <id>` line is matched to `by`). A closed
+  issue is accounted for when a PR so credited, or one a note names, closed it. A credited PR says
+  under which session and why in Done; only what nothing ties to a session that worked tonight is
+  listed under Needs a look, a body naming a session that wrote no note saying which.
 - Paid usage is the sum of each session's latest `usage.costUsd` (as /cost totals it), from
   heartbeats and the end note; "not measurable" only when no note carried one. The 5 hour, weekly
   and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
@@ -1313,6 +1324,12 @@ the ban list knowing that an action it does not name is approved.
   (#835), and both are said in the wake reply or the notification. Its GitHub reads keep to one
   30 s deadline, each read given only the time left, so wake waits at most 30 s for it before the
   report's own final render.
+- The events are read page by page back to the moment sleep began (#1160): the newest 100 alone
+  missed a busy night's earlier repositories on 2026-10-12. GitHub keeps a user's newest 300
+  (page 4 answers HTTP 422, measured 2026-10-13), so three pages at most, each inside the same
+  deadline on the engine's clock. A page that cannot be read, one past the deadline, or all 300
+  still overnight is said by the window left unread, sleep's start to the oldest event read, never
+  as a count; a full page of deploy runs says its window the same way.
 
 ### Sleep mode phase 6: the before bed questions about the queue's issues (#836), built
 

@@ -53,8 +53,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
                                             that the ban list exists to stop, read from GitHub
   unmeasured text                           the overnight check: a read it could not make
 
-`by` is the session id that wrote it. `usage` is {costUsd?, rateLimits?: [{kind, percentUsed,
-resetsAt?}]}, as $.session.usage() reads it. A note of a kind not listed is shown under Other notes.
+`by` is the session id that wrote it. `link`, stamped by the writer when the caller gave none, is
+the claude.ai session link of the session writing it (CLAUDE_CODE_BRIDGE_SESSION_ID), so what that
+session's subagents merge is credited to it at wake (#1159). `usage` is {costUsd?, rateLimits?:
+[{kind, percentUsed, resetsAt?}]}, as $.session.usage() reads it. A note of a kind not listed is shown under Other notes.
 
 Seams for tests: SLEEP_REPORT_NOW_MS stands in for the clock, SLEEP_REPORT_GH_TOTAL_S for the
 time GitHub's reads may take together, SLEEP_REPORT_LOCK_S for how long a render waits its turn;
@@ -87,6 +89,13 @@ _total = os.environ.get("SLEEP_REPORT_GH_TOTAL_S", "")
 GH_TOTAL_S = int(_total) if _total.isdigit() else 60
 KIND = re.compile(r"^[a-z][a-z-]{0,31}$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# A session as a pull request names it (#1159): the claude.ai link the harness ends every body
+# with, or the local line lib/claude-session-line.sh writes when there is no link; and a claim's
+# own branch, as sleep-queue.sh names it.
+SESSION_ID = re.compile(r"^session_[A-Za-z0-9]+$")
+SESSION_LINK = re.compile(r"claude\.ai/code/(session_[A-Za-z0-9]+)")
+SESSION_LOCAL = re.compile(r"Claude-Session: local ([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
+CLAIM_BRANCH = re.compile(r"^sleep/([1-9][0-9]*)$")
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
@@ -235,6 +244,12 @@ def append_note(record_path, record, line):
         raise Refused("the note's repo must be owner/name text, got %s" % json.dumps(note["repo"]))
     note["v"] = 1
     note["generation"] = record["generation"]
+    # The claude.ai link of the session writing the note, from the environment Claude Code gives its
+    # tool calls (as lib/claude-session-line.sh reads it): its subagents' pull requests carry the
+    # same link in their bodies, so at wake what they merged is credited to this session (#1159).
+    bridge = os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID", "")
+    if note.get("link") is None and SESSION_ID.match(bridge):
+        note["link"] = bridge
     if note.get("at") is None:
         note["at"] = now_ms()
     elif not (num(note["at"]) and 0 <= note["at"] < 1e14):
@@ -279,7 +294,10 @@ def gh_list(repo, what, since, deadline):
     field = "mergedAt" if what == "pr" else "closedAt"
     words = ["gh", what, "list", "-R", repo, "--state", "merged" if what == "pr" else "closed",
              "--search", "%s:>=%s" % ("merged" if what == "pr" else "closed", iso(since)),
-             "--json", "number,title,url,%s%s" % (field, "" if what == "pr" else ",stateReason"),
+             # What ties each to a session (#1159): a PR's branch, body and the issues it closes; the
+             # PRs that closed an issue.
+             "--json", "number,title,url,%s,%s" % (field, "headRefName,body,closingIssuesReferences" if what == "pr"
+                                                  else "stateReason,closedByPullRequestsReferences"),
              "--limit", str(GH_LIMIT)]
     try:
         p = subprocess.run(words, capture_output=True, text=True, timeout=min(GH_TIMEOUT_S, left))
@@ -500,6 +518,75 @@ def build(record, notes, bad, final, now, github):
     return "\n".join(out).rstrip() + "\n"
 
 
+# ---- whose merges and closes they were (#1159) ----
+# On 2026-10-12 the one overnight session's subagents merged 11 PRs and closed 21 issues, and every
+# one was listed as merged or closed "with no session noting it": 32 lines of noise that hid what
+# really needed a look. A subagent writes no note, but what it merges carries its session: the
+# session link the harness ends every PR body with (the parent's, the same one append_note stamps on
+# the parent's notes), a claim's own branch sleep/N (its reserved worktree's branch), or an issue the
+# session claimed that the PR closes. An issue is accounted for when a PR some session accounts for
+# closed it. Only what none of these ties to a session that worked tonight is listed.
+
+def refs(items, repo):
+    """Each reference GitHub gave (an issue a PR closes, a PR that closed an issue) as (owner/name
+    lowercased, number); one naming no repository is in `repo`. Anything else is left out."""
+    out = []
+    for r in items if isinstance(items, list) else []:
+        if not isinstance(r, dict) or isinstance(r.get("number"), bool) or not isinstance(r.get("number"), int):
+            continue
+        rp = r.get("repository") if isinstance(r.get("repository"), dict) else {}
+        owner = rp.get("owner") if isinstance(rp.get("owner"), dict) else {}
+        name = "%s/%s" % (owner["login"], rp["name"]) if isinstance(owner.get("login"), str) and isinstance(rp.get("name"), str) else repo
+        out.append((name.lower(), r["number"]))
+    return out
+
+
+def tonight(record, notes):
+    """Who worked tonight: the id of every session that wrote a note or that the record names as a
+    worker, each claude.ai link a note carried mapped to the session that wrote it (None when no
+    note with it said who), and the session of each claim by (repo lowercased, issue)."""
+    ids = {n["by"] for n in notes if isinstance(n.get("by"), str) and n["by"]}
+    ids |= {w for w in record.get("workers") or [] if isinstance(w, str) and w}
+    links, claims = {}, {}
+    for n in notes:
+        by = n["by"] if isinstance(n.get("by"), str) and n["by"] else None
+        link = n.get("link")
+        if isinstance(link, str) and SESSION_ID.match(link) and links.get(link) is None:
+            links[link] = by
+        if n["kind"] == "claim" and isinstance(n.get("repo"), str) and isinstance(n.get("issue"), int):
+            claims.setdefault((n["repo"].lower(), n["issue"]), by)
+    return ids, links, claims
+
+
+def session_name(s):
+    """A session as the report names it: a local id by its first 8 characters, a link's id whole."""
+    if not s:
+        return "a session that did not say"
+    return s if SESSION_ID.match(s) else "session %s" % short(s)
+
+
+def credit(repo, p, who):
+    """The session a merged PR no note names belongs to and why, as (session, why); or (None, why
+    not) where why not names any session its body names that wrote nothing tonight, else None."""
+    ids, links, claims = who
+    branch = p.get("headRefName") if isinstance(p.get("headRefName"), str) else ""
+    m = CLAIM_BRANCH.match(branch)
+    if m and (repo.lower(), int(m.group(1))) in claims:
+        return session_name(claims[(repo.lower(), int(m.group(1)))]), "its branch %s, that session's claim" % branch
+    body = p.get("body") if isinstance(p.get("body"), str) else ""
+    named = list(dict.fromkeys(SESSION_LINK.findall(body)))
+    for link in named:
+        if link in links:
+            return session_name(links[link] or link), "the session link in its body"
+    for local in SESSION_LOCAL.findall(body):
+        if local in ids:
+            return session_name(local), "the session line in its body"
+    for key in refs(p.get("closingIssuesReferences"), repo):
+        if key in claims:
+            return session_name(claims[key]), "it closes %s#%d, which that session claimed" % key
+    return None, ("its body names %s, which wrote no note tonight" % " and ".join(named)) if named else None
+
+
 def github_done(record, notes):
     since = record["since"]
     repos = sorted({n["repo"] for n in notes if isinstance(n.get("repo"), str) and REPO.match(n["repo"])})
@@ -515,9 +602,20 @@ def github_done(record, notes):
         bad_repo = not (isinstance(n.get("repo"), str) and REPO.match(n["repo"]))
         if bad_repo or (n.get("pr") is None and n.get("issue") is None):
             done.append("%s: %s (as noted, unchecked: %s)" % (where(n), text_of(n), "it names no repo GitHub can be asked about" if bad_repo else "it names no PR or issue"))
+    # Every repository is read before any is judged: an issue in one can be closed by a PR in another,
+    # and whether that PR is accounted for decides the issue (#1159).
+    reads = {repo: (gh_list(repo, "pr", since, deadline), gh_list(repo, "issue", since, deadline)) for repo in repos}
+    who = tonight(record, notes)
+    credits = {}
+    for repo, ((prs, _), _) in reads.items():
+        for p in (prs or {}).get("items", []):
+            if (repo, p["number"]) not in noted_prs:
+                credits[(repo, p["number"])] = credit(repo, p, who)
+    # The PRs some session accounts for, by a note or by credit, across every repository read.
+    accounted = {(r.lower(), n) for r, n in noted_prs if isinstance(r, str)} | \
+                {(r.lower(), n) for (r, n), (s, _) in credits.items() if s}
     for repo in repos:
-        prs, why_p = gh_list(repo, "pr", since, deadline)
-        issues, why_i = gh_list(repo, "issue", since, deadline)
+        (prs, why_p), (issues, why_i) = reads[repo]
         noted = [n for n in notes if n["kind"] == "done" and n.get("repo") == repo]
         unread = unread_line(repo, [(name, why) for name, why in (("PRs", why_p), ("issues", why_i)) if why])
         if unread:
@@ -534,9 +632,14 @@ def github_done(record, notes):
                 flags.append("%s PR #%d came back from GitHub with no merge time that could be read (%s), so whether it was merged tonight is unchecked." % (repo, p["number"], json.dumps(p.get("mergedAt"))))
             merged = {p["number"] for p in prs["items"] + prs["undated"]}
             for p in sorted(prs["items"], key=lambda p: p["at"]):
-                done.append("%s PR #%d %s, merged %s" % (repo, p["number"], p.get("title") or "", et_time(p["at"])))
-                if (repo, p["number"]) not in noted_prs:
-                    flags.append("%s PR #%d merged with no session noting it." % (repo, p["number"]))
+                line = "%s PR #%d %s, merged %s" % (repo, p["number"], p.get("title") or "", et_time(p["at"]))
+                if (repo, p["number"]) in credits:
+                    s, why = credits[(repo, p["number"])]
+                    if s:
+                        line += ", under %s (%s)" % (s, why)
+                    else:
+                        flags.append("%s PR #%d merged with no session accounting for it%s." % (repo, p["number"], " (%s)" % why if why else ""))
+                done.append(line)
             for n in notes:
                 if n["kind"] == "done" and n.get("repo") == repo and n.get("pr") is not None and n["pr"] not in merged and ("pr", n["pr"]) not in asked:
                     asked.add(("pr", n["pr"]))
@@ -549,10 +652,14 @@ def github_done(record, notes):
             closed = {i["number"] for i in issues["items"] + issues["undated"]}
             for i in sorted(issues["items"], key=lambda i: i["at"]):
                 reason = i.get("stateReason")
-                done.append("%s issue #%d %s, closed %s%s" % (repo, i["number"], i.get("title") or "", et_time(i["at"]),
-                                                             " as not planned" if reason == "NOT_PLANNED" else ""))
-                if (repo, i["number"]) not in noted_issues:
-                    flags.append("%s issue #%d closed with no session noting it." % (repo, i["number"]))
+                by = refs(i.get("closedByPullRequestsReferences"), repo)
+                closers = " and ".join("PR #%d" % n if r == repo.lower() else "%s PR #%d" % (r, n) for r, n in by)
+                done.append("%s issue #%d %s, closed %s%s%s" % (repo, i["number"], i.get("title") or "", et_time(i["at"]),
+                                                               " by %s" % closers if closers else "",
+                                                               " as not planned" if reason == "NOT_PLANNED" else ""))
+                # Closed by a PR some session accounts for is accounted for too (#1159).
+                if (repo, i["number"]) not in noted_issues and not any(k in accounted for k in by):
+                    flags.append("%s issue #%d closed with no session accounting for it%s." % (repo, i["number"], " (by %s)" % closers if closers else ""))
             for n in notes:
                 if n["kind"] == "done" and n.get("repo") == repo and n.get("pr") is None and n.get("issue") is not None and n["issue"] not in closed and ("issue", n["issue"]) not in asked:
                     asked.add(("issue", n["issue"]))
