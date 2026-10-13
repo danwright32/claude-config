@@ -741,6 +741,54 @@ for e in \
   if mt_gh_transient "$e"; then fail "an answer GitHub gave was treated as worth asking again: [$e]"; else pass; fi
 done
 
+echo "merge-target: mt_unfinished_runs reads every page of a commit's workflow runs (claude-config#1087)"
+# gh api --paginate prints one object per page, so an unfinished run on the second page must still
+# be seen, and an answer that is not the list is not an empty one.
+ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
+cat > "$ghstub/gh" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MT_GH_LOG"
+case "$MT_RUNS_MODE" in
+  pages) printf '%s\n' '{"total_count":2,"workflow_runs":[{"name":"Fast","status":"completed"}]}' '{"total_count":2,"workflow_runs":[{"name":"CI","status":"pending"}]}' ;;
+  done) printf '%s\n' '{"total_count":1,"workflow_runs":[{"name":"CI","status":"completed"}]}' ;;
+  junk) printf '%s\n' '{"message":"Not Found"}' ;;
+  empty) ;;
+  reset) echo 'read tcp 10.0.0.2:1->140.82.112.6:443: read: connection reset by peer' >&2; exit 1 ;;
+  forbidden) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+esac
+EOS
+chmod +x "$ghstub/gh"
+export MT_GH_LOG="$ghstub/log"
+for mode in pages done junk empty reset forbidden; do
+  : > "$MT_GH_LOG"
+  MT_RUNS_MODE="$mode" PATH="$ghstub:$PATH" mt_unfinished_runs acme/widget abc123 ""; rc=$?
+  case "$mode" in
+    pages) eq "$rc|$MT_RUNS_PENDING" "0|CI (pending)" "an unfinished run on the second page is seen" ;;
+    done) eq "$rc|$MT_RUNS_PENDING" "0|" "every run finished reads as nothing pending" ;;
+    junk) eq "$rc" "1" "an answer that is not a list of runs is a failed read, not an empty list" ;;
+    empty) eq "$rc" "1" "no answer at all is a failed read, not an empty list" ;;
+    reset) eq "$rc" "2" "a reset connection is a transient failure" ;;
+    forbidden) eq "$rc|$MT_RUNS_ERR" "1|gh: Resource not accessible by integration (HTTP 403)" "a refusal is believed, with GitHub's words" ;;
+  esac
+done
+: > "$MT_GH_LOG"
+eq "$(MT_RUNS_MODE=done PATH="$ghstub:$PATH" mt_unfinished_runs acme/widget abc123 "" ; cat "$MT_GH_LOG")" "api repos/acme/widget/actions/runs?head_sha=abc123&per_page=100 --paginate" "asked about that commit, every page"
+rm -rf "$ghstub"
+
+echo "merge-target: mt_retry_read asks again only on a transient failure, inside its deadline (claude-config#1081)"
+tries_left=0; calls=0
+flaky(){ calls=$((calls + 1)); if [ "$tries_left" -gt 0 ]; then tries_left=$((tries_left - 1)); return 2; fi; return 0; }
+refused(){ calls=$((calls + 1)); return 1; }
+slept=""; fake_sleep(){ slept="$slept $1"; }
+tries_left=1; calls=0; slept=""
+mt_retry_read 3 5 fake_sleep "" "" flaky; eq "$?|$calls|$slept" "0|2| 5" "a read failing once is asked again after one wait, then answers"
+tries_left=9; calls=0; slept=""
+mt_retry_read 3 5 fake_sleep "" "" flaky; eq "$?|$calls|$slept" "2|3| 5 5" "a read that keeps failing is tried three times in all, then reported failed"
+calls=0; slept=""
+mt_retry_read 3 5 fake_sleep "" "" refused; eq "$?|$calls|$slept" "1|1|" "a refusal is believed the first time"
+tries_left=9; calls=0; slept=""
+mt_retry_read 3 5 fake_sleep "$SECONDS" "" flaky; eq "$?|$calls|$slept" "2|1|" "no retry is made whose wait would end past the deadline"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

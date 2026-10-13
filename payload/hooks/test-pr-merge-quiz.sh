@@ -655,6 +655,39 @@ pair_run "a pull request that is not there still quizzes" fire "$MERGE_CMD 7 --r
 saw not-found 1 "a pull request that is not there"
 saw no-answer 0 "a pull request that is not there"
 forget_verdicts
+
+# --- Every merge in a command is read, not only the first (claude-config#1082) ---
+#
+# The merge gates refuse a command merging more than one pull request (#1072), so this hook sees two
+# only when an override let them through. It read the first merge's record alone, so a quiet first
+# merge silenced the quiz for a visible second one. The overrides go on the command as they would be
+# typed; this hook reads none of them.
+pair_record other/repo '[{"name":"changelog/none"}]'
+pair_record acme/widget '[{"name":"changelog/visible"}]'
+TWO="SKIP_PR_REVIEW=1 $MERGE_CMD 7 --repo other/repo --squash && $MERGE_CMD 7 --repo acme/widget --squash"
+pair_run "a quiet first merge does not silence a visible second one" fire "$TWO"
+if pair_asked_about "pr view 7 --repo acme/widget"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: #1082 the second merge's record was never read: $(cat "$GH_CALL_LOG")"; fi
+two_out="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "$TWO" "$PAIR/repo" \
+  | ( cd "$PAIR/repo" && env "PATH=$PAIR/bin:$PATH" "$HOOK" ) 2>/dev/null)"
+if holds "$two_out" "#7 in other/repo" && holds "$two_out" "#7 in acme/widget"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: #1082 the quiz does not name every pull request the command merged: $two_out"; fi
+# Both quiet: nothing user facing in either, so the quiz is silenced as for one merge.
+pair_record acme/widget '[{"name":"changelog/none"}]'
+pair_run "two quiet merges are silenced together" skip "$TWO"
+# One merge in a repository that opted out does not opt the other one out.
+mkdir -p "$PAIR/quiet"
+( cd "$PAIR/quiet" && git init -q && git remote add origin "https://github.com/other/repo.git" )
+printf 'no quiz here\n' > "$PAIR/quiet/.no-pr-quiz"
+pair_record other/repo '[{"name":"changelog/visible"}]'
+pair_record acme/widget '[{"name":"changelog/visible"}]'
+pair_run "an opted out first merge does not skip the second" fire \
+  "cd $PAIR/quiet && SKIP_PR_REVIEW=1 $MERGE_CMD 7 --squash; cd $PAIR/repo && $MERGE_CMD 7 --squash"
+printf 'no quiz here\n' > "$PAIR/repo/.no-pr-quiz"
+pair_run "both merges in opted out repositories skip" skip \
+  "cd $PAIR/quiet && SKIP_PR_REVIEW=1 $MERGE_CMD 7 --squash; cd $PAIR/repo && $MERGE_CMD 7 --squash"
+rm -f "$PAIR/repo/.no-pr-quiz"
+forget_verdicts
 rm -rf "$PAIR"
 unset GH_FIXTURE GH_CALL_LOG
 
