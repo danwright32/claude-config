@@ -5,6 +5,7 @@ import { APPROVAL_MS } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
+import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is refused until
@@ -56,6 +57,14 @@ const modKit: { name: string; register: Register } = {
         // #940: what each command runs, read with the same copy, so a python program's own text is judged.
         pipeline: async (input: { command: string }) => {
           const r = await built.process.run(['__modkit', 'pipeline', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
+        // #1171: where a python program holds text, read with the same copy. A program holding
+        // SCANNER_BREAKS stands for a mod-kit loaded before it had the member (standing rule 5).
+        pythonText: async (input: { code: string }) => {
+          if (input.code.includes('SCANNER_BREAKS')) throw new TypeError('$.modkit.pythonText is not a function')
+          const r = await built.process.run(['__modkit', 'pythonText', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout)
         },
@@ -176,6 +185,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     if (e.argv[0] === '__modkit' && e.argv[1] === 'typedAnswer') {
       const input = JSON.parse(String(e.argv[2])) as TypedAnswer
       return { value: { exitCode: 0, stdout: JSON.stringify({ toast: typedToast(input.guard), text: typedAnswerText(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'pythonText') {
+      const input = JSON.parse(String(e.argv[2])) as { code: string }
+      return { value: { exitCode: 0, stdout: JSON.stringify(pythonText(input.code)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] === '__modkit' && e.argv[1] === 'pipeline') {
       const input = JSON.parse(String(e.argv[2])) as { command: string }
@@ -612,8 +625,9 @@ const ISSUE_940 =
   "assert s.count(old)==1; s=s.replace(old,new)\nopen(p,'w').write(s)\nEOF\nscripts/test-claude-plugin-scope.sh 2>&1 | tail -2"
 test('a python heredoc whose text only names lasting memory in a sentence, writing another file, goes straight through (#940)', withKit, async ($, on) => {
   const w = world($, on)
-  // The real reader names no file for it, so what the command mentions is what is judged.
-  expect(commandWrites(ISSUE_940, CWD, HOME).unnamed.map(u => u.targets)).toEqual([undefined])
+  // Since #1171 the reader names the file it writes, the $ in its quoted heredoc being text, so that
+  // file is what is judged. Before, it named none and the command's mentions were (the test below).
+  expect(commandWrites(ISSUE_940, CWD, HOME).unnamed.map(u => u.targets)).toEqual([[`${CWD}/scripts/test-claude-plugin-scope.sh`]])
   expect(refusalOf(await call($, { tool: 'Bash', command: ISSUE_940 }))).toBe('')
   expect(w.ran.map(r => r.input.command)).toEqual([ISSUE_940])
   quietOnMain(w)
@@ -622,6 +636,25 @@ test('a python heredoc whose text only names lasting memory in a sentence, writi
   expect(real).not.toBe(ISSUE_940)
   expect(refusalOf(await call($, { tool: 'Bash', command: real }))).toContain(ASKS)
   expect(w.ran.length).toBe(1)
+})
+
+// The same program importing os, so the reader names no file it writes and what the command
+// mentions is judged, its sentences read by mod-kit's one scanner of python's text (#1171). A
+// mod-kit that cannot answer (loaded before it had the member) leaves the program whole, so the
+// sentence counts and Dan is asked, said once.
+const UNNAMED_940 = ISSUE_940.replace("<<'EOF'\np=", "<<'EOF'\nimport os\np=")
+test("a sentence naming lasting memory in a program whose files are unnamed is text; a scanner mod-kit cannot answer reads it whole, said once (#940, #1171)", withKit, async ($, on) => {
+  const w = world($, on)
+  expect(UNNAMED_940).not.toBe(ISSUE_940)
+  expect(commandWrites(UNNAMED_940, CWD, HOME).unnamed.map(u => u.targets)).toEqual([undefined])
+  expect(refusalOf(await call($, { tool: 'Bash', command: UNNAMED_940 }))).toBe('')
+  expect(w.ran.map(r => r.input.command)).toEqual([UNNAMED_940])
+  const real = UNNAMED_940.replace("open(p,'w')", "open('/Users/dan/.claude/CLAUDE.md','a')")
+  expect(refusalOf(await call($, { tool: 'Bash', command: real }))).toContain(ASKS)
+  const broken = UNNAMED_940.replace("import os\n", "import os\n# SCANNER_BREAKS\n")
+  for (let i = 0; i < 2; i++) expect(refusalOf(await call($, { tool: 'Bash', command: broken }))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit where a python program holds text')).length).toBe(1)
 })
 
 test('every route that really writes lasting memory is still asked about, a sentence naming it beside it or not (#940)', withKit, async ($, on) => {

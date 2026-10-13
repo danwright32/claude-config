@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { codeOnly, codeVerdict } from '../hooks/code.ts'
+import type { Register } from 'claude-code'
+import { codeOnly, codeVerdict, pythonText } from '../hooks/code.ts'
 
 // The per language judge of inline code (#712: moved here from scope-modes, so $.modkit.writes and
 // no build read code the same way). Its rules are pinned end to end through no build's own tests;
@@ -139,4 +140,52 @@ describe('codeOnly (#1165)', () => {
     expect(codeOnly('python', "exec('''open('app/page.tsx',\n'w')''')\nopen('x', 'w')")).toBeUndefined()
     expect(codeOnly('node', "require('fs').writeFileSync(p, `\napp/page.tsx`)")).toBeUndefined()
   })
+})
+
+// #1171: ask before saving's reading of a python program's text (#940) and codeOnly (#1165) each
+// scanned its comments and string literals, the same code twice. mod-kit holds the one scanner and
+// gives the spans; each reader keeps its own rule for what to do with them.
+describe('pythonText (#1171)', () => {
+  const spans = (code: string) => pythonText(code).map(s => [s.kind, code.slice(s.from, s.to)])
+  test('each comment and each string literal, by what it holds, the quotes left out', () => {
+    expect(spans("x = 'a' # note\ny = \"b\"")).toEqual([['string', 'a'], ['comment', ' note'], ['string', 'b']])
+    expect(spans("s = '''one\ntwo'''\nt = \"\"\"three\"\"\"")).toEqual([['string', 'one\ntwo'], ['string', 'three']])
+    // A quote inside a comment opens nothing, and a hash inside a string is no comment.
+    expect(spans("# it's\ns = 'a # b'")).toEqual([['comment', " it's"], ['string', 'a # b']])
+  })
+  test('an f-string or a t-string, whose braces hold code, is told apart from a plain one', () => {
+    expect(spans("f'{a}/x' + F\"y\" + t'{b}' + rf'z' + b'w' + r'v'")).toEqual([
+      ['formatted', '{a}/x'],
+      ['formatted', 'y'],
+      ['formatted', '{b}'],
+      ['formatted', 'z'],
+      ['string', 'w'],
+      ['string', 'v'],
+    ])
+  })
+  test('a backslash keeps a string open, in a raw string too, and a one quote string ends at its line', () => {
+    expect(spans("s='it\\'s'\nr'a\\'b'")).toEqual([['string', "it\\'s"], ['string', "a\\'b"]])
+    expect(spans("s='open\nx = 1")).toEqual([['string', 'open']])
+    // One never closed runs to the end.
+    expect(spans("s = '''open\nx = 1")).toEqual([['string', 'open\nx = 1']])
+    expect(spans('# only a comment')).toEqual([['comment', ' only a comment']])
+    expect(spans('x = 1')).toEqual([])
+  })
+})
+
+// The member ask before saving calls, asked from another plugin as a mod asks it.
+const asker: { name: string; register: Register } = {
+  name: 'asker',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const code = String((e as { command?: string }).command)
+      return { deny: JSON.stringify(await $.modkit.pythonText({ code })) }
+    })
+  },
+}
+test('$.modkit.pythonText gives another mod the same spans', { plugins: [asker] }, async $ => {
+  const code = "# note\nopen(f'{d}/a', 'w').write('''x\ny''')"
+  const said = ((await $.tool.call({ tool: 'Bash', command: code } as never)) as { deny?: string }).deny
+  expect(JSON.parse(String(said))).toEqual(pythonText(code))
+  expect(pythonText(code).map(s => s.kind)).toEqual(['comment', 'formatted', 'string', 'string'])
 })

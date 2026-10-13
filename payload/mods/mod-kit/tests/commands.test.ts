@@ -231,6 +231,7 @@ describe('pipeline: heredocs', () => {
         language: 'python',
         program: { text: "import os\nopen('x', 'w')", stdin: true },
         verdict: { does: 'write files', seen: 'open in mode w' },
+        asWritten: true,
       },
       { words: ['git', 'status'] },
     ])
@@ -239,7 +240,7 @@ describe('pipeline: heredocs', () => {
     expect(pipeline('cat << EOF\nls\nEOF')).toEqual([{ words: ['cat', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls', quoted: false }] }])
     expect(pipeline('cat 0<<"END"\nx\nEND')).toEqual([{ words: ['cat', '0<<END'], heredocs: [{ word: 1, body: 'x', quoted: true }] }])
     expect(pipeline('sudo -E python3 - <<\\EOF\nprint(1)\nEOF')).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: true }], language: 'python', program: { text: 'print(1)', stdin: true } },
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: true }], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
     ])
   })
   test('<<- takes the leading tabs off its body', () => {
@@ -248,7 +249,7 @@ describe('pipeline: heredocs', () => {
   test('each of several heredocs feeds its own command, read one after another', () => {
     expect(pipeline('cat <<A; python3 - <<B\na\nA\nb\nB\nls')).toEqual([
       { words: ['cat', '<<A'], heredocs: [{ word: 1, body: 'a', quoted: false }] },
-      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b', quoted: false }], language: 'python', program: { text: 'b', stdin: true } },
+      { words: ['python3', '-', '<<B'], heredocs: [{ word: 2, body: 'b', quoted: false }], language: 'python', program: { text: 'b', stdin: true }, asWritten: true },
       { words: ['ls'] },
     ])
   })
@@ -261,7 +262,7 @@ describe('pipeline: heredocs', () => {
   })
   test("a heredoc inside a shell's -c script feeds the command there", () => {
     expect(pipeline(`bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`)).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: false }], language: 'python', program: { text: 'print(1)', stdin: true } },
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: false }], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
     ])
   })
   // The cat the substitution runs is a command of its own since #974; its body was dropped with the line's.
@@ -466,5 +467,28 @@ describe('the commands a substitution runs (#974)', () => {
     expect(program("python3 - <<'EOF'\nprint('\\$HOME')\nEOF")).toEqual({ text: "print('\\$HOME')", stdin: true })
     expect(subs('bash <<EOF\necho \\$(git push) \\`npm publish\\`\nEOF')).toEqual([['git', 'push'], ['npm', 'publish']])
     expect(subs("bash <<'EOF'\necho \\$(git push)\nEOF")).toEqual([])
+  })
+})
+
+// #1171: whether the shell left a program's text as written was worked out twice, by mod-kit's
+// write reader (for targets and code) and by ask before saving (for its #940 reading). The reader
+// now says it on each command it gives, `asWritten`, so there is one answer.
+describe('pipeline: asWritten (#1171)', () => {
+  const asWritten = (command: string) => pipeline(command).filter(c => c.program).map(c => c.asWritten === true)
+  test('a program on standard input from a quoted heredoc, or holding no $ or backtick, is as written', () => {
+    expect(asWritten("python3 - <<'EOF'\nprint(`${x}` + $y)\nEOF")).toEqual([true])
+    expect(asWritten('python3 - <<"EOF"\nprint($y)\nEOF')).toEqual([true])
+    expect(asWritten("python3 - <<\\EOF\nprint($y)\nEOF")).toEqual([true])
+    expect(asWritten(`python3 -c "print('a')"`)).toEqual([true])
+    expect(asWritten("python3 - <<EOF\nprint('a')\nEOF")).toEqual([true])
+  })
+  test('the shell may have changed one that is unquoted and holds a $ or backtick, and one in a substitution', () => {
+    expect(asWritten("python3 - <<EOF\nprint($y)\nEOF")).toEqual([false])
+    expect(asWritten('python3 - <<EOF\nprint(`y`)\nEOF')).toEqual([false])
+    expect(asWritten(`python3 -c "print('$y')"`)).toEqual([false])
+    expect(asWritten(`echo "$(python3 -c "print('a')")"`)).toEqual([false])
+  })
+  test('a command running no program carries no asWritten', () => {
+    expect(pipeline('ls -la').map(c => 'asWritten' in c)).toEqual([false])
   })
 })

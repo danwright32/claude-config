@@ -11,6 +11,7 @@ import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
+import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
 import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
 
@@ -285,6 +286,7 @@ export const register: Register = (on, options) => {
       git: async ({ words }) => git(words),
       gh: async ({ words }) => ghArgs(words),
       pipeline: async ({ command }) => pipeline(command),
+      pythonText: async ({ code }) => pythonText(code),
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
       repo: async ({ root, remote }) => ({ github: githubRepo(remote), name: repoName({ root, remote }) }),
       branch: async ({ path }) =>

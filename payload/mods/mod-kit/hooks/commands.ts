@@ -543,7 +543,8 @@ const printfText = (args: readonly string[]): string | undefined => {
  * runs instead, and what the program can do. `xargs` marks a command xargs runs, giving it
  * operands from its own input that no word names; `found` the folders find starts from, on a
  * command its -exec runs, whose {} this reader writes as one of them and stands for everything
- * under it. `substitution` marks a command the shell runs inside a command substitution (#974).
+ * under it. `substitution` marks a command the shell runs inside a command substitution (#974), and
+ * `asWritten` one whose program text the shell left as written (#1171, shellLeftAsWritten).
  */
 export type Command = {
   words: string[]
@@ -556,6 +557,7 @@ export type Command = {
   script?: Script
   verdict?: CodeVerdict
   substitution?: true
+  asWritten?: true
 }
 
 /**
@@ -640,7 +642,30 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
  * read as commands. `opts` asks for more than the commands that run (ReadOptions).
  */
 export const pipeline = (cmd: string, opts: ReadOptions = {}): Command[] => flatten(readLine(cmd, opts))
-const flatten = (line: Line, inside = false): Command[] => line.flatMap(c => ('sub' in c ? flatten(c.sub, true) : [inside ? { ...c, substitution: true as const } : c]))
+const flatten = (line: Line, inside = false): Command[] => line.flatMap(c => ('sub' in c ? flatten(c.sub, true) : [placed(c, inside)]))
+
+/**
+ * Whether the text of the program a command runs is exactly what the shell left it, so a reader may
+ * read it as the interpreter does: on standard input from a quoted heredoc that is not replaced and
+ * feeds no other descriptor, or holding no $ or backtick, and never inside a command substitution,
+ * whose text the shell may have changed as it read the line (#974). The one answer (#1171): the
+ * files a program names (#830, codeTargets) and its code (#1165, codeOnly) are given by it, and every
+ * mod reads it as `asWritten` on the commands `pipeline` gives. Before, the files were refused on any
+ * $ or backtick, a quoted heredoc's included, and ask before saving worked it out itself (#940).
+ */
+export const shellLeftAsWritten = (c: Command): boolean => {
+  const p = c.program
+  if (!p || !('text' in p) || c.substitution) return false
+  return (p.stdin === true && (c.heredocs ?? []).some(h => h.quoted && !h.replaced && h.fd === undefined)) || !/[$`]/.test(p.text)
+}
+/**
+ * A command as a reader of a whole line takes it: marked `substitution` when a command substitution
+ * runs it, and `asWritten` when the shell left its program's text as written.
+ */
+export const placed = (c: Command, inSubstitution: boolean): Command => {
+  const at: Command = inSubstitution ? { ...c, substitution: true as const } : c
+  return shellLeftAsWritten(at) ? { ...at, asWritten: true as const } : at
+}
 
 /**
  * A command line read as its commands, each command substitution the shell runs in it given in its
