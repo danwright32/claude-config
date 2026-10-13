@@ -241,6 +241,8 @@ type Opts = {
   dirty?: string[]
   /** The files git status names in those folders (#1051); app.ts unless said. */
   dirtyFiles?: string[]
+  /** A `git switch -c` or `git checkout -b` that runs but leaves the checkout where it was (#1051). */
+  switchFails?: boolean
   /** mod-kit's branch reader fails (#980), with what it threw. */
   branchReaderFails?: string
   /** The session's folder, /repo unless said: a linked worktree of /repo, whose main working tree stays /repo (#980 review). */
@@ -662,6 +664,9 @@ const world = (on: On, o: Opts = {}) => {
     }
     const command = (e as { command?: string }).command
     w.reached.push(String(command ?? (e as { file_path?: string }).file_path ?? e.tool))
+    // A branch started by switch or checkout moves the checkout onto it, unless the test says it fails (#1051).
+    const started = /\bgit (?:switch -c|checkout -b) (\S+)/.exec(command ?? '')
+    if (started && !o.switchFails) o.branch = started[1]
     if (/\bpr create\b/.test(command ?? '') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
     return { result: 'ran', text: 'ran' } as never
   })
@@ -3631,6 +3636,18 @@ test('the cleanup branch Dan agreed to is refused once anything beyond his files
   expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(
     /^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings for tests\/section-time-readings\.tsv only, and app\.ts is uncommitted too\./,
   )
+})
+
+test("Dan's cleanup answer is used up only once the checkout is on that branch: a start that did not move it keeps his answer (#1051)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it', switchFails: true }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, cleanupAsk('chore/readings'))
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toBe('ran')
+  expect(w.toasts).toEqual([])
+  w.o.switchFails = false
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c3'))).toBe('ran')
+  expect(w.toasts).toEqual([`Winding down let the branch chore/readings start, for the cleanup Dan agreed to (${READINGS}).`])
 })
 
 test('a cleanup branch Dan agreed to is refused once nothing is uncommitted, since there is no cleanup left for it to carry (#1051)', withDeps, async ($, on) => {

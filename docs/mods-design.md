@@ -879,8 +879,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   and only when something is uncommitted, and records only Open it, with the checkout and the files.
   That branch may then start once, by `git switch -c` or `git checkout -b` (which carry the changes
   onto it; `git branch` and a new worktree leave them behind, so stay refused), while nothing
-  beyond those files is uncommitted, the start toasted; any other branch is refused as before, and
-  one he agreed to with other files changed since is refused naming them.
+  beyond those files is uncommitted (and something is: a leftover answer covers nothing). His answer
+  is used up, and the start toasted, only once the checkout is on that branch after the call ran, so
+  a call refused beneath this mod or a switch that failed keeps it. Any other branch is refused as
+  before, and one he agreed to with other files changed since is refused naming them.
 - How often GitHub is asked (#1037). The minute's check read every PR the session opened, plus one
   `gh issue view` per closing issue of each, every minute: about 2N GraphQL points a minute for N
   PRs, from the 5,000 an hour every gh command on the Mac shares (#1014). Measured on 2026-10-12

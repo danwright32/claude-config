@@ -2393,10 +2393,13 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
   return s
 }
 
-// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run.
+// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run,
+// or the cleanup answers (#1051) it runs on, which are used up once it has run (useCleanups).
 type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean; asleep: boolean }
-const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | undefined> => {
+type Verdict = { deny: string } | { cleanups: ScopeModesCleanup[] } | undefined
+const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   const { tool, input, toolUseId, scope, away, asleep } = j
+  let cleanupsLet: ScopeModesCleanup[] = []
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const commands = raw ? await readCommands($, raw) : []
 
@@ -2444,12 +2447,9 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
       await $.modkit.blocked({ toolUseId, guard: 'Winding down', reason: `Winding down, so this would not ${r.what}.`, safeWay: 'Claude finishes this issue and files anything else.' })
       return { deny: `Blocked: winding down, so this did not ${r.what}.${why} Finish this issue; file anything new as an issue instead of working on it.` }
     }
-    // A cleanup branch that starts uses Dan's answer up, and that is said.
+    // The cleanup answers this call starts a branch on, used up once it has run (useCleanups).
     const used = covered.filter(c => commands.some(cmd => newBranchOf(cmd)?.name === c.branch))
-    if (used.length) {
-      await $.state.set(cleanupRef, (await cleanupOf($)).filter(c => !used.some(u => u.root === c.root && u.branch === c.branch)))
-      for (const c of used) $.ui.toast(`Winding down let the branch ${c.branch} start, for the cleanup Dan agreed to (${filesSaid(c.files)}).`)
-    }
+    if (used.length) cleanupsLet = used
   }
   if (away) {
     // A Bash call by what its commands do on the Mac; another tool by what it opens (#702).
@@ -2471,7 +2471,25 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
       return { deny: overnightDeny(what) }
     }
   }
-  return undefined
+  return cleanupsLet.length ? { cleanups: cleanupsLet } : undefined
+}
+
+// Dan's cleanup answer (#1051) is used up, and that said, only once the checkout is on its branch
+// after the call ran, read from the checkout itself: a call refused beneath this mod, or a switch
+// that failed, leaves his answer to be used. A read that fails leaves it too, and is logged.
+const useCleanups = async ($: EngineInterface, cleanups: readonly ScopeModesCleanup[]) => {
+  for (const c of cleanups) {
+    let at
+    try {
+      at = await $.modkit.branch({ path: c.root })
+    } catch (err) {
+      $.ui.log(`scope-modes: whether the cleanup branch ${c.branch} started could not be read (${msg(err)}), so Dan's answer is kept`, { to: 'debug' })
+      continue
+    }
+    if (!at || 'unreadable' in at || at.branch !== c.branch) continue
+    await $.state.set(cleanupRef, (await cleanupOf($)).filter(x => !(x.root === c.root && x.branch === c.branch)))
+    $.ui.toast(`Winding down let the branch ${c.branch} start, for the cleanup Dan agreed to (${filesSaid(c.files)}).`)
+  }
 }
 
 // What winding down means, said the same way in its note, its command's context and the Stop
@@ -2864,10 +2882,11 @@ export const register: Register = on => {
     const raw = tool === 'Bash' ? String(input.command ?? '') : ''
     const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
     const mayBranch = /\bgit\b/.test(raw) && /\b(checkout|switch|branch|worktree|push|commit)\b/.test(raw)
-    const go = async () => {
+    const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
       const r = await next(e)
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
+      if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       return r
     }
 
@@ -2906,14 +2925,15 @@ export const register: Register = on => {
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that
     // fails is skipped, which would run the very thing the mode is on to stop (L42).
-    let refused: { deny: string } | undefined
+    let verdict: Verdict
     try {
-      refused = await judge($, { tool, input, toolUseId, scope, away, asleep })
+      verdict = await judge($, { tool, input, toolUseId, scope, away, asleep })
     } catch (err) {
       const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(asleep ? ['sleep mode'] : away ? ['away'] : [])].join(' and ')
-      refused = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
+      verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
-    return refused ?? go()
+    if (verdict && 'deny' in verdict) return verdict
+    return go(verdict?.cleanups ?? [])
   })
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it. Pressed
