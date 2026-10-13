@@ -638,13 +638,14 @@ export const codeTargets = (lang: Lang, inline: string): string[] | undefined =>
 /**
  * A python program's text with what it holds only as data blanked (#1165), for a guard reading the
  * names of the files a program can open: each comment, and each plain string literal spanning lines
- * (the text a script puts into a file, a block it replaces), all but a last word its closing quote
- * ends, which a name is (`"""notes\napp/page.tsx"""`). A literal on one line is kept whole, since a
- * path (one with a space in it too, in a Bidspoke checkout), names joined to be split and a sentence
- * read alike there, and so is an f-string or a t-string, whose braces hold code. A blanked character
- * becomes a space, a line break staying, so the text keeps its shape. Undefined where data cannot be
- * told from code: any language but python, and a program that runs a process or builds code at run
- * time (exec, eval, compile), either of which can run what a string holds.
+ * (the text a script puts into a file, a block it replaces), all but its last word, which may be a
+ * name (`"""notes\napp/page.tsx"""`, or one a .strip() leaves). A literal on one line is kept whole,
+ * since a path (one with a space in it too, in a Bidspoke checkout) and a sentence read alike there,
+ * and so is an f-string or a t-string, whose braces hold code. A blanked character becomes a space, a
+ * line break staying, so the text keeps its shape. Undefined where data cannot be told from code: any
+ * language but python, a program that runs a process or builds code at run time (exec, eval,
+ * compile), either of which can run what a string holds, and one whose code cuts text into parts
+ * (PARSES), which can cut a block into the names it opens.
  */
 export const codeOnly = (lang: Lang, inline: string): string | undefined => {
   if (lang !== 'python') return undefined
@@ -679,15 +680,20 @@ export const codeOnly = (lang: Lang, inline: string): string | undefined => {
     const closed = inline.startsWith(q, to)
     if (/[fFtT]/.test(prefix) || !body.includes('\n')) out += q + body
     else {
-      // The last word, kept where the closing quote ends it.
-      const last = closed ? (/[^\s]*$/.exec(body)?.[0] ?? '') : ''
+      // The last word, kept with whatever space follows it (a .strip() makes it the whole).
+      const last = /[^\s]*\s*$/.exec(body)?.[0] ?? ''
       out += q + blank(body.slice(0, body.length - last.length)) + last
     }
     if (closed) out += q
     i = to + (closed ? q.length : 0)
   }
-  return out
+  // A program that cuts text into parts may cut a block into the names it opens (`"""a.css\nb.css""".split()`,
+  // a JSON map of files), so where its code does, data cannot be told from names (lessons review).
+  return PARSES.test(out) ? undefined : out
 }
+// Python's ways of cutting text into parts: str's split and partition, a pattern's matches, and the
+// parsers of structured text (json, yaml, toml, csv, ast, shlex, configparser).
+const PARSES = /\.\s*(?:r?split|splitlines|r?partition|findall|finditer|search|match|fullmatch)\s*\(|\b(?:loads|load_all|safe_load|literal_eval)\s*\(|\b(?:csv|shlex|configparser|tomllib|toml|yaml)\s*\./
 
 /** What inline code in a language can do that no build refuses, or undefined when it only reads. */
 export const codeVerdict = (lang: Lang, inline: string): CodeVerdict | undefined => {

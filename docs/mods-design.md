@@ -2382,12 +2382,15 @@ write. An agent on #1158 ran a python heredoc editing `writes.test.ts`, whose ne
 - **A name counts where the program can open it, not where it sits in data.** mod-kit's write
   reader now gives, beside `program`, its `code`: the text with what a python program holds only as
   data blanked, each comment and each plain string literal spanning lines (the block it puts in a
-  file), but a last word its closing quote ends. A literal on one line is kept whole: a path, a path
-  with a space in it (a Bidspoke checkout), names joined to be split and a sentence read alike there.
-  An f-string is kept, its braces being code. The design round guard reads `code` where it is given.
+  file), but its last word, which may be a name. A literal on one line is kept whole: a path, a path
+  with a space in it (a Bidspoke checkout) and a sentence read alike there. An f-string is kept, its
+  braces being code. The design round guard reads `code` where it is given.
 - **Where data cannot be told from code, the whole text is still the guess, so it asks.** `code` is
   absent for any language but python, for a program that runs a process or builds code at run time
-  (either can run what a string holds), for one the shell may have changed (an unquoted heredoc or
+  (either can run what a string holds), for one whose code cuts text into parts (split, splitlines,
+  partition, a pattern's matches, a JSON, YAML, TOML, CSV or shlex parse), which can cut a block into
+  the names it opens (the lessons review's case, a block of two stylesheets split and each opened),
+  for one the shell may have changed (an unquoted heredoc or
   a -c program holding a $ or a backtick, ask before saving's own test for that, #940), for one a
   command substitution runs, and for one whose text names every file it writes, which `targets`
   already judges (#830).
@@ -2396,8 +2399,8 @@ write. An agent on #1158 ran a python heredoc editing `writes.test.ts`, whose ne
   not read `code`: its #940 reading counts a memory file a quote closes as a path even inside a
   string, a choice made there, so its behaviour is unchanged (108 of 108 of its tests, untouched).
 - Measured over 66 real python3 commands from this Mac's transcripts that open or quote a look file,
-  and the held one: 64 programs judged by their text, 54 given `code`, and 9 that lost a name, the
-  held one's `app/page.tsx` and eight others, every one data (a doc comment in a Swift block, test
+  and the held one: 64 programs judged by their text, 50 given `code`, and 8 that lost a name, the
+  held one's `app/page.tsx` and seven others, every one data (a doc comment in a Swift block, test
   data, a comment above the call, a URL in a test script), none a file the program opens. The
   Ovation program patching three design pages is still held for all three.
 

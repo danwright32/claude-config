@@ -1353,5 +1353,7 @@ test('#1165: a program that writes a screen file is still held, and so is one wh
   expect(await held(`python3 - <<'EOF'\nexec(compile('x=1', 'x', 'exec'))\nopen(p, 'w').write(${block})\nEOF`)).toContain(SKIP_QUESTION)
   expect(await held(`python3 - <<EOF\np = '$P'\nopen(p, 'w').write(${block})\nEOF`)).toContain(SKIP_QUESTION)
   expect(await held(`node -e "require('fs').writeFileSync(p, 'x\\n  git(app/page.tsx)\\n')"`)).toContain(SKIP_QUESTION)
+  // A program that cuts a block into the names it opens (lessons review).
+  expect(await held(`python3 - <<'EOF'\nfor f in """app/a.css\napp/b.css""".split():\n    open(f, 'w').write('')\nEOF`)).toContain('app/a.css')
   expect(w.ran).toEqual([])
 })

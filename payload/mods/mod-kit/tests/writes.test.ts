@@ -349,9 +349,10 @@ describe('writes: what the words do not name', () => {
     const program = `p='tests/x.test.ts'\ns=open(p).read()\nnew='''${data}'''\nopen(p,'w').write(s+new)`
     const u = read(`python3 - <<'EOF'\n${program}\nEOF`).unnamed[0]
     expect(u?.program).toBe(program)
-    expect(u?.code).toBe(program.replace(data, data.replace(/[^\n]/g, ' ')))
+    // All of its block but the last word, which is no name here.
+    expect(u?.code).toBe(program.replace(data, `${data.slice(0, -4).replace(/[^\n]/g, ' ')}}])\n`))
     // A -c program holding no $ or backtick is one the shell left as written.
-    expect(read(`python3 -c "open(p,'w').write('''x\napp/page.tsx\n''')"`).unnamed[0]?.code).toBe("open(p,'w').write(''' \n            \n''')")
+    expect(read(`python3 -c "open(p,'w').write('''app/page.tsx\nx\n''')"`).unnamed[0]?.code).toBe("open(p,'w').write('''            \nx\n''')")
     // Where the shell may have changed the text (an unquoted heredoc holding a $ or a backtick), the
     // program runs a process or the language is not python, data cannot be told apart: no code.
     const none = (command: string) => read(command).unnamed.map(x => 'code' in x)
