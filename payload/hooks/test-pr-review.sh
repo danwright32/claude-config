@@ -179,21 +179,9 @@ wait_final(){ # wait_final <sha>: waits on the condition, bounded, never a fixed
   while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
   [ -e "$f" ]
 }
-# A reviewer runner still going from the case before writes its answer into the NEXT case's fresh
-# state when it finishes: claude-config#1097, where section 3g2's runner, asleep 5 s, finished just
-# as 3h's check had made the state folder, so 3h read 3g2's review with one finding instead of its
-# own "could not run" (once in three runs under load, 2026-10-12, and on demand since by holding
-# that runner until 3h's check had made the folder). wait_final returns once the review FILE lands, and a runner goes on after
-# that to write the ledger and remove its input, so the state is wiped only once no runner holds an
-# input (its .diff, removed last however it ends), waited on and bounded rather than slept (L290).
-runners_done(){
-  local t0=$SECONDS
-  while [ $((SECONDS - t0)) -lt 40 ]; do
-    compgen -G "$AI_REVIEW_STATE_DIR/*.diff" >/dev/null || compgen -G "$AI_REVIEW_STATE_DIR/parts/*/*.diff" >/dev/null || return 0
-    sleep 0.1
-  done
-  return 1
-}
+# Waits for every reviewer runner of the case before to finish, so the state folder is never wiped
+# under one (claude-config#1097); shared with test-pr-review-push.sh, the story is in the library.
+. "$DIR/lib/review-runners-done.sh"
 reset_state(){
   runners_done || bad "a reviewer runner from the case before was still running 40 s later, so this case could read its answer"
   rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"

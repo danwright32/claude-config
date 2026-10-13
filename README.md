@@ -752,16 +752,33 @@ Five of them came after the 2026-09-21 timing further down, which measured the f
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
-Measured on this Mac on 2026-09-21, driving each installed gate with the payload Claude Code sends
-for `git push`, against a checkout one commit ahead of `origin/main`:
+Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
+reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
+the same way and reports the wall clock (#1122). Measured on this Mac on 2026-10-13, three cold
+readings of each, each against a fresh amend of a commit touching only this README in a throwaway
+checkout one commit ahead of `origin/main`, with other suites running (load average 12 to 18 on 12
+cores). The branch push is the one this repository accepts; it carried `SKIP_PR_REVIEW=1` so no
+timing run started a paid lessons review, whose wait is the last row of the table above. A push
+straight to main is refused by `linux-sections-before-push.sh` within a second (a change reaches
+main through a pull request here), but the other gates still run to the end, so it waits as long:
 
-| What the push carries | Total before git runs | Where it goes |
+| The push, and how the gates are run | Before git runs | Where it goes |
+| --- | --- | --- |
+| A branch push, gates together as Claude Code runs them | 26.1, 27.0 and 27.0 seconds | `scanners-before-push.sh` 25.4 to 26.5; every other gate finishes inside it, 0.9 seconds or less each (2026-10-13) |
+| A push straight to main, gates together | 24.2, 24.8 and 25.2 seconds | `scanners-before-push.sh` 23.7 to 24.6; every other gate 0.7 seconds or less (2026-10-13) |
+| The same push to main, gates one after another, as this tool used to | 30.4, 30.5 and 31.0 seconds | the same gates summed, which no push waits through (2026-10-13) |
+
+So a push waits about as long as the whole-tree scanner gate takes, and every other gate costs it
+nothing while that one runs, which is where any speed work belongs (L299). The earlier readings
+below were taken one after another and their totals are sums, so they overstate the wait by the
+other gates' times:
+
+| What the push carries | Gates summed, 2026-09-21 | Where it goes |
 | --- | --- | --- |
 | A commit touching no test section | 20.1 seconds | `scanners-before-push.sh` 15.3, every other gate 0.3 each (2026-09-21) |
 | A commit touching a test section | 26.0 seconds | `scanners-before-push.sh` 18.3, `linux-sections-before-push.sh` 1.5, the rest 0.3 each (2026-09-21) |
 
-So the whole-tree scanner gate is three quarters of the wait and everything else is noise, which is
-where any speed work belongs (L299). Two things the timing showed that no timeout could:
+Two things the timing showed that no timeout could:
 
 - `linux-sections-before-push.sh` returned in 1.5 seconds on 2026-09-21 having judged nothing,
   because docker is installed on this Mac and its daemon is not running. It said nothing at all, so a push nobody had

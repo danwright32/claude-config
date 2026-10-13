@@ -110,6 +110,12 @@ PC_PUSH=1
 # cwd is the SESSION's directory, so a session rooted outside the project reaches
 # it as `cd <repo> && git push`, and reading the cwd alone let every one of those
 # pushes past the gate while looking exactly like a push it had approved.
+# Exit 2 here is ps_repo_dir refusing: the command pushes from more than one repository, or names a
+# directory it could not resolve. Standing down on it says nothing to the session (stderr is shown
+# only on a nonzero exit), and that is deliberate: push-scope-notice.sh refuses the same push, once,
+# for every gate, with the reason and the remedy, so a second message here would only repeat it.
+# test-push-scope-notice.sh drives this gate beside that hook and fails if the two stop agreeing
+# (claude-config#1122).
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
