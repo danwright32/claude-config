@@ -195,6 +195,13 @@ reason="$(reason_of "$("$HELPER" --instruction "$INSTRUCTION" --label "X" --extr
 [[ "$reason" == *"HELD BACK: 235 harvest failures with no remedy since 2026-08-24."* ]] \
   && check "an extra line is carried in the reason itself" ok \
   || check "an extra line is carried in the reason itself" "[$reason]"
+# And SEVERAL are all carried. The review passes the held back count and a seen ledger it could not
+# keep (#1019 follow-up) as two --extra lines, and one replacing the other would lose the held back
+# report while the hook files those records away as reported.
+reason="$(reason_of "$("$HELPER" --instruction "$INSTRUCTION" --label "X" --extra "FIRST EXTRA held back count" --extra "SECOND EXTRA could not keep 1 seen ledger" 2>/dev/null)")"
+[[ "$reason" == *"FIRST EXTRA held back count"* && "$reason" == *"SECOND EXTRA could not keep 1 seen ledger"* ]] \
+  && check "two extra lines are both carried in the reason" ok \
+  || check "two extra lines are both carried in the reason" "[$reason]"
 
 # ---------------------------------------------------------------------------
 # 6. A missing instruction file is LOUD. A half applied sync on the other Mac is
