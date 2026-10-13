@@ -11196,6 +11196,9 @@ check "#513 a band with no room refuses instead of minting past it" "[ \"\$_spil
 check "#513 and the refusal names the band and the number in the way" \
   "line_has \"\$_spill_out\" '501 to 1000' 'highest in use 1000'"
 check "#513 and it mints nothing at all"  "! grep -qE '^L[0-9]+\$' <<< \"\$_spill_out\""
+# The words #1140 asserts are ABSENT when the payload fills a band, proved present here, so that
+# absence check is not satisfied by a refusal reworded out from under it.
+check "#513 and says the band has no room" "grep -q 'has no room in it' <<< \"\$_spill_out\""
 check "#513 and it names the call that should have been made instead" \
   "grep -q 'lesson_band_with_room' <<< \"\$_spill_out\""
 # The second refusal: what the merge does with a number that did not come back as a number. That is
@@ -11216,6 +11219,79 @@ check "#513 while a real number is accepted, or the merge could never renumber a
 # And the merge really does ask that question, rather than carrying its own copy of the test (L41).
 check "#513 the merge decides through that one predicate" \
   "grep -q 'usable_lesson_start' '$SCRIPT'"
+
+section "== a lesson number either copy holds is never minted again (claude-config#1140) =="
+# On 2026-10-13 L762 was minted twice on one Mac, and lesson-fanout.sh then filed twelve sweep
+# issues carrying the wrong lesson's text. The issue read it as next-lesson counting only the
+# payload; measured here, it counted only the LOCAL rule files, so the case the issue names (a lesson
+# written here and not yet sent) was already counted, and the opposite one was not: a number the
+# payload holds and this Mac's copy does not was offered again. That happens to a number already
+# PUBLISHED, so references to it exist where nothing local can reach them, and reusing it makes
+# every one of them ambiguous. The minter now takes the highest over BOTH copies, inside this
+# Mac's band, and the band's room is judged over the same files, or the two would disagree about
+# whether a band is full and the backstop inside next_lesson_number would refuse instead of rolling.
+NLR="$WORK/nl1140-repo"; NLH="$WORK/nl1140-home"
+mkdir -p "$NLR/payload" "$NLR/lesson-bands" "$NLH"
+echo 501 > "$NLR/lesson-bands/MacWork"
+printf '# rules\n@LESSONS.md\n' > "$NLH/CLAUDE.md"; cp "$NLH/CLAUDE.md" "$NLR/payload/CLAUDE.md"
+_nl1140(){ SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NLH" SYNC_REPO="$NLR" bash "$SCRIPT" "$@" 2>&1; }
+# The case the issue names: written here, not sent. Counted before this change and after it.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L762. written here, not sent.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_local="$(_nl1140 next-lesson)"
+check "#1140 a lesson written here and not yet sent is not offered again" "grep -q '^L763\$' <<< \"\$nl1140_local\""
+# The case that minted a duplicate: the payload holds L762 and this Mac's copy does not.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L762. already published.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_payload="$(_nl1140 next-lesson)"
+check "#1140 a number the payload holds is not offered again" "grep -q '^L763\$' <<< \"\$nl1140_payload\""
+nl1140_check="$(_nl1140 check-lessons)"
+check "#1140 and check-lessons names the same next free number" "grep -q 'next free: L763' <<< \"\$nl1140_check\""
+# The other Mac's band is still not this Mac's business: a payload number above the band moves nothing.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L1001. the other Mac.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_other="$(_nl1140 next-lesson)"
+check "#1140 a number in another Mac's band does not move this Mac's" "grep -q '^L762\$' <<< \"\$nl1140_other\""
+# Room is judged over the same files. The payload has used the band's last number and this Mac's copy
+# has not, so the band is full and must roll over, never refuse with the backstop's spill message.
+printf -- '- **L999. local top.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L999. local top.** body\n- **L1000. published top.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_full_rc=0; nl1140_full="$(_nl1140 next-lesson)" || nl1140_full_rc=$?
+check "#1140 a band the payload has filled rolls over rather than refusing" \
+  "[ \"\$nl1140_full_rc\" -eq 0 ] && grep -q '^L1001\$' <<< \"\$nl1140_full\""
+check "#1140 and never hands out a number past the band it was given" "! grep -q 'has no room in it' <<< \"\$nl1140_full\""
+# lesson-fanout.sh reads a duplicate out of lesson-faults by two pieces of wording: the duplicate
+# sentence, which says the tool reported on duplicates at all, and 'Lnnn used N times'. Its own suite
+# copies them, so the contract is held here, where the wording is made. Reworded, the fan out would
+# refuse every lesson while any fault stood, not file a wrong one, but it would say nothing useful.
+printf -- '- **L761. sound rule.** body of sound\n- **L762. slate rule.** body of slate\n- **L762. bidspoke rule.** body of bidspoke\n' > "$NLH/LESSONS.md"
+nl1140_faults_rc=0; nl1140_faults="$(_nl1140 lesson-faults)" || nl1140_faults_rc=$?
+check "#1140 the fan out's contract: a duplicate is reported in the words it reads" \
+  "[ \"\$nl1140_faults_rc\" -ne 0 ] && line_has \"\$nl1140_faults\" 'the same lesson number is used' 'L762 used 2 times'"
+# THE READER (claude-config#1140, folded in by Dan). `claude-sync lesson L762` answered with the FIRST
+# of two entries and exit 0, which is how the fan out came to file the wrong rule, and the PR lessons
+# review reads lessons the same way. Asked by a number two lessons share, it now prints EVERY entry
+# under it, each with its own id, says the number is a duplicate, and exits non zero, so no caller
+# can take one of two rules for the answer. Asked by an id, which names exactly one of them, it prints
+# that one.
+nl1140_ok_rc=0; nl1140_ok="$(_nl1140 lesson L761)" || nl1140_ok_rc=$?
+check "#1140 the control: a number one lesson holds is answered as before" \
+  "[ \"\$nl1140_ok_rc\" -eq 0 ] && grep -q 'sound rule' <<< \"\$nl1140_ok\" && ! grep -qi 'duplicate' <<< \"\$nl1140_ok\""
+nl1140_dup_rc=0; nl1140_dup="$(_nl1140 lesson L762)" || nl1140_dup_rc=$?
+check "#1140 a number two lessons share exits non zero" "[ \"\$nl1140_dup_rc\" -ne 0 ]"
+check "#1140 and prints the first entry" "grep -q 'slate rule' <<< \"\$nl1140_dup\" && grep -q 'body of slate' <<< \"\$nl1140_dup\""
+check "#1140 and the second, not only the first" "grep -q 'bidspoke rule' <<< \"\$nl1140_dup\" && grep -q 'body of bidspoke' <<< \"\$nl1140_dup\""
+check "#1140 and says plainly the number is a duplicate" "line_has \"\$nl1140_dup\" 'L762' 'names 2 lessons'"
+check "#1140 and gives each entry its own id" \
+  "[ \"\$(grep -oE '^id: [0-9a-f]+' <<< \"\$nl1140_dup\" | sort -u | wc -l | tr -d ' ')\" -eq 2 ]"
+nl1140_id2="$(grep -oE '^id: [0-9a-f]+' <<< "$nl1140_dup" | sed -n '2s/^id: //p')"
+nl1140_id1="$(grep -oE '^id: [0-9a-f]+' <<< "$nl1140_dup" | sed -n '1s/^id: //p')"
+nl1140_byid2_rc=0; nl1140_byid2="$(_nl1140 lesson "${nl1140_id2:-none}")" || nl1140_byid2_rc=$?
+check "#1140 the SECOND entry's id finds that entry" \
+  "[ \"\$nl1140_byid2_rc\" -eq 0 ] && grep -q 'bidspoke rule' <<< \"\$nl1140_byid2\" && ! grep -q 'slate rule' <<< \"\$nl1140_byid2\""
+nl1140_byid1_rc=0; nl1140_byid1="$(_nl1140 lesson "${nl1140_id1:-none}")" || nl1140_byid1_rc=$?
+check "#1140 and the first entry's id finds only the first" \
+  "[ \"\$nl1140_byid1_rc\" -eq 0 ] && grep -q 'slate rule' <<< \"\$nl1140_byid1\" && ! grep -q 'bidspoke rule' <<< \"\$nl1140_byid1\""
+check "#1140 and the answer by id still says the number is shared" "grep -q 'names 2 lessons' <<< \"\$nl1140_byid1\""
 
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
