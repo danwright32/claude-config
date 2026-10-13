@@ -2557,7 +2557,9 @@ const noteWritten =async ($: EngineInterface, tool: string, input: Record<string
     try {
       patched = await patchedFiles($, writes)
     } catch (err) {
-      const said = `Scope modes could not read the patch this call applied (${msg(err)}), so winding down may not count the files it changed as this session's.`
+      // Reading the patch file and finding the checkout it applies in can each fail; the cause in
+      // brackets says which, and the sentence claims only that the files could not be told.
+      const said = `Scope modes could not tell which files the patch this call applied changed (${msg(err)}), so winding down may not count them as this session's.`
       if (patchSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
       else $.ui.toast(`${said} Later failures go to the debug log.`)
       patchSaid = true

@@ -3918,11 +3918,21 @@ test("a patch that cannot be read is said, and the files the same call wrote by 
   const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, unreadableFiles: ['/tmp/fix.patch'] })
   await start($ as never, clock)
   expect(await call($ as never, bash('echo x > app.ts && git apply /tmp/fix.patch', 'g1'))).toBe('ran')
-  const said = w.toasts.filter(t => t.includes('could not read the patch'))
+  const said = w.toasts.filter(t => t.includes('the patch this call applied'))
   expect(said.length).toBe(1)
-  expect(said[0]).toMatch(/^Scope modes could not read the patch this call applied \(.*EACCES: permission denied, open '\/tmp\/fix\.patch'\), so winding down may not count the files it changed as this session's\. Later failures go to the debug log\.$/)
+  expect(said[0]).toMatch(/^Scope modes could not tell which files the patch this call applied changed \(.*EACCES: permission denied, open '\/tmp\/fix\.patch'\), so winding down may not count them as this session's\. Later failures go to the debug log\.$/)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
+})
+
+test('a checkout the patch applies in that cannot be found is said with that cause, not as a patch that could not be read (#1123 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, workingTreeFails: 'the disk cannot read /repo' })
+  await start($ as never, clock)
+  await call($ as never, bash('git apply /tmp/fix.patch', 'g1'))
+  const said = w.toasts.filter(t => t.includes('the patch this call applied'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toContain('the disk cannot read /repo')
+  expect(said[0]).not.toContain('EACCES')
 })
 
 test('a stash that cannot be read is said once, and the pop still runs (#1123)', withDeps, async ($, on) => {
