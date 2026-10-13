@@ -47,7 +47,8 @@
 # mostly built by agents, which never fire UserPromptSubmit. They were 2,008 of the 2,010 finished
 # files on 2026-10-12, and walking them is what timed the hook out. They are dropped by NAME, in the
 # one awk that lists what is unshown, so none costs a process. A pending one past its deadline is
-# still settled below, so its marker cannot keep every session off the fast path.
+# still settled below, so its marker cannot keep every session off the fast path; and so is every
+# other repository's, by whichever session prompts first (claude-config#1095).
 #
 # Nothing below may start a process per FILE, nor per review before the budget has decided to show
 # it: the state directory holds every repository's reviews for 14 days (1,975 files on 2026-10-03),
@@ -101,10 +102,13 @@ LIST=""; HELD=""
 [ -n "$session" ] && { LIST="$SHOWN_DIR/$session.list"; HELD="$SHOWN_DIR/$session.held"; }
 
 # Fast path: nothing written since this session last looked, nothing pending, and nothing held back
-# by the last pass for want of room (the .held marker, at the end).
+# by the last pass for want of room (the .held marker, at the end). "Since" is the session's record
+# being strictly NEWER than the last write: bash 3.2's -nt compares whole seconds, so a write in the
+# same second as the last look read as older and stayed hidden until some later write (#1095). A
+# tie takes the full path, which costs one full pass at most, in that second.
 pending=( "$AR_STATE_DIR"/*.txt.pending )
 if [ -n "$LIST" ] && [ -f "$LIST" ] && [ "${#pending[@]}" -eq 0 ] && [ ! -e "$HELD" ] \
-   && ! [ "$AR_STATE_DIR/.updated" -nt "$LIST" ]; then
+   && [ "$LIST" -nt "$AR_STATE_DIR/.updated" ]; then
   exit 0
 fi
 
@@ -210,14 +214,25 @@ body_bound() {   # $1 = finished review file -> sets bound
 # with `set -u` on is an unbound variable error, and the first version of this hook died there on
 # every prompt that had nothing pending, which is every ordinary prompt (found by the suite, not by
 # reading).
+#
+# EVERY repository's, not only this session's (claude-config#1095). The fast path above is off while
+# any pending marker exists, from any repository, so a dead review that only its own repository's
+# sessions settled kept every other repository's sessions on the full path until one of its own
+# prompted. Settling is a file write, the same for any repository; what a session is SHOWN stays its
+# own repository's (unshown_reviews). A marker with no start time to judge it by (a write cut short)
+# is judged by when it was written instead, one find for that rare marker alone, for the same reason.
 [ "${#pending[@]}" -gt 0 ] && for p in "${pending[@]}"; do
   base="${p##*/}"
-  case "$base" in "$key"-*) ;; *) continue ;; esac
   read_meta "$p"
-  case "$m_started" in ''|*[!0-9]*) continue ;; esac
   limit="${m_deadline:-$AR_DEADLINE}"
   case "$limit" in ''|*[!0-9]*) limit="$AR_DEADLINE" ;; esac
-  if [ $((now - m_started)) -gt $((limit + 60)) ]; then
+  case "$m_started" in
+    ''|*[!0-9]*)
+      [ -n "$(find "$p" -maxdepth 0 -mmin +$(( (limit + 60) / 60 + 1 )) 2>/dev/null)" ] || continue
+      m_started=""; age="" ;;
+    *) age=$((now - m_started)) ;;
+  esac
+  if [ -z "$age" ] || [ "$age" -gt $((limit + 60)) ]; then
     final="${p%.pending}"
     # A pull request review read in groups (#601) is settled by lib/pr-review.sh check, which knows
     # its groups: it writes the review up from answers that exist, or records it abandoned naming
@@ -233,12 +248,15 @@ body_bound() {   # $1 = finished review file -> sets bound
         printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=abandoned\n\n' \
           "$m_repo" "$m_branch" "$m_sha" "$m_started" "$now"
         printf 'The review was started and never finished: %s passed with no answer written, which means the background runner died. Nothing was read back. Push again to re-run it.\n' \
-          "$(elapsed_text $((now - m_started)))"
+          "$(elapsed_text "$age")"
       } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" 2>/dev/null
       # A pull request review's outcome is counted in the durable ledger like every other (#562).
       case "$base" in *-pr-*) ar_pr_ledger "$final" "$m_dir" ;; esac
     fi
     rm -f "$p" 2>/dev/null
+    # A write like any other, so it takes every OTHER session off its fast path once, or a session
+    # already past this pending marker would never be told (claude-config#1095).
+    touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
     finished=( "$AR_STATE_DIR"/*.txt )
   fi
 done
