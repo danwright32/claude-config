@@ -597,16 +597,21 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
 // rows and panes, and the colours. Read on each part of a camelCase name (`dimColor`, `paddingX`), so
 // a line naming any of them is held, as a hold costs Dan one answer and a pass a look he never saw.
 const MOD_LOOK_WORDS = new Set(
-  'color colour bold dim italic underline strikethrough inverse border frame box rule width height padding margin gap wrap truncate align justify flex style theme row rows column columns pane band card panel button render draw amber gray grey red green blue yellow cyan magenta violet white black orange purple pink'.split(
+  'color colour bold dim italic underline strikethrough inverse border frame box rule width height padding margin gap wrap truncate align justify flex style theme row rows column columns pane band card panel button render draw amber gray grey red green blue yellow cyan magenta violet white black orange purple pink ansi hex rgb hsl chalk cols icon glyph'.split(
     ' ',
   ),
 )
+// A colour or a terminal style spelled with no word at all: a hex colour (`'#ff0000'`), an ANSI
+// escape (`\x1b[31m`, `\u001b`, `\u{1b}`, `\033`, `\e[`), or an rgb() or hsl() colour (lessons review).
+const MOD_LOOK_LITERAL = /#[0-9a-f]{3,8}\b|\\x1b|\\u001b|\\u\{1b\}|\\033|\\e\[|\b(rgb|hsl)a?\(/i
 
 /**
  * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
  * the file draws (#1138): every line the change touches, in both texts, lies outside every JSX element
- * and, its comments aside, names no word a mod's drawing is spelled in (MOD_LOOK_WORDS). A text the
- * reader cannot follow (sourceSpans) is never judged so.
+ * and, its comments aside, names no word a mod's drawing is spelled in (MOD_LOOK_WORDS) and spells no
+ * colour or terminal style (MOD_LOOK_LITERAL). A text the reader cannot follow (sourceSpans) is never
+ * judged so. A size held in a constant whose name says nothing of it (`const MAX = 40`) is a gap this
+ * reading leaves, as a mod's `.ts` files, never held, leave every one.
  */
 export const modHookLogicOnly = (before: string, after: string): boolean => {
   if (before === after) return false
@@ -624,6 +629,7 @@ export const modHookLogicOnly = (before: string, after: string): boolean => {
     if (spans.jsx.some(([a, b]) => a < to && from < b)) return false
     let shown = ''
     for (let i = from; i < to; i++) if (!spans.comments.some(([a, b]) => a <= i && i < b)) shown += text[i]
+    if (MOD_LOOK_LITERAL.test(shown)) return false
     for (const w of shown.match(/[A-Za-z]+/g) ?? [])
       for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part)) return false
   }

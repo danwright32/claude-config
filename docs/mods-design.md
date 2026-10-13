@@ -2298,7 +2298,8 @@ we have the question presented in plain terms so I actually know what is going t
   count: five of the six draw Claude Code's panels through JSX, and manual steps draws through
   mod-kit's frames. But an edit whose changed lines, before and after, hold no JSX element and,
   comments aside, name no word a mod draws with (Ink's props such as color, bold, dim, border,
-  padding, wrap; mod-kit's frame, row, pane, band, card; the colours) is logic, and passes unasked
+  padding, wrap; mod-kit's frame, row, pane, band, card; the colours) and spell no colour or terminal
+  style (a hex value, an ANSI escape, rgb()) is logic, and passes unasked
   (rules.ts `modHookLogicOnly`). Its reader (`sourceSpans`) skips strings, templates, regexes,
   comments and a generic arrow's type parameters, opens an element only where an expression may
   start, and returns nothing for text it cannot follow, which is then asked about.

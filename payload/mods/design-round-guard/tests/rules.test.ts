@@ -402,6 +402,9 @@ test('a mod hook edit is logic only when it touches no JSX line and names no dra
   expect(modHookLogicOnly(TSX, swapIn('{/* note */}', '{/* a note */}'))).toBe(false)
   expect(modHookLogicOnly(TSX, swapIn('const label = `${n} <x>`', 'const label = `${n} <x>`\nconst EDGE = AMBER'))).toBe(false)
   expect(modHookLogicOnly(TSX, swapIn('b / 2', 'b / 2, dimColor'))).toBe(false)
+  // A colour or terminal style spelled with no word (lessons review): hex, ANSI escapes, rgb().
+  for (const literal of ["'#ff0000'", "'\\x1b[31m'", "'\\u001b[1m'", "'\\u{1b}[2m'", "'\\033[0m'", "'rgb(255, 0, 0)'"])
+    expect(modHookLogicOnly(TSX, swapIn('const label = `${n} <x>`', `const label = \`\${n} <x>\`\nconst EDGE = ${literal}`))).toBe(false)
   // No change, or text the reader cannot follow, is never logic only.
   expect(modHookLogicOnly(TSX, TSX)).toBe(false)
   expect(modHookLogicOnly(TSX, swapIn("const re = /<Box>'/g", "const re = /<Box>'/g\nconst open = <Box>"))).toBe(false)
