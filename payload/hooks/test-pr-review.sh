@@ -445,14 +445,18 @@ check "saying it failed and why" "claude exited 3" "$out"
 # 3e2. the reviewer failed and its stderr carried SECRETS (claude-config#581). On 2026-09-24 in
 #      Bidspoke a failed start printed Claude Code's warnings about wildcard permission rules, which
 #      quote each rule verbatim, and a rule held a live Supabase secret key inside a curl command, so
-#      the gate echoed the key into the session. The fake values are assembled at run time so this
-#      file holds no secret shaped literal for a scanner to trip on.
+#      the gate echoed the key into the session. Each fake is written whole, in a shape the sync's
+#      secret scan and the session's secret guard both accept by their own rules, never split into
+#      pieces to get past them (claude-config#1125). SB is under the 24 characters an apikey value needs before the sync's
+#      secret scan reads it as a credential, GHP under the 30 a GitHub token needs there, and SK,
+#      JWT and GHP under the lengths the session's secret guard looks for, while every one stays
+#      long enough for the redactor, whose rules ask for less.
 reset_state
-SB="sb_""secret_""Zq9fakeFAKEfake0123456789abcd"
-SK="sk-""ant-fakeFAKEfake0123456789abcdef"
-JWT="eyJ""hbGciOiJIUzI1NiJ9.eyJ""zdWIiOiJmYWtlIn0.c2lnbmF0dXJlZmFrZQ"
-BEARER="tok""FAKEfake0123456789bearer"
-GHP="ghp""_FAKEfake0123456789abcdefghijABCDEFGHIJ"
+SB="sb_secret_FAKEfake0123"
+SK="sk-ant-fakeFAKEfake0123456789abcdef"
+JWT="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.c2lnbmF0dXJl"
+BEARER="tokFAKEfake0123456789bearer"
+GHP="ghp_FAKEfake0123456789abcd"
 cat > "$WORKDIR/stderr-secrets" <<EOS
 Warning: permission rule Bash(curl -H "apikey: $SB" https://x.supabase.co/rest/v1/*) uses a wildcard
 Settings warning in .claude/settings.local.json: Bash(curl -H "Authorization: Bearer $BEARER" *)
