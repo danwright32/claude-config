@@ -625,7 +625,15 @@ method and `--delete-branch`, and stops, in its own words, on a gate's refusal, 
 A GitHub read that fails in transit or on GitHub's server (a timeout, a reset connection, an HTTP
 5xx) is asked again, four times over about a minute, before it stops naming the last error; an
 answer GitHub actually gave, such as a 404, is believed the first time, and nothing merges on a
-read it could not confirm (claude-config#1061).
+read it could not confirm (claude-config#1061). The gate's own reads are asked again the same way,
+three times within a budget well inside its 30 second hook timeout (claude-config#1081).
+
+Checks that have reported being green is not the head's CI being green (claude-config#1087). A
+workflow run can exist for minutes before any of its jobs registers a check (Slate's CI waits on a
+concurrency group), so a fast check from another workflow can be the only one on the head. Both the
+helper and `block-red-merge.sh` therefore also read the workflow runs GitHub has created for the head
+commit: the helper waits while any has not finished, and the gate refuses, naming the runs. No
+repository's check names are written anywhere; a run that has not finished is enough.
 
 Every outcome is named and none reads as clean by accident: finished with findings, finished clean,
 still running (with elapsed time), did not finish, failed, came back empty, answered in some other

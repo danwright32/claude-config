@@ -18,6 +18,16 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/block-red-merge.sh"
+
+# The gate asks a read again after a transient failure (#1081), waiting through BRM_SLEEP. Every case
+# here gets a sleep that only logs its argument, so no case waits on a clock (L524, L290), and the
+# cases about retrying read how many waits there were from BRM_SLEEP_LOG.
+SLEEP_DIR="$(mktemp -d)"
+trap 'rm -rf "$SLEEP_DIR"' EXIT
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "${BRM_SLEEP_LOG:-/dev/null}"\n' > "$SLEEP_DIR/fake-sleep"
+chmod +x "$SLEEP_DIR/fake-sleep"
+export BRM_SLEEP="$SLEEP_DIR/fake-sleep"
+unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS BRM_READ_BUDGET_SECONDS 2>/dev/null || true
 passed=0
 failed=0
 
@@ -53,10 +63,27 @@ case "\$*" in
   *"/compare/"*)
     printf '%s\n' "\$*" >> "\${GH_COMPARE_LOG:-/dev/null}"
     if [ -n "\${GH_COMPARE_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    if [ -n "\${GH_COMPARE_FAILS:-}" ] && [ -s "\$GH_COMPARE_FAILS" ]; then
+      head -1 "\$GH_COMPARE_FAILS" >&2; tail -n +2 "\$GH_COMPARE_FAILS" > "\$GH_COMPARE_FAILS.t"; mv "\$GH_COMPARE_FAILS.t" "\$GH_COMPARE_FAILS"; exit 1
+    fi
     if [ -n "\${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "\$GH_COMPARE_JSON"
     else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
     ;;
-  *"pr view"*) cat <<'JSON'
+  *"/actions/runs"*)
+    # The workflow runs for the head (#1087): GH_RUNS_JSON, or none; GH_RUNS_FAILS is a file of
+    # errors, one spent per call, so a read can fail some number of times and then answer (#1081).
+    printf '%s\n' "\$*" >> "\${GH_RUNS_LOG:-/dev/null}"
+    if [ -n "\${GH_RUNS_FAILS:-}" ] && [ -s "\$GH_RUNS_FAILS" ]; then
+      head -1 "\$GH_RUNS_FAILS" >&2; tail -n +2 "\$GH_RUNS_FAILS" > "\$GH_RUNS_FAILS.t"; mv "\$GH_RUNS_FAILS.t" "\$GH_RUNS_FAILS"; exit 1
+    fi
+    if [ -n "\${GH_RUNS_JSON:-}" ]; then printf '%s\n' "\$GH_RUNS_JSON"
+    else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
+    ;;
+  *"pr view"*)
+    if [ -n "\${GH_VIEW_FAILS:-}" ] && [ -s "\$GH_VIEW_FAILS" ]; then
+      head -1 "\$GH_VIEW_FAILS" >&2; tail -n +2 "\$GH_VIEW_FAILS" > "\$GH_VIEW_FAILS.t"; mv "\$GH_VIEW_FAILS.t" "\$GH_VIEW_FAILS"; exit 1
+    fi
+    cat <<'JSON'
 $2
 JSON
   ;;
@@ -474,6 +501,7 @@ case "$*" in
     if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
     else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
     ;;
+  *"/actions/runs"*) printf '%s\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *"auth status"*)
     printf 'Logged in to github.com account danwright32 (keyring)\n'
     printf 'Logged in to github.com account nursedexapp (keyring)\n'
@@ -503,6 +531,7 @@ case "$*" in
     if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
     else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
     ;;
+  *"/actions/runs"*) printf '%s\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *"auth status"*) printf 'Logged in to github.com account nursedexapp (keyring)\n' ;;
   *"auth token -u "*) printf 'tok-nursedexapp\n' ;;
   *"pr view"*)
@@ -529,6 +558,7 @@ case "$*" in
     if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
     else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
     ;;
+  *"/actions/runs"*) printf '%s\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
@@ -890,6 +920,7 @@ case "$*" in
     if [ -n "${GH_COMPARE_JSON:-}" ]; then printf '%s\n' "$GH_COMPARE_JSON"
     else printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}'; fi
     ;;
+  *"/actions/runs"*) printf '%s\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
@@ -1321,6 +1352,7 @@ cat > "$dir/bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
   *"/compare/"*) printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0}' ;;
+  *"/actions/runs"*) printf '%s\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *"pr view 8"*) printf '%s\n' '$RED' ;;
   *"pr view"*) printf '%s\n' '$GREEN' ;;
 esac
@@ -1340,6 +1372,109 @@ if denied "$out"; then pass; else
   fail "a second merge of another pull request in the same checkout was let through: $out"
 fi
 rm -rf "$dir" "$dir2"
+
+echo "block-red-merge: a fast check reporting first is not the head's CI (#1087)"
+
+# Slate #3645 was merged on 2026-10-12 with one check on its head, a green one from a separate fast
+# workflow, while its CI run had existed for a minute waiting on a concurrency group with no jobs
+# yet. The gate judged the checks that had reported, found them green, and allowed it. An unfinished
+# workflow run for the head is the record that more checks are coming, whatever they are called.
+RUNS_CI_PENDING='{"total_count":2,"workflow_runs":[{"name":"CI","status":"pending","conclusion":null},{"name":"Merge-gap guard","status":"completed","conclusion":"success"}]}'
+RUNS_DONE='{"total_count":2,"workflow_runs":[{"name":"CI","status":"completed","conclusion":"success"},{"name":"Merge-gap guard","status":"completed","conclusion":"success"}]}'
+FAST_ONLY='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[{"__typename":"CheckRun","name":"merge-gap","workflowName":"Merge-gap guard","conclusion":"SUCCESS","startedAt":"2026-10-12T22:24:49Z"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+PINNED="gh pr merge 7 --squash --match-head-commit $HEAD_SHA"
+dir=$(make_repo without-tool "$FAST_ONLY")
+GH_RUNS_LOG="$dir/runs.log"; export GH_RUNS_LOG
+out=$(GH_RUNS_JSON="$RUNS_CI_PENDING" run_hook "$dir" "$PINNED")
+if denied "$out"; then pass; else fail "a head whose CI run had not registered its checks was allowed on one fast green check: $out"; fi
+if holds "$out" "CI (pending)"; then pass; else fail "the refusal does not name the run still to report: $out"; fi
+if holds "$out" "merge-when-ready.sh 7"; then pass; else fail "the refusal does not hand over the helper that waits for it: $out"; fi
+if grep -qF "repos/acme/widget/actions/runs?head_sha=$HEAD_SHA" "$GH_RUNS_LOG"; then pass; else
+  fail "the runs were not read for the judged head in this repository: $(cat "$GH_RUNS_LOG")"
+fi
+out=$(GH_RUNS_JSON="$RUNS_DONE" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "control: every run finished and every check green was refused: $out"; else pass; fi
+# An answer that is not a list of runs is not "no runs" (L42).
+out=$(GH_RUNS_JSON='{"message":"Not Found"}' run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "could not read which workflow runs"; then pass; else
+  fail "an unreadable runs answer was read as nothing still to come: $out"
+fi
+rm -rf "$dir"
+unset GH_RUNS_LOG
+
+echo "block-red-merge: the gate's own reads are asked again on a dropped connection (#1081)"
+
+# Since #1070 merge-when-ready.sh retries its own reads, but this gate's one shot reads still turned a
+# TLS timeout into a refusal that stopped the merge after the whole CI wait. A transient failure is
+# asked again (a few tries, through BRM_SLEEP); a refusal is believed at once; and a read that never
+# answers still refuses.
+BRM_SLEEP_LOG="$(mktemp)"; export BRM_SLEEP_LOG
+sleeps() { grep -c . "$BRM_SLEEP_LOG" 2>/dev/null || true; }
+fails_file() {  # $@ = one error per line, each spent by one call
+  local f; f="$(mktemp)"; printf '%s\n' "$@" > "$f"; printf '%s' "$f"
+}
+TLS='Post "https://api.github.com/graphql": net/http: TLS handshake timeout'
+RESET='Get "https://api.github.com/repos/acme/widget/compare/main...x": read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer'
+
+dir=$(make_repo without-tool "$GREEN")
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$TLS")
+out=$(GH_VIEW_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#1081 a pull request read that failed once with a TLS timeout refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1081 the pull request read was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$TLS" "$TLS" "$TLS" "$TLS" "$TLS")
+out=$(GH_VIEW_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "TLS handshake timeout"; then pass; else fail "#1081 a pull request read that never answered did not refuse naming the error: $out"; fi
+if [ "$(sleeps)" = 2 ]; then pass; else fail "#1081 a read that kept failing was not tried three times in all ($(sleeps) waits)"; fi
+rm -f "$f"
+
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)")
+out=$(GH_VIEW_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then pass; else fail "#1081 a pull request GitHub says is not there was allowed: $out"; fi
+if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a real answer (not found) was asked again ($(sleeps) waits)"; fi
+rm -f "$f"
+
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#1081 a compare that was reset once refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1081 the compare was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+
+: > "$BRM_SLEEP_LOG"
+out=$(GH_COMPARE_FAIL=1 run_hook "$dir" "$PINNED")
+if denied "$out" && says "$out" "could not read"; then pass; else fail "#1081 a compare that kept failing with a server error was not refused: $out"; fi
+if [ "$(sleeps)" = 2 ]; then pass; else fail "#1081 a compare that kept failing was not tried three times ($(sleeps) waits)"; fi
+
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Server Error (HTTP 502)")
+out=$(GH_RUNS_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#1081 a runs read that failed once with a 502 refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1081 the runs read was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Resource not accessible by integration (HTTP 403)")
+out=$(GH_RUNS_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "HTTP 403"; then pass; else fail "#1081 a runs read GitHub refused was not refused naming GitHub's answer: $out"; fi
+if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a refusal (403) was asked again ($(sleeps) waits)"; fi
+rm -f "$f"
+
+# The retries live inside the gate's own budget, well inside the 30 seconds the harness gives it: a
+# gate killed for overrunning says nothing, which is no refusal at all. With no budget left, a
+# transient failure is not asked again and the read refuses.
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(BRM_READ_BUDGET_SECONDS=0 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then pass; else fail "#1081 with no retry budget left a failed compare was allowed: $out"; fi
+if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a retry was made past the budget ($(sleeps) waits)"; fi
+rm -f "$f"
+rm -rf "$dir"
+rm -f "$BRM_SLEEP_LOG"; unset BRM_SLEEP_LOG
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

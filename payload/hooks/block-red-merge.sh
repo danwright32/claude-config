@@ -101,6 +101,26 @@ case "$command" in
   *ALLOW_RED_MERGE=1*) exit 0 ;;
 esac
 
+# THIS GATE'S OWN READS ARE ASKED AGAIN when GitHub did not answer (claude-config#1081). Since #1061
+# merge-when-ready.sh retries its reads, but it hands the final pinned merge to this gate, whose one
+# shot reads turned a single TLS timeout or reset into a refusal that stopped the merge after the whole
+# CI wait. So each read below is a reader returning 0 (answered), 1 (GitHub answered no, or failed in
+# a way nobody recognised) or 2 (mt_gh_transient), run through mt_retry_read, the one retry loop the
+# helper uses too. A refusal is believed the first time, and a read still failing after its tries
+# refuses exactly as before: nothing merges on an unconfirmed read.
+#
+# The retries have a BUDGET, measured from the start of this hook in the shell's own SECONDS, because
+# the harness gives this gate 30 seconds and a gate killed for overrunning says nothing at all, which
+# is no refusal. A retry whose wait would end past the budget is not made. Seams, for the tests and
+# nothing else: BRM_READ_TRIES (3 in all), BRM_READ_RETRY_SECONDS (2), BRM_READ_BUDGET_SECONDS (12)
+# and BRM_SLEEP (sleep). None can let a merge through: the fewest tries is one, as before.
+brm_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+READ_TRIES="$(brm_num "${BRM_READ_TRIES:-}" 3)"
+READ_WAIT="$(brm_num "${BRM_READ_RETRY_SECONDS:-}" 2)"
+READ_DEADLINE="$(brm_num "${BRM_READ_BUDGET_SECONDS:-}" 12)"
+READ_SLEEP="${BRM_SLEEP:-sleep}"
+read_again(){ mt_retry_read "$READ_TRIES" "$READ_WAIT" "$READ_SLEEP" "$READ_DEADLINE" "" "$1"; }
+
 command -v gh >/dev/null 2>&1 || deny "Cannot verify CI: gh is not on PATH. Merging blind is what this gate exists to stop."
 
 # jq alone, with python3 present: the command above WAS readable, so this is known to be a merge,
@@ -247,7 +267,11 @@ pr_label="$(mt_pr_label "$pr")"
 # headRefOid comes from the SAME call as the verdict, deliberately: the commit the merge is
 # pinned to has to be the commit these checks were read for, and a second lookup could answer
 # about a head that had already moved (L70, #345).
-envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid,baseRefName,mergeStateStatus" "$remote_slug" "$repo_flag")
+read_view(){
+  envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid,baseRefName,mergeStateStatus" "$remote_slug" "$repo_flag")
+  mt_view_class "$envelope"
+}
+read_again read_view
 view_account=""
 if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ]; then
   rollup=$(printf '%s' "$envelope" | jq -c '.view')
@@ -409,6 +433,52 @@ bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEU
 # it there would block those repos for a reason that does not apply to them (L615, L324).
 head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
 
+# The repository the pull request is in, read from its own url, which is the one gh just answered
+# about, then from what the merge or the folder named. Never from gh's {owner}/{repo} placeholder,
+# which is filled in from whatever checkout the call happens to run in (#418). Both rules below ask
+# GitHub about it, as the account that could see the pull request.
+slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
+  | sed -nE 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
+[ -n "$slug" ] || slug="$remote_slug"
+# The one step remedy both rules hand over, carrying this merge's own method so it merges the same
+# way. Only the flags the helper carries are read; anything else is not its to pass on.
+helper_flags=""
+for hf in --squash --merge --rebase --delete-branch; do
+  case " $command " in *" $hf "*) helper_flags="$helper_flags $hf" ;; esac
+done
+helper_cmd="bash ~/.claude/hooks/lib/merge-when-ready.sh $number${slug:+ --repo $slug}$helper_flags"
+gh_as_viewer(){   # gh, as the account that could see the pull request when that was not the active one
+  local tok=""
+  [ -n "$view_account" ] && tok=$(gh auth token -u "$view_account" 2>/dev/null)
+  if [ -n "$tok" ]; then GH_TOKEN="$tok" gh "$@"; else gh "$@"; fi
+}
+
+# GREEN SO FAR IS NOT GREEN (claude-config#1087). The rollup lists the checks that have REGISTERED on
+# the head, and a workflow run can exist for minutes before any of its jobs does. On 2026-10-12 Slate
+# #3645 was merged on one check, a green one from a separate fast workflow, while its CI run had been
+# waiting on a concurrency group for a minute with no jobs yet: every check that had reported was
+# green, and this gate agreed (L98). So the runs GitHub has created for the head are read too, and any
+# that has not finished refuses, by whatever name its checks will carry: nothing here knows any
+# repository's check names.
+#
+# Fails CLOSED: a runs read that never answers, or answers with something that is not the list,
+# refuses in its own words, because not knowing whether CI is still to come is not knowing it is not
+# (L42). A repository with no Actions answers with an empty list, which is nothing to wait for.
+#
+# A rollup that named no head commit has no runs to ask about, and is not asked: the up to date rule
+# and the pin below each refuse a head they cannot name, unless both their overrides are given.
+if [ -n "$head_sha" ]; then
+  [ -z "$slug" ] && deny "Refusing to merge: nothing here could name the repository PR #$number is in (gh reported no url for it, the merge names none with --repo, and this folder has no GitHub remote), so nothing could read whether CI is still to report on its head ${head_sha:0:7}. Name the repository with --repo owner/name on the merge. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  read_runs(){ mt_unfinished_runs "$slug" "$head_sha" "$view_account"; }
+  read_again read_runs; runs_rc=$?
+  if [ "$runs_rc" -ne 0 ]; then
+    deny "Refusing to merge: could not read which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug (${MT_RUNS_ERR:-no answer}), so nothing here can tell whether CI is still to report on it. Not knowing is not the same as nothing being left to run: the checks reported so far may be a fast few, with the rest not registered yet. Re-run once GitHub answers. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  fi
+  if [ -n "$MT_RUNS_PENDING" ]; then
+    deny "PR #$number is not green yet: every check that has reported on its head ${head_sha:0:7} is green, but GitHub has workflow runs for that head that have not finished: $MT_RUNS_PENDING. Their checks have not all registered, so the green so far is about part of the head's CI, which is how Slate #3645 was merged before its CI ran (claude-config#1087). Wait for them, or have it done in the background from a checkout of the repository: $helper_cmd . It waits for those runs and the lessons review, then merges only that head. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  fi
+fi
+
 # UP TO DATE WITH THE BASE (#766). Green is a verdict on the head commit as it was built, which is
 # on top of whatever base the branch was cut from. If the base has moved since, the combination main
 # will hold after this merge was never tested: on 2026-10-04 Try-Pennie/slate #3237 was green, was
@@ -440,37 +510,29 @@ head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
 case "$command" in
   *ALLOW_BEHIND_MERGE=1*) ;;
   *)
-    slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
-      | sed -nE 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
-    [ -n "$slug" ] || slug="$remote_slug"
     base_ref=$(printf '%s' "$rollup" | jq -r '.baseRefName // ""' 2>/dev/null)
     merge_state=$(printf '%s' "$rollup" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
     update_cmd="gh pr update-branch $number${slug:+ --repo $slug}"
-    # The merge method this merge asked for travels with it, so the one step remedy merges the same
-    # way. Only the flags the helper carries are read; anything else is not its to pass on.
-    helper_flags=""
-    for hf in --squash --merge --rebase --delete-branch; do
-      case " $command " in *" $hf "*) helper_flags="$helper_flags $hf" ;; esac
-    done
-    helper_cmd="bash ~/.claude/hooks/lib/merge-when-ready.sh $number${slug:+ --repo $slug}$helper_flags"
     behind_override="Deliberate override: ALLOW_BEHIND_MERGE=1 <the same command>, which skips this rule only: the checks must still be green and the merge must still pin its commit."
 
     [ -z "$base_ref" ] && deny "Refusing to merge: gh did not report which base branch PR #$number merges into, so nothing here could read that branch's current tip or tell whether the head contains it. A green verdict earned against an older base says nothing about what main will hold after the merge. Check the pull request's base, then re-run. $behind_override"
     [ -z "$head_sha" ] && deny "Refusing to merge: PR #$number reads green, but gh did not report its head commit, so nothing here could tell whether that head contains the current tip of $base_ref. Check which commit is at the head, then re-run. $behind_override"
 
     [ -z "$slug" ] && deny "Refusing to merge: nothing here could name the repository PR #$number is in (gh reported no url for it, the merge names none with --repo, and this folder has no GitHub remote), so nothing could read the current tip of its base branch $base_ref or tell whether the head contains it. Name the repository with --repo owner/name on the merge. $behind_override"
-    compare_err=$(mktemp "${TMPDIR:-/tmp}/brm-compare.XXXXXX" 2>/dev/null) || compare_err=/dev/null
-    compare_token=""
-    if [ -n "$view_account" ]; then
-      compare_token=$(gh auth token -u "$view_account" 2>/dev/null) || compare_token=""
-    fi
-    if [ -n "$compare_token" ]; then
-      compare=$(GH_TOKEN="$compare_token" gh api "repos/$slug/compare/$base_ref...$head_sha?per_page=1" 2>"$compare_err"); compare_rc=$?
-    else
-      compare=$(gh api "repos/$slug/compare/$base_ref...$head_sha?per_page=1" 2>"$compare_err"); compare_rc=$?
-    fi
-    compare_why=$(awk 'NF { print; exit }' "$compare_err" 2>/dev/null)
-    [ "$compare_err" != /dev/null ] && rm -f "$compare_err"
+    # A comparison gh could not make is asked again only when what it printed names the transport or
+    # GitHub's server (#1081); its readable answer is judged below whatever came back.
+    read_compare(){
+      local errf errs
+      errf=$(mktemp "${TMPDIR:-/tmp}/brm-compare.XXXXXX" 2>/dev/null) || errf=/dev/null
+      compare=$(gh_as_viewer api "repos/$slug/compare/$base_ref...$head_sha?per_page=1" 2>"$errf"); compare_rc=$?
+      errs=$(cat "$errf" 2>/dev/null)
+      compare_why=$(awk 'NF { print; exit }' "$errf" 2>/dev/null)
+      [ "$errf" != /dev/null ] && rm -f "$errf"
+      [ "$compare_rc" -eq 0 ] && return 0
+      mt_gh_transient "$errs" && return 2
+      return 1
+    }
+    read_again read_compare
 
     compare_status=$(printf '%s' "$compare" | jq -r '.status // ""' 2>/dev/null)
     behind_by=$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)

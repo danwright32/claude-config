@@ -22,6 +22,8 @@
 #   mt_merge_span_why
 #                    whether the command merges more than one pull request, which
 #                      every merge gate refuses because it judges one (#1062)
+#   mt_merge_each    every merge in the command, for the hooks that act after a
+#                      merge rather than gate one (#1082)
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
 #                      that answer a non-merge caller needs too
 #   mt_checkout_candidates
@@ -36,6 +38,13 @@
 #   mt_gh_transient  whether a failed gh read is worth asking again: the
 #                      transport or GitHub's own server failed, rather than
 #                      GitHub answering no
+#   mt_retry_read    asks a read again while it fails transiently, through an
+#                      injected sleep, and never on a refusal (#1081)
+#   mt_view_class    whether an mt_pr_view answer was found, refused, or a
+#                      transient failure worth asking again
+#   mt_unfinished_runs
+#                    the workflow runs GitHub has created for a commit that have
+#                      not finished, whose checks may not have registered yet (#1087)
 #   mt_remote_path   whether a repository on GitHub holds a path, for a merge
 #                      naming a repository that is not the checkout it runs in
 #   mt_pinned_tool_remote
@@ -612,7 +621,10 @@ MTEOF
 # origin is acme/widget are one (lessons review of #1072). The work tree stands in only where there
 # is no name at all. A merge naming no readable number is never one with another: two such merges,
 # even `gh pr merge --squash || gh pr merge --admin` on one branch, count as two and are refused.
-mt_merge_targets() {  # $1 = command, $2 = session cwd
+#
+# With $3 set to "where", each line carries a fourth field, the directory that merge runs in, for a
+# caller that acts on each merge where it ran (mt_merge_each, claude-config#1082).
+mt_merge_targets() {  # $1 = command, $2 = session cwd, $3 = "where" to add a fourth field
   local cmd="$1" d="${2:-}" recs rec rc where flag pr top key slug seen=$'\n'
   local -a hits=()
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
@@ -639,8 +651,41 @@ mt_merge_targets() {  # $1 = command, $2 = session cwd
       case "$seen" in *$'\n'"${slug:-$key}"$'\t'"$pr"$'\n'*) continue ;; esac
       seen+="${slug:-$key}"$'\t'"$pr"$'\n'
     fi
-    printf '%s\t%s\t%s\n' "$slug" "$key" "$pr"
+    if [ "${3:-}" = where ]; then printf '%s\t%s\t%s\t%s\n' "$slug" "$key" "$pr" "$where"
+    else printf '%s\t%s\t%s\n' "$slug" "$key" "$pr"; fi
   done
+  return 0
+}
+
+# EVERY merge in the command, for a hook that acts after a merge rather than gating one
+# (pr-merge-quiz.sh, sync-main-to-dev.sh, claude-config#1082). One line per distinct target, as
+# "<directory it runs in>" TAB "<the --repo it names, or empty>" TAB "<pr number, or empty>": the
+# same three things those hooks read for a single merge with mt_repo_dir, mt_repo_flag and
+# mt_pr_number, which is exactly what they still print for a command running one merge.
+#
+# The merge gates refuse a command merging more than one pull request (#1072), so these hooks meet
+# one only when an override let it through, and they acted on the first merge alone: the main to dev
+# sync then skipped the second merge's repository in silence. Exit 2, printing nothing, when the
+# command runs more than one merge and nothing can read which pull request each is (no reader, L490):
+# the caller must say so by name rather than act on the first.
+mt_merge_each() {  # $1 = command, $2 = session cwd
+  local targets rc line slug key pr where
+  targets="$(mt_merge_targets "$1" "${2:-}" where)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      slug="${line%%$'\t'*}"; line="${line#*$'\t'}"
+      key="${line%%$'\t'*}"; line="${line#*$'\t'}"
+      pr="${line%%$'\t'*}"; where="${line#*$'\t'}"
+      # The key is the repository the merge names when it names one, and otherwise its work tree,
+      # which is an absolute path and never owner/name.
+      case "$key" in /*) key="" ;; esac
+      printf '%s\t%s\t%s\n' "$where" "$key" "$pr"
+    done <<< "$targets"
+    return 0
+  fi
+  [ "$rc" -eq 2 ] && mt_merge_span_why "$1" "${2:-}" >/dev/null && return 2
+  printf '%s\t%s\t%s\n' "$(mt_repo_dir "$1" "${2:-}")" "$(mt_repo_flag "$1")" "$(mt_pr_number "$1")"
   return 0
 }
 
@@ -1059,6 +1104,97 @@ mt_gh_transient() {  # $1 = the error text gh printed
   esac
   [[ "$t" =~ http\ 5[0-9][0-9] ]] && return 0
   return 1
+}
+
+# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient), up to
+# $1 tries in all with $2 seconds between them, slept through the command $3 so a test never waits
+# on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
+# recognised: believed the first time, since asking again cannot turn a refusal into a yes) or 2. It
+# is called in this shell, never a subshell, so the globals it sets reach the caller.
+#
+# $4, when not empty, is a deadline in the shell's own SECONDS: a retry whose wait would end past it
+# is not made, and 2 comes back as if the tries had run out. A hook the harness kills for overrunning
+# its timeout says nothing at all, which for a PreToolUse gate can read as an allow, so a gate gives
+# its retries a budget well inside its timeout (#1081). $5, when not empty, is a function told the
+# try number before each wait, for a caller that says what it is doing.
+#
+# One implementation, shared by merge-when-ready.sh and block-red-merge.sh, which both learned it
+# (claude-config#1061, #1081): two copies of a retry rule drift in exactly the part that matters, which
+# errors are asked again (L370).
+mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = deadline or empty, $5 = announcer or empty, $6 = reader
+  local tries="$1" wait="$2" sleeper="$3" deadline="$4" announce="$5" reader="$6" try=1 rc
+  case "$tries" in ''|*[!0-9]*) tries=1 ;; esac
+  [ "$tries" -ge 1 ] || tries=1
+  case "$wait" in ''|*[!0-9]*) wait=0 ;; esac
+  while :; do
+    "$reader"; rc=$?
+    [ "$rc" -eq 2 ] || return "$rc"
+    [ "$try" -lt "$tries" ] || return 2
+    if [ -n "$deadline" ] && [ $((SECONDS + wait)) -gt "$deadline" ]; then return 2; fi
+    [ -n "$announce" ] && "$announce" "$try"
+    "$sleeper" "$wait"
+    try=$((try + 1))
+  done
+}
+
+# How a reader classifies an mt_pr_view envelope ($1): 0 found, 2 a transient failure worth asking
+# again (gh's error names the transport or GitHub's server, and no account answered not found or
+# about another repository), 1 anything else. Sets MT_VIEW_ERR to gh's error, for the sentence a
+# caller stops with.
+mt_view_class() {  # $1 = the envelope mt_pr_view printed
+  MT_VIEW_ERR=""
+  [ "$(printf '%s' "$1" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
+  MT_VIEW_ERR="$(printf '%s' "$1" | jq -r '.error // ""' 2>/dev/null)"
+  if [ "$(printf '%s' "$1" | jq -r '(.notFound // false) or ((.wrongRepo // "") != "")' 2>/dev/null)" != "true" ] \
+     && mt_gh_transient "$MT_VIEW_ERR"; then
+    return 2
+  fi
+  return 1
+}
+
+# The workflow runs GitHub has created for a commit and not yet finished (claude-config#1087).
+#
+# A pull request's check rollup lists the checks that have REGISTERED, and a workflow run can exist
+# for minutes before any of its jobs does: Slate's CI waits on a concurrency group, so on 2026-10-12
+# its run for ad9e1d83 was created at 22:24:52 and its jobs only at 22:26:05. In between, the only
+# check on the head was a fast one from another workflow, already green, so "every check that has
+# reported is green" read as "the head's CI is green", and Slate #3645 was merged eleven seconds
+# before its CI started (L98, L179). The run itself is the record that more is coming, and it names
+# no check, so nothing here knows any repository's check names.
+#
+# Sets MT_RUNS_PENDING to the unfinished runs' names, joined with ", " (empty when every run has
+# finished, or when there are none at all, which is what a repository without Actions answers), and
+# MT_RUNS_ERR to what went wrong. Returns 0 when GitHub answered with a list it could read, 2 when
+# the read failed transiently, and 1 for anything else, including an answer that is not that list:
+# not knowing whether CI is still to come is not the same as knowing it is not (L42). Asked as
+# $3, the account that could see the pull request, when one is named.
+mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empty
+  local slug="$1" sha="$2" account="${3:-}" token="" errf out rc
+  MT_RUNS_PENDING=""; MT_RUNS_ERR=""
+  if [ -z "$slug" ] || [ -z "$sha" ]; then MT_RUNS_ERR="no repository or commit to ask about"; return 1; fi
+  errf=$(mktemp "${TMPDIR:-/tmp}/mt-runs.XXXXXX" 2>/dev/null) || errf=/dev/null
+  if [ -n "$account" ]; then
+    token=$(gh auth token -u "$account" 2>/dev/null) || token=""
+  fi
+  if [ -n "$token" ]; then
+    out=$(GH_TOKEN="$token" gh api "repos/$slug/actions/runs?head_sha=$sha&per_page=100" --paginate 2>"$errf"); rc=$?
+  else
+    out=$(gh api "repos/$slug/actions/runs?head_sha=$sha&per_page=100" --paginate 2>"$errf"); rc=$?
+  fi
+  MT_RUNS_ERR=$(awk 'NF { print; exit }' "$errf" 2>/dev/null)
+  [ "$errf" != /dev/null ] && rm -f "$errf"
+  if [ "$rc" -ne 0 ]; then
+    MT_RUNS_ERR="${MT_RUNS_ERR:-gh exited $rc}"
+    mt_gh_transient "$MT_RUNS_ERR" && return 2
+    return 1
+  fi
+  # --paginate prints one object per page, so the pages are slurped and every one must carry the list.
+  if [ "$(printf '%s' "$out" | jq -s 'length > 0 and all(.[]; (.workflow_runs | type) == "array")' 2>/dev/null)" != "true" ]; then
+    MT_RUNS_ERR="GitHub's answer was not a list of workflow runs: ${out:0:200}"
+    return 1
+  fi
+  MT_RUNS_PENDING=$(printf '%s' "$out" | jq -rs '[.[].workflow_runs[] | select((.status // "") != "completed") | "\(.name // "a workflow") (\(.status // "status unknown"))"] | unique | join(", ")' 2>/dev/null)
+  return 0
 }
 
 # Does a repository on GitHub hold this path? Prints present, absent or unknown.
