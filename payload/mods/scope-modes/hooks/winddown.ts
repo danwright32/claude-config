@@ -154,20 +154,23 @@ export const porcelainFiles = (stdout: string): string[] =>
 // UTF-8 (core.quotePath), and a quote, a backslash or a control character by its C escape. Read as
 // written, a file the session wrote under such a name never matched the path it wrote.
 const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 }
+// Read by code point, so a character git left raw (core.quotePath off) is never split in two.
 const unquoted = (q: string): string => {
+  const chars = [...q]
   const bytes: number[] = []
-  for (let i = 0; i < q.length; i++) {
-    const c = q[i] as string
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i] as string
     if (c !== '\\') {
       bytes.push(...new TextEncoder().encode(c))
       continue
     }
-    const next = q[i + 1] ?? ''
-    if (/^[0-7]{3}$/.test(q.slice(i + 1, i + 4))) {
-      bytes.push(parseInt(q.slice(i + 1, i + 4), 8))
+    const octal = chars.slice(i + 1, i + 4).join('')
+    if (/^[0-7]{3}$/.test(octal)) {
+      bytes.push(parseInt(octal, 8))
       i += 3
     } else {
-      bytes.push(C_ESCAPES[next] ?? next.charCodeAt(0))
+      const next = chars[i + 1] ?? ''
+      bytes.push(...(C_ESCAPES[next] !== undefined ? [C_ESCAPES[next] as number] : new TextEncoder().encode(next)))
       i += 1
     }
   }

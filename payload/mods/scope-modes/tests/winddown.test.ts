@@ -206,6 +206,8 @@ describe('uncommitted changes, by the files git status names (#1051)', () => {
       'back\\slash.ts',
       'newé.ts',
     ])
+    // A character git left raw (core.quotePath off), outside the BMP, in a name quoted for its quote.
+    expect(porcelainFiles('?? "\u{1F600}\\"x.ts"\n')).toEqual(['\u{1F600}"x.ts'])
     // So a file this session wrote under that name is its own.
     expect(whoseFiles(porcelainFiles('?? "caf\\303\\251.ts"\n'), '/repo', ['/repo/café.ts'])).toEqual({ own: ['café.ts'], others: [] })
   })
