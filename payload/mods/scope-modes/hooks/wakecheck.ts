@@ -7,8 +7,9 @@ import { etWhen } from './sleep.ts'
 // and deploy runs. Every hit goes at the top of the night's report; a read that fails is said as not
 // checked, never as nothing found (L460, L11).
 //
-// Which repositories: every one the gh login had an event in since sleep began, every one an issue
-// was created in, and the config repository (the live sync clone's). A milestone made in a
+// Which repositories: every one the gh login had an event in since sleep began (read page by page,
+// as far back as GitHub keeps them, its newest 300, and any window before that said, #1160), every
+// one an issue was created in, and the config repository (the live sync clone's). A milestone made in a
 // repository with no other event that night is not seen; the events API carries none for it.
 // GitHub is read as the account gh is logged in as, so another account's work is not read.
 
@@ -18,6 +19,9 @@ export type Runner = (argv: string[], timeoutMs?: number) => Promise<Ran>
 /** The whole check's deadline, and the most one GitHub read may take. */
 export const WAKE_CHECK_MS = 30_000
 const READ_MS = 20_000
+/** GitHub keeps a user's newest 300 events: three pages of 100 (page 4 answers HTTP 422). */
+const EVENTS_PER_PAGE = 100
+const EVENT_PAGES = 3
 export type WakeFindings = { hits: string[]; unmeasured: string[] }
 /** The time now in ms: the engine's clock (`$.clock.now`), never Date.now, which no test can move. */
 export type Clock = () => number | Promise<number>
@@ -102,18 +106,55 @@ export const wakeCheck = async (
   if (!me) unmeasured.push(`GitHub was not checked at all: the gh login could not be read (${firstLine(login.stderr) || 'no login printed'})`)
   else {
     type Ev = { type?: string; created_at?: string; repo?: { name?: string }; payload?: { action?: string; issue?: { number?: number; title?: string } } }
-    const events = await json<Ev[]>(['gh', 'api', `users/${me}/events?per_page=100`], 'the repositories worked overnight')
-    if (events) {
-      // An event of unknown time still names a repository to read: reading one more costs nothing.
-      const recent = events.filter(e => when(e.created_at) !== 'before')
-      if (events.length >= 100 && recent.length === events.length) unmeasured.push('more than 100 GitHub events since sleep began, so only the newest 100 were read for the repositories to check')
-      for (const e of recent) {
-        addRepo(e.repo?.name)
-        const i = e.payload?.issue
-        if (e.type !== 'IssuesEvent' || e.payload?.action !== 'opened' || !e.repo?.name || typeof i?.number !== 'number') continue
-        if (when(e.created_at) === 'unknown') unmeasured.push(`when issue ${e.repo.name.toLowerCase()}#${i.number} was opened ${NO_TIME}`)
-        else issue(e.repo.name, i.number, i.title ?? '')
+    // Page by page back to the moment sleep began (#1160): one page of 100 left a busy night's
+    // earlier repositories unread. GitHub keeps a user's newest 300 events, so page 4 is never asked
+    // for (it answers HTTP 422, measured 2026-10-13); each page goes through `run`, so the pages
+    // keep to the check's one deadline. A window not read is said by its two ends: sleep's start
+    // and the oldest event read, never as a count.
+    const events: Ev[] = []
+    let oldest: number | null = null
+    const unread = (why: string) => {
+      const span = oldest === null ? `since ${etWhen(o.since)}` : `from ${etWhen(o.since)} to ${etWhen(oldest)}`
+      unmeasured.push(`the GitHub events ${span} were not read for the repositories to check (${why})`)
+    }
+    for (let p = 1; p <= EVENT_PAGES; p++) {
+      const r = await run(['gh', 'api', `users/${me}/events?per_page=${EVENTS_PER_PAGE}&page=${p}`])
+      if (r.exitCode === SKIPPED) {
+        unread(`page ${p}: the check stopped at its ${Math.round(budget / 1000)} s limit`)
+        break
       }
+      if (r.exitCode !== 0) {
+        unread(`page ${p}: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`)
+        break
+      }
+      let page: Ev[] | null = null
+      try {
+        const got: unknown = JSON.parse(r.stdout)
+        if (Array.isArray(got)) page = got as Ev[]
+      } catch {
+        // said just below, as for an answer that is JSON but not a list
+      }
+      if (!page) {
+        unread(`page ${p}: the answer was not JSON`)
+        break
+      }
+      events.push(...page)
+      for (const e of page) {
+        const t = at(e.created_at)
+        if (!Number.isNaN(t) && (oldest === null || t < oldest)) oldest = t
+      }
+      // A page that is not full is the last there is; one reaching back past sleep's start is the last needed.
+      if (page.length < EVENTS_PER_PAGE || page.some(e => when(e.created_at) === 'before')) break
+      if (p === EVENT_PAGES) unread(`GitHub gives only the newest ${EVENT_PAGES * EVENTS_PER_PAGE} of a user's events`)
+    }
+    // An event of unknown time still names a repository to read: reading one more costs nothing.
+    const recent = events.filter(e => when(e.created_at) !== 'before')
+    for (const e of recent) {
+      addRepo(e.repo?.name)
+      const i = e.payload?.issue
+      if (e.type !== 'IssuesEvent' || e.payload?.action !== 'opened' || !e.repo?.name || typeof i?.number !== 'number') continue
+      if (when(e.created_at) === 'unknown') unmeasured.push(`when issue ${e.repo.name.toLowerCase()}#${i.number} was opened ${NO_TIME}`)
+      else issue(e.repo.name, i.number, i.title ?? '')
     }
     // The search index can lag, and the events can too, so both are read (L1014).
     type Found = { repository?: { nameWithOwner?: string }; number?: number; title?: string }
@@ -170,8 +211,13 @@ export const wakeCheck = async (
     for (const repo of repos) {
       type RunRow = { workflowName?: string; event?: string; createdAt?: string; url?: string }
       const runs = await json<RunRow[]>(['gh', 'run', 'list', '-R', repo, '--json', 'workflowName,event,createdAt,url', '--limit', '100'], `deploy runs in ${repo}`)
-      // Newest first: a full page whose oldest run is still overnight may leave runs out (L24).
-      if (runs && runs.length >= 100 && when(runs[runs.length - 1]?.createdAt) !== 'before') unmeasured.push(`more than 100 runs in ${repo} since sleep began, so only the newest 100 were read`)
+      // Newest first: a full page whose oldest run is still overnight may leave runs out (L24), and
+      // what is left out is said by its two ends, as the events are (#1160).
+      if (runs && runs.length >= 100 && when(runs[runs.length - 1]?.createdAt) !== 'before') {
+        const times = runs.map(r => at(r.createdAt)).filter(t => !Number.isNaN(t))
+        const span = times.length ? `from ${etWhen(o.since)} to ${etWhen(Math.min(...times))}` : `since ${etWhen(o.since)}`
+        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (only the newest 100 were asked for)`)
+      }
       for (const r of runs ?? []) {
         if (!/deploy|release|publish/i.test(r.workflowName ?? '') && r.event !== 'workflow_dispatch') continue
         const w = when(r.createdAt)
