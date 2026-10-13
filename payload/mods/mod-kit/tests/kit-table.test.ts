@@ -12,10 +12,10 @@ type Entry = { method: 'commands' | 'writes' | 'git'; input: Record<string, unkn
 const ENTRIES: Entry[] = [
   {"method":"commands","input":{"command":"git checkout main -- notes.txt"},"want":[["git","checkout","main","--","notes.txt"]]},
   {"method":"git","input":{"words":["git","checkout","main","--","notes.txt"]},"want":{"sub":"checkout","args":["main","--","notes.txt"]}},
-  {"method":"writes","input":{"command":"git checkout main -- notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}},
+  {"method":"writes","input":{"command":"git checkout main -- notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true,"from":"main"}]}},
   {"method":"commands","input":{"command":"git restore notes.txt"},"want":[["git","restore","notes.txt"]]},
   {"method":"git","input":{"words":["git","restore","notes.txt"]},"want":{"sub":"restore","args":["notes.txt"]}},
-  {"method":"writes","input":{"command":"git restore notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}},
+  {"method":"writes","input":{"command":"git restore notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true,"from":""}]}},
   {"method":"commands","input":{"command":"git rm notes.txt"},"want":[["git","rm","notes.txt"]]},
   {"method":"git","input":{"words":["git","rm","notes.txt"]},"want":{"sub":"rm","args":["notes.txt"]}},
   {"method":"writes","input":{"command":"git rm notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"remove"}]}},

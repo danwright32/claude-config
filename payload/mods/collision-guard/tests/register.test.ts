@@ -122,10 +122,10 @@ const KIT = new Map<string, unknown>([
   // #1136: what git itself changes, measured from mod-kit's readers on 2026-10-13.
   ["commands {\"command\":\"git checkout main -- notes.txt\"}",[["git","checkout","main","--","notes.txt"]]],
   ["git {\"words\":[\"git\",\"checkout\",\"main\",\"--\",\"notes.txt\"]}",{"sub":"checkout","args":["main","--","notes.txt"]}],
-  ["writes {\"command\":\"git checkout main -- notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}],
+  ["writes {\"command\":\"git checkout main -- notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true,"from":"main"}]}],
   ["commands {\"command\":\"git restore notes.txt\"}",[["git","restore","notes.txt"]]],
   ["git {\"words\":[\"git\",\"restore\",\"notes.txt\"]}",{"sub":"restore","args":["notes.txt"]}],
-  ["writes {\"command\":\"git restore notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}],
+  ["writes {\"command\":\"git restore notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true,"from":""}]}],
   ["commands {\"command\":\"git rm notes.txt\"}",[["git","rm","notes.txt"]]],
   ["git {\"words\":[\"git\",\"rm\",\"notes.txt\"]}",{"sub":"rm","args":["notes.txt"]}],
   ["writes {\"command\":\"git rm notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"remove"}]}],
