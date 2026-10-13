@@ -9,6 +9,11 @@
 #   bash ~/.claude/hooks/lib/sleep-queue.sh claim   REPO_ROOT ISSUE SESSION_ID
 #   bash ~/.claude/hooks/lib/sleep-queue.sh release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]
 #   bash ~/.claude/hooks/lib/sleep-queue.sh claims
+#   bash ~/.claude/hooks/lib/sleep-queue.sh work    REPO_ROOT ISSUE
+#
+# `work` is what the overnight driver reads as a claim's commits (sleep_work, #1119). A release of
+# done over an end the driver wrote (failed by its circuit breaker, or parked) lands when GitHub
+# shows the issue closed by a merged pull request (_sq_done_over_end).
 #
 # `next` is the one an overnight session uses: it builds the queue, claims the first issue nobody
 # holds, and gives it a worktree of its own (never a checkout or switch in the primary checkout,
@@ -162,6 +167,21 @@ _sq_gh_token() {
   return 1
 }
 _sq_gh() { _sq_gh_as "${_SQ_TOKEN:-}" "$@"; }
+# The account every GitHub read of this call goes as, into _SQ_TOKEN (empty for the active one, and
+# with an injected source). Exit 3 with the reason in _SQ_WHY when no account can see SLUG or
+# GitHub did not answer, each said as itself. Set here, never in a $( ), which would lose it.
+_sq_account() {
+  _SQ_TOKEN=""
+  _SQ_WHY=""
+  [ -n "${SLEEP_QUEUE_SOURCE:-}" ] && return 0
+  _SQ_TOKEN="$(_sq_gh_token "$1")"
+  case $? in
+    0) return 0 ;;
+    4) _SQ_WHY="GitHub did not answer within $(_sq_gh_limit)s while finding an account that can see $1, so the call was stopped" ;;
+    *) _SQ_WHY="no signed in GitHub account can see $1" ;;
+  esac
+  return 3
+}
 _sq_gh_source() {
   case "$1" in
     accounts) _sq_gh_as "" auth status --json hosts 2>/dev/null | python3 -c '
@@ -173,6 +193,11 @@ for a in json.load(sys.stdin).get("hosts", {}).get("github.com", []):
     issue) _sq_gh issue view "$3" -R "$2" --json number,title,labels,author,state ;;
     prs) _sq_gh pr list -R "$2" --state open --limit "$3" --json number,title,body,headRefName ;;
     branches) _sq_gh api --paginate "repos/$2/branches?per_page=100" --jq '.[].name' ;;
+    # The pull request whose merge last closed an issue, by number; nothing when the issue is open,
+    # or was last closed by hand, by a commit, or by a pull request that did not merge (#1119).
+    closer) _sq_gh api graphql -f owner="${2%%/*}" -f name="${2#*/}" -F number="$3" \
+      -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { state timelineItems(itemTypes: [CLOSED_EVENT], last: 1) { nodes { ... on ClosedEvent { closer { __typename ... on PullRequest { number merged } } } } } } } }' \
+      --jq '.data.repository.issue | select(.state == "CLOSED") | .timelineItems.nodes[0].closer // empty | select(.__typename == "PullRequest" and .merged == true) | .number' ;;
     *) echo "unknown source call $1" >&2; return 2 ;;
   esac
 }
@@ -200,15 +225,7 @@ sleep_queue() {
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/sleep-queue.XXXXXX")" || { _sq_refuse "no temporary folder could be made"; return 3; }
-  _SQ_TOKEN=""
-  if [ -z "${SLEEP_QUEUE_SOURCE:-}" ]; then
-    _SQ_TOKEN="$(_sq_gh_token "$slug")"
-    case $? in
-      0) ;;
-      4) rm -rf "$tmp"; _sq_refuse "GitHub did not answer within $(_sq_gh_limit)s while finding an account that can see $slug, so the call was stopped"; return 3 ;;
-      *) rm -rf "$tmp"; _sq_refuse "no signed in GitHub account can see $slug"; return 3 ;;
-    esac
-  fi
+  _sq_account "$slug" || { rm -rf "$tmp"; _sq_refuse "$_SQ_WHY"; return 3; }
   rc=0
   _sq_fetch "$tmp/accounts" "list of Dan's GitHub accounts" accounts || rc=3
   if [ "$rc" = 0 ] && [ $# -gt 0 ]; then
@@ -357,6 +374,10 @@ _sq_end() {
   dir="$(_sq_issue_dir "$gen" "$slug" "$issue")"
   line="$(python3 "$_SQ_PY" state "$dir" "$self" "$(_sq_registry)" "$(_sq_now)")" || { _sq_refuse "the claim on #$issue could not be judged"; return 3; }
   IFS=$'\t' read -r st nxt attempts reason <<< "$line"
+  if [ "$st" = ended ] && [ "$state" = done ]; then
+    _sq_done_over_end "$issue" "$self" "$why" "$slug" "$dir"
+    return $?
+  fi
   if [ "$st" != mine ]; then
     printf 'not-released\t%s\tthis session does not hold it (%s: %s)\n' "$issue" "$st" "$reason"
     return 1
@@ -372,6 +393,43 @@ _sq_end() {
   printf 'released\t%s\t%s\n' "$issue" "$state"
 }
 
+# The holder's done over an end the overnight driver wrote while the work went on (#1119): the
+# circuit breaker's failed, or a park, ended a claim whose issue a merged pull request then closed,
+# and the report called a finished issue a failure. GitHub decides, never the caller: done lands
+# only over this session's own failed or parked end, and only when the issue's last close was a
+# merged pull request's. Every other end stands, and a read of GitHub that fails refuses.
+_sq_done_over_end() {
+  local issue="$1" self="$2" why="$3" slug="$4" dir="$5" line kind nxt reason tmp pr text entry err
+  if ! line="$(python3 "$_SQ_PY" ended "$dir" "$self")"; then
+    printf 'not-released\t%s\tthis session does not hold it (%s)\n' "$issue" "${line:-its end could not be read}"
+    return 1
+  fi
+  IFS=$'\t' read -r kind nxt reason <<< "$line"
+  _sq_account "$slug" || { _sq_refuse "$_SQ_WHY"; return 3; }
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/sleep-queue.XXXXXX")" || { _sq_refuse "no temporary folder could be made"; return 3; }
+  if ! _sq_fetch "$tmp/closer" "pull request that closed #$issue" closer "$slug" "$issue"; then
+    rm -rf "$tmp"
+    return 3
+  fi
+  pr="$(tr -d '[:space:]' < "$tmp/closer")"
+  rm -rf "$tmp"
+  case "$pr" in
+    '') printf 'not-released\t%s\t#%s is not closed by a merged pull request, so its end stands (%s%s)\n' "$issue" "$issue" "$kind" "${reason:+: $reason}"; return 1 ;;
+    *[!0-9]*) _sq_refuse "GitHub's answer for the pull request that closed #$issue was not a pull request number"; return 3 ;;
+  esac
+  text="closed by merged PR #$pr after it was ended $kind${reason:+ ($reason)}${why:+: $why}"
+  entry="$(python3 "$_SQ_PY" entry done "$self" "$(_sq_now)" "$text")" || { _sq_refuse "the release entry could not be written"; return 3; }
+  err="$(_sq_link "$dir" "$nxt" "$entry")"
+  case $? in
+    0) ;;
+    1) printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"; return 1 ;;
+    *) _sq_refuse "$err"; return 3 ;;
+  esac
+  # The note says which end it replaced and the pull request, so the report hides only that end.
+  SLEEP_NOTE_REPLACES="$kind" SLEEP_NOTE_PR="$pr" _sq_note done "$self" "$slug" "$issue" "end (done)" "$text"
+  printf 'released\t%s\tdone\n' "$issue"
+}
+
 # sleep_claims_json: every claim of tonight, one JSON line each (repo, issue, attempts, entries).
 # The seam the nightly report (phase 4, #835) reads claims through, so it never parses the folders.
 sleep_claims_json() {
@@ -382,17 +440,12 @@ sleep_claims_json() {
 
 # ---- worktrees ----
 
-# sleep_worktree REPO_ROOT ISSUE: the issue's own worktree, PRIMARY/.claude/worktrees/sleep-ISSUE on
-# branch sleep/ISSUE, made from the remote default branch, or the one already there when it is this
-# repository's worktree. Anything else at that path is never adopted (L421).
-#
-# Exit 1 when it never can be made here (something else at the path, a bare repository), which
-# ends the issue for the night; exit 2 when it could not be made just now (a fetch or git worktree
-# add failing), which gives the issue back for a later pass rather than losing it to a network drop.
-sleep_worktree() {
-  local root="$1" issue="$2" common primary path branch base have list
+# _sq_primary REPO_ROOT: the primary checkout of ROOT's repository, the first worktree git lists,
+# wherever its git folder lives. Exit 1 when there never can be one (not a checkout, a bare
+# repository), 2 when git could not list its worktrees just now; the reason on stderr.
+_sq_primary() {
+  local root="$1" common primary list
   common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || { echo "$root is not a git checkout" >&2; return 1; }
-  # The primary checkout is the first worktree git lists, wherever its git folder lives.
   list="$(git -C "$root" worktree list --porcelain 2>/dev/null)" || { echo "git worktree list failed in $root" >&2; return 2; }
   primary="${list%%$'\n'*}"
   primary="${primary#worktree }"
@@ -410,11 +463,58 @@ sleep_worktree() {
       return 1
     fi
   fi
+  printf '%s\n' "$primary"
+}
+
+# _sq_is_worktree PATH COMMON: whether PATH is a checkout of the repository whose git folder is
+# COMMON, at PATH itself. A folder inside the primary checkout that is not one would otherwise be
+# read as the primary checkout, which git finds by walking up from it.
+_sq_is_worktree() {
+  [ "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" = "$2" ] &&
+    [ "$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" = "$1" ]
+}
+
+# sleep_work REPO_ROOT ISSUE: what the claim's work reads as now, for the overnight driver's circuit
+# breaker (#1119), two lines: `branch<TAB>SHA`, the tip of sleep/ISSUE, and `worktree<TAB>N`, how
+# many commits were made in the issue's reserved worktree on any branch; each empty when there is none.
+# A commit counts whoever made it: on 2026-10-12 a subagent of the claiming session committed #1106
+# in the reserved worktree on a branch of its own, and the breaker, reading only the sleep/ branch,
+# ended the claim as failed while the work merged. Refused (exit 3) when it cannot be read, which
+# the driver counts as no progress.
+sleep_work() {
+  local root="${1:-}" issue="${2:-}" primary common path tip head=""
+  case "$issue" in ''|*[!0-9]*) _sq_refuse "issue ${issue:-<none>} is not an issue number"; return 3 ;; esac
+  primary="$(_sq_primary "$root" 2>&1)" || { _sq_refuse "the work on #$issue could not be read: $primary"; return 3; }
+  common="$(git -C "$primary" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || { _sq_refuse "the work on #$issue could not be read: $primary is not a git checkout"; return 3; }
+  tip="$(git -C "$primary" for-each-ref --format='%(objectname)' "refs/heads/sleep/$issue" 2>/dev/null)" || { _sq_refuse "the branch sleep/$issue could not be read in $primary"; return 3; }
+  path="$primary/.claude/worktrees/sleep-$issue"
+  if [ -e "$path" ] && _sq_is_worktree "$path" "$common"; then
+    # The commits made there, on any branch: its own HEAD's reflog entries that record one. A
+    # branch switch moves HEAD without a commit, so counting what HEAD points at would read a
+    # switch as progress (lessons review of 162acef).
+    head="$(git -C "$path" reflog show --format=%gs HEAD 2>/dev/null)" || { _sq_refuse "the commits made in $path could not be read"; return 3; }
+    # Counted by awk, which exits 0 at a count of none, where grep -c would exit 1 and stop a
+    # caller under set -e at the commonest case, a worktree nobody has committed in yet.
+    head="$(printf '%s\n' "$head" | awk '/^(commit|merge |cherry-pick|revert|rebase( \(.*\))? \(finish\)|pull)/ { n++ } END { print n + 0 }')"
+  fi
+  printf 'branch\t%s\nworktree\t%s\n' "$tip" "$head"
+}
+
+# sleep_worktree REPO_ROOT ISSUE: the issue's own worktree, PRIMARY/.claude/worktrees/sleep-ISSUE on
+# branch sleep/ISSUE, made from the remote default branch, or the one already there when it is this
+# repository's worktree. Anything else at that path is never adopted (L421).
+#
+# Exit 1 when it never can be made here (something else at the path, a bare repository), which
+# ends the issue for the night; exit 2 when it could not be made just now (a fetch or git worktree
+# add failing), which gives the issue back for a later pass rather than losing it to a network drop.
+sleep_worktree() {
+  local root="$1" issue="$2" common primary path branch base
+  primary="$(_sq_primary "$root")" || return $?
+  common="$(git -C "$primary" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || { echo "$primary is not a git checkout" >&2; return 1; }
   path="$primary/.claude/worktrees/sleep-$issue"
   branch="sleep/$issue"
   if [ -e "$path" ]; then
-    have="$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-    if [ "$have" = "$common" ] && [ "$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" = "$path" ]; then
+    if _sq_is_worktree "$path" "$common"; then
       printf '%s\n' "$path"
       return 0
     fi
@@ -499,7 +599,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     claim) sleep_claim "$@" ;;
     release) sleep_release "$@" ;;
     claims) sleep_claims_json ;;
-    *) echo "usage: sleep-queue.sh next|queue|claim|release|claims ... (see the header of $0)" >&2; exit 2 ;;
+    work) sleep_work "$@" ;;
+    *) echo "usage: sleep-queue.sh next|queue|claim|release|claims|work ... (see the header of $0)" >&2; exit 2 ;;
   esac
   exit $?
 fi

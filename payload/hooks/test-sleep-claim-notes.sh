@@ -113,6 +113,23 @@ SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 28 s1 parked "the driver parked it"
 has "the driver's end is marked as the driver's" '"kind":"parked","by":"s1","repo":"danwright32/demo","issue":28,"text":"the driver parked it","driver":true' "$(notes)"
 lacks "the session's own ends are not" '"issue":21,"text":"merged as PR #4","driver"' "$(notes)"
 
+# ---- done over the driver's failure, once a merged PR closed the issue (#1119) ----
+# The note says what it replaced and which PR, so the report hides only a failure GitHub
+# confirmed was finished. GitHub stands in through the queue's issue source.
+cat > "$WORK/source.sh" <<EOF
+#!/bin/sh
+echo "\$*" >> "$WORK/source.log"
+[ "\$1" = closer ] && { echo 77; exit 0; }
+echo "the stub does not know \$1" >&2; exit 2
+EOF
+chmod +x "$WORK/source.sh"
+sleep_claim "$ROOT" 29 s1 >/dev/null 2>&1
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 29 s1 failed "circuit breaker: 3 blocks in a row" >/dev/null 2>&1
+out="$(SLEEP_QUEUE_SOURCE="$WORK/source.sh" sleep_release "$ROOT" 29 s1 done "merged" 2>&1)"
+has "done lands over the driver's failure" "$(printf 'released\t29\tdone')" "$out"
+has "its note names what it replaced and the pull request" '"issue":29,"text":"closed by merged PR #77 after it was ended failed (circuit breaker: 3 blocks in a row): merged","replaces":"failed","pr":77' "$(notes)"
+lacks "and the driver's failure is no longer listed" "Failed danwright32/demo#29" "$(final)"
+
 # ---- a release that does not happen writes no note ----
 before="$(notes | wc -l | tr -d ' ')"
 sleep_release "$ROOT" 21 s1 done "again" >/dev/null 2>&1

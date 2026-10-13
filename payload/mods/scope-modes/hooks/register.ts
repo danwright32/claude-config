@@ -1626,12 +1626,14 @@ const claimNow = async ($: EngineInterface, en: Enrolled): Promise<ClaimReading>
   return heldClaim(r.stdout, en.self)
 }
 
-// The tip of the sleep/ branch of the issue this session holds: a new commit there is progress.
-// Only its own: another worker's commits on its own branch are not this session's (#844). Nothing
-// held reads as no branch; null when unreadable.
-const refsNow = async ($: EngineInterface, root: string | null, claim: ClaimReading): Promise<string | null> => {
+// The work on the issue this session holds, as the queue reads it (`sleep-queue.sh work`): the tip
+// of its sleep/ branch and the commits made in its reserved worktree, so a commit there is progress
+// whoever made it, a subagent on a branch of its own included (#1119). Only its own claim: another
+// worker's commits on its own claim are not this session's (#844). Nothing held reads as no work;
+// null when unreadable.
+const refsNow = async ($: EngineInterface, root: string | null, claim: ClaimReading, home: string): Promise<string | null> => {
   if (!root || claim.state !== 'held') return ''
-  const r = await run($, ['git', '-C', root, 'for-each-ref', '--format=%(objectname)', `refs/heads/sleep/${claim.claim.issue}`])
+  const r = await run($, ['bash', queueScript(home), 'work', root, String(claim.claim.issue)])
   return r.exitCode === 0 ? r.stdout : null
 }
 
@@ -1699,7 +1701,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const notesText = await notesNow($, en)
     const claim = await claimNow($, en)
     const u = await usageNow($)
-    const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root, claim))
+    const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root, claim, en.home))
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
       weekly: u.weekly, claim, rules: overnightRules(en.self, where.root),

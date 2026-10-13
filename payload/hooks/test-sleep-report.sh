@@ -269,10 +269,18 @@ mkdir -p "$SLEEPDIR/notes"
   echo 'this line is broken'
   echo '{"v":1,"kind":"claim","at":1791444600000,"by":"aaaa1111","repo":"o/s","issue":3,"generation":"g6"}'
   echo '{"v":1,"kind":"failed","at":1791444700000,"by":"aaaa1111","repo":"o/s","issue":3,"text":"Classifier refused the push","generation":"g6"}'
+  # The driver's circuit breaker ended o/r#22 as failed while a subagent finished it; once a
+  # merged pull request closed it, the queue let the holder's done land over that end (#1119).
+  echo '{"v":1,"kind":"claim","at":1791444800000,"by":"aaaa1111","repo":"o/r","issue":22,"generation":"g6"}'
+  echo '{"v":1,"kind":"failed","at":1791444900000,"by":"aaaa1111","repo":"o/r","issue":22,"text":"circuit breaker: 22 minutes of active time with no new commit, claim or note","driver":true,"generation":"g6"}'
+  echo '{"v":1,"kind":"done","at":1791445000000,"by":"aaaa1111","repo":"o/r","issue":22,"text":"closed by merged PR #40 after it was ended failed","replaces":"failed","pr":40,"generation":"g6"}'
+  # A plain done after another session's failure is no replacement GitHub confirmed: the failure stands.
+  echo '{"v":1,"kind":"failed","at":1791445100000,"by":"bbbb2222","repo":"o/r","issue":23,"text":"tests would not build","generation":"g6"}'
+  echo '{"v":1,"kind":"done","at":1791445200000,"by":"aaaa1111","repo":"o/r","issue":23,"text":"finished it later","generation":"g6"}'
   echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"eeee5555","generation":"g6"}'
 } > "$N"
 echo '[{"number":34,"title":"Split cache","url":"https://github.com/o/r/pull/34","mergedAt":"2026-10-08T07:05:00Z"},{"number":35,"title":"Nobody noted","url":"https://github.com/o/r/pull/35","mergedAt":"2026-10-08T08:00:00Z"},{"number":30,"title":"Before sleep","url":"https://github.com/o/r/pull/30","mergedAt":"2026-10-07T20:00:00Z"}]' > "$FAKE/gh-pr-o_r"
-echo '[{"number":12,"title":"Cache per account","url":"https://github.com/o/r/issues/12","closedAt":"2026-10-08T07:06:00Z","stateReason":"COMPLETED"}]' > "$FAKE/gh-issue-o_r"
+echo '[{"number":12,"title":"Cache per account","url":"https://github.com/o/r/issues/12","closedAt":"2026-10-08T07:06:00Z","stateReason":"COMPLETED"},{"number":22,"title":"Finished by a subagent","url":"https://github.com/o/r/issues/22","closedAt":"2026-10-08T07:10:00Z","stateReason":"COMPLETED"}]' > "$FAKE/gh-issue-o_r"
 echo '{"number":36,"title":"Not merged","mergedAt":null}' > "$FAKE/gh-pr-view-o_r-36"
 echo '{"number":38,"title":"Lagging search","mergedAt":"2026-10-08T07:30:00Z"}' > "$FAKE/gh-pr-view-o_r-38"
 echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-view-o_r-39.fail"
@@ -321,6 +329,10 @@ lacks "a parked claim is not flagged" "o/r#21, claimed" "$r"
 lacks "a failed claim is not flagged" "o/s#3, claimed" "$r"
 has "parked work is listed with its branch" "Parked o/r#21 (branch fix-21): Two hours with no fix" "$r"
 has "failed work is listed" "Failed o/s#3: Classifier refused the push" "$r"
+has "an issue the breaker ended as failed and a merged PR then closed is done (#1119)" "o/r issue #22 Finished by a subagent" "$r"
+lacks "and is never also listed as failed" "Failed o/r#22" "$r"
+lacks "nor as ended unexpectedly" "o/r#22, claimed" "$r"
+has "a failure a plain done followed, not the queue's confirmed replacement, is still listed (lessons review of 162acef)" "Failed o/r#23: tests would not build" "$r"
 has "a proposed issue is listed" "Cache misses on cold start" "$r"
 has "a proposed issue carries its priority, labels and milestone, for the morning picker (#837)" "o/r: Cache misses on cold start (p2, perf, milestone Ungrouped). Seen while fixing 12" "$r"
 has "a PR that is not a number is flagged" 'o/r PR "--web" was noted done, but that is not a PR number, so GitHub was not asked' "$r"

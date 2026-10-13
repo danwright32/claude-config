@@ -253,8 +253,8 @@ type Opts = {
   beneathRetries?: boolean
   /** What `sleep-queue.sh claims` prints (#844): one JSON line per issue claimed tonight. */
   claims?: string
-  /** The tip of each sleep/ branch, by its ref, as for-each-ref prints it for that ref (#844). */
-  refs?: Record<string, string>
+  /** What `sleep-queue.sh work` prints for each issue, its branch tip and its worktree's checkout (#844, #1119). */
+  work?: Record<number, string>
   /** What pmset says this Mac is drawing power from (#844). */
   power?: 'ac' | 'battery'
   caffeinateFails?: boolean
@@ -356,6 +356,7 @@ const world = (on: On, o: Opts = {}) => {
     idThrows: false,
     released: [] as string[][],
     releasedBy: [] as string[],
+    workAsked: [] as string[],
     caffeinated: [] as string[],
     killed: [] as string[],
     /** Every opening of a file in BBEdit that succeeded, as run (#837). */
@@ -506,6 +507,10 @@ const world = (on: On, o: Opts = {}) => {
         return gate.then(() => ok(o.claims ?? '')) as never
       }
       if (a[1] === 'claims') return ok(o.claims ?? '')
+      if (a[1] === 'work') {
+        w.workAsked.push(a.slice(2).join(' '))
+        return ok(o.work?.[Number(a[3])] ?? 'branch\t\nworktree\t\n')
+      }
       if (a[1] === 'release') {
         w.released.push(a.slice(2))
         w.releasedBy.push(String(e.init?.env?.SLEEP_NOTE_BY_DRIVER))
@@ -513,7 +518,6 @@ const world = (on: On, o: Opts = {}) => {
         return ok(`released\t${a[3]}\t${a[5]}\n`)
       }
     }
-    if (a.includes('for-each-ref')) return ok(o.refs?.[a[a.length - 1] as string] ?? '')
     if (cmd === 'pmset') return ok(o.power === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
     if (cmd === 'sh' && String(a[1]).startsWith('caffeinate')) {
       if (o.caffeinateFails) return fail(127, 'sh: caffeinate: not found')
@@ -3164,16 +3168,21 @@ test('a session the record does not name is never driven: its Stop passes, and n
   expect(w.appended).toEqual([])
 })
 
-test('the circuit breaker lets a session that does nothing new stop, ending its claim; only a commit on its own branch keeps it going (#844)', withDeps, async ($, on) => {
+test('the circuit breaker lets a session that does nothing new stop, ending its claim; only a commit on its own claim keeps it going (#844, #1119)', withDeps, async ($, on) => {
   const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
   const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
   await start($ as never, clock)
   for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
   // A commit on its own claim's branch is progress, read from git, never from what the model said.
-  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n' }
+  w.o.work = { 7: 'branch\tabc123\nworktree\tabc123\n' }
   expect((await stop($ as never)).block).toBeDefined()
-  // Another worker's commits on its own branch are not this session's progress.
-  w.o.refs = { 'refs/heads/sleep/7': 'abc123\n', 'refs/heads/sleep/9': 'def456\n' }
+  // So is one a subagent made in the claim's reserved worktree on a branch of its own (#1119):
+  // the queue's reading of the claim's work, asked for this claim alone.
+  w.o.work = { 7: 'branch\tabc123\nworktree\tfed987\n' }
+  expect((await stop($ as never)).block).toBeDefined()
+  expect(w.workAsked).toContain('/repo 7')
+  // Another worker's commits on its own claim are not this session's progress.
+  w.o.work = { 7: 'branch\tabc123\nworktree\tfed987\n', 9: 'branch\tdef456\nworktree\tdef456\n' }
   for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
   expect((await stop($ as never)).block).toBeUndefined()
   expect(w.released).toEqual([['/repo', '7', 's1', 'failed', 'circuit breaker: 3 blocks in a row with no new commit, claim or note']])
