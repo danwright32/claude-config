@@ -1299,6 +1299,8 @@ test("#1151: a design round's own files in the scratchpad pass, however the comm
 
 test('#1151: a look edit in the project is still held, however the command names it', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate' })
+  // A stylesheet handed to a program as an argument, which it writes through sys.argv (lessons review).
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && python3 - app/site.css <<'EOF'\nimport sys\nopen(sys.argv[1], 'w').write('a{}')\nEOF` }))).toContain(SKIP_QUESTION)
   // A program on standard input writing a stylesheet the session's project holds, by a bare name.
   const sh = (command: string) => call($, { tool: 'Bash', command })
   expect(refusalOf(await sh(`cd /w/slate && python3 - <<'EOF'\nf = "app/site.css"\nopen(f, "w").write("a{}")\nEOF`))).toContain(SKIP_QUESTION)

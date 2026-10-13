@@ -149,7 +149,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     // stylesheet), and a bare name lands where the program runs, never in the session's folder.
     // After a cd the reader cannot follow, a bare name's place is unknown, and is held as such.
     if (u.program !== undefined) {
-      for (const m of mentionedLookFiles(u.program)) {
+      // Its own words count too: a file handed to it as an argument (`python3 - app/site.css <<EOF`,
+      // read as sys.argv) is one it may write (lessons review of #1151).
+      for (const m of mentionedLookFiles([u.program, ...u.words].join('\n'))) {
         const placed = /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m) || u.folder !== undefined
         targets.push(placed ? { path: resolvePath(m, u.folder ?? '/', at.home), word: m } : { word: m })
       }
