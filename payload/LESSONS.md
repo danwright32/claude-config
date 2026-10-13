@@ -8663,6 +8663,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1025. Every build of an app that declares a URL scheme, a test host or Debug product included,
+  registers with the operating system and competes for that scheme's links, so a development build
+  must not declare the production scheme, or a link opened while the app is closed can launch a test
+  build against real data.**
+  (downbeat#575, 2026-10-13)
+  SHORT: A dev or test build declaring the production URL scheme competes for its links, so a link opened with the app closed can launch it on real data.
 
 - **L766. When a deadline stops waiting on a write to another system, record that write as UNKNOWN and have a later step read the target back and resend only if it is absent, because an outcome labelled 'may have finished' that nothing re-checks becomes a silent loss on every slow upstream night.**
   (Try-Pennie/bidspoke#2015, 2026-10-13)
