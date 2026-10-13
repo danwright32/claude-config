@@ -2,6 +2,7 @@ import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
 import {
+  CONTRACT,
   GUARD,
   HEADER,
   NOT_LOOK,
@@ -11,10 +12,12 @@ import {
   SKIP_NO,
   SKIP_SOURCE,
   SKIP_YES,
+  SKILL,
   agentRefusal,
   callKey,
   callText,
   cannotCheck,
+  contractOf,
   card,
   checked,
   dataOnlyChange,
@@ -26,12 +29,17 @@ import {
   listed,
   lookKindIn,
   notLookWhy,
-  patternExtension,
+  isGroupPattern,
+  isPattern,
+  isTestPath,
+  patternFolder,
+  patternMayBeLook,
   relTo,
   shapeKind,
   mentionedLookFiles,
   mentionsStore,
   pathsOf,
+  predates,
   READS_ONLY,
   textsOf,
   refusal,
@@ -251,14 +259,44 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const unsureFiles: string[] = []
   let why = ''
   for (const t of targets) {
-    const kind = shapeKind(t.path ?? t.word)
-    if (kind === null) {
-      // A name whose extension is a pattern (`page.ts[x]`) may be expanded to a look changing file.
-      if (!t.path && patternExtension(t.word)) {
-        unsureFiles.push(t.word)
-        why ||= `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
+    // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
+    // the checkout its folder is in, when that folder is spelled out from the top of the disk or home
+    // (a cd before it cannot move it). A folder in no checkout is in no project, whatever the name.
+    // A group (`x.(css|md)`) is read as a name by mod-kit, which follows its folder, a cd included.
+    if (tool === 'Bash' && (t.path ? isGroupPattern(t.word) : isPattern(t.word))) {
+      const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : patternFolder(t.word, at.home)
+      let tree: string | null | undefined
+      if (folder !== undefined) {
+        try {
+          tree = await $.modkit.workingTree({ path: folder })
+        } catch (err) {
+          unsureFiles.push(t.word)
+          why ||= `the disk could not say which checkout ${folder} is in: ${message(err)}`
+          continue
+        }
+        if (tree === null) continue
+      }
+      const may = patternMayBeLook(t.word)
+      if (may === 'not') continue
+      const shown = t.path ?? (folder === undefined ? t.word : `${folder}/${t.word.split('/').pop() ?? ''}`)
+      // In a checkout, a pattern there waits on that issue's answer as a named file does, and one in a
+      // test folder passes; Dan's answer covers it. Read nowhere else: no Swift text, no edit.
+      if (tree) {
+        if (isTestPath(relTo(shown, tree))) continue
+        const files = byTree.get(tree) ?? []
+        if (!files.includes(shown)) files.push(shown)
+        byTree.set(tree, files)
         continue
       }
+      unsureFiles.push(t.word)
+      why ||=
+        may === 'unread'
+          ? `where the command writes ${t.word} could not be followed, and its name is a pattern the design round guard cannot read, so it may name a look changing file`
+          : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
+      continue
+    }
+    const kind = shapeKind(t.path ?? t.word)
+    if (kind === null) {
       // A destination the reader could not follow, spelled with no look changing name, may still be
       // one when the command names a look changing file anywhere: held, as ask before saving holds
       // lasting memory (lessons review of #991). A command naming none runs.
@@ -469,7 +507,25 @@ const settledFor = async ($: EngineInterface, issue: number | undefined, call: u
   return forCall(first, open)
 }
 
-type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown; call?: unknown; path?: unknown }; agentId?: string }
+// The contract newer than this guard's that a question carries, or the design rounds skill on disk
+// states, if either does (#1057). A skill that is not there, or states none, is no claim; one that is
+// there and cannot be read is said in the debug log and judged by the question alone.
+const newerContract = async ($: EngineInterface, carried: unknown): Promise<number | undefined> => {
+  if (typeof carried === 'number' && Number.isInteger(carried) && carried > CONTRACT) return carried
+  const home = (await $.env.get('HOME')) ?? ''
+  if (!home) return undefined
+  const path = `${home}/.claude/skills/${SKILL}/SKILL.md`
+  try {
+    if (!(await $.fs.exists(path))) return undefined
+    const stated = contractOf(String(await $.fs.read(path)))
+    return stated !== undefined && stated > CONTRACT ? stated : undefined
+  } catch (err) {
+    $.ui.log(`design-round-guard: the ${SKILL} skill could not be read for its contract: ${message(err)}`, { to: 'debug' })
+    return undefined
+  }
+}
+
+type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown; call?: unknown; path?: unknown; contract?: unknown }; agentId?: string }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
@@ -563,6 +619,11 @@ export const register: Register = on => {
 
     const decide = async () => {
       if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about design rounds. Stop and report to the main session that this waits on him.' }
+      // Steps newer than this guard (#1057): the version the question carries, or the skill on disk
+      // states, past CONTRACT. Read before anything is asked or recorded, so Dan is never asked a
+      // question whose answer this guard would misread.
+      const newer = await newerContract($, ask.metadata?.contract)
+      if (newer !== undefined) return { deny: predates(newer) }
       const questions = Array.isArray(ask.questions) ? ask.questions : []
 
       if (isSkip) {
