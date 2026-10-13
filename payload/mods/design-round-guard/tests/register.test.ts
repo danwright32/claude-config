@@ -3,7 +3,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { CONTRACT, HEADER, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
-import { pipeline } from './mod-kit/hooks/commands.ts'
+import { git as gitCommand, pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
 import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -44,7 +44,7 @@ const modKit: { name: string; register: Register } = {
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
-        git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+        git: async (input: { words: string[] }) => ask('git', input),
         gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
         ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
         linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
@@ -144,6 +144,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
     }
     if (cmd === '__modkit' && args[0] === 'pipeline') return ok(JSON.stringify(pipeline(JSON.parse(String(args[1])).command)))
+    // mod-kit's git reader (#1158), read here with its copy; JSON has no undefined, so none is null.
+    if (cmd === '__modkit' && args[0] === 'git') return ok(JSON.stringify(gitCommand(JSON.parse(String(args[1])).words) ?? null))
     // mod-kit's typed answer wording (#1145), read here with its copy.
     if (cmd === '__modkit' && args[0] === 'typedAnswer') {
       const input = JSON.parse(String(args[1])) as TypedAnswer
@@ -1355,6 +1357,18 @@ test('#1158: a restore git cannot read is held as a look change, and the refusal
   w.ctl.gitBlob = 'truncated'
   expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toContain('gave more than could be read whole')
   expect(w.ran).toEqual([])
+})
+
+// Lessons review of #1158: git's source is read before the call runs, so anything else on the line
+// may change what it names first (a branch switch, a staged copy, a script that runs git).
+test('#1158: a restore beside any other command is judged whole, saying why; one alone after a cd is measured', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MOD_HOOK]: EDITED, ...MOD_PLUGIN }, blobs: { [`/w/slate HEAD:${MOD_REL}`]: MOD_TEXT, [`/w/slate :${MOD_REL}`]: MOD_TEXT } })
+  for (const command of [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git checkout HEAD -- ${MOD_REL} | cat`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('the command runs more than this one git checkout or restore') }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && git checkout HEAD -- ${MOD_REL}` }))).toBe('')
 })
 
 test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {

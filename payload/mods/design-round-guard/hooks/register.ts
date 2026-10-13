@@ -96,8 +96,8 @@ import {
 //   (rules.ts modHookLogicOnly): an edit touching none of it passes unasked.
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
-//   passes; one git cannot read is judged whole, and the refusal says why. A refusal holds the
-//   change it refused, never the file.
+//   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
+//   judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -272,13 +272,29 @@ const putBack = async ($: EngineInterface, path: string, tree: string, from: str
   }
 }
 
+// Why what git puts back cannot be read before a shell call runs, or undefined when it can (lessons
+// review of #1158): putBack reads the source as it stands now, and any other command on the line may
+// change what that source names first (`git switch x && git checkout HEAD -- f`, `git add f && git
+// restore f`, a script that runs git). So only a line that is one git checkout or restore alone, a cd
+// before it aside, is measured; anything else is judged whole, saying so.
+const restoreAlone = async ($: EngineInterface, command: string): Promise<string | undefined> => {
+  try {
+    const rest = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
+    const only = rest.length === 1 ? await $.modkit.git({ words: rest[0]?.words ?? [] }) : undefined
+    if (only?.sub === 'checkout' || only?.sub === 'restore') return undefined
+    return 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
+  } catch (err) {
+    return `mod-kit could not read the command: ${message(err)}`
+  }
+}
+
 // What a call changes in a React screen file (rules.ts judgedByText), as the text before and after it:
 // an Edit, MultiEdit or Write naming one existing file, from the text the call leaves; a git checkout
-// or restore, from what git puts back (#1158), or why that could not be read. Undefined for anything
-// else (a shell write, a new file, a file that cannot be read, a call naming more than one file),
-// which is never judged by its lines and is asked about.
+// or restore, from what git puts back (#1158), or why that could not be read (`notAlone`, restoreAlone's
+// answer for the call). Undefined for anything else (a shell write, a new file, a file that cannot be
+// read, a call naming more than one file), which is never judged by its lines and is asked about.
 type Change = { before: string; after: string } | { unread: string } | undefined
-const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: string, tool: string, input: Record<string, unknown>): Promise<Change> => {
+const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: string, tool: string, input: Record<string, unknown>, notAlone: string | undefined): Promise<Change> => {
   if (!judgedByText(t.path) || (tool === 'Bash' ? t.from === undefined : pathsOf(input).length !== 1)) return undefined
   let before: string
   try {
@@ -291,6 +307,7 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
     const after = editedText(before, tool, input)
     return after === undefined ? undefined : { before, after }
   }
+  if (notAlone !== undefined) return { unread: notAlone }
   const back = await putBack($, t.path, tree, t.from)
   return 'why' in back ? { unread: back.why } : { before, after: back.text }
 }
@@ -339,6 +356,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const byTree = new Map<string, string[]>()
   // Per checkout, what a refusal says of a git checkout or restore whose lines could not be read (#1158).
   const unreadIn = new Map<string, string[]>()
+  // restoreAlone's answer for this call once asked; null until then.
+  let notAlone: string | undefined | null = null
   const unsureFiles: string[] = []
   let why = ''
   for (const t of targets) {
@@ -418,7 +437,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // does one to a mod's hook file that touches none of what it draws (#1138), nor a git checkout or
     // restore putting back only such lines (#1158). One whose lines git could not give is judged
     // whole, and the refusal says why.
-    const change = await changeOf($, { ...t, path: t.path }, tree, tool, input)
+    // Asked once per call, and only of one that puts back a file judged by its lines.
+    if (t.from !== undefined && judgedByText(t.path) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
+    const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
     if (change && 'unread' in change) {
       const said = unreadPutBack(relTo(t.path, tree), change.unread)
       const notes = unreadIn.get(tree) ?? []

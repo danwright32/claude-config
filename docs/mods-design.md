@@ -2438,6 +2438,10 @@ way", so the edit it never wanted stayed.
   too, and since a run is a part of the whole change, nothing judged whole before is held now.
 - **What git cannot give is said.** A missing ref, git failing or not running, or an answer too long
   to read whole leaves the restore judged whole, as before, and the refusal says which file and why.
+- **Only a restore alone is measured.** The source is read before the call runs, and any other
+  command on the line may change what it names first (`git switch x && git checkout HEAD -- f`,
+  `git add f && git restore f`, a script that runs git), so a line that is anything more than one
+  git checkout or restore, a cd before it aside, is judged whole, saying so (lessons review).
 - **A refusal holds the change, not the file.** It now says "Do not make this change to <file> any
   other way", and that undoing an earlier edit of one's own is judged by the lines it changes.
 - Left as is: a stylesheet or other look file has no lines that draw nothing, so putting one back
