@@ -567,6 +567,10 @@ expectFinding('a bare @everyone is refused', swap(5, 'Aliases can no longer set 
   const r = lint(swap(5, 'Aliases can no longer set off an @ channel ping.'));
   check(r.code === 0, 'the spaced @ channel Dan writes passes', r.all);
 }
+{
+  const r = lint(swap(5, 'Write to ops@here.example.com or team@everyone.example.com for access.'));
+  check(r.code === 0, 'an email address containing @here or @everyone is not a ping', r.all);
+}
 expectFinding('a heading not in uppercase is refused', swap(4, 'Goals'), 4, 'uppercase');
 expectFinding('a heading ending in a colon is refused', swap(4, 'GOALS:'), 4, 'colon');
 expectFinding('a bold heading is refused', swap(4, '*GOALS*'), 4, 'bold');

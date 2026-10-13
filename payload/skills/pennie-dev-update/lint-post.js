@@ -30,7 +30,8 @@ const BOLD = /\*\*[^*\n]+\*\*|__[^_\n]+__|(^|[^\w*])\*(?=\S)[^*\n]*?\S?\*(?![\w*
 const EMOJI = /\p{Extended_Pictographic}/u;
 const SHORTCODE = /:(?=[a-z0-9_+-]*[a-z])[a-z0-9_+-]+:/gi;
 const HYPHENATED = /\b[A-Za-z]+(?:-[A-Za-z]+)+\b/g;
-const PING = /@(channel|here|everyone)\b/i;
+// The @ must start a word, so an email address such as ops@here.example.com is not a ping.
+const PING = /(^|[^\w.@])@(channel|here|everyone)\b/i;
 const OPENER = /^Updates for .+ :thread:$/;
 const THREAD = ':thread:';
 
