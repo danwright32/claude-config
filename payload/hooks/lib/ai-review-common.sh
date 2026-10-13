@@ -158,7 +158,9 @@ ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 w
 # applied to a review's findings, which may legitimately name a settings file.
 ar_redact() {   # [--stderr]
   local rules drop='/[Pp]ermission rule|[Pp]ermissions?\.(allow|deny|ask)|settings(\.local)?\.json|[Ss]ettings warning|Bash\(/d'
-  rules="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/review-redact.sed"
+  # The folder of this file by parameter expansion, never dirname (claude-config#1104).
+  rules="${BASH_SOURCE[0]%/*}"; [ "$rules" != "${BASH_SOURCE[0]}" ] || rules=.
+  rules="$(cd "${rules:-/}" && pwd)/review-redact.sed"
   if [ ! -r "$rules" ]; then
     cat >/dev/null
     printf '\n(withheld: lib/review-redact.sed is missing, so this text could not be redacted)\n'

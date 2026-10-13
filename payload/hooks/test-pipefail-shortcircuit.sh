@@ -100,18 +100,26 @@ fi
 #   sed counts when its script holds a `q` or `Q` command, after substitutions and /addresses/,
 #   which can hold the letter as text, are taken out.
 #
-# A program read from a file (`-f`) cannot be judged from here and is not counted. Still one count
-# per LINE, as grep -c gave, so every recorded number keeps its meaning.
+# Every reader is found past what the shell runs it THROUGH (claude-config#1104): assignments
+# (`| LC_ALL=C awk`), `command`, and `env` with its options and assignments, and a reader named by
+# its path is the same reader. It was recognised only straight after the pipe, so the same program
+# behind a locale setting went uncounted. The reader's name must end at a space or the line's end,
+# so a case pattern such as `grep|head)` is not taken for a pipe into head.
+#
+# A program read from a file (`-f`, `--file`) cannot be judged from here. It is not counted, and it
+# is not passed either: the counter names its line as UNJUDGED, and the tree check further down
+# fails on one, because a site nobody has judged is not a site that is known not to short circuit
+# (L98). Still one count per LINE, as grep -c gave, so every recorded number keeps its meaning.
 _SC_COUNTER="$(cat <<'AWK'
 function tok(s,    n, c, pos, len, t, intok, j, closed) {
-  split("", T)
+  split("", T); split("", TEND)
   UNTERM = 0
   n = 0; pos = 1; len = length(s); t = ""; intok = 0
   while (pos <= len && n < 40) {
     c = substr(s, pos, 1)
     if (c == "\\" && pos == len) { UNTERM = 1; break }
-    if (c == "\\" && substr(s, pos + 1, 1) == "\n") { pos += 2; if (intok) { T[++n] = t; t = ""; intok = 0 } continue }
-    if (c == " " || c == "\t") { if (intok) { T[++n] = t; t = ""; intok = 0 } pos++; continue }
+    if (c == "\\" && substr(s, pos + 1, 1) == "\n") { if (intok) { T[++n] = t; TEND[n] = pos; t = ""; intok = 0 } pos += 2; continue }
+    if (c == " " || c == "\t") { if (intok) { T[++n] = t; TEND[n] = pos; t = ""; intok = 0 } pos++; continue }
     if (c == "\n" || c == ";" || c == "|" || c == "&" || c == ")" || c == "<" || c == ">") break
     intok = 1
     if (c == SQ) {
@@ -133,8 +141,33 @@ function tok(s,    n, c, pos, len, t, intok, j, closed) {
     if (c == "\\") { t = t substr(s, pos + 1, 1); pos += 2; continue }
     t = t c; pos++
   }
-  if (intok) T[++n] = t
+  if (intok) { T[++n] = t; TEND[n] = pos }
   return n
+}
+# The word that names the reader, past assignments and the command and env wrappers, or 0 when
+# there is none. A command -v or -V only describes a command, so it names no reader.
+function reader_at(n,    i) {
+  i = 1
+  while (i <= n) {
+    if (T[i] ~ /^[A-Za-z_][A-Za-z_0-9]*=/) { i++; continue }
+    if (T[i] == "command") {
+      i++
+      while (i <= n && T[i] ~ /^-[a-zA-Z]+$/) { if (T[i] ~ /[vV]/) return 0; i++ }
+      continue
+    }
+    if (T[i] == "env") {
+      i++
+      while (i <= n) {
+        if (T[i] == "-u" || T[i] == "--unset") { i += 2; continue }
+        if (T[i] == "--") { i++; break }
+        if (T[i] ~ /^-/ || T[i] ~ /^[A-Za-z_][A-Za-z_0-9]*=/) { i++; continue }
+        break
+      }
+      continue
+    }
+    return i
+  }
+  return 0
 }
 function strip_end(p,    s, k, depth, ch, rest) {
   while (match(p, /(^|[^A-Za-z_0-9])END[[:space:]]*\{/)) {
@@ -150,21 +183,22 @@ function strip_end(p,    s, k, depth, ch, rest) {
   }
   return p
 }
-function awk_leaves(n,    i, prog) {
-  i = 2
+# Each judge starts at the word after the name of the reader, r; a program read from a file sets UNJ.
+function awk_leaves(r, n,    i, prog) {
+  i = r + 1
   while (i <= n && substr(T[i], 1, 1) == "-") {
     if (T[i] == "--") { i++; break }
-    if (T[i] == "-f" || T[i] ~ /^--file/) return 0
+    if (T[i] == "-f" || T[i] ~ /^--file/) { UNJ = 1; return 0 }
     if (T[i] == "-v" || T[i] == "-F") i += 2; else i++
   }
   if (i > n) return 0
   prog = strip_end(T[i])
   return prog ~ /(^|[^A-Za-z_0-9])exit([^A-Za-z_0-9]|$)/
 }
-function sed_leaves(n,    i, sc) {
-  i = 2; sc = ""
+function sed_leaves(r, n,    i, sc) {
+  i = r + 1; sc = ""
   while (i <= n && substr(T[i], 1, 1) == "-") {
-    if (T[i] == "-f" || T[i] ~ /^--file/) return 0
+    if (T[i] == "-f" || T[i] ~ /^--file/) { UNJ = 1; return 0 }
     if (T[i] ~ /^-[a-zA-Z]*e$/ || T[i] == "--expression") { sc = sc ";" T[i + 1]; i += 2; continue }
     i++
   }
@@ -178,34 +212,60 @@ function sed_leaves(n,    i, sc) {
 }
 { L[NR] = $0 }
 END {
-  total = 0
+  total = 0; unjudged = ""
   for (i = 1; i <= NR; i++) {
     line = L[i]
     if (line ~ /^[[:space:]]*#/) continue
-    if (line ~ /(^|[^|])\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)/) { total++; continue }
-    rest = line; hit = 0
-    while (!hit && match(rest, /(^|[^|])\| *(awk|sed)( |$)/)) {
+    rest = line; hit = 0; UNJ = 0
+    while (!hit && match(rest, /(^|[^|])\|/)) {
       # Kept before anything else can call match(), which resets RSTART for the whole program.
       after = RSTART + RLENGTH
-      s = substr(rest, RSTART)
-      sub(/^[^|]*\| */, "", s)
+      s = substr(rest, after)
+      rest = s
+      # A second bar makes a logical OR (claude-config#282), and a bar then an ampersand pipes both streams.
+      if (substr(s, 1, 1) == "|") { rest = substr(s, 2); continue }
+      if (substr(s, 1, 1) == "&") s = substr(s, 2)
       text = s; k = i
       n = tok(text)
+      r = reader_at(n)
+      if (!r) continue
+      c = substr(text, TEND[r], 1)
+      if (c != "" && c != " " && c != "\t" && c != "\n" && c != "\\") continue
+      name = T[r]; sub(/.*\//, "", name)
+      if (name == "head") { hit = 1; continue }
+      if (name == "grep") { if (T[r + 1] ~ /^(--quiet|-[a-zA-Z]*q[a-zA-Z]*)$/) hit = 1; continue }
+      if (name != "awk" && name != "sed") continue
       while (UNTERM && k < NR && k < i + 300) { text = text "\n" L[++k]; n = tok(text) }
-      if (T[1] == "awk" && awk_leaves(n)) hit = 1
-      else if (T[1] == "sed" && sed_leaves(n)) hit = 1
-      rest = substr(rest, after)
+      if (name == "awk" && awk_leaves(r, n)) hit = 1
+      else if (name == "sed" && sed_leaves(r, n)) hit = 1
     }
     if (hit) total++
+    if (UNJ) unjudged = unjudged " " i
   }
   print total
+  if (unjudged != "") print "unjudged" unjudged
 }
 AWK
 )"
+# One pass over a file answers both questions: the count on the first line, then, when there are
+# any, `unjudged` and the line numbers of the piped programs read from a file.
+sc_scan() { # sc_scan <file>
+  awk -v SQ="'" -v DQ='"' "$_SC_COUNTER" "$1" 2>/dev/null
+}
+_SC_NL='
+'
 count_uncommented() { # count_uncommented <file>  -> how many lines hold a short circuiting pipeline
-  local n
-  n="$(awk -v SQ="'" -v DQ='"' "$_SC_COUNTER" "$1" 2>/dev/null)"
+  local out n
+  out="$(sc_scan "$1")"
+  n="${out%%"$_SC_NL"*}"
   printf '%s' "${n:-0}"
+}
+unjudged_lines() { # unjudged_lines <file>  -> the line numbers that pipe into a file program, or nothing
+  local out rest
+  out="$(sc_scan "$1")"
+  rest="${out#*"$_SC_NL"unjudged }"
+  [ "$rest" = "$out" ] || printf '%s' "$rest"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -304,6 +364,52 @@ _PIPE='|'
 [ "$(count_uncommented "$TMPROOT/probe-awk-sed.sh")" = "5" ] \
   && check "#1042 the counter sees an awk that exits and a sed that quits, multi line bodies too, and not their harmless neighbours" ok \
   || check "#1042 the counter sees an awk that exits and a sed that quits, multi line bodies too, and not their harmless neighbours" "it counted $(count_uncommented "$TMPROOT/probe-awk-sed.sh") of 5"
+
+# THE SAME READERS BEHIND A WRAPPER (claude-config#1104). The reader was recognised only when its
+# name came straight after the pipe, so `| LC_ALL=C awk`, `| command sed` and `| env awk` that leave
+# early were never counted, though the shell runs the very same program. Assignments, `command`
+# and `env` (with its options and assignments) are read past, and a reader named by its path is
+# the same reader. The last four lines must NOT count: an exit inside END, a `q` that is text, a
+# wrapped reader that reads to the end, and a case pattern, which holds a `|` and is no pipe.
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf '%s\n' "cat file $_PIPE LC_ALL=C awk 'NR == 1 { print; exit }'"
+  printf '%s\n' "cat file $_PIPE command sed 5q"
+  printf '%s\n' "cat file $_PIPE env LC_ALL=C awk '{ exit }'"
+  printf '%s\n' "cat file $_PIPE env -i PATH=/bin grep -q needle"
+  printf '%s\n' "cat file $_PIPE LANG=C command head -1"
+  printf '%s\n' "cat file $_PIPE A=1 B=\"x y\" /usr/bin/awk '/n/ { exit }'"
+  printf '%s\n' "cat file $_PIPE env -u TZ sed -n '1p;q'"
+  printf '%s\n' "cat file $_PIPE LC_ALL=C awk '{ n++ } END { exit n ? 0 : 1 }'"
+  printf '%s\n' "cat file $_PIPE command sed 's/q /x/'"
+  printf '%s\n' "cat file $_PIPE env LC_ALL=C sort"
+  printf '%s\n' "case \"\$x\" in grep${_PIPE}head) ;; esac"
+} > "$TMPROOT/probe-wrapped.sh"
+[ "$(count_uncommented "$TMPROOT/probe-wrapped.sh")" = "7" ] \
+  && check "#1104 the counter reads past assignments, command and env to the reader, and not into a case pattern" ok \
+  || check "#1104 the counter reads past assignments, command and env to the reader, and not into a case pattern" "it counted $(count_uncommented "$TMPROOT/probe-wrapped.sh") of 7"
+
+# A PROGRAM READ FROM A FILE IS UNJUDGED, NOT CLEAN (claude-config#1104). Whether `awk -f prog` or
+# `sed -f script` leaves early is decided by a file this counter does not read, so it was simply not
+# counted, which reported a site nobody had judged as one that does not short circuit (L98). It is
+# now named as unjudged, by line, wrapped or not and however the option is spelt; an inline program,
+# a file program that is not piped into, and a comment are not.
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf '%s\n' "cat file $_PIPE awk -f prog.awk"
+  printf '%s\n' "cat file $_PIPE LC_ALL=C sed -f script.sed"
+  printf '%s\n' "cat file $_PIPE env awk --file=prog.awk"
+  printf '%s\n' "cat file $_PIPE awk -v k=1 -f prog.awk"
+  printf '%s\n' "cat file $_PIPE awk '{ print }'"
+  printf '%s\n' "awk -f prog.awk file"
+  printf '%s\n' "# cat file $_PIPE awk -f prog.awk"
+} > "$TMPROOT/probe-unjudged.sh"
+[ "$(unjudged_lines "$TMPROOT/probe-unjudged.sh")" = "3 4 5 6" ] \
+  && check "#1104 a piped awk or sed whose program is a file is named as unjudged, by line" ok \
+  || check "#1104 a piped awk or sed whose program is a file is named as unjudged, by line" "it named lines '$(unjudged_lines "$TMPROOT/probe-unjudged.sh")', not 3 4 5 6"
+[ "$(count_uncommented "$TMPROOT/probe-unjudged.sh")" = "0" ] \
+  && check "#1104 and an unjudged site is not counted as one that short circuits" ok \
+  || check "#1104 and an unjudged site is not counted as one that short circuits" "it counted $(count_uncommented "$TMPROOT/probe-unjudged.sh")"
 
 # ---------------------------------------------------------------------------
 # The hazard itself, on THIS machine, rather than taken from a note (claude-config#162).
@@ -494,14 +600,23 @@ $1
 
 # A file the baseline does not mention at all, that has one. This is the case that matters: a new
 # one arriving in a file nobody was watching (L96).
+# The same one pass also names every pipe into an awk or sed program read from a file, which the
+# counter cannot judge (claude-config#1104).
 unlisted=""
+unjudged=""
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
   case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
   f="$ROOT/$rel"
   [ -f "$f" ] || continue
   runs_under_pipefail "$rel" || continue
-  have="$(count_uncommented "$f")"
+  scanned="$(sc_scan "$f")"
+  have="${scanned%%"$_SC_NL"*}"
+  unj="${scanned#*"$_SC_NL"unjudged }"
+  if [ "$unj" != "$scanned" ]; then
+    for ln in $unj; do unjudged="$unjudged  $rel: line $ln$(uncommitted_mark "$rel")
+"; done
+  fi
   [ "${have:-0}" -gt 0 ] || continue
   case "
 $(ratchet_read_baseline "$(cat "$BASELINE")")" in *"
@@ -535,6 +650,16 @@ case "$shrank$gone" in
     check "the baseline has been lowered as sites were converted" "these are stale:
 $shrank$gone  Lower the recorded number, so what is left keeps meaning something." ;;
   *) check "the baseline has been lowered as sites were converted" ok ;;
+esac
+
+# A one way door rather than a count, as for shipped code below: there were none once the one in
+# the sync suite was converted, and a program in a file is judged by nobody, so a new one is named
+# on the day it lands (claude-config#1104).
+case "$unjudged" in
+  *[![:space:]]*)
+    check "no pipe runs into an awk or sed program read from a file, which cannot be judged here" "these do:
+$unjudged  Give the program the input as a file or a here-string (awk -f prog <<< \"\$text\") rather than a pipe, or put the program inline so it can be read." ;;
+  *) check "no pipe runs into an awk or sed program read from a file, which cannot be judged here" ok ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -644,6 +769,22 @@ if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
         0:*) check "#403 the same file, once a pipefail script sources it, is counted" "it passed" ;;
         *util.sh*) check "#403 the same file, once a pipefail script sources it, is counted" ok ;;
         *) check "#403 the same file, once a pipefail script sources it, is counted" "it failed without naming the file: $sc_out" ;;
+      esac
+      git -C "$sc_probe" rm -q util.sh caller.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m unshared >/dev/null 2>&1
+
+      # 3. A piped awk whose program is a FILE fails the tree check by file and line, with no count
+      #    to its name, rather than passing as a site that does not short circuit (claude-config#1104).
+      #    Assembled for the same reason as the rest, so this file holds no such pipe of its own.
+      sc_unj="cat f $_PIPE awk -f prog.awk"
+      printf '%s\n' 'set -uo pipefail' "$sc_unj" > "$sc_probe/unj.sh"
+      git -C "$sc_probe" add unj.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m unj >/dev/null 2>&1
+      sc_out="$(sc_run)"; sc_rc=$?
+      case "$sc_rc:$sc_out" in
+        0:*) check "#1104 a pipe into an awk program read from a file fails the tree check" "it passed" ;;
+        *"unj.sh: line 2"*) check "#1104 a pipe into an awk program read from a file fails the tree check" ok ;;
+        *) check "#1104 a pipe into an awk program read from a file fails the tree check" "it failed without naming unj.sh line 2: $sc_out" ;;
       esac
       rm -rf "$sc_probe" ;;
   esac

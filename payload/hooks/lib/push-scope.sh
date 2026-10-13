@@ -211,7 +211,11 @@ ps__crude_cut() {   # $1 = command
 # assignments, one per line, outer quotes removed. A command that read on its own is exactly
 # that one command (no substitution in it) is kept as a reading of its own as well, so a question
 # about one command of the line, the push itself, is answered with no second start.
-PS_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh).
+_PS_LIB="${BASH_SOURCE[0]%/*}"; [ "$_PS_LIB" != "${BASH_SOURCE[0]}" ] || _PS_LIB=.
+_PS_LIB="$(cd "${_PS_LIB:-/}" && pwd)"
+PS_SHELL_WORDS="$_PS_LIB/shell-words.py"
 PS__M_ENV=""
 PS__HIT=0
 PS__REC=0
