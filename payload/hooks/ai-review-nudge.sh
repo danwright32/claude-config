@@ -163,8 +163,8 @@ elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
   if [ "$s" -ge 60 ]; then printf '%dm %02ds' "$((s / 60))" "$((s % 60))"; else printf '%ds' "$s"; fi
 }
 
-read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline m_kind m_findings
-  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_kind=""; m_findings=""; m_dir=""; m_groups=""
+read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline m_dir m_groups
+  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_dir=""; m_groups=""
   local line
   while IFS= read -r line; do
     [ -n "$line" ] || break
@@ -176,8 +176,6 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
       finished=*) m_finished="${line#finished=}" ;;
       status=*) m_status="${line#status=}" ;;
       deadline=*) m_deadline="${line#deadline=}" ;;
-      kind=*) m_kind="${line#kind=}" ;;
-      findings=*) m_findings="${line#findings=}" ;;
       dir=*) m_dir="${line#dir=}" ;;
       groups=*) m_groups="${line#groups=}" ;;
     esac
