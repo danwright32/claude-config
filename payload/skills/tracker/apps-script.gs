@@ -36,11 +36,13 @@
  * deployed as a new version (Deploy, Manage deployments, Edit, New version); see SKILL.md.
  *
  * Until TOKEN below is changed from the placeholder, every request is refused: the placeholder
- * is public, in the repository this file comes from.
+ * is public, in the repository this file comes from. It is written with spaces so claude-sync's
+ * secret scan, which matches a key such as TOKEN in any letter case, reads it as the placeholder
+ * it is (claude-config#1128, README "Secret scan").
  */
 
-const TOKEN = 'REPLACE_WITH_A_LONG_RANDOM_STRING';
-const TOKEN_PLACEHOLDER = 'REPLACE_WITH_A_LONG_RANDOM_STRING';
+const TOKEN = 'REPLACE WITH A LONG RANDOM STRING';
+const TOKEN_PLACEHOLDER = 'REPLACE WITH A LONG RANDOM STRING';
 const TOKEN_MIN_LENGTH = 32;
 const SHEET_NAME = ''; // leave blank to use the first sheet
 
