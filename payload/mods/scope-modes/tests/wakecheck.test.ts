@@ -19,7 +19,7 @@ const fail = (stderr: string): Ran => ({ exitCode: 1, stdout: '', stderr })
 type World = Record<string, Ran>
 const QUIET: World = {
   'gh api user --jq .login': ok('dan\n'),
-  'gh api users/dan/events?per_page=100': ok(JSON.stringify([{ type: 'PushEvent', created_at: AFTER, repo: { name: 'o/r' } }])),
+  'gh api users/dan/events?per_page=100&page=1': ok(JSON.stringify([{ type: 'PushEvent', created_at: AFTER, repo: { name: 'o/r' } }])),
   [`gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100`]: ok('[]'),
   'git -C /Users/x/claude-config-sync remote -v': ok('origin\tgit@github.com:o/claude-config.git (fetch)\n'),
   'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok('[]'),
@@ -58,7 +58,7 @@ describe('the wake check', () => {
   })
   test('issues created, milestones touched, LESSONS.md changed and deploy runs are each found', async () => {
     const r = await check({
-      'gh api users/dan/events?per_page=100': ok(JSON.stringify([
+      'gh api users/dan/events?per_page=100&page=1': ok(JSON.stringify([
         { type: 'IssuesEvent', created_at: AFTER, repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Found overnight' } } },
         { type: 'IssuesEvent', created_at: BEFORE, repo: { name: 'o/old' }, payload: { action: 'opened', issue: { number: 1, title: 'Before sleep' } } },
       ])),
@@ -112,14 +112,14 @@ describe('the wake check', () => {
       'when the Deploy run in o/r ran is unknown (GitHub gave no time)',
     ])
   })
-  test('a full page of milestones or runs says the rest were not read (L24)', async () => {
+  test('a full page of milestones or runs says the rest were not read, runs by the window left (L24, #1160)', async () => {
     const ms = Array.from({ length: 100 }, (_, n) => ({ title: `m${n}`, updated_at: BEFORE }))
     const runs = Array.from({ length: 100 }, () => ({ workflowName: 'CI', event: 'push', createdAt: AFTER, url: 'u' }))
     const r = await check({
       'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify(ms)),
       'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok(JSON.stringify(runs)),
     })
-    expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'more than 100 runs in o/r since sleep began, so only the newest 100 were read'])
+    expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'the runs in o/r from 11:00 PM ET on Wed Oct 7 to 1:00 AM ET on Thu Oct 8 were not read for deploys (only the newest 100 were asked for)'])
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
     const world: World = { ...QUIET, 'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'Secret', updated_at: AFTER }])), 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]') }
@@ -139,7 +139,7 @@ describe('the wake check', () => {
       { since: SINCE, home: HOME, github, now: () => t, budgetMs: 60_000 },
     )
     // Three GitHub reads use the 60 s; the local reads still run, and nothing after them on GitHub.
-    expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
+    expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100&page=1', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
     expect(asked.filter(a => !a.startsWith('gh '))).toEqual(['git -C /Users/x/claude-config-sync remote -v', 'stat -f %m /Users/x/.claude/LESSONS.md'])
     expect(r.unmeasured).toEqual(['the overnight check stopped at its 60 s limit, so the rest of GitHub was not read'])
   })
@@ -162,9 +162,87 @@ describe('the wake check', () => {
     const r = await check({ 'gh api user --jq .login': fail('not logged in') })
     expect(r.unmeasured[0]).toBe('GitHub was not checked at all: the gh login could not be read (not logged in)')
   })
-  test('a full page of events since sleep began says the rest were not read (L24)', async () => {
-    const many = Array.from({ length: 100 }, () => ({ type: 'PushEvent', created_at: AFTER, repo: { name: 'o/r' } }))
-    const r = await check({ 'gh api users/dan/events?per_page=100': ok(JSON.stringify(many)) })
-    expect(r.unmeasured).toContain('more than 100 GitHub events since sleep began, so only the newest 100 were read for the repositories to check')
+})
+
+// #1160: on a busy night (20 PRs merged on 2026-10-12) the newest 100 events did not reach back to
+// sleep's start, so the repositories worked earlier went unchecked. The events are read page by page
+// back to the moment sleep began, as far as GitHub keeps them (a user's newest 300: page 4 answers
+// HTTP 422, measured 2026-10-13), and a window that could not be read is said by its two ends.
+describe('the events, page by page back to sleep (#1160)', () => {
+  const page = (p: number) => `gh api users/dan/events?per_page=100&page=${p}`
+  const iso = (min: number) => new Date(SINCE + min * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  // n events, newest first, one a minute, the newest `newest` minutes after sleep began.
+  const events = (n: number, newest: number, repo = 'o/r') =>
+    Array.from({ length: n }, (_, i) => ({ type: 'PushEvent', created_at: iso(newest - i), repo: { name: repo } }))
+  const quietRepo = (repo: string): World => ({
+    [`gh api repos/${repo}/milestones?state=all&per_page=100`]: ok('[]'),
+    [`gh run list -R ${repo} --json workflowName,event,createdAt,url --limit 100`]: ok('[]'),
+  })
+
+  test('a page that is not full is the last one asked for', async () => {
+    const r = await check()
+    expect(r.asked).toContain(page(1))
+    expect(r.asked).not.toContain(page(2))
+  })
+  test('every page back to the moment sleep began is read, and the repositories on the last are checked', async () => {
+    const r = await check({
+      [page(1)]: ok(JSON.stringify(events(100, 400))),
+      [page(2)]: ok(JSON.stringify([...events(99, 300), ...events(1, 201, 'o/deep')])),
+      // The third page crosses sleep's start: ten events overnight, then the evening before.
+      [page(3)]: ok(JSON.stringify([...events(10, 200, 'o/deeper'), ...events(20, -1, 'o/evening')])),
+      ...quietRepo('o/deep'),
+      ...quietRepo('o/deeper'),
+    })
+    expect(r.unmeasured).toEqual([])
+    expect(r.asked).toContain(page(3))
+    expect(r.asked).not.toContain(page(4))
+    expect(r.asked).toContain('gh api repos/o/deep/milestones?state=all&per_page=100')
+    expect(r.asked).toContain('gh api repos/o/deeper/milestones?state=all&per_page=100')
+    expect(r.asked).not.toContain('gh api repos/o/evening/milestones?state=all&per_page=100')
+  })
+  test('a page whose events reach back past sleep is the last, however full', async () => {
+    const r = await check({ [page(1)]: ok(JSON.stringify([...events(50, 400), ...events(50, -1, 'o/evening')])) })
+    expect(r.unmeasured).toEqual([])
+    expect(r.asked).not.toContain(page(2))
+  })
+  test('all 300 events GitHub keeps since sleep began says the window before the oldest was not read', async () => {
+    const r = await check({
+      [page(1)]: ok(JSON.stringify(events(100, 400))),
+      [page(2)]: ok(JSON.stringify(events(100, 300))),
+      [page(3)]: ok(JSON.stringify(events(100, 200))),
+    })
+    // The oldest read is 101 minutes after 11:00 PM ET.
+    expect(r.unmeasured).toEqual(['the GitHub events from 11:00 PM ET on Wed Oct 7 to 12:41 AM ET on Thu Oct 8 were not read for the repositories to check (GitHub gives only the newest 300 of a user\'s events)'])
+    expect(r.asked).not.toContain(page(4))
+  })
+  test('a page that cannot be read says the window it would have covered, by its two ends', async () => {
+    const r = await check({ [page(1)]: ok(JSON.stringify(events(100, 400))), [page(2)]: fail('HTTP 502: Bad Gateway') })
+    // Page 1 reached back to 301 minutes after 11:00 PM ET.
+    expect(r.unmeasured).toEqual(['the GitHub events from 11:00 PM ET on Wed Oct 7 to 4:01 AM ET on Thu Oct 8 were not read for the repositories to check (page 2: HTTP 502: Bad Gateway)'])
+    expect(r.asked).not.toContain(page(3))
+    // What the first page named is still read.
+    expect(r.asked).toContain('gh api repos/o/r/milestones?state=all&per_page=100')
+  })
+  test('a first page that cannot be read says every event since sleep began went unread', async () => {
+    const r = await check({ [page(1)]: ok('<html>') })
+    expect(r.unmeasured).toEqual(['the GitHub events since 11:00 PM ET on Wed Oct 7 were not read for the repositories to check (page 1: the answer was not JSON)'])
+  })
+  test('a page past the check\'s deadline, on the injected clock, says the window it left unread (#1147)', async () => {
+    let t = 0
+    const world: World = { ...QUIET, [page(1)]: ok(JSON.stringify(events(100, 400))), [page(2)]: ok(JSON.stringify(events(100, 300))) }
+    const asked: string[] = []
+    const r = await wakeCheck(
+      async argv => {
+        asked.push(argv.join(' '))
+        t += 12_000 // each read takes 12 s: the login, then pages 1 and 2 use the 30 s
+        return world[argv.join(' ')] ?? fail('unexpected')
+      },
+      { since: SINCE, home: HOME, github, now: () => t },
+    )
+    expect(asked).not.toContain(page(3))
+    expect(r.unmeasured).toEqual([
+      'the overnight check stopped at its 30 s limit, so the rest of GitHub was not read',
+      'the GitHub events from 11:00 PM ET on Wed Oct 7 to 2:21 AM ET on Thu Oct 8 were not read for the repositories to check (page 3: the check stopped at its 30 s limit)',
+    ])
   })
 })
