@@ -11400,6 +11400,15 @@ rv_stale_nums="$(cat "$WORK"/rv1148-stale-*.out | grep -E '^L[0-9]+$' | sort)"
 check "#1148 five asks racing to take over a dead holder's lock still get five numbers" \
   "[ \"\$(printf '%s\n' \"\$rv_stale_nums\" | sort -u | grep -c .)\" -eq 5 ]"
 rm -f "$RVF"
+# A takeover that cannot happen, its break lock left behind by a run killed mid takeover, must end at
+# the deadline and say so. It used to loop straight back without reaching the deadline or the sleep,
+# spinning for ever; the wait is shortened to one second so the deadline is proved in one.
+mkdir -p "$RVF.lock" "$RVF.lock.break"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock/pid"
+rv_wedged_rc=0; rv_wedged="$(SYNC_LESSON_LOCK_WAIT=1 _rv1148 next-lesson)" || rv_wedged_rc=$?
+check "#1148 a takeover that cannot happen stops at its deadline" \
+  "[ \"\$rv_wedged_rc\" -ne 0 ] && ! grep -qE '^L[0-9]+\$' <<< \"\$rv_wedged\""
+check "#1148 and names the folder left behind" "grep -q 'lesson-reservations.tsv.lock.break' <<< \"\$rv_wedged\""
+rm -rf "$RVF.lock" "$RVF.lock.break" "$RVF"
 # A window that is not a whole number of seconds would read as zero in bash arithmetic and reserve
 # nothing, silently (L50), so it is refused by name.
 rv_win_rc=0; rv_win="$(SYNC_LESSON_RESERVE_SECONDS=ten _rv1148 next-lesson)" || rv_win_rc=$?

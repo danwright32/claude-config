@@ -3955,7 +3955,7 @@ highest_taken_in_band(){   # $1 = tree  $2 = band start
   written=$(($2 - 1))
   # Answered before the array is expanded: under set -u, bash 3.2 errors on expanding an EMPTY
   # array, and a tree with no rule files in it is the fixture every new clone starts from (L486).
-  [ "${#files[@]}" -gt 0 ] && written="$(highest_lesson_in_band "$2" "${files[@]}")"
+  if [ "${#files[@]}" -gt 0 ]; then written="$(highest_lesson_in_band "$2" "${files[@]}")"; fi
   reserved="$(highest_reserved_in_band "$2")"
   if [ "$reserved" -gt "$written" ]; then printf '%s' "$reserved"; else printf '%s' "$written"; fi
 }
@@ -3963,18 +3963,24 @@ highest_taken_in_band(){   # $1 = tree  $2 = band start
 # The reservations lock: mkdir, which is atomic, holding the pid of whoever took it. A holder that has
 # died leaves it behind, so a lock whose pid is not running is taken over rather than waited on for
 # ever. The critical section reads a few files and writes one line, so ten seconds is a deadline,
-# not a wait anybody will see.
+# not a wait anybody will see. SYNC_LESSON_LOCK_WAIT shortens it for the suite, which proves the
+# deadline fires without waiting ten seconds of real time for it (L524).
+#
+# Every turn of the wait reaches the deadline check, a takeover attempt included: a takeover that
+# cannot happen (its break lock left behind by a killed run) used to `continue` straight back to the
+# top, which is a loop with no deadline and no sleep, spinning for ever.
 take_reservations_lock(){
-  local lock="$LESSON_RESERVATIONS_FILE.lock" t0 holder
+  local lock="$LESSON_RESERVATIONS_FILE.lock" t0 holder max="${SYNC_LESSON_LOCK_WAIT:-10}"
+  case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
   mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
   t0="$(date +%s)"
   while ! mkdir "$lock" 2>/dev/null; do
     holder="$(cat "$lock/pid" 2>/dev/null || true)"
     case "$holder" in
       ''|*[!0-9]*) : ;;   # being written this instant, or unreadable: wait, never break on a guess
-      *) if ! kill -0 "$holder" 2>/dev/null; then break_stale_reservations_lock "$lock" "$holder"; continue; fi ;;
+      *) kill -0 "$holder" 2>/dev/null || break_stale_reservations_lock "$lock" "$holder" ;;
     esac
-    [ "$(( $(date +%s) - t0 ))" -lt 10 ] || die "another ask for a lesson number has held $lock for ten seconds, so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that folder (and $lock.break if it is there)."
+    [ "$(( $(date +%s) - t0 ))" -lt "$max" ] || die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that folder (and $lock.break if it is there)."
     sleep 0.1
   done
   printf '%s\n' "$$" > "$lock/pid"
@@ -3986,7 +3992,11 @@ release_reservations_lock(){ rm -rf "$LESSON_RESERVATIONS_FILE.lock"; }
 # taken, and both would mint at once. So a takeover first takes $lock.break (mkdir, atomic), then
 # reads the pid AGAIN and removes the lock only if it still names the same dead holder. A lock taken
 # since holds no pid yet or a live one, and is left alone. A waiter that cannot take the break lock
-# simply waits its turn.
+# simply waits its turn. Nothing can replace the stale lock between the re-read and the removal:
+# a new lock can only be made once the old one is gone, and the only remover of a dead holder's
+# lock is a takeover, which holds the break lock. A run killed in the instant between taking the
+# break lock and releasing it leaves it behind, and then no takeover can happen: every ask stops at
+# its ten second deadline naming both folders, which fails closed rather than minting twice.
 break_stale_reservations_lock(){   # $1 = lock dir  $2 = the dead holder's pid
   mkdir "$1.break" 2>/dev/null || return 0
   if [ "$(cat "$1/pid" 2>/dev/null || true)" = "$2" ] && ! kill -0 "$2" 2>/dev/null; then
