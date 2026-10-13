@@ -453,6 +453,10 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     expect(await bash('cd /tmp/wt && git update-ref -d refs/heads/main')).toBe('delete a branch')
     expect(await bash('git -C /tmp/unknown branch -D main')).toBe('delete a branch')
     expect(await bash('T=$(mktemp -d); git worktree add "$T/wt" && git -C "$T/wt" branch -D main')).toBe('delete a branch')
+    // A folder under $TMPDIR is not new, and the disk cannot be asked about it by name, so a
+    // branch delete there is refused (lessons review of ad5d3a5).
+    expect(await bash('cd "$TMPDIR/wt" && git branch -D main')).toBe('delete a branch')
+    expect(await bash('git -C "${TMPDIR}/wt" update-ref -d refs/heads/main')).toBe('delete a branch')
     // Switching branches in such a worktree is as in any linked worktree: allowed, as before.
     expect(await bash('git -C /tmp/wt switch -c x')).toBeUndefined()
     expect(await bash('T=$(mktemp -d); cd "$T" && git branch -D x && cd /Users/x/repo && git branch -D y')).toBe('delete a branch')

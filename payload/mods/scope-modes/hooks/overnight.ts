@@ -297,8 +297,14 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
   // of a real repository under the temp folder shares that repository's branches (lessons review
   // of 214d3ce). A folder mktemp makes in this line is new, so it is one unless the line adds a
   // worktree; a folder the line spells is asked of the disk, and one it cannot answer for refuses.
-  const ownBranches = async () =>
-    throwaway && !t.worktrees && (where !== null && (where === MARK || where.startsWith(`${MARK}/`)) ? true : (await look.isPrimary(where as string)) === true)
+  // $TMPDIR is no new folder and its mark names nothing the disk can be asked about, so a branch
+  // delete under it refuses (lessons review of ad5d3a5).
+  const ownBranches = async () => {
+    if (!throwaway || t.worktrees || where === null) return false
+    if (where === `${MARK}/TMPDIR` || where.startsWith(`${MARK}/TMPDIR/`)) return false
+    if (where.startsWith(`${MARK}/`)) return true
+    return (await look.isPrimary(where)) === true
+  }
   if (sub === 'push') {
     const why = pushRefusal(args)
     return why && (t.elsewhere || !pushesToTemp(args, where, home, t.temp)) ? why : undefined
