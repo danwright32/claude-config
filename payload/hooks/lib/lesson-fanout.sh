@@ -61,9 +61,10 @@ for tool in gh jq; do
 done
 
 # ---- a number naming two lessons is refused before anything reaches GitHub (claude-config#1140) ----
-# `claude-sync lesson Lnnn` answers with the FIRST entry under a number, so a number two lessons share
-# files the first one's rule. On 2026-10-13 L762 was minted twice on one Mac and twelve sweep issues
-# went out carrying another project's lesson. The question is asked of `lesson-faults`, the same list
+# `claude-sync lesson Lnnn` used to answer with the FIRST entry under a number, so a number two lessons
+# shared filed the first one's rule: on 2026-10-13 L762 was minted twice on one Mac and twelve sweep
+# issues went out carrying another project's lesson. The reader now refuses a shared number too, but
+# this asks first, so the refusal names the duplicate before any account or repo is touched. The question is asked of `lesson-faults`, the same list
 # the send refuses on, rather than a second copy of the duplicate rule here (L41), and of the same
 # home `lesson` reads below. SYNC_NO_NOTIFY because the tool notifies on a non interactive failure,
 # and this prints the fault itself.
@@ -87,7 +88,7 @@ for num in "$@"; do
     continue
   fi
   if [ "$faults_rc" -ne 0 ] && grep -qE "(^|[^0-9A-Za-z])$num used [0-9]+ times" <<<"$faults"; then
-    echo "REFUSED $num: $num names more than one lesson in $CLAUDE_HOME/LESSONS.md, so 'claude-sync lesson $num' answers with whichever comes first and every sweep issue would carry that rule, whichever lesson was meant. What lesson-faults said: ${faults#claude-sync: } Then fan out each lesson under its own number."
+    echo "REFUSED $num: $num names more than one lesson in $CLAUDE_HOME/LESSONS.md, so which rule the sweep issues should carry cannot be known from the number. What lesson-faults said: ${faults#claude-sync: } Then fan out each lesson under its own number."
     overall=1
     continue
   fi

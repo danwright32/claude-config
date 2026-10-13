@@ -11263,10 +11263,35 @@ check "#1140 and never hands out a number past the band it was given" "! grep -q
 # sentence, which says the tool reported on duplicates at all, and 'Lnnn used N times'. Its own suite
 # copies them, so the contract is held here, where the wording is made. Reworded, the fan out would
 # refuse every lesson while any fault stood, not file a wrong one, but it would say nothing useful.
-printf -- '- **L762. slate.** body\n- **L762. bidspoke.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L761. sound rule.** body of sound\n- **L762. slate rule.** body of slate\n- **L762. bidspoke rule.** body of bidspoke\n' > "$NLH/LESSONS.md"
 nl1140_faults_rc=0; nl1140_faults="$(_nl1140 lesson-faults)" || nl1140_faults_rc=$?
 check "#1140 the fan out's contract: a duplicate is reported in the words it reads" \
   "[ \"\$nl1140_faults_rc\" -ne 0 ] && line_has \"\$nl1140_faults\" 'the same lesson number is used' 'L762 used 2 times'"
+# THE READER (claude-config#1140, folded in by Dan). `claude-sync lesson L762` answered with the FIRST
+# of two entries and exit 0, which is how the fan out came to file the wrong rule, and the PR lessons
+# review reads lessons the same way. Asked by a number two lessons share, it now prints EVERY entry
+# under it, each with its own id, says the number is a duplicate, and exits non zero, so no caller
+# can take one of two rules for the answer. Asked by an id, which names exactly one of them, it prints
+# that one.
+nl1140_ok_rc=0; nl1140_ok="$(_nl1140 lesson L761)" || nl1140_ok_rc=$?
+check "#1140 the control: a number one lesson holds is answered as before" \
+  "[ \"\$nl1140_ok_rc\" -eq 0 ] && grep -q 'sound rule' <<< \"\$nl1140_ok\" && ! grep -qi 'duplicate' <<< \"\$nl1140_ok\""
+nl1140_dup_rc=0; nl1140_dup="$(_nl1140 lesson L762)" || nl1140_dup_rc=$?
+check "#1140 a number two lessons share exits non zero" "[ \"\$nl1140_dup_rc\" -ne 0 ]"
+check "#1140 and prints the first entry" "grep -q 'slate rule' <<< \"\$nl1140_dup\" && grep -q 'body of slate' <<< \"\$nl1140_dup\""
+check "#1140 and the second, not only the first" "grep -q 'bidspoke rule' <<< \"\$nl1140_dup\" && grep -q 'body of bidspoke' <<< \"\$nl1140_dup\""
+check "#1140 and says plainly the number is a duplicate" "line_has \"\$nl1140_dup\" 'L762' 'names 2 lessons'"
+check "#1140 and gives each entry its own id" \
+  "[ \"\$(grep -oE '^id: [0-9a-f]+' <<< \"\$nl1140_dup\" | sort -u | wc -l | tr -d ' ')\" -eq 2 ]"
+nl1140_id2="$(grep -oE '^id: [0-9a-f]+' <<< "$nl1140_dup" | sed -n '2s/^id: //p')"
+nl1140_id1="$(grep -oE '^id: [0-9a-f]+' <<< "$nl1140_dup" | sed -n '1s/^id: //p')"
+nl1140_byid2_rc=0; nl1140_byid2="$(_nl1140 lesson "${nl1140_id2:-none}")" || nl1140_byid2_rc=$?
+check "#1140 the SECOND entry's id finds that entry" \
+  "[ \"\$nl1140_byid2_rc\" -eq 0 ] && grep -q 'bidspoke rule' <<< \"\$nl1140_byid2\" && ! grep -q 'slate rule' <<< \"\$nl1140_byid2\""
+nl1140_byid1_rc=0; nl1140_byid1="$(_nl1140 lesson "${nl1140_id1:-none}")" || nl1140_byid1_rc=$?
+check "#1140 and the first entry's id finds only the first" \
+  "[ \"\$nl1140_byid1_rc\" -eq 0 ] && grep -q 'slate rule' <<< \"\$nl1140_byid1\" && ! grep -q 'bidspoke rule' <<< \"\$nl1140_byid1\""
+check "#1140 and the answer by id still says the number is shared" "grep -q 'names 2 lessons' <<< \"\$nl1140_byid1\""
 
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
