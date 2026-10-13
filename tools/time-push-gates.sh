@@ -8,10 +8,11 @@
 # guards are an untimed pipeline until somebody times them (L300).
 #
 # It drives each PreToolUse hook registered for Bash with the payload Claude Code sends for a
-# `git push`, in the order the settings list them, which is the order a push waits through, and
-# reports each one's wall clock, its exit code, and the total.
+# `git push`, all of them at once, as Claude Code runs them (claude-config#1122), and reports each
+# one's time and exit code in the order the settings list them, then the wall clock until the last
+# one finished, which is what a push waits through.
 #
-# Usage: time-push-gates.sh [--repo DIR] [--command "git push"] [--json] [--list]
+# Usage: time-push-gates.sh [--repo DIR] [--command "git push"] [--list]
 #   --list             name the gates, one per line as "<declared timeout>\t<hook>", and run none of
 #                      them: the reading the README's count of push gates is tested against
 #                      (claude-config#1066), so the count and the timing come from one list.
@@ -31,15 +32,13 @@ set -uo pipefail
 DEFAULT_TIMEOUT=60
 repo="$PWD"
 command_line="git push"
-as_json=""
 list_only=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) repo="${2:-}"; shift 2 ;;
     --command) command_line="${2:-}"; shift 2 ;;
-    --json) as_json=1; shift ;;
     --list) list_only=1; shift ;;
-    *) printf 'time-push-gates: "%s" is not an argument this takes (--repo DIR, --command CMD, --json, --list).\n' "$1" >&2; exit 2 ;;
+    *) printf 'time-push-gates: "%s" is not an argument this takes (--repo DIR, --command CMD, --list).\n' "$1" >&2; exit 2 ;;
   esac
 done
 
@@ -106,44 +105,70 @@ trap 'rm -rf "$work"' EXIT
 # there would put pushes nobody made into the record the gates' accuracy is judged from.
 export PUSH_GATE_LEDGER_DIR="${PUSH_GATE_LEDGER_DIR:-$work/push-gates}"
 
-printf 'seconds  exit  declared  gate\n'
-rows=""
-total=0
+# Every gate is started at once and waited on together, because that is how Claude Code runs them:
+# "All matching hooks run in parallel" (the hooks reference). This ran them one after another and
+# summed the times, so the table described a push nobody makes: what a push waits through is the
+# SLOWEST gate, and each gate is slower than it is alone because the others share the machine with
+# it (claude-config#1122).
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+names=(); decls=(); bounds=(); pids=(); starts=(); ends=(); killed=()
+n=0
+t0="$(now_ms)"
 while IFS="$(printf '\t')" read -r declared hook; do
   [ -n "$hook" ] || continue
-  name="${hook##*/}"
   bound="$declared"
   case "$bound" in ''|*[!0-9]*) bound="$DEFAULT_TIMEOUT" ;; esac
-  start="$(python3 -c 'import time; print(time.time())')"
-  # Run it in the background and wait on the CONDITION, so a gate that hangs is killed at its own
+  names[n]="${hook##*/}"; decls[n]="$declared"; bounds[n]="$bound"; ends[n]=""; killed[n]=""
+  mkdir -p "$work/$n"
+  starts[n]="$(now_ms)"
+  # In the background, waited on as a CONDITION below, so a gate that hangs is killed at its own
   # declared bound rather than taking this tool with it (L110, L473).
-  ( cd "$repo" 2>/dev/null || exit 0; printf '%s' "$payload" | bash "$hook" >"$work/out" 2>&1; printf '%s' "$?" > "$work/rc" ) &
-  runner=$!
-  killed=""
-  while kill -0 "$runner" 2>/dev/null; do
-    now="$(python3 -c 'import time; print(time.time())')"
-    over="$(awk -v a="$now" -v b="$start" -v c="$bound" 'BEGIN { print (a - b > c) ? 1 : 0 }')"
-    if [ "$over" = "1" ]; then
-      bash "$(dirname "${BASH_SOURCE[0]}")/../payload/hooks/lib/kill-tree.sh" "$runner" 2>/dev/null || kill -9 "$runner" 2>/dev/null
-      killed=1
-      break
-    fi
-    sleep 0.2
-  done
-  wait "$runner" 2>/dev/null
-  end="$(python3 -c 'import time; print(time.time())')"
-  secs="$(awk -v a="$end" -v b="$start" 'BEGIN { printf "%.1f", a - b }')"
-  rc="$(cat "$work/rc" 2>/dev/null || printf '?')"
-  total="$(awk -v t="$total" -v s="$secs" 'BEGIN { printf "%.1f", t + s }')"
-  if [ -n "$killed" ]; then
-    printf '%7s  %4s  %8s  %s (KILLED: timed out at its declared bound, so this is not a measurement of what it costs)\n' "$secs" "-" "$bound" "$name"
-  else
-    printf '%7s  %4s  %8s  %s\n' "$secs" "$rc" "$declared" "$name"
-  fi
-  rm -f "$work/rc" "$work/out"
+  ( cd "$repo" 2>/dev/null || exit 0; printf '%s' "$payload" | bash "$hook" >"$work/$n/out" 2>&1; printf '%s' "$?" > "$work/$n/rc" ) &
+  pids[n]=$!
+  n=$((n + 1))
 done <<EOF
 $gates
 EOF
 
-printf '%7s  %4s  %8s  TOTAL, which is what a push waits through before git runs\n' "$total" "" ""
+left=$n
+while [ "$left" -gt 0 ]; do
+  now="$(now_ms)"
+  j=0
+  while [ "$j" -lt "$n" ]; do
+    if [ -z "${ends[j]}" ]; then
+      if ! kill -0 "${pids[j]}" 2>/dev/null; then
+        ends[j]="$now"; left=$((left - 1))
+      elif [ $(( now - ${starts[j]} )) -gt $(( ${bounds[j]} * 1000 )) ]; then
+        bash "$(dirname "${BASH_SOURCE[0]}")/../payload/hooks/lib/kill-tree.sh" "${pids[j]}" 2>/dev/null || kill -9 "${pids[j]}" 2>/dev/null
+        killed[j]=1; ends[j]="$now"; left=$((left - 1))
+      fi
+    fi
+    j=$((j + 1))
+  done
+  [ "$left" -gt 0 ] && sleep 0.2
+done
+j=0
+while [ "$j" -lt "$n" ]; do wait "${pids[j]}" 2>/dev/null; j=$((j + 1)); done
+
+printf 'seconds  exit  declared  gate\n'
+last=0; sum=0
+j=0
+while [ "$j" -lt "$n" ]; do
+  ms=$(( ${ends[j]} - ${starts[j]} ))
+  sum=$(( sum + ms ))
+  [ $(( ${ends[j]} - t0 )) -gt "$last" ] && last=$(( ${ends[j]} - t0 ))
+  secs="$(awk -v m="$ms" 'BEGIN { printf "%.1f", m / 1000 }')"
+  if [ -n "${killed[j]}" ]; then
+    printf '%7s  %4s  %8s  %s (KILLED: timed out at its declared bound, so this is not a measurement of what it costs)\n' "$secs" "-" "${bounds[j]}" "${names[j]}"
+  else
+    rc="$(cat "$work/$j/rc" 2>/dev/null || printf '?')"
+    printf '%7s  %4s  %8s  %s\n' "$secs" "$rc" "${decls[j]}" "${names[j]}"
+  fi
+  j=$((j + 1))
+done
+
+printf '%7s  %4s  %8s  WALL CLOCK, which is what a push waits through before git runs: the gates run together, so it is the slowest of them\n' \
+  "$(awk -v m="$last" 'BEGIN { printf "%.1f", m / 1000 }')" "" ""
+printf '%7s  %4s  %8s  the gates'"'"' own times added up, which no push waits through; it is here to show how much they overlap\n' \
+  "$(awk -v m="$sum" 'BEGIN { printf "%.1f", m / 1000 }')" "" ""
 exit 0

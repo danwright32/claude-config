@@ -125,7 +125,14 @@ wait_final(){ # bounded, on the condition (L290)
   while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
   [ -e "$f" ]
 }
-reset_state(){ rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"; echo 1000 > "$FAKE_CLOCK_FILE"; }
+# A runner from the case before, still finishing, would write into the next case's fresh state, so
+# the wipe waits for every runner input to be gone (claude-config#1122, the shape #1097 fixed in
+# test-pr-review.sh; the story is in the library both suites share).
+. "$DIR/lib/review-runners-done.sh"
+reset_state(){
+  runners_done || bad "a reviewer runner from the case before was still running 40 s later, so this case could read its answer"
+  rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"; echo 1000 > "$FAKE_CLOCK_FILE"
+}
 meta(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$1"; }
 key_in(){ [[ "$1" =~ PR_REVIEW_READ=([a-f0-9]+) ]] && printf '%s' "${BASH_REMATCH[1]}"; }
 pre_payload(){ python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$1" "$2"; }
@@ -153,6 +160,25 @@ is_push(){ bash -c ". '$DIR/lib/push-scope.sh'; ps_is_git_push \"\$1\"" _ "$1"; 
 is_push 'git push -u origin feat' && ok || bad "a push is still a push"
 is_push '(cd x && git push)' && ok || bad "a push closing a subshell is still a push"
 is_push 'git commit -m push' && bad "a commit whose message says push is not a push" || ok
+
+# A reviewer runner from one case, still finishing, must not have the state folder wiped under it,
+# or its answer lands in the next case's fresh state (claude-config#1122, the shape #1097 fixed in
+# test-pr-review.sh). reset_state waits on runners_done: no runner input (.diff) left, bounded.
+mkdir -p "$AI_REVIEW_STATE_DIR"; : > "$AI_REVIEW_STATE_DIR/held.diff"
+RUNNERS_DONE_BOUND=1 runners_done; rc=$?
+check_eq "#1122 a runner input still held means the runners are not done" "1" "$rc"
+# Removed by another process once this one is waiting: the wait ends on the condition, not a sleep.
+rm -f "$WORKDIR/wait-started"
+( t0=$SECONDS; while [ ! -e "$WORKDIR/wait-started" ] && [ $((SECONDS - t0)) -lt 20 ]; do sleep 0.05; done
+  rm -f "$AI_REVIEW_STATE_DIR/held.diff" ) &
+_releaser=$!
+: > "$WORKDIR/wait-started"
+RUNNERS_DONE_BOUND=20 runners_done; rc=$?
+wait "$_releaser" 2>/dev/null
+check_eq "#1122 and they are done once the last input is removed" "0" "$rc"
+rm -f "$WORKDIR/wait-started"
+grep -q 'runners_done' <<< "$(declare -f reset_state)" && ok \
+  || bad "#1122 reset_state waits on runners_done before wiping the state folder"
 
 # ===========================================================================================
 # 2. A push with findings nobody has read is refused, with the findings and their key; the same

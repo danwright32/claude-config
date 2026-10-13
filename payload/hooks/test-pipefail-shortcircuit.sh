@@ -106,12 +106,12 @@ fi
 # behind a locale setting went uncounted. The reader's name must end at a space or the line's end,
 # so a case pattern such as `grep|head)` is not taken for a pipe into head.
 #
-# A program read from a file (`-f`, `--file`) cannot be judged from here. It is not counted, and it
-# is not passed either: the counter names its line as UNJUDGED, and the tree check further down
+# A program read from a file (`-f`, `--file`), or held in a shell variable (claude-config#1120),
+# cannot be judged from here. It is not counted, and it is not passed either: the counter names its line as UNJUDGED, and the tree check further down
 # fails on one, because a site nobody has judged is not a site that is known not to short circuit
 # (L98). Still one count per LINE, as grep -c gave, so every recorded number keeps its meaning.
 _SC_COUNTER="$(cat <<'AWK'
-function tok(s,    n, c, pos, len, t, intok, j, closed) {
+function tok(s,    n, c, d, pos, len, t, intok, j, closed) {
   split("", T); split("", TEND)
   UNTERM = 0
   n = 0; pos = 1; len = length(s); t = ""; intok = 0
@@ -131,18 +131,37 @@ function tok(s,    n, c, pos, len, t, intok, j, closed) {
       pos++; closed = 0
       while (pos <= len) {
         c = substr(s, pos, 1)
-        if (c == "\\") { t = t substr(s, pos + 1, 1); pos += 2; continue }
+        # Inside double quotes a backslash escapes only a dollar sign, a backquote, a double quote,
+        # itself and a newline; before anything else it stays, as in a sed address such as \|x|p.
+        if (c == "\\") { d = substr(s, pos + 1, 1); t = t (d ~ /^[$\\\n]$/ || d == DQ || d == sprintf("%c", 96) ? "" : c) d; pos += 2; continue }
         if (c == DQ) { pos++; closed = 1; break }
+        if (expands(s, pos)) { t = t XM; pos++; continue }
         t = t c; pos++
       }
       if (!closed) { UNTERM = 1; break }
       continue
     }
     if (c == "\\") { t = t substr(s, pos + 1, 1); pos += 2; continue }
+    if (expands(s, pos)) { t = t XM; pos++; continue }
     t = t c; pos++
   }
   if (intok) { T[++n] = t; TEND[n] = pos }
   return n
+}
+# Whether the unquoted or double quoted character at pos starts a shell expansion, a parameter, a
+# command substitution or arithmetic, whose text the counter never sees (claude-config#1120). The
+# tokenizer writes the mark XM in its place, so each judge can tell an expansion sitting where the
+# program has CODE, which it cannot read, from one inside a string, a substitution or an address,
+# which is a value the program matches or prints and cannot make it leave. A dollar
+# sign before a single quote is the ANSI C quoting form, and one before a space or the end is plain
+# text. The backquote and the opening parenthesis are named by their codes, 96 and 40, because bash
+# 3.2 reads this heredoc inside a command substitution, where a lone one of either fails the parse.
+function expands(s, pos,    c, d) {
+  c = substr(s, pos, 1)
+  if (c == sprintf("%c", 96)) return 1
+  if (c != "$") return 0
+  d = substr(s, pos + 1, 1)
+  return d ~ /^[A-Za-z_0-9{@*#?!$-]$/ || d == sprintf("%c", 40)
 }
 # The word that names the reader, past assignments and the command and env wrappers, or 0 when
 # there is none. A command -v or -V only describes a command, so it names no reader.
@@ -183,7 +202,8 @@ function strip_end(p,    s, k, depth, ch, rest) {
   }
   return p
 }
-# Each judge starts at the word after the name of the reader, r; a program read from a file sets UNJ.
+# Each judge starts at the word after the name of the reader, r; a program read from a file, or one
+# holding a shell expansion whose literal part does not already leave, sets UNJ (claude-config#1120).
 function awk_leaves(r, n,    i, prog) {
   i = r + 1
   while (i <= n && substr(T[i], 1, 1) == "-") {
@@ -193,7 +213,12 @@ function awk_leaves(r, n,    i, prog) {
   }
   if (i > n) return 0
   prog = strip_end(T[i])
-  return prog ~ /(^|[^A-Za-z_0-9])exit([^A-Za-z_0-9]|$)/
+  if (prog ~ /(^|[^A-Za-z_0-9])exit([^A-Za-z_0-9]|$)/) return 1
+  # An awk string, held between double quotes passed in as DQ: a literal one here would unbalance
+  # the quotes bash 3.2 counts in this heredoc.
+  gsub(DQ "([^" DQ "\\\\]|\\\\.)*" DQ, "", prog)
+  if (index(prog, XM)) UNJ = 1
+  return 0
 }
 function sed_leaves(r, n,    i, sc) {
   i = r + 1; sc = ""
@@ -208,8 +233,14 @@ function sed_leaves(r, n,    i, sc) {
   gsub(/s\|([^|\\]|\\.)*\|([^|\\]|\\.)*\|[a-zA-Z0-9]*/, "", sc)
   gsub(/s,([^,\\]|\\.)*,([^,\\]|\\.)*,[a-zA-Z0-9]*/, "", sc)
   gsub(/\/([^\/\\]|\\.)*\//, "//", sc)
-  return sc ~ /(^|[;{}[:space:]0-9$\/!])[qQ]([;}[:space:]0-9]|$)/
+  gsub(/\\\|([^|\\]|\\.)*\|/, "//", sc)
+  gsub(/\\#([^#\\]|\\.)*#/, "//", sc)
+  gsub(/\\,([^,\\]|\\.)*,/, "//", sc)
+  if (sc ~ /(^|[;{}[:space:]0-9$\/!])[qQ]([;}[:space:]0-9]|$)/) return 1
+  if (index(sc, XM)) UNJ = 1
+  return 0
 }
+BEGIN { XM = sprintf("%c", 1) }
 { L[NR] = $0 }
 END {
   total = 0; unjudged = ""
@@ -411,6 +442,41 @@ _PIPE='|'
   && check "#1104 and an unjudged site is not counted as one that short circuits" ok \
   || check "#1104 and an unjudged site is not counted as one that short circuits" "it counted $(count_uncommented "$TMPROOT/probe-unjudged.sh")"
 
+# A PROGRAM HELD IN A SHELL VARIABLE IS UNJUDGED TOO (claude-config#1120). The counter read the
+# word `"$prog"` as if those six characters were the program, found no exit in them, and passed a
+# site whose real program it never saw: the same silence as a file program, by another spelling.
+# An expansion where the program has CODE, bare or inside double quotes, makes the line unjudged,
+# for awk and for sed, a program glued from a variable and a literal included. A value spliced into
+# a sed substitution or address, or into an awk string, stays judged: it is text the program
+# matches or prints, and eight sites in the tree do exactly that. What is not an expansion stays
+# judged too: a `$` inside single quotes is awk's own field, an escaped `\$` inside double quotes is
+# the same, `$'...'` is a quoting form, and an expansion in a later operand (the input file) says
+# nothing about the program. A literal exit beside a variable still counts as a hit, since that
+# part was read and it leaves.
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf '%s\n' "cat file $_PIPE awk \"\$prog\""
+  printf '%s\n' "cat file $_PIPE LC_ALL=C awk -F '\\t' -v k=1 \"\$PRE\"'{ print }'"
+  printf '%s\n' "cat file $_PIPE sed \"\$script\""
+  printf '%s\n' "cat file $_PIPE sed -n -e \"\${expr}\""
+  printf '%s\n' "cat file $_PIPE awk \$prog"
+  printf '%s\n' "cat file $_PIPE awk '{ print \$1 }'"
+  printf '%s\n' "cat file $_PIPE awk \"{ print \\\$1 }\""
+  printf '%s\n' "cat file $_PIPE awk \$'{ print }'"
+  printf '%s\n' "cat file $_PIPE awk '{ print }' \"\$f\""
+  printf '%s\n' "cat file $_PIPE awk \"\$PRE\"'{ exit }'"
+  printf '%s\n' "cat file $_PIPE sed \"s|^|\$x |\""
+  printf '%s\n' "cat file $_PIPE sed -n \"\\|\$x|p\""
+  printf '%s\n' "cat file $_PIPE awk \"/x/ { print \\\"\$v\\\" }\""
+  printf '%s\n' "cat file $_PIPE sed -n \"/\$x/p; \$y\""
+} > "$TMPROOT/probe-unjudged-var.sh"
+[ "$(unjudged_lines "$TMPROOT/probe-unjudged-var.sh")" = "3 4 5 6 7 16" ] \
+  && check "#1120 a piped awk or sed whose program comes from a shell variable is named as unjudged, by line, and a spliced value is not" ok \
+  || check "#1120 a piped awk or sed whose program comes from a shell variable is named as unjudged, by line, and a spliced value is not" "it named lines '$(unjudged_lines "$TMPROOT/probe-unjudged-var.sh")', not 3 4 5 6 7 16"
+[ "$(count_uncommented "$TMPROOT/probe-unjudged-var.sh")" = "1" ] \
+  && check "#1120 and only the literal exit beside a variable is counted as one that short circuits" ok \
+  || check "#1120 and only the literal exit beside a variable is counted as one that short circuits" "it counted $(count_uncommented "$TMPROOT/probe-unjudged-var.sh") of 1"
+
 # ---------------------------------------------------------------------------
 # The hazard itself, on THIS machine, rather than taken from a note (claude-config#162).
 # ---------------------------------------------------------------------------
@@ -600,8 +666,8 @@ $1
 
 # A file the baseline does not mention at all, that has one. This is the case that matters: a new
 # one arriving in a file nobody was watching (L96).
-# The same one pass also names every pipe into an awk or sed program read from a file, which the
-# counter cannot judge (claude-config#1104).
+# The same one pass also names every pipe into an awk or sed program read from a file or held in a
+# shell variable, which the counter cannot judge (claude-config#1104, claude-config#1120).
 unlisted=""
 unjudged=""
 while IFS= read -r rel; do
@@ -653,13 +719,13 @@ $shrank$gone  Lower the recorded number, so what is left keeps meaning something
 esac
 
 # A one way door rather than a count, as for shipped code below: there were none once the one in
-# the sync suite was converted, and a program in a file is judged by nobody, so a new one is named
-# on the day it lands (claude-config#1104).
+# the sync suite was converted, and a program in a file or a variable is judged by nobody, so a new
+# one is named on the day it lands (claude-config#1104, claude-config#1120).
 case "$unjudged" in
   *[![:space:]]*)
-    check "no pipe runs into an awk or sed program read from a file, which cannot be judged here" "these do:
+    check "no pipe runs into an awk or sed program read from a file or a shell variable, which cannot be judged here" "these do:
 $unjudged  Give the program the input as a file or a here-string (awk -f prog <<< \"\$text\") rather than a pipe, or put the program inline so it can be read." ;;
-  *) check "no pipe runs into an awk or sed program read from a file, which cannot be judged here" ok ;;
+  *) check "no pipe runs into an awk or sed program read from a file or a shell variable, which cannot be judged here" ok ;;
 esac
 
 # ---------------------------------------------------------------------------
