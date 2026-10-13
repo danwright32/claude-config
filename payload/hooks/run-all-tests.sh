@@ -1404,7 +1404,7 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
   while IFS= read -r _lc_line; do
     [ -n "$_lc_line" ] || continue
     _lc_path="${_lc_line%%	*}"
-    _lc_was="$(printf '%s\n' "$_live_before" | awk -F"$(printf '\t')" -v f="$_lc_path" '$1 == f { print $2; exit }')"
+    _lc_was="$(printf '%s\n' "$_live_before" | awk -F"$(printf '\t')" -v f="$_lc_path" '$1 == f && !got { print $2; got = 1 }')"
     _lc_now="${_lc_line#*	}"
     [ "$_lc_was" = "$_lc_now" ] && continue
     if [ -n "$_lc_applied" ]; then

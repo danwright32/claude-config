@@ -104,7 +104,7 @@ sync_one() {  # $1 = directory, $2 = repo flag or empty, $3 = pr number or empty
   else
     resp="$(gh "${merge_args[@]}" 2>&1)"
   fi
-  code="$(printf '%s' "$resp" | awk 'toupper($1) ~ /^HTTP\// { print $2; exit }')"
+  code="$(printf '%s' "$resp" | awk 'toupper($1) ~ /^HTTP\// && !got { print $2; got = 1 }')"
 
   case "$code" in
     201)

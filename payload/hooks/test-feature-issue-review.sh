@@ -656,6 +656,97 @@ else
     || check "#1019 and the file is still there" "it is gone"
 fi
 
+# ---------------------------------------------------------------------------
+# Seen ledgers are KEPT beside the spool, past the temp cleaner (#1019 follow-up).
+# ---------------------------------------------------------------------------
+# keep-ledgers copies, never moves: a clear may be appending to the temp ledger at that moment, and a
+# mark it adds afterwards is copied next time, where a move would have lost it.
+SPOOL_LIB="$DIR/lib/issue-spool.sh"
+KL_TMP="$WORK/keep-tmp"; mkdir -p "$KL_TMP"
+kl_stamp="$KL_TMP/claude-issue-findings-eeeeeeeeeeee.sess-k.manifest"
+kl_temp="$(bash "$SPOOL_LIB" seen-ledger "$kl_stamp")"
+kl_kept="$(bash "$SPOOL_LIB" kept-ledger "$kl_stamp")"
+case "$kl_kept" in
+  "$CLAUDE_ISSUE_SPOOL_DIR/seen/"*) check "#1019 the kept ledger lives under the spool's own root" ok ;;
+  *) check "#1019 the kept ledger lives under the spool's own root" "kept=$kl_kept" ;;
+esac
+printf 'issue-spool seen v1\nsess-k aaaa1111\nsess-k bbbb2222\n' > "$kl_temp"
+kl_said="$(bash "$SPOOL_LIB" keep-ledgers "$KL_TMP" "claude-issue-findings-" 2>&1)"; kl_rc=$?
+[ "$kl_rc" -eq 0 ] && [ -z "$kl_said" ] \
+  && check "#1019 keeping a ledger succeeds quietly" ok \
+  || check "#1019 keeping a ledger succeeds quietly" "exit $kl_rc said=${kl_said:0:300}"
+[ "$(grep -c 'sess-k' "$kl_kept" 2>/dev/null)" = 2 ] && [ -f "$kl_temp" ] \
+  && check "#1019 the kept copy holds both marks and the temp ledger is left in place" ok \
+  || check "#1019 the kept copy holds both marks and the temp ledger is left in place" "kept=$(cat "$kl_kept" 2>/dev/null) temp present=$([ -f "$kl_temp" ] && echo yes || echo no)"
+# A mark added later is copied in, and one already held is not copied twice.
+printf 'sess-k cccc3333\n' >> "$kl_temp"
+bash "$SPOOL_LIB" keep-ledgers "$KL_TMP" "claude-issue-findings-" >/dev/null 2>&1
+bash "$SPOOL_LIB" keep-ledgers "$KL_TMP" "claude-issue-findings-" >/dev/null 2>&1
+[ "$(grep -c 'sess-k' "$kl_kept" 2>/dev/null)" = 3 ] \
+  && check "#1019 a later mark is kept, and none twice" ok \
+  || check "#1019 a later mark is kept, and none twice" "kept=$(cat "$kl_kept" 2>/dev/null)"
+# That the render reads the kept copy once the temp one is gone is driven end to end through the real
+# hook in test-subagent-issue-harvest.sh, beside the #1011 case that writes the ledger.
+rm -f "$kl_temp"
+# A kept ledger past the window is swept like the rest.
+touch -t 202001010000 "$kl_kept"
+kl_sweep="$(bash "$SPOOL_LIB" sweep-stamps "$KL_TMP" "claude-issue-findings-" 2>&1)"
+[ ! -e "$kl_kept" ] && holds "$kl_sweep" "$CLAUDE_ISSUE_SPOOL_DIR/seen" \
+  && check "#1019 a kept ledger past the window is swept, and the sweep names where" ok \
+  || check "#1019 a kept ledger past the window is swept, and the sweep names where" "said=${kl_sweep:0:300}"
+# A ledger that cannot be kept is NAMED and the command fails; its marks are still read from the temp
+# copy, so nothing reappears, but the clock on it is the temp cleaner's and that has to be said.
+printf 'issue-spool seen v1\nsess-k dddd4444\n' > "$kl_temp"
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR/seen"; chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+if ( : > "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe" ) 2>/dev/null; then
+  rm -f "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe"; chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+  echo "UNMEASURED: #1019 an unwritable kept ledger directory cannot be made here (chmod does not restrict this user)"
+else
+  kl_fail="$(bash "$SPOOL_LIB" keep-ledgers "$KL_TMP" "claude-issue-findings-" 2>&1)"; kl_frc=$?
+  chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+  [ "$kl_frc" -ne 0 ] && holds "$kl_fail" "could not keep 1 " && holds "$kl_fail" "$(basename "$kl_temp")" \
+    && check "#1019 a ledger that cannot be kept is named and the command fails" ok \
+    || check "#1019 a ledger that cannot be kept is named and the command fails" "exit $kl_frc said=${kl_fail:0:300}"
+fi
+rm -rf "$KL_TMP" "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+
+# A kept ledger directory the sweep cannot look in is said, and what the temp directory's pass removed
+# is still reported: the first version exited at the listing failure, after removing files, saying
+# nothing about them.
+SU_TMP="$WORK/sweep-unlisted"; mkdir -p "$SU_TMP" "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+printf 'x\n' > "$SU_TMP/claude-issue-findings-ffffffffffff.s.manifest"
+touch -t 202001010000 "$SU_TMP/claude-issue-findings-ffffffffffff.s.manifest"
+chmod a-r "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+if ls "$CLAUDE_ISSUE_SPOOL_DIR/seen" >/dev/null 2>&1; then
+  chmod u+r "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+  echo "UNMEASURED: #1019 an unlistable kept ledger directory cannot be made here (chmod does not restrict this user)"
+else
+  su_said="$(bash "$SPOOL_LIB" sweep-stamps "$SU_TMP" "claude-issue-findings-" 2>&1)"; su_rc=$?
+  chmod u+r "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+  [ "$su_rc" -ne 0 ] && holds "$su_said" "could not look in" && holds "$su_said" "removed 1 " \
+    && [ ! -e "$SU_TMP/claude-issue-findings-ffffffffffff.s.manifest" ] \
+    && check "#1019 a sweep that cannot look in one place still reports what it removed in the other" ok \
+    || check "#1019 a sweep that cannot look in one place still reports what it removed in the other" "exit $su_rc said=${su_said:0:300}"
+fi
+rm -rf "$SU_TMP" "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+
+# And a ledger the review could not keep is said in the REASON, whether or not there are findings,
+# since a review with none writes no findings file.
+KR_PROJ="$(mktemp -d "$WORK/keepreason.XXXXXX")"
+printf 'issue-spool seen v1\nsess-r 9999aaaa\n' > "${TMPDIR%/}/claude-issue-findings-0000000000aa.sess-r.seen"
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR/seen"; chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+if ( : > "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe" ) 2>/dev/null; then
+  rm -f "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe"; chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+  echo "UNMEASURED: #1019 an unwritable kept ledger directory cannot be made here (chmod does not restrict this user)"
+else
+  kr_reason="$(reason_of "$(run_review "$KR_PROJ")")"
+  chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+  holds "$kr_reason" "could not keep 1 " \
+    && check "#1019 a ledger the review could not keep is said in its reason" ok \
+    || check "#1019 a ledger the review could not keep is said in its reason" "reason=${kr_reason:0:300}"
+fi
+rm -rf "${TMPDIR%/}/claude-issue-findings-0000000000aa.sess-r.seen" "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+
 # --- the hook stays quiet when nothing happened ---
 # It fires on Stop, so a chat-only turn must not trigger a review. An absent
 # transcript is the cheapest stand-in for "nothing to review".

@@ -5,7 +5,10 @@
 #
 # `producer | grep -q needle` under `set -o pipefail` can report a failure that never happened:
 # grep -q leaves on its FIRST match, the producer is killed by SIGPIPE, and the pipeline's status
-# becomes that death (L183). `head` short circuits the same way.
+# becomes that death (L183). `head` short circuits the same way, and so do an awk program that
+# calls `exit` outside its END blocks and a sed script holding a `q` (claude-config#1042): two of
+# those shipped in claude-sync in #1022 and were caught only by a review, because this counted
+# neither.
 #
 # It bites only when the reader leaves while the writer still has data, so whether it fires depends
 # on how big the text is and where in it the match falls. That makes it a SIZE THRESHOLD nobody is
@@ -85,12 +88,123 @@ fi
 # did not: the same hazard with the letters the other way round, permanently exempt from the check
 # written to catch it (L217). The cluster must still CONTAIN a q, so a piped `grep -i`, `-c` or
 # `-o` reads its producer to the end and is not counted, which the probes below assert both ways.
-count_in() { # count_in <file>  -> how many short circuiting pipelines it has
-  grep -cE '(^|[^|])\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' "$1" 2>/dev/null | tr -d ' ' || echo 0
+#
+# An awk or a sed cannot be judged from its line alone (claude-config#1042). Whether it leaves
+# early is decided by its PROGRAM, which routinely runs over many lines, and by where in that
+# program the `exit` sits: one inside an END block runs after the input was read to the end and
+# kills nothing, while one in a rule or in BEGIN leaves the writer with data still queued. So the
+# counter reads each `| awk` and `| sed` the way the shell would, a word at a time with its quotes,
+# extending onto the next line while a quote is still open, and judges the program it gets:
+#
+#   awk counts when the program, with every END block taken out, still calls `exit`;
+#   sed counts when its script holds a `q` or `Q` command, after substitutions and /addresses/,
+#   which can hold the letter as text, are taken out.
+#
+# A program read from a file (`-f`) cannot be judged from here and is not counted. Still one count
+# per LINE, as grep -c gave, so every recorded number keeps its meaning.
+_SC_COUNTER="$(cat <<'AWK'
+function tok(s,    n, c, pos, len, t, intok, j, closed) {
+  split("", T)
+  UNTERM = 0
+  n = 0; pos = 1; len = length(s); t = ""; intok = 0
+  while (pos <= len && n < 40) {
+    c = substr(s, pos, 1)
+    if (c == "\\" && pos == len) { UNTERM = 1; break }
+    if (c == "\\" && substr(s, pos + 1, 1) == "\n") { pos += 2; if (intok) { T[++n] = t; t = ""; intok = 0 } continue }
+    if (c == " " || c == "\t") { if (intok) { T[++n] = t; t = ""; intok = 0 } pos++; continue }
+    if (c == "\n" || c == ";" || c == "|" || c == "&" || c == ")" || c == "<" || c == ">") break
+    intok = 1
+    if (c == SQ) {
+      j = index(substr(s, pos + 1), SQ)
+      if (j == 0) { UNTERM = 1; break }
+      t = t substr(s, pos + 1, j - 1); pos += j + 1; continue
+    }
+    if (c == DQ) {
+      pos++; closed = 0
+      while (pos <= len) {
+        c = substr(s, pos, 1)
+        if (c == "\\") { t = t substr(s, pos + 1, 1); pos += 2; continue }
+        if (c == DQ) { pos++; closed = 1; break }
+        t = t c; pos++
+      }
+      if (!closed) { UNTERM = 1; break }
+      continue
+    }
+    if (c == "\\") { t = t substr(s, pos + 1, 1); pos += 2; continue }
+    t = t c; pos++
+  }
+  if (intok) T[++n] = t
+  return n
 }
-count_uncommented() { # count_uncommented <file>
+function strip_end(p,    s, k, depth, ch, rest) {
+  while (match(p, /(^|[^A-Za-z_0-9])END[[:space:]]*\{/)) {
+    s = RSTART + RLENGTH - 1
+    depth = 0
+    for (k = s; k <= length(p); k++) {
+      ch = substr(p, k, 1)
+      if (ch == "{") depth++
+      else if (ch == "}") { depth--; if (depth == 0) break }
+    }
+    rest = (k < length(p)) ? substr(p, k + 1) : ""
+    p = substr(p, 1, RSTART) rest
+  }
+  return p
+}
+function awk_leaves(n,    i, prog) {
+  i = 2
+  while (i <= n && substr(T[i], 1, 1) == "-") {
+    if (T[i] == "--") { i++; break }
+    if (T[i] == "-f" || T[i] ~ /^--file/) return 0
+    if (T[i] == "-v" || T[i] == "-F") i += 2; else i++
+  }
+  if (i > n) return 0
+  prog = strip_end(T[i])
+  return prog ~ /(^|[^A-Za-z_0-9])exit([^A-Za-z_0-9]|$)/
+}
+function sed_leaves(n,    i, sc) {
+  i = 2; sc = ""
+  while (i <= n && substr(T[i], 1, 1) == "-") {
+    if (T[i] == "-f" || T[i] ~ /^--file/) return 0
+    if (T[i] ~ /^-[a-zA-Z]*e$/ || T[i] == "--expression") { sc = sc ";" T[i + 1]; i += 2; continue }
+    i++
+  }
+  if (sc == "" && i <= n) sc = T[i]
+  gsub(/s\/([^\/\\]|\\.)*\/([^\/\\]|\\.)*\/[a-zA-Z0-9]*/, "", sc)
+  gsub(/s#([^#\\]|\\.)*#([^#\\]|\\.)*#[a-zA-Z0-9]*/, "", sc)
+  gsub(/s\|([^|\\]|\\.)*\|([^|\\]|\\.)*\|[a-zA-Z0-9]*/, "", sc)
+  gsub(/s,([^,\\]|\\.)*,([^,\\]|\\.)*,[a-zA-Z0-9]*/, "", sc)
+  gsub(/\/([^\/\\]|\\.)*\//, "//", sc)
+  return sc ~ /(^|[;{}[:space:]0-9$\/!])[qQ]([;}[:space:]0-9]|$)/
+}
+{ L[NR] = $0 }
+END {
+  total = 0
+  for (i = 1; i <= NR; i++) {
+    line = L[i]
+    if (line ~ /^[[:space:]]*#/) continue
+    if (line ~ /(^|[^|])\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)/) { total++; continue }
+    rest = line; hit = 0
+    while (!hit && match(rest, /(^|[^|])\| *(awk|sed)( |$)/)) {
+      # Kept before anything else can call match(), which resets RSTART for the whole program.
+      after = RSTART + RLENGTH
+      s = substr(rest, RSTART)
+      sub(/^[^|]*\| */, "", s)
+      text = s; k = i
+      n = tok(text)
+      while (UNTERM && k < NR && k < i + 300) { text = text "\n" L[++k]; n = tok(text) }
+      if (T[1] == "awk" && awk_leaves(n)) hit = 1
+      else if (T[1] == "sed" && sed_leaves(n)) hit = 1
+      rest = substr(rest, after)
+    }
+    if (hit) total++
+  }
+  print total
+}
+AWK
+)"
+count_uncommented() { # count_uncommented <file>  -> how many lines hold a short circuiting pipeline
   local n
-  n="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -cE '(^|[^|])\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' || true)"
+  n="$(awk -v SQ="'" -v DQ='"' "$_SC_COUNTER" "$1" 2>/dev/null)"
   printf '%s' "${n:-0}"
 }
 
@@ -165,6 +279,31 @@ _PIPE='|'
 [ "$(count_uncommented "$TMPROOT/probe-or.sh")" = "2" ] \
   && check "and does not count a logical OR, only the real pipes beside it" ok \
   || check "and does not count a logical OR, only the real pipes beside it" "it counted $(count_uncommented "$TMPROOT/probe-or.sh") of the 2 real pipes"
+
+# An awk that leaves with `exit` and a sed that quits with `q` are the same hazard as grep -q
+# (claude-config#1042). Each counted shape sits beside the nearest shape that must NOT count, so a
+# counter that fixed the miss by counting every piped awk or sed fails here as surely as one that
+# still counts none (L159): an exit inside END runs after the input was read to the end, a `q`
+# inside a substitution is text, a program read from a file cannot be judged, and a comment or a
+# logical OR is not a pipe.
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf '%s\n' "cat file $_PIPE awk 'NR == 1 { print; exit }'"
+  printf '%s\n' "cat file $_PIPE awk -F'\\t' -v k=\"\$v\" '\$1 == k { print \$2; exit }'"
+  printf '%s\n' "cat file $_PIPE awk '" '  { n++ }' '  /needle/ { found = 1; exit }' "'"
+  printf '%s\n' "cat file $_PIPE sed -n '1p;q'"
+  printf '%s\n' "cat file $_PIPE sed 5q"
+  printf '%s\n' "cat file $_PIPE awk '{ n++ } END { exit n ? 0 : 1 }'"
+  printf '%s\n' "cat file $_PIPE awk '" '  { n++ }' '  END { if (n) exit 0; exit 1 }' "'"
+  printf '%s\n' "cat file $_PIPE sed 's/q /x/'"
+  printf '%s\n' "cat file $_PIPE sed -n '/q/p'"
+  printf '%s\n' "cat file $_PIPE awk -f prog.awk"
+  printf '%s\n' "# cat file $_PIPE awk '{ exit }'   <- a comment about one, not one"
+  printf '%s\n' "[ -n \"\$x\" ] $_PIPE$_PIPE awk '{ exit }' file"
+} > "$TMPROOT/probe-awk-sed.sh"
+[ "$(count_uncommented "$TMPROOT/probe-awk-sed.sh")" = "5" ] \
+  && check "#1042 the counter sees an awk that exits and a sed that quits, multi line bodies too, and not their harmless neighbours" ok \
+  || check "#1042 the counter sees an awk that exits and a sed that quits, multi line bodies too, and not their harmless neighbours" "it counted $(count_uncommented "$TMPROOT/probe-awk-sed.sh") of 5"
 
 # ---------------------------------------------------------------------------
 # The hazard itself, on THIS machine, rather than taken from a note (claude-config#162).
