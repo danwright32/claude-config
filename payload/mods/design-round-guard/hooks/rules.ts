@@ -429,6 +429,9 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
   const unread = new Error('unread')
   const id = (c: string | undefined) => c !== undefined && /[\w$]/.test(c)
   const space = (c: string | undefined) => c !== undefined && /\s/.test(c)
+  // A quote opening a TypeScript string or a JSX attribute's value. This reads source text, not a
+  // shell command, so mod-kit's command reader ($.modkit.commands) is no use here.
+  const stringQuote = (c: string | undefined): c is string => c !== undefined && /^["']$/.test(c)
   const EXPR_WORDS = new Set(['return', 'yield', 'case', 'default', 'await', 'typeof', 'void', 'in', 'of', 'delete', 'throw', 'else', 'do'])
   const quoted = (i: number): number => {
     const q = text[i]
@@ -494,7 +497,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
         k++
         while (space(text[k])) k++
         const c = text[k]
-        if (c === '"' || c === "'") {
+        if (stringQuote(c)) {
           const e = text.indexOf(c, k + 1)
           if (e < 0) throw unread
           j = e + 1
@@ -534,7 +537,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
         comments.push([i, e + 2])
         i = e + 2
       } else if (space(c)) i++
-      else if (c === '"' || c === "'") {
+      else if (stringQuote(c)) {
         i = quoted(i)
         prev = c
       } else if (c === '`') {
