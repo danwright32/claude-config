@@ -45,6 +45,7 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
       }
       return { ...built, modkit }
     })

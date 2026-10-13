@@ -183,21 +183,36 @@ type Targets = { files: string[]; guessed: string[] }
 // A Bash command as its mentions are read (#940): each python program in it that only writes files,
 // found in the command as written, with the lasting memory its comments and sentences name taken out
 // (withoutPythonText), so a script writing prose about CLAUDE.md to another file is not asked about.
-// Only a program the shell cannot have changed (on standard input from a quoted heredoc, or holding
-// no $ or backtick): in any other the shell may have run what its text holds. A program that runs a
-// process, or that cannot be found in the command as written, is read whole, as before. So is one a
-// command substitution runs (#974: the reader gives those since then), whose text the shell may have
-// changed as it read the line, and which was always read whole before.
+// Only a program the shell cannot have changed, as mod-kit's reader says on each command
+// (`asWritten`, #1171: this mod worked it out itself before): in any other the shell may have run
+// what its text holds, and so in one a command substitution runs (#974), which was always read
+// whole. A program that runs a process, or that cannot be found in the command as written, is read
+// whole, as before, and so is every program where a mod-kit loaded before it said so gives no answer.
 const mentionText = async ($: EngineInterface, command: string): Promise<string> => {
   let text = command
   for (const c of await $.modkit.pipeline({ command })) {
     const p = c.program
-    if (c.substitution || c.language !== 'python' || c.verdict?.does !== 'write files' || !p || !('text' in p) || !p.text || !text.includes(p.text)) continue
-    const quoted = p.stdin === true && (c.heredocs ?? []).some(h => h.quoted && !h.replaced && h.fd === undefined)
-    if (!quoted && /[$`]/.test(p.text)) continue
-    text = text.split(p.text).join(withoutPythonText(p.text))
+    if (!c.asWritten || c.language !== 'python' || c.verdict?.does !== 'write files' || !p || !('text' in p) || !p.text || !text.includes(p.text)) continue
+    text = text.split(p.text).join(await withoutText($, p.text))
   }
   return text
+}
+
+// A python program with the lasting memory its sentences name taken out (#940), where it holds text
+// read by mod-kit's one scanner (#1171). A mod-kit that cannot say (one loaded before it had the
+// member, which a reload can leave, standing rule 5) leaves the program whole, so every memory file
+// it names is asked about, the side that writes nothing unasked; said once in the transcript.
+let toldNoScanner = false
+const withoutText = async ($: EngineInterface, code: string): Promise<string> => {
+  try {
+    return withoutPythonText(code, await $.modkit.pythonText({ code }))
+  } catch (err) {
+    if (!toldNoScanner) {
+      toldNoScanner = true
+      $.ui.log(`Ask before saving could not ask mod-kit where a python program holds text (${message(err)}), so it read each program whole and asks about every memory file one names. A new session loads mod-kit again.`)
+    }
+    return code
+  }
 }
 
 // Where a call would save lasting memory, as Dan reads it, or nothing when it saves none. A Bash
@@ -234,7 +249,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
     // command's heredoc data in the same call, nor from the session's folder. Its text is read as
     // mentionText left it, so a sentence in a python program naming lasting memory stays text (#940).
     if (u.program !== undefined) {
-      const own = text.includes(u.program) ? u.program : withoutPythonText(u.program)
+      const own = text.includes(u.program) ? u.program : await withoutText($, u.program)
       const said = [own, ...u.words.filter(x => x !== u.program)].join('\n')
       for (const m of await mentioned(said, home, inCheckout, isSet, u.folder, command))
         if (!out.includes(m)) {

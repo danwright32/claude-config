@@ -66,7 +66,7 @@ describe('program: fed on standard input', () => {
   // #730: the shell's own standard input was not passed on to the commands its -c runs.
   test("a heredoc or here-string feeding a shell's -c feeds the commands it runs", () => {
     expect(pipeline(`bash -c 'python3' <<'EOF'\nopen('a','w')\nEOF`)).toEqual([
-      { words: ['python3'], language: 'python', program: { text: "open('a','w')", stdin: true }, verdict: { does: 'write files', seen: 'open in mode w' } },
+      { words: ['python3'], language: 'python', program: { text: "open('a','w')", stdin: true }, verdict: { does: 'write files', seen: 'open in mode w' }, asWritten: true },
     ])
     expect(of(`bash -lc 'python3' <<< "open('a','w')"`)).toEqual([{ text: "open('a','w')", stdin: true }])
     expect(of(`echo "open('a','w')" | bash -lc 'cd /repo && python3 -'`)).toEqual([undefined, undefined, { text: "open('a','w')", stdin: true }])

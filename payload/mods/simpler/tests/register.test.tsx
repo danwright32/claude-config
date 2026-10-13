@@ -121,6 +121,7 @@ const modKit: { name: string; register: Register } = {
           return JSON.parse(r.stdout) as boolean
         },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         press: never('press'),
         bandRow: never('bandRow'),
         clearBandRow: never('clearBandRow'),

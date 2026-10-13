@@ -183,48 +183,24 @@ export const mentionsAny = (text: string): boolean => text.search(MENTION) !== -
 const CLOSES = new Set(["'", '"'])
 
 /**
- * Where a python program holds text rather than code: each comment, and each string literal's
- * content, marked `code` for an f-string or a t-string, whose braces hold code. A backslash keeps a
- * string open in a raw string too, as python reads it; a string with one quote ends at its line.
+ * Where a python program holds text, as mod-kit's one scanner of its comments and strings gives it
+ * ($.modkit.pythonText, #1171): plain data, since only plain data crosses between mods. `formatted`
+ * is an f-string or a t-string, whose braces hold code.
  */
-const pythonText = (code: string): { from: number; to: number; code: boolean }[] => {
-  const out: { from: number; to: number; code: boolean }[] = []
-  let i = 0
-  while (i < code.length) {
-    const ch = code[i] as string
-    if (ch === '#') {
-      const end = code.indexOf('\n', i)
-      const to = end === -1 ? code.length : end
-      out.push({ from: i + 1, to, code: false })
-      i = to
-      continue
-    }
-    if (ch !== "'" && ch !== '"') {
-      i++
-      continue
-    }
-    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(code.slice(Math.max(0, i - 3), i))?.[1] ?? ''
-    const q = code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
-    let j = i + q.length
-    while (j < code.length && !code.startsWith(q, j) && (q.length === 3 || code[j] !== '\n')) j += code[j] === '\\' ? 2 : 1
-    const to = Math.min(j, code.length)
-    out.push({ from: i + q.length, to, code: /[fFtT]/.test(prefix) })
-    i = to + (code.startsWith(q, to) ? q.length : 0)
-  }
-  return out
-}
+export type PythonText = { kind: 'comment' | 'string' | 'formatted'; from: number; to: number }
 
 /**
  * A python program's text with each mention of lasting memory that sits in text, not code, blanked
  * (#940: a heredoc writing a test script was asked about as a save to the global CLAUDE.md, which a
  * comment it added named in a sentence). A mention is text when it is in a comment, or in a plain
  * string that goes on past it; one a quote closes is a path (a string of its own, or one inside code
- * held as text, such as an exec's or a shell line's), and one in an f-string is code. Only the
+ * held as text, such as an exec's or a shell line's), and one in an f-string is code. `spans` is
+ * where the program holds text, read by mod-kit (#1171: this mod scanned it itself before). Only the
  * mention's characters change, so the program can be put back where it was read. It reads the text,
  * not what the program does with it: a path cut out of a longer string at run time is not seen.
  */
-export const withoutPythonText = (code: string): string => {
-  const text = pythonText(code).filter(s => !s.code)
+export const withoutPythonText = (code: string, spans: readonly PythonText[]): string => {
+  const text = spans.filter(s => s.kind !== 'formatted')
   return code.replace(MENTION, (m: string, at: number) => {
     const end = at + m.length
     const inText = text.some(s => at >= s.from && end <= s.to)

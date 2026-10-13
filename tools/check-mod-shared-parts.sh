@@ -62,6 +62,11 @@
 #             telling Dan or Claude that an answer he typed     again }) (#1145: the design round guard and
 #             was not recorded (the phrase "typed answer was    ask before saving said it two ways, and only
 #             not recorded")                                    one told Dan at all)
+#   python-text                                                 use $.modkit.pythonText({ code }), the spans
+#             scanning a python program's comments and          of each comment and string (#1171: ask
+#             strings by hand (a triple quote, '"""', "'''"     before saving and mod-kit scanned them with
+#             or a quote's .repeat(3), or an f prefix class     the same code twice); what a span means is
+#             [fFtT])                                           each guard's own rule
 #   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -140,6 +145,7 @@ PARTS=(
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
   "typed-answer|typed answer was not recorded|\$.modkit.typedAnswer({ guard, typed, still, again })"
+  "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
 )
 
 n=0

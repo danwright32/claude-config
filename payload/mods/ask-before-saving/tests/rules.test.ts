@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText } from '../hooks/rules.ts'
+import { pythonText } from './mod-kit/hooks/code.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -221,7 +222,7 @@ test('lasting memory a script or a patch mentions, read from its text', async ()
 test('in a python program, a mention in a comment or in a sentence is text, and one a string ends on is a path', async () => {
   const { inCheckout } = checkouts()
   const left = async (code: string) => {
-    const out = withoutPythonText(code)
+    const out = withoutPythonText(code, pythonText(code))
     // Only the mention's own characters change, so the program can be put back where it was read.
     expect(out.length).toBe(code.length)
     return mentioned(out, HOME, inCheckout)
