@@ -1230,7 +1230,9 @@ the ban list knowing that an action it does not name is approved.
   whose destination is a temp path (as written, `file://`, or relative to the folder git runs in).
   The folder is a path the line spells there, or one `mktemp` makes there in the same line: a
   `$(mktemp ...)` word, a variable every assignment of which in the line is such a mktemp, or
-  `$TMPDIR` while the line does not set TMPDIR. Each stands for a folder under a made up name at
+  `$TMPDIR` while the line names TMPDIR only to expand it (an assignment, `read`, `for` or
+  `printf -v` of it makes it unknown). mktemp puts a template naming no folder in the folder it
+  runs in, not TMPDIR (measured), so such a template counts only with `-p` or `--tmpdir`. Each stands for a folder under a made up name at
   the root, and any climb (`..`) out of one, or from a folder reached through one, cannot be
   followed, so it is no longer known to be in the temp folder (`$TMPDIR/../Users/x/repo` would
   otherwise read as under the mark). A branch delete there needs a repository of its own: a

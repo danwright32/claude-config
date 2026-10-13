@@ -409,6 +409,8 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
       'T=$(mktemp -d) && git -C "$T/repo" switch -c y',
       'cd "$(mktemp -d)" && git init -q && git switch -c z',
       'export WORK=$(mktemp -d -t sq) && git -C "${WORK}/r" checkout -b a',
+      'T=$(mktemp -d -p /tmp foo.XXXXXX) && git -C "$T" switch -c b2',
+      'T=$(mktemp -d /tmp/foo.XXXXXX) && git -C "$T" switch -c b3',
       'T="$(mktemp -d "${TMPDIR:-/tmp}/suite.XXXXXX")"; git -C "$T" checkout -b b',
       'cd "$TMPDIR/scratch" && git checkout -b c',
       'git -C /tmp/t1 push --force /tmp/bare.git main',
@@ -463,6 +465,14 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     // TMPDIR set in the line itself may be anywhere, so mktemp's folder is no longer known.
     expect(await bash('TMPDIR=/Users/x/repo; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
     expect(await bash('export TMPDIR=/Users/x/repo; cd "$TMPDIR" && git checkout main')).toBe(unknown)
+    // TMPDIR changed any other way too (lessons review of b0538c5).
+    expect(await bash('read TMPDIR; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('for TMPDIR in /Users/x/repo; do cd "$TMPDIR" && git checkout main; done')).toBe(unknown)
+    expect(await bash('printf -v TMPDIR %s /Users/x/repo; T=$(mktemp -d -t x); git -C "$T" checkout main')).toBe(unknown)
+    // A template naming no folder is made in the folder mktemp runs in, never TMPDIR (lessons
+    // review of b0538c5, measured: mktemp -d x.XXXXXX made ./x.MuRXQ2).
+    expect(await bash('T=$(mktemp -d foo.XXXXXX); cd "$T" && git checkout main')).toBe(unknown)
+    expect(await bash('cd "$(mktemp -d foo.XXXXXX)" && git branch -D x')).toBe('delete a branch')
     // git told to use another repository's git folder is not the temp folder's.
     expect(await bash('git --git-dir=/Users/x/repo/.git -C /tmp/t1 checkout main')).toBe(unknown)
     expect(await bash('GIT_DIR=/Users/x/repo/.git git -C /tmp/t1 checkout main')).toBe(unknown)

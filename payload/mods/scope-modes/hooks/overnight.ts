@@ -127,32 +127,45 @@ export const inTemp = (p: string | null): boolean => p !== null && (TEMP.test(p)
 // itself does not set it, since then it may be anywhere.
 const TMPDIR_WORD = /^(?:\$TMPDIR|\$\{TMPDIR\}|\$\{TMPDIR:-\/tmp\/?\})(?:\/|$)/
 const unquote = (w: string) => w.replace(/^(['"])(.*)\1$/, '$2')
-// Whether a mktemp's arguments make its file or folder in the temp folder: every template and -p
-// folder spelled there (or a template with no folder, which mktemp puts in TMPDIR), every flag one
-// mktemp takes; anything else is not known to be there.
+// Whether a mktemp's arguments make its file or folder in the temp folder, as mktemp places it
+// (measured on this Mac, 2026-10-13): with no template, or with -t, in TMPDIR; a template naming a
+// folder, in that folder; a template naming none, in the folder it runs in (`mktemp -d x.XXXXXX`
+// made ./x.MuRXQ2), unless -p or --tmpdir gives its folder. Each folder must be spelled in the temp
+// folder, every flag one mktemp takes; anything else is not known to be there (lessons review of
+// b0538c5: a bare template was read as in TMPDIR).
 const MKTEMP_FLAGS = new Set(['-d', '-u', '-q', '--directory', '--dry-run', '--quiet'])
 const mktempInTemp = (args: string, tmpdirTrusted: boolean): boolean => {
   const words = args.trim().split(/\s+/).filter(Boolean).map(unquote)
   // Anything the shell would expand, but TMPDIR as above, can put the template anywhere.
   const expands = (w: string) => /[$`()\\]/.test(tmpdirTrusted ? w.replace(TMPDIR_WORD, '') : w)
   const there = (w: string) => !expands(w) && !w.split('/').includes('..') && (TEMP.test(w) || (tmpdirTrusted && TMPDIR_WORD.test(w)))
+  // The folder a bare template goes in: given by -p or --tmpdir, TMPDIR by -t, else none known.
+  let base: 'given' | 'tmpdir' | undefined
+  const templates: string[] = []
   for (let i = 0; i < words.length; i++) {
     const w = words[i] as string
     if (expands(w)) return false
     if (MKTEMP_FLAGS.has(w) || /^-[duq]+$/.test(w) || w.startsWith('--suffix=')) continue
-    if (w === '-t') { i++; continue }
-    if (w === '-p' || w === '--tmpdir') {
-      if (!there(words[++i] ?? '')) return false
+    if (w === '-t') {
+      base = base ?? 'tmpdir'
+      i++
       continue
     }
-    if (w.startsWith('--tmpdir=')) {
-      if (!there(w.slice('--tmpdir='.length))) return false
+    if (w === '--tmpdir') {
+      base = base ?? 'tmpdir'
+      continue
+    }
+    if (w === '-p' || w.startsWith('--tmpdir=')) {
+      if (!there(w === '-p' ? (words[++i] ?? '') : w.slice('--tmpdir='.length))) return false
+      base = 'given'
       continue
     }
     if (w.startsWith('-')) return false
-    if (w.includes('/') ? !there(w) : !tmpdirTrusted) return false
+    templates.push(w)
   }
-  return tmpdirTrusted || words.some(w => w.includes('/'))
+  const tmpdirOk = (b: typeof base) => b === 'given' || (b === 'tmpdir' && tmpdirTrusted)
+  if (!templates.length) return tmpdirOk(base ?? 'tmpdir')
+  return templates.every(w => (w.includes('/') ? there(w) : tmpdirOk(base)))
 }
 const MKTEMP = /\$\(\s*mktemp\b([^)]*)\)/g
 /**
@@ -163,7 +176,9 @@ const MKTEMP = /\$\(\s*mktemp\b([^)]*)\)/g
  * folder cannot be resolved and whatever needed it is judged as before.
  */
 export const tempWords = (raw: string): ((word: string) => string) => {
-  const tmpdirTrusted = !/(?:^|[^\w$])TMPDIR=/.test(raw)
+  // TMPDIR named anywhere but to expand it (an assignment, read, for, printf -v, declare, unset)
+  // may change it, as for any variable below (lessons review of b0538c5).
+  const tmpdirTrusted = !/(?<![\w$])(?<!\$\{)TMPDIR(?!\w)/.test(raw)
   const vars = new Set<string>()
   for (const m of raw.matchAll(/(?<![\w$])([A-Za-z_]\w*)=(?=["']?\$\(\s*mktemp\b)/g)) vars.add(m[1] as string)
   const fromMktemp = (at: number, name: string): boolean => {
