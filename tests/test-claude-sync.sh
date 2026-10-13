@@ -11383,10 +11383,20 @@ rm -f "$RVF"
 # both saw the dead pid would otherwise each remove the lock, the second removing the one the first
 # had just taken, and both would mint at once. Driven directly, with the tool sourced: the lock now
 # names a LIVE holder (this suite), and the takeover is asked to break it for the dead one it saw.
+# The call prints RAN only once the function has returned, so a sourcing that stopped early or a
+# renamed function cannot pass as "left the lock alone".
+_rv_takeover(){   # $1 = the pid the takeover believes is dead -> RAN, or nothing
+  bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_reservations_lock '$RVF.lock' '$1' && echo RAN" 2>/dev/null || true
+}
+# The control first: a lock that still names the dead holder IS removed.
+printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
+rv_tk0="$(_rv_takeover "$rv_dead_pid")"
+check "#1148 the control: a takeover removes a lock that still names the dead holder" \
+  "[ \"\$rv_tk0\" = RAN ] && [ ! -e '$RVF.lock' ]"
 printf '%s\n' "$$" > "$RVF.lock"
-bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_reservations_lock '$RVF.lock' '$rv_dead_pid'" >/dev/null 2>&1 || true
+rv_tk1="$(_rv_takeover "$rv_dead_pid")"
 check "#1148 a takeover leaves alone a lock taken since the dead holder was read" \
-  "[ \"\$(cat '$RVF.lock' 2>/dev/null)\" = '$$' ]"
+  "[ \"\$rv_tk1\" = RAN ] && [ \"\$(cat '$RVF.lock' 2>/dev/null)\" = '$$' ]"
 check "#1148 and leaves no takeover lock behind" "[ ! -d '$RVF.lock.break' ]"
 rm -f "$RVF.lock"
 # And end to end: a dead holder's lock in place while five sessions ask at once.
