@@ -4664,12 +4664,20 @@ $pf"*) continue ;; esac
 
 # Block obvious credentials from being published, with this one set of rules and no external
 # scanner: distinctive token shapes (low false positive), and a key named like a credential
-# (secret, token, api key, password) given 24 or more identifier characters. The key is matched in
-# ANY letter case, so API_TOKEN=... is refused like api_token=... (claude-config#1128); the one
-# exception is passwd, matched in lower case only until Dan decides about the sudoers NOPASSWD
-# line the bug-bash suite expects, which a capital PASSWD would refuse.
-# The send scans the payload, the only thing it commits. tests/test-payload-secret-scan.sh runs
-# this same function over every file a push publishes, before every push and in CI.
+# (secret, token, api key, password, passwd, private key) given 24 or more identifier characters.
+# The key is matched in ANY letter case, so API_TOKEN=... is refused like api_token=...
+# (claude-config#1128), and its name may run on past the credential word, so SECRET_KEY,
+# client_secret_key and AWS_SECRET_ACCESS_KEY are keys too (#1133). The one name left out is
+# NOPASSWD, a sudoers tag rather than a key: the grant the bug-bash suite expects is NOPASSWD
+# followed by a path, and PASSWD anywhere else, in any case, is a key (#1133).
+# The send scans the payload, and every file outside it that a commit the shared repo does not hold
+# yet changed (#1133): the sync commits lesson-counts/<host>.tsv, the lesson tag files and
+# lesson-bands/<host> itself, and the push publishes them with the payload.
+# tests/test-payload-secret-scan.sh runs this same function over every file a push of this
+# repository publishes, before every push and in CI.
+# An entry in .secret-allowlist is the sha256 of "<path in the repository>:<matched text>", so it
+# accepts one value in one file and nothing else (#1133, L1022). A private key header is never
+# accepted: its text is the same for every key of its kind, so no entry could name the key itself.
 # Override with SYNC_SKIP_SECRET_SCAN=1 if it ever flags a legitimate string.
 scan_secrets(){
   # Every way this ends WITHOUT refusing clears the record of its last refusal (claude-config#947):
@@ -4683,30 +4691,72 @@ scan_secrets(){
   local q="[\"']?" pat apat
   pat='BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|sk_live_[A-Za-z0-9]{20,}'
   # Each key spelled out in either case, rather than grep -i, which would fold the token shapes
-  # above as well. One pattern, so each file is still read once (L297).
-  apat="([Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|passwd)${q}[[:space:]]*[:=][[:space:]]*${q}[A-Za-z0-9_+/-]{24,}"
-  local line file match fp findings=""
-  # each grep -o hit is "path:matchedtext"; accept it if its fingerprint is allowlisted
+  # above as well. One pattern, so each file is still read once (L297). ERE has no look behind, so
+  # "not after NO" is spelled as what may come before passwd: the line start, anything but an O, or
+  # an O at the line start or after anything but an N.
+  apat="([Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|(^|[^Oo]|(^|[^Nn])[Oo])[Pp][Aa][Ss][Ss][Ww][Dd])[A-Za-z0-9_-]*${q}[[:space:]]*[:=][[:space:]]*${q}[A-Za-z0-9_+/-]{24,}"
+  # What the push publishes outside the payload: each file changed by a commit the upstream does not
+  # hold yet, read off the commits rather than from a list of the files the sync writes, so a record
+  # added later is judged on the day it lands (L247). With no git there is no push; with no upstream
+  # every tracked file would be new to the remote, so all of them are read. A listing git refuses is
+  # a refusal, never a scan of the payload alone reported as clean. Three dots, so a clone behind or
+  # diverged from its upstream lists only its own commits' changes, never what the other side
+  # published, which this send neither wrote nor carries.
+  local outside="" up rel extra=() unlisted=""
+  if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
+    if up="$(git -C "$SYNC_REPO" rev-parse --verify -q '@{upstream}' 2>/dev/null)"; then
+      outside="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --name-only --diff-filter=d "$up...HEAD" -- . ':(exclude)payload' 2>&1)" \
+        || unlisted="${outside:-git gave no reason}"
+    else
+      outside="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files -- . ':(exclude)payload' 2>&1)" \
+        || unlisted="${outside:-git gave no reason}"
+    fi
+    if [ -z "$unlisted" ]; then
+      while IFS= read -r rel; do
+        [ -n "$rel" ] && [ -f "$SYNC_REPO/$rel" ] && extra+=("$SYNC_REPO/$rel")
+      done <<< "$outside"
+    fi
+  fi
+  local line file match where fp findings=""
+  # each grep -o hit is "path:matchedtext"; accept it if the fingerprint of where it is and what it
+  # matched is allowlisted, and never a private key header
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     file="${line%%:*}"; match="${line#*:}"
-    fp="$(printf '%s' "$match" | shasum -a 256 | cut -d' ' -f1)"
-    [ -f "$allow" ] && grep -q "^$fp" "$allow" && continue
-    findings+="${file#$PAYLOAD/}
-"
-  done < <(grep -rIoE "$pat|$apat" "$PAYLOAD" 2>/dev/null || true)
+    where="${file#"$SYNC_REPO"/}"
+    case "$match" in
+      'BEGIN '*'PRIVATE KEY') ;;
+      *) fp="$(printf '%s:%s' "$where" "$match" | shasum -a 256 | cut -d' ' -f1)"
+         [ -f "$allow" ] && grep -q "^$fp" "$allow" && continue ;;
+    esac
+    case "$file" in
+      "$PAYLOAD"/*) findings+="${file#"$PAYLOAD"/}
+" ;;
+      *) findings+="$where
+" ;;
+    esac
+  done < <(grep -rIoE "$pat|$apat" "$PAYLOAD" ${extra[@]+"${extra[@]}"} 2>/dev/null || true)
   findings="$(printf '%s' "$findings" | sort -u | tr '\n' ' ')"
   # The refusal is RECORDED as well as said (claude-config#947), because the state it leaves behind
   # outlives the run that said it: the staged edits stay uncommitted in the clone, and a later pull
   # meets them with nothing but git's complaint to go on. Cleared by the next scan that passes.
   # Guarded on the variable rather than assuming it, because tests/test-payload-secret-scan.sh runs
   # this function cut out of the script, without the declarations at its top.
-  if is_blank "$findings"; then
+  if is_blank "$findings" && [ -z "$unlisted" ]; then
     [ -z "${SEND_REFUSED_FILE:-}" ] || rm -f "$SEND_REFUSED_FILE" 2>/dev/null || true
     return 0
   fi
-  local refusal="possible secret found in: ${findings% }. Remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
-  [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\n' "$(date +%s)" "${findings% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  local refusal
+  if [ -n "$unlisted" ]; then
+    # Recorded, since the staged edits stay behind exactly as after any refusal, but as what it is:
+    # the second field names what the scan FOUND, and here it found nothing, it could not look, so
+    # that field stays empty and a third says why (L11).
+    refusal="git could not list the files outside the payload this push would publish, so they were not scanned for secrets and nothing is sent: $(printf '%s' "$unlisted" | tr '\n' ' ')"
+    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t\tunlisted\n' "$(date +%s)" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  else
+    refusal="possible secret found in: ${findings% }. Remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
+    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\n' "$(date +%s)" "${findings% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  fi
   # A sync asks for the refusal to be HANDED BACK rather than ending the run, so its receiving half
   # still runs (claude-config#947). Nothing is weaker for it: do_sync then sets the staged edits
   # aside, commits nothing, pushes nothing, and still fails the run with these same words.
@@ -7835,10 +7885,11 @@ ${copy#"$CLAUDE_HOME"/}"
 # What stopped the send that left them, in words: the scan's own record when there is one, never a
 # guess, because a send can stop between staging and committing for other reasons too (L11).
 pending_edits_cause(){
-  local when found now
+  local when found why now
   if [ -s "$SEND_REFUSED_FILE" ]; then
     when="$(awk -F'\t' 'NR==1{print $1}' "$SEND_REFUSED_FILE" 2>/dev/null)"
     found="$(awk -F'\t' 'NR==1{print $2}' "$SEND_REFUSED_FILE" 2>/dev/null)"
+    why="$(awk -F'\t' 'NR==1{print $3}' "$SEND_REFUSED_FILE" 2>/dev/null)"
     now="$(date +%s)"
     case "$when" in
       ''|*[!0-9]*) when="" ;;
@@ -7846,6 +7897,12 @@ pending_edits_cause(){
     esac
     # Two measured facts side by side, never "so": whether THESE edits are the ones that send staged
     # is not something the record can tell, since a hand edit made after it reads the same (L11).
+    if [ "$why" = unlisted ]; then
+      # The scan refused without finding anything: git could not list what the send would publish
+      # outside the payload (#1133).
+      printf 'the secret scan last refused a send from this clone%s (git could not list the files outside the payload it would publish, so they went unscanned), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "$SYNC_REPO"
+      return 0
+    fi
     printf 'the secret scan last refused a send from this clone%s (possible secret in: %s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-?}" "$SYNC_REPO"
     return 0
   fi

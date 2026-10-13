@@ -93,7 +93,12 @@ outside="$(cd "$TREE" 2>/dev/null && find . -type f ! -path './payload/*' | grep
 [ -f "$TREE/payload/skills/tracker/config.example.json" ] && check "and the tracker's example config is among them" ok \
   || check "and the tracker's example config is among them" "missing, so the case that blocked sync is not being judged"
 
-out="$(run_scan "$TREE" "$ROOT")"
+# The copy is its own repository root as well, holding the repository's .secret-allowlist among the
+# files it copied: an allowlist entry names the file it accepts by its path in the repository
+# (#1133), so the copy must sit where the repository does for that path to read the same.
+[ -f "$TREE/.secret-allowlist" ] && check "and the repository's .secret-allowlist is among them" ok \
+  || check "and the repository's .secret-allowlist is among them" "missing, so the scan below would judge against no allowlist"
+out="$(run_scan "$TREE" "$TREE")"
 case "$out" in
   *'SCAN-RC=0') check "everything the repository publishes passes claude-sync's secret scan" ok ;;
   *) check "everything the repository publishes passes claude-sync's secret scan" "a push would publish, or a send would refuse: $(printf '%s' "$out" | tr '\n' ' ')" ;;
@@ -129,12 +134,185 @@ for k in API_TOKEN CLIENT_SECRET DB_PASSWORD X_API_KEY Api_Key; do
     *) check "#1128 the scan refuses a key written as $k" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
   esac
 done
-# What stays outside the rule, said on every run rather than left to be found (L129). A capital
-# PASSWD would refuse every send today: the bug-bash suite in the payload expects a sudoers line,
-# NOPASSWD followed by an absolute path, and the path is a run of identifier characters. Whether to
-# accept that line, and how, is Dan's decision, not this suite's, so until then the key is matched
-# in lower case only.
-echo "NOTE: #1128 open decision: a key spelled PASSWD in capitals is not matched (sudoers NOPASSWD in payload/skills/bug-bash/test-bug-bash.sh); lower case passwd is."
+# A key whose name runs on past the credential word is still a key (#1133): SECRET_KEY, a YAML
+# client_secret_key, PRIVATE_KEY and AWS_SECRET_ACCESS_KEY. PASSWD in capitals is one too, in a
+# shell variable and as a YAML key. Each in its own file, so one match cannot answer for the others.
+mkdir -p "$TMPROOT/compound/payload" "$TMPROOT/compound/repo"
+cv="$(printf 'compound key control' | shasum -a 256 | cut -c1-40)"
+for k in SECRET_KEY PRIVATE_KEY AWS_SECRET_ACCESS_KEY DB_PASSWD; do
+  printf 'export %s=%s\n' "$k" "$cv" > "$TMPROOT/compound/payload/$k.sh"
+done
+for k in client_secret_key PASSWD; do
+  printf '%s: %s\n' "$k" "$cv" > "$TMPROOT/compound/payload/$k.yml"
+done
+out="$(run_scan "$TMPROOT/compound/payload" "$TMPROOT/compound/repo")"
+for f in SECRET_KEY.sh PRIVATE_KEY.sh AWS_SECRET_ACCESS_KEY.sh DB_PASSWD.sh client_secret_key.yml PASSWD.yml; do
+  case "$out" in
+    *'possible secret found in: '*"$f"*'SCAN-RC=1') check "#1133 the scan refuses a key written as ${f%.*}" ok ;;
+    *) check "#1133 the scan refuses a key written as ${f%.*}" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  esac
+done
+# The one line a capital PASSWD must leave alone, with no exception written for it: the sudoers
+# grant the bug-bash suite expects, NOPASSWD followed by a path that reads as a long value. NOPASSWD
+# is a sudoers tag rather than a credential key, so the rule skips PASSWD right after NO. The whole
+# tree run above reads the real line; this is the same shape on its own, so a pass there cannot
+# come from that file being skipped.
+mkdir -p "$TMPROOT/sudoers/payload" "$TMPROOT/sudoers/repo"
+printf 'someone ALL = (root) NOPASSWD: /usr/local/libexec/bug-bash-egress load *\n' > "$TMPROOT/sudoers/payload/grant"
+out="$(run_scan "$TMPROOT/sudoers/payload" "$TMPROOT/sudoers/repo")"
+case "$out" in
+  *'SCAN-RC=0') check "#1133 a sudoers NOPASSWD grant is not read as a password" ok ;;
+  *) check "#1133 a sudoers NOPASSWD grant is not read as a password" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+
+# --- an exception admits one value in one file, never a shape (#1133, L1022) ------
+# An allowlist entry was the fingerprint of the matched text alone. For a private key that text is
+# the header line, the same for every key of its kind, so the entries written for one example in a
+# document accepted every real RSA, EC and PGP private key anywhere. Real keys, made here and thrown
+# away with this run, are planted and scanned against the repository's OWN allowlist.
+mkdir -p "$TMPROOT/realkey/payload"
+for kt in rsa ecdsa; do
+  ssh-keygen -q -t "$kt" -m PEM -N '' -C '' -f "$TMPROOT/realkey/payload/$kt.pem" >/dev/null 2>&1
+  rm -f "$TMPROOT/realkey/payload/$kt.pem.pub"
+done
+if [ -s "$TMPROOT/realkey/payload/rsa.pem" ] && [ -s "$TMPROOT/realkey/payload/ecdsa.pem" ]; then
+  cp "$ROOT/.secret-allowlist" "$TMPROOT/realkey/.secret-allowlist"
+  out="$(run_scan "$TMPROOT/realkey/payload" "$TMPROOT/realkey")"
+  for kt in rsa ecdsa; do
+    case "$out" in
+      *'possible secret found in: '*"$kt.pem"*'SCAN-RC=1') check "#1133 a real $kt private key is refused against the repository's own allowlist" ok ;;
+      *) check "#1133 a real $kt private key is refused against the repository's own allowlist" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+    esac
+  done
+else
+  check "#1133 a real private key is refused against the repository's own allowlist" "ssh-keygen made no key, so nothing was planted"
+fi
+
+# fp <where it lives, relative to the repository> <the matched text>: an allowlist fingerprint.
+fp(){ printf '%s:%s' "$1" "$2" | shasum -a 256 | cut -d' ' -f1; }
+# A value accepted in one file is refused in another: the entry names where it lives.
+mkdir -p "$TMPROOT/where/payload"
+wv="$(printf 'where it lives control' | shasum -a 256 | cut -c1-40)"
+printf 'token=%s\n' "$wv" > "$TMPROOT/where/payload/accepted.txt"
+printf 'token=%s\n' "$wv" > "$TMPROOT/where/payload/elsewhere.txt"
+printf '%s  # one value in one file\n' "$(fp payload/accepted.txt "token=$wv")" > "$TMPROOT/where/.secret-allowlist"
+out="$(run_scan "$TMPROOT/where/payload" "$TMPROOT/where")"
+case "$out" in
+  *'accepted.txt'*) check "#1133 an allowlisted value is accepted in the file it was allowlisted for" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  *'possible secret found in: '*'elsewhere.txt'*'SCAN-RC=1') check "#1133 an allowlisted value is accepted in the file it was allowlisted for" ok ;;
+  *) check "#1133 an allowlisted value is accepted in the file it was allowlisted for" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+case "$out" in
+  *'possible secret found in: '*'elsewhere.txt'*'SCAN-RC=1') check "#1133 and the same value in another file is still refused" ok ;;
+  *) check "#1133 and the same value in another file is still refused" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+# A private key header is never accepted at all: it is not the key, so no entry can name the value.
+# Both spellings of an entry for it are written, the old one (the text alone) and one naming its file.
+mkdir -p "$TMPROOT/header/payload"
+if [ -s "$TMPROOT/realkey/payload/rsa.pem" ]; then
+  cp "$TMPROOT/realkey/payload/rsa.pem" "$TMPROOT/header/payload/doc.pem"
+  hdr="$(grep -m 1 -oE 'BEGIN [A-Z ]*PRIVATE KEY' "$TMPROOT/header/payload/doc.pem")"
+  { printf '%s  # the text alone\n' "$(printf '%s' "$hdr" | shasum -a 256 | cut -d' ' -f1)"
+    printf '%s  # the text in its file\n' "$(fp payload/doc.pem "$hdr")"; } > "$TMPROOT/header/.secret-allowlist"
+  out="$(run_scan "$TMPROOT/header/payload" "$TMPROOT/header")"
+  case "$out" in
+    *'possible secret found in: doc.pem'*'SCAN-RC=1') check "#1133 a private key header is refused whatever the allowlist holds for it" ok ;;
+    *) check "#1133 a private key header is refused whatever the allowlist holds for it" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  esac
+fi
+
+# --- what a send commits outside the payload (#1133) ------------------------------
+# A send publishes the payload and every commit the clone holds that the shared repo does not, and
+# the sync makes commits of its own outside the payload: lesson-counts/<host>.tsv, the lesson tag
+# files and lesson-bands/<host>. A clone with an upstream, one such commit unpushed, holding a token.
+OB="$TMPROOT/outside/remote.git"; OC="$TMPROOT/outside/clone"
+mkdir -p "$TMPROOT/outside"
+git init -q --bare "$OB" 2>/dev/null
+git clone -q "$OB" "$OC" 2>/dev/null
+mkdir -p "$OC/payload" "$OC/lesson-counts"
+printf 'nothing secret\n' > "$OC/payload/clean.txt"
+printf 'HOST MacOut\nEND\n' > "$OC/lesson-counts/MacOut.tsv"
+gq(){ git -C "$OC" -c user.name=t -c user.email=t@e "$@" >/dev/null 2>&1; }
+gq add -A; gq commit -q -m seed; gq push -q -u origin HEAD
+printf 'HOST MacOut\nL1\t3 api_key=%s\nEND\n' "$(printf 'outside the payload control' | shasum -a 256 | cut -c1-40)" > "$OC/lesson-counts/MacOut.tsv"
+gq add -A; gq commit -q -m 'MacOut records its lesson citation counts'
+out="$(run_scan "$OC/payload" "$OC")"
+case "$out" in
+  *'possible secret found in: lesson-counts/MacOut.tsv'*'SCAN-RC=1') check "#1133 a token in an unpushed lesson counts commit is refused and named" ok ;;
+  *) check "#1133 a token in an unpushed lesson counts commit is refused and named" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+# Its control: the same clone with nothing unpushed outside the payload passes, so the refusal above
+# came from the commit and not from the scan reading the clone's whole history.
+gq push -q
+out="$(run_scan "$OC/payload" "$OC")"
+case "$out" in
+  *'SCAN-RC=0') check "#1133 control: once the shared repo holds that commit, the send has nothing outside the payload to judge" ok ;;
+  *) check "#1133 control: once the shared repo holds that commit, the send has nothing outside the payload to judge" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+# What the shared repo gained that this clone has not taken in is not this send's to judge: a clone
+# BEHIND its upstream reads only its own commits, never the other side's (a two dot diff of the
+# upstream against HEAD lists both). The shared repo already holds a token shaped record (published
+# past the scan, as SYNC_SKIP_SECRET_SCAN allows), this clone has it, and the other side then
+# changes it. This clone fetches and stays behind, so the record is one it neither wrote nor sends.
+OC2="$TMPROOT/outside/other"
+git clone -q "$OB" "$OC2" 2>/dev/null
+printf 'token=%s\n' "$(printf 'the other side published this' | shasum -a 256 | cut -c1-40)" > "$OC2/other-record.txt"
+git -C "$OC2" add -A >/dev/null 2>&1
+git -C "$OC2" -c user.name=t -c user.email=t@e commit -q -m other >/dev/null 2>&1
+git -C "$OC2" push -q >/dev/null 2>&1
+git -C "$OC" pull -q --rebase >/dev/null 2>&1
+printf 'token=%s\n' "$(printf 'the other side changed this' | shasum -a 256 | cut -c1-40)" > "$OC2/other-record.txt"
+git -C "$OC2" -c user.name=t -c user.email=t@e commit -q -am 'other again' >/dev/null 2>&1
+git -C "$OC2" push -q >/dev/null 2>&1
+git -C "$OC" fetch -q >/dev/null 2>&1
+behind="$(git -C "$OC" rev-list --count HEAD..@{upstream} 2>/dev/null)"
+out="$(run_scan "$OC/payload" "$OC")"
+case "$behind:$out" in
+  1:*'SCAN-RC=0') check "#1133 a clone behind its upstream judges only its own commits, not what the other side published" ok ;;
+  *) check "#1133 a clone behind its upstream judges only its own commits, not what the other side published" "behind ${behind:-?}, got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+
+# When git cannot say what is new, the send is refused and says so, rather than scanning the
+# payload alone and passing. A git that refuses the listing, in the same subshell as the scan.
+scan_with_refusing_git(){
+  local PAYLOAD="$1" SYNC_REPO="$2" SEND_REFUSED_FILE="$2/.send-refused"
+  (
+    unset SYNC_SKIP_SECRET_SCAN
+    die(){ printf 'REFUSED: %s\n' "$*"; exit 1; }
+    git(){
+      case " $* " in
+        *' diff '*) echo 'fatal: listing refused for this test' >&2; return 128 ;;
+        *) command git "$@" ;;
+      esac
+    }
+    eval "$BLANK_SRC"; eval "$SCAN_SRC"
+    scan_secrets
+  ) 2>&1
+  printf 'SCAN-RC=%s\n' "$?"
+}
+out="$(scan_with_refusing_git "$OC/payload" "$OC")"
+case "$out" in
+  *'REFUSED: git could not list the files outside the payload'*'listing refused for this test'*) check "#1133 a listing git refuses is a refusal that names git's reason" ok ;;
+  *) check "#1133 a listing git refuses is a refusal that names git's reason" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+# And it is recorded, since the staged edits stay behind as after any refusal, as what it is: no
+# finding, and why. A later pull reads the record through pending_edits_cause, cut out here too.
+rec="$(cat "$OC/.send-refused" 2>/dev/null)"
+case "$rec" in
+  [0-9]*"$(printf '\t\t')unlisted") check "#1133 that refusal is recorded with no finding and the reason" ok ;;
+  *) check "#1133 that refusal is recorded with no finding and the reason" "got: '$rec'" ;;
+esac
+CAUSE_SRC="$(sed -n '/^pending_edits_cause(){/,/^}/p' "$SCRIPT")"
+AGE_SRC="$(sed -n '/^age_in_words(){/,/^}/p' "$SCRIPT")"
+cause="$(SEND_REFUSED_FILE="$OC/.send-refused" SYNC_REPO="$OC"; eval "$AGE_SRC"; eval "$CAUSE_SRC"; pending_edits_cause 2>&1)"
+case "$cause" in
+  *'git could not list the files outside the payload'*) check "#1133 and a later pull names it as that, never as a possible secret" ok ;;
+  *) check "#1133 and a later pull names it as that, never as a possible secret" "got: $cause" ;;
+esac
+case "$cause" in
+  *'possible secret'*) check "#1133 control: the cause names no secret it never found" "got: $cause" ;;
+  *) check "#1133 control: the cause names no secret it never found" ok ;;
+esac
 
 # The comment over scan_secrets says what it does, and once said it used a tool it never called
 # (#1128). unbacked_tool_claim <comment and body>: prints each external scanner the text names
