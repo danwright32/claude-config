@@ -3103,6 +3103,10 @@ echo '{"hooks":{}}' > "$RDHA/settings.json"; echo '{"hooks":{}}' > "$RDHB/settin
 printf '{ "name": "scope-modes", "version": "0.1.0", "description": "a test mod" }\n' > "$RDHA/$RDMOD/.claude-plugin/plugin.json"
 printf 'export const register = () => {}\n' > "$RDHA/$RDMOD/hooks/register.ts"
 printf 'export const ghargs = "version one"\n' > "$RDHA/$RDREL"
+# And one whose name git QUOTES when it lists paths, a space and a non ASCII letter, deleted beside
+# it, so a lookup that reads git's listing has to read that name back as the file (review of #1093).
+RDODD=$'mods/scope-modes/hooks/na\xc3\xafve name.ts'
+printf 'export const odd = "named the way git quotes"\n' > "$RDHA/$RDODD"
 # No claude command to ask about the mods: the load check says it could not check, at once, rather
 # than asking the real one (and none of what it says is asserted on here).
 RDENV=(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_CLAUDE_BIN="$WORK/olddel-no-claude")
@@ -3115,7 +3119,7 @@ rd_v1="$(git -C "$RDR" log --format=%H -1 -- "payload/$RDREL" 2>/dev/null)"
 # A edits it, then deletes it, and publishes both. The version the repo deleted is version two.
 printf 'export const ghargs = "version two"\n' > "$RDHA/$RDREL"
 env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
-rm -f "$RDHA/$RDREL"
+rm -f "$RDHA/$RDREL" "$RDHA/$RDODD"
 env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
 check "#1009 the deletion really did reach the shared repo" \
   "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/register.ts' 2>/dev/null && ! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
@@ -3132,12 +3136,15 @@ check "#1009 the pull applied the deletion on the other Mac" "[ ! -e '$RDHB/$RDR
 # so it is a copy nobody here has written since the deletion arrived (L290).
 printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
 touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDREL"
+printf 'export const odd = "named the way git quotes"\n' > "$RDHB/$RDODD"
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDODD"
 # Beside it, in the same pull, a file the repo never held: unsent work, which must still be kept and
 # promised to the next send, or this passes by deleting everything the payload lacks (L159).
 printf 'export const mine = "made on B, not yet sent"\n' > "$RDHB/$RDMOD/hooks/pulled-own.ts"
 out_rdpull="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull 2>&1 || true)"
 dbg "#1013 pull meeting a leftover: $out_rdpull"
 check "#1013 a pull removes a leftover of a file the shared repo deleted" "[ ! -e '$RDHB/$RDREL' ]"
+check "#1013 and one whose name git quotes in its listings" "[ ! -e \"\$RDHB/\$RDODD\" ]"
 check "#1013 and says so, naming the file and the commit that removed it" \
   "line_has \"\$out_rdpull\" 'removed' 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted'"
 check "#1013 and never promises that leftover to the next send" \
@@ -3158,19 +3165,25 @@ check "#1013 and says a send will not carry it, rather than that it goes up" \
 out_rdpull0b="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull 2>&1 || true)"
 check "#1013 and the next apply does not say it again" \
   "[ -f '$RDHB/$RDREL' ] && ! line_has \"\$out_rdpull0b\" 'ghargs\.ts' 'will not carry'"
-rm -f "$RDHB/$RDREL" "$RDHB/$RDMOD/hooks/pulled-own.ts" "$RDR/.resurrected-reported"
+rm -f "$RDHB/$RDREL" "$RDHB/$RDODD" "$RDHB/$RDMOD/hooks/pulled-own.ts" "$RDR/.resurrected-reported"
 
 printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
 # Untouched since B last received it, which was before the deletion reached B's clone. Aged rather
 # than waited for, so both ends of the comparison are pinned (L130, L290): a day ago is before the
 # pull above whatever the clock says.
 touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDREL"
+# The send reads its untracked files from git's listing too, so the name git quotes is asked here
+# as well (second review of #1093, L30).
+printf 'export const odd = "named the way git quotes"\n' > "$RDHB/$RDODD"
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDODD"
 # And something of B's own in the same send, which must still go out (L159).
 printf 'export const own = "only on B"\n' > "$RDHB/$RDMOD/hooks/b-own.ts"
 out_olddel="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
 dbg "#1009 older copy send: $out_olddel"
 check "#1009 an older copy of a deleted file is not published back to the shared repo" \
   "! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
+check "#1009 nor a leftover whose name git quotes in its listings" \
+  "! git -C '$RDB' cat-file -e \"main:payload/\$RDODD\" 2>/dev/null && [ ! -e \"\$RDHB/\$RDODD\" ]"
 check "#1009 while this Mac's own new file in the same send still goes out" \
   "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/b-own.ts' 2>/dev/null"
 check "#1009 and the send names the file it did not publish, on the line saying so" \
