@@ -1,6 +1,6 @@
 ---
 name: tracker
-description: Add a row to my personal Google Sheet project tracker from any project. Use when the user wants to log a project update, record progress, or "add to the tracker".
+description: Add a row to my personal Google Sheet project tracker from any project, or scan this Mac's git work to propose row updates and new rows (--scan). Use when the user wants to log a project update, record progress, "add to the tracker", or bring the tracker up to date from their repositories.
 trigger: /tracker
 ---
 
@@ -24,6 +24,7 @@ credentials are stored locally and the skill works from any project on any machi
 /tracker --setup                          # one-time setup (deploy the web app, save config)
 /tracker --rotate                         # replace the token (see "Rotating the token")
 /tracker --headers                        # just print the sheet's column names
+/tracker --scan                           # find git work on this Mac, propose row updates and new rows
 ```
 
 Rows can also be changed in place by their Link (`tracker.sh update`, see "Updating a row in
@@ -53,17 +54,25 @@ chat. Walk the user through this once:
 
 Then verify with `bash tracker.sh headers`: it should print the sheet's column names. Until
 both values are filled in, `tracker.sh` refuses and names the one still missing or still a
-placeholder.
+placeholder. Every command that reaches the web app (`headers`, `append`, `update`) also checks
+that it is attached to the sheet linked above, and refuses with `different sheet` when the link
+in `config.local.json` came from another sheet's script.
 
-> If the user later changes the script, they must **Deploy, Manage deployments, Edit,
-> New version** for changes to take effect. The `/exec` URL stays the same.
+> Never make a second deployment. A new deployment gets a new `/exec` link, while
+> `config.local.json` keeps the old one, and the old deployment goes on answering with the old
+> code, so the change seems to do nothing (on 2026-10-12 a link from another sheet's script
+> answered for weeks, claude-config#1080). To change the script, always edit the existing
+> deployment: **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**,
+> **Deploy**. The `/exec` link then stays the same.
 
 ## Turning on update (one time, after claude-config#1031)
 
+"Turning on the sheet check" below deploys the same current script, so once it is done, so is this.
+
 `tracker.sh update` needs the deployed script to be the current `apps-script.gs`, which has the
-`update` action. A deployment made before #1031 does not, and refuses every update with
-`nothing to append` (it changes nothing; `tracker.sh` then says the script predates update).
-Do this once, on one Mac; the `/exec` URL and the token stay the same:
+`update` action. A deployment made before #1031 does not, and is also older than the sheet check,
+so `tracker.sh` refuses it with `did not say which sheet it is attached to` before sending any
+update. Do this once, on one Mac; the `/exec` URL and the token stay the same:
 
 1. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
    name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
@@ -77,9 +86,39 @@ Do this once, on one Mac; the `/exec` URL and the token stay the same:
 5. Check it, without changing anything, by asking to update a Link no row has:
    `bash tracker.sh update 'https://example.invalid/check-update' 'Check' '{"My Actions":"x"}'`
    The answer `no row has the Link https://example.invalid/check-update; nothing was changed`
-   means update is live. `the deployed web app predates update` means step 4 did not deploy a
-   new version. `bad token` or `token not set` means the TOKEN line does not hold the token from
+   means update is live. `did not say which sheet it is attached to` means the deployed script is
+   older than the current `apps-script.gs` (step 4 did not deploy a new version, or the link in
+   `config.local.json` belongs to a script in another sheet): see "Turning on the sheet check"
+   below. `bad token` or `token not set` means the TOKEN line does not hold the token from
    `config.local.json`: set it as in step 3 and deploy a new version again.
+
+## Turning on the sheet check (one time, after claude-config#1080)
+
+Every `tracker.sh` command that reaches the web app (`headers`, `append`, `update`) first asks it
+which sheet its script is attached to, and refuses unless it is the sheet linked at the top of
+this file, so a link deployed from another sheet's script can never write there. A script
+deployed before claude-config#1080 cannot say which sheet it is attached to, so until it is
+redeployed each of those commands refuses with
+`did not say which sheet it is attached to`. Do this once, on one Mac; the `/exec` link and the
+token stay the same:
+
+1. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
+   name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
+   Then **Extensions, Apps Script**.
+2. Select all the code there and paste the entire contents of the current `apps-script.gs`
+   over it.
+3. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
+   command in setup step 2. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING`
+   with the `token` value from that file, keeping the single quotes around it, and save.
+4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
+   Never **New deployment**: that makes a new `/exec` link, which `config.local.json` does not
+   hold, and leaves the old link answering with the old script.
+5. On each Mac, check it with `bash tracker.sh headers`. The column names mean that Mac's link
+   answers for this sheet. `different sheet` means that Mac's `config.local.json` holds a link
+   deployed from another sheet's script: in this sheet's **Deploy, Manage deployments**, copy
+   the active deployment's **Web app URL**, paste it over the `url` value in `config.local.json`
+   (opened as in step 3), save, and check again. `did not say which sheet` means step 4 did not
+   deploy a new version, or the link belongs to an older script in another sheet: check both.
 
 ## Rotating the token
 
@@ -204,6 +243,74 @@ bash tracker.sh update --restore 'https://github.com/example-owner/bidspoke' 'Bi
 ```
 
 Needs the one time redeploy in "Turning on update" above.
+
+## Scanning git work (`--scan`)
+
+`/tracker --scan` finds the git repositories on this Mac, compares the work in them with the
+sheet, and proposes updates to rows the sheet already has and new rows for projects it does not.
+Nothing is written until the user has seen and approved each row. Keep the files this flow makes
+(the scan, the sheet as read) in the session's scratch folder, never in the skill's folder.
+
+Settings, all optional, live in `config.local.json` beside the token; the append and update paths
+above never read them:
+
+- `authors`: the user's names or emails as git records them. Set by step 1, never typed by hand.
+- `scan_roots`: the folders to search, `~` for the home folder. Default: the home folder.
+- `scan_window_days`: how many days back counts as new work. Default: 30.
+
+Repositories the user never wants offered are listed apart, in `scan-state.local.json`, by
+`bash tracker.sh ignore-repo '<path>'` (undone by `bash tracker.sh unignore-repo '<path>'`), so
+this flow never rewrites the file that holds the token to record them.
+
+1. **Scan.** `bash tracker.sh scan > <scratch>/scan.json`. When the scan's `authors` is empty (the
+   first run on a Mac), run `bash tracker.sh authors-found <scratch>/scan.json`, show the
+   identities it lists (email, name, commits) as a multi select picker asking which are the
+   user's, save the ticked ones with `bash tracker.sh set-authors '["dan@example.com","Dan Wright"]'`
+   and scan again. A scan whose `outcome` is `no_repos` names the roots it searched: say so, never
+   "nothing to update". Mention the scan's `warnings`, if any.
+2. **Read the sheet by its id, never by Drive name.** `bash tracker.sh sheet-id` prints the id of
+   the sheet linked at the top of this file. Read that id with the Google Sheets connector's get
+   values, from `A1` across every column and down past the last row (for example `A1:Z2000`), and
+   save the whole answer, its `range` and `values`, to `<scratch>/sheet.json`. If the connector
+   cannot open that id, stop and say so: searching Drive for the name also finds the other sheet.
+3. **Reconcile.** `bash tracker.sh reconcile <scratch>/scan.json <scratch>/sheet.json` matches each
+   repository to the rows whose Link is the same repository address and sorts both sides into:
+   - `matched`: `update` when the user has commits in the window, otherwise `current`;
+   - `tracked_not_here`: rows no repository on this Mac answers for (PET, a project on the other
+     Mac, a row with no Link): reported, never updated;
+   - `new_here`: repositories with the user's commits and no row;
+   - `no_commits_by_you`: repositories with nothing under the user's identity, listed only;
+   - `questions`: never decided for the user. More than one row with the same Link, more than one
+     copy of a repository on this Mac, a repository with the user's commits and no hosted remote,
+     or one whose commits could not be read. Ask about each, one at a time, and change nothing it
+     covers until the user has resolved it (by fixing the sheet, or ignoring a copy with
+     `ignore-repo`), then run again from step 1.
+4. **Synthesize.** For each `update`, write one merged row from the existing row (`row` in the
+   reconcile's answer) and the new work (`repo.window_subjects`): My Actions and Outcome/Results
+   rewritten to cover both, never dropping what the curated row already says, and new skills added
+   to Skills Used. Name only the cells that change: update writes only those, so every column not
+   named carries through exactly as it is. Never name Date Started (the row keeps it), never clear a
+   Date Completed already set, never change the Link. For each new repository the user wants added,
+   build a whole row as in "Appending a row" (Date Started from its `first_commit_date`, but ask when
+   `is_shallow` is true; Date Completed `""`; Link the repository address). Then pass every row's
+   cells through `bash tracker.sh scan-cells '<the row as it is>' '<the cells>'` (`{}` as the row
+   for a new one): it refuses cells that break those rules, and answers with the cells to use, em
+   and en dashes, spaced hyphens and pipe separators turned into commas.
+5. **Review, one row at a time.** For each update, run
+   `bash tracker.sh update --preview '<link>' '<project name>' '<cells>'` and show the old value
+   (the preview's `before`) beside the new one, field by field. The user approves, edits (run the
+   edit through scan-cells again) or skips that row; there is no approve all for overwrites. Show
+   each new row whole; new rows may be approved together once each has been seen.
+6. **Write.** First `bash tracker.sh snapshot <scratch>/sheet.json` and give the user the path it
+   prints: the sheet as read, to restore from. Offer a backup tab as well (in the sheet, right
+   click the tab, Duplicate), made by the user, since this skill writes the sheet only through
+   the web app. Then write one row at a time: each update with
+   `bash tracker.sh update '<link>' '<project name>' '<cells>' '<the preview's before>'`, each new
+   row with `bash tracker.sh append '<row>'`. Say each row's outcome as it lands, keep each update's
+   `restore` from its answer, and stop at the first failure: report which rows landed, which one
+   failed and why, and which were not tried. Never retry a failed write unseen.
+
+Finish with what landed, the `tracked_not_here` rows, and any question still open.
 
 ## Notes
 
