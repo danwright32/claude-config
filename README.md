@@ -755,14 +755,18 @@ Five of them came after the 2026-09-21 timing further down, which measured the f
 Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
 reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
 the same way and reports the wall clock (#1122). Measured on this Mac on 2026-10-13, three cold
-readings of each way of running them, alternated, each against a fresh amend of a commit touching only
-this README in a checkout one commit ahead of `origin/main`, with other suites running (load average
-about 12 on 12 cores):
+readings of each, each against a fresh amend of a commit touching only this README in a throwaway
+checkout one commit ahead of `origin/main`, with other suites running (load average 12 to 18 on 12
+cores). The branch push is the one this repository accepts; it carried `SKIP_PR_REVIEW=1` so no
+timing run started a paid lessons review, whose wait is the last row of the table above. A push
+straight to main is refused by `linux-sections-before-push.sh` within a second (a change reaches
+main through a pull request here), but the other gates still run to the end, so it waits as long:
 
-| How the gates are run | Before git runs | Where it goes |
+| The push, and how the gates are run | Before git runs | Where it goes |
 | --- | --- | --- |
-| Together, as Claude Code runs them | 24.2, 24.8 and 25.2 seconds | `scanners-before-push.sh` 23.7 to 24.6; every other gate finishes inside it, 0.7 seconds or less each (2026-10-13) |
-| One after another, as this tool used to | 30.4, 30.5 and 31.0 seconds | the same gates summed, which no push waits through (2026-10-13) |
+| A branch push, gates together as Claude Code runs them | 26.1, 27.0 and 27.0 seconds | `scanners-before-push.sh` 25.4 to 26.5; every other gate finishes inside it, 0.9 seconds or less each (2026-10-13) |
+| A push straight to main, gates together | 24.2, 24.8 and 25.2 seconds | `scanners-before-push.sh` 23.7 to 24.6; every other gate 0.7 seconds or less (2026-10-13) |
+| The same push to main, gates one after another, as this tool used to | 30.4, 30.5 and 31.0 seconds | the same gates summed, which no push waits through (2026-10-13) |
 
 So a push waits about as long as the whole-tree scanner gate takes, and every other gate costs it
 nothing while that one runs, which is where any speed work belongs (L299). The earlier readings

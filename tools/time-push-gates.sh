@@ -12,7 +12,7 @@
 # one's time and exit code in the order the settings list them, then the wall clock until the last
 # one finished, which is what a push waits through.
 #
-# Usage: time-push-gates.sh [--repo DIR] [--command "git push"] [--json] [--list]
+# Usage: time-push-gates.sh [--repo DIR] [--command "git push"] [--list]
 #   --list             name the gates, one per line as "<declared timeout>\t<hook>", and run none of
 #                      them: the reading the README's count of push gates is tested against
 #                      (claude-config#1066), so the count and the timing come from one list.
@@ -32,15 +32,13 @@ set -uo pipefail
 DEFAULT_TIMEOUT=60
 repo="$PWD"
 command_line="git push"
-as_json=""
 list_only=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) repo="${2:-}"; shift 2 ;;
     --command) command_line="${2:-}"; shift 2 ;;
-    --json) as_json=1; shift ;;
     --list) list_only=1; shift ;;
-    *) printf 'time-push-gates: "%s" is not an argument this takes (--repo DIR, --command CMD, --json, --list).\n' "$1" >&2; exit 2 ;;
+    *) printf 'time-push-gates: "%s" is not an argument this takes (--repo DIR, --command CMD, --list).\n' "$1" >&2; exit 2 ;;
   esac
 done
 

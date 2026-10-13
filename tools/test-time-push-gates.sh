@@ -161,6 +161,17 @@ want="$word PreToolUse hooks fire on a \`git push\` here, declaring timeouts of 
 if grep -qF "$want" "$REPO_ROOT/README.md"; then check "the README counts the hooks a push waits on" ok
 else check "the README counts the hooks a push waits on" "wanted the README to say: $want. It says: $(grep -o '[A-Z][a-z-]* PreToolUse hooks fire on a .git push. here, declaring timeouts of [0-9]* to [0-9]* seconds' "$REPO_ROOT/README.md")"; fi
 
+# --json was parsed and documented while nothing read it, so asking for JSON printed the table and
+# exited 0, an answer in the wrong shape that reads as the right one (claude-config#1122). Nothing
+# consumes JSON from this tool, so the flag is gone: asking for it is refused by name.
+outj="$(GATE_TIMING_HOME="$HOME_DIR" bash "$T" --repo "$TMPROOT" --json 2>&1)"; rcj=$?
+[ "$rcj" -eq 2 ] && case "$outj" in *'"--json" is not an argument'*) true ;; *) false ;; esac \
+  && check "#1122 --json, which nothing ever produced, is refused by name" ok \
+  || check "#1122 --json, which nothing ever produced, is refused by name" "rc=$rcj out=${outj:0:300}"
+grep -q -- '--json' "$T" \
+  && check "#1122 and the tool no longer documents it" "it still mentions --json: $(awk '/--json/ && n++ < 3 { print FNR ": " $0 }' "$T")" \
+  || check "#1122 and the tool no longer documents it" ok
+
 # A settings file it cannot read is a refusal, never an empty table that reads as no gates (L98).
 out2="$(GATE_TIMING_HOME="$TMPROOT/nowhere" bash "$T" --repo "$TMPROOT" 2>&1)"; rc2=$?
 [ "$rc2" -ne 0 ] && case "$out2" in *"could not read"*) true ;; *) false ;; esac \
