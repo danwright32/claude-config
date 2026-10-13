@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1026. A layout's access check does not guard its pages; every protected page checks access itself, with a test.
 - L761. A pattern keeping a secret file out of git or a sync must also match its .bak, .orig and ~ copies.
 - L18. Enforce authorization at the database layer, not only in application code.
 - L19. Secret checks fail closed and compare constant-time through one shared verifier.

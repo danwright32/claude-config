@@ -236,14 +236,19 @@ export const withoutPythonText = (code: string): string => {
  * The lasting memory a write's text mentions, for the writes whose words name no file (a patch, an
  * inline script): each as written, home shown as ~, a diff's a/ or b/ taken off, an absolute path
  * judged where it lands. One in a temporary folder counts inside a checkout there, or when it is
- * built from a variable and so cannot be looked for.
+ * built from a variable and so cannot be looked for. `folder`, where known, places a bare name (the
+ * folder a program runs in, #1155); `command` is where a variable's assignment is looked for, the
+ * whole command when only a part of it is read.
  */
-export const mentioned = async (text: string, home: string, inCheckout: InCheckout, isSet: IsSet = ALWAYS_SET): Promise<string[]> => {
+export const mentioned = async (text: string, home: string, inCheckout: InCheckout, isSet: IsSet = ALWAYS_SET, folder?: string, command: string = text): Promise<string[]> => {
   const out: string[] = []
   for (const m of text.match(MENTION) ?? []) {
-    if (!(await throughSettable(m, text, isSet))) continue
+    // Whether a variable can be set is read from the whole command, where its assignment is (#1155).
+    if (!(await throughSettable(m, command, isSet))) continue
     let p = m.replace(/^[ab]\//, '')
     if (p.startsWith('/') || p.startsWith('~/') || p.startsWith('$HOME/') || p.startsWith('${HOME}/')) p = resolvePath(p, '/', home)
+    // A bare name a program writes lands in the folder it runs in, where that is known (#1155).
+    else if (folder !== undefined && !p.includes('$')) p = resolvePath(p, folder, home)
     if (TEMP.test(p) && !p.includes('$') && !(await inCheckout(p))) continue
     const shown = p.startsWith('/') ? display(p, home) : p
     if (!out.includes(shown)) out.push(shown)
