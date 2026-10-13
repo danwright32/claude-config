@@ -171,9 +171,10 @@ def set_authors(args):
 
 
 def repo_path(arg):
-    p = os.path.expanduser(arg)
-    # Resolved, as scan.sh compares them, so /tmp/x and /private/tmp/x are one repository.
-    return os.path.realpath(p) if os.path.exists(p) else os.path.abspath(p)
+    # Resolved, as scan.sh compares them, so /tmp/x and /private/tmp/x are one repository. realpath
+    # resolves the part that exists even when the repository itself has since been deleted or
+    # moved, so it can still be taken off the list by the path it was ignored under.
+    return os.path.realpath(os.path.expanduser(arg))
 
 
 def ignore_repo(args, add=True):
