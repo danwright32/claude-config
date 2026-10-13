@@ -11,7 +11,7 @@ import type {
   ScopeModesTarget,
 } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
-import { ghWords, helperWords, noBuildRefusal, type Cmd } from './nobuild.ts'
+import { EDITORS, ghWords, helperWords, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
   addAnswer,
   closedSentence,
@@ -71,6 +71,7 @@ import {
   choiceFor,
   CLEANUP_TOOL,
   filesSaid,
+  filesWritten,
   isLeftClosed,
   LEAVE_BRANCH_TOOL,
   NEW_WORK,
@@ -80,6 +81,7 @@ import {
   porcelainFiles,
   settledByBranchChoice,
   settledByDan,
+  whoseFiles,
   type DeployState,
   type Reading,
 } from './winddown.ts'
@@ -119,6 +121,7 @@ const leftOpenRef = { plugin: 'scope-modes', key: 'leftOpen' } as const
 const branchesRef = { plugin: 'scope-modes', key: 'branches' } as const
 const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
 const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
+const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
@@ -130,8 +133,9 @@ let checking: Promise<Checked | null> | undefined
 let checkingFresh = false
 // What the finish check found: what is still to do, the PRs settled by being left as they are on
 // Dan's own choice, open (#917) or closed (#1033), and the branches he chose to leave as they are
-// (#1074), each said apart from what is outstanding.
-type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[] }
+// (#1074), each said apart from what is outstanding, and the uncommitted files this session did not
+// write (#1108), said once it finishes.
+type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[]; notMine?: string[] }
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
 
@@ -1823,6 +1827,18 @@ const uncommittedIn = async ($: EngineInterface, root: string): Promise<string[]
   return st.exitCode === 0 ? porcelainFiles(st.stdout) : { unreadable: st.stderr.trim() || `git status exited ${st.exitCode}` }
 }
 
+// The files this session or its agents wrote (#1108), noted after each call that ran (noteWritten).
+const writtenOf = async ($: EngineInterface) => (await $.state.get(writtenRef)).value ?? []
+/**
+ * The files uncommitted in a checkout split into this session's own, which it or its agents wrote, and
+ * the rest (#1108): in a shared checkout the rest is another session's work, or a job's, never this
+ * session's to finish. Every reader of uncommitted work while winding down asks this one.
+ */
+const uncommittedOwn = async ($: EngineInterface, root: string): Promise<{ own: string[]; others: string[] } | { unreadable: string }> => {
+  const all = await uncommittedIn($, root)
+  return Array.isArray(all) ? whoseFiles(all, root, await writtenOf($)) : all
+}
+
 type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean }
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
   const { repo, elsewhere = false, fresh = false, inherited = false } = o
@@ -1931,7 +1947,15 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${r.branch}`) : { unreadable: wt.stderr.trim() }
   }
   // Gone, the folder took its uncommitted work with it: nothing is left there to commit.
-  if ((t.isDefault || inherited) && r.pr === null && !gone) r.dirty = await uncommittedIn($, t.root)
+  // Only what this session wrote is its unfinished work; the rest is kept to be said once (#1108).
+  if ((t.isDefault || inherited) && r.pr === null && !gone) {
+    const split = await uncommittedOwn($, t.root)
+    if ('unreadable' in split) r.dirty = split
+    else {
+      r.dirty = split.own
+      if (split.others.length) r.notMine = split.others
+    }
+  }
   return { reading: r, found }
 }
 
@@ -2055,7 +2079,7 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
         left.push(...toDo(one.reading, o.repo))
       }
       // One unreadable GitHub answers every read the same way, said once.
-      return { left: [...new Set(left)], kept, keptBranches }
+      return { left: [...new Set(left)], kept, keptBranches, ...(reading.notMine ? { notMine: reading.notMine } : {}) }
     } catch (err) {
       return { left: [`the finish check failed (${msg(err)})`], kept: [], keptBranches: [] }
     }
@@ -2074,7 +2098,9 @@ const finish = async ($: EngineInterface, c: Checked) => {
   await $.state.set(scopeRef, null)
   await $.state.set(targetRef, null)
   await showModes($)
-  $.ui.toast(`Wind down finished: safe to close this session.${keptSaid(c.kept, 'your')}${keptBranchesSaid(c.keptBranches, 'your')}`)
+  // Files this session did not write never held it (#1108), and are said here, the once.
+  const notMine = c.notMine?.length ? ` Left uncommitted, since this session did not write them: ${filesSaid(c.notMine)}.` : ''
+  $.ui.toast(`Wind down finished: safe to close this session.${keptSaid(c.kept, 'your')}${keptBranchesSaid(c.keptBranches, 'your')}${notMine}`)
 }
 
 // leave_pr_open (#917, #1033): asks Dan whether a PR stays as it is rather than being merged, in the
@@ -2200,7 +2226,8 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
   if (!repo) return "This session's repository could not be read, so name the branch's repository (owner/name). Dan was not asked and nothing was recorded."
   const why = String(input.why ?? '').trim().replace(/[.?]+$/, '')
   if (!why) return `Say why the branch ${branch} would be left as it is (another session stands on it, say), so Dan can decide. He was not asked and nothing was recorded.`
-  // The files his answer leaves uncommitted: this session's checkout's, when it is on that branch.
+  // The files his answer leaves uncommitted: this session's checkout's, when it is on that branch, and
+  // only the ones this session wrote, which alone wind down waits on (#1108).
   let files: string[] = []
   let at
   try {
@@ -2209,9 +2236,9 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
     return `Where this session's checkout stands could not be read (${msg(err)}), so Dan was not asked and nothing was recorded.`
   }
   if (at && !('unreadable' in at) && at.branch === branch && (!named || named.toLowerCase() === (await sessionSlug($))?.toLowerCase())) {
-    const now = await uncommittedIn($, at.root)
-    if (!Array.isArray(now)) return `Whether anything is uncommitted in ${at.root} could not be read (${now.unreadable}), so Dan was not asked and nothing was recorded.`
-    files = now
+    const now = await uncommittedOwn($, at.root)
+    if ('unreadable' in now) return `Whether anything is uncommitted in ${at.root} could not be read (${now.unreadable}), so Dan was not asked and nothing was recorded.`
+    files = now.own
   }
   const question = `Leave the branch ${branch} in ${repo} as it is (${why})? Winding down stops waiting for it to be deleted here or for a worktree on it to go${
     files.length ? `, and for ${files.join(', ')} to be committed. A change to any other file asks again.` : '.'
@@ -2238,9 +2265,10 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
 // open_cleanup_branch (#1051): while winding down, a new branch is new work, yet uncommitted changes
 // are unfinished, so work that finishing itself needs committed (a reading a monthly job appended to a
 // committed record, on 2026-10-09) had no way through but Dan turning winding down off. He is asked,
-// with the files git status names in this session's checkout and the reason; only his "Open it" is
-// recorded, and lets that one branch start by checkout or switch (which carry the changes onto it),
-// once, while nothing beyond those files is uncommitted. Any other branch is still refused.
+// with the files git status names in this session's checkout that this session wrote (#1108) and the
+// reason; only his "Open it" is recorded, and lets that one branch start by checkout or switch (which
+// carry the changes onto it), once, while nothing else this session wrote is uncommitted. Any other
+// branch is still refused.
 const openCleanupBranch = async ($: EngineInterface, input: Record<string, unknown>): Promise<string> => {
   if ((await scopeOf($)) !== 'WINDING DOWN') return "Winding down is not on, so no branch needs Dan's answer: make it as usual. He was not asked."
   const branch = String(input.branch ?? '').trim()
@@ -2250,8 +2278,13 @@ const openCleanupBranch = async ($: EngineInterface, input: Record<string, unkno
   const t = (await $.state.get(targetRef)).value ?? null
   if (!t) return 'This session is in no repository, so there is no branch to open. Dan was not asked.'
   if ('unreadable' in t) return `What this session is working on could not be read (${t.unreadable}), so Dan was not asked.`
-  const files = await uncommittedIn($, t.root)
-  if (!Array.isArray(files)) return `Whether anything is uncommitted in ${t.root} could not be read (${files.unreadable}), so Dan was not asked.`
+  // Only the files this session wrote, which alone the finish check lists (#1108): in a shared
+  // checkout the rest is another session's, never this branch's to carry.
+  const split = await uncommittedOwn($, t.root)
+  if ('unreadable' in split) return `Whether anything is uncommitted in ${t.root} could not be read (${split.unreadable}), so Dan was not asked.`
+  const files = split.own
+  if (!files.length && split.others.length)
+    return `Nothing this session wrote is uncommitted in ${t.root} (${filesSaid(split.others)} ${split.others.length === 1 ? 'is' : 'are'} not its own), so there is no cleanup for a branch to commit. Dan was not asked.`
   if (!files.length) return `Nothing is uncommitted in ${t.root}, so there is no cleanup for a branch to commit. Dan was not asked.`
   // Every file is named: what Dan agrees to is exactly what the branch may carry (L64).
   const question = `Open the branch ${branch} to commit ${files.join(', ')} (${why})? Winding down lets it start for these files only, and finishes it like any other PR.`
@@ -2289,6 +2322,23 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null): Prom
   return was
 }
 
+// Adds to one of the lists noted after each call what it does not hold yet, read and written with
+// ifVersion and again on a miss: the session's calls and its agents' finish at once, and a plain read
+// then set lets the later write drop the other's entries (lessons review of #1108). The engine wants
+// each state reference spelled where it is read or written, so the caller hands both in.
+type ListIo<T> = { get: () => Promise<{ value?: T[] | null; version: number }>; set: (list: T[], ifVersion: number) => Promise<{ isSet: boolean }> }
+const addToList = async <T,>(io: ListIo<T>, items: readonly T[], same: (a: T, b: T) => boolean) => {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const held = await io.get()
+    const now = held.value ?? []
+    const fresh = items.filter((x, i) => !now.some(n => same(n, x)) && items.findIndex(y => same(y, x)) === i)
+    if (!fresh.length) return
+    if ((await io.set([...now, ...fresh], held.version)).isSet) return
+  }
+  throw new Error('the list changed under every one of 10 attempts to add to it')
+}
+const sameText = (a: string, b: string) => a === b
+
 // The branches a Bash call made this session's own (#1074), whatever mode is on, from the session or
 // any of its agents: one it created or pushed by name, and for a commit or a push naming none, the
 // branch checked out where it ran. That is known only for the session's own call with no `cd` before
@@ -2307,9 +2357,7 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
       if (at && 'unreadable' in at && at.unreadable !== DETACHED) throw new Error(at.unreadable)
       if (at && !('unreadable' in at) && at.branch) add.push(at.branch)
     }
-    const mine = await branchesOf($)
-    const fresh = [...new Set(add)].filter(b => !mine.includes(b))
-    if (fresh.length) await $.state.set(branchesRef, [...mine, ...fresh])
+    await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
   } catch (err) {
     $.ui.toast(`Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`)
   }
@@ -2334,12 +2382,33 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
       if (r) found = { repo: r, number: Number(l[1]) }
     }
     if (!found) return
-    const { repo, number } = found
-    const opened = await openedOf($)
-    if (opened.some(o => o.repo.toLowerCase() === repo.toLowerCase() && o.number === number)) return
-    await $.state.set(openedRef, [...opened, { repo, number }])
+    await addToList<ScopeModesOpened>(
+      { get: () => $.state.get(openedRef), set: (l, v) => $.state.set(openedRef, l, { ifVersion: v }) },
+      [found],
+      (a, b) => a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number,
+    )
   } catch (err) {
     $.ui.toast(`Scope modes could not note the PR this call opened (${msg(err)}), so winding down will not know to finish it.`)
+  }
+}
+
+// The files a call that ran wrote (#1108), noted whatever mode is on, from the session or any of its
+// agents, so winding down later counts only those as this session's uncommitted work: an editing
+// tool's file, and what mod-kit's one write reader names for a Bash call. A note that cannot be made
+// is said, since winding down would then let that file go uncommitted: once a session, since it runs
+// after every Bash call, read only ones included, so a reader that stays broken would otherwise toast
+// on each (lessons review); later ones go to the debug log.
+let writeNoteSaid = false
+const noteWritten = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string) => {
+  try {
+    const writes = raw ? await readWrites($, raw) : NO_WRITES
+    const files = filesWritten({ tool, input, writes })
+    await addToList({ get: () => $.state.get(writtenRef), set: (l, v) => $.state.set(writtenRef, l, { ifVersion: v }) }, files, sameText)
+  } catch (err) {
+    const said = `Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`
+    if (writeNoteSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
+    else $.ui.toast(`${said} Later failures go to the debug log.`)
+    writeNoteSaid = true
   }
 }
 
@@ -2417,11 +2486,15 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
     let t = (await $.state.get(targetRef)).value ?? null
     const opened = await openedOf($)
     // The cleanup branches Dan agreed to for this checkout (#1051), and of those, the ones whose files
-    // cover everything uncommitted now: read only for a call that starts a branch it moves onto.
+    // cover everything this session wrote that is uncommitted now (#1108: another session's files
+    // beside them are not this branch's to carry): read only for a call that starts a branch it moves onto.
     const root = t && 'root' in t ? t.root : undefined
     const agreed = root ? (await cleanupOf($)).filter(c => c.root === root) : []
     let now: string[] | { unreadable: string } | undefined
-    if (root && agreed.length && commands.some(c => newBranchOf(c)?.moves)) now = await uncommittedIn($, root)
+    if (root && agreed.length && commands.some(c => newBranchOf(c)?.moves)) {
+      const split = await uncommittedOwn($, root)
+      now = 'unreadable' in split ? split : split.own
+    }
     // Nothing uncommitted is no cleanup to carry, so an answer left over covers nothing (lessons review).
     const covered = Array.isArray(now) && now.length ? agreed.filter(c => (now as string[]).every(f => c.files.includes(f))) : []
     const cleanBranches = covered.map(c => c.branch)
@@ -2596,7 +2669,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'leave_branch',
       description:
-        "Ask Dan whether a branch stays as it is rather than being cleaned up while winding down: kept here, a worktree on it kept, and, when this session's checkout is on it, the files uncommitted there left uncommitted. For when another session stands on it, or he has said to leave it. Only his \"Leave it as it is\" is recorded; a change to any other uncommitted file asks again, and the branch on GitHub is still deleted once its PR merges. Never call this to end a turn sooner.",
+        "Ask Dan whether a branch stays as it is rather than being cleaned up while winding down: kept here, a worktree on it kept, and, when this session's checkout is on it, the files this session wrote that are uncommitted there left uncommitted. For when another session stands on it, or he has said to leave it. Only his \"Leave it as it is\" is recorded; a change to any other uncommitted file asks again, and the branch on GitHub is still deleted once its PR merges. Never call this to end a turn sooner.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2610,7 +2683,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'open_cleanup_branch',
       description:
-        "While winding down, ask Dan to let one new branch start whose only purpose is to commit the uncommitted changes the finish check lists (a reading a job appended to a committed file, say). The files are read from git status and named to him. Only his \"Open it\" is recorded, and it lets that branch start once, by git switch -c or git checkout -b, while nothing beyond those files is uncommitted. Never for new work.",
+        "While winding down, ask Dan to let one new branch start whose only purpose is to commit the uncommitted changes the finish check lists (a reading a job appended to a committed file, say). The files are the ones git status names that this session wrote, named to him. Only his \"Open it\" is recorded, and it lets that branch start once, by git switch -c or git checkout -b, while nothing else this session wrote is uncommitted. Never for new work.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2885,10 +2958,13 @@ export const register: Register = on => {
     const raw = tool === 'Bash' ? String(input.command ?? '') : ''
     const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
     const mayBranch = /\bgit\b/.test(raw) && /\b(checkout|switch|branch|worktree|push|commit)\b/.test(raw)
+    const mayWrite = tool === 'Bash' || EDITORS.has(tool)
     const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
       const r = await next(e)
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
+      // A call refused here or beneath never ran, so it wrote nothing (#1108).
+      if (mayWrite && !r.deny) await noteWritten($, tool, input, raw)
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       return r
     }
@@ -3066,6 +3142,8 @@ export const register: Register = on => {
     await $.state.set(branchesRef, [] as string[])
     await $.state.set(leftBranchRef, [] as ScopeModesLeftBranch[])
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
+    await $.state.set(writtenRef, [] as string[])
+    writeNoteSaid = false
     prSeen.clear()
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)

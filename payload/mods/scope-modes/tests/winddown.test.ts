@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { branchesTouched, choiceFor, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, filesWritten, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
@@ -197,6 +197,20 @@ describe('uncommitted changes, by the files git status names (#1051)', () => {
     ])
     expect(porcelainFiles('')).toEqual([])
   })
+  test("a name git quoted is read back as the name itself: its octal bytes and escapes undone (#1108 lessons review)", () => {
+    // git writes a name with a byte past ASCII as octal escapes of its UTF-8, quoted (core.quotePath).
+    expect(porcelainFiles('?? "caf\\303\\251.ts"\n M "a\\"b.ts"\n M "tab\\there.ts"\n M "back\\\\slash.ts"\nR  "old\\303\\251.ts" -> "new\\303\\251.ts"\n')).toEqual([
+      'café.ts',
+      'a"b.ts',
+      'tab\there.ts',
+      'back\\slash.ts',
+      'newé.ts',
+    ])
+    // A character git left raw (core.quotePath off), outside the BMP, in a name quoted for its quote.
+    expect(porcelainFiles('?? "\u{1F600}\\"x.ts"\n')).toEqual(['\u{1F600}"x.ts'])
+    // So a file this session wrote under that name is its own.
+    expect(whoseFiles(porcelainFiles('?? "caf\\303\\251.ts"\n'), '/repo', ['/repo/café.ts'])).toEqual({ own: ['café.ts'], others: [] })
+  })
   test('the finish check names the files, at most five, then how many more', () => {
     const r: Reading = { ...merged, branch: 'main', isDefault: true, pr: null, deploy: null }
     expect(outstanding({ ...r, dirty: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toEqual([UNCOMMITTED('a, b, c, d, e and 2 more')])
@@ -272,5 +286,54 @@ describe("a branch that is not this session's, and Dan's answer to leave a branc
     const asked: Reading = { ...inherited, branch: left.branch, branchLeft: { ...left, files: ['notes.md'] } }
     expect(outstanding({ ...asked, dirty: ['notes.md'] })).toEqual([])
     expect(outstanding({ ...asked, dirty: ['notes.md', 'new.ts'] })).toEqual([UNCOMMITTED('new.ts')])
+  })
+})
+
+// #1108: in a shared primary checkout, another session's untracked files blocked every stop of this
+// one. Only the files this session (or one of its agents) wrote are its unfinished work.
+describe('whose uncommitted files they are (#1108)', () => {
+  const none = { files: [], changes: [], unnamed: [] }
+  test('Edit, Write, MultiEdit and NotebookEdit write the file they name, its path made plain', () => {
+    expect(filesWritten({ tool: 'Edit', input: { file_path: '/repo/app.ts' }, writes: none })).toEqual(['/repo/app.ts'])
+    expect(filesWritten({ tool: 'Write', input: { file_path: '/repo/./src/../notes.md' }, writes: none })).toEqual(['/repo/notes.md'])
+    expect(filesWritten({ tool: 'MultiEdit', input: { file_path: '/repo/a.ts' }, writes: none })).toEqual(['/repo/a.ts'])
+    expect(filesWritten({ tool: 'NotebookEdit', input: { notebook_path: '/repo/n.ipynb' }, writes: none })).toEqual(['/repo/n.ipynb'])
+    // A relative path names no file the session can be sure of, and a reading tool writes nothing.
+    expect(filesWritten({ tool: 'Edit', input: { file_path: 'app.ts' }, writes: none })).toEqual([])
+    expect(filesWritten({ tool: 'Read', input: { file_path: '/repo/app.ts' }, writes: none })).toEqual([])
+  })
+  test("a Bash call writes what mod-kit's write reader names: its files, its other changes, and a program's named targets", () => {
+    const writes = {
+      files: [{ word: 'out.txt', path: '/repo/out.txt' }, { word: '$X' }, { word: 'dir', path: '/repo/dir', sources: ['/repo/x.ts'], mayBeFolder: true as const }],
+      changes: [
+        { word: 'old.ts', path: '/repo/old.ts', does: 'remove' as const },
+        { word: 'build', path: '/repo/build', does: 'remove' as const, tree: true as const },
+        { word: 'made', path: '/repo/made', does: 'folder' as const },
+      ],
+      unnamed: [
+        { what: 'an inline python3 script', words: [], inputs: [], targets: ['/repo/gen.ts'] },
+        { what: 'a patch', words: [], inputs: ['/repo/p.diff'] },
+      ],
+    }
+    // A copy onto dir lands as dir or as dir/x.ts, never as all of dir, which may hold another
+    // session's files; a made folder writes no file (lessons review).
+    expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/out.txt', '/repo/dir', '/repo/dir/x.ts', '/repo/dir/x.ts/', '/repo/old.ts', '/repo/build', '/repo/build/', '/repo/gen.ts'])
+    expect(whoseFiles(['dir/x.ts', 'dir/theirs.md', 'made/theirs.md'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['dir/x.ts'], others: ['dir/theirs.md', 'made/theirs.md'] })
+  })
+  test('the uncommitted files are split into the ones this session wrote and the rest', () => {
+    const written = ['/repo/app.ts', '/repo/build/', '/elsewhere/x.ts']
+    expect(whoseFiles(['app.ts', 'build/out.js', 'notes.md', 'x.ts'], '/repo', written)).toEqual({ own: ['app.ts', 'build/out.js'], others: ['notes.md', 'x.ts'] })
+    // A folder's own name is not under it: build.ts is not in build/.
+    expect(whoseFiles(['build.ts'], '/repo', written)).toEqual({ own: [], others: ['build.ts'] })
+    expect(whoseFiles(['app.ts'], '/repo/', written)).toEqual({ own: ['app.ts'], others: [] })
+    expect(whoseFiles([], '/repo', written)).toEqual({ own: [], others: [] })
+  })
+  test("a file written under another spelling of its path is still the session's: case, and /private before /var, /tmp or /etc (lessons review)", () => {
+    expect(whoseFiles(['App.ts'], '/Users/x/Repo', ['/users/x/repo/app.ts'])).toEqual({ own: ['App.ts'], others: [] })
+    expect(whoseFiles(['a.ts'], '/private/var/folders/r', ['/var/folders/r/a.ts'])).toEqual({ own: ['a.ts'], others: [] })
+    expect(whoseFiles(['a.ts'], '/tmp/r', ['/private/tmp/r/a.ts'])).toEqual({ own: ['a.ts'], others: [] })
+    expect(whoseFiles(['b/c.ts'], '/private/tmp/r', ['/tmp/r/b/'])).toEqual({ own: ['b/c.ts'], others: [] })
+    // Only those three links: /private elsewhere is a folder of its own.
+    expect(whoseFiles(['a.ts'], '/private/stuff', ['/stuff/a.ts'])).toEqual({ own: [], others: ['a.ts'] })
   })
 })

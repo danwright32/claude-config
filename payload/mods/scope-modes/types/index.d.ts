@@ -101,6 +101,11 @@ declare module 'claude-code' {
       leftBranch: ScopeModesLeftBranch[]
       /** The cleanup branches Dan agreed to while winding down (#1051), each removed once used. */
       cleanup: ScopeModesCleanup[]
+      /**
+       * The files this session or one of its agents wrote (#1108), absolute; a path ending in `/`
+       * stands for everything under that folder. Winding down counts only these as its uncommitted work.
+       */
+      written: string[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
     }
