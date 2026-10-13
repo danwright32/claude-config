@@ -832,6 +832,23 @@ Each Mac mints lesson numbers from a band it owns, so two lessons written betwee
 claim the same number. `claude-sync next-lesson` prints the next free number in this Mac's band, and
 `check-lessons` fails on a duplicate anywhere in the file.
 
+A number is free only when neither copy holds it: the next number is one past the highest in this
+Mac's band across `~/.claude` AND the payload. The local copy covers a lesson written here and not
+sent yet; the payload covers a number already published that this Mac's copy no longer holds, whose
+references in filed issues nothing here can reach (claude-config#1140).
+
+A number two lessons share is never answered with one of them. `claude-sync lesson L762` then prints
+every entry under it, each with its own id, says the number is a duplicate, and exits non zero; it
+used to print the first entry's id and exit 0, which is how twelve sweep issues for L762 carried the
+other project's rule. Looked up by id, the one lesson that id names is printed, with a note that its
+number is shared. `lesson-fanout.sh` also refuses, before touching GitHub, any number
+`lesson-faults` reports as used more than once, naming it. When
+`lesson-faults` fails without reporting on duplicates at all (other faults only, or it could not
+run), every number is refused, since those read alike and neither says the number is unshared.
+
+`next-lesson` does not RESERVE the number it prints. Two sessions asking before either has written
+are offered the same one, and the duplicate check catches it only once both are written.
+
 An entry has to be written as `- **Lnnn. ...` to be a lesson at all. Everything here reads only that
 form, so one written any other way (a heading, a list item with the bold left off) is invisible to
 all of it at once: absent from the generated index that loads into every session, unretrievable by
