@@ -303,11 +303,14 @@ if [ -n "$foreign" ]; then
   case "$command" in
     *SKIP_MERGE_TOOL=1*) ;;
     *)
-      remote_tool="$(mt_pinned_tool_remote "$repo_flag" "$view_account")"; remote_rc=$?
+      # Each probe asked again on a transient failure, by the same rule as this gate's other reads
+      # (claude-config#1096), and read in this shell so what gh said reaches the refusal.
+      mt_pinned_tool_remote "$repo_flag" "$view_account" read_again; remote_rc=$?
+      remote_tool="$MT_REMOTE_TOOL"
       if [ "$remote_rc" = 0 ]; then
         deny "$repo_flag merges through its own commit pinned tool ($remote_tool), not through gh pr merge. From a checkout of $repo_flag, run: $(mt_pinned_how_for "$remote_tool" "${pr:-}") . It judges the checks against the commit at the head and hands GitHub that commit, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
       elif [ "$remote_rc" = 2 ]; then
-        deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool), because GitHub did not answer that question. Where one exists it is the only way this gate lets that repository merge, so not knowing is not the same as it being absent. Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
+        deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool), because GitHub did not answer that question${MT_REMOTE_ERR:+ (gh said: $MT_REMOTE_ERR)}. Where one exists it is the only way this gate lets that repository merge, so not knowing is not the same as it being absent. Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
       fi
       ;;
   esac
@@ -393,13 +396,15 @@ if [ "$total" = "0" ]; then
   # nothing that could be red. With some, whether they run on pull requests cannot be read from
   # here, so the unexplained absence refuses, as it does below; and not knowing refuses too.
   if [ -n "$foreign" ]; then
-    case "$(mt_remote_path "$repo_flag" ".github/workflows" "$view_account")" in
+    read_workflows(){ mt_remote_path "$repo_flag" ".github/workflows" "$view_account"; }
+    read_again read_workflows
+    case "$MT_REMOTE_STATE" in
       absent) exit 0 ;;
       present)
         deny "PR #$number has NO checks at all, but $repo_flag has workflows (.github/workflows), and from here the gate cannot read whether they run on pull requests, so something may have stopped them being scheduled: a workflow that will not parse, Actions disabled, or a run that never started. Run the merge from a checkout of $repo_flag, where its workflows can be read, or find out which before merging, because an empty check list is indistinguishable from a green one. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
         ;;
       *)
-        deny "PR #$number has NO checks at all, and GitHub did not answer whether $repo_flag has any workflows, so an empty check list cannot be told from one that was never scheduled. Run the merge from a checkout of $repo_flag, where its workflows can be read. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+        deny "PR #$number has NO checks at all, and GitHub did not answer whether $repo_flag has any workflows${MT_REMOTE_ERR:+ (gh said: $MT_REMOTE_ERR)}, so an empty check list cannot be told from one that was never scheduled. Run the merge from a checkout of $repo_flag, where its workflows can be read. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
         ;;
     esac
   fi

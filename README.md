@@ -705,16 +705,27 @@ the checkout's objects read only. `--no-github` asks GitHub nothing.
 
 ### What a push actually waits on
 
-Eighteen PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
-which the settings SET and are not measurements of anything. The eighteenth,
-`check-gh-watch-interval.sh` (#1014), sees every Bash call and answers one that never mentions a
-watch before loading anything: 0.009 seconds on a push payload, measured on this Mac on
-2026-10-09, so the table below still stands. A declared timeout is evidence of what
-somebody feared, not of what a gate costs, so they were timed:
+Twenty-two PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
+names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
+`payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
+(#1066), because the count was written by hand and went on being believed while hooks were added
+beside it. A declared timeout is evidence of what somebody feared, not of what a gate costs, so
+they were timed:
 
 ```bash
 bash tools/time-push-gates.sh --repo <checkout>
 ```
+
+Five of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+
+| Gate | What it costs on a push |
+| --- | --- |
+| `push-scope-notice.sh` (#552) | 0.07 seconds, five readings on this Mac on 2026-10-12 |
+| `pr-review-gate.sh` (#560) | 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
+| `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
+| `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
+| `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
 Measured on this Mac on 2026-09-21, driving each installed gate with the payload Claude Code sends
 for `git push`, against a checkout one commit ahead of `origin/main`:

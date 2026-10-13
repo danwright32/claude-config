@@ -931,6 +931,11 @@ case "$*" in
     exit 1 ;;
   "api "*)
     if [ -n "${GH_API_BROKEN:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    # GH_API_FAILS: a file of errors, one spent per probe, so a probe can fail some number of times
+    # and then answer (#1096).
+    if [ -n "${GH_API_FAILS:-}" ] && [ -s "$GH_API_FAILS" ]; then
+      head -1 "$GH_API_FAILS" >&2; tail -n +2 "$GH_API_FAILS" > "$GH_API_FAILS.t"; mv "$GH_API_FAILS.t" "$GH_API_FAILS"; exit 1
+    fi
     for a in "$@"; do
       case "$a" in repos/*)
         if [ -e "$FIXTURE/remote/$a" ]; then echo '{}'; exit 0; fi
@@ -1474,6 +1479,64 @@ if denied "$out"; then pass; else fail "#1081 with no retry budget left a failed
 if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a retry was made past the budget ($(sleeps) waits)"; fi
 rm -f "$f"
 rm -rf "$dir"
+
+echo "block-red-merge: a red merge in every command position is refused (#1040)"
+# The merge reader took the first three words of each command, so a merge behind then, {, ! or rtk was
+# no merge and this gate stood aside on a red pull request.
+dir=$(make_repo without-tool "$RED")
+for c in "if true; then gh pr merge 7 --squash; fi" "{ gh pr merge 7 --squash; }" "rtk gh pr merge 7 --squash" \
+         "while false; do gh pr merge 7 --squash; done" "( GH_TOKEN=x gh pr merge 7 --squash )"; do
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && holds "$out" "is not green"; then pass; else fail "#1040 a red merge written as [$c] was not refused as red: $out"; fi
+done
+rm -rf "$dir"
+
+echo "block-red-merge: a --repo merge's reads of that repository are asked again too (#1096)"
+
+# The two reads of a foreign repository's files (its merge tool, its workflows) were left one shot by
+# #1081: mt_remote_path answered only present, absent or unknown, so a dropped connection refused the
+# merge with nothing asked again. They now go through the same retry, on the same transient classes,
+# and a read that never answers still refuses, naming what gh said.
+SLOW='Get "https://api.github.com/repos/other/repo/contents/tools/wait_for_checks.py": net/http: TLS handshake timeout'
+two_repos SUCCESS
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$SLOW")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out"; then fail "#1096 a merge tool probe that timed out once refused a green merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1096 the merge tool probe was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$SLOW" "$SLOW" "$SLOW" "$SLOW" "$SLOW")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && says "$out" "could not tell whether other/repo" && holds "$out" "TLS handshake timeout"; then pass
+else fail "#1096 a merge tool probe that never answered did not refuse naming what gh said: $out"; fi
+if [ "$(sleeps)" = 2 ]; then pass; else fail "#1096 a probe that kept failing was not tried three times in all ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Resource not accessible by integration (HTTP 403)")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && holds "$out" "HTTP 403"; then pass; else fail "#1096 a probe GitHub refused was not refused naming GitHub's answer: $out"; fi
+if [ "$(sleeps)" = 0 ]; then pass; else fail "#1096 a refusal (403) of the probe was asked again ($(sleeps) waits)"; fi
+rm -f "$f"
+rm -rf "$dir"
+# The workflows probe, asked when the pull request has no checks at all. The tool rule is skipped so
+# the only probe is this one.
+two_repos none
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Server Error (HTTP 502)")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --repo other/repo --squash")
+if denied "$out"; then fail "#1096 a workflows probe that failed once with a 502 refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1096 the workflows probe was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Server Error (HTTP 502)" "gh: Server Error (HTTP 502)" "gh: Server Error (HTTP 502)")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --repo other/repo --squash")
+if denied "$out" && says "$out" "did not answer whether other/repo has any workflows" && holds "$out" "HTTP 502"; then pass
+else fail "#1096 a workflows probe that never answered did not refuse naming what gh said: $out"; fi
+if [ "$(sleeps)" = 2 ]; then pass; else fail "#1096 the workflows probe was not tried three times in all ($(sleeps) waits)"; fi
+rm -f "$f"
+rm -rf "$dir"
+unset FIXTURE GH_CALL_LOG
 rm -f "$BRM_SLEEP_LOG"; unset BRM_SLEEP_LOG
 
 echo "  $passed passed, $failed failed"

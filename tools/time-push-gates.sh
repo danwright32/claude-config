@@ -11,7 +11,10 @@
 # `git push`, in the order the settings list them, which is the order a push waits through, and
 # reports each one's wall clock, its exit code, and the total.
 #
-# Usage: time-push-gates.sh [--repo DIR] [--command "git push"] [--json]
+# Usage: time-push-gates.sh [--repo DIR] [--command "git push"] [--json] [--list]
+#   --list             name the gates, one per line as "<declared timeout>\t<hook>", and run none of
+#                      them: the reading the README's count of push gates is tested against
+#                      (claude-config#1066), so the count and the timing come from one list.
 #   GATE_TIMING_HOME   where settings.json and hooks/ live (default: ~/.claude), so a test can
 #                      drive a fixture rather than the installed config.
 #
@@ -28,12 +31,14 @@ DEFAULT_TIMEOUT=60
 repo="$PWD"
 command_line="git push"
 as_json=""
+list_only=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) repo="${2:-}"; shift 2 ;;
     --command) command_line="${2:-}"; shift 2 ;;
     --json) as_json=1; shift ;;
-    *) printf 'time-push-gates: "%s" is not an argument this takes (--repo DIR, --command CMD, --json).\n' "$1" >&2; exit 2 ;;
+    --list) list_only=1; shift ;;
+    *) printf 'time-push-gates: "%s" is not an argument this takes (--repo DIR, --command CMD, --json, --list).\n' "$1" >&2; exit 2 ;;
   esac
 done
 
@@ -80,6 +85,14 @@ esac
 if [ -z "$gates" ]; then
   printf 'time-push-gates: %s lists no PreToolUse hook for Bash, so nothing was timed. Refusing rather than reporting a push that waits on nothing.\n' "$settings" >&2
   exit 1
+fi
+if [ -n "$list_only" ]; then
+  while IFS="$(printf '\t')" read -r declared hook; do
+    [ -n "$hook" ] && printf '%s\t%s\n' "$declared" "${hook##*/}"
+  done <<EOF
+$gates
+EOF
+  exit 0
 fi
 
 payload="$(REPO="$repo" CMD="$command_line" python3 -c '
