@@ -117,6 +117,10 @@ judge_case() {   # <label> <PATH> <expect rc> <pattern on PC_JUDGE_ERR, or on PC
 }
 STUB_OUT='{"result":"{\"verdict\":\"pass\"}","duration_ms":1500,"total_cost_usd":0.02}' judge_case "a clean answer" "$STUB:$PATH_BASE" 0 '^\{"verdict":"pass"\}$'
 if [ "$PC_JUDGE_MS" = 1500 ] && [ "$PC_JUDGE_COST" = 0.02 ] && [ "$PC_JUDGE_MODEL" = sonnet ] && [ "$PC_JUDGE_BYTES" = 5 ]; then ok; else no "time, cost, model or size not read: [$PC_JUDGE_MS] [$PC_JUDGE_COST] [$PC_JUDGE_MODEL] [$PC_JUDGE_BYTES]"; fi
+# The envelope's figures are recorded as the envelope wrote them: %g kept 6 significant digits and
+# wrote a different number for a long call or a precise cost (merge review of #1109).
+STUB_OUT='{"result":"{\"verdict\":\"pass\"}","duration_ms":1234567.5,"total_cost_usd":0.123456789}' judge_case "large and precise figures" "$STUB:$PATH_BASE" 0 'verdict'
+if [ "$PC_JUDGE_MS" = 1234567.5 ] && [ "$PC_JUDGE_COST" = 0.123456789 ]; then ok; else no "figures rewritten on the way to the ledger: [$PC_JUDGE_MS] [$PC_JUDGE_COST]"; fi
 STUB_OUT='{"result":"```json\n{\"verdict\":\"block\",\"findings\":[]}\n```"}' judge_case "a fenced answer" "$STUB:$PATH_BASE" 0 '"verdict":"block"'
 STUB_OUT='{"is_error":true,"result":"overloaded"}' judge_case "an error envelope" "$STUB:$PATH_BASE" 1 'error envelope'
 STUB_OUT='{"result":"looks fine to me"}' judge_case "a prose answer" "$STUB:$PATH_BASE" 1 'not readable JSON'

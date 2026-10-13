@@ -184,7 +184,7 @@ try:
     if not isinstance(env, dict):
         print("ERR_VERDICT"); sys.exit(0)
     def num(v):
-        return "" if isinstance(v, bool) or not isinstance(v, (int, float)) else ("%g" % v if isinstance(v, float) else str(v))
+        return "" if isinstance(v, bool) or not isinstance(v, (int, float)) else (repr(v) if isinstance(v, float) else str(v))
     meta = num(env.get("duration_ms")) + "\t" + num(env.get("total_cost_usd"))
     if env.get("is_error"):
         print("ERR_ENVELOPE"); print(meta); sys.exit(0)
