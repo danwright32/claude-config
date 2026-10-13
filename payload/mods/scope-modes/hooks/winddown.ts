@@ -1,5 +1,6 @@
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesLeftAsIs, ScopeModesLeftBranch, ScopeModesLeftClosed, ScopeModesLeftOpen } from '../types/index.d.ts'
-import type { Cmd } from './nobuild.ts'
+import { EDITORS, type Cmd } from './nobuild.ts'
 
 // Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
 // or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
@@ -64,8 +65,69 @@ export type Reading = {
    * card has been made yet; unmeasured when the mod is not loaded. Never Claude's own report.
    */
   deploy: { state: DeployState } | null | Unmeasured | Unreadable
-  /** The files git status names uncommitted in the session's checkout (#1051); empty when none. */
+  /**
+   * The files git status names uncommitted in the session's checkout that this session or one of its
+   * agents wrote (#1051, #1108); empty when none.
+   */
   dirty: string[] | Unreadable
+  /**
+   * The other files git status names there, which this session did not write (#1108): another
+   * session's, a job's, or written by a route the mod cannot name. Never outstanding; said once, when
+   * winding down finishes.
+   */
+  notMine?: string[]
+}
+
+// A path with its empty, `.` and `..` steps taken out, so two spellings of one file match.
+const plain = (p: string): string => {
+  const out: string[] = []
+  for (const s of p.split('/')) {
+    if (s === '' || s === '.') continue
+    if (s === '..') out.pop()
+    else out.push(s)
+  }
+  return `/${out.join('/')}`
+}
+
+/**
+ * The files a call this session let through wrote (#1108), absolute: the file an editing tool names,
+ * and for a Bash call what mod-kit's one write reader names (#712), its files, its other changes and
+ * a program's named targets. A folder the call reached whole (a removal of a tree, a copy that may
+ * land inside a folder) is given again ending in `/`, standing for everything under it. A write the
+ * reader cannot name (a patch, a script, a path built from a variable) names nothing here.
+ */
+export const filesWritten = (call: { tool: string; input: Record<string, unknown>; writes: ModKitWrites }): string[] => {
+  if (EDITORS.has(call.tool)) {
+    const p = String(call.input.file_path ?? call.input.notebook_path ?? '')
+    return p.startsWith('/') ? [plain(p)] : []
+  }
+  if (call.tool !== 'Bash') return []
+  const out: string[] = []
+  const add = (path: string | undefined, whole: boolean) => {
+    if (!path?.startsWith('/')) return
+    out.push(plain(path))
+    if (whole) out.push(`${plain(path)}/`)
+  }
+  for (const f of call.writes.files) add(f.path, !!(f.mayBeFolder || f.tree))
+  for (const c of call.writes.changes) add(c.path, !!c.tree || c.does === 'folder')
+  for (const u of call.writes.unnamed) for (const t of u.targets ?? []) add(t, false)
+  return [...new Set(out)]
+}
+
+/**
+ * The uncommitted files git status names relative to `root`, split into this session's own (`written`
+ * names it, or a folder holding it) and the rest (#1108).
+ */
+export const whoseFiles = (dirty: readonly string[], root: string, written: readonly string[]): { own: string[]; others: string[] } => {
+  const files = new Set(written.filter(w => !w.endsWith('/')))
+  const trees = written.filter(w => w.endsWith('/'))
+  const own: string[] = []
+  const others: string[] = []
+  for (const f of dirty) {
+    const p = plain(`${root}/${f}`)
+    ;(files.has(p) || trees.some(t => p.startsWith(t)) ? own : others).push(f)
+  }
+  return { own, others }
 }
 
 /**

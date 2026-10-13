@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { branchesTouched, choiceFor, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, filesWritten, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
@@ -272,5 +272,42 @@ describe("a branch that is not this session's, and Dan's answer to leave a branc
     const asked: Reading = { ...inherited, branch: left.branch, branchLeft: { ...left, files: ['notes.md'] } }
     expect(outstanding({ ...asked, dirty: ['notes.md'] })).toEqual([])
     expect(outstanding({ ...asked, dirty: ['notes.md', 'new.ts'] })).toEqual([UNCOMMITTED('new.ts')])
+  })
+})
+
+// #1108: in a shared primary checkout, another session's untracked files blocked every stop of this
+// one. Only the files this session (or one of its agents) wrote are its unfinished work.
+describe('whose uncommitted files they are (#1108)', () => {
+  const none = { files: [], changes: [], unnamed: [] }
+  test('Edit, Write, MultiEdit and NotebookEdit write the file they name, its path made plain', () => {
+    expect(filesWritten({ tool: 'Edit', input: { file_path: '/repo/app.ts' }, writes: none })).toEqual(['/repo/app.ts'])
+    expect(filesWritten({ tool: 'Write', input: { file_path: '/repo/./src/../notes.md' }, writes: none })).toEqual(['/repo/notes.md'])
+    expect(filesWritten({ tool: 'MultiEdit', input: { file_path: '/repo/a.ts' }, writes: none })).toEqual(['/repo/a.ts'])
+    expect(filesWritten({ tool: 'NotebookEdit', input: { notebook_path: '/repo/n.ipynb' }, writes: none })).toEqual(['/repo/n.ipynb'])
+    // A relative path names no file the session can be sure of, and a reading tool writes nothing.
+    expect(filesWritten({ tool: 'Edit', input: { file_path: 'app.ts' }, writes: none })).toEqual([])
+    expect(filesWritten({ tool: 'Read', input: { file_path: '/repo/app.ts' }, writes: none })).toEqual([])
+  })
+  test("a Bash call writes what mod-kit's write reader names: its files, its other changes, and a program's named targets", () => {
+    const writes = {
+      files: [{ word: 'out.txt', path: '/repo/out.txt' }, { word: '$X' }, { word: 'dir', path: '/repo/dir', mayBeFolder: true as const }],
+      changes: [
+        { word: 'old.ts', path: '/repo/old.ts', does: 'remove' as const },
+        { word: 'build', path: '/repo/build', does: 'remove' as const, tree: true as const },
+      ],
+      unnamed: [
+        { what: 'an inline python3 script', words: [], inputs: [], targets: ['/repo/gen.ts'] },
+        { what: 'a patch', words: [], inputs: ['/repo/p.diff'] },
+      ],
+    }
+    expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/out.txt', '/repo/dir', '/repo/dir/', '/repo/old.ts', '/repo/build', '/repo/build/', '/repo/gen.ts'])
+  })
+  test('the uncommitted files are split into the ones this session wrote and the rest', () => {
+    const written = ['/repo/app.ts', '/repo/build/', '/elsewhere/x.ts']
+    expect(whoseFiles(['app.ts', 'build/out.js', 'notes.md', 'x.ts'], '/repo', written)).toEqual({ own: ['app.ts', 'build/out.js'], others: ['notes.md', 'x.ts'] })
+    // A folder's own name is not under it: build.ts is not in build/.
+    expect(whoseFiles(['build.ts'], '/repo', written)).toEqual({ own: [], others: ['build.ts'] })
+    expect(whoseFiles(['app.ts'], '/repo/', written)).toEqual({ own: ['app.ts'], others: [] })
+    expect(whoseFiles([], '/repo', written)).toEqual({ own: [], others: [] })
   })
 })

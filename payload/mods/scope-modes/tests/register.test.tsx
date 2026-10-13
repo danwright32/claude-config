@@ -288,6 +288,8 @@ type Opts = {
   gone?: string[]
   /** A folder that is still there when looked for, and removed the moment a process is started in it (#1059). */
   vanishOnSpawn?: string
+  /** A tool call naming this text is refused by a guard beneath the mod (#1108). */
+  refusedBeneath?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -663,6 +665,8 @@ const world = (on: On, o: Opts = {}) => {
       return { result: { questions: (e as unknown as { questions: unknown[] }).questions, answers: { [q]: o.ask ?? 'Yes' } }, text: `answered ${o.ask ?? 'Yes'}` } as never
     }
     const command = (e as { command?: string }).command
+    // A call a guard beneath refuses (#1108): it never ran, so it wrote nothing.
+    if (o.refusedBeneath && String(command ?? (e as { file_path?: string }).file_path).includes(o.refusedBeneath)) return { deny: 'refused beneath' } as never
     w.reached.push(String(command ?? (e as { file_path?: string }).file_path ?? e.tool))
     // A branch started by switch or checkout moves the checkout onto it, unless the test says it fails (#1051).
     const started = /\bgit (?:switch -c|checkout -b) (\S+)/.exec(command ?? '')
@@ -1096,6 +1100,8 @@ test("winding down from a linked worktree reads that worktree's uncommitted work
   const own = '/repo/.claude/worktrees/wt'
   const { w, clock } = world(on, { cwd: own, branch: 'main', dirty: [own] })
   await start($ as never, clock)
+  // Its own work, which this session wrote (#1108).
+  await call($ as never, edit(`${own}/app.ts`, 'w1'))
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
   const statuses = w.runs.filter(r => r.includes('status') && r.includes('--porcelain'))
@@ -1113,6 +1119,7 @@ test("winding down from a linked worktree is not held by changes in the main che
 test('winding down in the main checkout still reads its uncommitted work there (#996)', withDeps, async ($, on) => {
   const { clock } = world(on, { branch: 'main', dirty: ['/repo'] })
   await start($ as never, clock)
+  await call($ as never, edit('/repo/app.ts', 'w1'))
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
 })
@@ -1121,6 +1128,7 @@ test('winding down from a detached head in a linked worktree reads that worktree
   const own = '/repo/.claude/worktrees/wt'
   const { clock } = world(on, { cwd: own, branch: '', dirty: [own] })
   await start($ as never, clock)
+  await call($ as never, edit(`${own}/app.ts`, 'w1'))
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/there are uncommitted changes/)
 })
@@ -1675,7 +1683,11 @@ test('a gh pr create that printed no link notes no PR; one that cannot be read t
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
   w.o.created = 'https://github.com/o/r/pull/32\n'
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --title __reader_fails', tool_use_id: 'g2' } as never)
-  expect(w.toasts).toEqual([expect.stringMatching(/^Scope modes could not note the PR this call opened \(.*the reader broke.*\), so winding down will not know to finish it\.$/)])
+  // The files the call wrote could not be read either, and that is said too (#1108).
+  expect(w.toasts).toEqual([
+    expect.stringMatching(/^Scope modes could not note the PR this call opened \(.*the reader broke.*\), so winding down will not know to finish it\.$/),
+    "Scope modes could not note which files this call wrote (the reader broke), so winding down may not count them as this session's.",
+  ])
   await command($ as never, 'winddown')
   // Neither PR was noted, so on a clean default branch there is nothing to finish.
   expect((await stop($ as never)).block).toBeUndefined()
@@ -3604,10 +3616,16 @@ const CLEANUP = 'mcp__scope-modes__open_cleanup_branch'
 const READINGS = 'tests/section-time-readings.tsv'
 const cleanupAsk = (branch: string, id = 'k1') => ({ tool: CLEANUP, branch, why: 'commit the monthly section time reading', tool_use_id: id }) as never
 const onMainDirty = (extra: Opts = {}): Opts => ({ branch: 'main', dirty: ['/repo'], dirtyFiles: [READINGS], ...extra })
+// The session wrote the reading itself, so it is this session's work to finish (#1108: a file a job
+// wrote, as on 2026-10-09, is no longer the session's and no longer holds it).
+const startWrote = async ($: $T, clock: { settle: () => Promise<void> }) => {
+  await start($, clock)
+  expect(await call($, bash(`echo reading >> ${READINGS}`, 'w0'))).toBe('ran')
+}
 
 test('winding down with uncommitted work refuses a new branch until Dan agrees to a cleanup branch for those files, then lets that branch alone start, once (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   expect(w.tools).toContain('open_cleanup_branch')
   await command($ as never, 'winddown')
   const block = (await stop($ as never)).block ?? ''
@@ -3629,9 +3647,11 @@ test('winding down with uncommitted work refuses a new branch until Dan agrees t
 
 test('the cleanup branch Dan agreed to is refused once anything beyond his files is uncommitted, naming it (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   await command($ as never, 'winddown')
   await call($ as never, cleanupAsk('chore/readings'))
+  // A file this session wrote since he answered (#1108: one another session wrote is not counted).
+  await call($ as never, edit('/repo/app.ts', 'w1'))
   w.o.dirtyFiles = [READINGS, 'app.ts']
   expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(
     /^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings for tests\/section-time-readings\.tsv only, and app\.ts is uncommitted too\./,
@@ -3640,7 +3660,7 @@ test('the cleanup branch Dan agreed to is refused once anything beyond his files
 
 test("Dan's cleanup answer is used up only once the checkout is on that branch: a start that did not move it keeps his answer (#1051)", withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Open it', switchFails: true }))
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   await command($ as never, 'winddown')
   await call($ as never, cleanupAsk('chore/readings'))
   expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toBe('ran')
@@ -3652,7 +3672,7 @@ test("Dan's cleanup answer is used up only once the checkout is on that branch: 
 
 test('a cleanup branch Dan agreed to is refused once nothing is uncommitted, since there is no cleanup left for it to carry (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   await command($ as never, 'winddown')
   await call($ as never, cleanupAsk('chore/readings'))
   w.o.dirty = []
@@ -3663,7 +3683,7 @@ test('a cleanup branch Dan agreed to is refused once nothing is uncommitted, sin
 
 test('any answer but Open it records nothing, and the branch stays refused (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Do not' }))
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   await command($ as never, 'winddown')
   expect(await call($ as never, cleanupAsk('chore/readings'))).toBe('Dan did not agree to the branch chore/readings, so winding down still refuses it.')
   expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(/did not start a new branch/)
@@ -3672,7 +3692,7 @@ test('any answer but Open it records nothing, and the branch stays refused (#105
 
 test('a cleanup branch is asked about only while winding down, and only for work that is uncommitted (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty())
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   expect(await call($ as never, cleanupAsk('chore/readings'))).toBe("Winding down is not on, so no branch needs Dan's answer: make it as usual. He was not asked.")
   await command($ as never, 'winddown')
   w.o.dirty = []
@@ -3683,7 +3703,7 @@ test('a cleanup branch is asked about only while winding down, and only for work
 
 test('while Dan is asleep neither branch question is asked: each is noted for his morning report and nothing is recorded (#1051, #1074)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
-  await start($ as never, clock)
+  await startWrote($ as never, clock)
   await command($ as never, 'winddown')
   w.files[CURRENT] = asleepRecord()
   expect(await call($ as never, cleanupAsk('chore/readings'))).toBe(
@@ -3742,9 +3762,10 @@ test("an agent's commit, or one after a cd, names no branch of this session's ch
   expect((await stop($ as never)).block).toBeUndefined()
 })
 
-test("uncommitted work in the checkout of a branch that is not the session's still counts, and Dan's answer to leave it settles it until another file changes (#1074)", withDeps, async ($, on) => {
+test("uncommitted work this session wrote in the checkout of a branch that is not the session's still counts, and Dan's answer to leave it settles it until another file changes (#1074, #1108)", withDeps, async ($, on) => {
   const { w, clock } = world(on, onSlate({ dirty: ['/repo'], dirtyFiles: ['notes.md'], ask: 'Leave it as it is' }))
   await start($ as never, clock)
+  await call($ as never, edit('/repo/notes.md', 'w1'))
   expect(w.tools).toContain('leave_branch')
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(notes\.md\)/)
@@ -3770,6 +3791,61 @@ test("Dan's answer to leave the session's own merged branch as it is settles the
   await command($ as never, 'winddown')
   await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: 'scope-modes-616', why: 'another session stands on it', tool_use_id: 'b2' } as never)
   expect((await stop($ as never)).block).toMatch(/the branch scope-modes-616 still exists here/)
+})
+
+// ---- Whose uncommitted files they are (#1108) ----
+// In a shared primary checkout, another session's untracked files blocked every stop of this one
+// until Dan answered leave_branch. Only what this session or its agents wrote is its unfinished work:
+// a file it cannot attribute never blocks, and is said once, when winding down finishes.
+test("another session's uncommitted files in a shared checkout never block winding down, and are said once when it finishes (#1108)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['other/plan.md', 'scratch.txt'] })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left uncommitted, since this session did not write them: other/plan.md, scratch.txt.'])
+})
+
+for (const [how, wrote] of [
+  ['an Edit', edit('/repo/app.ts', 'w1')],
+  ['a Write', { tool: 'Write', file_path: '/repo/app.ts', content: 'x', tool_use_id: 'w1' } as never],
+  ['a shell redirect', bash('echo x > app.ts', 'w1')],
+  ["an agent's Edit", { tool: 'Edit', file_path: '/repo/app.ts', old_string: 'a', new_string: 'b', tool_use_id: 'w1', agentId: 'ag1' } as never],
+] as const)
+  test(`a file this session wrote by ${how} is its own unfinished work, while another session's beside it is not (#1108)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', 'other/plan.md'] })
+    await start($ as never, clock)
+    expect(await call($ as never, wrote)).toBe('ran')
+    await command($ as never, 'winddown')
+    const block = (await stop($ as never)).block ?? ''
+    expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
+    expect(block).not.toContain('other/plan.md')
+  })
+
+test('a call refused beneath the mod wrote nothing, so its file is not the session\'s (#1108)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], refusedBeneath: 'app.ts' })
+  await start($ as never, clock)
+  expect(await call($ as never, edit('/repo/app.ts'))).toBe('refused beneath')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test("the cleanup branch question names only this session's files, and another session's file appearing does not refuse the branch Dan agreed to (#1108)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', 'other/plan.md'], ask: 'Open it' })
+  await start($ as never, clock)
+  await call($ as never, edit('/repo/app.ts', 'w1'))
+  await command($ as never, 'winddown')
+  await call($ as never, cleanupAsk('chore/app'))
+  expect(w.asked).toEqual(['Open the branch chore/app to commit app.ts (commit the monthly section time reading)? Winding down lets it start for these files only, and finishes it like any other PR.'])
+  w.o.dirtyFiles = ['app.ts', 'other/plan.md', 'other/more.md']
+  expect(await call($ as never, bash('git switch -c chore/app', 'c2'))).toBe('ran')
+})
+
+test("with nothing of this session's uncommitted, no cleanup branch is asked about, and the reply names the other files (#1108)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['other/plan.md'], ask: 'Open it' })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect(await call($ as never, cleanupAsk('chore/app'))).toBe('Nothing this session wrote is uncommitted in /repo (other/plan.md is not its own), so there is no cleanup for a branch to commit. Dan was not asked.')
+  expect(w.asked).toEqual([])
 })
 
 // ---- How often winding down asks GitHub (#1037) ----
