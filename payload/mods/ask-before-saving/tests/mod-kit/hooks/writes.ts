@@ -434,6 +434,15 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const files: ModKitWrite[] = []
   const changes: ModKitChange[] = []
   const unnamed: ModKitWrites['unnamed'] = []
+  // What git itself changes (#1123), kept apart from files and changes, which the guards judge.
+  const byGit: NonNullable<ModKitWrites['byGit']> = []
+  const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean) => {
+    // A pathspec read from the top of the checkout (`:/docs`) or with magic (`:(glob)x`) is no path
+    // here; a pattern git matches itself, across folders, names no one folder (#1123).
+    const path = word.startsWith(':') || patternIn(word) ? undefined : absolutePath(word, at, home)
+    if (!word || byGit.some(x => x.does === does && (path ? x.path === path : !x.path && x.word === word))) return
+    byGit.push({ word: asWritten.get(word) ?? word, ...(path ? { path } : {}), does, ...(tree && path ? { tree: true as const } : {}) })
+  }
   const seen = new Set<string>()
   let dir: string | undefined = cwd
   let vars: Vars = new Map()
@@ -670,7 +679,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
           const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
           unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
         }
-      }
+      } else if (g?.sub) for (const [word, does, tree] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : absolutePath(g.dir, dir, home), does, tree)
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script
@@ -693,7 +702,50 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // A command given its operands by xargs changes files no word names (#730).
     if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: written, inputs: [] })
   }
-  return { files, changes, unnamed }
+  return { files, changes, unnamed, ...(byGit.length ? { byGit } : {}) }
+}
+
+// The options of git mv, rm, checkout and restore that take the next word as their value.
+const GIT_VALUED = new Set(['-s', '--source', '--conflict', '--pathspec-from-file', '-b', '-B', '--orphan'])
+
+/**
+ * The files git itself changes for one of its subcommands (#1123), each as [word, what it does, the
+ * whole of it]: git mv's destination written (and, onto one name that may be a folder, the source's
+ * own name inside it) and each source removed; git rm's paths removed (with -r, all under each),
+ * from the index alone too with --cached, since that also leaves the file changed in git status; a
+ * checkout of a path and a restore of the working tree writing what they name, all under each. A
+ * dry run, a branch switch or creation, a checkout of one name (git may take it for a branch) and a
+ * restore of the index alone name nothing.
+ */
+const gitOwn = (sub: string, args: readonly string[]): [string, 'write' | 'remove', boolean][] => {
+  const { ops, opts } = operands([...args], GIT_VALUED)
+  const flags = [...opts.keys()]
+  // An option by any of its names, a short one also inside a cluster (-rf).
+  const has = (...names: string[]) => names.some(n => flags.includes(n) || (/^-[A-Za-z]$/.test(n) && flags.some(k => /^-[A-Za-z]{2,}$/.test(k) && k.includes(n.slice(1)))))
+  if (sub === 'mv') {
+    if (has('-n', '--dry-run') || ops.length < 2) return []
+    const dest = ops[ops.length - 1] as string
+    const sources = ops.slice(0, -1)
+    const into = sources.length > 1 || dest.endsWith('/')
+    const dests: string[] = into ? sources.map(s => `${dest.replace(/\/+$/, '')}/${baseOf(s)}`) : [dest, `${dest}/${baseOf(sources[0] as string)}`]
+    return [...dests.map((d): [string, 'write', boolean] => [d, 'write', true]), ...sources.map((s): [string, 'remove', boolean] => [s, 'remove', true])]
+  }
+  if (sub === 'rm') {
+    if (has('-n', '--dry-run')) return []
+    const tree = has('-r')
+    return ops.map((p): [string, 'remove', boolean] => [p, 'remove', tree])
+  }
+  if (sub === 'checkout') {
+    if (has('-b', '-B', '--orphan')) return []
+    const dd = args.indexOf('--')
+    const paths = dd >= 0 ? args.slice(dd + 1) : ops.slice(1)
+    return paths.map((p): [string, 'write', boolean] => [p, 'write', true])
+  }
+  if (sub === 'restore') {
+    if (has('-S', '--staged') && !has('-W', '--worktree')) return []
+    return ops.map((p): [string, 'write', boolean] => [p, 'write', true])
+  }
+  return []
 }
 
 // The words that change the folder a relative path is read against.
@@ -722,6 +774,10 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
     else if (c.tree) had.tree = true
   }
   for (const u of from.unnamed) if (!into.unnamed.some(x => JSON.stringify(x) === JSON.stringify(u))) into.unnamed.push(u)
+  for (const b of from.byGit ?? []) {
+    const list = (into.byGit ??= [])
+    if (!list.some(x => x.does === b.does && (b.path ? x.path === b.path : !x.path && x.word === b.word))) list.push(b)
+  }
 }
 
 // A command line's changes with those of every substitution the shell runs in it (#965), each given

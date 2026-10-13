@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {
   ScopeModes,
   ScopeModesCleanup,
@@ -79,9 +80,11 @@ import {
   newBranchOf,
   newWork,
   outstanding,
+  patchedPaths,
   porcelainFiles,
   settledByBranchChoice,
   settledByDan,
+  stashTaken,
   whoseFiles,
   type DeployState,
   type Reading,
@@ -2544,10 +2547,10 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
 // after every Bash call, read only ones included, so a reader that stays broken would otherwise toast
 // on each (lessons review); later ones go to the debug log.
 let writeNoteSaid = false
-const noteWritten = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string) => {
+const noteWritten = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string, stashed: readonly string[] = []) => {
   try {
     const writes = raw ? await readWrites($, raw) : NO_WRITES
-    const files = filesWritten({ tool, input, writes })
+    const files = [...filesWritten({ tool, input, writes }), ...(await patchedFiles($, writes)), ...stashed]
     await addToList({ get: () => $.state.get(writtenRef), set: (l, v) => $.state.set(writtenRef, l, { ifVersion: v }) }, files, sameText)
   } catch (err) {
     const said = `Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`
@@ -2555,6 +2558,58 @@ const noteWritten = async ($: EngineInterface, tool: string, input: Record<strin
     else $.ui.toast(`${said} Later failures go to the debug log.`)
     writeNoteSaid = true
   }
+}
+
+// The checkout a git command in a call works in (#1123): its -C folder, else the session's. A folder
+// spelled with a variable cannot be followed, so it names none, and neither does a folder in no
+// checkout. A cd earlier in the call is not followed: knowingly loose, since a stash and a patch's
+// paths both belong to the whole checkout, so only a cd into another checkout reads the wrong one.
+const gitCheckout = async ($: EngineInterface, dir: string | undefined): Promise<string | null> => {
+  if (dir !== undefined && /[$`]/.test(dir)) return null
+  const cwd = await $.session.cwd()
+  return $.modkit.workingTree({ path: dir === undefined ? cwd : dir.startsWith('/') ? dir : `${cwd}/${dir}` })
+}
+
+// The files a patch git applies in a call changes (#1123), read from each patch file the write
+// reader names, as paths in the checkout git applies it in.
+const patchedFiles = async ($: EngineInterface, writes: ModKitWrites): Promise<string[]> => {
+  const out: string[] = []
+  for (const u of writes.unnamed) {
+    if (u.what !== 'a patch') continue
+    const g = await $.modkit.git({ words: u.words })
+    if (g?.sub !== 'apply' && g?.sub !== 'am') continue
+    const root = await gitCheckout($, g.dir)
+    if (!root) continue
+    for (const f of u.inputs) if (await $.fs.exists(f)) for (const p of patchedPaths(g.args, await $.fs.read(f))) out.push(`${root}/${p}`)
+  }
+  return out
+}
+
+// The files the stash a call's git stash pop or apply takes back holds (#1123), read before the call
+// runs, since a pop drops it. One that cannot be read is said, as a note that cannot be made is, and
+// the call runs all the same.
+let stashSaid = false
+const stashedFiles = async ($: EngineInterface, raw: string): Promise<string[]> => {
+  if (!/\bstash\b/.test(raw)) return []
+  const out: string[] = []
+  try {
+    for (const c of await readCommands($, raw)) {
+      const ref = c.git?.sub === 'stash' ? stashTaken(c.git.args) : undefined
+      if (!ref) continue
+      const root = await gitCheckout($, c.git?.dir)
+      if (!root) continue
+      // -z: one name per NUL, never quoted, so a name with a space or an accent is read as it is.
+      const r = await run($, ['git', '-C', root, 'stash', 'show', '--include-untracked', '--name-only', '-z', ref])
+      if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `git stash show exited ${r.exitCode}`)
+      for (const f of r.stdout.split(/[\0\n]/)) if (f) out.push(`${root}/${f}`)
+    }
+  } catch (err) {
+    const said = `Scope modes could not read which files the stash this call takes holds (${msg(err)}), so winding down may not count them as this session's.`
+    if (stashSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
+    else $.ui.toast(`${said} Later failures go to the debug log.`)
+    stashSaid = true
+  }
+  return out
 }
 
 // The issue numbers an agent may be sent about while winding down: the branch's, its PR and the
@@ -3128,6 +3183,8 @@ export const register: Register = on => {
     // A picker in the morning turn (#1107), counted answered or not; a refused one never reached Dan.
     const morningPicker = tool === 'AskUserQuestion' && input.agentId === undefined && morningWatch?.turnId !== undefined ? morningWatch : undefined
     const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
+      // A stash a pop takes back is gone once it runs, so what it holds is read first (#1123).
+      const stashed = raw ? await stashedFiles($, raw) : []
       let r: Awaited<ReturnType<typeof next>>
       try {
         r = await next(e)
@@ -3140,7 +3197,7 @@ export const register: Register = on => {
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
-      if (mayWrite && !r.deny) await noteWritten($, tool, input, raw)
+      if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       return r
     }

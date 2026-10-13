@@ -336,12 +336,19 @@ export type ModKitChange = { word: string; path?: string; folder?: string; does:
  * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs;
  * `targets`, for a program whose text names every file it writes, those files, absolute, so a reader
  * judges them rather than every path the text quotes, absent where the file of any write cannot be
- * named (#830)).
+ * named (#830)). `byGit`, present when there are any, is what git itself changes (#1123): git mv's
+ * destination written (onto one name, also the source's own name inside it) and each source
+ * removed, git rm's paths removed (also with --cached, which leaves each changed in git status), a
+ * checkout of a path and a restore of the working tree writing what they name; `tree` where all
+ * under it may change. `word` and `path` as in a write; a pathspec from the top of the checkout
+ * (`:/x`) or a pattern, which git matches across folders, has no path. Kept apart from `files` and
+ * `changes`, so the guards that judge those are unchanged by it; winding down reads it.
  */
 export type ModKitWrites = {
   files: ModKitWrite[]
   changes: ModKitChange[]
   unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[] }[]
+  byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true }[]
 }
 
 /**

@@ -912,9 +912,21 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   those count as the session's uncommitted work, in the finish
   check, the `open_cleanup_branch` question and its coverage, and the `leave_branch` question. A file
   it cannot attribute (another session's, a job's, or written by a route the reader cannot name, such
-  as a patch or `git mv`) never blocks, and the finish toast names it once: "Left uncommitted, since
+  as a script) never blocks, and the finish toast names it once: "Left uncommitted, since
   this session did not write them: ...". A note that cannot be made is toasted, as a branch note is.
   The #1051 case itself, a line a monthly job appended, is now not the session's and does not hold it.
+  Since #1123 what git itself changed counts too, so a session cannot finish with it uncommitted
+  while the toast names it as another's: git mv (the destination, and the source's own name inside
+  it), git rm (also `--cached`, which leaves the file changed in git status), a checkout of a path
+  and git restore of the working tree, which the write reader names apart as `byGit` so the guards
+  judging `files` and `changes` are unchanged; a patch git applies or am takes, by the paths its
+  patch file names (both sides of each diff, its `-p` and `--directory` honoured); and a stash git
+  pops or applies, by `git stash show --include-untracked --name-only` read before the call runs,
+  since a pop drops it (one that cannot be read is toasted once, and the call runs). The checkout
+  these are read in is git's `-C` folder or the session's; a cd earlier in the call is not followed,
+  knowingly loose, since stash and patch paths belong to the whole checkout. Still not attributed: a
+  checkout of one bare name (git may take it for a branch), a git pathspec pattern or `:/` path, and
+  a merge, cherry-pick or revert left uncommitted by a conflict.
 - How often GitHub is asked (#1037). The minute's check read every PR the session opened, plus one
   `gh issue view` per closing issue of each, every minute: about 2N GraphQL points a minute for N
   PRs, from the 5,000 an hour every gh command on the Mac shares (#1014). Measured on 2026-10-12

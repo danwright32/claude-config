@@ -247,6 +247,61 @@ describe('writes: downloads', () => {
   })
 })
 
+// claude-config#1123: winding down (#1108) counts as a session's own unfinished work only the files
+// it wrote, and git itself changes files no other route here names: git mv, git rm, a checkout of a
+// path, git restore. The reader names them apart, in byGit, a cd and git -C followed, so the guards
+// that judge files and changes are not changed by it.
+describe('writes: what git itself changes (#1123)', () => {
+  const byGit = (command: string, cwd = CWD) => read(command, cwd).byGit ?? []
+  test('git mv writes the destination and removes each source, everything under it included', () => {
+    expect(byGit('git mv old.ts new.ts')).toEqual([
+      { word: 'new.ts', path: `${CWD}/new.ts`, does: 'write', tree: true },
+      { word: 'new.ts/old.ts', path: `${CWD}/new.ts/old.ts`, does: 'write', tree: true },
+      { word: 'old.ts', path: `${CWD}/old.ts`, does: 'remove', tree: true },
+    ])
+    expect(byGit('cd src && git mv -k a.ts b.ts lib/')).toEqual([
+      { word: 'lib/a.ts', path: `${CWD}/src/lib/a.ts`, does: 'write', tree: true },
+      { word: 'lib/b.ts', path: `${CWD}/src/lib/b.ts`, does: 'write', tree: true },
+      { word: 'a.ts', path: `${CWD}/src/a.ts`, does: 'remove', tree: true },
+      { word: 'b.ts', path: `${CWD}/src/b.ts`, does: 'remove', tree: true },
+    ])
+    expect(byGit('git mv -n a.ts b.ts')).toEqual([])
+  })
+  test('git rm removes what it names, from the index alone with --cached, and nothing in a dry run', () => {
+    expect(byGit('git rm -r --cached build')).toEqual([{ word: 'build', path: `${CWD}/build`, does: 'remove', tree: true }])
+    expect(byGit('git -C /repo rm notes.md')).toEqual([{ word: 'notes.md', path: '/repo/notes.md', does: 'remove' }])
+    expect(byGit('git rm --dry-run notes.md')).toEqual([])
+    // git's own pattern matches across folders (its * takes a slash), so it is given as written.
+    expect(byGit("git rm 'logs/*.log'")).toEqual([{ word: 'logs/*.log', does: 'remove' }])
+  })
+  test('a checkout of a path, or a restore, writes what it names, a folder with everything under it', () => {
+    expect(byGit('git checkout main -- app/page.tsx')).toEqual([{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx`, does: 'write', tree: true }])
+    expect(byGit('git checkout -- .')).toEqual([{ word: '.', path: CWD, does: 'write', tree: true }])
+    expect(byGit('git checkout HEAD~1 a.ts b.ts')).toEqual([
+      { word: 'a.ts', path: `${CWD}/a.ts`, does: 'write', tree: true },
+      { word: 'b.ts', path: `${CWD}/b.ts`, does: 'write', tree: true },
+    ])
+    expect(byGit('git restore --source=HEAD~2 -W src')).toEqual([{ word: 'src', path: `${CWD}/src`, does: 'write', tree: true }])
+    expect(byGit('git restore -s main app.ts')).toEqual([{ word: 'app.ts', path: `${CWD}/app.ts`, does: 'write', tree: true }])
+  })
+  test('a branch switch, a checkout of one name git may take for a branch, and an unstage name no file', () => {
+    expect(byGit('git checkout main')).toEqual([])
+    expect(byGit('git checkout -b fix/1123 origin/main')).toEqual([])
+    expect(byGit('git switch -c x')).toEqual([])
+    expect(byGit('git restore --staged app.ts')).toEqual([])
+  })
+  test("a pathspec git reads from the top of the checkout is given as written, never placed in the folder", () => {
+    expect(byGit('git checkout -- :/docs')).toEqual([{ word: ':/docs', does: 'write' }])
+  })
+  test('inside a command substitution too', () => {
+    expect(byGit('out=$(git rm -q notes.md)')).toEqual([{ word: 'notes.md', path: `${CWD}/notes.md`, does: 'remove' }])
+  })
+  test('the guards see none of it in files or changes', () => {
+    const r = read('git mv a.ts b.ts && git rm c.ts && git checkout -- d.ts')
+    expect([r.files, r.changes, r.unnamed]).toEqual([[], [], []])
+  })
+})
+
 describe('writes: what the words do not name', () => {
   test('a patch applied names the patch files to read, resolved in the folder git is pointed at', () => {
     expect(read('patch -p1 < fix.diff').unnamed).toEqual([{ what: 'a patch', words: ['patch', '-p1', '<', 'fix.diff'], inputs: [`${CWD}/fix.diff`] }])

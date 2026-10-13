@@ -116,7 +116,66 @@ export const filesWritten = (call: { tool: string; input: Record<string, unknown
   }
   for (const c of call.writes.changes) if (c.does !== 'folder') add(c.path, !!c.tree)
   for (const u of call.writes.unnamed) for (const t of u.targets ?? []) add(t, false)
+  // What git itself changed (#1123): moved, removed, checked out or restored.
+  for (const g of call.writes.byGit ?? []) add(g.path, !!g.tree)
   return [...new Set(out)]
+}
+
+/**
+ * The paths a patch git applies changes (#1123), relative to the top of the checkout as git reads
+ * them: both sides of each `diff --git` line and of each `---` and `+++` line but /dev/null, with
+ * git apply's strip (`-p<n>`, 1 by default) and `--directory` honoured, a timestamp after a tab cut
+ * off. A name holding " b/" in a `diff --git` line is read at its last " b/", the commoner case.
+ */
+export const patchedPaths = (args: readonly string[], text: string): string[] => {
+  let strip = 1
+  let into = ''
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    const p = /^-p(\d+)$/.exec(a)
+    if (p) strip = Number(p[1])
+    else if (a === '-p' && /^\d+$/.test(args[i + 1] ?? '')) strip = Number(args[++i])
+    else if (a.startsWith('--directory=')) into = a.slice('--directory='.length).replace(/\/+$/, '')
+    else if (a === '--directory' && args[i + 1] !== undefined) into = (args[++i] as string).replace(/\/+$/, '')
+  }
+  const out: string[] = []
+  const take = (raw: string) => {
+    const name = raw.split('\t')[0]?.trim() ?? ''
+    if (!name || name === '/dev/null') return
+    const parts = name.split('/').slice(strip)
+    if (!parts.length) return
+    const path = into ? `${into}/${parts.join('/')}` : parts.join('/')
+    if (!out.includes(path)) out.push(path)
+  }
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string
+    const d = /^diff --git (.+)$/.exec(line)
+    if (d) {
+      const both = d[1] as string
+      const cut = both.lastIndexOf(' b/')
+      if (cut > 0) {
+        take(both.slice(0, cut))
+        take(both.slice(cut + 1))
+      }
+      continue
+    }
+    // A header is a --- line with its +++ line under it; a removed line reading "-- x" is not one.
+    const from = /^--- (.+)$/.exec(line)
+    const to = /^\+\+\+ (.+)$/.exec(lines[i + 1] ?? '')
+    if (from && to) {
+      take(from[1] as string)
+      take(to[1] as string)
+      i++
+    }
+  }
+  return out
+}
+
+/** The stash a `git stash` command takes back (#1123): pop's or apply's, the newest by default; undefined for any other. */
+export const stashTaken = (args: readonly string[]): string | undefined => {
+  if (args[0] !== 'pop' && args[0] !== 'apply') return undefined
+  return args.slice(1).find(a => !a.startsWith('-')) ?? 'stash@{0}'
 }
 
 // A path as matched against another spelling of it (lessons review): macOS's default volume ignores

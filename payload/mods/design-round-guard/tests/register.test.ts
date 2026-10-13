@@ -880,7 +880,7 @@ test('#1123: a relative pattern after a cd is placed in its folder: in a checkou
   for (const [command, shown] of [
     ['cd /w/slate && echo x > app/[t]okens.json', 'app/[t]okens.json'],
     ['cd /w/slate/src && rm -f *.css', 'src/*.css'],
-  ]) {
+  ] as [string, string][]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect([command, why.includes('issue #978 in slate'), why.includes(shown), why.includes('could not be followed')]).toEqual([command, true, true, false])
   }
