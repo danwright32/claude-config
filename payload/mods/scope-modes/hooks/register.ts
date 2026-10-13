@@ -2547,10 +2547,22 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
 // after every Bash call, read only ones included, so a reader that stays broken would otherwise toast
 // on each (lessons review); later ones go to the debug log.
 let writeNoteSaid = false
-const noteWritten = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string, stashed: readonly string[] = []) => {
+let patchSaid = false
+const noteWritten =async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string, stashed: readonly string[] = []) => {
   try {
     const writes = raw ? await readWrites($, raw) : NO_WRITES
-    const files = [...filesWritten({ tool, input, writes }), ...(await patchedFiles($, writes)), ...stashed]
+    // A patch that cannot be read is said on its own, never losing the files the call wrote by every
+    // other route (#1123 lessons review).
+    let patched: string[] = []
+    try {
+      patched = await patchedFiles($, writes)
+    } catch (err) {
+      const said = `Scope modes could not read the patch this call applied (${msg(err)}), so winding down may not count the files it changed as this session's.`
+      if (patchSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
+      else $.ui.toast(`${said} Later failures go to the debug log.`)
+      patchSaid = true
+    }
+    const files = [...filesWritten({ tool, input, writes }), ...patched, ...stashed]
     await addToList({ get: () => $.state.get(writtenRef), set: (l, v) => $.state.set(writtenRef, l, { ifVersion: v }) }, files, sameText)
   } catch (err) {
     const said = `Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`

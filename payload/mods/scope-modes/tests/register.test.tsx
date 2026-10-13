@@ -270,6 +270,8 @@ type Opts = {
   dirtyFiles?: string[]
   /** What `git stash show --name-only` names in the newest stash (#1123), or how it fails; none by default. */
   stash?: string[] | { fails: string }
+  /** Files that are there but cannot be read (#1123 lessons review). */
+  unreadableFiles?: string[]
   /** A `git switch -c` or `git checkout -b` that runs but leaves the checkout where it was (#1051). */
   switchFails?: boolean
   /** mod-kit's branch reader fails (#980), with what it threw. */
@@ -379,6 +381,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: undefined }
   })
   on('fs.read', ($, e) => {
+    if (o.unreadableFiles?.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
   })
@@ -3910,6 +3913,17 @@ for (const [how, line, extra] of [
     expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
     expect(block).not.toContain('other/plan.md')
   })
+
+test("a patch that cannot be read is said, and the files the same call wrote by other routes are still the session's (#1123 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, unreadableFiles: ['/tmp/fix.patch'] })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo x > app.ts && git apply /tmp/fix.patch', 'g1'))).toBe('ran')
+  const said = w.toasts.filter(t => t.includes('could not read the patch'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toMatch(/^Scope modes could not read the patch this call applied \(.*EACCES: permission denied, open '\/tmp\/fix\.patch'\), so winding down may not count the files it changed as this session's\. Later failures go to the debug log\.$/)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
+})
 
 test('a stash that cannot be read is said once, and the pop still runs (#1123)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], stash: { fails: 'fatal: not a git repository' } })
