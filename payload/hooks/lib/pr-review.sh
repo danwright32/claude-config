@@ -86,8 +86,13 @@
 # tool in 6 of about 10 rounds on one pull request, leaving no finding line to read, so the runner
 # also disallows that tool and the text it parses is the review's only channel.
 #
+# EARLIER REVIEWS OF THE SAME PULL REQUEST (claude-config#1063): a review is given what earlier
+# reviews of the same pull request raised and what has happened since to the lines each cites, as
+# context and never as a filter. See earlier_reviews below.
+#
 # Environment: AI_REVIEW_STATE_DIR (shared with the push review), PR_REVIEW_DEADLINE_SECONDS,
-# PR_REVIEW_MAX_BYTES, PR_REVIEW_MAX_GROUPS, AI_REVIEW_MODEL, AI_REVIEW_LESSONS_DIR.
+# PR_REVIEW_MAX_BYTES, PR_REVIEW_MAX_GROUPS, PR_REVIEW_HISTORY_MAX_BYTES, AI_REVIEW_MODEL,
+# AI_REVIEW_LESSONS_DIR.
 
 set -uo pipefail
 
@@ -104,6 +109,12 @@ PRR_MAX_BYTES="${PR_REVIEW_MAX_BYTES:-307200}"
 case "$PRR_MAX_BYTES" in ''|*[!0-9]*) PRR_MAX_BYTES=307200 ;; esac
 PRR_MAX_GROUPS="${PR_REVIEW_MAX_GROUPS:-8}"
 case "$PRR_MAX_GROUPS" in ''|*[!0-9]*|0) PRR_MAX_GROUPS=8 ;; esac
+# The most the earlier reviews of the same pull request may add to a review's input (#1063).
+# Measured 2026-10-12 over 2,059 stored reviews: finding lines come to 859 bytes median and 3,949 at
+# most per review, and a branch had 3 reviews median, 11 at p95. 16 KB holds the p95 branch's at the
+# median size, about 5% of the 300 KB a review can use; past it the oldest are left out, saying so.
+PRR_HISTORY_MAX="${PR_REVIEW_HISTORY_MAX_BYTES:-16384}"
+case "$PRR_HISTORY_MAX" in ''|*[!0-9]*) PRR_HISTORY_MAX=16384 ;; esac
 PRR_SHOW_LINES=20
 PRR_LINE_CHARS=300
 PRR_OVERRIDE="SKIP_PR_REVIEW=1"
@@ -168,6 +179,10 @@ if [ -z "$branch" ] && [ -n "$full_sha" ] && [ "$(git rev-parse HEAD 2>/dev/null
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [ "$branch" = "HEAD" ] && branch=""
 fi
+# Whether the label names a branch at all, which is what earlier reviews of the same pull request
+# are found by (#1063); the short commit names nothing earlier reviews could share.
+branch_known=0
+[ -n "$branch" ] && branch_known=1
 [ -n "$branch" ] || branch="$short"
 
 elapsed_text() {   # seconds -> "1m 42s" or "42s"
@@ -279,7 +294,7 @@ CANDS
   # The budget for putting files back is measured against the file list with every candidate
   # marked left out, the longest that list can be.
   left_out_marks "$rows" > "$marks"
-  budget=$((PRR_MAX_BYTES - $(file_list "$marks" | wc -c) - $(wc -c < "$code")))
+  budget=$((PRR_MAX_BYTES - $(file_list "$marks" | wc -c) - hist_bytes - $(wc -c < "$code")))
   while IFS=$'\t' read -r b p kind why; do
     [ -n "$p" ] || continue
     if [ "$budget" -ge "$b" ]; then
@@ -295,6 +310,7 @@ ROWS
     left_out_marks "$kept" > "$marks"
     {
       file_list "$marks"
+      history_text
       cat "$code"
       [ "${#incl[@]}" -gt 0 ] && ar_review_diff "$gen_in" "$mb" "$full_sha" "${incl[@]}"
     } > "$diff_file" 2>/dev/null
@@ -312,6 +328,106 @@ KEPT
   printf '%s' "$kept" > "$leftout" 2>/dev/null
   return 0
 }
+
+# EARLIER REVIEWS OF THE SAME PULL REQUEST (claude-config#1063). Each update of a branch onto its
+# base (merge-when-ready.sh) is a new head and gets a fresh review, which knew nothing of what the
+# last one raised or how each point was answered: on #1049 the second review asked to reverse what
+# the first had asked for, and #1053 and #1056 drew new points on lines already settled, each a full
+# CI cycle while a merge waited. So the review of a head is given, between the file list and the
+# diff, every finding an earlier review of the same pull request raised, each with what has happened
+# since to the lines it cites (unchanged; changed, naming this branch's commits that touched the
+# file; or changed only by the base merged in), and this branch's own commit messages since, where an
+# answer given in words is. ai-review-pr-scope.txt tells the reviewer what to do with it.
+#
+# Context, never a filter: nothing here removes, merges or discounts a finding the new review
+# returns, so a real new finding can never be let through because an earlier one looked like it.
+# The SAME pull request means a finished review labelled with this branch, of a head this head
+# descends from: an update onto the base keeps the old head as an ancestor, and a review of a
+# branch name reused later, or of a head since rewritten, is not this history. Reviews are read
+# from the files the reviews already are, so there is no second record to drift (L655). The one awk
+# over their headers took 59 to 78 ms warm (381 ms cold) over the 1,280 claude-config reviews on disk
+# at load 7 to 9, 2026-10-12, five runs.
+line_since() {   # $1 = earlier head, $2 = path, $3 = cited line -> what happened to those lines since
+  local a="$1" p="$2" l="$3" lo hi near touched
+  lo=$((l - 3)); [ "$lo" -ge 1 ] || lo=1; hi=$((l + 3))
+  if ! git cat-file -e "$a:$p" 2>/dev/null; then
+    printf 'since %s: %s is not a file at that head, so whether the lines it cites changed cannot be told.' "${a:0:7}" "$p"
+    return
+  fi
+  # Read whole, then judged: an awk leaving a pipe early can fail the pipeline under pipefail.
+  near="$(git diff --no-color --no-renames -U0 "$a" "$full_sha" -- ":(literal)$p" 2>/dev/null)"
+  near="$(awk -v lo="$lo" -v hi="$hi" '
+    /^deleted file mode/ && !r { r = "gone" }
+    /^@@ / && !r { n = split($2, o, ","); s = substr(o[1], 2) + 0; c = (n > 1 ? o[2] + 0 : 1)
+                   e = (c == 0 ? s + 1 : s + c - 1)
+                   if (s <= hi && e >= lo) r = "near" }
+    END { print r }' <<<"$near")"
+  if [ -z "$near" ]; then
+    printf 'since %s: lines %s to %s of %s are unchanged.' "${a:0:7}" "$lo" "$hi" "$p"
+    return
+  fi
+  touched="$(git log -n 5 --no-merges --format='%h %s' "$full_sha" "^$a" "^$mb" -- ":(literal)$p" 2>/dev/null | awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')"
+  if [ "$near" = gone ]; then
+    printf 'since %s: %s was deleted or moved' "${a:0:7}" "$p"
+  else
+    printf 'since %s: lines %s to %s of %s changed' "${a:0:7}" "$lo" "$hi" "$p"
+  fi
+  if [ -n "$touched" ]; then
+    printf ', and this branch'"'"'s own commits touching it since are: %s.' "$touched"
+  else
+    printf ', by the base branch merged in: no commit of this branch'"'"'s own touched it since.'
+  fi
+}
+
+# Prints the block, or nothing when there is no earlier review with findings. Called from do_start,
+# whose mb it reads.
+earlier_reviews() {
+  [ "$branch_known" = 1 ] && [ -n "$full_sha" ] || return 0
+  local f rows fin s rf line sect oldest="" out="" seen=$'\n' kept=0 left=0
+  local -a files=()
+  for f in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$f" ] && files+=("$f"); done
+  [ "${#files[@]}" -gt 0 ] || return 0
+  # One awk over every review's header, newest first: finished, head and file of each finished
+  # review of this branch label that returned a review.
+  rows="$(awk -v br="$branch" '
+    FNR == 1 { b = ""; s = ""; st = ""; fin = 0 }
+    /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
+    /^status=/ { st = substr($0, 8) } /^finished=/ { fin = substr($0, 10) + 0 }
+    /^$/ { if (b == br && st == "ok") printf "%s\t%s\t%s\n", fin, s, FILENAME; nextfile }' "${files[@]}" 2>/dev/null \
+    | sort -t "$(printf '\t')" -k1,1nr)"
+  local re='^([^ :]+):([0-9]+): '
+  while IFS=$'\t' read -r fin s rf; do
+    [ -n "$s" ] && [ "$s" != "$full_sha" ] || continue
+    git merge-base --is-ancestor "$s" "$full_sha" 2>/dev/null || continue
+    sect=""
+    while IFS= read -r line; do
+      [[ "$line" =~ $re ]] || continue
+      # The same point raised by several reviews is listed once, at the newest that raised it.
+      case "$seen" in *$'\n'"$line"$'\n'*) continue ;; esac
+      seen="$seen$line"$'\n'
+      sect="$sect$line"$'\n'"    $(line_since "$s" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")"$'\n'
+    done < <(awk 'found { print } /^$/ && !found { found = 1 }' "$rf" 2>/dev/null)
+    [ -n "$sect" ] || continue
+    sect="--- the review of ${s:0:7} raised ---"$'\n'"$sect"
+    # The newest is always given, so the cap can never leave the whole history out unsaid.
+    if [ "$left" -gt 0 ] || { [ "$kept" -gt 0 ] && [ $(( $(printf '%s' "$out$sect" | wc -c) )) -gt "$PRR_HISTORY_MAX" ]; }; then
+      left=$((left + 1)); continue
+    fi
+    out="$out$sect"; kept=$((kept + 1)); oldest="$s"
+  done <<ROWS
+$rows
+ROWS
+  [ "$kept" -gt 0 ] || return 0
+  printf '===== EARLIER REVIEWS OF THIS PULL REQUEST: what %s earlier review(s) of branch %s raised, on heads this head descends from, most recent first, each finding with what has happened since to the lines it cites =====\n' "$kept" "$branch"
+  printf '%s' "$out"
+  [ "$left" -gt 0 ] && printf '(%s older review(s) left out: the history is capped at %s KB, PR_REVIEW_HISTORY_MAX_BYTES.)\n' "$left" "$((PRR_HISTORY_MAX / 1024))"
+  printf -- '--- this branch'"'"'s own commits since %s, oldest first: an answer given in words, such as a point declined and why, is in these messages ---\n' "${oldest:0:7}"
+  git log --reverse --no-merges --format='%h %s%n%w(0,4,4)%b' "$full_sha" "^$oldest" "^$mb" 2>/dev/null \
+    | awk 'NF && ++n <= 80 { print substr($0, 1, 300) }'
+  printf '===== END OF EARLIER REVIEWS =====\n\n'
+}
+
+history_text() { [ -n "${hist:-}" ] && printf '%s\n\n' "$hist"; }
 
 do_start() {
   if [ -e "$final" ] || [ -e "$pending" ]; then
@@ -345,14 +461,19 @@ do_start() {
     record could-not-run "Could not find where this branch left its base (${ref:-no origin default branch found}), so the whole branch cannot be told from the rest of history."
     echo "The lessons review could not run: no merge base with ${ref:-the base branch}."; return 0
   fi
-  local short_mb="${mb:0:7}" diff_file="$AR_STATE_DIR/$name.diff" total size
+  local short_mb="${mb:0:7}" diff_file="$AR_STATE_DIR/$name.diff" total size hist hist_bytes
   total="$(git diff --name-only "$mb" "$full_sha" 2>/dev/null | awk 'END { print NR }')"
   if [ "${total:-0}" -eq 0 ]; then
     record empty-diff "The head $short adds nothing to $ref (merge base $short_mb), so there is nothing to review." "$mb"
     echo "Nothing to review: $short adds nothing to $ref."; return 0
   fi
+  # What earlier reviews of this pull request raised (#1063): after the file list in every input
+  # this review is read from, single or in groups, and counted in each one's size.
+  hist="$(earlier_reviews)"
+  hist_bytes="$(history_text | wc -c | tr -d '[:space:]')"
   {
     file_list /dev/null
+    history_text
     ar_review_diff "$(ar_generated_paths "$mb" "$full_sha")" "$mb" "$full_sha"
   } > "$diff_file" 2>/dev/null
   size="$(wc -c < "$diff_file" | tr -d '[:space:]')"
@@ -486,7 +607,7 @@ NAMES
   [ -s "$leftout" ] && lo_marks="$(left_out_marks "$(cat "$leftout")")"
   { [ -n "$lo_marks" ] && printf '%s\n' "$lo_marks"
     awk -F '\t' '{ printf "%s\t(changed, reviewed in another group: not shown below)\n", $2 }' "$rows"; } > "$marks"
-  budget=$((PRR_MAX_BYTES - $(file_list "$marks" | wc -c) - $(group_note 99 99 | wc -c) - gen_reserve))
+  budget=$((PRR_MAX_BYTES - $(file_list "$marks" | wc -c) - $(group_note 99 99 | wc -c) - hist_bytes - gen_reserve))
   if [ "$budget" -le 0 ]; then
     groups_refusal="the list of its $total changed files alone leaves no room under the cap for any file's changes"; return 1
   fi
@@ -513,6 +634,7 @@ NAMES
     {
       file_list "$marks"
       group_note "$k" "$groups_n"
+      history_text
       ar_review_diff "$(ar_generated_paths "$mb" "$full_sha" "${gspecs[@]}")" "$mb" "$full_sha" "${gspecs[@]}"
     } > "$parts/$name-g$k.diff" 2>/dev/null
     sz="$(wc -c < "$parts/$name-g$k.diff" | tr -d '[:space:]')"

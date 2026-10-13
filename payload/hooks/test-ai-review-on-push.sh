@@ -436,6 +436,52 @@ check_eq "a review still inside its deadline is not mentioned" "" "$OUT"
 [ -f "$AI_REVIEW_STATE_DIR/$stale_key-$fresh_sha.txt.pending" ] && ok || bad "and its pending file is left alone"
 rm -f "$AI_REVIEW_STATE_DIR/$stale_key-$fresh_sha.txt.pending"
 
+# A pending review of ANOTHER repository past its deadline (claude-config#1095). Every session's
+# fast path is off while any pending marker exists, and a session settled only its own repository's,
+# so one dead review kept the sessions of every other repository on the full path until a session
+# of its own prompted. Any session settles it now, and only its own repository's sessions are told.
+other_key="$(ar_repo_key "$OTHER")"
+other_sha="0000000000000000000000000000000000000fed"
+other_pending="$AI_REVIEW_STATE_DIR/$other_key-$other_sha.txt.pending"
+printf 'repo=other\nbranch=fix/elsewhere\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=240\n' \
+  "$other_sha" "$(( $(date +%s) - 1000 ))" > "$other_pending"
+nudge n1
+check_eq "another repository's dead review is not shown to this repository's session" "" "$OUT"
+[ -e "$other_pending" ] && bad "but it is settled, so it no longer holds every session off the fast path" || ok
+[ -f "${other_pending%.pending}" ] && ok || bad "into a finished file saying so"
+nudge n3 "$OTHER"
+check "a session in that repository is told it never finished" "was started and never finished" "$OUT"
+check "naming its branch" "fix/elsewhere" "$OUT"
+# Still inside its deadline, another repository's review is left running.
+printf 'repo=other\nbranch=fix/elsewhere\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=240\n' \
+  "$other_sha" "$(date +%s)" > "$other_pending"
+rm -f "${other_pending%.pending}"
+nudge n1
+[ -f "$other_pending" ] && ok || bad "another repository's review inside its deadline is left alone"
+rm -f "$other_pending"
+# A marker with no start time to judge it by is judged by when it was written, so a damaged one
+# (a write cut short on a full disk) cannot hold every session off the fast path for ever.
+damaged_pending="$AI_REVIEW_STATE_DIR/$other_key-0000000000000000000000000000000000000dad.txt.pending"
+printf 'repo=other\nbranch=fix/damaged\n' > "$damaged_pending"
+touch -t 202001010000 "$damaged_pending"
+nudge n1
+[ -e "$damaged_pending" ] && bad "a marker with no start time, written long ago, is settled" || ok
+nudge n3 "$OTHER"
+check "and reported in its repository as never finished" "fix/damaged" "$OUT"
+printf 'repo=other\nbranch=fix/damaged\n' > "$damaged_pending"
+nudge n1
+[ -f "$damaged_pending" ] && ok || bad "while one with no start time written just now is left alone"
+rm -f "$damaged_pending" "${damaged_pending%.pending}"
+# Written in the SAME second as the session last looked. bash 3.2's -nt compares whole seconds, so
+# the fast path's "nothing written since" read a write in that second as older and hid it until
+# some later write; which way a run fell depended on the clock (found by the tests above, #1095).
+same_sec="$AI_REVIEW_STATE_DIR/$stale_key-0000000000000000000000000000000000000555.txt"
+printf 'repo=repo\nbranch=fix/same-second\nsha=0000000000000000000000000000000000000555\nstarted=1\nfinished=2\nstatus=ok\n\nsrc/a.ts:1: written in the same second. Should be: shown.\n' > "$same_sec"
+touch -t 202501010000.00 "$AI_REVIEW_STATE_DIR/shown/n1.list" "$AI_REVIEW_STATE_DIR/.updated"
+nudge n1
+check "a review written in the same second the session last looked is still shown" "written in the same second" "$OUT"
+rm -f "$same_sec"
+
 # No session id: it speaks rather than falling silent, and says on stderr why it could not dedupe.
 OUT="$(printf '{"cwd":"%s"}' "$REPO" | bash "$NUDGE" 2>"$WORKDIR/nudge.err")"
 check "with no session to key on it speaks" "deleteEvent still throws the raw error" "$OUT"
