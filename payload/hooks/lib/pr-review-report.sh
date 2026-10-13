@@ -20,6 +20,8 @@
 #     opens nothing, the pull request already exists) is a second chance to start a review, not a
 #     second pull request that also needs one. The per opening share is printed too, as before.
 #   - reviews by outcome, each outcome named; findings per finished review;
+#   - what reading the pull request's description and comments at each review's start came to
+#     (claude-config#1168): read, no open pull request, or could not be read, with what gh said;
 #   - findings ACTED ON: a review with findings counts as acted on when the pull request's final head
 #     changed a file one of its findings named, compared with the reviewed commit. A file changing is
 #     evidence of attention, not proof the finding was fixed, and the count says only what it
@@ -293,6 +295,18 @@ awk -F '\t' 'NF {
     sep = " ("
     for (k in n) if (k != "ok" && k != "empty-diff") { printf "%s%s %d", sep, k, n[k]; sep = ", " }
     if (sep == ", ") printf ")"
+    printf "\n"
+  }' "$work/reviews"
+
+# What reading the pull request's description and comments at each review's start came to
+# (claude-config#1168): a read that failed is counted here with the review's other outcomes, so a
+# read failing on every review (gh logged out on this Mac) shows rather than living only inside each
+# review's input (L77). Rows written before #1168 have no such column and are said as unrecorded,
+# never counted as reads that worked (L90).
+awk -F '\t' 'NF { n++ } NF && $12 != "" { a++; c[$12]++; if ($12 == "failed") w[$13 == "" ? "gh gave no reason" : $13]++ } END {
+    if (!a) { print "  reads of the pull request at review start: none recorded (rows written before claude-config#1168 carry none)"; exit }
+    printf "  reads of the pull request at review start: %d of %d reviews; read %d, no open pull request %d, could not be read %d", a, n, c["read"], c["none"], c["failed"]
+    if (c["failed"]) { sep = " ("; for (k in w) { printf "%s%d %s", sep, w[k], k; sep = ", " } printf ")" }
     printf "\n"
   }' "$work/reviews"
 

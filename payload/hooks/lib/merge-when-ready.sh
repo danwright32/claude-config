@@ -251,8 +251,8 @@ while :; do
   # server side update fires no local push hook, so nothing else would start it.
   rev_args=(--dir "$top" --sha "$head" --base-ref "origin/$base")
   [ -n "$branch" ] && rev_args+=(--branch "$branch")
-  # The pull request whose description and comments a review with earlier findings reads, where the
-  # answers to them are written (claude-config#1161).
+  # The pull request whose description and comments every review reads when it starts, where the
+  # answers to earlier findings are written (claude-config#1161).
   rev_args+=(--pr "$pr")
   if [ "$started_for" != "$head" ]; then
     started_for="$head"

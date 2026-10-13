@@ -322,6 +322,33 @@ out="$(run)"
 check "0 of 5 reviewed is not met however the unplaced opening falls" "GATE NOT MET" "$out"
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
 
+# 16. claude-config#1168: each review reads its pull request's description and comments when it
+# starts, and a read that failed is counted with the review's other outcomes, so a lasting failure
+# (gh logged out on one Mac) shows in the report, not only inside each review's input (L77). The
+# record is the one the review writes beside itself, read by the real ledger writer.
+export AI_REVIEW_STATE_DIR="$WORKDIR/state-prread"; mkdir -p "$AI_REVIEW_STATE_DIR"
+review_read(){ # review_read <sha> <outcome> <what gh said>: a finished review with its read record
+  local f="$WORKDIR/r-$1-read.txt"
+  printf 'repo=repo\nbranch=b\nsha=%s\nstarted=%s\nfinished=%s\nstatus=ok\nkind=pr\nbase=x\nfindings=0\n\nNo issues found.\n' \
+    "$1" "$((now - 200))" "$now" > "$f"
+  printf '%s\t%s\n' "$2" "$3" > "$f.prread"
+  bash -c '. "$1/lib/ai-review-common.sh"; ar_pr_ledger "$2" "$3"' _ "$DIR" "$f" "$REPO"
+}
+review "$S5" ok 0 "No issues found."
+out="$(run --no-github)"
+check "rows written before #1168 say no read was recorded, never zero failures" "reads of the pull request at review start: none recorded" "$out"
+review_read "$S1" read ""
+review_read "$S3" none ""
+review_read "$S6" failed $'HTTP 401: Bad credentials\twith a tab\nand a second line'
+review_read "$S7" failed $'HTTP 401: Bad credentials\twith a tab\nand a second line'
+check_eq "the ledger row carries the outcome" "failed" "$(awk -F '\t' -v s="$S6" '$5 == s { print $12 }' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv")"
+check_eq "and what gh said, on one line with no tab, so the row keeps its columns" "HTTP 401: Bad credentials with a tab and a second line" "$(awk -F '\t' -v s="$S6" '$5 == s { print $13 }' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv")"
+check_eq "every row still has thirteen columns" "13" "$(awk -F '\t' -v s="$S6" '$5 == s { print NF }' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv")"
+out="$(run --no-github)"
+check "the report counts the reads by outcome" "reads of the pull request at review start: 4 of 5 reviews; read 1, no open pull request 1, could not be read 2" "$out"
+check "naming what gh said, with how often" "2 HTTP 401: Bad credentials with a tab and a second line" "$out"
+export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
