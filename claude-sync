@@ -5723,10 +5723,21 @@ UNLOADABLE
 # copy>\t<commit that deleted it>", the path relative to the payload. A file whose stored form
 # cannot be read is not listed, so it stays where it is: removing work on the strength of a
 # comparison that could not be made is the wrong direction to fail (L5, L50).
+#
+# Priced for every apply, because it runs on every one, under the lock (review of #1093): ONE walk
+# of the history names every payload path the repo ever deleted, and only a file on that list is
+# hashed and judged, so this Mac's ordinary unsent new files cost a string match each rather than a
+# history walk each. The dry run reads only its deletion lines, which need no content comparison,
+# so it runs without -c and checksums nothing.
 deleted_leftovers_here(){
-  local d line change path h verdict _v vcommit delcommit
+  local d line change path h verdict _v vcommit delcommit ever_deleted
   have_git || return 0
   git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
+  ever_deleted="$(git -C "$SYNC_REPO" log --format= --name-only --diff-filter=D HEAD -- payload 2>/dev/null || true)"
+  [ -n "$ever_deleted" ] || return 0
+  ever_deleted="
+$ever_deleted
+"
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$PAYLOAD/$d" ] || continue
     [ -d "$CLAUDE_HOME/$d" ] || continue
@@ -5740,6 +5751,9 @@ deleted_leftovers_here(){
       [ -n "$path" ] || continue
       case "$path" in */|.|./) continue ;; esac
       [ -f "$CLAUDE_HOME/$d/$path" ] || continue
+      case "$ever_deleted" in *"
+payload/$d/$path
+"*) ;; *) continue ;; esac
       if tokenized_path "$d/$path"; then
         h="$(tok < "$CLAUDE_HOME/$d/$path" | git -C "$SYNC_REPO" hash-object --stdin 2>/dev/null)" || continue
       else
@@ -5750,7 +5764,7 @@ deleted_leftovers_here(){
       case "$verdict" in 'leftover '*) ;; *) continue ;; esac
       read -r _v vcommit delcommit <<< "$verdict"
       printf '%s\t%s\t%s\n' "$d/$path" "$vcommit" "$delcommit"
-    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+    done < <(rsync -ain --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
   done
   return 0
 }
