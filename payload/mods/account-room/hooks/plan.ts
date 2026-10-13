@@ -3,9 +3,10 @@
 //
 // The table is the one Claude Code 2.1.296 itself keeps (claude_max, claude_pro, claude_enterprise,
 // claude_team), measured from its build on 2026-10-13, never guessed. The status line names plans in
-// jq (payload/mods/status-bar/statusline.sh) and keeps its own copy of this table, one entry per line
-// written exactly as here; tests/test-status-bar-statusline.sh reads every entry below and fails when
-// the status line names any of them differently, so the two cannot drift.
+// jq (payload/mods/status-bar/statusline.sh) and keeps its own copy of this table as one JSON object
+// on its `plans='...'` line. tests/test-status-bar-statusline.sh reads each entry below (so keep them
+// one per line, written `  claude_x: 'Name',`), runs it through the status line, and compares the
+// two tables' keys, failing when they differ, so the two cannot drift.
 export const PLANS: Readonly<Record<string, string>> = {
   claude_team: 'Team',
   claude_max: 'Max',
