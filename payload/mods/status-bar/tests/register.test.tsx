@@ -734,6 +734,13 @@ test("the facts file names the session's own account, read at its start, and kee
   expect(accountIn(files)).toEqual(mine)
 })
 
+test("the facts file carries the login's organizationType, so the status line can name the plan (#1156)", withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  files[LOGIN_FILE] = JSON.stringify({ oauthAccount: { accountUuid: 'acct-1', organizationUuid: 'org-1', displayName: 'Dan', organizationName: 'Pennie', organizationType: 'claude_team', billingType: 'kept out' } })
+  await start($, clock)
+  expect(accountIn(files)).toEqual({ accountUuid: 'acct-1', organizationUuid: 'org-1', displayName: 'Dan', organizationName: 'Pennie', organizationType: 'claude_team' })
+})
+
 test('a second session start in the same session, as a reload of the mod brings, keeps the account first read (#815)', withKit, async ($, on) => {
   const { files, clock } = world(on)
   loginAs(files, 'acct-1', 'Dan', 'Pennie')

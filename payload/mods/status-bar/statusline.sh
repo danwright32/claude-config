@@ -171,6 +171,10 @@ fi
 # The session's account as the mod recorded it at session start (#815): an object, {} for no
 # claude.ai login, or null for a login file it could not read then, which is said as unknown rather
 # than replaced by whatever the Mac is logged in to now (L11).
+# The plan each organizationType names (#1156), the account room's table in
+# payload/mods/account-room/hooks/plan.ts (Claude Code's own values, measured 2026-10-13). Kept on
+# this one line, which tests/test-status-bar-statusline.sh reads and holds to that table key for key.
+plans='{"claude_team":"Team","claude_max":"Max","claude_pro":"Pro","claude_enterprise":"Enterprise"}'
 src=""
 case "$sid" in
   ''|*[!A-Za-z0-9-]*) ;;
@@ -182,10 +186,15 @@ if [ "$src" = null ]; then
 elif [ -n "$src" ] || [ -f "$login" ]; then
   [ -n "$src" ] || src="$(jq -c '.oauthAccount // {}' "$login" 2>/dev/null)"
   if [ -n "$src" ] && account="$(printf '%s' "$src" | jq -r '[(.displayName // .emailAddress // empty), (.organizationName // empty)] | map(select(. != "")) | join(", ")' 2>/dev/null)"; then
+    # The plan, shown after the name and org when there is no nickname (#1156): its name from the
+    # table, else the value as it came, control bytes removed and trimmed as the account room does,
+    # never hidden. No value, or one that is not text, is no plan.
+    plan="$(printf '%s' "$src" | jq -r --argjson p "$plans" '.organizationType | strings | (. as $t | if $p | has($t) then $p[$t] else (gsub("[\u0000-\u001f\u007f]"; "") | sub("^\\s+"; "") | sub("\\s+$"; "")) end) | select(. != "") | "\(.) plan"' 2>/dev/null | head -1 | LC_ALL=C tr -d '\000-\037\177')"
     # A nickname given in the account room (/accounts rename) replaces the name and org (Dan, live
     # check 2026-10-05). It is keyed as the account room keys it: the first 16 hex digits of
     # SHA-256 over "<account id>:<org id>". No nickname, a skipped one (null) or a file that cannot
     # be read leaves the name and org as they are.
+    nick=""
     ids="$(printf '%s' "$src" | jq -r 'select(.accountUuid and .organizationUuid) | "\(.accountUuid):\(.organizationUuid)"' 2>/dev/null)"
     nicks="$HOME/.claude/mods/account-room-nicknames.json"
     if [ -n "$ids" ] && [ -f "$nicks" ] && command -v shasum >/dev/null 2>&1; then
@@ -196,8 +205,10 @@ elif [ -n "$src" ] || [ -f "$login" ]; then
       # Tabs and newlines become spaces and every other control byte goes, then the ends are trimmed,
       # so a nickname of only spaces leaves the name and org rather than a blank segment.
       nick="$(jq -r --arg k "$key" '(.names[$k] | if type == "object" then .name else . end) // empty | strings | gsub("[\t\n\r]"; " ") | gsub("[\u0000-\u001f\u007f]"; "") | sub("^\\s+"; "") | sub("\\s+$"; "")' "$nicks" 2>/dev/null | head -1 | LC_ALL=C tr -d '\000-\037\177')"
-      [ -n "$nick" ] && account="$nick"
     fi
+    # A nickname replaces the name, org and plan alike.
+    if [ -n "$nick" ]; then account="$nick"
+    elif [ -n "$plan" ]; then account="${account:+$account, }$plan"; fi
     [ -n "$account" ] && parts+=("$account")
   else
     parts+=("account unknown")

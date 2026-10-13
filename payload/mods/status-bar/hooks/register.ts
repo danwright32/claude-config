@@ -129,7 +129,7 @@ const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAcco
     const o = (JSON.parse(await $.fs.read(`${h}/.claude.json`)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
     const out: StatusBarAccount = {}
     if (!o || typeof o !== 'object') return out
-    for (const k of ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress', 'organizationName'] as const) {
+    for (const k of ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress', 'organizationName', 'organizationType'] as const) {
       const v = o[k]
       if (typeof v === 'string') out[k] = v
     }

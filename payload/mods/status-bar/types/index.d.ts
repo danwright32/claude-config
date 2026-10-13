@@ -40,6 +40,8 @@ export type StatusBarAccount = {
   displayName?: string
   emailAddress?: string
   organizationName?: string
+  /** The plan the login is on, as Claude Code names it (claude_team, claude_max...); the status line names it (#1156). */
+  organizationType?: string
 }
 
 declare module 'claude-code' {
