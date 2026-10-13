@@ -2443,7 +2443,8 @@ way", so the edit it never wanted stayed.
   `git add f && git restore f`, a script that runs git), so a line that is anything more than one
   git checkout or restore, a cd before it aside, is judged whole, saying so (lessons review).
 - **A refusal holds the change, not the file.** It now says "Do not make this change to <file> any
-  other way", and that undoing an earlier edit of one's own is judged by the lines it changes.
+  other way", and, for a `.tsx` or `.jsx` file only, that undoing an earlier edit of one's own is
+  judged by the lines it changes; a stylesheet's refusal does not claim it (lessons review).
 - Left as is: a stylesheet or other look file has no lines that draw nothing, so putting one back
   still waits on a round. Dan's Not a look change lets one refused call through, so undoing an edit
   he passed that way to a stylesheet is asked about again.

@@ -1378,6 +1378,10 @@ test('#1158: a refusal holds the change it refused, never the file, so undoing a
     expect(why).toContain('Blocked')
     expect(why).not.toContain('Do not change app/globals.css any other way')
     expect(why).toContain('Do not make this change to app/globals.css any other way')
+    // A stylesheet is judged whole, so its refusal never claims an undo is judged by its lines
+    // (lessons review); a React file's is, and says so.
+    expect(why).not.toContain('judged by the lines it changes')
+    expect(refusalOf(await call($, { ...PAGE, ...extra }))).toContain('undoing an earlier edit of your own is judged by the lines it changes')
   }
 })
 

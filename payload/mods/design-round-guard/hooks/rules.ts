@@ -758,7 +758,11 @@ const named = (subjects: readonly DesignRoundSubject[]) => listed(subjects.map(s
 
 // A refusal holds the change it refused, never the file (#1158): told "Do not change <file> any other
 // way", a session that had made an edit the guard let through could not undo it, so the edit stayed.
-const leaveIt = (f: string) => `Do not make this change to ${f} any other way; undoing an earlier edit of your own is judged by the lines it changes, as an edit is.`
+// That an undo is judged by its lines is said only where it is: every file a React one (judgedByText);
+// a stylesheet is judged whole however it is put back (lessons review of #1158).
+const leaveIt = (files: readonly string[]) =>
+  `Do not make this change to ${listed(files)} any other way` +
+  (files.every(judgedByText) ? '; undoing an earlier edit of your own is judged by the lines it changes, as an edit is.' : '.')
 
 // What a refusal says of a git checkout or restore whose lines could not be measured (#1158), each
 // as unreadPutBack gives it, so the session is told why the whole file was judged.
@@ -777,7 +781,7 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
     `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
     unreadSaid(unread) +
-    leaveIt(f)
+    leaveIt(files)
   )
 }
 
@@ -795,7 +799,7 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
     unreadSaid(unread) +
     `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
-    leaveIt(f)
+    leaveIt(files)
   )
 }
 
