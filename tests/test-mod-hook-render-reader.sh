@@ -70,6 +70,10 @@ else
     case "$line" in *'"isModHook":true'*'"read":true'*) check "$name is read as a mod hook file" ok ;; *) check "$name is read as a mod hook file" "$line" ;; esac
     case "$line" in *'"comment":true'*|*'"comment":-1'*) check "$name: a changed comment line is logic only" ok ;; *) check "$name: a changed comment line is logic only" "$line" ;; esac
   done <<<"$out"
+  # A file with no comment line of its own (-1) measures nothing, so at least one must have been
+  # measured, or every pass above would be that (lessons review).
+  measured="$(printf '%s\n' "$out" | grep -c '"comment":true')"
+  [ "$measured" -ge 1 ] && check "a changed comment line was measured in at least one real file" ok || check "a changed comment line was measured in at least one real file" "none measured: $out"
   # Most draw through JSX; manual steps draws only through mod-kit's frames, so holds none. A reader
   # finding no element in any of them would be reading nothing.
   drawing="$(printf '%s\n' "$out" | grep '"rel"' | grep -c -v '"elements":0')"
