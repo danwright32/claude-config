@@ -2,6 +2,7 @@
 name: design-rounds
 description: Use when a product or feature is about to get its look settled, when the first screen is about to be designed or built, when an existing screen is being redesigned, or when a choice between visual directions (layout, type, density, chrome, colour) has to be made with Dan. Also use when a settled design decision needs to survive past the session that made it.
 ---
+<!-- design-round-guard contract: 1 -->
 
 # Design rounds
 
@@ -179,7 +180,7 @@ nothing on screen changes, build no switcher, and close one of two ways.
 
 - **A refused edit is waiting** (the design round guard named its id): ask the guard's own
   question about it, one AskUserQuestion with
-  `"metadata": { "source": "design-round-guard:<the id the refusal named>" }` and the
+  `"metadata": { "source": "design-round-guard:<the id the refusal named>", "contract": 1 }` and the
   question "Skip design rounds for this issue?". The guard words it, and its answer
   **Not a look change** lets that one edit through, recorded as his word, while every
   other look changing edit stays held. Then send the refused call again, unchanged.
@@ -199,12 +200,16 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 ```json
 {
   "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
-  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>" }
+  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>", "contract": 1 }
 }
 ```
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
+- `"contract": 1` is the version of these steps the guard must know. A session keeps the
+  guard it started with while these steps are read fresh, so when the guard answers that it
+  predates the steps you read, nothing was asked or recorded: tell Dan, and go on in a new
+  session. Asking again in this one gets the same answer (claude-config#1057).
 - `"path"`, an absolute path (a relative one is refused, by name), names the project the
   design is for, and the settlement is recorded for the issue its checkout's branch names
   (or the branch, when it names none). Never the folder this session runs in, which can be
