@@ -96,7 +96,10 @@
 
 set -uo pipefail
 
-PRR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh).
+PRR_LIB="${BASH_SOURCE[0]%/*}"; [ "$PRR_LIB" != "${BASH_SOURCE[0]}" ] || PRR_LIB=.
+PRR_LIB="$(cd "${PRR_LIB:-/}" && pwd)"
 # shellcheck source=ai-review-common.sh
 . "$PRR_LIB/ai-review-common.sh" 2>/dev/null || {
   echo "The lessons review could not run: $PRR_LIB/ai-review-common.sh is missing, so the review state cannot be read. Nothing was reviewed. Override for one merge, explained to Dan first: SKIP_PR_REVIEW=1 <the merge command>."
