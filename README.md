@@ -964,18 +964,30 @@ answer as nothing wrong.
 
 ## Secret scan
 
-Every send scans the payload, the only thing it commits, and aborts if it finds a credential
-shape. Every `git push` of this repository and every CI run scans the WHOLE tree with the same
-rules (#1128): `tests/test-payload-secret-scan.sh` is a whole tree scanner, so the pre push scanner
-gate runs it. Accept a known string by adding the sha256 of the matched text to
-`.secret-allowlist`, or bypass once with `SYNC_SKIP_SECRET_SCAN=1`.
+Every send scans the payload, and every file outside it that a commit the shared repo does not
+hold yet changed, and aborts if it finds a credential shape. The sync commits records of its own
+outside the payload (`lesson-counts/<host>.tsv`, the lesson tag files, `lesson-bands/<host>`), and
+the push publishes them with the payload, so they are read off those commits rather than from a
+list of what the sync writes (#1133). Every `git push` of this repository and every CI run scans
+the WHOLE tree with the same rules (#1128): `tests/test-payload-secret-scan.sh` is a whole tree
+scanner, so the pre push scanner gate runs it. Bypass once with `SYNC_SKIP_SECRET_SCAN=1`.
+
+An entry in `.secret-allowlist` accepts one value in one file: it is the sha256 of
+`<path in the repository>:<matched text>`, such as `payload/skills/x/config.json:token=...`. An
+entry used to be the sha256 of the matched text alone, and for a private key that text is the
+header, the same for every key of its kind, so three entries written for one document accepted
+every real RSA, EC and PGP key anywhere (#1133, L1022). A private key header is now never accepted
+by any entry; write an example of one so the scan does not read it as a header. Adding or widening
+an entry needs Dan's sign off.
 
 The rules are claude-sync's own, in `scan_secrets`, and nothing else: no external scanner is
 called. They are distinctive token shapes (an AWS key id, GitHub, Slack, Google and Stripe
-tokens, a private key header) and a key named `secret`, `token`, `api_key` or `password`, in any
-letter case, followed by 24 or more identifier characters. `passwd` is matched in lower case only:
-a capital `PASSWD` would refuse the sudoers line the bug-bash suite expects (`NOPASSWD:` followed by
-a path), and whether to accept that line is an open decision for Dan.
+tokens, a private key header) and a key named `secret`, `token`, `api_key`, `password`, `passwd`
+or `private_key`, in any letter case and with the name running on past that word (`SECRET_KEY`,
+`client_secret_key`, `AWS_SECRET_ACCESS_KEY`), followed by 24 or more identifier characters. The
+one name left out is `NOPASSWD`, a sudoers tag rather than a key: the bug-bash suite expects the
+grant `NOPASSWD:` followed by a path, and the rule skips `PASSWD` right after `NO` rather than
+holding an exception for that line (#1133).
 
 ### A refused send does not stop this Mac receiving
 
