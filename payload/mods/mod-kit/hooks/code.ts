@@ -635,6 +635,70 @@ export const codeTargets = (lang: Lang, inline: string): string[] | undefined =>
   return pythonTargets(SURFACES.python.canonical?.(inline) ?? inline)
 }
 
+/**
+ * A python program's text with what it holds only as data blanked (#1165), for a guard reading the
+ * names of the files a program can open: each comment, and each plain string literal spanning lines
+ * (the text a script puts into a file, a block it replaces), all but its last word, which may be a
+ * name (`"""notes\napp/page.tsx"""`, or one a .strip() leaves). A literal on one line is kept whole,
+ * since a path (one with a space in it too, in a Bidspoke checkout) and a sentence read alike there,
+ * and so is an f-string or a t-string, whose braces hold code. A blanked character becomes a space, a
+ * line break staying, so the text keeps its shape. Undefined where data cannot be told from code: any
+ * language but python, a program that runs a process or builds code at run time (exec, eval,
+ * compile), either of which can run what a string holds, and one whose code cuts text into parts
+ * (PARSES), which can cut a block into the names it opens. Like the #940 reading of the same text
+ * (ask before saving's withoutPythonText), it reads the text, not what the program does with it: a
+ * name sliced or searched out of a block at run time is not seen, as a name built at run time
+ * (`'app/' + x + '.tsx'`) never was. Following a block's value to every call it reaches is a parse
+ * of python this reader does not make (lessons review of #1165).
+ */
+export const codeOnly = (lang: Lang, inline: string): string | undefined => {
+  if (lang !== 'python') return undefined
+  const s = SURFACES.python
+  const canonical = s.canonical?.(inline) ?? inline
+  if (first(s.process, canonical) || first(s.dynamic, canonical)) return undefined
+  const blank = (t: string) => t.replace(/[^\n]/g, ' ')
+  let out = ''
+  let i = 0
+  while (i < inline.length) {
+    const ch = inline[i] as string
+    if (ch === '#') {
+      const end = inline.indexOf('\n', i)
+      const to = end === -1 ? inline.length : end
+      out += `#${blank(inline.slice(i + 1, to))}`
+      i = to
+      continue
+    }
+    if (ch !== "'" && ch !== '"') {
+      out += ch
+      i++
+      continue
+    }
+    // A string literal, read as python reads it: a backslash keeps it open (in a raw string too), and
+    // one with a single quote ends at its line.
+    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(inline.slice(Math.max(0, i - 3), i))?.[1] ?? ''
+    const q = inline.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+    let j = i + q.length
+    while (j < inline.length && !inline.startsWith(q, j) && (q.length === 3 || inline[j] !== '\n')) j += inline[j] === '\\' ? 2 : 1
+    const to = Math.min(j, inline.length)
+    const body = inline.slice(i + q.length, to)
+    const closed = inline.startsWith(q, to)
+    if (/[fFtT]/.test(prefix) || !body.includes('\n')) out += q + body
+    else {
+      // The last word, kept with whatever space follows it (a .strip() makes it the whole).
+      const last = /[^\s]*\s*$/.exec(body)?.[0] ?? ''
+      out += q + blank(body.slice(0, body.length - last.length)) + last
+    }
+    if (closed) out += q
+    i = to + (closed ? q.length : 0)
+  }
+  // A program that cuts text into parts may cut a block into the names it opens (`"""a.css\nb.css""".split()`,
+  // a JSON map of files), so where its code does, data cannot be told from names (lessons review).
+  return PARSES.test(out) ? undefined : out
+}
+// Python's ways of cutting text into parts: str's split and partition, a pattern's matches, and the
+// parsers of structured text (json, yaml, toml, csv, ast, shlex, configparser).
+const PARSES = /\.\s*(?:r?split|splitlines|r?partition|findall|finditer|search|match|fullmatch)\s*\(|\b(?:loads|load_all|safe_load|literal_eval)\s*\(|\b(?:csv|shlex|configparser|tomllib|toml|yaml)\s*\./
+
 /** What inline code in a language can do that no build refuses, or undefined when it only reads. */
 export const codeVerdict = (lang: Lang, inline: string): CodeVerdict | undefined => {
   const s = SURFACES[lang]

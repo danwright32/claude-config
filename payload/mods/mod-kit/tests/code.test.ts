@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { codeVerdict } from '../hooks/code.ts'
+import { codeOnly, codeVerdict } from '../hooks/code.ts'
 
 // The per language judge of inline code (#712: moved here from scope-modes, so $.modkit.writes and
 // no build read code the same way). Its rules are pinned end to end through no build's own tests;
@@ -100,5 +100,43 @@ describe('codeVerdict after #760', () => {
     expect(codeVerdict('ruby', 'def public_send(name, *args); end')).toBeUndefined()
     expect(codeVerdict('ruby', 'send(name, "ls")')).toEqual({ does: 'unreadable', seen: 'send of a computed name' })
     expect(codeVerdict('ruby', 'def go(n)\n  send(n)\nend')).toEqual({ does: 'unreadable', seen: 'send of a computed name' })
+  })
+})
+
+// #1165: since #1151 the design round guard read every look file name a program's text holds as a
+// file it may write, so a python heredoc editing a test file, whose replacement text quoted
+// app/page.tsx as test data, was held as a change to app/page.tsx. What the program holds only as
+// data is blanked, so a guard reads the names it can open.
+describe('codeOnly (#1165)', () => {
+  const blank = (s: string) => s.replace(/[^\n]/g, ' ')
+  test('a comment and a string literal spanning lines are data; code, a one line literal and an f-string are kept', () => {
+    const data = "  test('x', () => {\n    git('checkout -- app/page.tsx')\n  })\n"
+    expect(codeOnly('python', `p='tests/x.test.ts'\nnew='''${data}'''\nopen(p,'w').write(new)`)).toBe(`p='tests/x.test.ts'\nnew='''${blank(data.slice(0, -3))}})\n'''\nopen(p,'w').write(new)`)
+    expect(codeOnly('python', '# rewrites app/page.tsx\nx = 1')).toBe(`#${blank(' rewrites app/page.tsx')}\nx = 1`)
+    // One line: a path, a path with a space in it (a Bidspoke checkout), a sentence.
+    for (const code of ["open('app/page.tsx', 'w')", "open('/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx', 'w')", "print('wrote app/page.tsx')"])
+      expect(codeOnly('python', code)).toBe(code)
+    // An f-string's braces hold code, so it is kept, across lines too.
+    const f = "open(f'''{root}\n/app/page.tsx''', 'w')"
+    expect(codeOnly('python', f)).toBe(f)
+  })
+  test('a literal spanning lines keeps its last word, which may be a name, with any space after it', () => {
+    expect(codeOnly('python', 'p = """notes\napp/page.tsx"""\nopen(p, "w")')).toBe('p = """     \napp/page.tsx"""\nopen(p, "w")')
+    expect(codeOnly('python', "p = '''\nnotes\napp/page.tsx\n'''.strip()\nopen(p, 'w')")).toBe("p = '''\n     \napp/page.tsx\n'''.strip()\nopen(p, 'w')")
+  })
+  // Lessons review: names in a block the program cuts into parts are names it may open.
+  test('a program whose code cuts text into parts may open the names a block holds, so it is undefined', () => {
+    expect(codeOnly('python', 'for f in """app/a.css\napp/b.css""".split():\n    open(f, "w").write("")')).toBeUndefined()
+    expect(codeOnly('python', "import json\nfor f, t in json.loads('''{\n  \"app/page.tsx\": \"x\"\n}''').items():\n    open(f, 'w').write(t)")).toBeUndefined()
+    expect(codeOnly('python', "import re\nfor f in re.findall(r'\\S+', '''a\napp/page.tsx b''')[:1]:\n    open(f, 'w')")).toBeUndefined()
+    expect(codeOnly('python', "s = '''a\nb'''\nfor f in s.splitlines():\n    open(f, 'w')")).toBeUndefined()
+    // A cut that only a block it puts in a file holds runs nowhere, so that program is read.
+    expect(codeOnly('python', "open(p, 'w').write('''x = a.split()\ny''')")).toBe(`open(p, 'w').write('''${blank('x = a.split()\n')}y''')`)
+  })
+  test('where data cannot be told from code it is undefined: a process, code built at run time, or any language but python', () => {
+    expect(codeOnly('python', "import subprocess\nsubprocess.run('''sed -i s/a/b/\napp/page.tsx''', shell=True)")).toBeUndefined()
+    expect(codeOnly('python', "from os import system\nsystem('''touch\napp/page.tsx''')")).toBeUndefined()
+    expect(codeOnly('python', "exec('''open('app/page.tsx',\n'w')''')\nopen('x', 'w')")).toBeUndefined()
+    expect(codeOnly('node', "require('fs').writeFileSync(p, `\napp/page.tsx`)")).toBeUndefined()
   })
 })

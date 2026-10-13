@@ -148,10 +148,14 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     // command's other heredocs are another command's data (a design round's spec naming its
     // stylesheet), and a bare name lands where the program runs, never in the session's folder.
     // After a cd the reader cannot follow, a bare name's place is unknown, and is held as such.
+    // Only the names it can open count (#1165): mod-kit's `code` blanks what it holds only as data (a
+    // comment, a block spanning lines it puts in a file), so test data quoting app/page.tsx is not a
+    // write to it. Where mod-kit cannot tell data from code it gives none, and the whole text is read.
     if (u.program !== undefined) {
       // Its own words count too: a file handed to it as an argument (`python3 - app/site.css <<EOF`,
-      // read as sys.argv) is one it may write (lessons review of #1151).
-      for (const m of mentionedLookFiles([u.program, ...u.words].join('\n'))) {
+      // read as sys.argv) is one it may write (lessons review of #1151). A -c program is one of its
+      // words, read as its code instead.
+      for (const m of mentionedLookFiles([u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n'))) {
         const placed = /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m) || u.folder !== undefined
         targets.push(placed ? { path: resolvePath(m, u.folder ?? '/', at.home), word: m } : { word: m })
       }

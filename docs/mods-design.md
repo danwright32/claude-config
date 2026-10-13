@@ -2383,6 +2383,42 @@ the NurseDex checkout.
   still read from the whole command. A write the reader followed through a variable is still
   judged by everything the command mentions (#743), which this leaves as it was.
 
+### What #1165 changed, 2026-10-13
+
+Reading a program by its own text still read every look changing name in it as a file it may
+write. An agent on #1158 ran a python heredoc editing `writes.test.ts`, whose new test data quoted
+`app/page.tsx`, and was held as changing `app/page.tsx`.
+
+- **A name counts where the program can open it, not where it sits in data.** mod-kit's write
+  reader now gives, beside `program`, its `code`: the text with what a python program holds only as
+  data blanked, each comment and each plain string literal spanning lines (the block it puts in a
+  file), but its last word, which may be a name. A literal on one line is kept whole: a path, a path
+  with a space in it (a Bidspoke checkout) and a sentence read alike there. An f-string is kept, its
+  braces being code. The design round guard reads `code` where it is given.
+- **Where data cannot be told from code, the whole text is still the guess, so it asks.** `code` is
+  absent for any language but python, for a program that runs a process or builds code at run time
+  (either can run what a string holds), for one whose code cuts text into parts (split, splitlines,
+  partition, a pattern's matches, a JSON, YAML, TOML, CSV or shlex parse), which can cut a block into
+  the names it opens (the lessons review's case, a block of two stylesheets split and each opened),
+  for one the shell may have changed (an unquoted heredoc or
+  a -c program holding a $ or a backtick, ask before saving's own test for that, #940), for one a
+  command substitution runs, and for one whose text names every file it writes, which `targets`
+  already judges (#830).
+- **Decided in the shared reader, read only by the design round guard.** Only mod-kit's judge knows
+  whether a program runs a process or builds code, so the blanking is there. Ask before saving does
+  not read `code`: its #940 reading counts a memory file a quote closes as a path even inside a
+  string, a choice made there, so its behaviour is unchanged (108 of 108 of its tests, untouched).
+- **What it does not see, as #940's reading does not.** It reads the text, not what the program
+  does with it: a name a program slices or searches out of a block at run time is not seen, as a
+  name built at run time (`'app/' + x + '.tsx'`) never was. Cutting a block into a list of names is
+  the common way such a name reaches an open, and that one asks. Following a block's value to every
+  call it reaches would be a parse of python mod-kit does not make (lessons review).
+- Measured over 66 real python3 commands from this Mac's transcripts that open or quote a look file,
+  and the held one: 64 programs judged by their text, 50 given `code`, and 8 that lost a name, the
+  held one's `app/page.tsx` and seven others, every one data (a doc comment in a Swift block, test
+  data, a comment above the call, a URL in a test script), none a file the program opens. The
+  Ovation program patching three design pages is still held for all three.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
