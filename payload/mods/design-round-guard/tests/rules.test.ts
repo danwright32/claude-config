@@ -10,6 +10,13 @@ import {
   SKIP_YES,
   agentRefusal,
   callKey,
+  isModHook,
+  modHookLogicOnly,
+  onScreenProblem,
+  sourceSpans,
+  TYPED_TOAST,
+  typedSettled,
+  typedSkip,
   dataOnlyChange,
   editedText,
   isOwnRecord,
@@ -205,8 +212,10 @@ test('the refusal names the file and both ways on, in plain words, tied to the r
 
 test("Dan's two questions are the plan's words, with answers the guard sets itself", () => {
   const subjects = [{ key: 'k', label: 'issue #978 in slate' }]
-  expect(skipQuestion(['app/page.tsx'], subjects).startsWith(SKIP_QUESTION)).toBe(true)
-  expect(skipQuestion(['app/page.tsx'], subjects)).toContain('app/page.tsx')
+  // #1138: what changes on screen leads, in the session's words; the plan's question, then the file.
+  const q = skipQuestion('The Save button on the invoice screen turns blue', ['app/page.tsx'], subjects)
+  expect(q).toBe(`The Save button on the invoice screen turns blue. ${SKIP_QUESTION} This is for issue #978 in slate; the file is app/page.tsx.`)
+  expect(DASHES.test(q)).toBe(false)
   expect(skipOptions(subjects).map(o => o.label)).toEqual([SKIP_YES, SKIP_NO, NOT_LOOK])
   expect(settledQuestion(subjects).startsWith(SETTLED_QUESTION)).toBe(true)
   expect(settledQuestion(subjects)).toContain('issue #978 in slate')
@@ -309,4 +318,91 @@ test("the third answer to the skip question says it covers this one edit, in pla
   const third = skipOptions(subjects).find(o => o.label === NOT_LOOK)
   expect(third?.description).toContain('this edit')
   expect(DASHES.test(JSON.stringify(skipOptions(subjects)))).toBe(false)
+})
+
+// #1138: the sentence the skip question leads with is refused when it is missing, too long for one
+// sentence, or names a file, the very thing Dan could not read.
+test("the skip question's plain sentence is required, one sentence long, and names no file", () => {
+  const files = ['payload/mods/mod-kit/hooks/register.tsx']
+  expect(onScreenProblem('Nothing on screen changes: mod-kit gains one reader of whether a message is yours.', files)).toBeUndefined()
+  expect(onScreenProblem('The steps card in the band gets an amber edge.', files)).toBeUndefined()
+  for (const missing of [undefined, null, '', '  ', 3]) expect(onScreenProblem(missing, files)).toContain('"onScreen"')
+  expect(onScreenProblem('Changes register.tsx', files)).toContain('names a file (register.tsx)')
+  expect(onScreenProblem('Restyles app/globals.css', files)).toContain('globals.css')
+  expect(onScreenProblem('y'.repeat(301), files)).toContain('at most 300')
+  for (const t of [onScreenProblem('', files), onScreenProblem('Changes register.tsx', files)]) expect(DASHES.test(String(t))).toBe(false)
+})
+
+test('a typed answer is said to Dan and to Claude as not recorded, with the question to ask again', () => {
+  const subjects = [{ key: 'k', label: 'issue #978 in slate' }]
+  const t = typedSkip('which page?', ['app/page.tsx'], subjects)
+  expect(t).toContain('"which page?"')
+  expect(t).toContain('not recorded')
+  expect(t).toContain('ask him the same question again')
+  expect(typedSettled('fine')).toContain(`ask him "${SETTLED_QUESTION}" again`)
+  expect(TYPED_TOAST).toContain('not recorded')
+  for (const x of [t, typedSettled('fine'), TYPED_TOAST]) expect(DASHES.test(x)).toBe(false)
+})
+
+// #1138: a mod's own hook files, judged by what they draw.
+test("a mod's hook file is one under mods/<mod>/hooks, in TSX or JSX; nothing else is", () => {
+  expect(isModHook('payload/mods/mod-kit/hooks/register.tsx')).toBe(true)
+  expect(isModHook('mods/x/hooks/panel.jsx')).toBe(true)
+  expect(isModHook('payload/mods/mod-kit/hooks/rules.ts')).toBe(false)
+  expect(isModHook('src/app/mods/page.tsx')).toBe(false)
+  expect(isModHook('src/mods/x/components/hooks.tsx')).toBe(false)
+})
+
+const TSX = [
+  "import type { Register } from 'claude-code'",
+  '// a < b, and <Text> in a comment is no element',
+  "const re = /<Box>'/g",
+  'const n = (a: number, b: number): Promise<Array<number>> => Promise.resolve([a < b ? a : b / 2])',
+  'const label = `${n} <x>`',
+  "export const draw = (ok: boolean) => ok ? <Text color=\"green\">don't {label}</Text> : (",
+  '  <Box flexDirection="column">',
+  '    {/* note */}',
+  '    <Text {...{ a: 1 }} dimColor>{[1].map(x => <Text key={String(x)}>x</Text>)}</Text>',
+  '  </Box>',
+  ')',
+  '',
+].join('\n')
+
+test('the JSX reader finds elements only where an expression starts, past strings, regexes, comments and generics', () => {
+  const spans = sourceSpans(TSX)
+  if (!spans) throw new Error('the fixture could not be read')
+  // The two elements the code holds, and the one inside the second's map, which lies within it.
+  const outer = spans.jsx.filter(([a, b]) => !spans.jsx.some(([c, d]) => (c < a && b <= d) || (c <= a && b < d)))
+  const shown = outer.map(([a, b]) => TSX.slice(a, b))
+  expect(shown.length).toBe(2)
+  expect(shown[0]).toBe('<Text color="green">don\'t {label}</Text>')
+  expect(shown[1]?.startsWith('<Box flexDirection="column">')).toBe(true)
+  expect(shown[1]?.endsWith('</Box>')).toBe(true)
+  expect(spans.jsx.map(([a, b]) => TSX.slice(a, b))).toContain('<Text key={String(x)}>x</Text>')
+  expect(spans.comments.map(([a, b]) => TSX.slice(a, b))).toEqual(['// a < b, and <Text> in a comment is no element', '/* note */'])
+  // What it cannot follow is null, never a partial reading.
+  for (const bad of ['const x = <Box>', "const s = 'open", 'const x = (<Box></Text>)', '/* open', 'const f = <T,(x: T) => x']) expect(sourceSpans(bad)).toBeNull()
+  // A generic arrow's type parameters are no element, mod-kit's drawCard among them.
+  for (const generic of ['const f = <T,>(x: T) => x', 'const drawCard = <E extends ResolveInput>($: E) => <Box />', 'const g = <T = Map<string, number>>(x: T) => x']) {
+    const s = sourceSpans(generic)
+    expect(s?.jsx.map(([a, b]) => generic.slice(a, b))).toEqual(generic.includes('<Box />') ? ['<Box />'] : [])
+  }
+})
+
+test('a mod hook edit is logic only when it touches no JSX line and names no drawing word, comments aside', () => {
+  const swapIn = (from: string, to: string) => {
+    if (!TSX.includes(from)) throw new Error(`the fixture holds no ${from}`)
+    return TSX.replace(from, to)
+  }
+  expect(modHookLogicOnly(TSX, swapIn('b / 2', 'b / 3'))).toBe(true)
+  expect(modHookLogicOnly(TSX, swapIn('// a < b, and', '// a < b in any colour, and'))).toBe(true)
+  expect(modHookLogicOnly(TSX, swapIn("import type { Register } from 'claude-code'", "import type { Register, On } from 'claude-code'"))).toBe(true)
+  // Lines holding JSX, or naming how it is drawn.
+  expect(modHookLogicOnly(TSX, swapIn('color="green"', 'color="red"'))).toBe(false)
+  expect(modHookLogicOnly(TSX, swapIn('{/* note */}', '{/* a note */}'))).toBe(false)
+  expect(modHookLogicOnly(TSX, swapIn('const label = `${n} <x>`', 'const label = `${n} <x>`\nconst EDGE = AMBER'))).toBe(false)
+  expect(modHookLogicOnly(TSX, swapIn('b / 2', 'b / 2, dimColor'))).toBe(false)
+  // No change, or text the reader cannot follow, is never logic only.
+  expect(modHookLogicOnly(TSX, TSX)).toBe(false)
+  expect(modHookLogicOnly(TSX, swapIn("const re = /<Box>'/g", "const re = /<Box>'/g\nconst open = <Box>"))).toBe(false)
 })

@@ -7,6 +7,7 @@ import {
   HEADER,
   NOT_LOOK,
   SETTLED_NO,
+  TYPED_TOAST,
   SETTLED_SOURCE,
   SETTLED_YES,
   SKIP_NO,
@@ -23,6 +24,7 @@ import {
   dataOnlyChange,
   editedText,
   forged,
+  isModHook,
   isOwnRecord,
   isSwiftUI,
   judgedByText,
@@ -37,6 +39,8 @@ import {
   shapeKind,
   mentionedLookFiles,
   mentionsStore,
+  modHookLogicOnly,
+  onScreenProblem,
   pathsOf,
   predates,
   READS_ONLY,
@@ -48,6 +52,8 @@ import {
   skipOptions,
   skipQuestion,
   subjectsOf,
+  typedSettled,
+  typedSkip,
   unreadable,
   unsure,
 } from './rules.ts'
@@ -79,6 +85,11 @@ import {
 //   asks Dan. Which loop a call runs in is known only at tool.call, so a subagent's call is judged
 //   there; the main session's at tool.check, beneath every mod's tool.call hook and after the
 //   settings hooks, so Dan is never asked about a call another guard refuses (#707, #875).
+// - Since #1138: the skip question leads with `onScreen`, the session's plain sentence saying what on
+//   screen changes or that nothing visible does, and names the file after it; without one nothing is
+//   asked (rules.ts onScreenProblem). A typed answer is said, to Dan in a toast and to Claude, as not
+//   recorded, with the question to ask again. A mod's own hook file is judged by what it draws
+//   (rules.ts modHookLogicOnly): an edit touching none of it passes unasked.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -218,9 +229,10 @@ const passed = async ($: EngineInterface, c: Called): Promise<boolean> => {
 }
 
 // Whether an edit to a React screen file changes nothing on screen, judged from the file as it is and
-// the text the call leaves (rules.ts dataOnlyChange). A shell write, a new file, a file that cannot be
-// read and a call naming more than one file are never judged so, and are asked about.
-const dataOnly = async ($: EngineInterface, path: string, tool: string, input: Record<string, unknown>): Promise<boolean> => {
+// the text the call leaves: a component's data prop (rules.ts dataOnlyChange), or, in a mod's own hook
+// file, logic outside what it draws (rules.ts modHookLogicOnly, #1138). A shell write, a new file, a
+// file that cannot be read and a call naming more than one file are never judged so, and are asked about.
+const nothingShown = async ($: EngineInterface, path: string, tree: string, tool: string, input: Record<string, unknown>): Promise<boolean> => {
   if (tool === 'Bash' || !judgedByText(path) || pathsOf(input).length !== 1) return false
   let before: string
   try {
@@ -230,7 +242,8 @@ const dataOnly = async ($: EngineInterface, path: string, tool: string, input: R
     return false
   }
   const after = editedText(before, tool, input)
-  return after !== undefined && dataOnlyChange(before, after)
+  if (after === undefined) return false
+  return dataOnlyChange(before, after) || (isModHook(relTo(path, tree)) && modHookLogicOnly(before, after))
 }
 
 type Verdict =
@@ -333,8 +346,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // Only now is a Swift file read for SwiftUI, so a test is never read, nor held when it cannot be
     // (lessons review of #991).
     if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
-    // An edit whose one change is a component's data prop changes nothing on screen (#1010).
-    if (await dataOnly($, t.path, tool, input)) continue
+    // An edit whose one change is a component's data prop changes nothing on screen (#1010), nor
+    // does one to a mod's hook file that touches none of what it draws (#1138).
+    if (await nothingShown($, t.path, tree, tool, input)) continue
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)
@@ -531,7 +545,7 @@ const newerContract = async ($: EngineInterface, carried: unknown): Promise<numb
   }
 }
 
-type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown; call?: unknown; path?: unknown; contract?: unknown }; agentId?: string }
+type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; issue?: unknown; call?: unknown; path?: unknown; contract?: unknown; onScreen?: unknown }; agentId?: string }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
@@ -619,6 +633,18 @@ export const register: Register = on => {
       return `${head}, so edits that change the look on ${left} stay blocked. Tell him, and ask again.`
     }
 
+    // Dan typed an answer instead of choosing one (#1138): he is told it was not recorded, in a toast,
+    // as well as Claude, so it is never only Claude who knows. A toast that cannot be shown is said in
+    // the debug log; what Claude is told is unchanged.
+    const typed = async (r: Awaited<ReturnType<typeof next>>, text: string) => {
+      try {
+        await $.ui.toast(TYPED_TOAST)
+      } catch (err) {
+        $.ui.log(`design-round-guard: the toast saying a typed answer was not recorded could not be shown: ${message(err)}`, { to: 'debug' })
+      }
+      return say(r, text)
+    }
+
     // What Claude is told to do with a refused call once Dan's answer lets it through.
     const again = (w: DesignRoundPending) =>
       w.agent ? 'The refused change was a subagent\'s: tell that agent, or a new one, to make it again, unchanged.' : `Send the ${w.tool} call to ${listed(w.files)} again now, unchanged.`
@@ -643,6 +669,11 @@ export const register: Register = on => {
         if (questions.length !== 1) return { deny: 'Ask Dan one question: "Skip design rounds for this issue?".' }
         if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
           return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
+        // What changes on screen, in the session's plain words, leads the question; without it nothing
+        // is asked, never the file path in its place (#1138).
+        const problem = onScreenProblem(ask.metadata?.onScreen, waiting.files)
+        if (problem !== undefined) return { deny: problem }
+        const onScreen = String(ask.metadata?.onScreen).trim()
         // Only what still has no answer of his is asked about and recorded: a subject he has since
         // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
         // What the refused call waits on, as the settled question naming it reads it (#1046).
@@ -653,7 +684,7 @@ export const register: Register = on => {
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }
         }
         const s = listed(open.map(x => x.label))
-        const { r, chosen, none } = await asked(skipQuestion(waiting.files, open), skipOptions(open))
+        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), skipOptions(open))
         if (chosen === undefined) return none ? say(r, none) : r
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
@@ -663,7 +694,7 @@ export const register: Register = on => {
           // His word that this one call changes nothing on screen, kept with why (#1010): the same
           // call sent again goes through, and nothing is recorded for the issue.
           try {
-            const pass: DesignRoundPass = { kind: 'not-look', at: await $.clock.now(), tool: waiting.tool, files: waiting.files, subjects: open.map(x => x.label), why: notLookWhy(waiting.files), call: waiting.call }
+            const pass: DesignRoundPass = { kind: 'not-look', at: await $.clock.now(), tool: waiting.tool, files: waiting.files, subjects: open.map(x => x.label), why: notLookWhy(waiting.files), onScreen, call: waiting.call }
             await $.store.set(passKey(waiting.key), pass)
           } catch (err) {
             return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)
@@ -671,7 +702,7 @@ export const register: Register = on => {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes nothing on screen. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
         }
-        if (chosen !== SKIP_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded, so edits that change the look on ${s} stay blocked. Act on what he said.`)
+        if (chosen !== SKIP_YES) return typed(r, typedSkip(chosen, waiting.files, open))
         const kept = await record(open, 'skipped')
         if (kept.why !== undefined) return say(r, partly(SKIP_YES, kept))
         await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
@@ -693,7 +724,7 @@ export const register: Register = on => {
       const { r, chosen, none } = await asked(settledQuestion(subjects), settledOptions(subjects))
       if (chosen === undefined) return none ? say(r, none) : r
       if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: nothing is recorded. Keep going with design rounds.`)
-      if (chosen !== SETTLED_YES) return say(r, `Dan answered in his own words instead of choosing: "${chosen}". Nothing is recorded; act on what he said.`)
+      if (chosen !== SETTLED_YES) return typed(r, typedSettled(chosen))
       const kept = await record(subjects, 'settled')
       if (kept.why !== undefined) return say(r, partly(SETTLED_YES, kept))
       // Each refused call his answer covers in full can be sent again. It stays on the waiting list,

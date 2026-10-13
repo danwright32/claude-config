@@ -96,6 +96,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const gitRuns: string[] = []
   const reads: string[] = []
   const storeGets: string[] = []
+  const toasts: string[] = []
   const at ={ cwd: init.cwd ?? '/w/slate', session: 's1' }
   const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
@@ -160,7 +161,10 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (text.startsWith('CARD ')) cards.push(JSON.parse(text.slice(5)))
     return { value: undefined } as never
   })
-  on('ui.toast', () => ({ value: undefined }) as never)
+  on('ui.toast', ($, e) => {
+    toasts.push(String((e as { text?: string }).text ?? ''))
+    return { value: undefined } as never
+  })
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   // Claude Code's settings hooks and permission check, beneath every mod's tool.check hook: they
   // allow every call, unless the test has them refuse one (the payload write gate, say).
@@ -186,7 +190,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts }
 }
 type W = ReturnType<typeof world>
 
@@ -205,15 +209,20 @@ const BOTH_WAYS = (why: string) => {
   expect(why).toContain(SKIP_QUESTION)
 }
 
+// What the session says changes on screen (#1138), in the plain words the question leads with.
+const SHOWS = 'The heading on the home page gets more space above it.'
 // Claude asking Dan the skip question as the refusal told it to, and Dan answering in the dialog.
-const askSkip = async ($: Caller, w: W, refusal: string, answer: string | undefined, extra: Record<string, unknown> = {}) => {
+// `metadata` adds to (or, set undefined, removes from) what the question carries.
+const askSkip = async ($: Caller, w: W, refusal: string, answer: string | undefined, extra: Record<string, unknown> = {}, metadata: Record<string, unknown> = {}) => {
   const id = idIn(refusal)
   if (!id) throw new Error(`no refused call named in: ${refusal}`)
   w.dialog.answer = answer
+  const meta: Record<string, unknown> = { source: `design-round-guard:${id}`, onScreen: SHOWS, ...metadata }
+  for (const k of Object.keys(meta)) if (meta[k] === undefined) delete meta[k]
   return call($, {
     tool: 'AskUserQuestion',
     questions: [{ question: 'Skip design rounds for this issue?', header: 'x', options: [{ label: 'Yes', description: 'y' }, { label: 'No', description: 'n' }], multiSelect: false }],
-    metadata: { source: `design-round-guard:${id}` },
+    metadata: meta,
     ...extra,
   })
 }
@@ -372,7 +381,8 @@ test("blocked, then let through for the rest of the issue by Dan's Skip them, in
   const answered = await askSkip($, w, why, SKIP_YES)
   const q = w.asked[0]?.questions[0]
   if (!q) throw new Error('Dan was asked no question')
-  expect(q.question.startsWith(SKIP_QUESTION)).toBe(true)
+  expect(q.question.startsWith(SHOWS)).toBe(true)
+  expect(q.question).toContain(SKIP_QUESTION)
   expect(q.question).toContain('app/page.tsx')
   expect(q.header).toBe(HEADER)
   expect(q.options.map(o => o.label)).toEqual([SKIP_YES, SKIP_NO, NOT_LOOK])
@@ -1081,4 +1091,151 @@ test('#1057: the same contract on both sides, or a skill not on disk, is answere
   w.branches['/w/slate'] = '979-next'
   const id2 = idIn(refusalOf(await call($, STYLE)))
   expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: id2 }))).toBe('')
+})
+
+// #1138. Dan, 2026-10-13, on "Skip design rounds for this issue? Claude wants to change how
+// hooks/register.tsx looks, on issue #1135 ...": "I don't know what the file name means or what this
+// change will do. Can we have the question presented in plain terms so I actually know what is going
+// to change? So like 'this will change the look of x button on y page' or something."
+const questionOf = (w: W) => w.asked[w.asked.length - 1]?.questions[0]?.question ?? ''
+
+test('#1138: a real look change: the question leads with what changes on screen, and names the file second', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  // The refusal tells Claude what the question needs.
+  expect(why).toContain('"onScreen"')
+  const shows = 'The Save button on the invoice screen turns from grey to blue.'
+  await askSkip($, w, why, SKIP_YES, {}, { onScreen: shows })
+  const q = questionOf(w)
+  expect(q.startsWith(shows)).toBe(true)
+  expect(q.indexOf(SKIP_QUESTION)).toBeGreaterThan(q.indexOf(shows))
+  expect(q.indexOf('app/page.tsx')).toBeGreaterThan(q.indexOf(SKIP_QUESTION))
+  expect(q).toContain('issue #978 in slate')
+  expect(q).not.toContain('Claude wants to change how')
+  // A sentence with no full stop of its own is given one, so the question does not run on.
+  w.branches['/w/slate'] = '979-next'
+  const why2 = refusalOf(await call($, { ...STYLE, new_string: 'a{color:blue}' }))
+  await askSkip($, w, why2, SKIP_NO, {}, { onScreen: 'Links on every page turn blue' })
+  expect(questionOf(w).startsWith(`Links on every page turn blue. ${SKIP_QUESTION}`)).toBe(true)
+})
+
+test('#1138: a no visible change edit: the question leads with that, and Not a look change keeps the sentence with his word', withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  const edit = { tool: 'Edit', file_path: RESULT, old_string: 'variant={plain}', new_string: 'variant={lead.variant}' }
+  const why = refusalOf(await call($, edit))
+  const shows = 'Nothing on screen changes: the offer page reads its variant from the lead instead of a constant with the same value.'
+  await askSkip($, w, why, NOT_LOOK, {}, { onScreen: shows })
+  const q = questionOf(w)
+  expect(q.startsWith(shows)).toBe(true)
+  expect(q.indexOf('src/app/my-offers/result/page.tsx')).toBeGreaterThan(q.indexOf(SKIP_QUESTION))
+  const pass = Object.entries(w.store).find(([k]) => k.startsWith('pass:'))?.[1] as { onScreen?: string } | undefined
+  expect(pass?.onScreen).toBe(shows)
+  expect(refusalOf(await call($, edit))).toBe('')
+})
+
+test('#1138: with no plain sentence, or one that only names the file, nothing is asked and the call stays waiting', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  for (const onScreen of [undefined, '', '   ', 7]) {
+    const r = await askSkip($, w, why, SKIP_YES, {}, { onScreen })
+    expect(refusalOf(r)).toContain('"onScreen"')
+    expect(refusalOf(r)).toContain('which control or area')
+  }
+  for (const onScreen of ['Changes app/page.tsx.', 'This edits page.tsx so it looks different.', 'Edits the file globals.css']) expect(refusalOf(await askSkip($, w, why, SKIP_YES, {}, { onScreen }))).toContain('names a file')
+  expect(refusalOf(await askSkip($, w, why, SKIP_YES, {}, { onScreen: 'x'.repeat(301) }))).toContain('one sentence')
+  expect(w.asked.length).toBe(0)
+  expect(Object.keys(w.store)).toEqual([])
+  // Asked with one, the same refused call is asked about and answered.
+  expect(contextOf(await askSkip($, w, why, SKIP_YES))).toContain(`Dan answered ${SKIP_YES}`)
+  expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
+test("#1138: a subagent is told to report what on screen its change alters, for the main session's question", withKit, async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  const why = refusalOf(await call($, { ...PAGE, agentId: 'agent-a1' }))
+  expect(why).toContain('what on screen')
+  expect(w.ran).toEqual([])
+})
+
+test('#1138: a typed answer is not recorded, Dan is told so, and Claude is told to say so and ask again', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  const typed = contextOf(await askSkip($, w, why, 'which page is this?'))
+  expect(typed).toContain('which page is this?')
+  expect(typed).toContain('not recorded')
+  expect(typed).toContain('ask him the same question again')
+  expect(w.toasts.some(t => t.includes('not recorded'))).toBe(true)
+  expect(Object.keys(w.store)).toEqual([])
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  // The settled question the same way.
+  const typedSettled = contextOf(await askSettled($, w, 'looks fine to me'))
+  expect(typedSettled).toContain('not recorded')
+  expect(typedSettled).toContain(`ask him "${SETTLED_QUESTION}" again`)
+  expect(w.toasts.length).toBe(2)
+  expect(Object.keys(w.store)).toEqual([])
+  // Asked again and answered by choosing, it is recorded.
+  await askSkip($, w, why, SKIP_YES)
+  expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
+// #1138: a mod's own hook files draw Claude Code's panels through JSX (Box, Text, Button) and through
+// mod-kit's frames, so they count as screen files; an edit to one is judged by what it touches. The
+// fixture is shaped after the real mods (simpler's reply button, manual steps' band frame);
+// tests/test-mod-hook-render-reader.sh reads every real mod hook file with the same reader.
+const MOD_HOOK = '/w/slate/payload/mods/demo/hooks/register.tsx'
+const MOD_TEXT = `import type { EngineInterface, Register } from 'claude-code'
+import { AMBER } from './rules.ts'
+
+// Whether the reply is the one offered.
+const sameReply = (a: string, b: string): boolean => a.trim() === b.trim()
+
+const publishBand = async ($: EngineInterface): Promise<string | undefined> => {
+  await $.modkit.bandRow({ mod: 'demo', id: 'steps', frame: { kind: 'left-rule', color: AMBER }, lines: [] as never })
+  return undefined
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (!sameReply(e.props.text, 'x')) return next(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const button = e.props.isFirstOfReply ? (
+      <Button key="simpler" label="Simpler" onPress={() => publishBand($)} />
+    ) : (
+      <Text key="simpler-typed">
+        <Text dimColor>type: </Text>/simpler
+      </Text>
+    )
+    return (
+      <Box flexDirection="column">
+        {button}
+        {await next(e)}
+      </Box>
+    )
+  })
+}
+`
+
+test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its JSX, its colours and frames, and the same edit in an app's page are asked", withKit, async ($, on) => {
+  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, '/w/slate/app/page.tsx': MOD_TEXT } })
+  const edit = (old_string: string, new_string: string, file_path = MOD_HOOK) => ({ tool: 'Edit', file_path, old_string, new_string })
+  // Logic: what a function decides, a comment, a value a condition compares.
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a.trim().toLowerCase() === b.trim().toLowerCase()')))).toBe('')
+  expect(refusalOf(await call($, edit('// Whether the reply is the one offered.', '// Whether the reply is the one offered, read in any case or colour.')))).toBe('')
+  expect(refusalOf(await call($, edit("if (!sameReply(e.props.text, 'x')) return next(e)", "if (!sameReply(e.props.text, 'y')) return next(e)")))).toBe('')
+  expect(w.ran.length).toBe(3)
+  // What it draws: a prop, a tag's child text on its own line, a new element, the band's colour and frame.
+  const drawn: [string, string][] = [
+    ['<Box flexDirection="column">\n        {button}', '<Box flexDirection="row">\n        {button}'],
+    ['</Text>/simpler', '</Text>/simpler now'],
+    ['        {button}\n        {await', '        {button}\n        <Text>more</Text>\n        {await'],
+    ['color: AMBER', 'color: RED'],
+    ["kind: 'left-rule'", "kind: 'box'"],
+  ]
+  for (const [from, to] of drawn) expect(refusalOf(await call($, edit(from, to)))).toContain(SKIP_QUESTION)
+  // The same logic edit in an app's screen file is still asked: only a mod's hook file is read so.
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
+  // A mod hook file whose text the reader cannot follow is asked about, never passed.
+  w.files[MOD_HOOK] = MOD_TEXT.replace('// Whether the reply is the one offered.', 'const unclosed = <Box>')
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(3)
 })

@@ -28,8 +28,9 @@ export const NOT_LOOK = 'Not a look change'
  * both together whenever a question's metadata changes meaning (tests/test-mod-skill-contracts.sh
  * fails while they differ).
  * 1: #1046, Settled answering for what the refused call it names (`call`) waits on.
+ * 2: #1138, the skip question carrying `onScreen`, the plain sentence Dan reads first.
  */
-export const CONTRACT = 1
+export const CONTRACT = 2
 /** The skill this guard enforces, as installed under ~/.claude/skills. */
 export const SKILL = 'design-rounds'
 
@@ -404,6 +405,231 @@ export const dataOnlyChange = (before: string, after: string): boolean => {
   return lt >= 0 && /^<[A-Z][\w.]*(\s|$)/.test(tag) && !tag.includes('>')
 }
 
+/**
+ * Whether a file, by its path inside its checkout, is one of a Claude Code mod's own hook files that
+ * draws through JSX (`mods/<mod>/hooks/<file>.tsx` or `.jsx`), which modHookLogicOnly judges (#1138).
+ */
+export const isModHook = (rel: string): boolean => /(^|\/)mods\/[^/]+\/hooks\/[^/]+\.(tsx|jsx)$/i.test(rel)
+
+type Span = readonly [number, number]
+
+/**
+ * Where a TSX file's JSX elements and comments lie, as [start, end) offsets, or null for text this
+ * reader cannot follow (an unclosed element, string or comment, or a closing tag naming another
+ * element), which the caller holds rather than passes. A small reader of the code around the JSX:
+ * strings, template literals, regular expressions, comments and a generic arrow's type parameters
+ * (`<T,>(`, `<E extends X>(`, mod-kit's drawCard) are skipped, and a `<` opens an element only where
+ * an expression may start (after `(`, `,`, `=`, `=>`, `?`, `:`, `&&`, `return` and the like), so
+ * `Promise<X>` and `a < b` are never read as one.
+ */
+export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | null => {
+  const jsx: Span[] = []
+  const comments: Span[] = []
+  const n = text.length
+  const unread = new Error('unread')
+  const id = (c: string | undefined) => c !== undefined && /[\w$]/.test(c)
+  const space = (c: string | undefined) => c !== undefined && /\s/.test(c)
+  const EXPR_WORDS = new Set(['return', 'yield', 'case', 'default', 'await', 'typeof', 'void', 'in', 'of', 'delete', 'throw', 'else', 'do'])
+  const quoted = (i: number): number => {
+    const q = text[i]
+    for (let j = i + 1; j < n; j++) {
+      if (text[j] === '\\') j++
+      else if (text[j] === q) return j + 1
+      else if (text[j] === '\n') throw unread
+    }
+    throw unread
+  }
+  const template = (i: number): number => {
+    for (let j = i + 1; j < n; j++) {
+      if (text[j] === '\\') j++
+      else if (text[j] === '`') return j + 1
+      else if (text[j] === '$' && text[j + 1] === '{') j = code(j + 2, true)
+    }
+    throw unread
+  }
+  const regex = (i: number): number => {
+    let set = false
+    for (let j = i + 1; j < n; j++) {
+      const c = text[j]
+      if (c === '\\') j++
+      else if (c === '\n') throw unread
+      else if (set) set = c !== ']'
+      else if (c === '[') set = true
+      else if (c === '/') {
+        j++
+        while (j < n && /[a-z]/i.test(text[j] as string)) j++
+        return j
+      }
+    }
+    throw unread
+  }
+  // An element from its `<` to just past its end; nested elements and expressions read in turn.
+  const element = (i: number): number => {
+    let j = i + 1
+    let name = ''
+    if (text[j] === '>') j++
+    else {
+      const m = /^[A-Za-z_$][\w$.:-]*/.exec(text.slice(j, j + 200))
+      if (!m) throw unread
+      name = m[0]
+      j += name.length
+      for (;;) {
+        while (space(text[j])) j++
+        if (j >= n) throw unread
+        if (text[j] === '/' && text[j + 1] === '>') return j + 2
+        if (text[j] === '>') {
+          j++
+          break
+        }
+        if (text[j] === '{') {
+          j = code(j + 1, true) + 1
+          continue
+        }
+        const a = /^[A-Za-z_$][\w$:-]*/.exec(text.slice(j, j + 200))
+        if (!a) throw unread
+        j += a[0].length
+        let k = j
+        while (space(text[k])) k++
+        if (text[k] !== '=') continue
+        k++
+        while (space(text[k])) k++
+        const c = text[k]
+        if (c === '"' || c === "'") {
+          const e = text.indexOf(c, k + 1)
+          if (e < 0) throw unread
+          j = e + 1
+        } else if (c === '{') j = code(k + 1, true) + 1
+        else if (c === '<') j = element(k)
+        else throw unread
+      }
+    }
+    for (;;) {
+      if (j >= n) throw unread
+      if (text[j] === '<' && text[j + 1] === '/') {
+        const e = text.indexOf('>', j)
+        if (e < 0 || text.slice(j + 2, e).trim() !== name) throw unread
+        return e + 1
+      }
+      if (text[j] === '<') j = element(j)
+      else if (text[j] === '{') j = code(j + 1, true) + 1
+      else j++
+    }
+  }
+  // Code from `i`: to the `}` closing an expression when `nested` (its offset), else to the end.
+  const code = (i: number, nested: boolean): number => {
+    let depth = 0
+    let prev = ''
+    let word = ''
+    const starts = () => prev === '' || '([{,;:=!&|?>'.includes(prev) || (prev === 'a' && EXPR_WORDS.has(word))
+    while (i < n) {
+      const c = text[i] as string
+      if (c === '/' && text[i + 1] === '/') {
+        const e = text.indexOf('\n', i)
+        const end = e < 0 ? n : e
+        comments.push([i, end])
+        i = end
+      } else if (c === '/' && text[i + 1] === '*') {
+        const e = text.indexOf('*/', i + 2)
+        if (e < 0) throw unread
+        comments.push([i, e + 2])
+        i = e + 2
+      } else if (space(c)) i++
+      else if (c === '"' || c === "'") {
+        i = quoted(i)
+        prev = c
+      } else if (c === '`') {
+        i = template(i)
+        prev = c
+      } else if (c === '/' && starts()) {
+        i = regex(i)
+        prev = ')'
+      } else if (c === '<' && starts() && /^<\s*[A-Za-z_$][\w$]*\s*(,|=|extends\b)/.test(text.slice(i, i + 200))) {
+        // A generic arrow's type parameters (`<T,>(`, `<E extends X>(`, `<T = X>(`), which no
+        // element can open with: skipped to their closing `>`, nested ones counted.
+        let depth = 0
+        let j = i
+        for (; j < n; j++) {
+          if (text[j] === '<') depth++
+          else if (text[j] === '>' && text[j - 1] !== '=' && --depth === 0) break
+        }
+        if (j >= n) throw unread
+        i = j + 1
+        prev = 'a'
+        word = ''
+      } else if (c === '<' && starts() && /[A-Za-z>]/.test(text[i + 1] ?? '')) {
+        const s = i
+        i = element(i)
+        jsx.push([s, i])
+        prev = ')'
+      } else if (id(c)) {
+        let j = i
+        while (j < n && id(text[j])) j++
+        word = text.slice(i, j)
+        prev = 'a'
+        i = j
+      } else {
+        if (c === '{') depth++
+        else if (c === '}') {
+          if (depth === 0) {
+            if (nested) return i
+            throw unread
+          }
+          depth--
+        }
+        prev = c
+        word = ''
+        i++
+      }
+    }
+    if (nested) throw unread
+    return n
+  }
+  try {
+    code(0, false)
+    return { jsx, comments }
+  } catch (err) {
+    if (err === unread) return null
+    throw err
+  }
+}
+
+// The words a mod's drawing is spelled in outside its JSX: Ink's Text and Box props, mod-kit's frames,
+// rows and panes, and the colours. Read on each part of a camelCase name (`dimColor`, `paddingX`), so
+// a line naming any of them is held, as a hold costs Dan one answer and a pass a look he never saw.
+const MOD_LOOK_WORDS = new Set(
+  'color colour bold dim italic underline strikethrough inverse border frame box rule width height padding margin gap wrap truncate align justify flex style theme row rows column columns pane band card panel button render draw amber gray grey red green blue yellow cyan magenta violet white black orange purple pink'.split(
+    ' ',
+  ),
+)
+
+/**
+ * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
+ * the file draws (#1138): every line the change touches, in both texts, lies outside every JSX element
+ * and, its comments aside, names no word a mod's drawing is spelled in (MOD_LOOK_WORDS). A text the
+ * reader cannot follow (sourceSpans) is never judged so.
+ */
+export const modHookLogicOnly = (before: string, after: string): boolean => {
+  if (before === after) return false
+  const max = Math.min(before.length, after.length)
+  let p = 0
+  while (p < max && before[p] === after[p]) p++
+  let s = 0
+  while (s < max - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s++
+  for (const text of [before, after]) {
+    const spans = sourceSpans(text)
+    if (!spans) return false
+    const from = text.lastIndexOf('\n', p - 1) + 1
+    const nl = text.indexOf('\n', text.length - s)
+    const to = nl < 0 ? text.length : nl
+    if (spans.jsx.some(([a, b]) => a < to && from < b)) return false
+    let shown = ''
+    for (let i = from; i < to; i++) if (!spans.comments.some(([a, b]) => a <= i && i < b)) shown += text[i]
+    for (const w of shown.match(/[A-Za-z]+/g) ?? [])
+      for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part)) return false
+  }
+  return true
+}
+
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
 export const callText = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
   const canon = (v: unknown): unknown =>
@@ -465,8 +691,8 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
   const s = named(subjects)
   return (
     `Blocked: ${f} changes how the screen looks, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
-    `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}"}, look changing edits on ${s} go through. ` +
-    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}"} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
+    `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
+    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
     `Do not change ${f} any other way.`
   )
 }
@@ -481,7 +707,7 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
   const f = listed(files)
   return (
     `Blocked: ${f} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
-    `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}". ` +
+    `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. Do not change ${f} any other way.`
   )
 }
@@ -508,15 +734,54 @@ export const forged = (path: string): string =>
 
 export const cannotCheck = (why: string): string => `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
 
-/** The skip question as Dan reads it: the plan's words, then what it is about. */
-export const skipQuestion = (files: readonly string[], subjects: readonly DesignRoundSubject[]): string =>
-  `${SKIP_QUESTION} Claude wants to change how ${listed(files)} looks, on ${named(subjects)}, with no design round settled.`
+/** What the skip question's `onScreen` asks for, as the refusal shows Claude it (#1138). */
+export const ON_SCREEN_HINT = '<one plain sentence for Dan: what on screen this edit changes, which control or area on which screen, or that nothing visible changes>'
+/** The longest `onScreen` the question leads with: one sentence, which the dialog shows whole. */
+export const ON_SCREEN_MAX = 300
+
+/**
+ * Why the session's sentence for the skip question cannot lead it, or undefined when it can (#1138).
+ * Dan, 2026-10-13: "I don't know what the file name means or what this change will do". So the
+ * question never falls back to the file: no sentence, or one naming a file, is refused and nothing is
+ * asked.
+ */
+export const onScreenProblem = (onScreen: unknown, files: readonly string[]): string | undefined => {
+  const ask = `Give metadata "onScreen" as one plain sentence for Dan saying what on screen this edit changes (which control or area, on which screen, as "The Save button on the invoice screen turns blue"), or that nothing visible changes and what the edit does instead.`
+  if (typeof onScreen !== 'string' || !onScreen.trim()) return `Nothing was asked: the question leads with what Dan will see change, and a file name tells him nothing. ${ask}`
+  const text = onScreen.trim()
+  if (text.length > ON_SCREEN_MAX) return `Nothing was asked: "onScreen" is ${text.length} characters, and the question leads with it, so keep it to one sentence of at most ${ON_SCREEN_MAX}. ${ask}`
+  const bases = files.map(f => (f.split('/').pop() ?? f).toLowerCase())
+  const lower = text.toLowerCase()
+  const named = [...mentionedLookFiles(text), ...bases.filter(b => lower.includes(b))]
+  if (named.length) return `Nothing was asked: "onScreen" names a file (${listed([...new Set(named)])}), which tells Dan nothing; the guard names the file itself, after your sentence. ${ask}`
+  return undefined
+}
+
+/** The skip question as Dan reads it (#1138): what changes on screen in the session's words, then the plan's question, then the issue and the file. */
+export const skipQuestion = (onScreen: string, files: readonly string[], subjects: readonly DesignRoundSubject[]): string => {
+  const said = onScreen.trim()
+  const lead = /[.!?]$/.test(said) ? said : `${said}.`
+  return `${lead} ${SKIP_QUESTION} This is for ${named(subjects)}; the file is ${listed(files)}.`
+}
 
 export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
   { label: SKIP_YES, description: `Edits that change the look go ahead on ${named(subjects)} without a design round; the next issue asks again` },
   { label: SKIP_NO, description: 'Nothing that changes the look is edited until you settle a design round' },
   { label: NOT_LOOK, description: 'Nothing on screen changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
+
+/** What Dan sees, as a toast, when he types an answer to either question instead of choosing one (#1138). */
+export const TYPED_TOAST = 'Design round guard: your typed answer was not recorded, because only choosing one of the answers counts. Choose one when Claude asks again.'
+
+/** What Claude is told when Dan typed an answer to the skip question instead of choosing (#1138). */
+export const typedSkip = (typed: string, files: readonly string[], subjects: readonly DesignRoundSubject[]): string =>
+  `Dan typed "${typed}" instead of choosing an answer, so it was not recorded, and the edit to ${listed(files)} stays held, as do edits that change the look on ${named(subjects)}. ` +
+  `Tell him in one line that his typed answer was not recorded, because only choosing one of the answers counts; answer what he said if it asks something; then ask him the same question again, with the same metadata.`
+
+/** What Claude is told when Dan typed an answer to the settled question instead of choosing (#1138). */
+export const typedSettled = (typed: string): string =>
+  `Dan typed "${typed}" instead of choosing an answer, so it was not recorded, and nothing is settled. ` +
+  `Tell him in one line that his typed answer was not recorded, because only choosing one of the answers counts; act on what he said if it asks for a change to the design; then ask him "${SETTLED_QUESTION}" again, with the same metadata.`
 
 /** Dan's Not a look change, kept with the refused call (#1010): what it let through, and why. */
 export const notLookWhy = (files: readonly string[]): string =>

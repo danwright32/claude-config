@@ -2275,6 +2275,37 @@ direction is what follows.
   `tests/test-mod-skill-contracts.sh`) fails while the two numbers, or an example in the skill,
   disagree, so they are raised together.
 
+### What #1138 changed, 2026-10-13
+
+Dan, answering "Skip design rounds for this issue? Claude wants to change how hooks/register.tsx
+looks, on issue #1135 ...": "I don't know what the file name means or what this change will do. Can
+we have the question presented in plain terms so I actually know what is going to change? So like
+'this will change the look of x button on y page' or something."
+
+- **The question leads with what changes on screen.** The skip question's metadata carries
+  `onScreen`, one plain sentence from the session doing the edit: which control or area changes on
+  which screen, or that nothing visible changes and what the edit does instead. The guard asks
+  "<that sentence> Skip design rounds for this issue? This is for <the issue>; the file is
+  <the file>." It never falls back to the path: a missing or blank sentence, one past 300
+  characters, or one naming a file (a look changing name, or the refused file's own) is refused
+  and nothing is asked. A subagent's refusal asks it to report the sentence with its line. Not a
+  look change keeps the sentence beside his word. The contract is 2, raised with the skill.
+- **A typed answer says so.** An answer Dan types instead of choosing records nothing, as before,
+  and he is now told so in a toast; Claude is told to say so in one line, answer what he said, and
+  ask the same question again. Before, Claude was told to act on what he said, and Dan was told
+  nothing.
+- **A mod's own hook files, judged by what they draw.** `mods/<mod>/hooks/*.tsx` (or `.jsx`) still
+  count: five of the six draw Claude Code's panels through JSX, and manual steps draws through
+  mod-kit's frames. But an edit whose changed lines, before and after, hold no JSX element and,
+  comments aside, name no word a mod draws with (Ink's props such as color, bold, dim, border,
+  padding, wrap; mod-kit's frame, row, pane, band, card; the colours) is logic, and passes unasked
+  (rules.ts `modHookLogicOnly`). Its reader (`sourceSpans`) skips strings, templates, regexes,
+  comments and a generic arrow's type parameters, opens an element only where an expression may
+  start, and returns nothing for text it cannot follow, which is then asked about.
+  `tests/test-mod-hook-render-reader.sh` runs it over every real mod hook file. Copy outside JSX
+  (a toast's or a log line's words) passes, as it does in a mod's `.ts` files, which were never
+  held. An app's screen files are not judged this way: a className can live outside JSX there.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

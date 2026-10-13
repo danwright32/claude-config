@@ -2,7 +2,7 @@
 name: design-rounds
 description: Use when a product or feature is about to get its look settled, when the first screen is about to be designed or built, when an existing screen is being redesigned, or when a choice between visual directions (layout, type, density, chrome, colour) has to be made with Dan. Also use when a settled design decision needs to survive past the session that made it.
 ---
-<!-- design-round-guard contract: 1 -->
+<!-- design-round-guard contract: 2 -->
 
 # Design rounds
 
@@ -180,10 +180,26 @@ nothing on screen changes, build no switcher, and close one of two ways.
 
 - **A refused edit is waiting** (the design round guard named its id): ask the guard's own
   question about it, one AskUserQuestion with
-  `"metadata": { "source": "design-round-guard:<the id the refusal named>", "contract": 1 }` and the
-  question "Skip design rounds for this issue?". The guard words it, and its answer
+  `"metadata": { "source": "design-round-guard:<the id the refusal named>", "onScreen": "Nothing on screen changes: <what the edit does instead, in plain words>", "contract": 2 }`
+  and the question "Skip design rounds for this issue?". The guard words it, and its answer
   **Not a look change** lets that one edit through, recorded as his word, while every
   other look changing edit stays held. Then send the refused call again, unchanged.
+
+## What Dan reads first: what changes on screen
+
+Every time the guard's skip question is asked, its metadata carries `"onScreen"`: one plain
+sentence saying what Dan will see change, which control or area on which screen ("The Save
+button on the invoice screen turns from grey to blue"), or that nothing visible changes and what
+the edit does instead. The question leads with it, then asks "Skip design rounds for this
+issue?", and names the issue and the file last. Dan, 2026-10-13, shown a question built from a
+file path: "I don't know what the file name means or what this change will do"
+(claude-config#1138). So the guard refuses to ask without the sentence, or with one that names a
+file, and nothing is asked until it is given. A subagent that was refused reports the sentence
+with the line the refusal gave it, and the main session asks with it.
+
+A Claude Code mod's own hook file (`mods/<mod>/hooks/<file>.tsx`) counts as a screen file, because
+it draws Claude Code's panels, but an edit to one that touches none of its JSX and names none of
+the words a mod draws with (a colour, a frame, a border, a row) is logic and goes through unasked.
 - **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
 
 ## The last step: is this design settled?
@@ -200,13 +216,13 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 ```json
 {
   "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
-  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>", "contract": 1 }
+  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>", "contract": 2 }
 }
 ```
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
-- `"contract": 1` is the version of these steps the guard must know. A session keeps the
+- `"contract": 2` is the version of these steps the guard must know. A session keeps the
   guard it started with while these steps are read fresh, so when the guard answers that it
   predates the steps you read, nothing was asked or recorded: tell Dan, and go on in a new
   session. Asking again in this one gets the same answer (claude-config#1057).
@@ -228,7 +244,9 @@ Ask it exactly like this, one question in one AskUserQuestion call:
   (claude-config#1046: recorded instead, the edit sent again was refused again).
 - Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
   subagent, and never write anything else to record it: the guard refuses all three, and a
-  write to its record. Not yet, or an answer in his own words, records nothing: carry on.
+  write to its record. Not yet records nothing: carry on. An answer he types instead of
+  choosing records nothing either; the guard tells him so, and you tell him in one line,
+  answer what he said, and ask the same question again.
 - Then write the deliverable below. Look changing edits on that issue now go through.
 
 ## The deliverable
