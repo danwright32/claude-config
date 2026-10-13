@@ -747,7 +747,7 @@ SHNEEDS
   # The median of what was measured, or nothing at all when nothing was.
   _sh_median=0
   if [ "$_sh_measured" -gt 0 ]; then
-    _sh_median="$(printf '%s' "$_sh_all_secs" | sort -n | awk -v n="$_sh_measured" 'NR == int((n + 1) / 2) { print; exit }')"
+    _sh_median="$(printf '%s' "$_sh_all_secs" | sort -n | awk -v n="$_sh_measured" 'NR == int((n + 1) / 2) { print }')"
     case "$_sh_median" in ''|*[!0-9]*) _sh_median=0 ;; esac
   fi
   # Which rule this run is about to use, said before it deals, because a run that fell back to
@@ -9968,7 +9968,7 @@ _WF="$(dirname "$SCRIPT")/.github/workflows/tests.yml"
 
 # THE IMAGE IS DERIVED FROM THE WORKFLOW, never a second copy of that decision (L41). A workflow
 # moved to another operating system must not leave this claiming to reproduce CI.
-_lin_runner="$(sed 's/#.*//' "$_WF" | awk -F'runs-on:' '/runs-on:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')"
+_lin_runner="$(sed 's/#.*//' "$_WF" | awk -F'runs-on:' '/runs-on:/ && !got {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; got = 1}')"
 check "#337 the workflow still declares what it runs on ($_lin_runner)" "[ -n '$_lin_runner' ]"
 # Matched as a case ARM rather than as bare text, so a runner named only in a comment or in a
 # refusal message cannot answer for one the script actually handles (L103).
@@ -15480,7 +15480,7 @@ done
 # legitimately differs, which is what it did the first time it ran there (L376).
 _sr_budgets="$(_sr_field budget_seconds | grep . | sort -u | grep -c .)"
 check "#520 every recorded reading was judged against one budget" "[ \"\${_sr_budgets:-0}\" -eq 1 ]"
-_sr_bud="$(_sr_field budget_seconds | awk 'NF { print; exit }')"
+_sr_bud="$(_sr_field budget_seconds | awk 'NF && !got { print; got = 1 }')"
 
 # And the share of that budget the prose claims is recomputed from the readings, so the sentence
 # cannot say 38% of a budget the numbers beside it do not divide into that way.
@@ -16138,7 +16138,7 @@ check "#505 and the marked line says the same thing as the headline" \
 # BUILT IS NOT WIRED (L3). The function above is only worth having if a real run actually emits a
 # total for it to judge, so a filtered run is driven and its machine readable line read back.
 _wb_run="$(SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
-_wb_line="$(printf '%s\n' "$_wb_run" | awk '/^SUITE-WORK /{print; exit}')"
+_wb_line="$(printf '%s\n' "$_wb_run" | awk '/^SUITE-WORK / && !got {print; got = 1}')"
 check "#492 a real run emits a machine readable work total" "[ -n \"\$_wb_line\" ]"
 check "#492 and it carries both the seconds and the section count" \
   "line_has \"\$_wb_line\" 'seconds=[0-9]+' 'sections=[0-9]+'"
@@ -20323,7 +20323,7 @@ printf '%s\n' "$*" >> "$ME_LOG"
 m=""; prev=""
 for a in "$@"; do [ "$prev" = "--model" ] && m="$a"; prev="$a"; done
 [ -n "$m" ] || m=default
-full="$(printf '%s\n' "$ME_MAP" | tr ',' '\n' | awk -F= -v k="$m" '$1 == k { print $2; exit }')"
+full="$(printf '%s\n' "$ME_MAP" | tr ',' '\n' | awk -F= -v k="$m" '$1 == k && !got { print $2; got = 1 }')"
 [ -n "$full" ] || exit 0
 printf '{"type":"system","subtype":"init","model":"%s"}\n' "$full"
 printf '{"type":"result","subtype":"success","result":"Current model","total_cost_usd":0}\n'
