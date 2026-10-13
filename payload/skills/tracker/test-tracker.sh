@@ -68,8 +68,10 @@ found="$(shipped_secret_lines "$DIR")"
 check_eq "no shipped file in the tracker skill holds a token shaped value (file:line listed, value never printed)" "" "$found"
 # The control (L1): the scan finds a token where one is planted, so its silence above means something.
 mkdir -p "$TMP/planted"
-# Assembled from two halves so this file never holds a token shaped run of its own.
-printf '{ "url": "x", "token": "%s%s" }\n' "Ab3dEf6hIj9kLm2n" "Op5qRs8tUv1wXy4zAb7cDe0f" > "$TMP/planted/config.example.json"
+# The planted token is a hash made here, so this file holds no token, whole or split into pieces
+# (claude-config#1125: tests/test-payload-secret-scan.sh refuses a test that assembles one).
+planted="$(printf 'tracker planted control' | shasum -a 256 | cut -c1-40)"
+printf '{ "url": "x", "token": "%s" }\n' "$planted" > "$TMP/planted/config.example.json"
 printf 'kept local\n' > "$TMP/planted/config.local.json"
 check_eq "and the same scan finds a planted one, while ignoring config.local.json" "config.example.json:1" "$(shipped_secret_lines "$TMP/planted")"
 
@@ -756,8 +758,10 @@ console.log(JSON.stringify({ response: responses[responses.length - 1], appended
   responses, diffs, writes, reads, mutated, lock, rows }));
 JS
   GS="$DIR/apps-script.gs"
-  # Built from parts so this file never holds a token shaped run of its own.
-  REAL="abcdefghijklmnop""0123456789ABCDEFGHIJKLMN"
+  # An invented key, written whole: long enough for the script's 32 character minimum, and holding
+  # spaces, so neither the sync's secret scan nor the shipped file check above reads it as a token
+  # (README "Secret scan"). Never built from parts to get past them (claude-config#1125).
+  REAL="the web app test key, invented, 0123456789"
   gs(){ node "$TMP/gs-harness.js" "$GS" "$1" "$2" "${3:-POST}" "${4:--}" 2>&1; }
   # jget <harness output> <python expression over d>: one field of the harness's report, as
   # compact JSON. Prints HARNESS-UNREADABLE when the output was not the harness's JSON, so a

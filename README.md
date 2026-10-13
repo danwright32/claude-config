@@ -995,6 +995,13 @@ placeholder in a shipped template is the usual cause: a key named `token`, `secr
 `api_key` followed by 24 or more letters, digits, `_`, `+`, `/` or `-` reads as a credential, so
 write placeholders with spaces or angle brackets (`<set by tracker.sh new-token>`).
 
+The same suite refuses a test that gets a token past the scan by how it is WRITTEN rather than by
+what it is: a key in one place and its value in a variable, a value printed from two halves, or
+quoted pieces glued together (#1125). It reads every test file the way the shell joins it and runs
+the same scan over that. A test fixture is written whole, in a shape the scan accepts by the rules
+above (spaces, or under a pattern's minimum length); a control that must be token shaped is a hash
+made at run time, so no token sits in the file to be split.
+
 ## Tests
 
 ```bash
