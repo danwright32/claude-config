@@ -1076,7 +1076,7 @@ test('another mod adds a step: a card of its own when none is pinned, shown as a
   const text = await bandText($)
   expect(text[0]).toMatch(/^The morning after sleep mode/)
   expect(text[1]).toBe(`1. ${MORNING.title}  [done]`)
-  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks }])
+  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true }])
 })
 
 test('a step added to a card already pinned goes at its end, under its heading, and never twice (#1107)', withCaller, async ($, on) => {
@@ -1103,6 +1103,23 @@ test('finish takes the step off by its title, whichever step is open, said as ch
   // The last unfinished step taken off takes the card with it.
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toBe('Every step is finished, so the card is gone.')
   expect(stored(w.mem)).toBeUndefined()
+})
+
+test('a later pin through the steps tool keeps a step another mod added, at its end, unless it names it (#1107 lessons review)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await addStep($)
+  // Pinning replaces the card, but the reminder is not Claude's to drop.
+  await hand($, [step()])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
+  expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
+  // Pinned again naming it, it is not listed twice.
+  await hand($, [step(), step({ title: MORNING.title, url: undefined, location: MORNING.location })])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
+  // Taken off, it is not brought back by the next pin.
+  await finishStep($)
+  await hand($, [step({ title: 'Purge the cache' })])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache'])
 })
 
 test('the only step taken off takes the card away (#1107)', withCaller, async ($, on) => {

@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
 
@@ -372,9 +372,10 @@ const addStep: Hook<'manualSteps.add'> = async ($, e) => {
   const made = cardFrom({ heading: e.heading, steps: [{ ...e.step, checked: 'not-done' }] })
   // Refused to the caller: a hook that throws is skipped, and the caller would hear only that it did not answer.
   if ('refusal' in made) return { deny: made.refusal }
-  const added = made.card.steps[0] as StepsCard['steps'][number]
+  // Marked as another mod's, so a later pin through the steps tool keeps it.
+  const added = { ...(made.card.steps[0] as StepsCard['steps'][number]), isAdded: true }
   const how = await change($, card => {
-    if (!card || nextStep(card) === undefined) return { card: made.card, out: 'shown' as const }
+    if (!card || nextStep(card) === undefined) return { card: { ...made.card, steps: [added] }, out: 'shown' as const }
     if (card.steps.some(s => !s.finished && s.title === added.title)) return { card, out: card.isCarried ? ('held' as const) : ('shown' as const) }
     return { card: { ...card, steps: [...card.steps, added] }, out: card.isCarried ? ('held' as const) : ('shown' as const) }
   })
@@ -497,8 +498,10 @@ export const register: Register = on => {
     if (refused) return refused
     const made = cardFrom(e)
     if ('refusal' in made) return { deny: made.refusal }
-    // A step found done keeps how and when it finished on the card this one replaces (#886).
-    const card = keepFinished(made.card, (await $.state.get(cardRef)).value ?? null)
+    // A step found done keeps how and when it finished on the card this one replaces (#886), and an
+    // unfinished step another mod added stays on it (#1107).
+    const prior = (await $.state.get(cardRef)).value ?? null
+    const card = keepAdded(keepFinished(made.card, prior), prior)
     if (nextStep(card) === undefined) {
       await change($, () => ({ card: null, out: undefined }))
       await hide($)

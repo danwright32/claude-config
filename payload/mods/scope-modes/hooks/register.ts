@@ -426,20 +426,25 @@ const releaseMarker = async ($: EngineInterface, path: string, mine: Marker) => 
 const LOCK_WAIT_MS = 30_000
 const LOCK_STALE_MS = 10 * MIN
 
+// A lock in the sleep folder taken for a writer of a shared file, waiting on another writer up to
+// LOCK_WAIT_MS: the answers lock, and the morning reviews' (#1107).
+const takeLock = async ($: EngineInterface, lock: string): Promise<Claim> => {
+  await run($, ['mkdir', '-p', lock.slice(0, lock.lastIndexOf('/'))])
+  const waitUntil = (await $.clock.now()) + LOCK_WAIT_MS
+  for (;;) {
+    const claim = await claimMarker($, lock, LOCK_STALE_MS)
+    if (!('held' in claim) || (await $.clock.now()) >= waitUntil) return claim
+    await $.clock.sleep(1_000)
+  }
+}
+
 // A bedtime answer written into the shared file under the answers lock, so a late answer and
 // another never read the same file and write over each other; whole beside it and moved into place,
 // so a reader never sees half a file. The sync carries it to the other Mac, so each repository is
 // asked once.
 const recordAnswer = async ($: EngineInterface, path: string, repo: string, answer: string): Promise<string | null> => {
   const lock = `${sleepDir((await $.env.get('HOME')) ?? '')}/repos.lock`
-  await run($, ['mkdir', '-p', sleepDir((await $.env.get('HOME')) ?? '')])
-  const waitUntil = (await $.clock.now()) + LOCK_WAIT_MS
-  let claim: Claim
-  for (;;) {
-    claim = await claimMarker($, lock, LOCK_STALE_MS)
-    if (!('held' in claim) || (await $.clock.now()) >= waitUntil) break
-    await $.clock.sleep(1_000)
-  }
+  const claim = await takeLock($, lock)
   if ('held' in claim) return `the lists are being written by session ${claim.held.owner} (since ${etWhen(claim.held.at)})`
   if ('unreadable' in claim) return `the answers lock cannot be read (${claim.unreadable})`
   if ('failed' in claim) return `the answers lock could not be taken (${claim.failed})`
@@ -1300,8 +1305,20 @@ const readReviews = async ($: EngineInterface): Promise<MorningReview[] | { unre
 }
 // Changed and written whole. A file that cannot be read is never written over (lessons review): it
 // is moved aside, kept for whoever reads it, and a new one started, which is logged; a move that
-// fails refuses the change.
+// fails refuses the change. Changed under its own lock, since /sleep in one session and a wake in
+// another can change it at once, and the later write would drop the other's night (lessons review).
 const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => MorningReview[]): Promise<string | null> => {
+  let claim: Claim
+  let lock: string
+  try {
+    lock = `${(await sleepPaths($)).dir}/morning-review.lock`
+    claim = await takeLock($, lock)
+  } catch (err) {
+    return msg(err)
+  }
+  if ('held' in claim) return `session ${claim.held.owner} has been changing the record of the morning reviews since ${etWhen(claim.held.at)}`
+  if ('unreadable' in claim) return `the lock on the record of the morning reviews cannot be read (${claim.unreadable})`
+  if ('failed' in claim) return `the lock on the record of the morning reviews could not be taken (${claim.failed})`
   try {
     const path = await reviewsPath($)
     const all = await readReviews($)
@@ -1314,6 +1331,8 @@ const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => M
     return await writeWhole($, path, JSON.stringify(fn(Array.isArray(all) ? all : [])))
   } catch (err) {
     return msg(err)
+  } finally {
+    await releaseMarker($, lock, claim.claimed)
   }
 }
 

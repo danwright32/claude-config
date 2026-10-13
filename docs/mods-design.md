@@ -1378,7 +1378,8 @@ morning offers what the night proposed, filing nothing he has not picked.
   any card already pinned, or a card of its own headed "The morning after sleep mode". It is shown
   at once, though Dan cannot do it until morning, because he asked for it to pop up then. The night
   is first noted as waiting on its review in `~/.claude/state/sleep/morning-review.json` (the latest
-  14 nights; one that cannot be read is moved aside, never written over), so the step never stands
+  14 nights, changed under its own lock; one that cannot be read is moved aside, never written
+  over), so the step never stands
   where nothing could take it off. It comes off by the review
   having happened, never by time: at wake, by the session that woke, when the night proposed nothing
   and every note was read (said in the wake reply, a phone wake included); otherwise once the morning
@@ -1554,7 +1555,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   it), at the end of the card pinned now under its heading, or as a card of its own; a step already
   on the card unfinished, by its title, is not added twice. It is shown as a new card is and never
   held while Dan is away, since the caller decides when to add; on a card carried from an earlier
-  session it is kept and stays held with the rest. `$.manualSteps.finish({ title })` finishes that
+  session it is kept and stays held with the rest. A later pin through the steps tool, which
+  replaces the card, keeps such a step at its end while it is unfinished, unless the new card names
+  it, since it is not Claude's to drop. `$.manualSteps.finish({ title })` finishes that
   step as checked, whichever step is open. Both are answered by this mod's own hooks on the noun's
   events, which have the whole engine and so reach mod-kit wherever the folders sort; the noun's own
   methods throw only when those hooks failed. Sleep mode's morning reminder is the one caller.

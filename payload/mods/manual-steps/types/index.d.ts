@@ -30,6 +30,11 @@ export type StepsStep = {
   /** Finished in an earlier session and carried into this one's card, so drawn grey with its age (#886). */
   isEarlier?: boolean
   /**
+   * Added by another mod through the noun (#1107), not by Claude's steps tool, so a later pin, which
+   * replaces the card, keeps it while it is unfinished.
+   */
+  isAdded?: boolean
+  /**
    * Done was pressed and "step N done" sent; Claude has not yet said whether it took. Never kept
    * in the store: the turn that would answer it does not reach another session.
    */

@@ -1936,7 +1936,7 @@ const CURRENT = `${SLEEP}/current.json`
 // The writes of the record itself, leaving out the caffeinate hold's process number (#844) and the
 // night's unanswered list (#836).
 const recordWrites = (w: { fsWrites: string[] }) =>
-  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('morning-review.json'))
+  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('/morning-review.') && !f.includes('/.morning-review.'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
@@ -4148,6 +4148,19 @@ test('a step that could not be taken off is tried again at the next minute, and 
   expect(stepsCalls(w).length).toBe(2)
   await clock.advance(2 * MIN)
   expect(stepsCalls(w).length).toBe(2)
+})
+
+test('/sleep waits on another session changing the record of the nights, then says so rather than writing over it (#1107 lessons review)', withSteps, async ($, on) => {
+  const RLOCK = `${SLEEP}/morning-review.lock`
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], files: { [REVIEWS]: pendingG0, [RLOCK]: marker('s2', T0) } })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(MIN)
+  const r = await pending
+  expect(r.text).toContain(" The reminder to review the night's proposed issues was not pinned: the night could not be noted as waiting on it (session s2 has been changing the record of the morning reviews since ")
+  expect(w.files[REVIEWS]).toBe(pendingG0)
+  expect(w.files[RLOCK]).toBe(marker('s2', T0))
+  expect(stepsCalls(w)).toEqual([])
 })
 
 test('/sleep over a record of the nights that cannot be read keeps it aside rather than writing over it (#1107 lessons review)', withSteps, async ($, on) => {
