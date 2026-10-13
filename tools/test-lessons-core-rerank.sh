@@ -335,6 +335,17 @@ check_rc "this Mac's own untagged lesson refuses" 1 "$rc"
 check "naming it" "UNTAGGED L502" "$out"
 out="$(rerank)"; rc=$?
 check_rc "with no host given every untagged lesson refuses" 1 "$rc"
+# A lesson in NO band (below every band start, written before bands existed) is tagged by neither
+# Mac's job, so it refuses with a remedy that says so, never one pointing at a job that will never
+# tag it (found by the PR lessons review of this change).
+cp "$WORK/index-aside.md" "$IDX/LESSONS-INDEX-proof.md"; cp "$WORK/ages-aside.txt" "$WORK/ages.txt"
+cp "$REPO/lesson-tags.tsv" "$WORK/tags-nb.tsv"; grep -v $'^L2\t' "$WORK/tags-nb.tsv" > "$REPO/lesson-tags.tsv"
+printf '7\n' > "$REPO/lesson-bands/mac-a"
+out="$(rerank --host mac-a)"; rc=$?
+check_rc "an untagged lesson below every band refuses" 1 "$rc"
+check "naming it as in no Mac's band" "UNTAGGED L2 (in no Mac's band" "$out"
+check "with a remedy to tag it by hand, since no daily job will" "no daily job tags it" "$out"
+cp "$WORK/tags-nb.tsv" "$REPO/lesson-tags.tsv"; printf '1\n' > "$REPO/lesson-bands/mac-a"
 cp "$WORK/index-aside.md" "$IDX/LESSONS-INDEX-proof.md"; cp "$WORK/ages-aside.txt" "$WORK/ages.txt"
 
 # No tag file at all is its own refusal, not 13 UNTAGGED lines.

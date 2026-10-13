@@ -207,9 +207,11 @@ def main(argv):
     # and a lesson it never read could never be disputed, so it is not read as agreeing (L113). Each
     # Mac's daily job tags the lessons in its own band (#566), so one in the OTHER Mac's band is
     # waiting for that Mac's job and its next sync, like counts not arrived yet (UNMEASURED); one in
-    # this Mac's band, or in no band, means this Mac's tagging failed, which refuses.
+    # this Mac's band means this Mac's tagging failed, which refuses. One in NO band (below every band
+    # start, written before bands existed) is tagged by neither Mac's job, so it refuses with a remedy
+    # that says so rather than pointing at a job that will never tag it.
     bands = read_bands(a.bands_dir)
-    waiting_tags, untagged_own = {}, []
+    waiting_tags, untagged_own, untagged_nobody = {}, [], []
     for path, have, which in ((a.tags, tags, ""), (a.second_tags, tags2, " in the second pass")):
         if not path or not os.path.exists(path):
             continue
@@ -219,9 +221,16 @@ def main(argv):
             owner = band_owner(n, bands) if a.host else None
             if owner is not None and owner != a.host:
                 waiting_tags.setdefault(owner, set()).add(n)
+            elif a.host and owner is None:
+                problems.append(f"UNTAGGED L{n}{which} (in no Mac's band, so no daily job tags it)")
+                untagged_nobody.append(n)
             else:
                 problems.append(f"UNTAGGED L{n}{which}")
                 untagged_own.append(n)
+    if untagged_nobody:
+        remedies.append("A lesson in no Mac's band was written before bands existed, and no daily job tags it, so tag it by "
+                        "hand, in ~/claude-config-sync: python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv > first.txt, "
+                        "then ./claude-sync record-lesson-tags first first.txt, and the same for the second pass.")
     if untagged_own:
         remedies.append("The daily re-rank job tags this Mac's new lessons itself before it re-ranks, so its tagging "
                         "failed or has not run: its log (~/.claude-lessons-core-rerank.log) says why. To tag by hand, "
