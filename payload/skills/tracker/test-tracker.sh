@@ -309,6 +309,12 @@ check "with the key in that body" "\"key\": \"$GOOD_TOKEN\"" "$(grep '^STDIN:' "
 check "the body goes as POST data" "--data @-" "$(grep '^ARGS:' "$CURL_LOG")"
 check_not "and never puts the token on curl's command line or in the address" "$GOOD_TOKEN" "$(grep '^ARGS:' "$CURL_LOG")"
 check_not "and the address carries no query string at all" "?" "$(grep '^ARGS:' "$CURL_LOG")"
+# The scan's settings (claude-config#1032) are optional and read only by the scan: the quick
+# append path never requires them, nor judges them, so even malformed ones leave it working.
+python3 -c 'import json,sys; json.dump({"url":sys.argv[2],"token":sys.argv[3],"authors":"not a list","scan_window_days":"x","scan_roots":[""]}, open(sys.argv[1],"w"))' "$SK/config.local.json" "$GOOD_URL" "$GOOD_TOKEN"
+run append '{"Project Name":"x"}'
+check_eq "an append with the scan settings missing or malformed still succeeds" 0 "$RC"
+write_local "$GOOD_URL" "$GOOD_TOKEN"
 run append '{"Project Name":"x"}'
 check_eq "a configured skill's append succeeds" 0 "$RC"
 check_eq "and reaches curl twice: the sheet check, then the write" 2 "$(curl_calls)"

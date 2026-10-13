@@ -1,6 +1,6 @@
 ---
 name: tracker
-description: Add a row to my personal Google Sheet project tracker from any project. Use when the user wants to log a project update, record progress, or "add to the tracker".
+description: Add a row to my personal Google Sheet project tracker from any project, or scan this Mac's git work to propose row updates and new rows (--scan). Use when the user wants to log a project update, record progress, "add to the tracker", or bring the tracker up to date from their repositories.
 trigger: /tracker
 ---
 
@@ -24,6 +24,7 @@ credentials are stored locally and the skill works from any project on any machi
 /tracker --setup                          # one-time setup (deploy the web app, save config)
 /tracker --rotate                         # replace the token (see "Rotating the token")
 /tracker --headers                        # just print the sheet's column names
+/tracker --scan                           # find git work on this Mac, propose row updates and new rows
 ```
 
 Rows can also be changed in place by their Link (`tracker.sh update`, see "Updating a row in
@@ -239,6 +240,74 @@ bash tracker.sh update --restore 'https://github.com/example-owner/bidspoke' 'Bi
 ```
 
 Needs the one time redeploy in "Turning on update" above.
+
+## Scanning git work (`--scan`)
+
+`/tracker --scan` finds the git repositories on this Mac, compares the work in them with the
+sheet, and proposes updates to rows the sheet already has and new rows for projects it does not.
+Nothing is written until the user has seen and approved each row. Keep the files this flow makes
+(the scan, the sheet as read) in the session's scratch folder, never in the skill's folder.
+
+Settings, all optional, live in `config.local.json` beside the token; the append and update paths
+above never read them:
+
+- `authors`: the user's names or emails as git records them. Set by step 1, never typed by hand.
+- `scan_roots`: the folders to search, `~` for the home folder. Default: the home folder.
+- `scan_window_days`: how many days back counts as new work. Default: 30.
+
+Repositories the user never wants offered are listed apart, in `scan-state.local.json`, by
+`bash tracker.sh ignore-repo '<path>'` (undone by `bash tracker.sh unignore-repo '<path>'`), so
+this flow never rewrites the file that holds the token to record them.
+
+1. **Scan.** `bash tracker.sh scan > <scratch>/scan.json`. When the scan's `authors` is empty (the
+   first run on a Mac), run `bash tracker.sh authors-found <scratch>/scan.json`, show the
+   identities it lists (email, name, commits) as a multi select picker asking which are the
+   user's, save the ticked ones with `bash tracker.sh set-authors '["dan@example.com","Dan Wright"]'`
+   and scan again. A scan whose `outcome` is `no_repos` names the roots it searched: say so, never
+   "nothing to update". Mention the scan's `warnings`, if any.
+2. **Read the sheet by its id, never by Drive name.** `bash tracker.sh sheet-id` prints the id of
+   the sheet linked at the top of this file. Read that id with the Google Sheets connector's get
+   values, from `A1` across every column and down past the last row (for example `A1:Z2000`), and
+   save the whole answer, its `range` and `values`, to `<scratch>/sheet.json`. If the connector
+   cannot open that id, stop and say so: searching Drive for the name also finds the other sheet.
+3. **Reconcile.** `bash tracker.sh reconcile <scratch>/scan.json <scratch>/sheet.json` matches each
+   repository to the rows whose Link is the same repository address and sorts both sides into:
+   - `matched`: `update` when the user has commits in the window, otherwise `current`;
+   - `tracked_not_here`: rows no repository on this Mac answers for (PET, a project on the other
+     Mac, a row with no Link): reported, never updated;
+   - `new_here`: repositories with the user's commits and no row;
+   - `no_commits_by_you`: repositories with nothing under the user's identity, listed only;
+   - `questions`: never decided for the user. More than one row with the same Link, more than one
+     copy of a repository on this Mac, a repository with the user's commits and no hosted remote,
+     or one whose commits could not be read. Ask about each, one at a time, and change nothing it
+     covers until the user has resolved it (by fixing the sheet, or ignoring a copy with
+     `ignore-repo`), then run again from step 1.
+4. **Synthesize.** For each `update`, write one merged row from the existing row (`row` in the
+   reconcile's answer) and the new work (`repo.window_subjects`): My Actions and Outcome/Results
+   rewritten to cover both, never dropping what the curated row already says, and new skills added
+   to Skills Used. Name only the cells that change: update writes only those, so every column not
+   named carries through exactly as it is. Never name Date Started (the row keeps it), never clear a
+   Date Completed already set, never change the Link. For each new repository the user wants added,
+   build a whole row as in "Appending a row" (Date Started from its `first_commit_date`, but ask when
+   `is_shallow` is true; Date Completed `""`; Link the repository address). Then pass every row's
+   cells through `bash tracker.sh scan-cells '<the row as it is>' '<the cells>'` (`{}` as the row
+   for a new one): it refuses cells that break those rules, and answers with the cells to use, em
+   and en dashes, spaced hyphens and pipe separators turned into commas.
+5. **Review, one row at a time.** For each update, run
+   `bash tracker.sh update --preview '<link>' '<project name>' '<cells>'` and show the old value
+   (the preview's `before`) beside the new one, field by field. The user approves, edits (run the
+   edit through scan-cells again) or skips that row; there is no approve all for overwrites. Show
+   each new row whole; new rows may be approved together once each has been seen.
+6. **Write.** First `bash tracker.sh snapshot <scratch>/sheet.json` and give the user the path it
+   prints: the sheet as read, to restore from. Offer a backup tab as well (in the sheet, right
+   click the tab, Duplicate), made by the user, since this skill writes the sheet only through
+   the web app. Then write one row at a time: each update with
+   `bash tracker.sh update '<link>' '<project name>' '<cells>' '<the preview's before>'`, each new
+   row with `bash tracker.sh append '<row>'`. Say each row's outcome as it lands, keep each update's
+   `restore` from its answer, and stop at the first failure: report which rows landed, which one
+   failed and why, and which were not tried. Never retry a failed write unseen.
+
+Finish with what landed, the `tracked_not_here` rows, and any question still open.
 
 ## Notes
 

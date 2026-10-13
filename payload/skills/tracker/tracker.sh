@@ -6,6 +6,8 @@
 #                                                   # change named cells of the row with that Link
 #   tracker.sh new-token                            # write a fresh token into config.local.json
 #   tracker.sh sheet-id                             # the id of the sheet SKILL.md names
+#   tracker.sh scan | set-authors | ignore-repo | unignore-repo | authors-found | reconcile |
+#              snapshot | scan-cells                # /tracker --scan, SKILL.md "Scanning git work"
 #
 # The write token lives ONLY in config.local.json beside this script. That file is ignored by
 # git and left out of claude-sync's mirror, so it never leaves the Mac that holds it
@@ -22,9 +24,11 @@ LIB="$DIR/tracker_lib.py"
 
 # The commands that never reach the web app run in tracker_lib.py, which needs no web app link or
 # token: new-token writes the token into config.local.json without ever showing it, and sheet-id
-# prints the id of the sheet SKILL.md names.
+# prints the id of the sheet SKILL.md names. The /tracker --scan commands (claude-config#1032) run
+# there too: none of them needs the web app, so none of them requires its link or token.
 case "${1:-}" in
-  new-token|sheet-id) exec python3 "$LIB" "$@" ;;
+  new-token|sheet-id|scan|set-authors|ignore-repo|unignore-repo|authors-found|reconcile|snapshot|scan-cells)
+    exec python3 "$LIB" "$@" ;;
 esac
 
 if [ ! -f "$CONFIG" ]; then
@@ -230,7 +234,7 @@ PY
     post "$BODY" "$MODE"
     ;;
   *)
-    echo "usage: tracker.sh {headers | append '<json>' | update '<link>' '<project name>' '<json>' | new-token | sheet-id}" >&2
+    echo "usage: tracker.sh {headers | append '<json>' | update '<link>' '<project name>' '<json>' | new-token | sheet-id | scan and the rest of /tracker --scan (SKILL.md)}" >&2
     exit 1
     ;;
 esac
