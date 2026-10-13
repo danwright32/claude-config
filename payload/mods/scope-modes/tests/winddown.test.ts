@@ -197,6 +197,18 @@ describe('uncommitted changes, by the files git status names (#1051)', () => {
     ])
     expect(porcelainFiles('')).toEqual([])
   })
+  test("a name git quoted is read back as the name itself: its octal bytes and escapes undone (#1108 lessons review)", () => {
+    // git writes a name with a byte past ASCII as octal escapes of its UTF-8, quoted (core.quotePath).
+    expect(porcelainFiles('?? "caf\\303\\251.ts"\n M "a\\"b.ts"\n M "tab\\there.ts"\n M "back\\\\slash.ts"\nR  "old\\303\\251.ts" -> "new\\303\\251.ts"\n')).toEqual([
+      'café.ts',
+      'a"b.ts',
+      'tab\there.ts',
+      'back\\slash.ts',
+      'newé.ts',
+    ])
+    // So a file this session wrote under that name is its own.
+    expect(whoseFiles(porcelainFiles('?? "caf\\303\\251.ts"\n'), '/repo', ['/repo/café.ts'])).toEqual({ own: ['café.ts'], others: [] })
+  })
   test('the finish check names the files, at most five, then how many more', () => {
     const r: Reading = { ...merged, branch: 'main', isDefault: true, pr: null, deploy: null }
     expect(outstanding({ ...r, dirty: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toEqual([UNCOMMITTED('a, b, c, d, e and 2 more')])

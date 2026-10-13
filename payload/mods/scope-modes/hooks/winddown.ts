@@ -147,8 +147,32 @@ export const porcelainFiles = (stdout: string): string[] =>
     .map(l => {
       const path = l.slice(3)
       const to = path.includes(' -> ') ? path.slice(path.lastIndexOf(' -> ') + 4) : path
-      return to.startsWith('"') && to.endsWith('"') ? to.slice(1, -1) : to
+      return to.startsWith('"') && to.endsWith('"') ? unquoted(to.slice(1, -1)) : to
     })
+
+// What git quoted, read back (#1108 lessons review): a byte past ASCII as an octal escape of its
+// UTF-8 (core.quotePath), and a quote, a backslash or a control character by its C escape. Read as
+// written, a file the session wrote under such a name never matched the path it wrote.
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 }
+const unquoted = (q: string): string => {
+  const bytes: number[] = []
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i] as string
+    if (c !== '\\') {
+      bytes.push(...new TextEncoder().encode(c))
+      continue
+    }
+    const next = q[i + 1] ?? ''
+    if (/^[0-7]{3}$/.test(q.slice(i + 1, i + 4))) {
+      bytes.push(parseInt(q.slice(i + 1, i + 4), 8))
+      i += 3
+    } else {
+      bytes.push(C_ESCAPES[next] ?? next.charCodeAt(0))
+      i += 1
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes))
+}
 
 // Files named in a sentence: at most five, then how many more.
 const MAX_NAMED = 5
