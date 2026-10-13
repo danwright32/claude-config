@@ -1,7 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { HEADER, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
+import { CONTRACT, HEADER, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
@@ -821,9 +821,60 @@ test('#1010: a Next.js dynamic segment is followed as the folder it names, relat
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/src/app/booking/[SO_ID]/page.tsx', content: 'x' }))).toContain('issue #978 in slate')
   await askSkip($, w, refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' })), SKIP_YES)
   expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' }))).toBe('')
-  // A bracket that is a pattern is still a write that cannot be followed.
+  // A bracket that is a pattern is no route segment: since #1015 its folder is followed, so it is held
+  // as a look changing file of that checkout's issue, which Dan can answer for.
   w.branches['/w/slate'] = '979-next'
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/app/page.ts[x]' }))).toContain('could not be followed')
+  const pattern = refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/app/page.ts[x]' }))
+  expect(pattern).toContain('app/page.ts[x]')
+  expect(pattern).toContain('issue #979 in slate')
+})
+
+// claude-config#1015: a shell write whose file NAME is a pattern that may expand to a design tokens
+// or Tailwind config file was let through: its extension is literal, and its literal name is no look
+// changing file. Every name a pattern may expand to is now judged. And the other way, seen on
+// 2026-10-12: `rm -f ~/.claude/state/ai-review/shown/timing-test-post.*`, a scratch file in Claude's
+// own state folder in no project, was refused as "a pattern that may name a look changing file".
+test('#1015: a pattern in a written name is held where it may expand to a tokens or Tailwind config file', withKit, async ($, on) => {
+  const w = world($, on)
+  // A folder held in a variable leaves only the folder unknown, never the name (lessons review of #1015).
+  for (const command of ['echo x > [t]ailwind.config.ts', 'echo x > app/[t]okens.json', "printf '{}' > design-[t]okens.json", 'rm -f tailwind.config.*', 'echo x > $D/app/page.ts[x]', 'echo x > "$D/[t]ailwind.config.ts"']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes('a pattern that may name a look changing file')]).toEqual([command, true])
+  }
+  // Its folder followed into the checkout, it waits on that issue's answer like any look changing file.
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/[t]ailwind.config.ts' }))
+  expect(why).toContain('[t]ailwind.config.ts')
+  expect(why).toContain('issue #978 in slate')
+  BOTH_WAYS(why)
+  await askSkip($, w, why, SKIP_YES)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/[t]ailwind.config.ts' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('#1015: a pattern in a folder outside every checkout, or whose literal parts rule out every look changing file, runs', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    'rm -f ~/.claude/state/ai-review/shown/timing-test-post.*',
+    'rm -f $HOME/.claude/state/ai-review/shown/*',
+    'echo x > /tmp/scratch/[t]ailwind.config.ts',
+    'rm -f logs/run-*.log',
+    'rm -f /w/slate/logs/*.l?g',
+    'echo x > notes-[0-9].md',
+    'rm -f /w/slate/tests/*.tsx',
+  ]) {
+    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  }
+  expect(w.ran.length).toBe(7)
+})
+
+test('#1015: a pattern the guard cannot read is held, saying so, and in a known checkout waits on its issue', withKit, async ($, on) => {
+  world($, on)
+  const why = refusalOf(await call($, { tool: 'Bash', command: `cd "$D" && echo x > 'x.@(css|md)'` }))
+  expect(why).toContain('a pattern the design round guard cannot read')
+  // The folder followed (mod-kit reads the group as a name, a cd included), it is that issue's to answer.
+  const known = refusalOf(await call($, { tool: 'Bash', command: "echo x > 'app/x.@(css|md)'" }))
+  expect(known).toContain('app/x.@(css|md)')
+  expect(known).toContain('issue #978 in slate')
 })
 
 // claude-config#1046, from a pet session: the session in the project's main checkout, the edit in a
@@ -908,4 +959,71 @@ test('#1046: with no refused edit waiting, a path that is not absolute is still 
   expect(why).toContain('"path" as the absolute path')
   expect(why).not.toContain('"call"')
   expect(w.asked).toEqual([])
+})
+
+// claude-config#1057: the design rounds skill is read fresh each time it is used, while a session keeps
+// the guard it loaded at its start. On 2026-10-09 a session followed the new skill (Settled naming
+// the refused call) against the guard from before it, which ignored the call, recorded Settled for
+// the wrong subject, and refused the edit again, so the answer looped (#1046). The two are stamped
+// with one contract version: the skill's `<!-- design-round-guard contract: N -->` and the guard's
+// CONTRACT, and the skill has every question carry its version as metadata "contract".
+const SKILL_MD = `${HOME}/.claude/skills/design-rounds/SKILL.md`
+const stamped = (n: number) => `---\nname: design-rounds\n---\n<!-- design-round-guard contract: ${n} -->\n# Design rounds\n`
+
+test('#1057: an answer in a form newer than this guard knows is refused, naming the remedy, with nothing asked or recorded', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate', files: { [SKILL_MD]: stamped(CONTRACT) } })
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call')
+  const newer = [
+    () => askSettled($, w, SETTLED_YES, {}, { call: id, contract: CONTRACT + 1 }),
+    () => askSkip($, w, `design-round-guard:${id}`, SKIP_YES, { metadata: { source: `design-round-guard:${id}`, contract: CONTRACT + 1 } }),
+  ]
+  for (const ask of newer) {
+    const why = refusalOf(await ask())
+    expect(why).toContain("this session's design round guard predates the design rounds steps you read")
+    expect(why).toContain('start a new session')
+  }
+  expect(w.asked).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
+  // Asked again the same way, it says the same, rather than looping through a record and a refusal.
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: id, contract: CONTRACT + 1 }))).toContain('start a new session')
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
+// Lessons review of #1057: a contract that is not a whole number ("2", 2.5) read as no claim, so the
+// question was answered as current. It is refused by name, before Dan is asked.
+test('#1057: a contract that is not a whole number is refused by name, with nothing asked or recorded', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call')
+  for (const contract of ['2', 2.5, 0, null]) {
+    const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: id, contract }))
+    expect([contract, why.includes('is not a contract version')]).toEqual([contract, true])
+  }
+  expect(w.asked).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
+})
+
+test('#1057: the design rounds skill on disk stamped newer than this guard is refused the same way, even with no contract given', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate', files: { [SKILL_MD]: stamped(CONTRACT + 1) } })
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call')
+  const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: id }))
+  expect(why).toContain("this session's design round guard predates the design rounds steps you read")
+  expect(w.asked).toEqual([])
+})
+
+test('#1057: the same contract on both sides, or a skill not on disk, is answered as before', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate', files: { [SKILL_MD]: stamped(CONTRACT) } })
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call')
+  const r = await askSettled($, w, SETTLED_YES, {}, { call: id, contract: CONTRACT })
+  expect(refusalOf(r)).toBe('')
+  expect(contextOf(r)).toContain('recorded as settled for issue #978 in slate')
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  // No skill on disk at all: nothing to compare against, so nothing is refused for it.
+  delete w.files[SKILL_MD]
+  w.branches['/w/slate'] = '979-next'
+  const id2 = idIn(refusalOf(await call($, STYLE)))
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: id2 }))).toBe('')
 })
