@@ -4592,6 +4592,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   percent of the limit in a test. Related to L737, where the limit also spans a wait on a person)
   SHORT: Before a timeout is read as a failure, compute the work's duration at the slowest passing input and keep it well inside the limit.
 
+- **L762. A check that compares against a bounded mirror (a cache, sync or replica that
+  deliberately keeps only a window or a retention period) must judge only the range the mirror
+  is defined to hold, and treat a missing row beyond that range as unmeasured, because the
+  writer drops rows there on purpose and their absence says nothing about the source.**
+  (slate#3655, 2026-10-13)
+  SHORT: A check against a bounded cache or mirror judges only the range it is defined to hold; a missing row beyond it is unmeasured, not absent.
+
 ## State and identity
 
 - **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
@@ -8644,6 +8651,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+
+- **L766. When a deadline stops waiting on a write to another system, record that write as UNKNOWN and have a later step read the target back and resend only if it is absent, because an outcome labelled 'may have finished' that nothing re-checks becomes a silent loss on every slow upstream night.**
+  (Try-Pennie/bidspoke#2015, 2026-10-13)
+  SHORT: A write a deadline stopped waiting on is UNKNOWN, so record it and read the target back later, resending only if absent; unchecked it is a silent loss.
 
 - **L1020. A GitHub Actions concurrency group holds one running and one pending run, and a third arrival cancels the pending one even with cancel-in-progress set to false, so a workflow that must handle every event (every commit on main, every finished CI run) keys its group on that event's own identity, never one constant name.**
   (danwright32/ovation#688, 2026-10-08)

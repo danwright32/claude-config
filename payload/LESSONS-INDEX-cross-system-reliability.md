@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L766. A write a deadline stopped waiting on is UNKNOWN, so record it and read the target back later, resending only if absent; unchecked it is a silent loss.
 - L1020. A concurrency group keeps one pending run and a third arrival cancels it, so key a must-see-every-event workflow's group on the event.
 - L405. A check deciding whether anything is NEW must compare what the artifact MEANS, not its serialized form, which carries provenance that changes each run.
 - L403. An automated flow that PUSHES a branch and OPENS a pull request must use ONE credential for both, or the platform suppresses the checks it triggers.
