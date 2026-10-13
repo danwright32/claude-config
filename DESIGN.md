@@ -965,6 +965,14 @@ else is this Mac's work and is sent, with a line saying it puts back a deleted f
 tombstone list was considered and not built: the history already records every deletion and every
 version, and a second record of the same facts is one more thing for the two Macs to disagree on.
 
+The APPLY asks the same question (#1013), through the same function, `deleted_path_verdict`, so the
+two cannot disagree about one file. Before it, a local file the payload lacked was kept as unsent
+work whenever `unapplied_paths` did not list it, which is exactly when the marker is already past
+the deletion, and the pull promised it to the next send, which then refused it. Now a leftover is
+left out of what the apply holds back, so its own `--delete` removes it, and the pull says so and
+names the commit holding it. With `SYNC_ACCEPT_DELETIONS=0` it stays, and the pull says a send will
+not carry it, once per copy through the same `.resurrected-reported` record the send keeps.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on
