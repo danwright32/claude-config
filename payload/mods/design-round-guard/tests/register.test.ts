@@ -1307,6 +1307,10 @@ test('#1151: a look edit in the project is still held, however the command names
   expect(refusalOf(await sh(`python3 - <<'EOF'\nf = "app/site.css"\nopen(f, "w").write("a{}")\nEOF`))).toContain(SKIP_QUESTION)
   // The same program after a cd the reader cannot follow: where it writes cannot be told, so it is held.
   expect(refusalOf(await sh(`cd $D && python3 - <<'EOF'\nf = "site.css"\nopen(f, "w").write("a{}")\nEOF`))).toContain('could not')
+  // A copy or move of a stylesheet into a folder the reader cannot follow lands under the source's own
+  // name, a look file wherever that folder is, so it is held (lessons review of #1151).
+  for (const command of ['cp app/site.css $D/', 'mv app/site.css "$D"/', 'cp app/site.css $D', 'cp app/site.css "$(dirname x)"/'])
+    expect({ command, held: refusalOf(await sh(command)).includes('could not') }).toEqual({ command, held: true })
   // A write whose own name is a variable may be a look file, so its data still counts.
   expect(refusalOf(await sh(`cat > $F <<'EOF'\napp/site.css\nEOF`))).toContain('could not')
   // And a stylesheet written into the project by a heredoc is a look edit, as ever.
