@@ -314,6 +314,42 @@ out_pf="$(HOOK_TESTS_JOBS=4 bash "$RUNNER" "$PF" 2>&1)"; code_pf=$?
 grep -q 'test-quick.sh' <<< "$out_pf" \
   && check "and is named" ok || check "and is named" "out=$out_pf"
 
+# A SUITE THAT READS ITS STDIN must not eat the runner's list of what to launch next. The launch
+# loop read that list from a here-document, and under the Mac's bash 3.2 every suite started inside
+# the loop shared it as stdin, so a suite reading stdin to the end (a hook driven with no input
+# given) took every name still waiting. Each of those then reported "left no exit status, so it
+# was killed or never started", with "load average could not be read" beside it, and passed when
+# rerun alone: 93 of 101 on 2026-10-13. Linux CI's bash never showed it. The reader goes first and
+# holds both slots' attention, so the names after it are still waiting when it reads.
+SI="$TMPROOT/dir-stdin"
+mkdir -p "$SI"
+printf '#!/usr/bin/env bash\ncat > "$(dirname "$0")/aaa.stdin"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$SI/test-aaa.sh"
+for n in bbb ccc ddd eee fff; do mk_suite "$SI" "$n" 0; done
+out_si="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_JOBS=2 HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$SI" 2>&1)"; code_si=$?
+si_ran="$(printf '%s\n' "$out_si" | grep -cE '^ +ok +test-' || true)"
+[ "$code_si" -eq 0 ] && [ "$si_ran" = "6" ] \
+  && check "a suite reading its stdin does not stop the suites after it from being launched" ok \
+  || check "a suite reading its stdin does not stop the suites after it from being launched" "exit=$code_si, $si_ran of 6 ran: $out_si"
+[ -f "$SI/aaa.stdin" ] && [ ! -s "$SI/aaa.stdin" ] \
+  && check "and the suite reading stdin is handed nothing, never the runner's own input" ok \
+  || check "and the suite reading stdin is handed nothing, never the runner's own input" "it read: $(head -c 300 "$SI/aaa.stdin" 2>/dev/null)"
+
+# And no suite reads the Mac's REAL sleep record (2026-10-13). Sleep aware hooks go quiet while it
+# says asleep, so their suites failed on the first run made during a night of sleep mode and passed
+# on CI, which has no record. Every suite is handed a record of its own, which does not exist.
+SR="$TMPROOT/dir-sleep-record"
+mkdir -p "$SR"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${CLAUDE_SLEEP_RECORD:-}" > "$(dirname "$0")/record.seen"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$SR/test-sleep-record.sh"
+HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$SR" >/dev/null 2>&1
+sr_seen="$(cat "$SR/record.seen" 2>/dev/null)"
+case "$sr_seen" in
+  '') check "every suite is handed a sleep record of its own" "it was handed none, so it read the real one" ;;
+  "$HOME/.claude/"*) check "every suite is handed a sleep record of its own" "it was handed the real one: $sr_seen" ;;
+  *) [ ! -e "$sr_seen" ] \
+       && check "every suite is handed a sleep record of its own" ok \
+       || check "every suite is handed a sleep record of its own" "the record it was handed exists: $sr_seen" ;;
+esac
+
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
 # when a suite only fails alongside others.
 out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?

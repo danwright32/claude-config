@@ -4,6 +4,9 @@
 # both are held to (mods/scope-modes/tests/sleep-fixtures.ts, L26). The mod's own suite holds
 # readSleep to the same states, so a reader that drifts fails here or there.
 set -uo pipefail
+# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
+# the test runner hands every other suite through CLAUDE_SLEEP_RECORD (lib/sleep.sh).
+unset CLAUDE_SLEEP_RECORD
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
   echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
@@ -138,6 +141,18 @@ fi
 printf '{"v":1,' > "$WORK/bad.json"
 check_eq "a broken record says why, asked in a subshell as every caller asks" "the sleep record is not JSON" "$(sleep_why "$WORK/bad.json" 1 1)"
 check_eq "an asleep record has no why" "" "$(sleep_why "$WORK/rec0.json" 1791360000000 1759800000)"
+
+# WHERE THE RECORD IS, WHEN NO CALLER NAMES ONE, CAN BE MOVED (2026-10-13). Every sleep aware hook
+# asks with no path, so its suite read Dan's real record: the first suite run on a night of sleep
+# mode found him asleep, the hooks went quiet, and those suites failed (121 checks of the merge quiz
+# alone) while CI, with no record, passed. The runner now hands every suite a record of its own
+# through CLAUDE_SLEEP_RECORD; a path given as an argument still wins over it.
+check_eq "CLAUDE_SLEEP_RECORD names the record a caller with no path reads" "asleep" \
+  "$(CLAUDE_SLEEP_RECORD="$WORK/rec0.json" sleep_state "" 1791360000000 1759800000)"
+check_eq "and one naming no record reads as none, whatever the real record says" "none" \
+  "$(CLAUDE_SLEEP_RECORD="$WORK/no-such-record.json" sleep_state "" 1791360000000 1759800000)"
+check_eq "and a path given as an argument still wins over it" "asleep" \
+  "$(CLAUDE_SLEEP_RECORD="$WORK/no-such-record.json" sleep_state "$WORK/rec0.json" 1791360000000 1759800000)"
 
 # THE LIBRARY FINDS ITS OWN FOLDER WITH NO EXTERNAL COMMAND (claude-config#1098). It used dirname,
 # so under a PATH holding nothing `cd ""` left it in the CALLER's folder and sleep_note ran
