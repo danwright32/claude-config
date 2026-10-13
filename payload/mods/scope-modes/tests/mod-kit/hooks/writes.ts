@@ -1,6 +1,6 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
 import { git, readLine, type Command, type Line } from './commands.ts'
-import { codeTargets } from './code.ts'
+import { codeOnly, codeTargets } from './code.ts'
 import { kindOf } from './program.ts'
 
 // The one reader of which files a Bash call changes (#705, L613), over the simple commands the
@@ -700,7 +700,13 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       // never another command's heredoc data, and places a bare one where the program is, never in
       // the session's folder. The folder is left out where a cd before it cannot be followed.
       const read = p && 'text' in p ? { program: p.text } : {}
-      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(dir ? { folder: dir } : {}) })
+      // And, where its files are not all named, its code: what it holds only as data blanked (#1165),
+      // so a guard reads the names it can open, never those a block it puts in a file quotes. Only
+      // for a program the shell cannot have changed, as ask before saving reads one (#940): on
+      // standard input from a quoted heredoc, or holding no $ or backtick, never in a substitution.
+      const asWrittenByShell = p && 'text' in p && !c.substitution && ((p.stdin === true && (c.heredocs ?? []).some(h => h.quoted && !h.replaced && h.fd === undefined)) || !/[$`]/.test(p.text))
+      const code = !('targets' in known) && asWrittenByShell && c.language && p && 'text' in p ? codeOnly(c.language, p.text) : undefined
+      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(code === undefined ? {} : { code }), ...(dir ? { folder: dir } : {}) })
     }
     else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
     // A command given its operands by xargs changes files no word names (#730).

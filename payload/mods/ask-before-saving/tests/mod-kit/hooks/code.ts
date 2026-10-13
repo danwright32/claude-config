@@ -635,6 +635,60 @@ export const codeTargets = (lang: Lang, inline: string): string[] | undefined =>
   return pythonTargets(SURFACES.python.canonical?.(inline) ?? inline)
 }
 
+/**
+ * A python program's text with what it holds only as data blanked (#1165), for a guard reading the
+ * names of the files a program can open: each comment, and each plain string literal spanning lines
+ * (the text a script puts into a file, a block it replaces), all but a last word its closing quote
+ * ends, which a name is (`"""notes\napp/page.tsx"""`). A literal on one line is kept whole, since a
+ * path (one with a space in it too, in a Bidspoke checkout), names joined to be split and a sentence
+ * read alike there, and so is an f-string or a t-string, whose braces hold code. A blanked character
+ * becomes a space, a line break staying, so the text keeps its shape. Undefined where data cannot be
+ * told from code: any language but python, and a program that runs a process or builds code at run
+ * time (exec, eval, compile), either of which can run what a string holds.
+ */
+export const codeOnly = (lang: Lang, inline: string): string | undefined => {
+  if (lang !== 'python') return undefined
+  const s = SURFACES.python
+  const canonical = s.canonical?.(inline) ?? inline
+  if (first(s.process, canonical) || first(s.dynamic, canonical)) return undefined
+  const blank = (t: string) => t.replace(/[^\n]/g, ' ')
+  let out = ''
+  let i = 0
+  while (i < inline.length) {
+    const ch = inline[i] as string
+    if (ch === '#') {
+      const end = inline.indexOf('\n', i)
+      const to = end === -1 ? inline.length : end
+      out += `#${blank(inline.slice(i + 1, to))}`
+      i = to
+      continue
+    }
+    if (ch !== "'" && ch !== '"') {
+      out += ch
+      i++
+      continue
+    }
+    // A string literal, read as python reads it: a backslash keeps it open (in a raw string too), and
+    // one with a single quote ends at its line.
+    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(inline.slice(Math.max(0, i - 3), i))?.[1] ?? ''
+    const q = inline.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+    let j = i + q.length
+    while (j < inline.length && !inline.startsWith(q, j) && (q.length === 3 || inline[j] !== '\n')) j += inline[j] === '\\' ? 2 : 1
+    const to = Math.min(j, inline.length)
+    const body = inline.slice(i + q.length, to)
+    const closed = inline.startsWith(q, to)
+    if (/[fFtT]/.test(prefix) || !body.includes('\n')) out += q + body
+    else {
+      // The last word, kept where the closing quote ends it.
+      const last = closed ? (/[^\s]*$/.exec(body)?.[0] ?? '') : ''
+      out += q + blank(body.slice(0, body.length - last.length)) + last
+    }
+    if (closed) out += q
+    i = to + (closed ? q.length : 0)
+  }
+  return out
+}
+
 /** What inline code in a language can do that no build refuses, or undefined when it only reads. */
 export const codeVerdict = (lang: Lang, inline: string): CodeVerdict | undefined => {
   const s = SURFACES[lang]

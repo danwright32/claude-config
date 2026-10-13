@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { codeVerdict } from '../hooks/code.ts'
+import { codeOnly, codeVerdict } from '../hooks/code.ts'
 
 // The per language judge of inline code (#712: moved here from scope-modes, so $.modkit.writes and
 // no build read code the same way). Its rules are pinned end to end through no build's own tests;
@@ -100,5 +100,35 @@ describe('codeVerdict after #760', () => {
     expect(codeVerdict('ruby', 'def public_send(name, *args); end')).toBeUndefined()
     expect(codeVerdict('ruby', 'send(name, "ls")')).toEqual({ does: 'unreadable', seen: 'send of a computed name' })
     expect(codeVerdict('ruby', 'def go(n)\n  send(n)\nend')).toEqual({ does: 'unreadable', seen: 'send of a computed name' })
+  })
+})
+
+// #1165: since #1151 the design round guard read every look file name a program's text holds as a
+// file it may write, so a python heredoc editing a test file, whose replacement text quoted
+// app/page.tsx as test data, was held as a change to app/page.tsx. What the program holds only as
+// data is blanked, so a guard reads the names it can open.
+describe('codeOnly (#1165)', () => {
+  const blank = (s: string) => s.replace(/[^\n]/g, ' ')
+  test('a comment and a string literal spanning lines are data; code, a one line literal and an f-string are kept', () => {
+    const data = "  test('x', () => {\n    git('checkout -- app/page.tsx')\n  })\n"
+    expect(codeOnly('python', `p='tests/x.test.ts'\nnew='''${data}'''\nopen(p,'w').write(new)`)).toBe(`p='tests/x.test.ts'\nnew='''${blank(data)}'''\nopen(p,'w').write(new)`)
+    expect(codeOnly('python', '# rewrites app/page.tsx\nx = 1')).toBe(`#${blank(' rewrites app/page.tsx')}\nx = 1`)
+    // One line: a path, a path with a space in it (a Bidspoke checkout), names to split, a sentence.
+    for (const code of ["open('app/page.tsx', 'w')", "open('/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx', 'w')", "f = 'app/a.css app/b.css'.split()", "print('wrote app/page.tsx')"])
+      expect(codeOnly('python', code)).toBe(code)
+    // An f-string's braces hold code, so it is kept, across lines too.
+    const f = "open(f'''{root}\n/app/page.tsx''', 'w')"
+    expect(codeOnly('python', f)).toBe(f)
+  })
+  test('a literal spanning lines keeps a last word its closing quote ends, which may be a name', () => {
+    expect(codeOnly('python', 'p = """notes\napp/page.tsx"""\nopen(p, "w")')).toBe('p = """     \napp/page.tsx"""\nopen(p, "w")')
+    // A word a line break or a space comes after, before the quote, is no name the quote ends.
+    expect(codeOnly('python', "s = '''a\napp/page.tsx\n'''")).toBe(`s = '''${blank('a\napp/page.tsx\n')}'''`)
+  })
+  test('where data cannot be told from code it is undefined: a process, code built at run time, or any language but python', () => {
+    expect(codeOnly('python', "import subprocess\nsubprocess.run('''sed -i s/a/b/\napp/page.tsx''', shell=True)")).toBeUndefined()
+    expect(codeOnly('python', "from os import system\nsystem('''touch\napp/page.tsx''')")).toBeUndefined()
+    expect(codeOnly('python', "exec('''open('app/page.tsx',\n'w')''')\nopen('x', 'w')")).toBeUndefined()
+    expect(codeOnly('node', "require('fs').writeFileSync(p, `\napp/page.tsx`)")).toBeUndefined()
   })
 })

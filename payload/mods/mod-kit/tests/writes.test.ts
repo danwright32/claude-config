@@ -342,6 +342,23 @@ describe('writes: what the words do not name', () => {
     expect(lost?.program).toContain("f = 'out.css'")
     expect(lost && 'folder' in lost).toBe(false)
   })
+  // #1165: and its code, what it holds only as data blanked, so the design round guard reads the
+  // names it can open, never those its replacement text quotes as test data.
+  test('a python program the shell cannot have changed carries its code, with what it holds as data blanked', () => {
+    const data = "  expect(byGit('git checkout -- app/page.tsx')).toEqual([{ path: `${CWD}/app/page.tsx` }])\n"
+    const program = `p='tests/x.test.ts'\ns=open(p).read()\nnew='''${data}'''\nopen(p,'w').write(s+new)`
+    const u = read(`python3 - <<'EOF'\n${program}\nEOF`).unnamed[0]
+    expect(u?.program).toBe(program)
+    expect(u?.code).toBe(program.replace(data, data.replace(/[^\n]/g, ' ')))
+    // A -c program holding no $ or backtick is one the shell left as written.
+    expect(read(`python3 -c "open(p,'w').write('''x\napp/page.tsx\n''')"`).unnamed[0]?.code).toBe("open(p,'w').write(''' \n            \n''')")
+    // Where the shell may have changed the text (an unquoted heredoc holding a $ or a backtick), the
+    // program runs a process or the language is not python, data cannot be told apart: no code.
+    const none = (command: string) => read(command).unnamed.map(x => 'code' in x)
+    expect(none(`python3 - <<EOF\n${program}\nEOF`)).toEqual([false])
+    expect(none(`python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['true'])\n${program}\nEOF`)).toEqual([false])
+    expect(none(`node -e "require('fs').writeFileSync(p, 'x\\napp/page.tsx')"`)).toEqual([false])
+  })
   test('an inline script that only reads is not a write', () => {
     expect(read(`python3 -c "print(open('CLAUDE.md').read())"`).unnamed).toEqual([])
   })

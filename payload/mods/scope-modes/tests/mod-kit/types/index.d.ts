@@ -366,8 +366,13 @@ export type ModKitWrites = {
   /**
    * For a program the reader read (inline or on standard input), `program` is its text and `folder`
    * the folder it runs in, a cd before it followed, left out where that cannot be followed (#1151).
+   * `code`, for such a program whose files are not all named (no `targets`), is its text with what
+   * it holds only as data blanked to spaces: each comment and each plain string literal spanning
+   * lines but for a last word its closing quote ends (#1165). Given only for python the shell cannot
+   * have changed (from a quoted heredoc, or holding no $ or backtick) that runs no process and builds
+   * no code at run time; absent, data cannot be told from code, and the whole `program` is the guess.
    */
-  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; folder?: string }[]
+  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; code?: string; folder?: string }[]
   byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true }[]
 }
 
