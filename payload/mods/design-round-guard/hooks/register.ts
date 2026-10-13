@@ -7,7 +7,6 @@ import {
   HEADER,
   NOT_LOOK,
   SETTLED_NO,
-  TYPED_TOAST,
   SETTLED_SOURCE,
   SETTLED_YES,
   SKIP_NO,
@@ -53,9 +52,11 @@ import {
   skipOptions,
   skipQuestion,
   subjectsOf,
-  typedSettled,
-  typedSkip,
+  settledTyped,
+  skipTyped,
   unreadable,
+  unreadableCard,
+  unsureCard,
   unsure,
 } from './rules.ts'
 
@@ -404,12 +405,14 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
     return forged(v.forged)
   }
   if ('unsure' in v) {
-    await drawCard($, call.id, `${listed(v.unsure)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to.`, 'Claude checks out the issue branch, or asks you.')
+    const c = unsureCard(v.unsure)
+    await drawCard($, call.id, c.reason, c.safeWay)
     return unsure(v.unsure, v.why)
   }
   if ('unreadable' in v) {
     const u = v.unreadable
-    await drawCard($, call.id, `${listed(u.files)} changes how the screen looks, and the design round guard could not read its record of your answers.`, 'Claude tries again, or tells you.')
+    const c = unreadableCard(u.files)
+    await drawCard($, call.id, c.reason, c.safeWay)
     return unreadable(u.files, u.subjects, u.why)
   }
   const { files, subjects, trees } = v.missing
@@ -637,16 +640,15 @@ export const register: Register = on => {
       return `${head}, so edits that change the look on ${left} stay blocked. Tell him, and ask again.`
     }
 
-    // Dan typed an answer instead of choosing one (#1138): he is told it was not recorded, in a toast,
-    // as well as Claude, so it is never only Claude who knows. A toast that cannot be shown is said in
-    // the debug log; what Claude is told is unchanged.
-    const typed = async (r: Awaited<ReturnType<typeof next>>, text: string) => {
+    // Dan typed an answer instead of choosing one (#1138): nothing is recorded, and mod-kit's one
+    // wording (#1145) tells him so in a toast and tells Claude to say so and ask again. A mod-kit that
+    // cannot (one loaded before it had the member) is said, so Claude knows Dan was not told.
+    const typed = async (r: Awaited<ReturnType<typeof next>>, chosen: string, parts: { still: string; again: string }) => {
       try {
-        await $.ui.toast(TYPED_TOAST)
+        return say(r, await $.modkit.typedAnswer({ guard: GUARD, typed: chosen, ...parts }))
       } catch (err) {
-        $.ui.log(`design-round-guard: the toast saying a typed answer was not recorded could not be shown: ${message(err)}`, { to: 'debug' })
+        return say(r, `Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${message(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`)
       }
-      return say(r, text)
     }
 
     // What Claude is told to do with a refused call once Dan's answer lets it through.
@@ -706,7 +708,7 @@ export const register: Register = on => {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes nothing on screen. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
         }
-        if (chosen !== SKIP_YES) return typed(r, typedSkip(chosen, waiting.files, open))
+        if (chosen !== SKIP_YES) return typed(r, chosen, skipTyped(waiting.files, open))
         const kept = await record(open, 'skipped')
         if (kept.why !== undefined) return say(r, partly(SKIP_YES, kept))
         await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
@@ -728,7 +730,7 @@ export const register: Register = on => {
       const { r, chosen, none } = await asked(settledQuestion(subjects), settledOptions(subjects))
       if (chosen === undefined) return none ? say(r, none) : r
       if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: nothing is recorded. Keep going with design rounds.`)
-      if (chosen !== SETTLED_YES) return typed(r, typedSettled(chosen))
+      if (chosen !== SETTLED_YES) return typed(r, chosen, settledTyped())
       const kept = await record(subjects, 'settled')
       if (kept.why !== undefined) return say(r, partly(SETTLED_YES, kept))
       // Each refused call his answer covers in full can be sent again. It stays on the waiting list,

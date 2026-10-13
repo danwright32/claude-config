@@ -42,6 +42,7 @@ const modKit: { name: string; register: Register } = {
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+        typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         // #951: the session's repository, asked of the world (a plugin in a test runs in its own
         // environment), which reads with a byte for byte copy of mod-kit's own reader.
         repo: async (input: { root?: string | null; remote: string | null }) => {

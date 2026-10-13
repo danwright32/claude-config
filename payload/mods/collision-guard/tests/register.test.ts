@@ -72,6 +72,7 @@ const deps: { name: string; register: Register } = {
           press: async () => ({ isAnswered: false }),
           clickable: async () => true,
           isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         },
         sessions: {
           list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),

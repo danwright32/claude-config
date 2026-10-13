@@ -5,6 +5,7 @@ import { APPROVAL_MS } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
+import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is refused until
 // Dan answers, his own permanent words skip the question, and each answer does what the spec says.
@@ -73,6 +74,16 @@ const modKit: { name: string; register: Register } = {
           const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout) as boolean
+        },
+        // #1145: a typed answer, said with the copy of mod-kit's wording, the toast shown here as
+        // mod-kit shows it. One typed as BREAKS stands for a mod-kit loaded before it had the member.
+        typedAnswer: async (input: { guard: string; typed: string; still: string; again: string }) => {
+          if (input.typed === 'BREAKS') throw new TypeError('$.modkit.typedAnswer is not a function')
+          const r = await built.process.run(['__modkit', 'typedAnswer', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          const said = JSON.parse(r.stdout) as { toast: string; text: string }
+          await built.ui.toast(said.toast)
+          return said.text
         },
       }
       return { ...built, modkit }
@@ -161,6 +172,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
       const input = JSON.parse(String(e.argv[2])) as { origin: never }
       return { value: { exitCode: 0, stdout: JSON.stringify(isDans(input.origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'typedAnswer') {
+      const input = JSON.parse(String(e.argv[2])) as TypedAnswer
+      return { value: { exitCode: 0, stdout: JSON.stringify({ toast: typedToast(input.guard), text: typedAnswerText(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] === '__modkit' && e.argv[1] === 'pipeline') {
       const input = JSON.parse(String(e.argv[2])) as { command: string }
@@ -858,14 +873,25 @@ test('a dialog that closed itself while Dan was away approves nothing, and the s
   expect(w.ran.length).toBe(1)
 })
 
-test("an answer typed in Dan's own words saves nothing and is handed to Claude to act on", withKit, async ($, on) => {
+// #1145: a typed answer is said as not recorded, to Dan in a toast and to Claude, who says so,
+// answers what he said, and asks the same question again, which the save still waits on.
+test("an answer typed in Dan's own words saves nothing, Dan is told so, and the same question can be asked again", withKit, async ($, on) => {
   const w = world($, on)
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
   const refused = refusalOf(await call($, input))
-  const typed = await askDan($, w, refused, 'only for the web app', '~/Apps/slate/AGENTS.md')
-  expect(contextOf(typed)).toContain('"only for the web app". Nothing was saved.')
-  expect(refusalOf(await call($, input))).toContain(ASKS)
+  const typed = contextOf(await askDan($, w, refused, 'only for the web app', '~/Apps/slate/AGENTS.md'))
+  expect(typed).toContain('Dan typed "only for the web app" instead of choosing an answer, so it was not recorded, and nothing was saved to ~/Apps/slate/AGENTS.md')
+  expect(typed).toContain('ask him the same question again, with the same metadata')
+  expect(w.toasts).toContain(typedToast('Ask before saving'))
   expect(w.ran).toEqual([])
+  // A mod-kit that cannot say it: Claude is still told, and told Dan was not.
+  const unsaid = contextOf(await askDan($, w, refused, 'BREAKS', '~/Apps/slate/AGENTS.md'))
+  expect(unsaid).toContain('nothing was saved')
+  expect(unsaid).toContain('could not tell him')
+  // The save still waits on that question: asked again and answered For good, it is saved.
+  await askDan($, w, refused, 'For good', '~/Apps/slate/AGENTS.md')
+  expect((await call($, input)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
 })
 
 test('the same save refused twice waits under one question, the latest', withKit, async ($, on) => {
@@ -1243,6 +1269,20 @@ test("an approval only Dan's own answer in the dialog gives: answers Claude fill
   await proposeLesson($, w, 'Add to LESSONS.md', { agentId: 'agent-a1' })
   expect(refusalOf(await call($, addLesson))).toContain(ASKS)
   expect(w.ran).toEqual([])
+})
+
+// #1145: a typed answer to the lesson's picker is said as not recorded, as the save question's is.
+test("a typed answer to the lesson's picker approves nothing, Dan is told so, and Claude asks the same question again", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const typed = contextOf(await proposeLesson($, w, 'yes but shorter'))
+  expect(typed).toContain('Dan typed "yes but shorter" instead of choosing an answer, so it was not recorded, and the lesson is not approved')
+  expect(typed).toContain('ask him the same question again, with the same metadata and the rule as it then stands')
+  expect(w.toasts).toContain(typedToast('Ask before saving'))
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  // No answer at all is not a typed one: no toast for it.
+  const before = w.toasts.length
+  expect(contextOf(await proposeLesson($, w, undefined))).toContain('did not choose')
+  expect(w.toasts.length).toBe(before)
 })
 
 test('Project memory instead and Skip approve nothing for the lessons file', withKit, async ($, on) => {

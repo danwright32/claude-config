@@ -727,10 +727,28 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
   )
 }
 
+// The card Dan sees leads in plain words and names the file after (#1145; Dan, 2026-10-13: "I don't
+// know what the file name means"). It is drawn when the call is refused, before the session has said
+// what changes on screen, and a result row already drawn is not drawn again, so the plain sentence
+// itself comes in the question that follows (#1138), and the card says that it will.
+const CARD_LEAD = 'Claude wants to make an edit that may change how something looks on screen'
+
 /** The card Dan sees for a refused look changing edit, drawn by mod-kit as every guard's is. */
 export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
-  reason: `${listed(files)} changes how the screen looks, and ${named(subjects)} has no settled design round.`,
-  safeWay: `Claude starts /design-rounds, or asks you whether to skip them for this issue, or whether this edit changes the look at all.`,
+  reason: `${CARD_LEAD}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
+  safeWay: `Claude tells you in plain words what would change, then starts /design-rounds or asks whether to skip them for this issue, or whether this edit changes the look at all.`,
+})
+
+/** The card when the issue or branch cannot be told. */
+export const unsureCard = (files: readonly string[]) => ({
+  reason: `${CARD_LEAD}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
+  safeWay: 'Claude checks out the issue branch, or asks you.',
+})
+
+/** The card when the record of Dan's answers cannot be read. */
+export const unreadableCard = (files: readonly string[]) => ({
+  reason: `${CARD_LEAD}, and the design round guard could not read its record of your answers. The file is ${listed(files)}.`,
+  safeWay: 'Claude tries again, or tells you.',
 })
 
 /** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
@@ -785,18 +803,15 @@ export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
   { label: NOT_LOOK, description: 'Nothing on screen changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
 
-/** What Dan sees, as a toast, when he types an answer to either question instead of choosing one (#1138). */
-export const TYPED_TOAST = 'Design round guard: your typed answer was not recorded, because only choosing one of the answers counts. Choose one when Claude asks again.'
-
-/** What Claude is told when Dan typed an answer to the skip question instead of choosing (#1138). */
-export const typedSkip = (typed: string, files: readonly string[], subjects: readonly DesignRoundSubject[]): string =>
-  `Dan typed "${typed}" instead of choosing an answer, so it was not recorded, and the edit to ${listed(files)} stays held, as do edits that change the look on ${named(subjects)}. ` +
-  `Tell him in one line that his typed answer was not recorded, because only choosing one of the answers counts; answer what he said if it asks something; then ask him the same question again, with the same metadata.`
-
-/** What Claude is told when Dan typed an answer to the settled question instead of choosing (#1138). */
-export const typedSettled = (typed: string): string =>
-  `Dan typed "${typed}" instead of choosing an answer, so it was not recorded, and nothing is settled. ` +
-  `Tell him in one line that his typed answer was not recorded, because only choosing one of the answers counts; act on what he said if it asks for a change to the design; then ask him "${SETTLED_QUESTION}" again, with the same metadata.`
+// Dan typed an answer instead of choosing one (#1138): said to him and to Claude in mod-kit's one
+// wording ($.modkit.typedAnswer, #1145), given what stays as it was and how to ask again.
+/** The skip question's: the refused edit and the issue stay held, and the same question is asked again. */
+export const skipTyped = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
+  still: `the edit to ${listed(files)} stays held, as do edits that change the look on ${named(subjects)}`,
+  again: 'ask him the same question again, with the same metadata',
+})
+/** The settled question's: nothing is settled, and it is asked again. */
+export const settledTyped = () => ({ still: 'nothing is settled', again: `ask him "${SETTLED_QUESTION}" again, with the same metadata` })
 
 /** Dan's Not a look change, kept with the refused call (#1010): what it let through, and why. */
 export const notLookWhy = (files: readonly string[]): string =>
