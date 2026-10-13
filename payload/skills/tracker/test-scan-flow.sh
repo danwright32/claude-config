@@ -124,9 +124,10 @@ commit "$ROOT/localonly" -1 "$ME_NAME" "$ME_EMAIL" "local only work"
 newrepo "$ROOT/botty" "https://github.com/example/botty"
 commit "$ROOT/botty" -1 "dependabot[bot]" "49699333+dependabot[bot]@users.noreply.github.com" "bump"
 
-# An invented token, only ever written through a variable: a token key followed by its value as
-# literal text is what claude-sync's secret scan refuses to send.
-KEEP_TOKEN="keep_this_token_value_0123456789_abcdef"
+# An invented token, shaped as the secret scan's own rules accept: it holds spaces, so no key
+# followed by it reads as a credential (README "Secret scan"). It is written as text, never assembled
+# to get past the scan (claude-config#1125); tests/test-payload-secret-scan.sh refuses that.
+KEEP_TOKEN="kept token, invented for this test"
 write_config(){ # write_config <json object>
   python3 -c 'import json,sys; json.dump(json.loads(sys.argv[2]), open(sys.argv[1],"w"))' "$CONFIG" "$1"
 }
@@ -216,8 +217,8 @@ run set-authors "[\"$ME_EMAIL\",\"Dan Wright\"]"
 check_eq "set-authors succeeds" 0 "$RC"
 check_eq "and saves the authors" "[\"$ME_EMAIL\",\"Dan Wright\"]" "$(jq "$(cat "$CONFIG")" 'd["authors"]')"
 check_eq "and keeps the url and the token exactly" '["https://script.google.com/macros/s/FAKE/exec",true]' \
-  "$(jq "$(cat "$CONFIG")" '[d["url"], d["token"] == "keep_this_token_value_0123456789_abcdef"]')"
-check_not "and never prints the token" "keep_this_token_value" "$OUT"
+  "$(jq "$(cat "$CONFIG")" '[d["url"], d["token"] == "kept token, invented for this test"]')"
+check_not "and never prints the token" "kept token, invented" "$OUT"
 check_eq "and the file is readable by its owner only" "600" "$(mode_of "$CONFIG")"
 for bad in '[]' '"dan@example.com"' '[1]' '["  "]' '{not json'; do
   before="$(fingerprint "$CONFIG")"
