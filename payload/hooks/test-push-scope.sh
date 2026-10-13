@@ -1039,6 +1039,60 @@ case "$no_base" in
   *) check "#457 no hook asks for a range without a base" ok ;;
 esac
 
+echo "push-scope: one reading of a command, whatever is asked of it (claude-config#1040)"
+# ps_is_git_push asked python for the words of EVERY command in the line, so the commonest push here,
+# a heredoc commit then a push, started one python per line: 44 for a commit, forty short commands
+# and a push, in each of the push hooks (measured 2026-10-12, 3.7 s in ps_is_git_push alone on
+# 2026-10-09). The cost is counted in python3 starts, not seconds, so the machine's load cannot move
+# it (L224): a python3 on PATH that notes each start, then runs the real one.
+CNT="$(mktemp -d "${TMPDIR:-/tmp}/ps-count.XXXXXXXX")"
+mkdir -p "$CNT/bin"
+printf '#!/bin/bash\nprintf "start\\n" >> "%s/log"\nexec "%s" "$@"\n' "$CNT" "$(command -v python3)" > "$CNT/bin/python3"
+chmod +x "$CNT/bin/python3"
+starts() { if [ -f "$CNT/log" ]; then wc -l < "$CNT/log" | tr -d ' '; else printf '0'; fi; }
+counted() {  # counted <function> <args...>: runs it in a fresh shell, its answers on stdout
+  rm -f "$CNT/log"
+  PATH="$CNT/bin:$PATH" bash -c '. "$1"; shift; "$@"' _ "$LIB" "$@"
+}
+asks_all() {  # the questions a push hook asks of one command, in one shell, as one line of answers
+  local c="$1" a="" d
+  ps_is_git_push "$c" && a+="push "
+  ps_is_git_commit "$c" && a+="commit "
+  ps_is_git_add "$c" && a+="add "
+  d="$(ps_repo_dir "$c" "$2")" && a+="dir=$d"
+  printf '%s' "$a"
+}
+export -f asks_all
+msg=""; for i in $(seq 1 400); do msg+="line $i of the message, which says don't push yet"$'\n'; done
+big="git add a.txt && git commit -F - <<'EOF'"$'\n'"$msg"'EOF'
+for i in $(seq 1 40); do big+=$'\n'"echo step $i"; done
+big+=$'\n'"git push origin HEAD"
+flat="${big//$'\n'/; }"
+for form in raw flat; do
+  [ "$form" = raw ] && c="$big" || c="$flat"
+  got="$(counted asks_all "$c" "$T")"
+  [ "$got" = "push commit add dir=$T" ] && check "#1040 the $form heredoc commit then push is still read right" ok \
+    || check "#1040 the $form heredoc commit then push is still read right" "answered [$got]"
+  n="$(starts)"
+  [ "$n" -le 1 ] && check "#1040 four questions of the $form command start python once" ok \
+    || check "#1040 four questions of the $form command start python once" "$n starts"
+done
+# The control on the instrument: a question that has to read starts the counted python, so a count
+# of zero above cannot come from a shim nothing ran (L1).
+counted ps_is_git_push "git push" >/dev/null
+n="$(starts)"
+[ "$n" -ge 1 ] && check "#1040 the counter sees a reading" ok || check "#1040 the counter sees a reading" "$n starts"
+# The reading is kept for the command it was made from and no other: a second command one word
+# different is read again and answered for itself.
+got="$(PATH="$CNT/bin:$PATH" bash -c '. "$1"; ps_is_git_push "git push" && printf y; ps_is_git_push "git pull" || printf n; ps_is_git_push "git push" && printf y' _ "$LIB")"
+[ "$got" = "yny" ] && check "#1040 a kept reading answers only for its own command" ok \
+  || check "#1040 a kept reading answers only for its own command" "answered [$got]"
+# A reader swapped underneath the shell (a test seam, a reinstall) is not answered from the old one.
+got="$(bash -c '. "$1"; ps_is_git_push "cd $2 && git push" >/dev/null; PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_repo_dir "cd $2 && git push" "$3"' _ "$LIB" "$T" "$S" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && check "#1040 a reading is not reused once the reader it came from is gone" ok \
+  || check "#1040 a reading is not reused once the reader it came from is gone" "rc=$rc said [$got]"
+rm -rf "$CNT"
+
 rm -rf "$RD" "$MB"
 
 echo "push-scope: the reader a gate cannot work without (claude-config#480)"

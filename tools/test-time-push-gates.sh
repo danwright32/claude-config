@@ -85,6 +85,49 @@ awk -v a="${_slow_s:-0}" -v b="${_quick_s:-0}" 'BEGIN { exit !(a > b) }' \
   && check "the durations are measured, not printed from the config" ok \
   || check "the durations are measured, not printed from the config" "slow=$_slow_s quick=$_quick_s"
 
+# --list names the gates a push waits on, with what each declares, and runs none of them: the one
+# reading of the settings both the timing and the README's count come from (claude-config#1066).
+mk marks.sh 'touch "$(dirname "$0")/../ran"'
+python3 - "$HOME_DIR/settings.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["hooks"]["PreToolUse"][0]["hooks"].append({"type": "command", "command": "__CLAUDE_HOME__/hooks/marks.sh", "timeout": 5})
+json.dump(d, open(p, "w"))
+PY
+rm -f "$HOME_DIR/ran"
+listed="$(GATE_TIMING_HOME="$HOME_DIR" bash "$T" --list 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && check "--list runs" ok || check "--list runs" "rc=$rc out=$listed"
+[ "$(printf '%s\n' "$listed" | awk -F '\t' '{ print $2 }' | tr '\n' ' ')" = "quick.sh speaks.sh slow.sh untimed.sh marks.sh " ] \
+  && check "--list names every Bash gate in order, and nothing else" ok \
+  || check "--list names every Bash gate in order, and nothing else" "out=$listed"
+[ "$(printf '%s\n' "$listed" | awk -F '\t' '{ print $1 }' | tr '\n' ' ')" = "30 60 1 - 5 " ] \
+  && check "--list gives each gate's declared timeout" ok || check "--list gives each gate's declared timeout" "out=$listed"
+[ ! -e "$HOME_DIR/ran" ] && check "--list runs no gate" ok || check "--list runs no gate" "marks.sh ran"
+
+# The README's count of the hooks a push waits on, derived from the settings the payload installs
+# (claude-config#1066). The count was written by hand, "Seventeen" and then "Eighteen", and went on
+# being believed while hooks were added beside it (L244), so the next hook added fails this suite
+# until the sentence says how many there are now.
+REPO_ROOT="$(cd "$DIR/.." && pwd)"
+REAL_HOME="$TMPROOT/real-home"; mkdir -p "$REAL_HOME"
+cp "$REPO_ROOT/payload/settings.hooks.json" "$REAL_HOME/settings.json"
+real="$(GATE_TIMING_HOME="$REAL_HOME" bash "$T" --list --command "git push" 2>&1)"; rc=$?
+n="$(printf '%s\n' "$real" | grep -c .)"
+[ "$rc" -eq 0 ] && [ "$n" -gt 0 ] && check "the payload's push gates are listed" ok \
+  || check "the payload's push gates are listed" "rc=$rc out=$real"
+lo="$(printf '%s\n' "$real" | awk -F '\t' '$1 ~ /^[0-9]+$/ && (m == "" || $1 + 0 < m) { m = $1 + 0 } END { print m }')"
+hi="$(printf '%s\n' "$real" | awk -F '\t' '$1 ~ /^[0-9]+$/ && $1 + 0 > m { m = $1 + 0 } END { print m }')"
+word="$(python3 -c '
+import sys
+n = int(sys.argv[1])
+ones = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+tens = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+w = ones[n] if n < 20 else tens[n // 10] + ("" if n % 10 == 0 else "-" + ones[n % 10])
+print(w[0].upper() + w[1:])' "$n")"
+want="$word PreToolUse hooks fire on a \`git push\` here, declaring timeouts of $lo to $hi seconds"
+if grep -qF "$want" "$REPO_ROOT/README.md"; then check "the README counts the hooks a push waits on" ok
+else check "the README counts the hooks a push waits on" "wanted the README to say: $want. It says: $(grep -o '[A-Z][a-z-]* PreToolUse hooks fire on a .git push. here, declaring timeouts of [0-9]* to [0-9]* seconds' "$REPO_ROOT/README.md")"; fi
+
 # A settings file it cannot read is a refusal, never an empty table that reads as no gates (L98).
 out2="$(GATE_TIMING_HOME="$TMPROOT/nowhere" bash "$T" --repo "$TMPROOT" 2>&1)"; rc2=$?
 [ "$rc2" -ne 0 ] && case "$out2" in *"could not read"*) true ;; *) false ;; esac \

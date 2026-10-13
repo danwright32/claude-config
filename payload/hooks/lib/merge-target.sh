@@ -46,7 +46,8 @@
 #                    the workflow runs GitHub has created for a commit that have
 #                      not finished, whose checks may not have registered yet (#1087)
 #   mt_remote_path   whether a repository on GitHub holds a path, for a merge
-#                      naming a repository that is not the checkout it runs in
+#                      naming a repository that is not the checkout it runs in, as
+#                      a reader mt_retry_read can ask again (#1096)
 #   mt_pinned_tool_remote
 #                    the same question as mt_pinned_tool, asked of GitHub
 #   mt_push_gate_scope
@@ -192,78 +193,102 @@ mt_pinned_how() {  # $1 = a directory, $2 = pr number or empty
   mt_pinned_how_for "$path" "${2:-}"
 }
 
-# The command with every heredoc BODY removed, so text nobody is executing is not
-# read as something somebody is. Done BEFORE the segment split rather than during
-# it, because a body is ordinary prose and prose carries semicolons: splitting
-# first turns the sentence after a semicolon into a segment of its own.
-#
-# A herestring is blanked first. Three angle brackets hold two starting at the
-# second character, so a herestring whose word follows immediately would
-# otherwise be read as opening a heredoc named for that word, and would swallow
-# the rest of the command.
-#
-# Its one blind spot, stated rather than hidden: two angle brackets inside a
-# quoted string open a heredoc here that the shell would not. That direction
-# loses lines, so it can only make a matcher fail to fire, never fire wrongly.
-mt_strip_heredocs() {  # $1 = command
-  local line probe delim="" trimmed in_body=0 out=""
-  local opener='<<-?[[:space:]]*("[A-Za-z_][A-Za-z0-9_]*"|'"'"'[A-Za-z_][A-Za-z0-9_]*'"'"'|[A-Za-z_][A-Za-z0-9_]*)'
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$in_body" = 1 ]; then
-      trimmed="${line#"${line%%[![:space:]]*}"}"
-      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-      [ "$trimmed" = "$delim" ] && in_body=0
-      continue
-    fi
-    out="$out$line"$'\n'
-    probe="${line//<<</   }"
-    if [[ "$probe" =~ $opener ]]; then
-      delim="${BASH_REMATCH[1]}"
-      delim="${delim%\"}"; delim="${delim#\"}"
-      delim="${delim%\'}"; delim="${delim#\'}"
-      in_body=1
-    fi
-  done <<MTEOF
-$1
-MTEOF
-  printf '%s' "$out"
-}
-
-# The first three tokens of every shell segment, one segment per line, with any
-# leading environment assignments dropped. Three because the longest thing being
-# looked for is three tokens.
-#
-# Split on `&&`, `||` and `;` only. A pipe and a bare `&` also start a command,
-# and are deliberately left alone: nothing ever pipes into a merge, so splitting
-# on them buys nothing while giving a quoted payload one more way to be cut into
-# a segment that starts with the phrase.
+# Every command in the command, one per line, from its own command name on: past the reserved words
+# that only open or continue a compound command (then, do, else, {, !, time), past leading
+# NAME=value assignments, and past `rtk`, which runs the same command (claude-config#1040). This used
+# to drop only the assignments and read the first three words of what was left, so `then gh pr`,
+# `{ gh pr` and `rtk gh pr` stood where `gh pr merge` should, and a merge inside an if, a loop or a
+# brace group, or behind rtk, was no merge to any merge gate.
 mt_command_segments() {  # $1 = command
-  local seg
-  while IFS= read -r seg; do
-    mt_split_assignments "$seg"
-    printf '%s\n' "$MT_REST"
-  done <<MTEOF
-$(mt_raw_segments "$1")
+  local line
+  while IFS= read -r line; do mt__split_line "$line"; printf '%s\n' "$MT__L_CMD"; done <<MTEOF
+$(mt__commands "$1")
 MTEOF
 }
 
-# The command cut at `&&`, `||`, `;` and newlines, one segment per line, but only where those
-# sit OUTSIDE quotes and substitutions (lessons review of #795): cut inside them,
-# `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` became two halves, neither a merge, and
-# every merge gate stood down. Heredoc bodies are stripped first. Read by lib/shell-words.py, one
-# process for the whole command: the same scan in bash took 55 s on a 26 KB command (measured
-# 2026-10-05). With no
-# python3 the plain cut at every separator is used, which can only over cut.
-MT_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
-mt_raw_segments() {  # $1 = command
-  local s out
-  s="$(mt_strip_heredocs "$1")"
-  if command -v python3 >/dev/null 2>&1 && out="$(printf '%s' "$s" | python3 "$MT_SHELL_WORDS" segments 2>/dev/null)"; then
-    printf '%s\n' "$out"
+# Every command as "<its leading assignments, 0x1d between>" 0x1f "<its text as written>" 0x1f "<the
+# command from its name on>", one per line (newlines inside a command made spaces), both read by the one reading (ps__read: lib/shell-words.py's command_rest, so the
+# reserved words come from the same RESERVED list the push walker uses), with `rtk` in front dropped.
+# With nothing to read the command, the crude cut and the bash assignment split, which can only see
+# more commands than are there (L42).
+mt__commands() {  # $1 = command
+  local rc i end cmd assigns seg text
+  ps__read "$1"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      cmd="${PS__R_CMD[$i]}"; assigns="${PS__R_ASSIGNS[$i]}"
+      text="${PS__R_TEXT[$i]}"
+      mt__print_command "${assigns//$'\n'/$'\x1d'}" "${text//$'\n'/ }" "${cmd//$'\n'/ }"
+      i=$((i + 1))
+    done
     return 0
   fi
-  s="${s//&&/$'\n'}"; s="${s//||/$'\n'}"; s="${s//;/$'\n'}"
-  printf '%s\n' "$s"
+  while IFS= read -r seg; do
+    mt_split_assignments "$seg"
+    assigns="${MT_ASSIGNS%$'\n'}"
+    mt__print_command "${assigns//$'\n'/$'\x1d'}" "$seg" "$MT_REST"
+  done <<MTEOF
+$(ps__crude_cut "$1")
+MTEOF
+}
+
+# What to ask a predicate about for one line of mt__commands: the command's text as written, which the
+# reading already holds, so the question starts nothing; or, when that text holds a substitution
+# (whose own commands are lines of their own), the command from its name on, so a merge inside the
+# substitution is not taken for this command's.
+mt__own_text() {  # $1 = one line of mt__commands
+  mt__split_line "$1"
+  case "$MT__L_TEXT" in *'$('*|*'`'*) printf '%s' "$MT__L_CMD" ;; *) printf '%s' "$MT__L_TEXT" ;; esac
+}
+
+# One line of mt__commands into MT__L_ASSIGNS, MT__L_TEXT and MT__L_CMD. Split by read, never by a
+# pattern removal: `${line##*<sep>}` tries every prefix and took 1.1 s on one 26 KB command
+# (measured 2026-10-12), where read takes 0.02.
+mt__split_line() {  # $1 = one line of mt__commands
+  IFS=$'\x1f' read -r MT__L_ASSIGNS MT__L_TEXT MT__L_CMD <<MTSPLIT
+$1
+MTSPLIT
+}
+
+mt__print_command() {  # $1 = assignments (0x1d between)  $2 = the text  $3 = the command from its name on
+  local cmd="$3" first rest
+  read -r first rest <<MTRTK
+$cmd
+MTRTK
+  case "$first" in rtk|*/rtk) cmd="$rest" ;; esac
+  printf '%s\x1f%s\x1f%s\n' "$1" "$2" "$cmd"
+}
+
+# Every simple command the shell would run, one per line, from lib/push-scope.sh's reading
+# (ps__read): the ONE reader of a command for both libraries (claude-config#1040). Cut where the
+# shell cuts, never inside quotes or substitutions (lessons review of #795: cut inside them,
+# `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` became two halves, neither a merge, and every
+# merge gate stood down), past heredoc bodies and comments, and with a pipe, a subshell or a command
+# substitution's commands read as the commands they are.
+#
+# This file used to read commands with a pair of its own, a bash heredoc stripper and a python cutter,
+# beside the push library's reader, and the two disagreed: a merge after a pipe, in a subshell or in a
+# substitution was no merge here, so no merge gate judged it. A newline inside one command (a quoted
+# string) becomes a space, so each command stays one line. With nothing to read the command, the
+# crude cut at every separator both libraries fall back to, which can only over cut (L42).
+#
+# A caller asking several questions of one command calls ps__read on it in its own shell first, so
+# this, which runs in a subshell wherever it is read from, finds the reading already made.
+MT_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+mt_raw_segments() {  # $1 = command
+  local rc i end text
+  ps__read "$1"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      text="${PS__R_TEXT[$i]}"
+      printf '%s\n' "${text//$'\n'/ }"
+      i=$((i + 1))
+    done
+    return 0
+  fi
+  ps__crude_cut "$1"
 }
 
 # A segment's leading `NAME=value` assignments, read as the shell reads them (lib/shell-words.py
@@ -303,16 +328,18 @@ mt_split_assignments() {  # $1 = one segment
 # Prints the key when it is hex, nothing otherwise. One reader for both gates, so the two cannot come
 # to disagree about what presenting a key looks like.
 mt_presented_read_key() {  # $1 = command, $2 = the predicate the action's segment must satisfy
-  local seg found
-  while IFS= read -r seg; do
-    mt_split_assignments "$seg"
-    found="$(printf '%s' "$MT_ASSIGNS" | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
-    if [ -n "$found" ] && [ -n "$MT_REST" ] && "$2" "$MT_REST"; then
+  local line found rest text
+  ps__read "$1" || :
+  while IFS= read -r line; do
+    mt__split_line "$line"; rest="$MT__L_CMD"; text="$(mt__own_text "$line")"
+    found="$(printf '%s\n' "$MT__L_ASSIGNS" | tr '\035' '\n' | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
+    # Asked of the command's own text, which the reading holds, so no second reading starts.
+    if [ -n "$found" ] && [ -n "$rest" ] && "$2" "$text" </dev/null; then
       case "$found" in *[!a-f0-9]*) ;; *) printf '%s' "$found" ;; esac
       return 0
     fi
   done <<MTEOF
-$(mt_raw_segments "$1")
+$(mt__commands "$1")
 MTEOF
   return 0
 }
@@ -341,23 +368,24 @@ MTEOF
 # the push (a PostToolUse hook) reads the state the command left, which differs from the gate's
 # only when the same command also switched branch after pushing.
 mt_push_gate_scope() {  # $1 = command (segmented reading)  $2 = command (raw reading)  $3 = cwd
-  local cmd="$1" raw="$2" cwd="${3:-}" seg only_deletes=0 repo_dir rd top head
+  local cmd="$1" raw="$2" cwd="${3:-}" seg text only_deletes=0 repo_dir rd top head
   MT_PUSH_GATE_TOP=""; MT_PUSH_GATE_HEAD=""; MT_PUSH_GATE_BRANCH=""; MT_PUSH_GATE_WHY=""
   ps_is_git_push "$cmd" || return 1
   ps_has_override "$cmd" SKIP_PR_REVIEW && return 3
+  ps__read "$raw" || :
   # A push that only deletes a remote branch sends no commits to review. Judged on each PUSH
   # segment's own words, and exempt only when every push in the command deletes: a delete flag
   # anywhere else (another push, an `rm -d`) says nothing about the push beside it (L673, lessons
   # review of #1002).
   while IFS= read -r seg; do
-    mt_split_assignments "$seg"
-    [ -n "$MT_REST" ] && ps_is_git_push "$MT_REST" || continue
-    case " $MT_REST " in
+    text="$(mt__own_text "$seg")"; mt__split_line "$seg"; seg="$MT__L_CMD"
+    [ -n "$seg" ] && ps_is_git_push "$text" </dev/null || continue
+    case " $seg " in
       *" --delete "*|*" -d "*) [ "$only_deletes" -eq 0 ] && only_deletes=1 ;;
       *) only_deletes=2; break ;;
     esac
   done <<MTEOF
-$(mt_raw_segments "$raw")
+$(mt__commands "$raw")
 MTEOF
   if [ "$only_deletes" -eq 1 ]; then MT_PUSH_GATE_WHY="the push only deletes, so it sends no commits"; return 6; fi
   # The head a chained commit makes does not exist yet, so no review can have read it, and judging
@@ -443,6 +471,7 @@ MTEOF
 mt_is_pr_merge() {  # $1 = command
   case "$1" in *merge*) ;; *) return 1 ;; esac
   local heads
+  ps__read "$1" || :
   heads="$(mt_command_heads "$1")"
   grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<MTEOF
 $heads
@@ -459,6 +488,7 @@ MTEOF
 # merges nothing, so a prefix match would fire on every look at a pull request.
 mt_runs_merge() {  # $1 = command
   case "$1" in *merge*) ;; *) return 1 ;; esac
+  ps__read "$1" || :
   mt_is_pr_merge "$1" && return 0
   local seg
   while IFS= read -r seg; do
@@ -473,6 +503,7 @@ mt_runs_merge() {  # $1 = command
 mt_pr_number() {  # $1 = command
   local direct seg prev tok
   local -a MT_TOKENS
+  ps__read "$1" || :
   direct="$(mt__merge_selector "$(mt__selector_input "$1")")"
   direct="${direct#*$'\t'}"
   [ -n "$direct" ] && { printf '%s' "$direct"; return; }
@@ -628,6 +659,9 @@ mt_merge_targets() {  # $1 = command, $2 = session cwd, $3 = "where" to add a fo
   local cmd="$1" d="${2:-}" recs rec rc where flag pr top key slug seen=$'\n'
   local -a hits=()
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
+  # Read here first, so the subshell below and every question asked of each merge find the reading
+  # this shell holds, each merge's own command included (#1040).
+  ps__read "$cmd" || :
   recs="$(ps__action_records "$cmd" mt_runs_merge)"; rc=$?
   [ "$rc" -eq 2 ] && return 2
   [ "$rc" -eq 0 ] || return 1
@@ -690,31 +724,27 @@ mt_merge_each() {  # $1 = command, $2 = session cwd
 }
 
 # What mt__merge_selector reads: the `gh pr merge` segment itself, its leading assignments
-# removed, when the shell reading finds one (lessons review of #795). The selector tokenizes the
-# whole command and cannot see inside $( ), so in `GH_TOKEN=$(gh auth token -u x; true) gh pr
-# merge 7` the merge did not sit at a command start and its number was lost. With no such segment
-# the whole command is read as before.
+# removed (lessons review of #795). The selector tokenizes what it is handed and cannot see inside
+# $( ), so in `GH_TOKEN=$(gh auth token -u x; true) gh pr merge 7` the merge did not sit at a command
+# start and its number was lost. With no such segment it is handed nothing, so a command that runs
+# no gh merge names no pull request: the whole command used to be read instead, and with no heredoc
+# stripper of its own left that would read a number out of a heredoc body (claude-config#1040).
 mt__selector_input() {  # $1 = command
   local seg a b c d
+  ps__read "$1" || :
+  # Each command from its own name on (mt_command_segments): `rtk gh pr merge`, `then gh pr merge`
+  # and an assignment in front are the same merge, and the selector reads `gh` at a command start.
   while IFS= read -r seg; do
-    mt_split_assignments "$seg"
     read -r a b c d <<MTSEOF
-$MT_REST
+$seg
 MTSEOF
-    # `rtk gh pr merge` is the same merge; the selector reads `gh` at a command start, so the rtk
-    # word is dropped from what it is handed.
-    if [ "${a##*/}" = "rtk" ]; then
-      a="$b"; b="$c"; c="${d%% *}"
-      if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
-        printf '%s' "${MT_REST#*rtk}"; return 0
-      fi
-    elif [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
-      printf '%s' "$MT_REST"; return 0
+    if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+      printf '%s' "$seg"; return 0
     fi
   done <<MTSEOF
-$(mt_raw_segments "$1")
+$(mt_command_segments "$1")
 MTSEOF
-  printf '%s' "$1"
+  return 0
 }
 
 # WHICH pull request, and in WHICH repository, the gh merge invocation itself names. One
@@ -733,10 +763,9 @@ MTSEOF
 # link and --repo danwright32/claude-config answered about cli/cli.
 #
 # Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is
-# about that view. Read with a shell tokenizer, in command position only, so a merge quoted
-# inside an echo names nothing, and the walk stops at the first token it cannot read. Heredoc
-# bodies are removed first, so prose about merging names nothing
-# and a real merge written after a heredoc is still read (L673).
+# about that view. It is handed the merge's own command, read by the one reader (mt__selector_input),
+# so prose about merging in a heredoc body or an echo names nothing and a real merge written after a
+# heredoc is still read (L673); the walk stops at the first token it cannot read.
 #
 # The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
 # trailing .git) come back as one. A host other than github.com is kept whole, so it can never
@@ -745,7 +774,7 @@ MTSEOF
 # IT NEEDS python3, and mt_reader_missing below is how a gate says so. See that comment before
 # reaching for a fallback reader.
 mt__merge_selector() {  # $1 = command
-  MT_CMD="$(mt_strip_heredocs "$1")" python3 -c '
+  MT_CMD="$1" python3 -c '
 import os, re, shlex
 cmd = os.environ.get("MT_CMD", "")
 # A newline starts a new command the way a semicolon does, and a backslash before one does not.
@@ -1197,52 +1226,75 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
   return 0
 }
 
-# Does a repository on GitHub hold this path? Prints present, absent or unknown.
+# Does a repository on GitHub hold this path? A reader in mt_retry_read's terms (claude-config#1096):
+# sets MT_REMOTE_STATE to present, absent or unknown and MT_REMOTE_ERR to the first line gh printed,
+# and returns 0 when GitHub answered (present or absent), 2 when the read failed transiently
+# (mt_gh_transient), and 1 for any other failure. Call it in this shell, never a subshell, so the
+# globals reach the caller.
 #
 # For a merge that names, with --repo, a repository other than the checkout it
 # runs in: the folder's own files say nothing about that repository, so what the
 # gate would read from disk (a merge tool, a workflow) has to be read from GitHub
 # instead (claude-config#463). Asked as the account that could see the pull
 # request. Only gh's own 404 is absent; any other failure is unknown, and a
-# caller must refuse on unknown rather than read it as absent (L42).
+# caller must refuse on unknown rather than read it as absent (L42). It used to
+# print only those three words, so a dropped connection was an unknown nobody
+# could tell from a refusal, and the gate refused the merge on the first one
+# with nothing asked again (claude-config#1096).
 mt_remote_path() {  # $1 = owner/name, $2 = a repo relative path, $3 = account or empty for the active one
   local slug="$1" path="$2" account="${3:-}" token="" errf err rc
-  errf=$(mktemp "${TMPDIR:-/tmp}/mt-remote-path.XXXXXX" 2>/dev/null) || { printf 'unknown'; return 0; }
+  MT_REMOTE_STATE="unknown"; MT_REMOTE_ERR=""
+  errf=$(mktemp "${TMPDIR:-/tmp}/mt-remote-path.XXXXXX" 2>/dev/null) \
+    || { MT_REMOTE_ERR="could not make a temporary file for gh's answer"; return 1; }
   if [ -n "$account" ]; then
     token=$(gh auth token -u "$account" 2>/dev/null) || token=""
-    if [ -z "$token" ]; then rm -f "$errf"; printf 'unknown'; return 0; fi
+    if [ -z "$token" ]; then rm -f "$errf"; MT_REMOTE_ERR="gh has no token for the account $account"; return 1; fi
     GH_TOKEN="$token" gh api "repos/$slug/contents/$path" >/dev/null 2>"$errf"; rc=$?
   else
     gh api "repos/$slug/contents/$path" >/dev/null 2>"$errf"; rc=$?
   fi
-  err=$(cat "$errf"); rm -f "$errf"
-  if [ "$rc" = 0 ]; then printf 'present'; return 0; fi
+  # Judged on everything gh printed, reported by its first line.
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if [ "$rc" = 0 ]; then MT_REMOTE_STATE="present"; return 0; fi
+  MT_REMOTE_ERR=$(printf '%s\n' "$err" | awk 'NF { print; exit }')
+  MT_REMOTE_ERR="${MT_REMOTE_ERR:-gh exited $rc}"
   case "$err" in
-    *"HTTP 404"*) printf 'absent' ;;
-    *) printf 'unknown' ;;
+    *"HTTP 404"*) MT_REMOTE_STATE="absent"; return 0 ;;
   esac
+  mt_gh_transient "$err" && return 2
+  return 1
 }
 
-# mt_pinned_tool, asked of a repository on GitHub rather than a directory on disk.
-# Prints the tool's path and returns 0 when the repository carries one, returns 1
-# when it carries none, and prints the path it could not read and returns 2 when
-# it cannot tell. Reads MT_MERGE_TOOLS, so there is still one declaration (L41).
-mt_pinned_tool_remote() {  # $1 = owner/name, $2 = account or empty
-  local row path kind rest state
+# mt_pinned_tool, asked of a repository on GitHub rather than a directory on disk. Sets
+# MT_REMOTE_TOOL and returns 0 when the repository carries one, returns 1 when it carries none, and
+# returns 2 when it cannot tell, with MT_REMOTE_TOOL the path it could not read and MT_REMOTE_ERR what
+# gh said. Reads MT_MERGE_TOOLS, so there is still one declaration (L41). $3, when given, is how the
+# caller asks a read again (a function taking a reader's name, as block-red-merge.sh's read_again
+# wraps mt_retry_read), so each probe is retried by the caller's own rule (claude-config#1096). Call it
+# in this shell, so the globals reach the caller.
+mt_pinned_tool_remote() {  # $1 = owner/name, $2 = account or empty, $3 = retrier or empty
+  local row path kind rest
+  MT_REMOTE_TOOL=""
+  MT__PROBE_SLUG="$1"; MT__PROBE_ACCOUNT="${2:-}"
   for row in "${MT_MERGE_TOOLS[@]}"; do
     path="${row%%|*}"
     rest="${row#*|}"; rest="${rest#*|}"
     kind="${rest%%|*}"
     [ "$kind" = "pinned" ] || continue
-    state="$(mt_remote_path "$1" "$path" "${2:-}")"
-    case "$state" in
-      present) printf '%s' "$path"; return 0 ;;
+    MT__PROBE_PATH="$path"
+    if [ -n "${3:-}" ]; then "$3" mt__probe_path; else mt__probe_path; fi
+    case "$MT_REMOTE_STATE" in
+      present) MT_REMOTE_TOOL="$path"; return 0 ;;
       absent) ;;
-      *) printf '%s' "$path"; return 2 ;;
+      *) MT_REMOTE_TOOL="$path"; return 2 ;;
     esac
   done
   return 1
 }
+
+# mt_remote_path for the path mt_pinned_tool_remote is asking about, as a reader taking no arguments,
+# which is the shape a retrier runs.
+mt__probe_path() { mt_remote_path "$MT__PROBE_SLUG" "$MT__PROBE_PATH" "$MT__PROBE_ACCOUNT"; }
 
 # EXECUTED mode, for a caller that cannot source bash. Guarded on this file
 # being the script rather than the source, because both merge gates source it

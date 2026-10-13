@@ -54,6 +54,9 @@ refused "gh named by its path" "/opt/homebrew/bin/gh pr checks 3 --watch --repo 
 refused "on the second line of the command" "$(printf 'echo start\ngh pr checks 9 --watch')"
 refused "gh run watch at its 3 second default" "gh run watch 123456"
 refused "gh run watch at 5 seconds" "gh run watch 123456 -i 5"
+# A quote never closed leaves only the crude cut at every separator, which still holds the watcher;
+# this used to stand the guard down in silence (claude-config#1065).
+refused "after a quote never closed, read by the crude cut" "echo don't; gh pr checks 12 --watch"
 
 judge "gh pr checks 12 --watch"
 check "#1014 the refusal says what the default costs" "every 10 seconds" "$out"
@@ -97,15 +100,41 @@ print(sum(1 for m in d["hooks"].get("PreToolUse", []) if m.get("matcher") == "Ba
           for h in m["hooks"] if h.get("command", "").endswith("/hooks/check-gh-watch-interval.sh")))' "${SETTINGS:-/dev/null}")"
 check_eq "#1014 registered once as a PreToolUse hook on Bash" "1" "$wired"
 
-# 3. With no python3 the command cannot be read, and it stands down saying so, never silently.
+# 3. With no python3 the command cannot be read, and it stands down saying so, never silently. It
+# says so with exit 1, a non-blocking error: the command still runs, and Claude Code shows stderr
+# only for that code. With exit 0 the same line was thrown away, so the guard's absence was silent
+# (claude-config#1065, L98).
 NOPY="$WORKDIR/nopy"; mkdir -p "$NOPY"
 for t in bash cat dirname sed awk tr head grep jq printf; do
   p="$(command -v "$t" 2>/dev/null)" && [ -x "$p" ] && ln -sf "$p" "$NOPY/$t"
 done
 pl="$(payload "gh pr checks 12 --watch")"
 out="$(printf '%s' "$pl" | PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1)"; rc=$?
-check_eq "#1014 with no python3 it does not block" "0" "$rc"
+check_eq "#1014 with no python3 it does not block, and says so where it is shown" "1" "$rc"
 check "#1014 and says it did not run" "DID NOT RUN" "$out"
+
+# 4. The shared reader missing, or a payload nothing can read, is the same: the command runs, and one
+# line names what is missing and how to put it back (claude-config#1065). It used to exit 0 in
+# silence, so every too fast watcher ran and nothing said the guard was off (L98, L11).
+LONE="$WORKDIR/lone"; mkdir -p "$LONE"
+cp "$HOOK" "$LONE/"
+out="$(payload "gh pr checks 12 --watch" | bash "$LONE/check-gh-watch-interval.sh" 2>&1)"; rc=$?
+check_eq "#1065 with lib/push-scope.sh missing it does not block, and says so where it is shown" "1" "$rc"
+check "#1065 and names the missing file" "lib/push-scope.sh" "$out"
+check "#1065 and the remedy" "claude-sync pull" "$out"
+check_eq "#1065 in one line" "1" "$(printf '%s\n' "$out" | grep -c .)"
+mkdir -p "$LONE/lib"; cp "$DIR/lib/push-scope.sh" "$LONE/lib/"
+out="$(payload "gh pr checks 12 --watch" | bash "$LONE/check-gh-watch-interval.sh" 2>&1)"; rc=$?
+check_eq "#1065 with lib/shell-words.py missing it does not block, and says so" "1" "$rc"
+check "#1065 and names that file" "shell-words.py" "$out"
+check "#1065 and the remedy for it" "claude-sync pull" "$out"
+out="$(printf '{"tool_input": {"command": "gh pr checks 12 --watch"' | bash "$HOOK" 2>&1)"; rc=$?
+check_eq "#1065 a payload nothing can read does not block, and says so" "1" "$rc"
+check "#1065 and says the payload could not be read" "could not read the hook payload" "$out"
+# The control: the cheap exit for a command that never mentions a watch stays silent and clean, with
+# the reader missing, because there was nothing for the guard to judge (L54).
+out="$(payload "ls -la" | bash "$LONE/check-gh-watch-interval.sh" 2>&1)"; rc=$?
+check_eq "#1065 control: a command with no watch passes in silence even with the reader missing" "0|" "$rc|$out"
 
 echo
 echo "passed: $pass, failed: $fail"
